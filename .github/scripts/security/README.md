@@ -826,11 +826,14 @@ echo "Results: $pass_count passed, $fail_count failed"
 
 ### Testing in CI
 
-Add a workflow step to validate the library itself:
+Add workflow steps to validate both the input-validation helpers and the workflow security linter:
 
 ```yaml
 - name: Test validation library
   run: bash .github/scripts/security/tests/test-validation.sh
+
+- name: Test security linter
+  run: bash .github/scripts/security/tests/test-check-actions-security.sh
 ```
 
 ## Security Considerations
@@ -929,6 +932,7 @@ A standalone linting script that scans GitHub Actions workflows and composite ac
 ```
 
 **Options:**
+- `-c`, `--checks LIST`: Run only selected checks (for example `-c 5,15,21-25`)
 - `--strict`: Exit with non-zero code if any issues are found (useful for CI gating)
 
 **Checks performed:**
@@ -939,12 +943,27 @@ A standalone linting script that scans GitHub Actions workflows and composite ac
 | 2 | `eval` usage | HIGH | Any `eval` statement in workflows or actions |
 | 3 | `bash -c` with `${{ }}` | MEDIUM | Direct expression interpolation in `bash -c` commands |
 | 4 | `pull_request_target` + checkout | HIGH | Workflows using `pull_request_target` that also checkout PR code |
-| 5 | Unpinned external actions | LOW | Actions using mutable refs (`@v*`, `@main`) instead of SHA pins |
+| 5 | Unpinned external actions | LOW | External actions not pinned to a full 40-character commit SHA |
 | 6 | `secrets: inherit` | LOW | Excessive use of `secrets: inherit` (threshold: 50) |
 | 7 | Token exposure in logs | HIGH | `echo`/`print` statements containing `GITHUB_TOKEN` or runtime tokens |
 | 8 | Broad permissions | MEDIUM | Workflows using `write-all` permissions |
 | 9 | Ref-based injection | MEDIUM | `head.ref`/`base.ref` in `${{ }}` expressions |
 | 10 | `curl \| bash` patterns | HIGH | Downloading and piping scripts directly to a shell |
+| 11 | Inputs/outputs interpolation | HIGH | Direct `inputs.*`, `steps.*.outputs.*`, or `needs.*.outputs.*` interpolation in `run:` blocks |
+| 12 | Deprecated workflow commands | MEDIUM | Use of `::set-output` or `::save-state` instead of environment files |
+| 13 | `ACTIONS_ALLOW_UNSECURE_COMMANDS` | CRITICAL | Re-enables deprecated insecure workflow commands |
+| 14 | `toJSON()` in `run:` blocks | MEDIUM | Inline JSON expansion that can break shell quoting |
+| 15 | Cross-repo reusable workflow refs | HIGH | Reusable workflows outside the repo not pinned to a full commit SHA |
+| 16 | Additional attacker-controlled event fields | HIGH | Direct interpolation of more attacker-controlled `github.event.*` fields in `run:` blocks |
+| 17 | `actions/github-script` interpolation | HIGH | Direct `github.event.*` interpolation in `github-script` bodies |
+| 18 | `secrets.*` interpolation in `run:` blocks | HIGH | Direct secret interpolation into shell source |
+| 19 | `matrix.*` interpolation in `run:` blocks | MEDIUM | Direct matrix value interpolation in `run:` blocks |
+| 20 | `github.repository` / `github.event_name` | LOW | Defense-in-depth warning for direct interpolation in `run:` blocks |
+| 21 | `pull_request_target` privilege boundaries | HIGH / MEDIUM | PR-head checkout, local action use after untrusted checkout, or persisted checkout credentials |
+| 22 | Privileged `workflow_run` follow-ups | MEDIUM | Artifact download/use from triggering runs combined with elevated capabilities |
+| 23 | Self-hosted runners on untrusted triggers | HIGH | Public-input triggers targeting self-hosted runners |
+| 24 | Write-capable permissions on untrusted triggers | MEDIUM | Explicit write scopes granted to `pull_request`, `pull_request_target`, `issue_comment`, and similar events |
+| 25 | Mutable container image references | MEDIUM | `docker://` or `image:` references not pinned to immutable `@sha256` digests |
 
 ### Reporting Security Issues
 

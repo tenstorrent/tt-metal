@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Parallel wrapper for GitHub Actions Security Linting
-# Runs per-file checks in parallel using xargs, then aggregate checks once.
+# Runs per-file checks in parallel batches, then aggregate checks once.
 #
 # Usage: ./check-actions-security-parallel.sh [OPTIONS] [FILE...]
 #   -h, --help    Show help message
@@ -30,7 +30,7 @@ Options:
   --strict      Exit with error code if any issues found
 
 This wrapper runs security checks in parallel for better performance.
-Per-file checks run in parallel using xargs -P, then aggregate checks run once.
+Per-file checks run in background batches, then aggregate checks run once.
 
 If no FILEs are provided, scans all .yml/.yaml files in .github/workflows and .github/actions.
 
@@ -64,9 +64,10 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
-# Create temp file for results, clean up on exit
+# Create temp files for results, clean up on exit
 RESULTS_FILE=$(mktemp)
-trap 'rm -f "$RESULTS_FILE"' EXIT
+RESULTS_DIR=$(mktemp -d)
+trap 'rm -f "$RESULTS_FILE"; rm -rf "$RESULTS_DIR"' EXIT
 
 # Default to finding all files if none provided
 if [[ ${#FILES[@]} -eq 0 ]]; then
@@ -76,6 +77,16 @@ if [[ ${#FILES[@]} -eq 0 ]]; then
         \( -name "*.yml" -o -name "*.yaml" \) -print0 2>/dev/null)
 fi
 
+if [[ "$PARALLEL_JOBS" -eq 0 ]]; then
+    if command -v getconf >/dev/null 2>&1; then
+        PARALLEL_JOBS="$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)"
+    else
+        PARALLEL_JOBS=1
+    fi
+    [[ "$PARALLEL_JOBS" =~ ^[0-9]+$ ]] || PARALLEL_JOBS=1
+    [[ "$PARALLEL_JOBS" -gt 0 ]] || PARALLEL_JOBS=1
+fi
+
 # Exit early if no files to check
 if [[ ${#FILES[@]} -eq 0 ]]; then
     echo "No workflow files found to check."
@@ -83,12 +94,54 @@ if [[ ${#FILES[@]} -eq 0 ]]; then
     exit 0
 fi
 
+worker_pids=()
+worker_outputs=()
+
+flush_workers() {
+    local pid
+    local output_file
+
+    for pid in "${worker_pids[@]}"; do
+        wait "$pid" || true
+    done
+
+    for output_file in "${worker_outputs[@]}"; do
+        [[ -f "$output_file" ]] || continue
+        cat "$output_file" >> "$RESULTS_FILE"
+    done
+
+    worker_pids=()
+    worker_outputs=()
+}
+
+launch_batch() {
+    local output_file="$RESULTS_DIR/worker-${#worker_outputs[@]}-$RANDOM.txt"
+    "$MAIN_SCRIPT" --skip-aggregate --machine-output "$@" > "$output_file" 2>&1 || true &
+    worker_pids+=("$!")
+    worker_outputs+=("$output_file")
+}
+
 # Phase 1: Run per-file checks in parallel (skip aggregates 5,6)
-# Use -P0 for all available CPUs, -n 5 to batch 5 files per invocation
-printf '%s\0' "${FILES[@]}" | \
-    xargs -0 -P "$PARALLEL_JOBS" -n 5 \
-    "$MAIN_SCRIPT" --skip-aggregate --machine-output \
-    >> "$RESULTS_FILE" 2>&1 || true
+# Batch 5 files per invocation to reduce shell startup overhead.
+batch_files=()
+for file in "${FILES[@]}"; do
+    batch_files+=("$file")
+
+    if [[ ${#batch_files[@]} -eq 5 ]]; then
+        launch_batch "${batch_files[@]}"
+        batch_files=()
+
+        if [[ ${#worker_pids[@]} -ge $PARALLEL_JOBS ]]; then
+            flush_workers
+        fi
+    fi
+done
+
+if [[ ${#batch_files[@]} -gt 0 ]]; then
+    launch_batch "${batch_files[@]}"
+fi
+
+flush_workers
 
 # Phase 2: Run aggregate checks once with all files
 "$MAIN_SCRIPT" -c 5,6 --machine-output "${FILES[@]}" \

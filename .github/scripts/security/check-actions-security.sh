@@ -21,6 +21,7 @@ FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
 CURRENT_CHECK=""
+MAX_CHECK_NUM=25
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -69,6 +70,11 @@ Checks:
  18  secrets.* interpolation in run blocks (HIGH)
  19  matrix.* interpolation in run blocks (MEDIUM)
  20  github.repository/event_name in run blocks (LOW)
+ 21  pull_request_target privilege boundary issues (HIGH/MEDIUM)
+ 22  workflow_run privileged follow-up patterns (MEDIUM)
+ 23  self-hosted runners on untrusted triggers (HIGH)
+ 24  Write-capable permissions on untrusted triggers (MEDIUM)
+ 25  Mutable container and docker:// image references (MEDIUM)
 EOF
     exit 0
 }
@@ -92,18 +98,18 @@ parse_checks() {
                 exit 1
             fi
             for ((i=start; i<=end; i++)); do
-                if [[ $i -ge 1 && $i -le 20 ]]; then
+                if [[ $i -ge 1 && $i -le $MAX_CHECK_NUM ]]; then
                     result+=("$i")
                 else
-                    echo "Error: Check $i is out of range (valid: 1-20)" >&2
+                    echo "Error: Check $i is out of range (valid: 1-$MAX_CHECK_NUM)" >&2
                     exit 1
                 fi
             done
         elif [[ "$part" =~ ^[0-9]+$ ]]; then
-            if [[ $part -ge 1 && $part -le 20 ]]; then
+            if [[ $part -ge 1 && $part -le $MAX_CHECK_NUM ]]; then
                 result+=("$part")
             else
-                echo "Error: Check $part is out of range (valid: 1-20)" >&2
+                echo "Error: Check $part is out of range (valid: 1-$MAX_CHECK_NUM)" >&2
                 exit 1
             fi
         else
@@ -162,7 +168,7 @@ done
 
 # Default to all checks if none specified
 if [[ ${#CHECKS_TO_RUN[@]} -eq 0 ]]; then
-    CHECKS_TO_RUN=({1..20})
+    CHECKS_TO_RUN=($(seq 1 "$MAX_CHECK_NUM"))
 fi
 
 # =============================================================================
@@ -203,6 +209,11 @@ log_fix_example() {
         echo -e "    ${DIM}${line}${NC}"
     done <<< "$example"
     echo ""
+}
+
+has_untrusted_trigger() {
+    local file="$1"
+    grep -qE '(^|[[:space:][:punct:]])(pull_request_target|pull_request|issue_comment|discussion|discussion_comment)([[:space:][:punct:]]|$)' "$file" 2>/dev/null
 }
 
 # =============================================================================
@@ -372,11 +383,27 @@ check_5() {
     local external_unpinned=0
     for file in "$@"; do
         local count
-        count=$(grep -hE 'uses:' "$file" 2>/dev/null | \
-            grep -v 'tenstorrent/' | \
-            grep -v './' | \
-            grep -v '#' | \
-            grep -cE '@(v[0-9]|main|master)' 2>/dev/null || echo 0)
+        count=$(awk '
+            /^[[:space:]]*-[[:space:]]*uses:[[:space:]]*[^.#[:space:]][^[:space:]#]*@|^[[:space:]]*uses:[[:space:]]*[^.#[:space:]][^[:space:]#]*@/ {
+                ref = $0
+                sub(/^[[:space:]]*-[[:space:]]*uses:[[:space:]]*/, "", ref)
+                sub(/^[[:space:]]*uses:[[:space:]]*/, "", ref)
+                sub(/[[:space:]]+#.*$/, "", ref)
+                gsub(/^[\"\047]|[\"\047]$/, "", ref)
+
+                if (ref ~ /^docker:\/\//) next
+                if (ref ~ /^\.\//) next
+                if (ref ~ /^tenstorrent\//) next
+                if (ref ~ /\/\.github\/workflows\//) next
+
+                n = split(ref, parts, "@")
+                refspec = parts[n]
+                if (refspec !~ /^[a-f0-9]{40}$/) {
+                    count++
+                }
+            }
+            END { print count + 0 }
+        ' "$file" 2>/dev/null)
         count="${count:-0}"
         if [[ "$count" =~ ^[0-9]+$ ]]; then
             ((external_unpinned += count)) || true
@@ -384,7 +411,7 @@ check_5() {
     done
     external_unpinned="${external_unpinned:-0}"
     if [[ "$external_unpinned" =~ ^[0-9]+$ ]] && [[ "$external_unpinned" -gt 0 ]]; then
-        log_issue "LOW" "Multiple files" "Found $external_unpinned external actions using mutable refs (@v*, @main) - consider pinning to SHA"
+        log_issue "LOW" "Multiple files" "Found $external_unpinned external actions not pinned to a full commit SHA - consider pinning to immutable refs"
         return 1
     fi
     return 0
@@ -675,8 +702,19 @@ EOF
 check_15() {
     local file="$1"
     local unsafe_calls
-    unsafe_calls=$(grep -E 'uses:\s+[^./][^[:space:]]*/.github/workflows/[^[:space:]]+@' "$file" 2>/dev/null | \
-        grep -vE '@[a-f0-9]{40}' || true)
+    unsafe_calls=$(awk '
+        /^[[:space:]]*uses:[[:space:]]*[^.#[:space:]][^[:space:]#]*\/\.github\/workflows\/[^[:space:]#]+@/ {
+            ref = $0
+            sub(/^[[:space:]]*uses:[[:space:]]*/, "", ref)
+            sub(/[[:space:]]+#.*$/, "", ref)
+            gsub(/^[\"\047]|[\"\047]$/, "", ref)
+            n = split(ref, parts, "@")
+            refspec = parts[n]
+            if (refspec !~ /^[a-f0-9]{40}$/) {
+                print ref
+            }
+        }
+    ' "$file" 2>/dev/null)
     if [[ -n "$unsafe_calls" ]]; then
         log_issue "HIGH" "$file" "Cross-repo reusable workflow call uses mutable ref instead of commit SHA - pin to full SHA"
         return 1
@@ -866,6 +904,240 @@ check_20() {
         fi
     fi
     return 0
+}
+
+# =============================================================================
+# Check 21: pull_request_target privilege boundary issues
+# =============================================================================
+check_21_description="pull_request_target privilege boundary issues"
+check_21_severity="HIGH"
+
+example_check_21() {
+    cat <<'EOF'
+# BEFORE (unsafe - PR head checkout plus persisted credentials):
+  on: pull_request_target
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+    - uses: ./.github/actions/build
+# AFTER (safer - avoid PR head checkout in privileged jobs and do not persist credentials):
+  on: pull_request_target
+  steps:
+    - uses: actions/checkout@v4
+      with:
+        persist-credentials: false
+    - run: ./scripts/label-pr.sh
+EOF
+}
+
+check_21() {
+    local file="$1"
+    local found=0
+
+    if ! grep -qE 'pull_request_target' "$file" 2>/dev/null; then
+        return 0
+    fi
+
+    if grep -q 'actions/checkout' "$file" 2>/dev/null && \
+       grep -qE 'github\.event\.pull_request\.head\.(sha|ref|repo\.full_name)|github\.head_ref' "$file" 2>/dev/null; then
+        log_issue "HIGH" "$file" "pull_request_target checks out the PR head ref/repository - this can execute untrusted code with base-repository privileges"
+        found=1
+    fi
+
+    if grep -q 'actions/checkout' "$file" 2>/dev/null && \
+       grep -qE 'github\.event\.pull_request\.head\.(sha|ref|repo\.full_name)|github\.head_ref' "$file" 2>/dev/null && \
+       grep -qE '^[[:space:]]*uses:[[:space:]]*\./' "$file" 2>/dev/null; then
+        log_issue "HIGH" "$file" "pull_request_target invokes a local action after untrusted checkout - local action code comes from the checked-out repository"
+        found=1
+    fi
+
+    if grep -q 'actions/checkout' "$file" 2>/dev/null && \
+       ! grep -qE 'persist-credentials:[[:space:]]*false' "$file" 2>/dev/null; then
+        log_issue "MEDIUM" "$file" "pull_request_target uses actions/checkout without persist-credentials: false - the workflow token may remain in git config"
+        found=1
+    fi
+
+    [[ $found -eq 0 ]]
+}
+
+# =============================================================================
+# Check 22: workflow_run privileged follow-up patterns
+# =============================================================================
+check_22_description="workflow_run privileged follow-up patterns"
+check_22_severity="MEDIUM"
+
+example_check_22() {
+    cat <<'EOF'
+# BEFORE (risky - privileged workflow_run job consumes upstream artifacts):
+  on: workflow_run
+  permissions:
+    contents: write
+  steps:
+    - run: gh run download "${{ github.event.workflow_run.id }}"
+# AFTER (safer - keep follow-up job read-only or validate artifacts before privileged use):
+  on: workflow_run
+  permissions:
+    contents: read
+  steps:
+    - run: ./scripts/verify-artifacts.sh
+EOF
+}
+
+check_22() {
+    local file="$1"
+    local found=0
+
+    if ! grep -qE 'workflow_run' "$file" 2>/dev/null; then
+        return 0
+    fi
+
+    if grep -qE 'github\.event\.workflow_run\.id|gh[[:space:]]+run[[:space:]]+download|dawidd6/action-download-artifact|/actions/artifacts|run_id:[[:space:]]*\$\{\{[[:space:]]*github\.event\.workflow_run\.id' "$file" 2>/dev/null && \
+       grep -qE 'secrets:[[:space:]]*inherit|\$\{\{[[:space:]]*secrets\.|write-all|contents:[[:space:]]*write|actions:[[:space:]]*write|packages:[[:space:]]*write|pull-requests:[[:space:]]*write|id-token:[[:space:]]*write|uses:[[:space:]]*actions/checkout' "$file" 2>/dev/null; then
+        log_issue "MEDIUM" "$file" "workflow_run downloads or references upstream run artifacts while also having elevated capabilities - validate artifacts before privileged use"
+        found=1
+    fi
+
+    [[ $found -eq 0 ]]
+}
+
+# =============================================================================
+# Check 23: self-hosted runners on untrusted triggers
+# =============================================================================
+check_23_description="self-hosted runners on untrusted triggers"
+check_23_severity="HIGH"
+
+example_check_23() {
+    cat <<'EOF'
+# BEFORE (risky - public PRs can reach self-hosted infrastructure):
+  on: pull_request
+  jobs:
+    test:
+      runs-on: [self-hosted, linux]
+# AFTER (safer - use GitHub-hosted runners for untrusted events):
+  on: pull_request
+  jobs:
+    test:
+      runs-on: ubuntu-latest
+EOF
+}
+
+check_23() {
+    local file="$1"
+    if has_untrusted_trigger "$file" && grep -qE 'self-hosted' "$file" 2>/dev/null; then
+        log_issue "HIGH" "$file" "Untrusted trigger targets a self-hosted runner - isolate self-hosted runners from public-input workflows"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 24: write-capable permissions on untrusted triggers
+# =============================================================================
+check_24_description="write-capable permissions on untrusted triggers"
+check_24_severity="MEDIUM"
+
+example_check_24() {
+    cat <<'EOF'
+# BEFORE (risky - untrusted trigger gets write-capable token scopes):
+  on: pull_request_target
+  permissions:
+    contents: write
+    pull-requests: write
+# AFTER (safer - keep token read-only unless a separate trusted job needs elevation):
+  on: pull_request_target
+  permissions:
+    contents: read
+EOF
+}
+
+check_24() {
+    local file="$1"
+    local scoped_write
+
+    if ! has_untrusted_trigger "$file"; then
+        return 0
+    fi
+
+    scoped_write=$(awk '
+        /^[[:space:]]*permissions:[[:space:]]*.*write/ { print; next }
+        /^[[:space:]]*(actions|attestations|checks|contents|deployments|discussions|id-token|issues|packages|pages|pull-requests|repository-projects|security-events|statuses):[[:space:]]*write([[:space:]]|$)/ { print }
+    ' "$file" 2>/dev/null)
+
+    if [[ -n "$scoped_write" ]] && ! grep -qE 'permissions:[[:space:]]*write-all|write-all' "$file" 2>/dev/null; then
+        log_issue "MEDIUM" "$file" "Untrusted trigger requests write-capable token scopes - keep permissions minimal and isolate privileged jobs"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 25: Mutable container and docker:// image references
+# =============================================================================
+check_25_description="mutable container and docker image references"
+check_25_severity="MEDIUM"
+
+example_check_25() {
+    cat <<'EOF'
+# BEFORE (mutable image tags can be retargeted):
+  container:
+    image: ghcr.io/example/build-env:latest
+  steps:
+    - uses: docker://alpine:3.20
+# AFTER (pin to immutable digests):
+  container:
+    image: ghcr.io/example/build-env@sha256:0123456789abcdef...
+  steps:
+    - uses: docker://alpine@sha256:0123456789abcdef...
+EOF
+}
+
+check_25() {
+    local file="$1"
+    local found=0
+    local mutable_docker_uses
+    local mutable_images
+
+    mutable_docker_uses=$(awk '
+        /^[[:space:]]*-[[:space:]]*uses:[[:space:]]*docker:\/\// || /^[[:space:]]*uses:[[:space:]]*docker:\/\// {
+            ref = $0
+            sub(/^[[:space:]]*-[[:space:]]*uses:[[:space:]]*docker:\/\//, "", ref)
+            sub(/^[[:space:]]*uses:[[:space:]]*docker:\/\//, "", ref)
+            sub(/[[:space:]]+#.*$/, "", ref)
+            gsub(/^[\"\047]|[\"\047]$/, "", ref)
+            if (ref !~ /@sha256:[a-f0-9]{64}$/) {
+                print ref
+            }
+        }
+    ' "$file" 2>/dev/null)
+
+    if [[ -n "$mutable_docker_uses" ]]; then
+        log_issue "MEDIUM" "$file" "Uses docker:// image reference without an immutable @sha256 digest"
+        found=1
+    fi
+
+    mutable_images=$(awk '
+        /^[[:space:]]*image:[[:space:]]*/ {
+            image = $0
+            sub(/^[[:space:]]*image:[[:space:]]*/, "", image)
+            sub(/[[:space:]]+#.*$/, "", image)
+            gsub(/^[\"\047]|[\"\047]$/, "", image)
+
+            if (image == "Dockerfile" || image ~ /^\.\//) next
+            if (image ~ /^docker-image:\/\//) next
+
+            if (image !~ /@sha256:[a-f0-9]{64}$/ && image ~ /[\/:]/) {
+                print image
+            }
+        }
+    ' "$file" 2>/dev/null)
+
+    if [[ -n "$mutable_images" ]]; then
+        log_issue "MEDIUM" "$file" "Uses container or service images without immutable @sha256 digests"
+        found=1
+    fi
+
+    [[ $found -eq 0 ]]
 }
 
 # =============================================================================
