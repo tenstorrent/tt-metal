@@ -9,7 +9,7 @@ from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_512x51
 from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_1024x1024 import (
     ModelOptimisations1024x1024,
 )
-from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_1024x1024_BH import (
+from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_1024x1024BH import (
     ModelOptimisations1024x1024BH,
 )
 

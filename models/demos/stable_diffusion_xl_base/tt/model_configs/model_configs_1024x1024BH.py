@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -12,6 +12,8 @@ from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import (
 )
 
 
+# NOTE: This file is a placeholder for future optimizations of SDXL on Blackhole.
+# For now, it has identical configs as Wormhole_b0.
 class ModelOptimisations1024x1024BH:
     def __init__(
         self,

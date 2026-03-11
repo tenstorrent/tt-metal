@@ -1,13 +1,15 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_1024x1024_BH import (
+from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_1024x1024BH import (
     ModelOptimisations1024x1024BH,
 )
 
 
+# NOTE: This file is a placeholder for future optimizations of SDXL on Blackhole.
+# For now, it has identical configs as Wormhole_b0.
 class VAEModelOptimisationsBH(ModelOptimisations1024x1024BH):
     def __init__(
         self,

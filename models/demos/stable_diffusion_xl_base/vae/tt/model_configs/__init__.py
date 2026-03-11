@@ -6,7 +6,7 @@ from models.common.utility_functions import is_wormhole_b0, is_blackhole
 from models.demos.stable_diffusion_xl_base.vae.tt.model_configs.model_configs_1024x1024 import (
     VAEModelOptimisations,
 )
-from models.demos.stable_diffusion_xl_base.vae.tt.model_configs.model_configs_1024x1024_BH import (
+from models.demos.stable_diffusion_xl_base.vae.tt.model_configs.model_configs_1024x1024BH import (
     VAEModelOptimisationsBH,
 )
 
