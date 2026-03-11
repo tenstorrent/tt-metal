@@ -23,6 +23,7 @@ from ....utils.mochi import get_rot_transformation_mat
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.substate import pop_substate, rename_substate
 from ....utils.tensor import bf16_tensor, float32_tensor, from_torch, unflatten
+from ....utils.tracing import Tracer
 from .attention_wan import WanAttention
 
 
@@ -365,6 +366,7 @@ class WanTransformer3DModel(Module):
     def get_rope_features(self, hidden_states: torch.Tensor, *, on_host: bool = False):
         if tuple(hidden_states.shape) not in self.cached_rope_features:
             rope_features = self.prepare_rope_features(hidden_states)
+            Tracer.warn_if_live()
             self.cached_rope_features[(tuple(hidden_states.shape), on_host)] = rope_features
         return self.cached_rope_features[(tuple(hidden_states.shape), on_host)]
 

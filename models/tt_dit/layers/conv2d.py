@@ -13,6 +13,7 @@ import ttnn
 
 from ..parallel.config import vae_all_gather
 from ..parallel.manager import CCLManager
+from ..utils.tracing import Tracer
 from .module import Module, Parameter
 
 if TYPE_CHECKING:
@@ -261,6 +262,9 @@ class Conv2d(Module):
         )
 
         try:
+            if self._prepared_weight is None:
+                Tracer.warn_if_live()
+
             x, (out_height, out_width), (self._prepared_weight, self._prepared_bias) = ttnn.conv2d(
                 input_tensor=x,
                 weight_tensor=self._prepared_weight or self.weight.data,
