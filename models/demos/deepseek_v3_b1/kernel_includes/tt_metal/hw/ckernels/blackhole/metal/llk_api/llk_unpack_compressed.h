@@ -56,6 +56,10 @@ constexpr uint32_t TILES_PER_UINT32 = 32 / ASSIGN_BITS;  // 16
 // Format index for bfp0 (zero tile)
 constexpr uint32_t FMT_BFP0 = 3;
 
+// Address of 512-byte all-zeros region in L1, pre-shifted for THCON registers (>> cb_addr_shift=4).
+// Zero tiles point here instead of the weight data buffer.
+constexpr uint32_t ZEROS_ADDR_SHIFTED = MEM_ZEROS_BASE >> 4;
+
 // ---------------------------------------------------------------------------
 // Assignment helpers
 // ---------------------------------------------------------------------------
