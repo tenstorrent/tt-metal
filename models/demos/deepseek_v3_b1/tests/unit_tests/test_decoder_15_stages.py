@@ -22,12 +22,17 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
-from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
+from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
+from models.demos.deepseek_v3_b1.demo.stage import (
+    ACTIVATION_FIFO_SIZE,
+    ACTIVATION_PAGE_SIZE_BYTES,
+    MoEDecoderBlockComputeStage,
+    StageContext,
+)
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_decoder_block import create_decoder_block_tensors
+from models.demos.deepseek_v3_b1.prepare_weights import prepare_moe_layer_weights
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     ROUTED_EXPERT_LAYER_IDX,
     RoutedExpert,
@@ -118,11 +123,8 @@ def test_persistent_decoder_15_stages(
     is_stage0 = my_mesh_id == 0
     is_moe_stage = my_mesh_id >= 1
 
-    M = 1
     K = embedding_dim
     pipeline_core = ttnn.CoreCoord(12, 8)
-    moe_sender_core = ttnn.CoreCoord(12, 9)
-    moe_worker_core_grid = build_worker_grid_excluding_core(device_grid, pipeline_core)
 
     token_size_bytes = 64
     embedding_size_bytes = K * dtype_size(ttnn.bfloat16)
@@ -133,25 +135,34 @@ def test_persistent_decoder_15_stages(
     torch_embedding = torch.randn(iterations, 1, 1, K, dtype=torch.bfloat16)
     print("Torch embedding created")
 
-    reduce_root_coord = ttnn.MeshCoordinate(0, 0)
-
-    stage_entry_device = None
-    gate_proj_noc = ttnn.NOC.NOC_0
-    gate_proj_worker_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(gate_proj_noc)
-    gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
-    shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
-    aggregator_core = shard_cores_list[0]
-
+    # ── Build MoE stage object (MoE stages only, before collective PipelineBlock creation) ──
+    moe_stage = None
+    ctx = StageContext(mesh_device=mesh_device, pipeline_config=pipeline_config, my_mesh_id=my_mesh_id)
     if is_moe_stage:
-        stage_entry_device = pipeline_config[my_mesh_id].entry_node_coord
-        reduce_root_coord = pipeline_config[my_mesh_id].exit_node_coord
-        logger.info(f"[rank={my_mesh_id}] stage entry device: {stage_entry_device}")
-        logger.info(f"[rank={my_mesh_id}] reduce aggregator core: {aggregator_core}")
+        layer_idx = 0
+        num_routed_experts = 1
+        logger.info("Preparing model state dict...")
+        state_dict = get_reference_model_state_dict(
+            layer_idx=layer_idx,
+            is_moe=True,
+            seed=RoutedExpert.SEED,
+            num_routed_experts=num_routed_experts,
+        )
+        bdw = BlitzDecodeWeights(mesh_device)
+        weights = prepare_moe_layer_weights(
+            bdw, state_dict, layer_idx, num_routed_experts=num_routed_experts, move_to_device=True
+        )
+        moe_stage = MoEDecoderBlockComputeStage(
+            weights=weights,
+            is_torus=is_torus,
+            use_hardcoded_expert_index=True,
+            enable_routing=True,
+        )
+        logger.info(f"[rank={my_mesh_id}] MoE stage object created")
 
-    # ── Pipeline block setup (collective) ──
+    # ── Pipeline block setup (collective — all hosts must participate simultaneously) ──
     pipeline_block = None
     try:
-        # ── Pipeline block setup (collective — all hosts must participate simultaneously) ────
         if is_stage0:
             print("Write embedding to tensor")
             embedding_tensor = ttnn.from_torch(
@@ -164,200 +175,33 @@ def test_persistent_decoder_15_stages(
             pipeline_block = PipelineBlock(
                 mesh_device,
                 pipeline_core,
-                upstream_d2d_socket_fifo_size=embedding_fifo_size,
-                downstream_d2d_socket_fifo_size=embedding_fifo_size,
-                upstream_d2d_socket_page_size=embedding_size_bytes,
-                downstream_d2d_socket_page_size=embedding_size_bytes,
+                upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+                downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+                upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+                downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
                 h2d_socket_fifo_size=token_size_bytes * 2,
-                d2h_socket_fifo_size=embedding_fifo_size,
-                d2h_socket_page_size=embedding_size_bytes,
+                d2h_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+                d2h_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
                 embedding_tensor=embedding_tensor,
             )
         else:
-            pipeline_block = PipelineBlock(
-                mesh_device,
-                pipeline_core,
-                upstream_d2d_socket_fifo_size=embedding_fifo_size,
-                downstream_d2d_socket_fifo_size=embedding_fifo_size,
-                upstream_d2d_socket_page_size=embedding_size_bytes,
-                downstream_d2d_socket_page_size=embedding_size_bytes,
-                entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
-                exit_node_upstream=ttnn.MeshCoreCoord(reduce_root_coord, aggregator_core),
-            )
+            pipeline_block = moe_stage.create_pipeline_block(ctx)
 
         logger.info(f"[rank={my_mesh_id}] pipeline block created")
 
-        downstream_socket = None
-        if my_mesh_id >= 1:
-            downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
-
-        # ── MoE tensors (MoE stages only) ──
-
-        r = None
-        s = None
+        # ── Tensor / semaphore setup (MoE stages only) ──
         if is_moe_stage:
-            layer_idx = 0
-            enable_routing = True
-            use_hardcoded_expert_index = True
-            num_routed_experts = 1
-            position_id = 0
-            max_seq_len = 32 * 1024
-            logger.info("Preparing model state dict...")
-            state_dict = get_reference_model_state_dict(
-                layer_idx=layer_idx,
-                is_moe=True,
-                seed=RoutedExpert.SEED,
-                num_routed_experts=num_routed_experts,
-            )
-
-            num_cores = mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y
-            available_cores = ttnn.num_cores_to_corerangeset(
-                num_cores, mesh_device.compute_with_storage_grid_size(), row_wise=True
-            )
-
-            bcast_cluster_axis = 0
-            bcast_secondary_cluster_axis = 1
-            reduce_cluster_axis = 1
+            moe_stage.setup(ctx, pipeline_block)
             logger.info(f"[rank={my_mesh_id}] MoE setup complete")
-
-            attn_semaphores = AttentionBlock.create_semaphores(mesh_device)
-            moe_semaphores = MoeOp.create_semaphores(mesh_device)
-            reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(4)]
-            persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, available_cores, 1)
-            sender_coord = pipeline_config[my_mesh_id].entry_node_coord
-            d = create_decoder_block_tensors(
-                mesh_device,
-                mesh_device.shape[0],
-                mesh_device.shape[1],
-                sender_coord.row,
-                sender_coord.col,
-                position_id,
-                state_dict,
-                layer_idx,
-                num_routed_experts,
-                max_seq_len,
-                root_coord=pipeline_config[my_mesh_id].exit_node_coord,
-            )
-            ttnn.synchronize_device(mesh_device)
-
-            recv_socket = pipeline_block.get_downstream_socket()
 
         # ── Launch pipeline ──
         pipeline_block.run()
         logger.info(f"[rank={my_mesh_id}] pipeline launched")
 
         # ── MoE stages: submit persistent kernel ──
-        if my_mesh_id >= 1:
+        if is_moe_stage:
             logger.info(f"[rank={my_mesh_id}] submitting persistent MoE kernel")
-            # MoeOp.op(
-            #     r.ttnn_residual_mcast_src,
-            #     gate_mm_weights_tensor=r.ttnn_gate_mm_weights,
-            #     gate_bias_tensor=r.ttnn_gate_bias,
-            #     gate_indices_tensor=r.ttnn_gate_indices,
-            #     gate_output_scores_tensor=r.gate_output_scores_tensor,
-            #     gate_output_indices_tensor=r.gate_output_indices_tensor,
-            #     gate_proj_weights_tensor=r.gate_proj_weights,
-            #     up_proj_weights_tensor=r.up_proj_weights,
-            #     down_proj_weights_tensor=r.down_proj_weights,
-            #     final_output_tensor=r.final_output_tensor,
-            #     rmsnorm_gamma_tensor=r.ttnn_rmsnorm_gamma,
-            #     shared_gate_weights_overlapped=s.shared_gate_weights_overlapped,
-            #     shared_up_weights_overlapped=s.shared_up_weights_overlapped,
-            #     shared_down_weights_tensor=s.ttnn_down_weights,
-            #     shared_k_parallel=s.k_parallel,
-            #     shared_n_parallel=s.n_parallel,
-            #     use_hardcoded_expert_index=True,
-            #     sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
-            #     sdpa_out_interm_buffer=sdpa_out_interm_buffer,
-            #     num_iterations=1,
-            #     persistent_mode=True,
-            #     persistent_next_iter_semaphore=persistent_next_iter_semaphore,
-            #     reduce_intermediate_tensors=reduce_intermediate_tensors,
-            #     reduce_output_tensor=reduce_output_tensor,
-            #     reduce_semaphores=reduce_semaphores,
-            #     reduce_root_coord=reduce_root_coord,
-            #     bcast_input_tensor=bcast_input_tensor,
-            #     bcast_intermediate_tensor=bcast_intermediate_tensor,
-            #     bcast_semaphores=bcast_semaphores,
-            #     bcast_sender_coord=bcast_sender_coord,
-            #     socket=recv_socket,
-            #     semaphores=moe_semaphores,
-            #     worker_core_grid=moe_worker_core_grid,
-            #     is_torus=is_torus,
-            #     downstream_socket=downstream_socket,
-            # )
-            is_torus = device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D_TORUS_Y
-            moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.op(
-                # AttentionBlock parameters
-                d["input_tensor_mesh"],
-                d["gamma_overlapped"],
-                d["matmul_weights_overlapped"],
-                d["rmsnorm2_gamma_overlapped"],
-                d["matmul2_weights_overlapped"],
-                d["matmul3_weights_overlapped"],
-                d["ttnn_qrope_sin"],
-                d["ttnn_qrope_cos"],
-                d["ttnn_trans_mat"],
-                d["ttnn_krope_cos"],
-                d["ttnn_krope_sin"],
-                d["dkv_matmul_weights_overlapped"],
-                d["dkv_rmsnorm_gamma_overlapped"],
-                d["ttnn_kv_cache"],
-                d["ttnn_position_ids"],
-                d["scale"],
-                d["sdpa_kv_cache_buffer"],
-                d["sdpa_out_interm_buffer"],
-                d["sender_coord"],
-                # Post-SDPA parameters
-                # Post-SDPA
-                d["kv_b2_overlapped"],
-                d["o_proj_overlapped"],
-                d["ttnn_sdpa_input_l"],
-                d["ttnn_sdpa_input_ms"],
-                d["ttnn_sdpa_output_l"],
-                d["ttnn_sdpa_intermediate_recv"],
-                d["ttnn_sdpa_forwarder_scratch"],
-                d["device_chunk_size"],
-                d["ttnn_attention_block_output"],
-                attention_block_semaphores=attn_semaphores,
-                # MoE parameters
-                shared_residual_mcast_src_tensor=d["ttnn_residual_mcast_src"],
-                gate_mm_weights_tensor=d["gate_mm_overlapped"],
-                gate_bias_tensor=d["ttnn_gate_bias"],
-                gate_indices_tensor=d["ttnn_gate_indices"],
-                gate_output_scores_tensor=d["gate_output_scores_tensor"],
-                gate_output_indices_tensor=d["gate_output_indices_tensor"],
-                gate_proj_weights_tensor=d["gate_proj_weights"],
-                up_proj_weights_tensor=d["up_proj_weights"],
-                down_proj_weights_tensor=d["down_proj_weights"],
-                moe_final_output_tensor=None,
-                rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
-                shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
-                shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
-                shared_down_weights_tensor=d["shared_down_weights_tensor"],
-                shared_k_parallel=d["shared_k_parallel"],
-                shared_n_parallel=d["shared_n_parallel"],
-                moe_semaphores=moe_semaphores,
-                reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
-                reduce_output_tensor=d["reduce_output_tensor"],
-                reduce_semaphores=reduce_semaphores,
-                reduce_root_coord=reduce_root_coord,
-                # Shared parameters
-                enable_routing=enable_routing,
-                use_hardcoded_expert_index=use_hardcoded_expert_index,
-                bcast_cluster_axis=bcast_cluster_axis,
-                bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
-                reduce_cluster_axis=reduce_cluster_axis,
-                sdpa_cluster_axis=0,  # sdpa_cluster_axis
-                sdpa_scale_fp32=1.0,  # sdpa_scale_fp32
-                num_links=1,  # num_links
-                skip_ccl=False,
-                upstream_socket=recv_socket,
-                downstream_socket=downstream_socket,
-                persistent_next_iter_semaphore=persistent_next_iter_semaphore,
-                persistent_mode=True,
-                is_torus=is_torus,
-            )
+            moe_stage.launch_compute(ctx, pipeline_block)
             logger.info(f"[rank={my_mesh_id}] persistent MoE kernel submitted")
         ttnn.distributed_context_barrier()
 

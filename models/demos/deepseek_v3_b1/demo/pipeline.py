@@ -18,6 +18,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
     DenseDecoderStage,
     EmbeddingStage,
     LMHeadStage,
+    MoEDecoderBlockComputeStage,
     PassthroughPayload,
     PassthroughStage,
     StageContext,
@@ -25,7 +26,6 @@ from models.demos.deepseek_v3_b1.demo.stage import (
 )
 from models.demos.deepseek_v3_b1.demo.weight_provider import WeightProvider
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_15_stages_demo_api import MoEComputeStage
 
 
 def create_fabric_router_config(max_payload_size: int) -> Any:
@@ -91,7 +91,9 @@ def create_single_pod_pipeline_configuration(
         return lambda d: DenseDecoderStage(weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d))
 
     def _moe_stage(layer_id: int):
-        return lambda d: MoEComputeStage(weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d))
+        return lambda d: MoEDecoderBlockComputeStage(
+            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d)
+        )
 
     dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
     moe_layer_id = moe_layer_id_override if moe_layer_id_override is not None else None
@@ -137,8 +139,9 @@ def create_sp4_pipeline_configuration(
         return lambda d: DenseDecoderStage(weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d))
 
     def _moe_stage(layer_id: int):
-        # TODO: Use this when we have the full decoder: return lambda d: MoEDecoderStage(weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d))
-        return lambda d: MoEComputeStage(weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d))
+        return lambda d: MoEDecoderBlockComputeStage(
+            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d)
+        )
 
     dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
     moe_layer_id = moe_layer_id_override if moe_layer_id_override is not None else None

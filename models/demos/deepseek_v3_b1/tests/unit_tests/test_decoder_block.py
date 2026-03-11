@@ -49,17 +49,20 @@ def create_decoder_block_tensors(
     sender_row,
     sender_col,
     position_id,
-    state_dict,
-    layer_idx,
-    num_routed_experts,
-    max_seq_len,
+    state_dict=None,
+    layer_idx=0,
+    num_routed_experts=1,
+    max_seq_len=32 * 1024,
     reduce_root_coord=ttnn.MeshCoordinate(1, 1),
+    prebuilt_layer=None,
 ):
-    """Create all tensors required by DecoderBlock.op() using a single BlitzDecodeWeights.
-    This avoids the L1 OOM caused by allocating overlapped attention weights twice
-    (once for MLA, once for MoE's gate_mm/ffn_norm). A single BDW instance ensures
-    the three fused weight groups share L1 without duplication.
-    Returns a dict with all attention + MoE + shared expert + reduce tensors.
+    """Create all tensors required by DecoderBlock.op().
+
+    When *prebuilt_layer* (a DeepSeekV3MoELayerWeights) is supplied the function
+    reuses those device-resident weights directly -- no BlitzDecodeWeights /
+    prepare_moe_layer_weights call, no golden-model tensors. Callers that pass a
+    *state_dict* and leave *prebuilt_layer* as None get the original behaviour
+    (single BDW instance, golden tensors included).
     """
     torch.manual_seed(0)
     num_devices = mesh_rows * mesh_cols
@@ -156,16 +159,20 @@ def create_decoder_block_tensors(
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # All weights via prepare_moe_layer_weights (single BDW)
+    # All weights via prepare_moe_layer_weights (single BDW) or prebuilt
     # ══════════════════════════════════════════════════════════════════════════
-    bdw = BlitzDecodeWeights(submesh)
-    layer = prepare_moe_layer_weights(
-        bdw,
-        state_dict,
-        layer_idx,
-        num_routed_experts=num_routed_experts,
-        move_to_device=True,
-    )
+    if prebuilt_layer is not None:
+        layer = prebuilt_layer
+    else:
+        assert state_dict is not None, "Either state_dict or prebuilt_layer must be provided"
+        bdw = BlitzDecodeWeights(submesh)
+        layer = prepare_moe_layer_weights(
+            bdw,
+            state_dict,
+            layer_idx,
+            num_routed_experts=num_routed_experts,
+            move_to_device=True,
+        )
 
     # ── MoE final output config (DRAM streaming matmul output grid) ──
     gate_proj_noc = ttnn.NOC.NOC_0
@@ -221,24 +228,28 @@ def create_decoder_block_tensors(
     )
 
     # ── Fresh gate output buffers for standalone MoeOp.op sanity check ──
-    moe_ref_gate_output_scores = ttnn.from_torch(
-        torch.zeros((1, 16), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=gate_output_mem_config,
-        tile=tile_1x16,
-        mesh_mapper=mesh_mapper,
-    )
-    moe_ref_gate_output_indices = ttnn.from_torch(
-        torch.zeros((1, 16), dtype=torch.uint16),
-        dtype=ttnn.uint16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=gate_output_mem_config,
-        tile=tile_1x16,
-        mesh_mapper=mesh_mapper,
-    )
+    _build_golden = state_dict is not None and prebuilt_layer is None
+    moe_ref_gate_output_scores = None
+    moe_ref_gate_output_indices = None
+    if _build_golden:
+        moe_ref_gate_output_scores = ttnn.from_torch(
+            torch.zeros((1, 16), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=gate_output_mem_config,
+            tile=tile_1x16,
+            mesh_mapper=mesh_mapper,
+        )
+        moe_ref_gate_output_indices = ttnn.from_torch(
+            torch.zeros((1, 16), dtype=torch.uint16),
+            dtype=ttnn.uint16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=gate_output_mem_config,
+            tile=tile_1x16,
+            mesh_mapper=mesh_mapper,
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     # Attention input/intermediate/output mesh tensors
@@ -376,17 +387,18 @@ def create_decoder_block_tensors(
         memory_config=kv_mem,
         mesh_mapper=kv_cache_2d_mesh_mapper,
     )
-    kv_cache_bfp8_before_op = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
-
-    # ── KV cache clone for standalone AttentionBlock.op sanity check ──
-    ttnn_kv_cache_attn_ref = ttnn.from_torch(
-        torch_kv_cache_shuffled,
-        dtype=ttnn.bfloat8_b,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=kv_mem,
-        mesh_mapper=kv_cache_2d_mesh_mapper,
-    )
+    kv_cache_bfp8_before_op = None
+    ttnn_kv_cache_attn_ref = None
+    if _build_golden:
+        kv_cache_bfp8_before_op = ttnn.to_torch(ttnn_kv_cache, mesh_composer=ttnn.ConcatMeshToTensor(submesh, dim=0))
+        ttnn_kv_cache_attn_ref = ttnn.from_torch(
+            torch_kv_cache_shuffled,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=kv_mem,
+            mesh_mapper=kv_cache_2d_mesh_mapper,
+        )
 
     # ── SDPA output tensor ──
     s1_cores, _ = FlashMLADecode.ProgramConfig.grid.BLOCKS[0]
@@ -435,15 +447,17 @@ def create_decoder_block_tensors(
         memory_config=output_mem_config,
         mesh_mapper=shard_mesh_mapper,
     )
-    attn_ref_output = ttnn.from_torch(
-        mesh_output_torch,
-        device=submesh,
-        layout=ttnn.TILE_LAYOUT,
-        tile=a_tile,
-        dtype=ttnn.bfloat16,
-        memory_config=output_mem_config,
-        mesh_mapper=shard_mesh_mapper,
-    )
+    attn_ref_output = None
+    if _build_golden:
+        attn_ref_output = ttnn.from_torch(
+            mesh_output_torch,
+            device=submesh,
+            layout=ttnn.TILE_LAYOUT,
+            tile=a_tile,
+            dtype=ttnn.bfloat16,
+            memory_config=output_mem_config,
+            mesh_mapper=shard_mesh_mapper,
+        )
 
     # ── SDPA worker/forwarder tensors ──
     sdpa_output_cores = FlashMLADecode.ProgramConfig.grid.output_cores(0, NUM_SDPA_WORKERS)
@@ -589,24 +603,27 @@ def create_decoder_block_tensors(
     )
 
     # ── Fresh reduce tensors for standalone MoeOp.op sanity check ──
-    moe_ref_reduce_intermediate = ttnn.from_torch(
-        torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=intermediate_mem_config,
-        tile=tile_1x32,
-        mesh_mapper=reduce_mesh_mapper,
-    )
-    moe_ref_reduce_output = ttnn.from_torch(
-        torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=reduce_output_mem,
-        tile=tile_1x32,
-        mesh_mapper=reduce_mesh_mapper,
-    )
+    moe_ref_reduce_intermediate = None
+    moe_ref_reduce_output = None
+    if _build_golden:
+        moe_ref_reduce_intermediate = ttnn.from_torch(
+            torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=intermediate_mem_config,
+            tile=tile_1x32,
+            mesh_mapper=reduce_mesh_mapper,
+        )
+        moe_ref_reduce_output = ttnn.from_torch(
+            torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=reduce_output_mem,
+            tile=tile_1x32,
+            mesh_mapper=reduce_mesh_mapper,
+        )
 
     # ── Shared expert mcast grid ──
     def _unwrap(t):
@@ -616,54 +633,88 @@ def create_decoder_block_tensors(
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Golden model PyTorch tensors (attention / MLA)
+    # Golden model PyTorch tensors (attention / MLA) -- only for test callers
     # ══════════════════════════════════════════════════════════════════════════
-    def _sd_key(suffix):
-        return f"model.layers.{layer_idx}.{suffix}"
+    golden = {}
+    if _build_golden:
 
-    golden_torch_gamma = state_dict[_sd_key("input_layernorm.weight")].unsqueeze(0)
-    golden_torch_matmul_weights = state_dict[_sd_key("self_attn.q_a_proj.weight")].T.contiguous()
-    golden_torch_rmsnorm2_gamma = state_dict[_sd_key("self_attn.q_a_layernorm.weight")].unsqueeze(0)
-    golden_torch_matmul2_weights = state_dict[_sd_key("self_attn.q_b_proj.weight")].T.contiguous()
-    golden_torch_dkv_matmul_weights = state_dict[_sd_key("self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
-    golden_torch_dkv_rmsnorm_gamma = state_dict[_sd_key("self_attn.kv_a_layernorm.weight")].unsqueeze(0)
-    golden_torch_o_proj_weights = state_dict[_sd_key("self_attn.o_proj.weight")].T.contiguous()
+        def _sd_key(suffix):
+            return f"model.layers.{layer_idx}.{suffix}"
 
-    V_HEAD_DIM = 128
-    KV_B_PROJ_HEAD_DIM = QNOPE_HEAD_DIM + V_HEAD_DIM  # 256
-    kv_b_proj_raw = state_dict[_sd_key("self_attn.kv_b_proj.weight")]
-    kv_b_out, kv_lora_rank = kv_b_proj_raw.shape
-    total_kv_heads = kv_b_out // KV_B_PROJ_HEAD_DIM
-    kv_b_3d = kv_b_proj_raw.reshape(total_kv_heads, KV_B_PROJ_HEAD_DIM, kv_lora_rank).contiguous()
-    golden_kv_b1 = kv_b_3d[:, :QNOPE_HEAD_DIM, :].reshape(-1, kv_lora_rank)
-    golden_kv_b2 = kv_b_3d[:, QNOPE_HEAD_DIM:, :].reshape(-1, kv_lora_rank).T.contiguous()
-    golden_torch_matmul3_weights = golden_kv_b1.reshape(total_kv_heads, QNOPE_HEAD_DIM, kv_lora_rank)
+        golden_torch_gamma = state_dict[_sd_key("input_layernorm.weight")].unsqueeze(0)
+        golden_torch_matmul_weights = state_dict[_sd_key("self_attn.q_a_proj.weight")].T.contiguous()
+        golden_torch_rmsnorm2_gamma = state_dict[_sd_key("self_attn.q_a_layernorm.weight")].unsqueeze(0)
+        golden_torch_matmul2_weights = state_dict[_sd_key("self_attn.q_b_proj.weight")].T.contiguous()
+        golden_torch_dkv_matmul_weights = state_dict[_sd_key("self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
+        golden_torch_dkv_rmsnorm_gamma = state_dict[_sd_key("self_attn.kv_a_layernorm.weight")].unsqueeze(0)
+        golden_torch_o_proj_weights = state_dict[_sd_key("self_attn.o_proj.weight")].T.contiguous()
 
-    golden_total_qnope_heads = total_kv_heads
-    golden_total_qrope_heads = total_kv_heads
+        V_HEAD_DIM = 128
+        KV_B_PROJ_HEAD_DIM = QNOPE_HEAD_DIM + V_HEAD_DIM  # 256
+        kv_b_proj_raw = state_dict[_sd_key("self_attn.kv_b_proj.weight")]
+        kv_b_out, kv_lora_rank = kv_b_proj_raw.shape
+        total_kv_heads = kv_b_out // KV_B_PROJ_HEAD_DIM
+        kv_b_3d = kv_b_proj_raw.reshape(total_kv_heads, KV_B_PROJ_HEAD_DIM, kv_lora_rank).contiguous()
+        golden_kv_b1 = kv_b_3d[:, :QNOPE_HEAD_DIM, :].reshape(-1, kv_lora_rank)
+        golden_kv_b2 = kv_b_3d[:, QNOPE_HEAD_DIM:, :].reshape(-1, kv_lora_rank).T.contiguous()
+        golden_torch_matmul3_weights = golden_kv_b1.reshape(total_kv_heads, QNOPE_HEAD_DIM, kv_lora_rank)
 
-    # ── Golden model PyTorch tensors (MoE) ──
-    golden_moe_rmsnorm_gamma = (
-        state_dict[_sd_key("post_attention_layernorm.weight")].reshape(1, K).to(torch.bfloat16).float()
-    )
-    golden_moe_shared_gate = state_dict[_sd_key("mlp.shared_experts.gate_proj.weight")].T.contiguous()
-    golden_moe_shared_up = state_dict[_sd_key("mlp.shared_experts.up_proj.weight")].T.contiguous()
-    golden_moe_shared_down = state_dict[_sd_key("mlp.shared_experts.down_proj.weight")].T.contiguous()
-    golden_moe_routing_weights = state_dict[_sd_key("mlp.gate.weight")].T.contiguous()
-    golden_moe_bias = (
-        state_dict[_sd_key("mlp.gate.e_score_correction_bias")].reshape(1, 8, 32).contiguous().to(torch.bfloat16)
-    )
+        golden_total_qnope_heads = total_kv_heads
+        golden_total_qrope_heads = total_kv_heads
 
-    golden_moe_gate_proj_dict = {}
-    golden_moe_up_proj_dict = {}
-    golden_moe_down_proj_dict = {}
-    for e in range(num_routed_experts):
-        w_g = state_dict[_sd_key(f"mlp.experts.{e}.gate_proj.weight")].T.contiguous()
-        golden_moe_gate_proj_dict[e] = w_g.reshape(1, 1, K, -1)
-        w_u = state_dict[_sd_key(f"mlp.experts.{e}.up_proj.weight")].T.contiguous()
-        golden_moe_up_proj_dict[e] = w_u.reshape(1, 1, K, -1)
-        w_d = state_dict[_sd_key(f"mlp.experts.{e}.down_proj.weight")].T.contiguous()
-        golden_moe_down_proj_dict[e] = w_d.reshape(1, 1, -1, K)
+        # ── Golden model PyTorch tensors (MoE) ──
+        golden_moe_rmsnorm_gamma = (
+            state_dict[_sd_key("post_attention_layernorm.weight")].reshape(1, K).to(torch.bfloat16).float()
+        )
+        golden_moe_shared_gate = state_dict[_sd_key("mlp.shared_experts.gate_proj.weight")].T.contiguous()
+        golden_moe_shared_up = state_dict[_sd_key("mlp.shared_experts.up_proj.weight")].T.contiguous()
+        golden_moe_shared_down = state_dict[_sd_key("mlp.shared_experts.down_proj.weight")].T.contiguous()
+        golden_moe_routing_weights = state_dict[_sd_key("mlp.gate.weight")].T.contiguous()
+        golden_moe_bias = (
+            state_dict[_sd_key("mlp.gate.e_score_correction_bias")].reshape(1, 8, 32).contiguous().to(torch.bfloat16)
+        )
+
+        golden_moe_gate_proj_dict = {}
+        golden_moe_up_proj_dict = {}
+        golden_moe_down_proj_dict = {}
+        for e in range(num_routed_experts):
+            w_g = state_dict[_sd_key(f"mlp.experts.{e}.gate_proj.weight")].T.contiguous()
+            golden_moe_gate_proj_dict[e] = w_g.reshape(1, 1, K, -1)
+            w_u = state_dict[_sd_key(f"mlp.experts.{e}.up_proj.weight")].T.contiguous()
+            golden_moe_up_proj_dict[e] = w_u.reshape(1, 1, K, -1)
+            w_d = state_dict[_sd_key(f"mlp.experts.{e}.down_proj.weight")].T.contiguous()
+            golden_moe_down_proj_dict[e] = w_d.reshape(1, 1, -1, K)
+
+        golden = {
+            "golden_torch_input": torch_input,
+            "golden_torch_gamma": golden_torch_gamma,
+            "golden_torch_matmul_weights": golden_torch_matmul_weights,
+            "golden_torch_rmsnorm2_gamma": golden_torch_rmsnorm2_gamma,
+            "golden_torch_matmul2_weights": golden_torch_matmul2_weights,
+            "golden_torch_matmul3_weights": golden_torch_matmul3_weights,
+            "golden_torch_sin": torch_sin,
+            "golden_torch_cos": torch_cos,
+            "golden_position_ids": position_ids,
+            "golden_torch_dkv_matmul_weights": golden_torch_dkv_matmul_weights,
+            "golden_torch_dkv_rmsnorm_gamma": golden_torch_dkv_rmsnorm_gamma,
+            "golden_torch_kv_cache": torch_kv_cache,
+            "golden_scale": scale,
+            "golden_torch_kv_b2_proj_weights": golden_kv_b2,
+            "golden_torch_o_proj_weights": golden_torch_o_proj_weights,
+            "golden_total_qnope_heads": golden_total_qnope_heads,
+            "golden_total_qrope_heads": golden_total_qrope_heads,
+            "golden_kv_cache_bfp8_before_op": kv_cache_bfp8_before_op,
+            "golden_sdpa_slice_size": SDPA_INPUT_NUM_CORES * HEADS_PER_ROW,
+            "golden_moe_rmsnorm_gamma": golden_moe_rmsnorm_gamma,
+            "golden_moe_shared_gate": golden_moe_shared_gate,
+            "golden_moe_shared_up": golden_moe_shared_up,
+            "golden_moe_shared_down": golden_moe_shared_down,
+            "golden_moe_routing_weights": golden_moe_routing_weights,
+            "golden_moe_bias": golden_moe_bias,
+            "golden_moe_gate_proj_dict": golden_moe_gate_proj_dict,
+            "golden_moe_up_proj_dict": golden_moe_up_proj_dict,
+            "golden_moe_down_proj_dict": golden_moe_down_proj_dict,
+        }
 
     return {
         # Attention weights (from prepare_moe_layer_weights via BDW)
@@ -722,7 +773,7 @@ def create_decoder_block_tensors(
         "reduce_intermediate_tensors": intermediate_tensors,
         "reduce_output_tensor": reduce_output_tensor,
         "reduce_root_coord": reduce_root_coord,
-        # Standalone MoE ref tensors
+        # Standalone MoE ref tensors (None when prebuilt_layer is used)
         "moe_ref_gate_output_scores": moe_ref_gate_output_scores,
         "moe_ref_gate_output_indices": moe_ref_gate_output_indices,
         "moe_ref_reduce_intermediate": moe_ref_reduce_intermediate,
@@ -731,36 +782,8 @@ def create_decoder_block_tensors(
         "per_core_down_proj_N": per_core_down_proj_N,
         # MoE mcast grid (for shared expert)
         "mcast_grid": mcast_grid,
-        # Golden model PyTorch tensors (attention / MLA)
-        "golden_torch_input": torch_input,
-        "golden_torch_gamma": golden_torch_gamma,
-        "golden_torch_matmul_weights": golden_torch_matmul_weights,
-        "golden_torch_rmsnorm2_gamma": golden_torch_rmsnorm2_gamma,
-        "golden_torch_matmul2_weights": golden_torch_matmul2_weights,
-        "golden_torch_matmul3_weights": golden_torch_matmul3_weights,
-        "golden_torch_sin": torch_sin,
-        "golden_torch_cos": torch_cos,
-        "golden_position_ids": position_ids,
-        "golden_torch_dkv_matmul_weights": golden_torch_dkv_matmul_weights,
-        "golden_torch_dkv_rmsnorm_gamma": golden_torch_dkv_rmsnorm_gamma,
-        "golden_torch_kv_cache": torch_kv_cache,
-        "golden_scale": scale,
-        "golden_torch_kv_b2_proj_weights": golden_kv_b2,
-        "golden_torch_o_proj_weights": golden_torch_o_proj_weights,
-        "golden_total_qnope_heads": golden_total_qnope_heads,
-        "golden_total_qrope_heads": golden_total_qrope_heads,
-        "golden_kv_cache_bfp8_before_op": kv_cache_bfp8_before_op,
-        "golden_sdpa_slice_size": SDPA_INPUT_NUM_CORES * HEADS_PER_ROW,
-        # Golden model PyTorch tensors (MoE)
-        "golden_moe_rmsnorm_gamma": golden_moe_rmsnorm_gamma,
-        "golden_moe_shared_gate": golden_moe_shared_gate,
-        "golden_moe_shared_up": golden_moe_shared_up,
-        "golden_moe_shared_down": golden_moe_shared_down,
-        "golden_moe_routing_weights": golden_moe_routing_weights,
-        "golden_moe_bias": golden_moe_bias,
-        "golden_moe_gate_proj_dict": golden_moe_gate_proj_dict,
-        "golden_moe_up_proj_dict": golden_moe_up_proj_dict,
-        "golden_moe_down_proj_dict": golden_moe_down_proj_dict,
+        # Golden / ref tensors (empty dict when prebuilt_layer is used)
+        **golden,
     }
 
 

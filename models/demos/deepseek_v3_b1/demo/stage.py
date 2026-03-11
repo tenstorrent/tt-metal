@@ -16,7 +16,10 @@ from typing import Any
 import torch
 
 import ttnn
+from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
+from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
+from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
 from models.demos.deepseek_v3_b1.prepare_weights import (
     DeepSeekV3DenseLayerWeights,
@@ -24,6 +27,7 @@ from models.demos.deepseek_v3_b1.prepare_weights import (
     DeepSeekV3LMHeadWeights,
     DeepSeekV3MoELayerWeights,
 )
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_decoder_block import create_decoder_block_tensors
 
 # Global constants used by multiple stage kinds (and exported to pipeline/cli)
 TOKEN_PAGE_SIZE_BYTES = 64
@@ -32,6 +36,29 @@ ACTIVATION_DIM = 7168
 ACTIVATION_PAGE_SIZE_BYTES = ACTIVATION_DIM * 2
 ACTIVATION_FIFO_SIZE = ACTIVATION_PAGE_SIZE_BYTES * 1
 PIPELINE_CORE_COORD = ttnn.CoreCoord(12, 8)
+MOE_SENDER_CORE_COORD = ttnn.CoreCoord(12, 9)
+
+
+def build_worker_grid_excluding_core(device_grid_size, excluded_core):
+    """Build a CoreRangeSet covering the full device grid minus *excluded_core*."""
+    max_x = device_grid_size.x - 1
+    max_y = device_grid_size.y - 1
+    ranges = []
+
+    if excluded_core.y > 0:
+        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(max_x, excluded_core.y - 1)))
+    if excluded_core.y < max_y:
+        ranges.append(ttnn.CoreRange(ttnn.CoreCoord(0, excluded_core.y + 1), ttnn.CoreCoord(max_x, max_y)))
+    if excluded_core.x > 0:
+        ranges.append(
+            ttnn.CoreRange(ttnn.CoreCoord(0, excluded_core.y), ttnn.CoreCoord(excluded_core.x - 1, excluded_core.y))
+        )
+    if excluded_core.x < max_x:
+        ranges.append(
+            ttnn.CoreRange(ttnn.CoreCoord(excluded_core.x + 1, excluded_core.y), ttnn.CoreCoord(max_x, excluded_core.y))
+        )
+
+    return ttnn.CoreRangeSet(ranges)
 
 
 @dataclass
@@ -399,4 +426,169 @@ class LMHeadStage(StageKind):
             socket_output=d["lmhead_output_socket"],
             persistent_mode=self._lm_head_persistent_mode,
             persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
+        )
+
+
+class MoEDecoderBlockComputeStage(StageKind):
+    """Full decoder stage: attention + MoE via DecoderBlock.op()."""
+
+    def __init__(
+        self,
+        weights: DeepSeekV3MoELayerWeights,
+        *,
+        persistent_mode: bool = True,
+        is_torus: bool = True,
+        use_hardcoded_expert_index: bool = False,
+        enable_routing: bool = True,
+        position_id: int = 0,
+        max_seq_len: int = 32 * 1024,
+    ) -> None:
+        self._weights = weights
+        self._persistent_mode = persistent_mode
+        self._is_torus = is_torus
+        self._use_hardcoded_expert_index = use_hardcoded_expert_index
+        self._enable_routing = enable_routing
+        self._position_id = position_id
+        self._max_seq_len = max_seq_len
+        self._state: dict[str, Any] = {}
+
+    def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
+        mesh_device = ctx.mesh_device
+        pipeline_config = ctx.pipeline_config
+        my_mesh_id = ctx.my_mesh_id
+
+        gate_proj_noc = ttnn.NOC.NOC_0
+        gate_proj_worker_cores = mesh_device.get_optimal_dram_bank_to_logical_worker_assignment(gate_proj_noc)
+        gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in gate_proj_worker_cores])
+        shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
+        aggregator_core = shard_cores_list[0]
+
+        stage_entry_device = pipeline_config[my_mesh_id].entry_node_coord
+        reduce_root_coord = pipeline_config[my_mesh_id].exit_node_coord
+
+        return PipelineBlock(
+            mesh_device,
+            PIPELINE_CORE_COORD,
+            upstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
+            upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, MOE_SENDER_CORE_COORD),
+            exit_node_upstream=ttnn.MeshCoreCoord(reduce_root_coord, aggregator_core),
+        )
+
+    def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+        mesh_device = ctx.mesh_device
+        pipeline_config = ctx.pipeline_config
+        my_mesh_id = ctx.my_mesh_id
+
+        sender_coord = pipeline_config[my_mesh_id].entry_node_coord
+        reduce_root_coord = pipeline_config[my_mesh_id].exit_node_coord
+
+        d = create_decoder_block_tensors(
+            mesh_device,
+            mesh_device.shape[0],
+            mesh_device.shape[1],
+            sender_coord[0],
+            sender_coord[1],
+            self._position_id,
+            max_seq_len=self._max_seq_len,
+            reduce_root_coord=reduce_root_coord,
+            prebuilt_layer=self._weights,
+        )
+        ttnn.synchronize_device(mesh_device)
+
+        num_cores = mesh_device.compute_with_storage_grid_size().x * mesh_device.compute_with_storage_grid_size().y
+        available_cores = ttnn.num_cores_to_corerangeset(
+            num_cores, mesh_device.compute_with_storage_grid_size(), row_wise=True
+        )
+
+        attn_semaphores = AttentionBlock.create_semaphores(mesh_device)
+        moe_semaphores = MoeOp.create_semaphores(mesh_device)
+        reduce_semaphores = [ttnn.create_global_semaphore(mesh_device, available_cores, 0) for _ in range(4)]
+
+        recv_socket = pipeline_block.get_downstream_socket()
+        downstream_socket = pipeline_block.exit_socket_interface.get_upstream_socket()
+
+        self._state = {
+            **d,
+            "attn_semaphores": attn_semaphores,
+            "moe_semaphores": moe_semaphores,
+            "reduce_semaphores": reduce_semaphores,
+            "reduce_root_coord": reduce_root_coord,
+            "recv_socket": recv_socket,
+            "downstream_socket": downstream_socket,
+        }
+
+        if self._persistent_mode:
+            persistent_next_iter_semaphore = ttnn.create_global_semaphore(mesh_device, available_cores, 1)
+            self._state["persistent_next_iter_semaphore"] = persistent_next_iter_semaphore
+
+    def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
+        d = self._state
+        DecoderBlock.op(
+            d["input_tensor_mesh"],
+            d["gamma_overlapped"],
+            d["matmul_weights_overlapped"],
+            d["rmsnorm2_gamma_overlapped"],
+            d["matmul2_weights_overlapped"],
+            d["matmul3_weights_overlapped"],
+            d["ttnn_qrope_sin"],
+            d["ttnn_qrope_cos"],
+            d["ttnn_trans_mat"],
+            d["ttnn_krope_cos"],
+            d["ttnn_krope_sin"],
+            d["dkv_matmul_weights_overlapped"],
+            d["dkv_rmsnorm_gamma_overlapped"],
+            d["ttnn_kv_cache"],
+            d["ttnn_position_ids"],
+            d["scale"],
+            d["sdpa_kv_cache_buffer"],
+            d["sdpa_out_interm_buffer"],
+            d["sender_coord"],
+            d["kv_b2_overlapped"],
+            d["o_proj_overlapped"],
+            d["ttnn_sdpa_input_l"],
+            d["ttnn_sdpa_input_ms"],
+            d["ttnn_sdpa_output_l"],
+            d["ttnn_sdpa_intermediate_recv"],
+            d["ttnn_sdpa_forwarder_scratch"],
+            d["device_chunk_size"],
+            d["ttnn_attention_block_output"],
+            attention_block_semaphores=d["attn_semaphores"],
+            shared_residual_mcast_src_tensor=d["ttnn_residual_mcast_src"],
+            gate_mm_weights_tensor=d["gate_mm_overlapped"],
+            gate_bias_tensor=d["ttnn_gate_bias"],
+            gate_indices_tensor=d["ttnn_gate_indices"],
+            gate_output_scores_tensor=d["gate_output_scores_tensor"],
+            gate_output_indices_tensor=d["gate_output_indices_tensor"],
+            gate_proj_weights_tensor=d["gate_proj_weights"],
+            up_proj_weights_tensor=d["up_proj_weights"],
+            down_proj_weights_tensor=d["down_proj_weights"],
+            moe_final_output_tensor=None,
+            rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
+            shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
+            shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
+            shared_down_weights_tensor=d["shared_down_weights_tensor"],
+            shared_k_parallel=d["shared_k_parallel"],
+            shared_n_parallel=d["shared_n_parallel"],
+            moe_semaphores=d["moe_semaphores"],
+            reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
+            reduce_output_tensor=d["reduce_output_tensor"],
+            reduce_semaphores=d["reduce_semaphores"],
+            reduce_root_coord=d["reduce_root_coord"],
+            enable_routing=self._enable_routing,
+            use_hardcoded_expert_index=self._use_hardcoded_expert_index,
+            bcast_cluster_axis=0,
+            bcast_secondary_cluster_axis=1,
+            reduce_cluster_axis=1,
+            sdpa_cluster_axis=0,
+            sdpa_scale_fp32=1.0,
+            num_links=1,
+            skip_ccl=False,
+            upstream_socket=d["recv_socket"],
+            downstream_socket=d["downstream_socket"],
+            persistent_next_iter_semaphore=d.get("persistent_next_iter_semaphore"),
+            persistent_mode=self._persistent_mode,
+            is_torus=self._is_torus,
         )
