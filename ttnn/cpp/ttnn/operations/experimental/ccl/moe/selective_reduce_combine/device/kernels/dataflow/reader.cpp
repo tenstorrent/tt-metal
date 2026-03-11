@@ -73,6 +73,7 @@ void kernel_main() {
     constexpr uint32_t dense_token_maps_stride_elm = get_named_compile_time_arg_val("dense_token_maps_stride_elm");
     constexpr uint32_t num_local_experts = get_named_compile_time_arg_val("num_local_experts");
     constexpr uint32_t num_token_parallel_cores = get_named_compile_time_arg_val("num_token_parallel_cores");
+    constexpr uint32_t num_data_parallel_cores = get_named_compile_time_arg_val("num_data_parallel_cores");
     constexpr uint32_t global_num_tokens = get_named_compile_time_arg_val("global_num_tokens");
     constexpr uint32_t select_experts_k = get_named_compile_time_arg_val("select_experts_k");
     constexpr uint32_t sync_semaphore_id = get_named_compile_time_arg_val("sync_semaphore_id");
@@ -93,6 +94,7 @@ void kernel_main() {
     const auto dense_token_counts_addr = get_arg_val<uint32_t>(arg_index++);
     const auto token_activations_addr = get_arg_val<uint32_t>(arg_index++);
     const auto token_parallel_core_id = get_arg_val<uint32_t>(arg_index++);
+    const bool sync_core = get_arg_val<uint32_t>(arg_index++);
 
     const auto sync_semaphore_addr = get_semaphore(sync_semaphore_id);
 

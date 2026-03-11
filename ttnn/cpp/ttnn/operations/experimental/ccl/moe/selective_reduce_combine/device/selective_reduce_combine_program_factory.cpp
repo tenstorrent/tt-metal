@@ -160,7 +160,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     const ttnn::CoreRangeSet worker_core_range_set(operation_attributes.worker_cores);
     const uint32_t metadata_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range_set, 1);
     const uint32_t compute_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range_set, 1);
-    auto artifacts = ttnn::build_selective_reduce_combine_program_artifacts(
+    auto artifacts = build_selective_reduce_combine_program_artifacts(
         program,
         operation_attributes,
         mesh_coordinate,
@@ -188,7 +188,7 @@ void UnifiedSelectReduce::override_runtime_arguments(
             range.end_coord());
 
         const auto& shared_variables = cached_workload.shared_variables.at(range);
-        ttnn::selective_reduce_combine_helper_override_runtime_arguments(
+        selective_reduce_combine_helper_override_runtime_arguments(
             program,
             shared_variables.reader_kernel_id,
             shared_variables.writer_kernel_id,
@@ -287,7 +287,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
 
     const auto input_data_format = datatype_to_dataformat_converter(input_tensor.dtype());
     // input sharded buffer
-    constexpr auto data_cb_id = tt::CBIndex::c_0;
+    constexpr auto data_cb_id = tt::CBIndex::c_15;
     CircularBufferConfig cb_data_config = CircularBufferConfig(buffer_size_bytes, {{data_cb_id, input_data_format}})
                                               .set_page_size(data_cb_id, buffer_size_bytes)
                                               .set_globally_allocated_address(*input_tensor.buffer());
@@ -375,6 +375,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"dense_token_maps_stride_elm", dense_token_maps_stride_elm},
         {"num_local_experts", experts_per_device},
         {"num_token_parallel_cores", num_token_parallel_cores},
+        {"num_data_parallel_cores", num_data_parallel_cores},
         {"global_num_tokens", total_tokens},
         {"select_experts_k", select_experts_k},
         {"sync_semaphore_id", metadata_sync_semaphore_id},
@@ -439,7 +440,9 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"linearized_mesh_coord", flat_mesh_idx},
         {"topology", static_cast<uint32_t>(topology)},
         {"num_mux_workers_per_link", neighbors.size()},
-        {"compute_sync_semaphore_id", writer_compute_sync_semaphore_id}};
+        {"compute_sync_semaphore_id", writer_compute_sync_semaphore_id},
+        {"compute_cores_per_combine_core", 3}};
+    // TODO (AM) ^ don't hardcode this here
 
     std::vector<uint32_t> writer_compile_time_args;
     ttnn::ccl::fabric_mux_connection_ct_args(
@@ -491,6 +494,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
             dense_token_counts_tensor.buffer()->address(),  // dense_token_counts_addr
             token_activations_tensor.buffer()->address(),   // token_activations_addr
             token_parallel_idx,                             // token_parallel_core_id
+            sender_core == sender_cores[0]                  // sync_core
         };
 
         const auto source_token_segment_size_bytes = *(data_parallel_size_iter++);

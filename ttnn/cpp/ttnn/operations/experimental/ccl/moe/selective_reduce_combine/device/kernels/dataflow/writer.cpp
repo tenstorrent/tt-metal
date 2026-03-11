@@ -78,7 +78,8 @@ void kernel_main() {
     constexpr auto topology = tt::tt_fabric::Topology(get_named_compile_time_arg_val("topology"));
     constexpr uint32_t num_mux_workers_per_link = get_named_compile_time_arg_val("num_mux_workers_per_link");
     constexpr uint32_t compute_sync_semaphore_id = get_named_compile_time_arg_val("compute_sync_semaphore_id");
-
+    constexpr uint32_t compute_cores_per_combine_core =
+        get_named_compile_time_arg_val("compute_cores_per_combine_core");
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(0);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(1);
     constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(2);
@@ -190,7 +191,7 @@ void kernel_main() {
     }
 
     auto* compute_sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(compute_sync_semaphore_addr);
-    uint32_t compute_sync_semaphore_val = moe_ring::NUM_CORES / num_data_parallel_cores;
+    uint32_t compute_sync_semaphore_val = compute_cores_per_combine_core;
     bool needs_barrier = false;
     for (uint32_t e = 0; e < num_local_experts; ++e) {
         auto* expert_token_activations_ptr =
