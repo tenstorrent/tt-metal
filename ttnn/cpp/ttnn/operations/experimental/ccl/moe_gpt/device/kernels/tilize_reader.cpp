@@ -1008,20 +1008,13 @@ void kernel_main() {
     // write out e_t_output_tensor
     // Skip if address is 0 (fused mode: no output tensors allocated)
     if (is_drain_tilize_core && e_t_output_address != 0) {
-        // Repack stride-4 internal e_t CB to stride-1 flat format in-place for selective_reduce_combine.
-        // Internal: token_id at e_t_buffer_base + (e*(tokens+1) + k) * e_t_entry_size
-        // Output:   flat[e * tokens + k] = token_id  (written to CB base, then NOC-copied to output)
-        // In-place safety: src byte (e*(tokens+1)*16 + k*16) >= dst byte (e*tokens*4 + k*4) for all e,k.
-        constexpr uint32_t e_t_stride = e_t_entry_size / sizeof(uint32_t);  // = 4
-        uint32_t* flat_e_t = reinterpret_cast<uint32_t*>(e_t_buffer_base);
+        // Write e_t directly in internal format: 1 page per expert, stride-4 with (T+1) entries.
+        // This matches moe_compute's output format expected by selective_reduce_combine.
+        uint32_t l1_read_addr = get_read_ptr(e_t_cb_id);
         for (uint32_t e = 0; e < experts_per_device; ++e) {
-            const uint32_t* src =
-                reinterpret_cast<const uint32_t*>(e_t_buffer_base + e * (tokens + 1) * e_t_entry_size);
-            for (uint32_t k = 0; k < num_activated_tokens_per_expert[e]; ++k) {
-                flat_e_t[e * tokens + k] = src[k * e_t_stride];
-            }
+            noc_async_write_page(e, e_t_output_tensor_addr_gen, l1_read_addr);
+            l1_read_addr += e_t_output_page_size;
         }
-        noc_async_write_page(0, e_t_output_tensor_addr_gen, e_t_buffer_base);
     }
 
     // write out per_expert_total_tokens_output_tensor

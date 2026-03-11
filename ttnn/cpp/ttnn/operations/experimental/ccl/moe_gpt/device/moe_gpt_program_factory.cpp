@@ -550,8 +550,10 @@ MoEGPTMeshWorkloadFactory::create_at(
         uint32_t activation_total_bytes = (tokens + 1) * activation_row_bytes;
         auto tilize_expert_activation_output_page_size = activation_total_bytes;
 
-        // stride-1 flat layout: {1, E * tokens} uint32, matches e_t_spec in device_operation
-        auto tilize_e_t_output_page_size = experts_per_device * tokens * sizeof(uint32_t);
+        // Matches moe_compute format: {E, (T+1)*stride} with 1 page per expert.
+        // Each page = (tokens + 1) * align(sizeof(uint32_t), l1_alignment) bytes.
+        auto tilize_e_t_output_page_size =
+            (tokens + 1) * tt::align(static_cast<uint32_t>(sizeof(uint32_t)), l1_alignment);
 
         // --- Semaphores ---
         constexpr uint32_t INVALID = 0;

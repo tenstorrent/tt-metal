@@ -15,7 +15,7 @@ from typing import Optional
 import torch
 
 import ttnn
-from tests.nightly.tg.ccl.test_all_to_all_dispatch_metadata_6U import gen_expert_mapping_new_format_from_old
+from tests.nightly.tg.ccl.moe.test_moe_compute_6U import gen_expert_mapping
 
 
 @dataclass
@@ -358,28 +358,29 @@ def create_expert_mapping_tensors(
     memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
     new_format: bool = False,
     return_torch: bool = False,
+    cluster_axis: int = 0,
 ) -> ttnn.Tensor:
-    """Create expert-to-device mapping tensors for all_to_all operations.
-
-    Args:
-        num_devices: Total number of devices
-        num_experts_global: Number of global experts
-        mesh_device: TTNN mesh device
-
-    Returns:
-        Mapping tensor [1, 1, num_experts, num_devices]
-    """
-    # Create identity matrix showing which device owns which expert
-    # Shape: [num_experts, num_devices] where mapping[e, d] = 1 if expert e is on device d
+    """Create expert-to-device mapping tensors for all_to_all operations."""
     num_experts_per_device = num_experts_global // num_devices
-    mapping = (
-        torch.eye(num_devices, dtype=torch.int32)
-        .repeat_interleave(num_experts_per_device, dim=0)
-        .unsqueeze(0)
-        .unsqueeze(0)
-    )
     if new_format:
-        mapping = gen_expert_mapping_new_format_from_old(mapping, mesh_device.shape)
+        mesh_rows, mesh_cols = mesh_device.shape
+        num_replicated_devices = mesh_cols if cluster_axis == 0 else mesh_rows
+        experts_per_cluster = num_experts_global // num_replicated_devices
+        mapping = gen_expert_mapping(
+            num_devices,
+            num_replicated_devices,
+            cluster_axis,
+            num_experts_global,
+            experts_per_cluster,
+            num_experts_per_device,
+        )
+    else:
+        mapping = (
+            torch.eye(num_devices, dtype=torch.int32)
+            .repeat_interleave(num_experts_per_device, dim=0)
+            .unsqueeze(0)
+            .unsqueeze(0)
+        )
 
     if return_torch:
         return mapping

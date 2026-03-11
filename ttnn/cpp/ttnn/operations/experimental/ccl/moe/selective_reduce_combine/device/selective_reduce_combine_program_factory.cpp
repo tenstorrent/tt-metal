@@ -264,10 +264,12 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
             .set_page_size(token_counts_cb_id, aligned_token_counts_buffer_size);
 
     // token activations metadata
-    // page size: total tokens * (2 * experts_per_device + 1 + 3) * sizeof(uint32_t)
-    const uint32_t activations_stride_elm = token_activations_tensor.logical_shape()[-1] / total_tokens;
-
-    TT_FATAL(activations_stride_elm == 8, "unexpected stride");
+    // Per-row layout: [token_id, k_indices[E], scores[E]] with L1 alignment padding.
+    // Stride = align((2*E+1)*4, l1_alignment) / 4.  The tensor may have an extra sentinel
+    // row (moe_gpt allocates total_tokens+1 rows), so we compute stride from experts_per_device.
+    const uint32_t activations_row_elements = 2 * experts_per_device + 1;
+    const uint32_t activations_stride_elm =
+        tt::align(activations_row_elements * sizeof(uint32_t), l1_alignment) / sizeof(uint32_t);
 
     const auto token_activations_page_size_bytes = token_activations_tensor.tensor_spec().compute_page_size_bytes();
     const auto aligned_token_activations_page_size_bytes = tt::align(token_activations_page_size_bytes, l1_alignment);

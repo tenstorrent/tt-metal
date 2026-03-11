@@ -360,3 +360,58 @@ are fast (~25-37 μs each). Max times are higher due to fabric synchronization v
    `w0_w1: [num_cores, L, E, groups_per_core, K, 4*TILE_SIZE]`
    `w2: [num_cores, L, E, 2, N, 4*TILE_SIZE]`
    These are prepared by `weights.py:_prepare_w0_w1_tensor` / `_prepare_w2_tensor`, not standard ttnn weight tensors.
+
+---
+
+## 13. Integration Status (2026-03-11)
+
+### Branch
+- **Branch**: `sraizada/moe-gpt-fused-integration-cleanup` (33 pushed commits on `grechsteiner/final_moe_test`)
+- 10 uncommitted files with critical fixes (see below)
+
+### Test Results
+| Test | Status | Notes |
+|------|--------|-------|
+| `test_dispatch` | PASS | All 32 devices |
+| `test_dispatch_compute` | PASS | All 32 devices, PCC ~0.990 |
+| `test_dispatch_compute_combine` | RUNS (no hang) | PCC ~0.4 — accuracy issue in test reference |
+| `test_moe_gpt_e2e` | Not re-run | Was passing before e_t format change |
+| `test_moe_gpt_e2e_perf` | Not re-run | Was passing before e_t format change |
+
+### Key Fix: e_t Format Mismatch (selective_reduce_combine hang)
+`moe_gpt` was outputting e_t as `{1, E*T}` stride-1 flat. `selective_reduce_combine` expects `{E, (T+1)*stride}` with stride=4 (16-byte alignment) and a sentinel per expert — the format `moe_compute` (DeepSeek) produces. Fix spans:
+
+- `moe_gpt_device_operation.cpp`: Output spec → `Shape({E_per_dev, e_t_row_elements})`
+- `tilize_reader.cpp`: Write 1 page per expert instead of repacking to flat
+- `moe_gpt_program_factory.cpp`: Page size = `(T+1) * align(4, l1_alignment)`
+
+### Key Fix: activations_stride_elm
+`selective_reduce_combine_program_factory.cpp` had `TT_FATAL(activations_stride_elm == 8)` hardcoded for DeepSeek's E=2. For GPT-OSS E=4, stride is 12. Changed to dynamic computation:
+```cpp
+const uint32_t activations_row_elements = 2 * experts_per_device + 1;
+const uint32_t activations_stride_elm = tt::align(activations_row_elements * sizeof(uint32_t), l1_alignment) / sizeof(uint32_t);
+```
+
+### Open Issue: Combine PCC ~0.4
+Uniformly low across all 32 devices — likely a test verification reference bug, not kernel. The combine output changed from `[experts_per_ring, M, H]` to `[K, M, H]` (K-indexed). Fix script at `/tmp/fix_combine_test.py`.
+
+### Uncommitted Files
+| File | Change |
+|------|--------|
+| `moe_gpt_device_operation.cpp` | e_t output shape matching moe_compute format |
+| `moe_gpt_program_factory.cpp` | e_t per-expert page size |
+| `tilize_reader.cpp` | Write e_t as 1 page per expert (stride-4) |
+| `selective_reduce_combine_program_factory.cpp` | Dynamic activations_stride_elm |
+| `config.py` | Fixed import to `gen_expert_mapping`, fixed `experts_per_cluster` |
+| `test_moe_gpt_e2e.py` | Updated e_t verification for stride-4, K-indexed combine |
+| `CMakeLists.txt` | Fixed paths to `experimental/ccl/moe_gpt/` |
+| `experimental_nanobind.cpp` | Removed duplicate includes |
+| `fused_decode.py` | WIP model integration |
+| `weights.py` | WIP model integration |
+
+### Next Steps
+1. Debug combine PCC accuracy (likely test reference code for K-indexed output)
+2. Re-run all 5 tests
+3. Commit uncommitted changes
+4. Wire fused path into ThroughputExperts model class
+5. Add all_reduce after combine

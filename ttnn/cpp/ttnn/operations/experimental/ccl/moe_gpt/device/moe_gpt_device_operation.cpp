@@ -138,9 +138,13 @@ MoEGPTDeviceOperation::spec_return_value_t MoEGPTDeviceOperation::compute_output
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
 
-    // Output 2: Token indices (per expert) - stride-1 flat: [1, E * total_tokens]
+    // Output 2: Token indices (per expert) - matches moe_compute format.
+    // 1 page per expert, each entry at 16B (l1_alignment) offset.
+    // (total_tokens + 1) entries per expert: token IDs + sentinel.
+    uint32_t e_t_row_bytes = (total_tokens + 1) * tt::align(sizeof(uint32_t), l1_alignment);
+    uint32_t e_t_row_elements = e_t_row_bytes / sizeof(uint32_t);
     auto e_t_spec = TensorSpec(
-        Shape({1, experts_per_device * total_tokens}),
+        Shape({experts_per_device, e_t_row_elements}),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::UINT32,
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
