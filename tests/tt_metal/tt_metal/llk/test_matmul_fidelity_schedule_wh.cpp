@@ -9,7 +9,7 @@
 namespace tt::tt_metal::unit_tests::compute::matmul {
 
 TEST(WormholeMatmulFidelitySchedule, SkipsHiFi2ForBfloat16TimesBfp4AtHiFi3) {
-    constexpr std::uint32_t format_extra_bit = 1u << DATA_FORMAT_BIT_COUNT;
+    constexpr std::uint32_t format_extra_bit = 1u << ckernel::DATA_FORMAT_BIT_COUNT;
 
     EXPECT_TRUE(ckernel::should_skip_hifi2_for_bf16_bfp4_matmul(
         ckernel::MathFidelity::HiFi3, ::DataFormat::Float16_b, ::DataFormat::Bfp4_b));
