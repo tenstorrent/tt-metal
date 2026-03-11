@@ -1693,7 +1693,6 @@ class MLA1D(AbstractModule):
 
         # DP wkv_b2 to match decode weights.
         # Chunk sequence for all_gather to avoid single giant output allocations at 8K+ prefill.
-        wkv_b2_ag_prefill_runtime_args = ccl.populate_all_gather_runtime_args(cfg["wkv_b2_ag_prefill"])
         num_heads_padded = pad_batch_to_dram_banks(num_heads)
 
         def _run_wkv_b2_prefill_matmul(v_out_chunk_ag: ttnn.Tensor, chunk_seq_len: int) -> ttnn.Tensor:
@@ -1739,8 +1738,8 @@ class MLA1D(AbstractModule):
                     (0, 0, start, 0),
                     (1, num_heads_local, end, kv_lora_rank),
                 )  # [1, num_heads_local, chunk_seq_len, kv_lora_rank]
-                v_out_chunk_ag = ttnn.experimental.all_gather_async(
-                    attn_out_chunk, **wkv_b2_ag_prefill_runtime_args
+                v_out_chunk_ag = ccl.all_gather_async(
+                    attn_out_chunk, cfg["wkv_b2_ag_prefill"]
                 )  # [1, num_heads, chunk_seq_len, kv_lora_rank]
                 ttnn.deallocate(attn_out_chunk)
 
@@ -1757,8 +1756,8 @@ class MLA1D(AbstractModule):
                 for v_chunk in v_out_chunks:
                     ttnn.deallocate(v_chunk)
         else:
-            v_out_ag = ttnn.experimental.all_gather_async(
-                attn_out, **wkv_b2_ag_prefill_runtime_args
+            v_out_ag = ccl.all_gather_async(
+                attn_out, cfg["wkv_b2_ag_prefill"]
             )  # [1, num_heads, seq_len, v_head_dim] # wkv_b2_ag_prefill
 
             # wkv_b2
@@ -1866,8 +1865,8 @@ class MLA1D(AbstractModule):
         # 1,1,32,2112 (q_lora_rank + kv_lora_rank + qk_rope_head_dim = 1536 + 512 + 64)
 
         # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
-        tt_q_kv = ttnn.experimental.all_gather_async(
-            tt_q_kv, **ccl.populate_all_gather_runtime_args(cfg["wq_kv_a_ag_decode"])
+        tt_q_kv = ccl.all_gather_async(
+            tt_q_kv, cfg["wq_kv_a_ag_decode"]
         )  # [1, num_devices, bsz, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
         tt_q_kv = ttnn.experimental.fast_reduce_nc(
             tt_q_kv,
@@ -2077,7 +2076,8 @@ class MLA1D(AbstractModule):
     @classmethod
     def _fwd_decode_all_to_all_pre_flash_mla(cls, tt_q: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:
         # 1,32,16,576 L1 interleaved
-        tt_q = ttnn.experimental.all_to_all_async_generic(tt_q, **cfg["wq_a2a_decode"], **cfg["flash_mla_reshard"])
+        ccl = cfg["ccl"]
+        tt_q = ccl.all_to_all_async_generic(tt_q, **cfg["wq_a2a_decode"], **cfg["flash_mla_reshard"])
         # 1,4,128,576 L1 height sharded 8x9 [32,576]
         return tt_q
 
@@ -2152,7 +2152,7 @@ class MLA1D(AbstractModule):
         v_out = ttnn.experimental.view(v_out, (1, 1, bsz // mesh_shape[1], num_heads * v_head_dim))
         # All_gather
         v_out = ttnn.to_memory_config(v_out, memory_config=ttnn.L1_MEMORY_CONFIG)
-        v_out = ttnn.experimental.all_gather_async(v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"]))
+        v_out = ccl.all_gather_async(v_out, cfg["wo_ag_decode"])
         v_out = ttnn.tilize(v_out)
         # 1,1,32,16384 L1 interleaved
         return v_out
@@ -2199,8 +2199,8 @@ class MLA1D(AbstractModule):
         tt_q_kv = ttnn.linear(x, **cfg["wq_kv_a"], program_config=wq_kv_a_program_config)
 
         # AR using AG + local reduce (since sub-tile RS not supported for new shapes)
-        tt_q_kv = ttnn.experimental.all_gather_async(
-            tt_q_kv, **ccl.populate_all_gather_runtime_args(cfg["wq_kv_a_ag_prefill"])
+        tt_q_kv = ccl.all_gather_async(
+            tt_q_kv, cfg["wq_kv_a_ag_prefill"]
         )  # [1, num_devices, seq_len, q_lora_rank + kv_lora_rank + qk_rope_head_dim]
         tt_q_kv = ttnn.experimental.fast_reduce_nc(
             tt_q_kv, **cfg["wq_kv_a_r_prefill"]

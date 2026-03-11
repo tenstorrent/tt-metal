@@ -269,7 +269,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
 
         ccl = cfg["lm_head"]["ccl"]
 
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
+        x = ccl.all_gather_async(x, cfg["lm_head"]["all_gather"])
         x = LMHead1D.forward_decode(x, cfg["lm_head"])
         return x
 
@@ -300,6 +300,6 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
 
         ccl = cfg["lm_head"]["ccl"]
 
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["lm_head"]["all_gather"]))
+        x = ccl.all_gather_async(x, cfg["lm_head"]["all_gather"])
         x = LMHead1D.forward_prefill(x, cfg["lm_head"])
         return x

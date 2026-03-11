@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import hashlib
+import json
 import os
 from pathlib import Path
 
@@ -31,6 +33,21 @@ from models.demos.deepseek_v3.utils.test_utils import (
 
 PCC_REQUIRED = 0.99
 PCC_REQUIRED_KVPE = 0.999
+
+
+def _trace_tensor_hash_record(record: dict) -> None:
+    trace_path = os.getenv("DEEPSEEK_TEST_TRACE_JSONL")
+    if not trace_path:
+        return
+    with open(trace_path, "a", buffering=1) as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def _tensor_sha256(tensor: torch.Tensor) -> str:
+    tensor = tensor.detach().contiguous().cpu()
+    if tensor.dtype == torch.bfloat16:
+        tensor = tensor.view(torch.uint16)
+    return hashlib.sha256(tensor.numpy(force=True).tobytes()).hexdigest()
 
 
 def get_cache_on_host(tt_cache: ttnn.Tensor, mesh_device: ttnn.MeshDevice) -> torch.Tensor:
@@ -281,6 +298,23 @@ def run_test_forward_pass_mla2d(
     ).reshape(
         -1, seq_len, hf_config_short.hidden_size
     )  # Concatenate all batches together
+
+    _trace_tensor_hash_record(
+        {
+            "test": "test_mla",
+            "module_path": module_path,
+            "layer_idx": layer_idx,
+            "mode": mode,
+            "seq_len": seq_len,
+            "batch_size_per_row": batch_size_per_row,
+            "decode_position_ids": decode_position_ids,
+            "mesh_shape": list(mesh_device.shape),
+            "torch_input_sha256": _tensor_sha256(torch_input),
+            "reference_output_sha256": _tensor_sha256(reference_output),
+            "tt_output_sha256": _tensor_sha256(tt_output_torch),
+            "position_ids": None if position_ids is None else [int(x) for x in position_ids.tolist()],
+        }
+    )
 
     # Check PCC
     tt_cache = torch_cache_from_paged(

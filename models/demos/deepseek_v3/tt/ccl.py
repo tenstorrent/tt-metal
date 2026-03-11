@@ -2,6 +2,8 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import os
+
 import ttnn
 
 
@@ -17,6 +19,7 @@ class CCL:
         self.core_range_set = ttnn.num_cores_to_corerangeset(self.num_cores, self.grid, row_wise=True)
         self.num_axes = len(list(self.mesh_device.shape))
         self.sems_per_axis = 2
+        self.sync_after_ccl = os.getenv("DEEPSEEK_SYNC_AFTER_CCL", "0") == "1"
 
         self.gather_sems = []
         self.reduce_scatter_sems = []
@@ -186,3 +189,37 @@ class CCL:
         self.gather_sem_cnt = [0 for _ in range(self.num_axes)]
         self.reduce_scatter_sem_cnt = [0 for _ in range(self.num_axes)]
         self.barrier_sem_cnt = [0 for _ in range(self.num_axes)]
+
+    def _maybe_synchronize_after_ccl(self):
+        if self.sync_after_ccl:
+            ttnn.synchronize_device(self.mesh_device)
+
+    def all_gather_async(self, x: ttnn.Tensor, ccl_config: dict) -> ttnn.Tensor:
+        out = ttnn.experimental.all_gather_async(x, **self.populate_all_gather_runtime_args(ccl_config))
+        self._maybe_synchronize_after_ccl()
+        return out
+
+    def reduce_scatter_minimal_async(self, x: ttnn.Tensor, ccl_config: dict) -> ttnn.Tensor:
+        out = ttnn.experimental.reduce_scatter_minimal_async(x, **self.populate_reduce_scatter_runtime_args(ccl_config))
+        self._maybe_synchronize_after_ccl()
+        return out
+
+    def reduce_scatter(self, x: ttnn.Tensor, **kwargs) -> ttnn.Tensor:
+        out = ttnn.reduce_scatter(x, **kwargs)
+        self._maybe_synchronize_after_ccl()
+        return out
+
+    def all_to_all_async_generic(self, x: ttnn.Tensor, **kwargs) -> ttnn.Tensor:
+        out = ttnn.experimental.all_to_all_async_generic(x, **kwargs)
+        self._maybe_synchronize_after_ccl()
+        return out
+
+    def all_to_all_dispatch(self, *args, **kwargs):
+        out = ttnn.all_to_all_dispatch(*args, **kwargs)
+        self._maybe_synchronize_after_ccl()
+        return out
+
+    def all_to_all_combine(self, *args, **kwargs):
+        out = ttnn.all_to_all_combine(*args, **kwargs)
+        self._maybe_synchronize_after_ccl()
+        return out

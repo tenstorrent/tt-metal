@@ -200,7 +200,7 @@ class MLA2D(MLA1D):
 
         ccl = cfg["ccl"]
 
-        x_next = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["seq_ag_prefill"]))
+        x_next = ccl.all_gather_async(x, cfg["seq_ag_prefill"])
         x_out = super().forward_prefill(
             x_next,
             batch_idx=batch_idx % USERS_PER_ROW,
@@ -211,10 +211,5 @@ class MLA2D(MLA1D):
         )
         ttnn.deallocate(x_next)
 
-        x_rs = (
-            ttnn.experimental.reduce_scatter_minimal_async(
-                x_out, **ccl.populate_reduce_scatter_runtime_args(cfg["seq_rs_prefill"])
-            )
-            * scale
-        )
+        x_rs = ccl.reduce_scatter_minimal_async(x_out, cfg["seq_rs_prefill"]) * scale
         return x_rs

@@ -74,8 +74,6 @@ class Embedding2D(Embedding1D):
 
         ccl = cfg["ccl"]
 
-        x = ttnn.experimental.reduce_scatter_minimal_async(
-            x, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter"])
-        )
+        x = ccl.reduce_scatter_minimal_async(x, cfg["reduce_scatter"])
         x = x * scale
         return x

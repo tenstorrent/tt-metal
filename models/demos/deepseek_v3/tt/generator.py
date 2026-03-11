@@ -3,6 +3,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import os
 from pathlib import Path
 from typing import Iterable, List, Tuple
@@ -100,6 +102,17 @@ class DeepseekGenerator(WarmupForwardMixin):
         self._kv_cache_debug_prev_positions: torch.Tensor | None = None
         self._kv_cache_debug_corruption_detected = False
         self._kv_cache_debug_mesh_composer: ttnn.CppMeshToTensor | None = None
+        self.sample_trace_dir = os.getenv("DEEPSEEK_SAMPLE_TRACE_DIR")
+        self.sample_trace_topk = max(1, int(os.getenv("DEEPSEEK_SAMPLE_TRACE_TOPK", "8")))
+        self.sample_trace_hash = bool(int(os.getenv("DEEPSEEK_SAMPLE_TRACE_HASH", "1")))
+        self.sample_trace_rank = (
+            os.getenv("RANK")
+            or os.getenv("OMPI_COMM_WORLD_RANK")
+            or os.getenv("PMI_RANK")
+            or os.getenv("LOCAL_RANK")
+            or "0"
+        )
+        self.sample_trace_file = None
 
         # Load HF config + tokenizer
         self.hf_config = (
@@ -179,6 +192,17 @@ class DeepseekGenerator(WarmupForwardMixin):
             )
             if self.kv_cache_debug_identity_page_table:
                 logger.warning("KVDBG identity page table enabled.")
+        if self.sample_trace_dir:
+            trace_dir = Path(self.sample_trace_dir)
+            trace_dir.mkdir(parents=True, exist_ok=True)
+            trace_path = trace_dir / f"sample_trace_rank{self.sample_trace_rank}.jsonl"
+            self.sample_trace_file = open(trace_path, "a", buffering=1)
+            logger.warning(
+                "SAMPLE TRACE enabled: writing sampling trace to {} (topk={}, hashes={})",
+                trace_path,
+                self.sample_trace_topk,
+                self.sample_trace_hash,
+            )
 
         # Initialize rope_setup once
         self.rope_setup = RotarySetup(
@@ -421,6 +445,13 @@ class DeepseekGenerator(WarmupForwardMixin):
         except Exception as e:
             logger.warning(f"Failed to cleanup paged config: {e}")
 
+        try:
+            if self.sample_trace_file is not None:
+                self.sample_trace_file.close()
+                self.sample_trace_file = None
+        except Exception as e:
+            logger.warning(f"Failed to close sample trace file: {e}")
+
     def __enter__(self):
         """Context manager entry."""
         return self
@@ -544,13 +575,15 @@ class DeepseekGenerator(WarmupForwardMixin):
     def _sample_greedy(self, logits: torch.Tensor) -> torch.Tensor:
         return torch.argmax(logits, dim=-1)  # [B]
 
-    def _sample_next_token(self, logits: torch.Tensor, sampling: SamplingParams | None) -> torch.Tensor:
-        """Sample next tokens from logits.
+    @staticmethod
+    def _hash_tensor_bytes(tensor: torch.Tensor) -> str:
+        return hashlib.sha256(tensor.detach().contiguous().cpu().numpy().tobytes()).hexdigest()
 
-        If sampling is disabled (or temperature <= 0), falls back to greedy argmax.
-        """
+    def _sampling_distribution(
+        self, logits: torch.Tensor, sampling: SamplingParams | None
+    ) -> tuple[torch.Tensor | None, torch.Tensor | None, torch.Tensor | None]:
         if sampling is None or float(sampling.temperature) <= 0:
-            return self._sample_greedy(logits)
+            return None, None, None
 
         temperature = float(sampling.temperature)
         top_k = int(sampling.top_k)
@@ -558,13 +591,11 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         scores = logits / temperature
 
-        # Optional top-k filtering.
         if top_k > 0:
             top_k = min(top_k, scores.shape[-1])
             kth_values = torch.topk(scores, top_k, dim=-1).values[..., -1, None]
             scores = scores.masked_fill(scores < kth_values, float("-inf"))
 
-        # Optional top-p (nucleus) filtering.
         if 0.0 < top_p < 1.0:
             sorted_scores, sorted_indices = torch.sort(scores, descending=True, dim=-1)
             sorted_probs = torch.softmax(sorted_scores, dim=-1)
@@ -581,6 +612,86 @@ class DeepseekGenerator(WarmupForwardMixin):
         probs = torch.softmax(scores, dim=-1)
         row_sums = probs.sum(dim=-1)
         valid_rows = torch.isfinite(probs).all(dim=-1) & torch.isfinite(row_sums) & (row_sums > 0)
+        return scores, probs, valid_rows
+
+    def _trace_sampling_event(
+        self,
+        *,
+        stage: str,
+        step_idx: int,
+        positions: torch.Tensor,
+        logits: torch.Tensor,
+        sampling: SamplingParams | None,
+        sampled_tokens: torch.Tensor,
+        num_users: int,
+        rng_state_before: torch.Tensor | None,
+        rng_state_after: torch.Tensor | None,
+    ) -> None:
+        if self.sample_trace_file is None:
+            return
+
+        logits_cpu = logits.detach().to(torch.float32).cpu()
+        positions_cpu = positions.detach().cpu()
+        sampled_cpu = sampled_tokens.detach().cpu()
+        _, probs, valid_rows = self._sampling_distribution(logits_cpu, sampling)
+
+        topk = min(self.sample_trace_topk, logits_cpu.shape[-1])
+        users = []
+        for user_idx in range(num_users):
+            row = logits_cpu[user_idx].contiguous()
+            top_vals, top_idx = torch.topk(row, k=topk)
+            user_record = {
+                "user_idx": user_idx,
+                "position": int(positions_cpu[user_idx].item()),
+                "sampled_token": int(sampled_cpu[user_idx].item()),
+                "argmax_token": int(torch.argmax(row).item()),
+                "logits_min": float(row.min().item()),
+                "logits_max": float(row.max().item()),
+                "logits_sum": float(row.sum().item()),
+                "logits_l2": float(torch.linalg.vector_norm(row).item()),
+                "topk_idx": [int(x) for x in top_idx.tolist()],
+                "topk_logits": [float(x) for x in top_vals.tolist()],
+            }
+            if self.sample_trace_hash:
+                user_record["logits_sha256"] = self._hash_tensor_bytes(row)
+            if probs is not None and valid_rows is not None:
+                prob_row = probs[user_idx].contiguous()
+                prob_top_vals, prob_top_idx = torch.topk(prob_row, k=topk)
+                user_record["sampling_valid"] = bool(valid_rows[user_idx].item())
+                user_record["probs_sum"] = float(prob_row.sum().item())
+                user_record["topk_prob_idx"] = [int(x) for x in prob_top_idx.tolist()]
+                user_record["topk_probs"] = [float(x) for x in prob_top_vals.tolist()]
+                if self.sample_trace_hash:
+                    user_record["probs_sha256"] = self._hash_tensor_bytes(prob_row)
+            users.append(user_record)
+
+        record = {
+            "stage": stage,
+            "step_idx": step_idx,
+            "rank": self.sample_trace_rank,
+            "sampling": None
+            if sampling is None
+            else {
+                "temperature": float(sampling.temperature),
+                "top_k": int(sampling.top_k),
+                "top_p": float(sampling.top_p),
+            },
+            "rng_before_sha256": None if rng_state_before is None else self._hash_tensor_bytes(rng_state_before),
+            "rng_after_sha256": None if rng_state_after is None else self._hash_tensor_bytes(rng_state_after),
+            "users": users,
+        }
+        self.sample_trace_file.write(json.dumps(record) + "\n")
+
+    def _sample_next_token(self, logits: torch.Tensor, sampling: SamplingParams | None) -> torch.Tensor:
+        """Sample next tokens from logits.
+
+        If sampling is disabled (or temperature <= 0), falls back to greedy argmax.
+        """
+        if sampling is None or float(sampling.temperature) <= 0:
+            return self._sample_greedy(logits)
+
+        _, probs, valid_rows = self._sampling_distribution(logits, sampling)
+        assert probs is not None and valid_rows is not None
 
         if valid_rows.all():
             return torch.multinomial(probs, num_samples=1).squeeze(-1)
@@ -724,6 +835,23 @@ class DeepseekGenerator(WarmupForwardMixin):
         if partial_interval <= 0:
             partial_interval = 0
 
+        debug_stop_after_generated_tokens = 0
+        debug_stop_after_env = os.getenv("DEEPSEEK_DEBUG_STOP_AFTER_GENERATED_TOKENS")
+        if debug_stop_after_env:
+            try:
+                debug_stop_after_generated_tokens = max(int(debug_stop_after_env), 0)
+            except ValueError:
+                logger.warning(
+                    "Ignoring invalid DEEPSEEK_DEBUG_STOP_AFTER_GENERATED_TOKENS="
+                    f"{debug_stop_after_env!r}; expected positive integer."
+                )
+                debug_stop_after_generated_tokens = 0
+        if debug_stop_after_generated_tokens:
+            logger.info(
+                "Debug stop-after-generated-tokens enabled: "
+                f"{debug_stop_after_generated_tokens} token(s) will be emitted before exiting decode early."
+            )
+
         # Run one or more prefill+decode batches
         for _ in range(repeat_batches):
             # Reset teacher-forcing state per batch.
@@ -810,6 +938,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
             if max_new_tokens <= 0:
                 logger.info("max_new_tokens <= 0, skipping decode loop.")
+                executed_decode_steps = 0
             else:
                 logger.info(f"Generating {max_new_tokens} tokens for {num_of_prompts} user(s)...")
                 if early_print_first_user:
@@ -820,7 +949,20 @@ class DeepseekGenerator(WarmupForwardMixin):
                 if self.profile_decode:
                     next_tokens = next_tokens_override
                 else:
+                    rng_state_before = torch.get_rng_state() if self.sample_trace_file is not None else None
                     next_tokens = self._sample_next_token(last_logits, sampling)
+                    rng_state_after = torch.get_rng_state() if self.sample_trace_file is not None else None
+                    self._trace_sampling_event(
+                        stage="prefill_last_logits",
+                        step_idx=0,
+                        positions=lengths,
+                        logits=last_logits,
+                        sampling=sampling,
+                        sampled_tokens=next_tokens,
+                        num_users=num_of_prompts,
+                        rng_state_before=rng_state_before,
+                        rng_state_after=rng_state_after,
+                    )
                 if teacher_forcing is not None:
                     # Record user-0 prediction for accuracy, but force teacher token for alignment.
                     forced0 = teacher_forcing.collect_predicted_tokens(
@@ -860,10 +1002,23 @@ class DeepseekGenerator(WarmupForwardMixin):
                 # Generate remaining tokens with decode (each decode call produces the next token)
                 decode_steps = max_new_tokens - 1
                 profiler.start("inference_decode")
+                executed_decode_steps = 0
                 kvdbg_check_stride = None
                 if self.kv_cache_debug:
                     kvdbg_check_stride = int(self.paged_config.block_size) * KVDBG_CHECK_EVERY_BLOCKS
+                if debug_stop_after_generated_tokens == 1:
+                    logger.info(
+                        "Stopping early after the first generated token due to "
+                        "DEEPSEEK_DEBUG_STOP_AFTER_GENERATED_TOKENS=1."
+                    )
                 for gen_idx in range(decode_steps):
+                    if debug_stop_after_generated_tokens and gen_idx + 1 >= debug_stop_after_generated_tokens:
+                        logger.info(
+                            "Stopping decode loop before step "
+                            f"{gen_idx} because DEEPSEEK_DEBUG_STOP_AFTER_GENERATED_TOKENS="
+                            f"{debug_stop_after_generated_tokens} has been reached."
+                        )
+                        break
                     logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
                     profiler.start(f"decode_time_{gen_idx}")
                     logits = self.decode_forward(
@@ -876,7 +1031,20 @@ class DeepseekGenerator(WarmupForwardMixin):
                     )
                     profiler.end(f"decode_time_{gen_idx}")
                     self.ccl.reset_sem_counters()
+                    rng_state_before = torch.get_rng_state() if self.sample_trace_file is not None else None
                     pred_tokens = self._sample_next_token(logits, sampling)
+                    rng_state_after = torch.get_rng_state() if self.sample_trace_file is not None else None
+                    self._trace_sampling_event(
+                        stage="decode",
+                        step_idx=gen_idx + 1,
+                        positions=positions,
+                        logits=logits,
+                        sampling=sampling,
+                        sampled_tokens=pred_tokens,
+                        num_users=num_of_prompts,
+                        rng_state_before=rng_state_before,
+                        rng_state_after=rng_state_after,
+                    )
                     if teacher_forcing is not None:
                         # Record user-0 prediction for accuracy, then force teacher token.
                         forced = teacher_forcing.collect_predicted_tokens(
@@ -914,6 +1082,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                             else:
                                 print(f"{token_value} ", end="", flush=True)
                     _maybe_emit_partial()
+                    executed_decode_steps += 1
 
                 profiler.end("inference_decode")
 
@@ -923,7 +1092,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         profiler.end("run")
         # Calculate statistics
         prefill_time = profiler.get_duration("inference_prefill") if not self.profile_decode else 0
-        decode_steps = max(max_new_tokens - 1, 0)
+        decode_steps = executed_decode_steps if max_new_tokens > 0 else 0
         decode_times = [profiler.get_duration(f"decode_time_{i}") for i in range(decode_steps)]
 
         # Get config preparation times

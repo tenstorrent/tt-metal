@@ -110,9 +110,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
             # Input is TP-sharded, need to gather
             # Use MoE's all_gather config which outputs the correct memory layout for MoEGate
             ccl_moe = cfg["moe"]["ccl"]
-            x_gathered = ttnn.experimental.all_gather_async(
-                x, **ccl_moe.populate_all_gather_runtime_args(cfg["moe"]["revert_tp"])
-            )
+            x_gathered = ccl_moe.all_gather_async(x, cfg["moe"]["revert_tp"])
         else:
             # Should always be TP-sharded at this point
             assert False, f"Expected TP-sharded input with dim {hidden_size // tp_size}, got dim {x_dim}"
@@ -131,10 +129,7 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         if x_dim == hidden_size // tp_size:
             # Single reduce_scatter on combined output using MoE's config for consistency
             ccl_moe = cfg["moe"]["ccl"]
-            output = ttnn.experimental.reduce_scatter_minimal_async(
-                combined_out,
-                **ccl_moe.populate_reduce_scatter_runtime_args(cfg["moe"]["final_output_reduce_scatter"]),
-            )
+            output = ccl_moe.reduce_scatter_minimal_async(combined_out, cfg["moe"]["final_output_reduce_scatter"])
             ttnn.deallocate(combined_out)
             # Cleanup gathered tensor
             if x_gathered is not x:

@@ -186,9 +186,7 @@ class DistributedRMSNorm(RMSNormBase):
 
         # AllGather stats
         ccl = cfg["ccl"]
-        tt_gathered_stats = ttnn.experimental.all_gather_async(
-            tt_stats, **ccl.populate_all_gather_runtime_args(cfg["all_gather"])
-        )
+        tt_gathered_stats = ccl.all_gather_async(tt_stats, cfg["all_gather"])
         ttnn.deallocate(tt_stats)
 
         # Run distributed rmsnorm part 2

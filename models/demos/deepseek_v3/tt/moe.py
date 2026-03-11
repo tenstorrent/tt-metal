@@ -406,7 +406,8 @@ class MoE(SharedStateAddOn, AbstractModule):
                 [batch_end, 1, seq_len, cfg["num_experts_per_tok"]],
             )
 
-            all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
+            ccl = cfg["ccl"]
+            all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ccl.all_to_all_dispatch(
                 x_chunk,
                 topk_indices_chunk,
                 cfg["expert_mapping_tensors"],
@@ -438,7 +439,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 shape=(1, batch_size_chunk, seq_len, cfg["num_experts_per_tok"]),
             )
 
-            all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
+            all_to_all_combine_output_tensors = ccl.all_to_all_combine(
                 experts_output,
                 all_to_all_dispatch_metadata_tensors,
                 cfg["expert_mapping_tensors"],
@@ -497,11 +498,11 @@ class MoE(SharedStateAddOn, AbstractModule):
             "num_buffers_per_channel": rs_cfg.get("num_buffers_per_channel"),
         }
         rs_kwargs = {k: v for k, v in rs_kwargs.items() if v is not None}
-        return ttnn.reduce_scatter(post_combine_output_tensor, **rs_kwargs)
+        return ccl.reduce_scatter(post_combine_output_tensor, **rs_kwargs)
 
     @classmethod
     def _fwd_all_gather(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
-        return ttnn.experimental.all_gather_async(x, **cfg["ccl"].populate_all_gather_runtime_args(cfg["revert_tp"]))
+        return cfg["ccl"].all_gather_async(x, cfg["revert_tp"])
 
     @classmethod
     def forward_prefill(

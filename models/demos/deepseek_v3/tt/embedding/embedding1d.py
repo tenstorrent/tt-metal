@@ -190,9 +190,7 @@ class Embedding1D(AbstractModule):
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 
-        embeddings_ag = ttnn.experimental.all_gather_async(
-            embeddings_tc, **ccl.populate_all_gather_runtime_args(cfg["all_gather"])
-        )
+        embeddings_ag = ccl.all_gather_async(embeddings_tc, cfg["all_gather"])
         ttnn.deallocate(embeddings_tc)
 
         assert len(embeddings_ag.shape) == 4

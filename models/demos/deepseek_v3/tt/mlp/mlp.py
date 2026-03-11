@@ -536,15 +536,13 @@ class MLP(AbstractModule):
         ccl = cfg["ccl"]
 
         # All gather for efficient matmuls
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+        x = ccl.all_gather_async(x, cfg["all_gather"])
 
         # Perform the core computation
         output, (original_seq_len, pad_rows) = cls._forward_prefill_compute_only(x, cfg)
 
         # Reduce-scatter across devices to sum partial results
-        output = ttnn.experimental.reduce_scatter_minimal_async(
-            output, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
-        )
+        output = ccl.reduce_scatter_minimal_async(output, cfg["reduce_scatter_async"])
 
         # De-chunk the output if the input was chunked
         _, num_chunks, _, output_dim = output.shape
@@ -562,15 +560,13 @@ class MLP(AbstractModule):
         ccl = cfg["ccl"]
 
         # All gather
-        x = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+        x = ccl.all_gather_async(x, cfg["all_gather"])
 
         # Perform the core computation
         w2_out = cls._forward_decode_compute_only(x, cfg)
 
         # Add reduce-scatter
-        output = ttnn.experimental.reduce_scatter_minimal_async(
-            w2_out, **ccl.populate_reduce_scatter_runtime_args(cfg["reduce_scatter_async"])
-        )
+        output = ccl.reduce_scatter_minimal_async(w2_out, cfg["reduce_scatter_async"])
         ttnn.deallocate(w2_out)
 
         assert output.memory_config() == cfg["output_memory_config"]

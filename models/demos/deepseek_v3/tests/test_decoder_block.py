@@ -2,6 +2,9 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import hashlib
+import json
+import os
 from pathlib import Path
 
 import pytest
@@ -81,6 +84,21 @@ def generate_reference_io(
         torch_input = torch_input.permute(1, 0, 2)  # [seq_len, batch_size, hidden_size]
         reference_output = reference_output.permute(1, 0, 2)  # [seq_len, batch_size, hidden_size]
     return state_dict, position_ids, torch_input, reference_output, input_cache, output_cache
+
+
+def _trace_tensor_hash_record(record: dict) -> None:
+    trace_path = os.getenv("DEEPSEEK_TEST_TRACE_JSONL")
+    if not trace_path:
+        return
+    with open(trace_path, "a", buffering=1) as f:
+        f.write(json.dumps(record) + "\n")
+
+
+def _tensor_sha256(tensor: torch.Tensor) -> str:
+    tensor = tensor.detach().contiguous().cpu()
+    if tensor.dtype == torch.bfloat16:
+        tensor = tensor.view(torch.uint16)
+    return hashlib.sha256(tensor.numpy(force=True).tobytes()).hexdigest()
 
 
 def run_test_forward_pass_decoder2d(
@@ -190,6 +208,24 @@ def run_test_forward_pass_decoder2d(
 
     tt_output_torch = ttnn.to_torch(
         tt_output, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape)
+    )
+
+    _trace_tensor_hash_record(
+        {
+            "test": "test_decoder_block",
+            "decoder_block_class": DecoderBlockClass.__name__,
+            "module_path": module_path,
+            "reference_layer_idx": reference_layer_idx,
+            "mode": mode,
+            "seq_len": seq_len,
+            "batch_size_per_row": batch_size_per_row,
+            "decode_position_ids": decode_position_ids,
+            "mesh_shape": list(mesh_device.shape),
+            "torch_input_sha256": _tensor_sha256(torch_input),
+            "reference_output_sha256": _tensor_sha256(reference_output),
+            "tt_output_sha256": _tensor_sha256(tt_output_torch),
+            "position_ids": None if position_ids is None else [int(x) for x in position_ids.tolist()],
+        }
     )
 
     # Check output PCC
