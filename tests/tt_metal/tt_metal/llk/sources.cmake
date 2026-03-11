@@ -8,6 +8,7 @@ set(UNIT_TESTS_LLK_SRC
     test_cumsum.cpp
     test_dropout_sfpu_compute.cpp
     test_golden_impls.cpp
+    test_matmul_fidelity_schedule.cpp
     test_mul_reduce_scalar.cpp
     test_pack_rows.cpp
     test_reconfig.cpp

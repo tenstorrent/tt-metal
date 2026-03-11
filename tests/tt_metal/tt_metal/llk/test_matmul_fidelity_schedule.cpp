@@ -1,0 +1,62 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#include <gtest/gtest.h>
+
+#include "../../../../tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_matmul_fidelity.h"
+
+namespace tt::tt_metal::unit_tests::compute::matmul {
+
+TEST(MatmulFidelitySchedule, SkipsHiFi2ForBfloat16TimesBfp4AtHiFi3) {
+    EXPECT_TRUE(ckernel::should_skip_hifi2_for_bf16_bfp4_matmul(
+        ckernel::MathFidelity::HiFi3, ckernel::DataFormat::Float16_b, ckernel::DataFormat::Bfp4));
+    EXPECT_EQ(
+        ckernel::get_matmul_fidelity_phase_count(
+            ckernel::MathFidelity::HiFi3,
+            static_cast<std::uint32_t>(ckernel::DataFormat::Float16_b),
+            static_cast<std::uint32_t>(ckernel::DataFormat::Bfp4_b)),
+        2u);
+    EXPECT_EQ(
+        ckernel::get_matmul_fidelity_increment(
+            ckernel::MathFidelity::HiFi3,
+            static_cast<std::uint32_t>(ckernel::DataFormat::Float16_b),
+            static_cast<std::uint32_t>(ckernel::DataFormat::Bfp4_b)),
+        2u);
+}
+
+TEST(MatmulFidelitySchedule, KeepsStandardHiFi3ScheduleForNonBfp4Inputs) {
+    EXPECT_FALSE(ckernel::should_skip_hifi2_for_bf16_bfp4_matmul(
+        ckernel::MathFidelity::HiFi3, ckernel::DataFormat::Float16_b, ckernel::DataFormat::Float16_b));
+    EXPECT_EQ(
+        ckernel::get_matmul_fidelity_phase_count(
+            ckernel::MathFidelity::HiFi3,
+            static_cast<std::uint32_t>(ckernel::DataFormat::Float16_b),
+            static_cast<std::uint32_t>(ckernel::DataFormat::Float16_b)),
+        3u);
+    EXPECT_EQ(
+        ckernel::get_matmul_fidelity_increment(
+            ckernel::MathFidelity::HiFi3,
+            static_cast<std::uint32_t>(ckernel::DataFormat::Float16_b),
+            static_cast<std::uint32_t>(ckernel::DataFormat::Float16_b)),
+        1u);
+}
+
+TEST(MatmulFidelitySchedule, KeepsStandardHiFi2ScheduleForBfloat16TimesBfp4) {
+    EXPECT_FALSE(ckernel::should_skip_hifi2_for_bf16_bfp4_matmul(
+        ckernel::MathFidelity::HiFi2, ckernel::DataFormat::Float16_b, ckernel::DataFormat::Bfp4_b));
+    EXPECT_EQ(
+        ckernel::get_matmul_fidelity_phase_count(
+            ckernel::MathFidelity::HiFi2,
+            static_cast<std::uint32_t>(ckernel::DataFormat::Float16_b),
+            static_cast<std::uint32_t>(ckernel::DataFormat::Bfp4_b)),
+        2u);
+    EXPECT_EQ(
+        ckernel::get_matmul_fidelity_increment(
+            ckernel::MathFidelity::HiFi2,
+            static_cast<std::uint32_t>(ckernel::DataFormat::Float16_b),
+            static_cast<std::uint32_t>(ckernel::DataFormat::Bfp4_b)),
+        1u);
+}
+
+}  // namespace tt::tt_metal::unit_tests::compute::matmul
