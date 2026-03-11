@@ -43,6 +43,29 @@ TEST_F(Fabric2DFixture, CompileOnlyAutoPacketization2D) {
             .defines = defines});
 
     tt::tt_metal::detail::CompileProgram(device, program);
+
+    // Second program for additional compile probes (unicast + multicast families)
+    tt::tt_metal::Program program2;
+
+    tt::tt_metal::CreateKernel(
+        program2,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/auto_packetization/kernels/compile_probe_unicast_families.cpp",
+        core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
+
+    tt::tt_metal::CreateKernel(
+        program2,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/auto_packetization/kernels/compile_probe_multicast_families.cpp",
+        core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::RISCV_1_default,
+            .defines = defines});
+
+    tt::tt_metal::detail::CompileProgram(device, program2);
 }
 
 // Compile-only test for 1D (linear) API kernels.
@@ -62,6 +85,19 @@ TEST_F(Fabric1DFixture, CompileOnlyAutoPacketization1D) {
             .noc = tt::tt_metal::NOC::RISCV_0_default});
 
     tt::tt_metal::detail::CompileProgram(device, program);
+
+    // Second program for linear compile probes covering all missing families
+    tt::tt_metal::Program program2;
+
+    tt::tt_metal::CreateKernel(
+        program2,
+        "tests/tt_metal/tt_fabric/fabric_data_movement/auto_packetization/kernels/linear_compile_probe_all_families.cpp",
+        core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default});
+
+    tt::tt_metal::detail::CompileProgram(device, program2);
 }
 
 }  // namespace tt::tt_fabric::fabric_router_tests
