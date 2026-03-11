@@ -144,6 +144,29 @@ while IFS= read -r file; do
     [[ -n "$file" ]] && log_issue "HIGH" "$file" "Contains 'curl | bash' pattern - download and verify scripts before execution"
 done < <(grep -rlE 'curl.*\|\s*(ba)?sh|wget.*\|\s*(ba)?sh' "$GITHUB_DIR/workflows" "$GITHUB_DIR/actions" 2>/dev/null || true)
 
+# Check 11: inputs.* and steps.*.outputs.* direct interpolation in run blocks
+# These are common shell injection vectors when workflow inputs or step outputs
+# are interpolated directly into shell code instead of being passed via env vars.
+# Only flags UNSAFE usage: direct interpolation in run: blocks
+# Safe usage (passing via env var) is NOT flagged
+echo "Checking for inputs/steps.outputs interpolation in run blocks..."
+while IFS= read -r -d '' file; do
+    if grep -qE '\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.)' "$file" 2>/dev/null; then
+        # Check if any usage is in an unsafe context (directly in run: block, not via env var)
+        # Safe: env: block assignment like "INPUT_FOO: ${{ inputs.foo }}"
+        # Unsafe: run: block with direct interpolation like "echo ${{ inputs.foo }}"
+        unsafe_usage=$(awk '
+            /^[[:space:]]*run:[[:space:]]*\|/ { in_run_block = 1; next }
+            /^[[:space:]]*run:/ && /\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.)/ { print; next }
+            in_run_block && /^[[:space:]]*[a-z_-]+:/ { in_run_block = 0 }
+            in_run_block && /\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.)/ { print }
+        ' "$file" 2>/dev/null)
+        if [[ -n "$unsafe_usage" ]]; then
+            log_issue "HIGH" "$file" "Contains \${{ inputs.* }} or \${{ steps.*.outputs.* }} directly in run: block - use env var instead"
+        fi
+    fi
+done < <(find "$GITHUB_DIR/workflows" "$GITHUB_DIR/actions" -name "*.yml" -o -name "*.yaml" 2>/dev/null | tr '\n' '\0')
+
 echo ""
 echo "=========================================="
 echo "Scan Complete"

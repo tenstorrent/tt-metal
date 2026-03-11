@@ -96,3 +96,11 @@ repos:
       language: system
       pass_filenames: false
       files: ^tests/tt_metal/tt_metal/perf_microbenchmark/routing/golden/.*bandwidth.*\.csv$
+- repo: local
+  hooks:
+    - id: check-github-actions-security
+      name: Check GitHub Actions for security anti-patterns
+      entry: bash .github/scripts/security/check-actions-security.sh --strict
+      language: system
+      pass_filenames: false
+      files: ^\.github/.*\.(yaml|yml)$
