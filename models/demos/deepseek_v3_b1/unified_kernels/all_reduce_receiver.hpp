@@ -118,21 +118,22 @@ struct AllReduceReceiver {
             // ================================================================
             // Push local and residual tiles to compute immediately (they're ready)
             // Skip local push if data is already in CB (e.g., from preceding gather operation)
+            DPRINT << "RA S1" << ENDL();
             if constexpr (!ReaderCT::skip_local_push) {
                 cb_reserve_back(ReaderCT::cb_in2, ReaderCT::num_standard_tiles);
                 cb_push_back(ReaderCT::cb_in2, ReaderCT::num_standard_tiles);
             }
-
+            DPRINT << "RA S2" << ENDL();
             if constexpr (ReaderCT::has_residual) {
                 cb_reserve_back(ReaderCT::cb_residual, ReaderCT::num_standard_tiles);
                 cb_push_back(ReaderCT::cb_residual, ReaderCT::num_standard_tiles);
             }
-
+            DPRINT << "RA S3" << ENDL();
             // Wait for remote sender to signal data has been written to intermediate tensor
             auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sender_semaphore_addr);
             noc_semaphore_wait(local_semaphore_ptr, 1);
             noc_semaphore_set(local_semaphore_ptr, 0);
-
+            DPRINT << "RA S4" << ENDL();
             // Remote data is now ready, push to compute
             cb_reserve_back(ReaderCT::cb_in1, ReaderCT::num_standard_tiles);
             cb_push_back(ReaderCT::cb_in1, ReaderCT::num_standard_tiles);
@@ -149,16 +150,17 @@ struct AllReduceReceiver {
             reconfig_data_format<false, true>(ComputeCT::cb_in0, ComputeCT::cb_in1);
             pack_reconfig_data_format<true>(ComputeCT::cb_out0);
             add_tiles_init(ComputeCT::cb_in0, ComputeCT::cb_in1);
-
+            DPRINT << "RA S5" << ENDL();
             constexpr uint32_t max_dst_tiles = 4;
             constexpr uint32_t num_batches = (ComputeCT::num_tiles + max_dst_tiles - 1) / max_dst_tiles;
 
             if constexpr (ComputeCT::has_residual) {
                 // Fused residual add: (local + residual) + remote → output
+                DPRINT << "RA S6" << ENDL();
                 cb_wait_front(ComputeCT::cb_in1, ComputeCT::num_tiles);
                 cb_wait_front(ComputeCT::cb_residual, ComputeCT::num_tiles);
                 cb_reserve_back(ComputeCT::cb_temp, ComputeCT::num_tiles);
-
+                DPRINT << "RA S8" << ENDL();
                 // First add: local + residual → temp
                 for (uint32_t batch = 0; batch < num_batches; ++batch) {
                     uint32_t start_tile = batch * max_dst_tiles;
@@ -178,15 +180,16 @@ struct AllReduceReceiver {
                     }
                     tile_regs_release();
                 }
+                DPRINT << "RA S9" << ENDL();
                 cb_pop_front(ComputeCT::cb_in1, ComputeCT::num_tiles);
                 cb_pop_front(ComputeCT::cb_residual, ComputeCT::num_tiles);
                 cb_push_back(ComputeCT::cb_temp, ComputeCT::num_tiles);
-
+                DPRINT << "RA S10" << ENDL();
                 // Second add: (local+residual) + remote → output
                 cb_wait_front(ComputeCT::cb_in0, ComputeCT::num_tiles);
                 cb_wait_front(ComputeCT::cb_temp, ComputeCT::num_tiles);
                 cb_reserve_back(ComputeCT::cb_out0, ComputeCT::num_tiles);
-
+                DPRINT << "RA S11" << ENDL();
                 for (uint32_t batch = 0; batch < num_batches; ++batch) {
                     uint32_t start_tile = batch * max_dst_tiles;
                     uint32_t batch_size = (start_tile + max_dst_tiles <= ComputeCT::num_tiles)
@@ -205,15 +208,18 @@ struct AllReduceReceiver {
                     }
                     tile_regs_release();
                 }
+                DPRINT << "RA S12" << ENDL();
                 cb_pop_front(ComputeCT::cb_in0, ComputeCT::num_tiles);
                 cb_pop_front(ComputeCT::cb_temp, ComputeCT::num_tiles);
                 cb_push_back(ComputeCT::cb_out0, ComputeCT::num_tiles);
+                DPRINT << "RA S13" << ENDL();
             } else {
                 // Simple all-reduce: local + remote → output
+                DPRINT << "RA S14" << ENDL();
                 cb_wait_front(ComputeCT::cb_in0, ComputeCT::num_tiles);
                 cb_wait_front(ComputeCT::cb_in1, ComputeCT::num_tiles);
                 cb_reserve_back(ComputeCT::cb_out0, ComputeCT::num_tiles);
-
+                DPRINT << "RA S15" << ENDL();
                 for (uint32_t batch = 0; batch < num_batches; ++batch) {
                     uint32_t start_tile = batch * max_dst_tiles;
                     uint32_t batch_size = (start_tile + max_dst_tiles <= ComputeCT::num_tiles)
@@ -232,9 +238,11 @@ struct AllReduceReceiver {
                     }
                     tile_regs_release();
                 }
+                DPRINT << "RA S16" << ENDL();
                 cb_pop_front(ComputeCT::cb_in0, ComputeCT::num_tiles);
                 cb_pop_front(ComputeCT::cb_in1, ComputeCT::num_tiles);
                 cb_push_back(ComputeCT::cb_out0, ComputeCT::num_tiles);
+                DPRINT << "RA S17" << ENDL();
             }
 #endif
         }

@@ -3938,7 +3938,8 @@ class MoeOp:
             dst_sem_addr = reduce_params["sem_exit_addr"]
 
         output_core_phys = routed_ctx.device.worker_core_from_logical_core(reduce_params["output_core"])
-
+        if self.downstream_socket is not None:
+            print("Downstream socket exists")
         # Compile-time args
         self.ncrisc_args.extend([("reduce_device_role", device_role), ("reduce_num_tiles", reduce_params["num_tiles"])])
         self.brisc_args.extend(
@@ -4011,6 +4012,7 @@ class MoeOp:
         agg_core_noc_x = 0
         agg_core_noc_y = 0
         if device_role == MESH_ROOT1 and self.downstream_socket is not None:
+            print("Adding agg core physical coordinates")
             agg_core_phys = routed_ctx.device.worker_core_from_logical_core(reduce_params["worker_cores_list"][0])
             agg_core_noc_x = agg_core_phys.x
             agg_core_noc_y = agg_core_phys.y
@@ -4020,6 +4022,7 @@ class MoeOp:
         persistent_enable_root1 = (
             device_role == MESH_ROOT1 and self.downstream_socket is not None and self.persistent_next_iter_sem_addr != 0
         )
+        print("Persistent enable root1: ", persistent_enable_root1)
         persistent_dst_noc_x = 0
         persistent_dst_noc_y = 0
         persistent_dst_sem_addr = 0
@@ -4069,10 +4072,15 @@ class MoeOp:
                 worker_agg_sem_addr = agg_sem_addr
                 worker_agg_noc_x = agg_core_noc_x
                 worker_agg_noc_y = agg_core_noc_y
+                print("Adding socket config address")
                 if shard_idx == 0:
+                    print("Adding socket config address for shard 0")
                     socket_config_addr = self.downstream_socket.get_config_buffer_address()
+                    print("Socket config address: ", socket_config_addr)
 
             is_persistent_agg = persistent_enable_root1 and shard_idx == 0
+            print("Is persistent agg: ", is_persistent_agg)
+            print("Core: ", core)
 
             reduce_brisc_per_core_args.append(
                 (
@@ -4396,6 +4404,10 @@ class MoeOp:
         """Setup both routed and shared expert contexts, then overlap CBs with SDPA buffers."""
         self.noc_mode = noc_mode
         self.is_torus = is_torus
+        if downstream_socket is not None:
+            print("Downstream socket is not None")
+        else:
+            print("Downstream socket is None")
         self.downstream_socket = downstream_socket
         if semaphores is None:
             semaphores = MoeOp.create_semaphores(shared_residual_mcast_src_tensor.device())
@@ -4408,6 +4420,12 @@ class MoeOp:
             if persistent_next_iter_semaphore is not None
             else 0
         )
+
+        if persistent_next_iter_semaphore is not None:
+            print("Persistent next iter semaphore address: ", persistent_next_iter_semaphore)
+        else:
+            print("Persistent next iter semaphore address is None")
+
         print("MoEOp persistent next iter semaphore address created")
         if cb_id_context is None:
             self.cb_id_manager = CircularBufferIdManager()

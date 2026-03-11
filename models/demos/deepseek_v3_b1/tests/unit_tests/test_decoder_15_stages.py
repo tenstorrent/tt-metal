@@ -250,6 +250,14 @@ def test_persistent_decoder_15_stages(
 
         # ── MoE stages: submit persistent kernel ──
         if my_mesh_id >= 1:
+            # Print mesh coordinates
+            print("Submesh coordinate -> fabric ID / device ID mapping:")
+            for row in range(mesh_device.shape[0]):
+                for col in range(mesh_device.shape[1]):
+                    coord = ttnn.MeshCoordinate(row, col)
+                    fabric_id = mesh_device.get_fabric_node_id(coord)
+                    device_id = mesh_device.get_device_id(coord)
+                    print(f"  ({row}, {col}) -> fabric_id={fabric_id}, device_id={device_id}")
             logger.info(f"[rank={my_mesh_id}] submitting persistent MoE kernel")
             is_torus = device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D_TORUS_Y
             moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.op(

@@ -116,21 +116,24 @@ struct AllReduceSender {
             // ================================================================
             // NCRISC (Reader) - reads local tensor data into CB
             // ================================================================
+            DPRINT << "AR S1" << ENDL();
             cb_reserve_back(ReaderCT::cb0_id, ReaderCT::num_tiles);
             const uint32_t l1_write_addr = get_write_ptr(ReaderCT::cb0_id);
             uint64_t base_src_addr = get_noc_addr(ReaderCT::core_noc_x, ReaderCT::core_noc_y, args.tensor_address);
             noc_async_read(base_src_addr, l1_write_addr, ReaderCT::num_tiles * ReaderCT::tensor_page_size);
             noc_async_read_barrier();
             cb_push_back(ReaderCT::cb0_id, ReaderCT::num_tiles);
-
+            DPRINT << "AR S2" << ENDL();
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
             // BRISC (Writer) - sends data to remote device via fabric
             // ================================================================
+            DPRINT << "AR S1" << ENDL();
             tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
 
             size_t fabric_args_start_index = size_t(args.fabric_args_start_index);
             open_connections(fabric_connection, WriterCT::num_connections, fabric_args_start_index);
+            DPRINT << "AR S2" << ENDL();
 
             PacketHeaderPool::reset();
             auto* packet_header_ptr = PacketHeaderPool::allocate_header(1);
@@ -150,18 +153,20 @@ struct AllReduceSender {
             packet_header_ptr->to_noc_fused_unicast_write_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc_addr, receive_sem_noc_addr, 1, true},
                 align(WriterCT::payload_size_bytes, WriterCT::l1_alignment));
-
+            DPRINT << "AR S3" << ENDL();
             auto& connection = fabric_connection.get(0).sender;
             connection.wait_for_empty_write_slot();
+            DPRINT << "AR S4" << ENDL();
             connection.send_payload_without_header_non_blocking_from_address(
                 packet_base_addr, WriterCT::payload_size_bytes);
+            DPRINT << "AR S5" << ENDL();
             connection.send_payload_flush_blocking_from_address(
                 (uint32_t)packet_header_ptr, sizeof(PACKET_HEADER_TYPE));
-
+            DPRINT << "AR S6" << ENDL();
             cb_pop_front(WriterCT::packet_cb_id, WriterCT::input_num_tiles);
 
             close_connections(fabric_connection);
-
+            DPRINT << "AR S7" << ENDL();
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================
             // TRISC - No-op (compute runs on receiver core)
