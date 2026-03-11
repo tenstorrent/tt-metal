@@ -8,6 +8,7 @@ import torch
 import ttnn
 from models.common.utility_functions import is_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
 
 # Hardcoded grid from PREFETCHER_NOC1_OUTPUT_GRID adjusted to work on smaller grids like on an x2
 GRID = [
@@ -150,6 +151,14 @@ def run_matmul_1d_dram_sharded(device, num_iters=1):
         torch_out = in0 @ in1.to(torch.bfloat16)
 
         # --- PCC comparisons ---
+        test_name = f"run_matmul_1d_dram_sharded[num_iters={num_iters}]_iter{_}"
+        collect_and_dump_numeric_metrics(
+            torch_out,
+            ring_out,
+            test_name=test_name,
+            csv_filename="test_ring_matmul_numeric_results.csv",
+            test_params=None,
+        )
         assert_with_pcc(ring_out, torch_out, 0.9)
 
 

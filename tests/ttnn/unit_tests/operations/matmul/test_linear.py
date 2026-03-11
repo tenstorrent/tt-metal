@@ -10,6 +10,7 @@ from loguru import logger
 
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc
 from models.common.utility_functions import torch_random
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
 
 pytestmark = pytest.mark.use_module_device
 
@@ -135,6 +136,15 @@ def test_linear_with_core_grid(
 
     output_tensor = ttnn.to_torch(output_tensor)
 
+    test_name = f"test_linear_with_core_grid[batch_size={batch_size},m_size={m_size},k_size={k_size},n_size={n_size},use_bias={use_bias},core_grid={core_grid}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_linear_numeric_results.csv",
+        test_params=None,
+    )
+
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
 
 
@@ -161,6 +171,14 @@ def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
     output_tensor = ttnn.linear(input_tensor_a, input_tensor_b, core_grid=device.core_grid, activation=activation)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    test_name = f"test_wide_linear_with_argument_for_core_grid_set_to_device_grid[batch_size={batch_size},m_size={m_size},k_size={k_size},n_size={n_size},activation={activation}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_linear_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
@@ -200,6 +218,14 @@ def test_linear_with_compound_activation(device, batch_size, m_size, k_size, n_s
     # We supply no program config or core grid, so this uses the unfused path.
     output_tensor = ttnn.linear(input_tensor_a, input_tensor_b, activation=activation)
     output_tensor = ttnn.to_torch(output_tensor)
+    test_name = f"test_linear_with_compound_activation[batch_size={batch_size},m_size={m_size},k_size={k_size},n_size={n_size},activation={activation}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_linear_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
@@ -228,6 +254,14 @@ def test_linear_by_passing_in_1D_systolic_array_program_config(device, batch_siz
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
+    test_name = f"test_linear_by_passing_in_1D_systolic_array_program_config[batch_size={batch_size},m_size={m_size},k_size={k_size},n_size={n_size},activation={activation}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_linear_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
@@ -260,6 +294,14 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
     )
 
     output_tensor = ttnn.to_torch(output_tensor)
+    test_name = f"test_linear_fp32_acc[m_size={m_size},k_size={k_size},n_size={n_size}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_linear_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
 
@@ -297,6 +339,15 @@ def test_bloom_ff2_linear(device):
         dtype=ttnn.bfloat16,
     )
 
+    output_torch = ttnn.to_torch(output)
+    test_name = "test_bloom_ff2_linear"
+    collect_and_dump_numeric_metrics(
+        torch_output,
+        output_torch,
+        test_name=test_name,
+        csv_filename="test_linear_numeric_results.csv",
+        test_params=None,
+    )
     assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9992
 
 
@@ -343,6 +394,14 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
 
     assert len(output_tensor.shape) == len(torch_output_tensor.shape) == len(optional_output_tensor.shape)
     assert output_tensor.shape == torch_output_tensor.shape == optional_output_tensor.shape
+    test_name = f"test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outout_tensor[batch_size={batch_size},m_size={m_size},k_size={k_size},n_size={n_size},activation={activation}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_linear_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
     assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.997)
     assert_with_pcc(optional_output_tensor, output_tensor, 0.997)
@@ -376,6 +435,14 @@ def test_linear_with_fp32_dest_acc_and_bias(device):
         transpose_b=True,
     )
     output_tensor = ttnn.to_torch(output1)
+    test_name = "test_linear_with_fp32_dest_acc_and_bias"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_linear_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -446,6 +513,14 @@ def test_resnet50_linear(device):
     )
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+    test_name = "test_resnet50_linear"
+    collect_and_dump_numeric_metrics(
+        torch_out_golden_tensor,
+        torch_output_tensor[0, 0, :, :],
+        test_name=test_name,
+        csv_filename="test_linear_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)
 
 
@@ -533,6 +608,14 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
         assert False, f"mismatch in shape: torch: {torch_result.shape}, ttnn: {ttnn_result_torch.shape}"
 
     # Check values with PCC
+    test_name = f"test_vector_linear[shape_a={shape_a},shape_b={shape_b},shape_bias={shape_bias}]"
+    collect_and_dump_numeric_metrics(
+        torch_result,
+        ttnn_result_torch,
+        test_name=test_name,
+        csv_filename="test_linear_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_result, ttnn_result_torch, 0.99)
 
     # Allow some tolerance for numeric differences
@@ -654,6 +737,14 @@ def test_linear_yolov7(
     )
     tt_output_tensor = ttnn.from_device(tt_output_tensor_on_device)
     torch_output_tensor = ttnn.to_torch(tt_output_tensor)
+    test_name = f"test_linear_yolov7[in0_block_w={in0_block_w},out_subblock={out_subblock},out_block={out_block},num_cores={num_cores},input_dtype={input_dtype},weights_bias_dtype={weights_bias_dtype},output_dtype={output_dtype},compute_config_params={compute_config_params}]"
+    collect_and_dump_numeric_metrics(
+        torch_out_golden_tensor,
+        torch_output_tensor[0, 0, :, :],
+        test_name=test_name,
+        csv_filename="test_linear_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)
 
 
@@ -743,6 +834,14 @@ def test_linear_on_subdevice(device, m_size, k_size, n_size, use_bias, transpose
             sub_device_id=worker_sub_device_id,
         )
         output = ttnn.to_torch(output)
+        test_name = f"test_linear_on_subdevice[m_size={m_size},k_size={k_size},n_size={n_size},use_bias={use_bias},transpose_b={transpose_b}]"
+        collect_and_dump_numeric_metrics(
+            torch_output,
+            output,
+            test_name=test_name,
+            csv_filename="test_linear_numeric_results.csv",
+            test_params=None,
+        )
         assert_with_pcc(torch_output, output, 0.999)
     finally:
         _teardown_subdevice(device, sub_device_manager)
@@ -777,6 +876,14 @@ def test_linear_on_subdevice_variable_start_row(device, m_size, k_size, n_size, 
             sub_device_id=worker_sub_device_id,
         )
         output = ttnn.to_torch(output)
+        test_name = f"test_linear_on_subdevice_variable_start_row[m_size={m_size},k_size={k_size},n_size={n_size},skip_rows={skip_rows}]"
+        collect_and_dump_numeric_metrics(
+            torch_output,
+            output,
+            test_name=test_name,
+            csv_filename="test_linear_numeric_results.csv",
+            test_params=None,
+        )
         assert_with_pcc(torch_output, output, 0.999)
     finally:
         _teardown_subdevice(device, sub_device_manager)
@@ -828,4 +935,12 @@ def test_linear_bias_cb_estimation_with_large_n_small_k(device, batch_size, seq_
         compute_kernel_config=compute_kernel_config,
     )
     output = ttnn.to_torch(output)
+    test_name = f"test_linear_bias_cb_estimation_with_large_n_small_k[batch_size={batch_size},seq_len={seq_len},k_size={k_size},n_size={n_size},fp32_dest_acc={fp32_dest_acc}]"
+    collect_and_dump_numeric_metrics(
+        torch_output,
+        output,
+        test_name=test_name,
+        csv_filename="test_linear_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output, output, 0.99)
