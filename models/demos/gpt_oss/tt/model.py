@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-
 import torch
 from loguru import logger
 
@@ -336,7 +335,6 @@ class Model:
         user_id=0,
         sampling_on_device=False,
         batch_size=1,
-        return_hidden_states=False,
     ):
         """
         Shared forward pass through decoder layers and final projection.
@@ -370,9 +368,11 @@ class Model:
             )
         logits = hidden_states
 
-        # For batched prefill + sampling: return hidden states before norm/lm_head
-        # so the generator can extract per-user rows cheaply first.
-        if return_hidden_states:
+        # Batched prefill with get_last_token == -1: return hidden states before
+        # norm/lm_head so ttnn_prefill_forward can gather row-sharded data first,
+        # then run norm+lm_head on the combined tensor.
+        # This matches the base Transformer pattern (model.py line ~720).
+        if not is_decode and get_last_token == -1:
             return hidden_states
 
         if get_last_token != -1:
@@ -472,7 +472,6 @@ class Model:
         get_last_token=-1,
         kv_cache=None,
         batch_size=1,
-        return_hidden_states=False,
     ):
         """Prefill forward pass - processes full sequences"""
         # Use provided rotation matrices or slice from rope_setup (matches tt-transformers)
@@ -497,7 +496,6 @@ class Model:
             is_decode=False,
             user_id=user_id,
             batch_size=batch_size,
-            return_hidden_states=return_hidden_states,
         )
 
         # When returning hidden states for batched prefill with row-sharding,
@@ -505,8 +503,13 @@ class Model:
         # The generator expects the full [1, 1, batch*seq_len, hidden_dim] replicated
         # on all devices so it can reshape to [batch, 1, seq_len, hidden_dim].
         # Gather from all rows on host and replicate back.
-        if return_hidden_states and batch_size > 1 and self.users_row_sharded:
+        if get_last_token == -1 and batch_size > 1 and self.users_row_sharded:
             logits = self._gather_row_sharded_hidden_states(logits, batch_size)
+
+        # For batched prefill, _forward_layers_and_head returned hidden states
+        # (before norm+lm_head). Apply norm+lm_head here after the gather.
+        if get_last_token == -1:
+            logits = self._apply_norm_and_lm_head(logits)
 
         return logits
 
@@ -639,34 +642,6 @@ class Model:
         logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
         hidden_states.deallocate(True)
         return logits
-
-    def sample_batched_prefill(self, user_hidden, padded_batch):
-        """Apply norm + lm_head and greedy-sample tokens for batched prefill.
-
-        The on-device sampling module requires batch_size % 32 == 0 and row-sharded
-        params (sampling_dp > 1), which doesn't match the replicated hidden states
-        from batched prefill with small batch sizes. This method handles sampling
-        on host via argmax after gathering column-sharded logits.
-
-        Args:
-            user_hidden: [1, 1, padded_batch, hidden_dim] replicated on all devices
-            padded_batch: number of user slots
-
-        Returns:
-            (tokens, log_probs): tokens is a 1D tensor of length padded_batch,
-                                 log_probs is None (host-side argmax has no log probs)
-        """
-        logits_tt = self._apply_norm_and_lm_head(user_hidden)
-
-        # Gather column-parallel (TP-sharded) logits: each column has vocab_size/num_cols
-        num_cols = self.mesh_device.shape[1]
-        device_tensors = ttnn.get_device_tensors(logits_tt)
-        col_logits = [ttnn.to_torch(device_tensors[col]) for col in range(num_cols)]
-        full_logits = torch.cat(col_logits, dim=-1)  # [1, 1, padded_batch, full_vocab]
-
-        tokens = torch.argmax(full_logits, dim=-1).reshape(-1)[:padded_batch]
-        logits_tt.deallocate(True)
-        return tokens, None
 
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """
