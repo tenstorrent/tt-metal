@@ -34,6 +34,7 @@ void kernel_main() {
     constexpr uint32_t cb_id_in0 = 0;
     constexpr uint32_t cb_id_in1 = 1;
 
+    experimental::Noc noc;
     experimental::CircularBuffer cb_in0_obj(cb_id_in0);
     dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in1>(0.0f);
 
