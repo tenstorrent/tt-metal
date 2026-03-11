@@ -80,6 +80,9 @@ public:
     std::vector<BuildEnvInfo> get_all_build_envs_info();
 
 private:
+    void add_build_env_locked(
+        ChipId device_id, const JitDeviceConfig& dev_config, const llrt::RunTimeOptions& rtoptions);
+
     std::unordered_map<ChipId, DeviceBuildEnv> device_id_to_build_env_;
 
     // A device-agnostic mapping from programmable_core_type and processor_class to unique index + processor_type_count.

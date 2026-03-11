@@ -153,14 +153,19 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitD
 }  // namespace
 
 void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
+    const std::lock_guard<std::mutex> lock(this->lock);
     auto dev_config = create_jit_device_config(device_id, num_hw_cqs);
-    add_build_env(device_id, dev_config, MetalContext::instance().rtoptions());
+    add_build_env_locked(device_id, dev_config, MetalContext::instance().rtoptions());
 }
 
 void BuildEnvManager::add_build_env(
     ChipId device_id, const JitDeviceConfig& dev_config, const llrt::RunTimeOptions& rtoptions) {
     const std::lock_guard<std::mutex> lock(this->lock);
+    add_build_env_locked(device_id, dev_config, rtoptions);
+}
 
+void BuildEnvManager::add_build_env_locked(
+    ChipId device_id, const JitDeviceConfig& dev_config, const llrt::RunTimeOptions& rtoptions) {
     auto& dev_build_env = device_id_to_build_env_[device_id];
     uint64_t build_key = compute_build_key(dev_config, rtoptions);
     auto device_kernel_defines = initialize_device_kernel_defines(dev_config);
