@@ -223,6 +223,7 @@ class DecoderBlock:
         cb_id_manager = CircularBufferIdManager()
         mla_cb_id_context = cb_id_manager.create_context()
         moe_cb_id_context = cb_id_manager.create_context()
+        print("Attention get program context")
         full_device_grid, decoder_cbs, decoder_per_device_contexts = AttentionBlock.get_program_context(
             input_tensor_mesh,
             gamma_tensor,
@@ -268,7 +269,6 @@ class DecoderBlock:
             noc_mode,
             mla_cb_id_context,
             upstream_socket=upstream_socket,
-            persistent_next_iter_semaphore=persistent_next_iter_semaphore,
         )
         print("B")
 
@@ -309,8 +309,10 @@ class DecoderBlock:
             is_torus=is_torus,
         )
 
+        print("MoE build descriptors")
         moe._build_descriptors()
         moe_ctx = moe.ctx
+        print("MoE context created")
 
         io_tensors = []
         cb_metadata = record_cb_metadata(decoder_cbs)
@@ -358,6 +360,7 @@ class DecoderBlock:
                     result.append((name, value))
             return result
 
+        print("MoE setup per device args")
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         for ctx in decoder_per_device_contexts:
             mesh_coord = ctx["mesh_coord"]
@@ -367,11 +370,12 @@ class DecoderBlock:
 
             # ── MoE per-device setup ──
             moe._setup_per_device_args(chip_id, num_iterations, reduce_root_coord, mesh_coord, row, col)
+            print("MoE per device args setup")
 
             moe_ncrisc_ct = _adapt_moe_ct_args(moe.ncrisc_args)
             moe_brisc_ct = _adapt_moe_ct_args(moe.brisc_args)
             moe_trisc_ct = _adapt_moe_ct_args(moe.trisc_args)
-
+            print("MoE CT args adapted")
             attn_ncrisc_common = ctx["ncrisc_common_runtime_args"]
             attn_trisc_common = ctx["trisc_common_runtime_args"]
             moe_ncrisc_ct = _patch_named_compile_time_args(
@@ -380,13 +384,13 @@ class DecoderBlock:
             moe_trisc_ct = _patch_named_compile_time_args(
                 moe_trisc_ct, {"moe_rmsnorm_trisc_common_rt_arg_base": len(attn_trisc_common)}
             )
-
+            print("MoE CT args patched")
             attn_per_core_brisc = ctx["per_core_brisc_args"]
             attn_brisc_prefix_len_by_core = {}
             for core_coord, args in attn_per_core_brisc:
                 core_key = (core_coord.x, core_coord.y)
                 attn_brisc_prefix_len_by_core[core_key] = attn_brisc_prefix_len_by_core.get(core_key, 0) + len(args)
-
+            print("MoE per core brisc args computed")
             moe_per_core_brisc = moe.device_rt_args_desc.brisc_args if moe.device_rt_args_desc else []
 
             # Compute the correct bases and patch directly into moe_brisc_ct.
@@ -409,16 +413,21 @@ class DecoderBlock:
                     "reduce_brisc_fabric_rt_arg_base": reduce_rt_arg_base,
                 },
             )
-
+            print("MoE brisc CT args patched")
             merged_ucd = ctx["unified_compile_time_core_descriptors"] + moe.device_unified_core_descs
             merged_pcd = ctx["per_core_compile_time_descriptors"] + moe.device_per_core_descs
-
+            print("MoE merged UCd and PCd")
             mesh_coord_args = [("mesh_row", row), ("mesh_col", col)]
 
+            print("Done defines printing")
+            my_defines = moe.kernel_defines
+            if ctx["device_kernel_defines"] is not None:
+                my_defines = ctx["device_kernel_defines"] + moe.kernel_defines
+            print("My defines", my_defines)
             unified_kernel = UnifiedKernelDescriptor(
                 kernel_source="models/demos/deepseek_v3_b1/fused_ops/decoder_block/kernels/decoder_block_kernel.cpp",
                 core_ranges=full_device_grid,
-                defines=ctx["device_kernel_defines"] + moe.kernel_defines,
+                defines=my_defines,
                 ncrisc_compile_time_args=ctx["ncrisc_compile_time_args"],
                 brisc_compile_time_args=ctx["brisc_compile_time_args"],
                 ncrisc_named_compile_time_args=mesh_coord_args
@@ -455,14 +464,14 @@ class DecoderBlock:
                 ),
                 noc_mode=noc_mode,
             )
-
+            print("MoE kernel descriptor created")
             kernel_result = unified_kernel.get_kernel_descriptors()
             program = ttnn.ProgramDescriptor(
                 kernels=kernel_result.kernels,
                 cbs=cbs_list,
                 semaphores=ctx["semaphore_list"] + moe.device_sem_descs,
             )
-
+            print("MoE program descriptor created")
             broadcast_worker_core = ctx["broadcast_worker_core"]
             dst_nodes = ctx["dst_nodes"]
             if not skip_ccl and len(dst_nodes) > 0:
@@ -480,7 +489,7 @@ class DecoderBlock:
                         )
                         extend_fabric_args(writer_rt_args_ref, fabric_args)
                         break
-
+            print("MoE fabric connections setup")
             # ==================================================================
             # SDPA runtime args and fabric connection setup
             # ==================================================================
@@ -590,8 +599,9 @@ class DecoderBlock:
 
             # MoE fabric connections (reduce-to-one)
             moe._setup_fabric_connections(mesh_coord, row, col, reduce_root_coord, kernel_result, program)
-
+            print("MoE fabric connections setup")
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
         print("Running DecoderBlock op")
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
+        print("DecoderBlock op completed")
         return result, attention_block_output_tensor

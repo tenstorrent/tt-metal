@@ -2672,6 +2672,7 @@ void kernel_main() {
     }
 
     for (uint32_t i = 0; i < num_iterations; i++) {
+#if defined(COMPILE_FOR_BRISC)
         constexpr uint32_t persistent_mode = get_named_compile_time_arg_val("persistent_mode");
         constexpr uint32_t persistent_next_iter_sem_addr = get_named_compile_time_arg_val("persistent_next_iter_sem_addr");
         if constexpr (persistent_mode) {
@@ -2682,6 +2683,7 @@ void kernel_main() {
                 noc_semaphore_set(next_iter_sem, 0);
             }
         }
+#endif
         unified_kernels::reconfig_cb_interfaces(mla_cb_config);
         setup_mla_sharded_buffers();
         mla_body();

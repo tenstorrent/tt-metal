@@ -277,6 +277,7 @@ class AttentionBlock:
                 per_core_ncrisc_args, per_core_brisc_args, per_core_trisc_args,
                 cbs_list, worker_core, fabric_node_id, dst_nodes
         """
+        print("AttentionBlock get program context started")
         sender_row = sender_coord[0]
         sender_col = sender_coord[1]
 
@@ -285,21 +286,26 @@ class AttentionBlock:
         mesh_shape = mesh_device.shape
         mesh_rows = mesh_shape[0]
         mesh_cols = mesh_shape[1]
-
+        print("AttentionBlock get mesh/device info completed")
         # Get per-device tensors
         input_tensors_per_device = ttnn.get_device_tensors(input_tensor_mesh)
         gamma_fused_tensors_per_device = ttnn.get_device_tensors(gamma_tensor.fused_tensor)
         fused_weights_tensors_per_device = ttnn.get_device_tensors(matmul_weights_tensor.fused_tensor)
         kv_b12_fused_tensors_per_device = ttnn.get_device_tensors(matmul3_weights_tensor.fused_tensor)
+        print("AttentionBlock get fused tensors completed")
         qrope_sin_tensors_per_device = ttnn.get_device_tensors(qrope_sin_tensor)
         qrope_cos_tensors_per_device = ttnn.get_device_tensors(qrope_cos_tensor)
         trans_mat_tensors_per_device = ttnn.get_device_tensors(trans_mat_tensor)
         krope_cos_tensors_per_device = ttnn.get_device_tensors(krope_cos_tensor)
         krope_sin_tensors_per_device = ttnn.get_device_tensors(krope_sin_tensor)
+        print("AttentionBlock get RoPE tensors completed")
         position_ids_tensors_per_device = ttnn.get_device_tensors(position_ids_tensor)
+        print("AttentionBlock get position ids tensors completed")
         kv_cache_tensors_per_device = ttnn.get_device_tensors(kv_cache_tensor)
+        print("AttentionBlock get kv cache tensors completed")
         sdpa_out_interm_buffers_per_device = ttnn.get_device_tensors(sdpa_out_interm_buffer)
         sdpa_kv_cache_buffers_per_device = ttnn.get_device_tensors(sdpa_kv_cache_buffer)
+        print("AttentionBlock get device tensors completed")
 
         # Post-SDPA parameters
         post_sdpa_weights1_fused_tensors_per_device = ttnn.get_device_tensors(post_sdpa_weights1_tensor.fused_tensor)
@@ -308,12 +314,12 @@ class AttentionBlock:
         # Uncomment to debug local FlashMLA output
         # output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
         attention_block_output_tensors_per_device = ttnn.get_device_tensors(attention_block_output_tensor)
-
+        print("AttentionBlock get attention block output tensors completed")
         assert (
             attention_block_semaphores is not None
             and len(attention_block_semaphores) == AttentionBlock.get_num_semaphores()
         )
-
+        print("AttentionBlock semaphores assertion completed")
         # Semaphore addresses (only needed for CCL mode)
         out_ready_sem_addr = 0
         barrier_sem_addr = 0
@@ -329,22 +335,22 @@ class AttentionBlock:
             out_ready_sem_addr = ttnn.get_global_semaphore_address(out_ready_semaphore)
             barrier_sem_addr = ttnn.get_global_semaphore_address(barrier_semaphore)
             secondary_sync_sem_addr = ttnn.get_global_semaphore_address(secondary_sync_semaphore)
-
+        print("AttentionBlock semaphore addresses calculated")
         # Calculate packet size and page info for CCL broadcast
         packet_size_bytes = 14336  # 14 KB packets for (1, 7168) input
-
+        print("AttentionBlock packet size and page info calculated")
         # Get tensor properties (use a sample device tensor)
         input_tensor_sample = input_tensors_per_device[0]
         input_shape = input_tensor_sample.shape
         data_format = input_tensor_sample.dtype
-
+        print("AttentionBlock tensor properties calculated")
         # CCL broadcast page info
         element_size = 2
         tile_id_start = 0
         bcast_page_size_bytes = 32 * 32 * element_size  # interpret as 32x32 tile
         bcast_num_pages = input_shape[0] * input_shape[1] * element_size // bcast_page_size_bytes
         num_pages_per_packet = packet_size_bytes // bcast_page_size_bytes
-
+        print("AttentionBlock CCL broadcast page info calculated")
         # Interpret N 1x32 tiles as full 32x32 or 16x32 tiles
         # eg. [1, 7168] = 7 full 32x32 tiles
         # eg. [1, 1536] = 3 half 16x32 tiles
@@ -354,30 +360,30 @@ class AttentionBlock:
         is_16x32_tile = (input_shape[1] // FULL_32x32_TILE.tile_shape[1]) % FULL_32x32_TILE.tile_shape[0] != 0
         interpreted_tile = HALF_16x32_TILE if is_16x32_tile else FULL_32x32_TILE
         tile_height, tile_width = interpreted_tile.tile_shape
-
+        print("AttentionBlock tile dimensions calculated")
         # Calculate single tile size in bytes (bfloat16 = 2 bytes per element)
         tile_size = interpreted_tile.get_tile_size(data_format)
-
+        print("AttentionBlock tile size calculated")
         # Calculate num_tiles from tensor shape
         num_tiles = (input_shape[0] * input_shape[1]) // (tile_height * tile_width)
 
         # Get number of elements for RMS calculation
         numel = input_tensor_sample.logical_volume()
-
+        print("AttentionBlock numel calculated")
         # Get core grid from input tensor's memory config
         input_memory_config = input_tensor_sample.memory_config()
         input_core_grid = input_memory_config.shard_spec.grid
         input_core_ranges = list(input_core_grid.ranges())
         rmsnorm_core = input_core_ranges[0].start
         rmsnorm_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(rmsnorm_core, rmsnorm_core)])
-
+        print("AttentionBlock rmsnorm core grid calculated")
         # Get full device grid
         device = input_tensor_sample.device()
         device_grid_size = device.compute_with_storage_grid_size()
         full_device_grid = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
         )
-
+        print("AttentionBlock full device grid calculated")
         # Matmul1 grid from OverlappedTensor metadata (single packed weight tensor)
         matmul_weights_core_grid = matmul_weights_tensor.core_range_set
         if len(list(matmul_weights_core_grid.ranges())) != 1:
@@ -392,7 +398,7 @@ class AttentionBlock:
         if matmul_num_cores != 96:
             raise ValueError(f"matmul core grid must have 96 cores for this K-split path, got {matmul_num_cores}")
         matmul_half_num_cores = matmul_num_cores // 2
-
+        print("AttentionBlock matmul grid calculated")
         # Calculate per-core width in tiles for matmul1 (from OverlappedTensor)
         matmul_weights_shard_shape = matmul_weights_tensor.shard_shape
         matmul_weights_shard_width = matmul_weights_shard_shape[1]  # Width dimension
@@ -403,10 +409,10 @@ class AttentionBlock:
         matmul2_weights_shard_shape = matmul2_weights_tensor.shard_shape
         matmul2_weights_shard_width = matmul2_weights_shard_shape[1]  # Width dimension
         matmul2_out_w = matmul2_weights_shard_width // matmul2_weights_tensor.tile_shape[1]  # Per-core width in tiles
-
+        print("AttentionBlock matmul2 out w calculated")
         # Extract matmul3 weights core grid (for inferring QNOPE grid dimensions)
         matmul3_weights_core_grid = matmul3_weights_tensor.core_range_set
-
+        print("AttentionBlock matmul3 weights core grid calculated")
         # ========================================================================
         # Qnope/Qrope grid configuration (for interleaved Q head layout)
         # With shuffled weights, matmul2 output is interleaved by row groups:
@@ -424,12 +430,12 @@ class AttentionBlock:
         matmul3_grid_ranges = list(matmul3_weights_core_grid.ranges())
         matmul2_grid_size = matmul2_grid_ranges[0].grid_size()
         matmul3_grid_size = matmul3_grid_ranges[0].grid_size()
-
+        print("AttentionBlock matmul2 and matmul3 grid sizes calculated")
         # Infer dimensions from grids
         HEAD_GRID_ROWS = matmul2_grid_size.y  # Number of rows (same for both grids)
         QNOPE_GRID_COLS = matmul3_grid_size.x  # QNOPE columns (from matmul3 grid width)
         QROPE_GRID_COLS = matmul2_grid_size.x - matmul3_grid_size.x  # QROPE columns (remaining columns)
-
+        print("AttentionBlock Qnope and Qrope grid columns calculated")
         # Qnope grid: columns 0-7, rows 0-7 (64 cores total)
         qnope_grid = ttnn.CoreRangeSet(
             [
@@ -439,7 +445,7 @@ class AttentionBlock:
                 )
             ]
         )
-
+        print("AttentionBlock qnope grid calculated")
         # Qrope grid: columns 8-11, rows 0-7 (32 cores total for P150)
         # Note: For non-P150 with 11 columns, Qrope grid would be cols 8-10 (24 cores)
         qrope_grid_start_x = QNOPE_GRID_COLS  # Column 8
@@ -452,9 +458,9 @@ class AttentionBlock:
                 )
             ]
         )
-
+        print("AttentionBlock qrope grid calculated")
         dkv_rmsnorm_grid = dkv_rmsnorm_gamma_tensor.core_range_set
-
+        print("AttentionBlock dkv rmsnorm grid calculated")
         # Krope grid: columns 8-9, rows 8-9 (2 cores total)
         krope_grid = ttnn.CoreRangeSet(
             {
@@ -464,11 +470,11 @@ class AttentionBlock:
                 )
             }
         )
-
+        print("AttentionBlock krope grid calculated")
         kv_cache_update_grid = dkv_rmsnorm_grid.merge(krope_grid)
         # Use the merged grids for certain shared CBs between Q rope and K rope
         qkv_grid = qrope_grid.merge(krope_grid)
-
+        print("AttentionBlock qkv grid calculated")
         # ========================================================================
         # SDPA Input grid configuration (for receiving interleaved QNOPE/QROPE data)
         # SDPA Input cores: 4×2 grid (4 columns × 2 rows) at logical (0,1)-(3,2)
@@ -494,18 +500,18 @@ class AttentionBlock:
                 )
             ]
         )
-
+        print("AttentionBlock sdpa input grid calculated")
         # CreateQHeads parameters for 3-phase tilization layout
         COMBINED_HEAD_SIZE = 576  # 512 (QNOPE) + 64 (QROPE) elements per combined head
         QNOPE_DATA_SIZE = 512  # Elements per QNOPE head
         QROPE_HEAD_DIM = 64  # Elements per QROPE head
         QNOPE_COLS = 8  # Number of QNOPE sender columns
         QROPE_COLS = 4  # Number of QROPE sender columns
-
+        print("AttentionBlock CreateQHeads parameters calculated")
         # KV Cache Branch grid configuration
         # DKV Matmul (9x2)
         dkv_matmul_weights_core_grid = dkv_matmul_weights_tensor.core_range_set
-
+        print("AttentionBlock dkv matmul weights core grid calculated")
         # Calculate per-core width in tiles for dkv matmul (from overlapped tensor shard spec)
         dkv_matmul_weights_shard_shape = dkv_matmul_weights_tensor.shard_shape
         dkv_matmul_weights_shard_width = dkv_matmul_weights_shard_shape[1]  # Width dimension
@@ -526,20 +532,20 @@ class AttentionBlock:
             ttnn.CoreCoord(MCAST_GRID_START_X, MCAST_GRID_START_Y),
             ttnn.CoreCoord(MCAST_GRID_END_X, MCAST_GRID_END_Y),
         )
-
+        print("AttentionBlock main grid calculated")
         TILE_1x32 = ttnn.Tile((1, 32))
         tile_1x32_size = TILE_1x32.get_tile_size(data_format)
         # Mcast setup: sender core (rmsnorm) -> full mcast grid
         # Only matmul cores (is_matmul_core=true) will actually participate in receive
-
+        print("AttentionBlock tile 1x32 size calculated")
         # Get NOC coordinates for mcast destination
         mcast_dest_noc_start_core = device.worker_core_from_logical_core(main_grid.start)
         mcast_dest_noc_end_core = device.worker_core_from_logical_core(main_grid.end)
-
+        print("AttentionBlock mcast destination NOC coordinates calculated")
         # Calculate number of mcast cores (full grid)
         mcast_num_cores = main_grid.grid_size().x * main_grid.grid_size().y
         mcast_is_part_of_receiver_grid = main_grid.contains(rmsnorm_core_grid)
-
+        print("AttentionBlock mcast number of cores calculated")
         # Post-SDPA Parameters
         # ========================================================================
         # Core grid configuration — derived from production weight overlap specs
@@ -548,38 +554,38 @@ class AttentionBlock:
         kv_b12_spec = KVB12_PROJ_SingleDeviceOverlapSpec()
         matmul4_core_grid = kv_b12_spec.kv_b2_core_range_set
         num_matmul4_cores = matmul4_core_grid.num_cores()  # 64
-
+        print("AttentionBlock matmul4 core grid calculated")
         # Per-core gather2 sender index: contiguous 0..63 in row-major order.
         # Needed because kv_b2 grid is non-rectangular (5×8 + 12×2).
         matmul4_cores = ttnn.corerange_to_cores(matmul4_core_grid, row_wise=True)
         gather2_sender_idx_per_core = [(core, idx) for idx, core in enumerate(matmul4_cores)]
-
+        print("AttentionBlock gather2 sender index per core calculated")
         # Gather/CCL receiver core: same as rmsnorm_core
         gather_core = rmsnorm_core
         gather_core_grid = rmsnorm_core_grid
-
+        print("AttentionBlock gather core calculated")
         # CCL sender core: (11, 9) - adjacent to gather core
         ccl_sender_core = ttnn.CoreCoord(11, 9)
         ccl_sender_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ccl_sender_core, ccl_sender_core)])
-
+        print("AttentionBlock ccl sender core grid calculated")
         # TODO: Subtract the pipeline core
         is_full_mcast_grid_core = ttnn.CoreRangeSet([main_grid]).subtract(rmsnorm_core_grid)
-
+        print("AttentionBlock is full mcast grid core calculated")
         # Active Matmul5 cores: o_proj cores (12×8 + 8×2 = 112 cores)
         o_proj_spec = O_PROJ_GATE_MM_RMSNORM_GAMMA_SingleDeviceOverlapSpec()
         matmul5_active_core_grid = o_proj_spec.o_proj_core_range_set
         num_matmul5_cores = matmul5_active_core_grid.num_cores()  # 112
-
+        print("AttentionBlock matmul5 active core grid calculated")
         # Per-core gather3 sender index: contiguous 0..111 in row-major order.
         # Needed because o_proj grid is non-rectangular (12×8 + 8×2).
         # Row-major (y then x) matches WIDTH_SHARDED shard placement order.
         matmul5_cores = ttnn.corerange_to_cores(matmul5_active_core_grid, row_wise=True)
         gather3_sender_idx_per_core = [(core, idx) for idx, core in enumerate(matmul5_cores)]
-
+        print("AttentionBlock gather3 sender index per core calculated")
         # Full grid (union of all cores for semaphore allocation)
         # TODO: Subtract the pipeline core
         full_grid = rmsnorm_core_grid.merge(ttnn.CoreRangeSet([main_grid])).merge(ccl_sender_core_grid)
-
+        print("AttentionBlock full grid calculated")
         # SDPA tensor properties - use same calculation as original sdpa_reduce_to_all op
         sdpa_input_l_sample = ttnn.get_device_tensors(sdpa_input_l_mesh)[0]
 
@@ -967,7 +973,7 @@ class AttentionBlock:
         ccl_residual_cb = input_cb
         ccl_temp_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # CCL temp for compute (receiver core)
         ccl_output_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # CCL output (receiver core)
-
+        print("AttentionBlock CCL parameters calculated")
         attention_block_output_cb = ccl_output_cb  # Attention block output (receiver core)
 
         # RMSNorm2 parameters (for 1536 element input using 16x32 tiles)
@@ -1067,6 +1073,7 @@ class AttentionBlock:
             ("matmul_k_per_core", matmul_k_per_core),
             ("matmul_act_total_tiles", matmul_act_total_tiles),
         ]
+        print("AttentionBlock matmul trisc named compile time args calculated")
 
         # Matmul2 compile-time args (different per RISC)
         # NCRISC: in1, num_tiles, rmsnorm2_output_cb (for copy to matmul2_input)
@@ -1091,7 +1098,7 @@ class AttentionBlock:
             ("matmul2_k_num_tiles", matmul2_num_tiles_k),
             ("matmul2_out_w_per_core", matmul2_out_w),
         ]
-
+        print("AttentionBlock matmul2 compile-time args calculated")
         # ========================================================================
         # Matmul3 parameters (batched matmul on Qnope cores only)
         # Input: matmul2 output on Qnope cores [1, 128] = 4 tiles of 1x32 per core
@@ -1871,6 +1878,7 @@ class AttentionBlock:
                 ("sdpa_per_device_chunk_size", sdpa_per_device_chunk_size),
             ]
         )
+        print("AttentionBlock sdpa trisc named compile time args calculated")
 
         # Create tile descriptor for proper tile dimensions
         tile_descriptor = ttnn.TileDescriptor(interpreted_tile)
@@ -1991,7 +1999,7 @@ class AttentionBlock:
             ref_fused_weights_tensor,
             core_ranges=full_device_grid,
         )
-
+        print("AttentionBlock fused matmul weights cb descriptor calculated")
         # CB: Matmul input buffer (1x32 tiles, receives mcast data)
         # Senders will query the write pointer of this CB to get the receiver address.
         # Tensor-backed on full device grid (superset of sender/receiver grids) so senders
@@ -2014,7 +2022,7 @@ class AttentionBlock:
             )
         ]
         sdpa_out_interm_running_offset += matmul_input_cb_descriptor.total_size  # +14336 B
-
+        print("AttentionBlock matmul input cb descriptor calculated")
         # CB: Matmul output buffer (single tile) — overlap with sdpa_out_interm L1 buffer
         # at offset 0 B. This CB is consumed before SDPA runs.
         matmul_output_tile_descriptor = ttnn.TileDescriptor(TILE_1x32)
@@ -2035,7 +2043,7 @@ class AttentionBlock:
             )
         ]
         sdpa_out_interm_running_offset += matmul_output_cb_descriptor.total_size  # +64 B
-
+        print("AttentionBlock matmul output cb descriptor calculated")
         # CB 7: RMSNorm2 input buffer (3 tiles) — overlap with sdpa_kv_cache L1 buffer
         # at offset 14400 B. This CB is consumed before SDPA runs.
         # Covers gather_reduce senders (matmul_weights_core_grid, rows 0-7) + receiver (rmsnorm_core_grid)
@@ -2056,7 +2064,7 @@ class AttentionBlock:
             )
         ]
         sdpa_kv_cache_running_offset_mcast_core += rmsnorm2_input_cb_descriptor.total_size  # +3072 B
-
+        print("AttentionBlock rmsnorm2 input cb descriptor calculated")
         # CB9 lifecycle:
         # 1) RMSNorm2 writes normalized output here
         # 2) Mcast2 reads from CB9 and writes to matmul2 input CB
@@ -2070,6 +2078,7 @@ class AttentionBlock:
             total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
             core_ranges=full_device_grid,
         )
+        print("AttentionBlock gather reduce half1 scratch cb descriptor calculated")
         gather_reduce_half1_scratch_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
                 buffer_index=gather_reduce_half1_scratch_cb,
@@ -2221,6 +2230,7 @@ class AttentionBlock:
 
         # CB 20: Rotated input intermediate CB — overlap with sdpa_out_interm L1 buffer
         # at offset 13888 B. This CB is consumed before SDPA runs.
+        print("AttentionBlock rotated input intermediate cb descriptor calculated")
         qrope_interm_tile_size = qrope_head_dim_per_core_t * TILE_1x32.get_tile_size(data_format)
         qrope_rotated_input_interm_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
             qrope_rotated_input_interm_cb,
@@ -2264,6 +2274,7 @@ class AttentionBlock:
         # Senders write row-major data here via NOC, receiver marks pages, TRISC tilizes to output
         # Allocated on union of sender (QNOPE/QROPE) and receiver (SDPA Input) grids
         # so senders can use get_write_ptr to determine the L1 destination address
+        print("AttentionBlock create q heads intermediate buffer calculated")
         TILE_8x32 = ttnn.Tile((Q_TILE_HEIGHT, 32))
         create_q_heads_interm_tile_descriptor = ttnn.TileDescriptor(TILE_8x32)
         create_q_heads_interm_page_size = TILE_8x32.get_tile_size(untilize_df)  # 8*32*2 = 512 bytes
@@ -2308,6 +2319,7 @@ class AttentionBlock:
                 tile=create_q_heads_out_tile_descriptor,
             )
         ]
+        print("AttentionBlock create q heads out cb descriptor calculated")
         sdpa_forwarder_scratch_running_offset += create_q_heads_out_cb_descriptor.total_size
 
         # CB 24: DKV Matmul output — shares CB ID with matmul_output_cb (disjoint grids)
@@ -2499,6 +2511,7 @@ class AttentionBlock:
                 tile=ttnn.TileDescriptor(kv_cache_tensor.get_tile()),
             )
         ]
+        print("AttentionBlock mla k in cb descriptor calculated")
 
         mla_cb_descriptors.append(mla_k_in_cb_descriptor)
         # V is read directly from K buffer (strided matmul) - no separate V CB needed
@@ -2576,6 +2589,7 @@ class AttentionBlock:
         ]
         sdpa_forwarder_scratch_running_offset += mla_out_o_cb_descriptor.total_size
         mla_cb_descriptors.append(mla_out_o_cb_descriptor)
+        print("AttentionBlock mla out o cb descriptor calculated")
         # Uncomment to debug local FlashMLA output
         # mla_out_o_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(mla_out_o_cb, output_tensor_device)
         # mla_out_o_cb_descriptor.core_ranges = mla_core_grid
@@ -2774,6 +2788,7 @@ class AttentionBlock:
                 tile=tile_descriptor,
             )
         ]
+        print("AttentionBlock ccl remote data cb descriptor calculated")
         sdpa_kv_cache_running_offset_mcast_core += ccl_remote_data_cb_descriptor.total_size
         post_sdpa_cb_list.append(ccl_remote_data_cb_descriptor)
         ccl_send_addr = ttnn.get_cb_address(ccl_remote_data_cb_descriptor)
@@ -2803,6 +2818,7 @@ class AttentionBlock:
         attention_block_output_cb_descriptor.core_ranges = full_device_grid
         attention_block_output_cb_descriptor.format_descriptors[0].tile = tile_descriptor
         attention_block_output_cb_descriptor.format_descriptors[0].page_size = cb_page_size
+        print("AttentionBlock attention block output cb descriptor calculated")
 
         # Get from fused
         # CB 14: SDPA local L (aliased to input tensor)
@@ -3133,7 +3149,7 @@ class AttentionBlock:
             + mla_trisc_named_compile_time_args
             + post_sdpa_trisc_named_compile_time_args
         )
-
+        print("AttentionBlock trisc named compile time args calculated")
         # ========================================================================
         # Unified and per-core compile-time descriptors (device-invariant)
         # ========================================================================
@@ -3357,6 +3373,7 @@ class AttentionBlock:
         # ========================================================================
         # Per-device loop (only per-device varying parts)
         # ========================================================================
+        print("AttentionBlock per-device loop started")
 
         for row in range(mesh_rows):
             for col in range(mesh_cols):
@@ -3424,7 +3441,7 @@ class AttentionBlock:
                 # ================================================================
                 # bcast_page_size_bytes = 32 * 32 * element_size  # interpret as 32x32 tile
                 # bcast_num_pages = input_shape[0] * input_shape[1] * element_size // bcast_page_size_bytes
-                device_kernel_defines += [("ENABLE_SOCKET_READER", "1") if upstream_socket is not None else None]
+                device_kernel_defines = [("ENABLE_SOCKET_READER", "1")] if upstream_socket is not None else None
                 bcast_brisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                     ("bcast_cb0_id", bcast_pkt_cb if not skip_ccl else 0),
@@ -3577,6 +3594,7 @@ class AttentionBlock:
                     ("kv_cache_sp_device_idx", row),
                     ("kv_cache_num_sp_devices", mesh_rows),
                 ]
+                print("AttentionBlock kv cache sp named compile time args calculated")
 
                 # Assemble full compile-time arg lists from base + per-device parts
                 ncrisc_named_compile_time_args = (
@@ -3662,6 +3680,8 @@ class AttentionBlock:
                 fwd_r2_count = [0, 0]
                 bwd_r1_count = [0, 0]
                 bwd_r2_count = [0, 0]
+
+                print("AttentionBlock sdpa worker cores calculated")
 
                 sdpa_worker_cores = ttnn.corerange_to_cores(sdpa_worker_grid)
                 for worker_idx, worker_core in enumerate(sdpa_worker_cores):
@@ -3861,7 +3881,9 @@ class AttentionBlock:
                         "sdpa": sdpa_ctx,
                     }
                 )
+        print("AttentionBlock per-device context calculated")
         attention_block_cbs = [in_cb_descriptor, *cbs_list, attention_block_output_cb_descriptor]
+        print("AttentionBlock CBs calculated")
         return full_device_grid, attention_block_cbs, per_device_contexts
 
     @staticmethod
@@ -3911,8 +3933,10 @@ class AttentionBlock:
         num_iterations=1,
         upstream_socket=None,
     ):
+        print("AttentionBlock op started")
         cb_id_manager = CircularBufferIdManager()
         cb_id_context = cb_id_manager.create_context()
+        print("AttentionBlock get program context started")
         full_device_grid, attention_block_cbs, attention_block_per_device_contexts = AttentionBlock.get_program_context(
             input_tensor_mesh,
             gamma_tensor,
@@ -3960,6 +3984,8 @@ class AttentionBlock:
             upstream_socket,
         )
 
+        print("AttentionBlock get program context completed")
+
         io_tensors = []
         cb_metadata = record_cb_metadata(attention_block_cbs)
         reconfig_tensor = build_cb_reconfig_tensor(cb_metadata, full_device_grid, input_tensor_mesh.device())
@@ -3988,9 +4014,11 @@ class AttentionBlock:
             sdpa_out_interm_buffer,
             attention_block_output_tensor,
         ]
+        print("AttentionBlock additional named compile time args created")
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
         for ctx in attention_block_per_device_contexts:
+            print("AttentionBlock creating unified kernel descriptor for device", ctx["mesh_coord"])
             unified_kernel = UnifiedKernelDescriptor(
                 kernel_source="models/demos/deepseek_v3_b1/fused_ops/attention_block/kernels/attention_block_kernel.cpp",
                 core_ranges=full_device_grid,
@@ -4018,14 +4046,14 @@ class AttentionBlock:
                 ),
                 noc_mode=noc_mode,
             )
-
+            print("AttentionBlock unified kernel descriptor created for device", ctx["mesh_coord"])
             kernel_result = unified_kernel.get_kernel_descriptors()
             program = ttnn.ProgramDescriptor(
                 kernels=kernel_result.kernels,
                 cbs=cbs_list,
                 semaphores=ctx["semaphore_list"],
             )
-
+            print("AttentionBlock program descriptor created for device", ctx["mesh_coord"])
             mesh_coord = ctx["mesh_coord"]
             broadcast_worker_core = ctx["broadcast_worker_core"]
             dst_nodes = ctx["dst_nodes"]
@@ -4044,7 +4072,7 @@ class AttentionBlock:
                         )
                         extend_fabric_args(writer_rt_args_ref, fabric_args)
                         break
-
+            print("AttentionBlock fabric connections setup for device", ctx["mesh_coord"])
             # ==================================================================
             # SDPA runtime args and fabric connection setup
             # ==================================================================
@@ -4105,7 +4133,9 @@ class AttentionBlock:
                         _extend_runtime_args(
                             program.kernels[group.ncrisc_kernel_index].runtime_args, sdpa_forwarder_ncrisc_rt_args, crs
                         )
-
+            print(
+                "AttentionBlock SDPA runtime args and fabric connection setup completed for device", ctx["mesh_coord"]
+            )
             if ctx["ccl"]:
                 ccl = ctx["ccl"]
                 ccl_sender_core = ctx["ccl_sender_core"]
@@ -4145,13 +4175,14 @@ class AttentionBlock:
                     sender_brisc_kernel_idx,
                     ccl_sender_core,
                 )
+                print("AttentionBlock sender fabric args setup for device", ctx["mesh_coord"])
                 extend_fabric_args(sender_brisc_rt_args_ref, sender_fabric_args)
 
                 receiver_ncrisc_kernel_idx = ccl_receiver_group.ncrisc_kernel_index
                 receiver_ncrisc_rt_args_ref = program.kernels[receiver_ncrisc_kernel_idx].runtime_args[gather_core.x][
                     gather_core.y
                 ]
-
+                print("AttentionBlock receiver fabric args setup for device", ctx["mesh_coord"])
             mesh_program_descriptor[ttnn.MeshCoordinateRange(mesh_coord, mesh_coord)] = program
         print("Running AttentionBlock op")
         result = ttnn.generic_op(io_tensors, mesh_program_descriptor)
