@@ -182,7 +182,7 @@ Tensor Tensor::from_span(
     std::optional<tt::tt_metal::QueueId> cq_id,
     T pad_value) {
     if (!logical_matches_physical(spec)) {
-        // If the logical type doesn’t match the physical type, we need to encode the data
+        // If the logical shape doesn't match the physical shape, we need to encode the data
         // and write the result to a new buffer. This branch avoids the extra copy that
         // would otherwise occur in the from_vector function call.
         auto res = from_span_impl(buffer, spec, static_cast<T>(pad_value));
