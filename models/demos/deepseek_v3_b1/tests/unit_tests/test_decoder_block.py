@@ -858,6 +858,13 @@ def test_decoder(
             pytest.skip("Test requires more devices than available")
 
         submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+        print("Submesh coordinate -> fabric ID / device ID mapping:")
+        for row in range(mesh_rows):
+            for col in range(mesh_cols):
+                coord = ttnn.MeshCoordinate(row, col)
+                fabric_id = submesh.get_fabric_node_id(coord)
+                device_id = submesh.get_device_id(coord)
+                print(f"  ({row}, {col}) -> fabric_id={fabric_id}, device_id={device_id}")
         device_grid_size = submesh.compute_with_storage_grid_size()
 
         logger.info("Preparing model state dict...")

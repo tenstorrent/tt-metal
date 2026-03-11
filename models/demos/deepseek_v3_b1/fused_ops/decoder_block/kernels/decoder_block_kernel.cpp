@@ -2358,7 +2358,7 @@ void kernel_main() {
 
     auto moe_body = [&]() {
         // 0. Residual Mcast: Broadcast input as residual to mcast receiver cores (pop_src=false)
-        DPRINT << "Starting MoE"
+        DPRINT << "Starting MoE" << ENDL();
         {
             DeviceZoneScopedN("RESIDUAL_MCAST");
             residual_mcast(moe.routed.residual_mcast_args);
