@@ -50,6 +50,42 @@ _reset_tt_devices() {
 }
 
 # ---------------------------------------------------------------------------
+# _check_system_health - Run test_system_health diagnostic on all job nodes
+# ---------------------------------------------------------------------------
+# Best-effort diagnostic: logs system health output but never fails the job.
+# Requires the build tree to be present (skipped if binary not found).
+_check_system_health() {
+    if [[ "${SKIP_DEVICE_RESET:-0}" == "1" ]]; then
+        return 0
+    fi
+
+    local ws="${WORKSPACE:-.}"
+    local health_bin="${ws}/build/test/tt_metal/tt_fabric/test_system_health"
+
+    if [[ ! -x "${health_bin}" ]]; then
+        log_debug "test_system_health not found at ${health_bin}, skipping health check"
+        return 0
+    fi
+
+    local num_nodes="${SLURM_JOB_NUM_NODES:-1}"
+    local run_env="TT_METAL_HOME=${ws} LD_LIBRARY_PATH=${ws}/build/lib\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}"
+
+    log_info "Running system health check..."
+
+    if (( num_nodes > 1 )) && command -v srun &>/dev/null; then
+        srun --ntasks-per-node=1 bash -c \
+            "export ${run_env} && echo '[$(hostname)] test_system_health' && ${health_bin}" 2>&1 | \
+            while IFS= read -r line; do log_info "  ${line}"; done || \
+            log_warn "test_system_health returned non-zero on one or more nodes, continuing"
+    else
+        (export TT_METAL_HOME="${ws}" LD_LIBRARY_PATH="${ws}/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}" && \
+            "${health_bin}") 2>&1 | \
+            while IFS= read -r line; do log_info "  ${line}"; done || \
+            log_warn "test_system_health failed on $(hostname), continuing"
+    fi
+}
+
+# ---------------------------------------------------------------------------
 # setup_job - Main prologue function
 # ---------------------------------------------------------------------------
 # Controlled by environment variables:
@@ -78,6 +114,9 @@ setup_job() {
 
     # -- Reset TT devices (mirrors GH Actions runner pre-job reset) --
     _reset_tt_devices
+
+    # -- System health diagnostic --
+    _check_system_health
 
     # -- Create workspace --
     mkdir -p "$workspace"
