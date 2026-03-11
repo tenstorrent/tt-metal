@@ -93,10 +93,13 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
         input_cb_num_tiles = num_input_tiles;
         num_cos_sin_tiles = num_input_tiles;
     }
-    // When cos/sin are sharded: fast path (seq_per_core==1, shard covers all cores) uses globally-allocated L1 view;
-    // reload path reads each row via TensorAccessor (used when seq_per_core>1 or shard count < num_cores).
+    // When cos/sin are sharded: fast path (seq_per_core==1) uses globally-allocated L1 view;
+    // reload path reads each row via TensorAccessor (used when seq_per_core>1 or active cores exceed shard count).
+    // We compare against active cores (not total device cores) to preserve the fast L1 path
+    // when the shard grid is smaller than the device grid but still covers all active cores.
+    const uint32_t num_active_cores_upper_bound = batch_parallel_factor * seq_parallel_factor;
     const bool cos_sin_sharded_reload =
-        cos_sin_sharded && (seq_per_core > 1 || cos.shard_spec()->grid.num_cores() < num_cores);
+        cos_sin_sharded && (seq_per_core > 1 || num_active_cores_upper_bound > cos.shard_spec()->grid.num_cores());
     if (cos_sin_sharded) {
         num_cos_sin_tiles = cos_sin_sharded_reload ? num_input_tiles : head_dim_t;
     }
@@ -132,17 +135,37 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
                     .set_page_size(sin_cb_index, sin_single_tile_size);
             tt_metal::CreateCircularBuffer(program, all_cores, sin_cb_cfg);
         } else {
+            const CoreRangeSet& cos_sin_shard_grid = cos.shard_spec()->grid;
+            const bool partial_cos_sin = cos_sin_shard_grid.num_cores() < num_cores;
+            const auto& cos_sin_cb_cores = partial_cos_sin ? cos_sin_shard_grid : CoreRangeSet(all_cores);
+
             auto cos_cb_cfg = tt_metal::CircularBufferConfig(
                                   num_cos_sin_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
                                   .set_page_size(cos_cb_index, cos_single_tile_size)
                                   .set_globally_allocated_address(*cos_buffer);
-            cb_cos_handle = tt_metal::CreateCircularBuffer(program, all_cores, cos_cb_cfg);
+            cb_cos_handle = tt_metal::CreateCircularBuffer(program, cos_sin_cb_cores, cos_cb_cfg);
 
             auto sin_cb_cfg = tt_metal::CircularBufferConfig(
                                   num_cos_sin_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
                                   .set_page_size(sin_cb_index, sin_single_tile_size)
                                   .set_globally_allocated_address(*sin_buffer);
-            cb_sin_handle = tt_metal::CreateCircularBuffer(program, all_cores, sin_cb_cfg);
+            cb_sin_handle = tt_metal::CreateCircularBuffer(program, cos_sin_cb_cores, sin_cb_cfg);
+
+            if (partial_cos_sin) {
+                CoreRangeSet remaining_cores = CoreRangeSet(all_cores).subtract(cos_sin_shard_grid);
+                if (remaining_cores.num_cores() > 0) {
+                    tt_metal::CreateCircularBuffer(
+                        program,
+                        remaining_cores,
+                        tt_metal::CircularBufferConfig(cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
+                            .set_page_size(cos_cb_index, cos_single_tile_size));
+                    tt_metal::CreateCircularBuffer(
+                        program,
+                        remaining_cores,
+                        tt_metal::CircularBufferConfig(sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
+                            .set_page_size(sin_cb_index, sin_single_tile_size));
+                }
+            }
         }
     } else {
         tt_metal::CircularBufferConfig cb_cos_config =
@@ -161,17 +184,34 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
     uint32_t trans_mat_cb_index = CBIndex::c_3;
     // We only take one tile of trans_mat
     uint32_t num_trans_mat_tiles = 1;
-    // Globally-allocated CB for trans_mat requires shard grid to cover all cores.
-    // When shard count < num_cores, fall back to TensorAccessor reads (the non-sharded kernel path).
-    const bool trans_mat_use_global_cb = trans_mat_sharded && trans_mat.shard_spec()->grid.num_cores() >= num_cores;
+    // Globally-allocated CB for trans_mat requires shard grid to cover all active cores.
+    // When shard count < active cores, fall back to TensorAccessor reads (the non-sharded kernel path).
+    const bool trans_mat_use_global_cb =
+        trans_mat_sharded && num_active_cores_upper_bound <= trans_mat.shard_spec()->grid.num_cores();
     std::optional<CBHandle> cb_trans_mat_handle;
     if (trans_mat_use_global_cb) {
+        const CoreRangeSet& tm_shard_grid = trans_mat.shard_spec()->grid;
+        const bool partial_tm = tm_shard_grid.num_cores() < num_cores;
+        const auto& tm_cb_cores = partial_tm ? tm_shard_grid : CoreRangeSet(all_cores);
+
         auto tm_cb_cfg =
             tt_metal::CircularBufferConfig(
                 num_trans_mat_tiles * trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
                 .set_page_size(trans_mat_cb_index, trans_mat_single_tile_size)
                 .set_globally_allocated_address(*trans_mat_buffer);
-        cb_trans_mat_handle = tt_metal::CreateCircularBuffer(program, all_cores, tm_cb_cfg);
+        cb_trans_mat_handle = tt_metal::CreateCircularBuffer(program, tm_cb_cores, tm_cb_cfg);
+
+        if (partial_tm) {
+            CoreRangeSet tm_remaining = CoreRangeSet(all_cores).subtract(tm_shard_grid);
+            if (tm_remaining.num_cores() > 0) {
+                tt_metal::CreateCircularBuffer(
+                    program,
+                    tm_remaining,
+                    tt_metal::CircularBufferConfig(
+                        trans_mat_single_tile_size, {{trans_mat_cb_index, trans_mat_cb_data_format}})
+                        .set_page_size(trans_mat_cb_index, trans_mat_single_tile_size));
+            }
+        }
     } else {
         tt_metal::CircularBufferConfig cb_trans_mat_config =
             tt_metal::CircularBufferConfig(
