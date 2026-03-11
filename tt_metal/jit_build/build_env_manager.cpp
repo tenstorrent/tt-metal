@@ -158,6 +158,7 @@ std::vector<JitBuildState> create_build_state(JitBuildEnv& build_env, const JitD
 }  // namespace
 
 void BuildEnvManager::add_build_env(ChipId device_id, uint8_t num_hw_cqs) {
+    const std::lock_guard<std::mutex> lock(this->lock);
     auto dev_config = create_jit_device_config(device_id, num_hw_cqs);
     add_build_env_locked(device_id, dev_config, MetalContext::instance().rtoptions());
 }
