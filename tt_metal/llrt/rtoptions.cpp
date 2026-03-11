@@ -97,7 +97,6 @@ enum class EnvVarID {
     TT_METAL_SKIP_ETH_CORES_WITH_RETRAIN,      // Skip Ethernet cores during retrain
     TT_METAL_VALIDATE_PROGRAM_BINARIES,        // Validate kernel binary integrity
     TT_METAL_DISABLE_DMA_OPS,                  // Disable DMA operations
-    TT_METAL_ENABLE_ERISC_IRAM,                // Enable ERISC IRAM (inverted logic)
     RELIABILITY_MODE,                          // Fabric reliability mode (strict/relaxed)
     TT_METAL_DISABLE_MULTI_AERISC,             // Disable multi-erisc mode (inverted logic, enabled by default)
     TT_METAL_USE_MGD_2_0,                      // Use mesh graph descriptor 2.0
@@ -667,17 +666,6 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: 0 (DMA enabled)
         // Usage: export TT_METAL_DISABLE_DMA_OPS=1
         case EnvVarID::TT_METAL_DISABLE_DMA_OPS: this->disable_dma_ops = is_env_enabled(value); break;
-
-        // TT_METAL_ENABLE_ERISC_IRAM
-        // Enable ERISC IRAM functionality (inverted: 0=disabled, 1=enabled).
-        // Default: 1 (enabled)
-        // Usage: export TT_METAL_ENABLE_ERISC_IRAM=0  # to disable
-        case EnvVarID::TT_METAL_ENABLE_ERISC_IRAM: {
-            bool disabled = (value[0] == '0');
-            this->erisc_iram_enabled = !disabled;
-            this->erisc_iram_enabled_env_var = !disabled;
-            break;
-        }
 
         // TT_METAL_DISABLE_SFPLOADMACRO
         // Disable use of SFPLOADMACRO instructions.
@@ -1754,6 +1742,7 @@ std::string RunTimeOptions::get_watcher_hash() const {
     hash_str += std::to_string(get_watcher_noc_sanitize_linked_transaction());
     hash_str += std::to_string(get_watcher_enabled());
     hash_str += std::to_string(get_lightweight_kernel_asserts());
+    hash_str += std::to_string(get_llk_asserts());
     return hash_str;
 }
 
