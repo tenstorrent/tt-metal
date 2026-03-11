@@ -426,7 +426,7 @@ def run_demo(
 
 
 def main() -> None:
-    args, unknown = create_parser().parse_known_args()
+    args = create_parser().parse_args()
 
     # Load prompts from JSON file if provided
     prompts_file_path = None
