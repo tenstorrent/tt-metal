@@ -1,0 +1,180 @@
+{
+  "op_name": "layer_norm_rm",
+  "op_path": "ttnn/ttnn/operations/layer_norm_rm",
+  "spec_path": "ttnn/ttnn/operations/layer_norm_rm/op_design.md",
+  "layout": "ROW_MAJOR_LAYOUT",
+  "current_stage_index": 0,
+  "last_passing_commit": null,
+  "stages": [
+    {
+      "name": "data_pipeline",
+      "description": "Reader reads RM sticks, compute tilizes then immediately untilizes, writer writes RM sticks back. Identity passthrough to verify data pipeline.",
+      "kernel_files": [
+        "reader_layer_norm_rm.cpp",
+        "compute_layer_norm_rm.cpp",
+        "writer_layer_norm_rm.cpp"
+      ],
+      "test_file": "test_stage_data_pipeline.py",
+      "reference_body": "x",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.01
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "reduce_mean",
+      "description": "Pass 1: tilize input, reduce SUM along row with 1/W scaler to compute row-wise mean. Output is a column vector.",
+      "kernel_files": [
+        "reader_layer_norm_rm.cpp",
+        "compute_layer_norm_rm.cpp",
+        "writer_layer_norm_rm.cpp"
+      ],
+      "test_file": "test_stage_reduce_mean.py",
+      "reference_body": "x.mean(dim=-1, keepdim=True)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.1
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "list(shape[:-1]) + [32]",
+      "compare_slice": "[:,:,:,0:1]",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "subtract_mean",
+      "description": "2-pass: Pass 1 computes mean (reduce_sum_row with 1/W scaler). Pass 2 re-tilizes input and subtracts mean (COL broadcast). Output is centered x.",
+      "kernel_files": [
+        "reader_layer_norm_rm.cpp",
+        "compute_layer_norm_rm.cpp",
+        "writer_layer_norm_rm.cpp"
+      ],
+      "test_file": "test_stage_subtract_mean.py",
+      "reference_body": "x - x.mean(dim=-1, keepdim=True)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.1
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "variance_rsqrt",
+      "description": "2-pass: Pass 1 mean. Pass 2 subtract mean, square, reduce_sum_row (variance), add epsilon, rsqrt. Output is rsqrt(var+eps) column vector.",
+      "kernel_files": [
+        "reader_layer_norm_rm.cpp",
+        "compute_layer_norm_rm.cpp",
+        "writer_layer_norm_rm.cpp"
+      ],
+      "test_file": "test_stage_variance_rsqrt.py",
+      "reference_body": "torch.rsqrt(((x - x.mean(-1, keepdim=True))**2).mean(-1, keepdim=True) + 1e-5)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "list(shape[:-1]) + [32]",
+      "compare_slice": "[:,:,:,0:1]",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "full_normalize",
+      "description": "Full 3-pass layer norm: Pass 1 mean, Pass 2 variance+rsqrt, Pass 3 normalize with gamma/beta. Tests with and without gamma/beta.",
+      "kernel_files": [
+        "reader_layer_norm_rm.cpp",
+        "compute_layer_norm_rm.cpp",
+        "writer_layer_norm_rm.cpp"
+      ],
+      "test_file": "test_stage_full_normalize.py",
+      "reference_body": "torch.nn.functional.layer_norm(x, [x.shape[-1]], eps=1e-5)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
