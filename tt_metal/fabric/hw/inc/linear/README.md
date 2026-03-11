@@ -48,5 +48,5 @@ Routes via `num_hops` (unicast) or `start_distance`/`range` (multicast). Support
 | Auto-packetization compile-only (1D) | `fabric_unit_tests`          | `--gtest_filter="*CompileOnlyAutoPacketization1D*"`        |
 | 1D basic API (conn mgr)              | `fabric_unit_tests`          | `--gtest_filter="*TestLinearFabric*"`                      |
 | 1D sparse multicast                  | `fabric_unit_tests`          | `--gtest_filter="*TestLinearFabricSparseMulticast*"`       |
-| AddrGen 1D                           | `fabric_addrgen_write_tests` | `--gtest_filter="*AddrgenLinear1DTest*"`                   |
-| AddrGen 1D conn mgr                  | `fabric_addrgen_write_tests` | `--gtest_filter="*AddrgenLinear1DTest*ConnMgr*"`           |
+| AddrGen 1D                           | `fabric_unit_tests` | `--gtest_filter="*AddrgenLinear1DTest*"`                   |
+| AddrGen 1D conn mgr                  | `fabric_unit_tests` | `--gtest_filter="*AddrgenLinear1DTest*ConnMgr*"`           |

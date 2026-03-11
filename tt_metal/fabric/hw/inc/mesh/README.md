@@ -40,5 +40,5 @@ Requires `FABRIC_2D` compile flag. Routes via `(dst_dev_id, dst_mesh_id)`.
 |--------------------------------------|------------------------------|-----------------------------------------------------------|
 | Auto-packetization silicon (2D)      | `fabric_unit_tests`          | `--gtest_filter="*AutoPacketization*Silicon*"`            |
 | Auto-packetization compile-only (2D) | `fabric_unit_tests`          | `--gtest_filter="*CompileOnlyAutoPacketization2D*"`       |
-| AddrGen comprehensive (2D)           | `fabric_addrgen_write_tests` | `--gtest_filter="*AddrgenComprehensiveTest*"`             |
-| ConnMgr AddrGen (2D)                 | `fabric_addrgen_write_tests` | `--gtest_filter="*AddrgenComprehensiveTest*ConnMgr*"`     |
+| AddrGen comprehensive (2D)           | `fabric_unit_tests` | `--gtest_filter="*AddrgenComprehensiveTest*"`             |
+| ConnMgr AddrGen (2D)                 | `fabric_unit_tests` | `--gtest_filter="*AddrgenComprehensiveTest*ConnMgr*"`     |
