@@ -173,6 +173,18 @@ def normalize_op_name(op_name: str) -> str:
     return op_name.replace("::", ".")
 
 
+def get_excluded_arg_keys():
+    """Argument keys to strip from trace output.
+
+    These are runtime-specific handles (e.g. device semaphores) that vary
+    between runs and should not affect configuration identity or hashing.
+    """
+    return {
+        "multi_device_global_semaphore",
+        "barrier_semaphore",
+    }
+
+
 def get_excluded_operations():
     """Operations to exclude from tracing.
 
@@ -327,8 +339,11 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
                     arguments[arg_key] = arg_value
 
         # Add kwargs as named arguments (they come after positional args)
+        excluded_arg_keys = get_excluded_arg_keys()
         kwargs = data.get("kwargs", {})
         for key, value in kwargs.items():
+            if key in excluded_arg_keys:
+                continue
             # Also check kwargs for mesh_device info
             if isinstance(value, dict) and "mesh_device" in value:
                 mesh_data = value["mesh_device"]
