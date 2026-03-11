@@ -23,7 +23,8 @@ readonly SAFE_CONTAINER_PREFIXES=(
     "gcr.io/"
 )
 
-# Known safe GitHub users/orgs for forks (optional)
+# Known safe GitHub users/orgs for forks (optional, available for external use)
+# shellcheck disable=SC2034
 readonly SAFE_GITHUB_USERS=()
 
 # Maximum lengths for various inputs
@@ -608,7 +609,7 @@ validate_semver() {
     fi
 
     # Extract remainder after core MAJOR.MINOR.PATCH
-    local remainder="${version#${BASH_REMATCH[0]}}"
+    local remainder="${version#"${BASH_REMATCH[0]}"}"
 
     # Remainder must be empty, start with '-' (prerelease), or '+' (build metadata)
     if [[ -n "$remainder" && ! "$remainder" =~ ^[-+] ]]; then
@@ -1097,7 +1098,8 @@ set_github_output() {
     if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
         # Handle multi-line values or values with \r using delimiter
         if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
-            local delimiter="OUTPUT_$(date +%s)_$(head -c 16 /dev/urandom | xxd -p | head -c 16)"
+            local delimiter
+            delimiter="OUTPUT_$(date +%s)_$(head -c 16 /dev/urandom | xxd -p | head -c 16)"
             {
                 echo "${name}<<${delimiter}"
                 echo "$value"
@@ -1144,7 +1146,8 @@ set_github_env() {
     if [[ -n "${GITHUB_ENV:-}" ]]; then
         # Handle multi-line values or values with \r
         if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
-            local delimiter="ENV_$(date +%s)_$(head -c 16 /dev/urandom | xxd -p | head -c 16)"
+            local delimiter
+            delimiter="ENV_$(date +%s)_$(head -c 16 /dev/urandom | xxd -p | head -c 16)"
             {
                 echo "${name}<<${delimiter}"
                 echo "$value"
