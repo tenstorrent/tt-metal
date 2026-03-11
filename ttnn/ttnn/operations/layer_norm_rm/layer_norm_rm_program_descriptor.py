@@ -336,10 +336,9 @@ def create_program_descriptor(
     reader_ct_args = [stick_size, has_gamma, has_beta]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
-    # Compute compile-time args: Wt, num_tile_rows_this_core (will vary per core), has_gamma, has_beta
-    # Since compile-time args are the same for all cores, use the max (nblocks_per_core)
-    # and let runtime args specify actual count per core.
-    compute_ct_args = [Wt, nblocks_per_core, has_gamma, has_beta]
+    # Compute compile-time args: Wt, has_gamma, has_beta
+    # num_tile_rows varies per core (cliff), so it's a runtime arg instead
+    compute_ct_args = [Wt, has_gamma, has_beta]
 
     # Writer compile-time args: stick_size, Wt, TensorAccessorArgs(output)
     writer_ct_args = [stick_size, Wt]
@@ -356,6 +355,7 @@ def create_program_descriptor(
     dst_addr = output_tensor.buffer_address()
 
     reader_rt_args = ttnn.RuntimeArgs()
+    compute_rt_args = ttnn.RuntimeArgs()
     writer_rt_args = ttnn.RuntimeArgs()
 
     # Iterate over all cores in the grid and assign work
@@ -383,6 +383,10 @@ def create_program_descriptor(
                     eps_value,  # 6: eps_value (packed bf16)
                 ]
 
+                compute_rt_args[x][y] = [
+                    this_core_tile_rows,  # 0: num_tile_rows
+                ]
+
                 writer_rt_args[x][y] = [
                     dst_addr,  # 0: dst_addr
                     this_core_tile_rows,  # 1: num_tile_rows
@@ -394,6 +398,7 @@ def create_program_descriptor(
             else:
                 # Idle core: MUST set empty list
                 reader_rt_args[x][y] = []
+                compute_rt_args[x][y] = []
                 writer_rt_args[x][y] = []
 
             core_idx += 1
@@ -411,7 +416,7 @@ def create_program_descriptor(
         kernel_source=str(KERNEL_DIR / "compute_layer_norm_rm.cpp"),
         core_ranges=core_grid,
         compile_time_args=compute_ct_args,
-        runtime_args=[],
+        runtime_args=compute_rt_args,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4,
             fp32_dest_acc_en=False,

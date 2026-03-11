@@ -2,26 +2,45 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Layer Norm RM - Compute Kernel
-// Phases per tile-row:
-//   1. Tilize c_0 -> c_1
-//   2. Reduce row (c_1, c_2) -> c_24 (mean)
-//   3. Tilize c_0 -> c_1 (pass 2)
-//   4. Sub<COL>(c_1, c_24) -> c_25 (centered)
-//   5. Square(c_25) -> c_1
-//   6. Reduce row (c_1, c_2) -> c_26 (variance)
-//   7. Add<SCALAR>(c_26, c_3) + rsqrt -> c_27 (inv_std)
-//   8. Tilize c_0 -> c_1 (pass 3)
-//   9. Sub<COL>(c_1, c_24) -> c_25 (centered)
-//  10. Mul<COL>(c_25, c_27) -> c_16 (normalized)
-//  11. Mul<NONE>(c_16, c_4) -> c_25 (if gamma)
-//  12. Add<NONE>(c_25, c_5) -> c_16 (if beta)
-//  13. Untilize c_16 -> c_17
+// Stage 1 (data_pipeline): tilize c_0 -> c_1, untilize c_1 -> c_17
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/tilize_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/untilize_helpers.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_compute.hpp"
-#include "ttnn/cpp/ttnn/kernel_lib/binary_op_helpers.hpp"
-#include "api/compute/eltwise_unary/rsqrt.h"
 
-void kernel_main() {}
+constexpr uint32_t c_0 = 0;    // RM input staging for tilize
+constexpr uint32_t c_1 = 1;    // Tilized input tiles
+constexpr uint32_t c_2 = 2;    // Reduce scaler (unused in stage 1)
+constexpr uint32_t c_17 = 17;  // Untilized RM output
+
+// Compile-time args
+constexpr uint32_t Wt = get_compile_time_arg_val(0);
+constexpr uint32_t has_gamma = get_compile_time_arg_val(1);
+constexpr uint32_t has_beta = get_compile_time_arg_val(2);
+
+void kernel_main() {
+    // Runtime args
+    uint32_t num_tile_rows = get_arg_val<uint32_t>(0);
+
+    // Hardware init - must come first
+    compute_kernel_hw_startup(c_0, c_2, c_1);
+
+    for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
+        // Phase 1: Tilize c_0 -> c_1
+        compute_kernel_lib::tilize<
+            c_0,
+            c_1,
+            compute_kernel_lib::tilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::tilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(Wt, 1);
+
+        // Phase 13: Untilize c_1 -> c_17 (direct passthrough for stage 1)
+        compute_kernel_lib::untilize<
+            Wt,
+            c_1,
+            c_17,
+            compute_kernel_lib::untilize_config::InitUninitMode::InitAndUninit,
+            compute_kernel_lib::untilize_config::WaitMode::WaitBlock,
+            compute_kernel_lib::untilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>(1);
+    }
+}
