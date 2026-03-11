@@ -115,3 +115,41 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 | 7 | Discovery keyword matching | | | |
 | 9 | No architect/builder cross-validation | | | |
 | 11 | No incremental re-run | | | |
+| 12 | Builder tensor_accessor include path wrong | HIGH | SMALL | HIGH |
+| 13 | ttnn.Shape slice indexing unsupported | MEDIUM | SMALL | MEDIUM |
+| 14 | Tilize/untilize namespace collision | LOW | SMALL | LOW |
+
+## Instruction Correctness Issues
+
+### 12. Builder's tensor_accessor include path is wrong
+**Status**: Proposed — HIGH PRIORITY
+
+The builder's helper-to-include mapping specifies `#include "ttnn/cpp/ttnn/tensor/accessor/tensor_accessor.hpp"` for TensorAccessor, but the actual device-side header is `#include "api/tensor/tensor_accessor.h"`. Every operation using TensorAccessor in RM kernels hits this as a guaranteed first-attempt compilation failure.
+
+**Observed in**: layer_norm_rm (2026-03-11 run, Phase 3), and likely every prior RM operation.
+
+**Proposal**: One-line fix in builder prompt: update the mapping entry.
+
+---
+
+### 13. ttnn.Shape does not support Python slice indexing
+**Status**: Proposed
+
+`ttnn.Shape` objects do not support `[:-1]`, `[1:]`, or similar Python slice syntax. Using slices raises `TypeError: __getitem__(): incompatible function arguments`. All agents that construct output shapes from input shapes must use `list(tensor.shape)` first. This caused a hard retry in layer_norm_rm Stage 2 (reduce_mean).
+
+**Observed in**: layer_norm_rm (2026-03-11 run, Phase 4 Stage 2).
+
+**Proposal**: Add instruction to builder and architect prompts: "Always convert ttnn.Shape to list before slicing."
+
+---
+
+### 14. Tilize/untilize config namespace collision in fused compute kernels
+**Status**: Proposed
+
+When both `tilize_helpers.hpp` and `untilize_helpers.hpp` are included in the same compute kernel, their config enum names (`InitUninitMode`, `WaitMode`, `ReconfigureRegisterDatatypeMode`) collide. Using `using namespace` for either config namespace causes compilation errors. Must use fully qualified names like `compute_kernel_lib::tilize_config::InitAndUninit`.
+
+**Observed in**: layer_norm_rm (2026-03-11 run, Phase 4 Stage 1).
+
+**Proposal**: Add warning to kernel writer instructions. Consider renaming the enum types in the helpers to be unique (e.g., `TilizeInitUninitMode` vs `UntilizeInitUninitMode`).
+
+---
