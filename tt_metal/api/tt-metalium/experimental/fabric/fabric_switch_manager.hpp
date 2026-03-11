@@ -6,8 +6,7 @@
 
 #include <map>
 #include <tt_stl/indestructible.hpp>
-// UMD: re-exports ChipId (used in FabricSwitchManager::switch_devices_ data member).
-#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt::tt_metal {
