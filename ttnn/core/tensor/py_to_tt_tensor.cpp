@@ -171,7 +171,6 @@ DataType compute_host_dtype(ttnn::PyDType src_dtype, const DataType& dst_dtype, 
         return mapped_dst_type;
     }
 
-    // TODO: Remove this check
     if (is_sharded && get_datatype_tile_size(dst_dtype) != get_datatype_tile_size(to_ttnn_dtype(src_dtype))) {
         // Sharded typecast does not support conversion between tensors with types of different tile size:
         // See explicit assertion in the `TypecastShardedProgramFactory::create` method implementation.
