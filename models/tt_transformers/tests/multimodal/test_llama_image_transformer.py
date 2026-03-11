@@ -76,16 +76,6 @@ def test_image_transformer_inference(batch, num_chunks, mesh_device, is_global):
     callable_reference = reference_model.transformer if not is_global else reference_model.global_transformer
     all_tests_pass = True
 
-    # Since attention weights are permuted by load_checkpoints.py, the Q and K attention weights are assigned to HF model computational graph to match tensor output for increased similarity between hidden states of each layer. This is temporary till exclusion of vision branch is implemented in convert_hf_to_meta_llama_format() and all Llama reference models use HF's computational graph. Refer to https://github.com/tenstorrent/tt-metal/issues/32024 for more details.
-    # prefix = "global_" if is_global else ""
-    # for id_b, _ in enumerate(callable_reference.layers):
-    #     callable_reference.layers[id_b].self_attn.q_proj.weight = torch.nn.Parameter(
-    #         state_dict["vision_model.vision_encoder." + prefix + "transformer.resblocks.{}.attn.wq.weight".format(id_b)]
-    #     )
-    #     callable_reference.layers[id_b].self_attn.k_proj.weight = torch.nn.Parameter(
-    #         state_dict["vision_model.vision_encoder." + prefix + "transformer.resblocks.{}.attn.wk.weight".format(id_b)]
-    #     )
-
     tt_ccl = TT_CCL(mesh_device)
     tt_model = TtLlamaImageTransformer(
         mesh_device,
