@@ -68,18 +68,16 @@ void kernel_main() {
     constexpr uint32_t cb_input_mask = tt::CBIndex::c_28;
     constexpr uint32_t cb_in = tt::CBIndex::c_29;
 
-    constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_gamma);
-    constexpr uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask);
-
+    constexpr uint32_t cb_reread_write_out = tt::CBIndex::c_22;
     constexpr uint32_t cb_out0 = tt::CBIndex::c_16;
 #ifdef UNTILIZE_OUT
     constexpr uint32_t cb_out = tt::CBIndex::c_30;
 #else
-    constexpr uint32_t cb_out =
-        (fuse_gamma or fuse_beta)
-            ? (((fuse_gamma and not fuse_beta) or (not fuse_gamma and fuse_beta)) ? cb_in : cb_out0)
-            : cb_out0;
+    constexpr uint32_t cb_out = (fuse_gamma or fuse_beta) ? cb_out0 : cb_reread_write_out;
 #endif
+
+    constexpr uint32_t single_tile_size_bytes = get_tile_size(cb_out);
+    constexpr uint32_t input_mask_single_tile_size_bytes = get_tile_size(cb_input_mask);
 
     // input mask
     const auto mask = TensorAccessor(input_mask_args, input_mask_addr, input_mask_single_tile_size_bytes);

@@ -64,6 +64,7 @@ target_sources(
         groupnorm/device/groupnorm_mcast_program_factory.cpp
         groupnorm/groupnorm.cpp
         groupnorm/groupnorm_input_mask.cpp
+        groupnorm/groupnorm_grid_utils.cpp
         layernorm/device/layernorm_device_operation.cpp
         layernorm/device/layernorm_common.cpp
         layernorm/device/layernorm_op_multi_core.cpp
