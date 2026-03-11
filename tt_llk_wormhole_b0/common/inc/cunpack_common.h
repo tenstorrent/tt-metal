@@ -117,8 +117,8 @@ typedef union
 // Set unpacker offsets to 0, except for unpacker 0, channel 1, X, which is the tile X dimension
 inline void unpacker_addr_counter_init()
 {
-    TTI_SETADCXY(0b011, 0, 0, 0, 0, 0b1011);
-    TTI_SETADCZW(0b011, 0, 0, 0, 0, 0b1111);
+    TTI_SETADCXY(p_setadc::UNP_A | p_setadc::UNP_B, 0, 0, 0, 0, 0b1011);
+    TTI_SETADCZW(p_setadc::UNP_A | p_setadc::UNP_B, 0, 0, 0, 0, 0b1111);
 }
 
 inline void unpacker_iteration_cleanup(std::uint32_t &context)
