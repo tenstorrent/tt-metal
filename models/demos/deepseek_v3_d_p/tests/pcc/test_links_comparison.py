@@ -513,6 +513,17 @@ def test_combined_dispatch(
             marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="linear"),
             id="smoke-linear-4-2link",
         ),
+        pytest.param(
+            (4, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=15232),
+            },
+            2,
+            ttnn.Topology.Ring,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(4, 1), topology="ring"),
+            id="smoke-ring-4-2link",
+        ),
     ],
     indirect=["mesh_device", "device_params"],
 )

@@ -102,21 +102,35 @@ void kernel_main() {
 
     // ===== Runtime Args =====
     size_t rt_args_idx = 0;
-    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t weights_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t offsets_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t combined_output_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t counter_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t cross_device_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t token_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t token_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t expert_start_idx = get_arg_val<uint32_t>(rt_args_idx++);
-    uint32_t expert_end_idx = get_arg_val<uint32_t>(rt_args_idx++);
+    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);            // 0
+    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);          // 1
+    uint32_t weights_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);          // 2
+    uint32_t offsets_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);          // 3
+    uint32_t combined_output_address = get_arg_val<uint32_t>(rt_args_idx++);         // 4
+    uint32_t counter_tensor_address = get_arg_val<uint32_t>(rt_args_idx++);          // 5
+    uint32_t cross_device_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);  // 6
+    uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args_idx++);          // 7
+    uint32_t token_start_idx = get_arg_val<uint32_t>(rt_args_idx++);                 // 8
+    uint32_t token_end_idx = get_arg_val<uint32_t>(rt_args_idx++);                   // 9
+    uint32_t dispatch_core_idx = get_arg_val<uint32_t>(rt_args_idx++);               // 10
+    uint32_t num_dispatch_cores = get_arg_val<uint32_t>(rt_args_idx++);              // 11
+    uint32_t assigned_direction = get_arg_val<uint32_t>(rt_args_idx++);              // 12
+    uint32_t assigned_link = get_arg_val<uint32_t>(rt_args_idx++);                   // 13
+    rt_args_idx += 2;  // skip batch_ready_sem_id, batch_consumed_sem_id (14-15)
+    uint32_t num_secondary_cores = get_arg_val<uint32_t>(rt_args_idx++);  // 16
+    rt_args_idx += 2;                                                     // skip primary_noc_x, primary_noc_y (17-18)
+    uint32_t mcast_noc_x_start = get_arg_val<uint32_t>(rt_args_idx++);    // 19
+    uint32_t mcast_noc_y_start = get_arg_val<uint32_t>(rt_args_idx++);    // 20
+    uint32_t mcast_noc_x_end = get_arg_val<uint32_t>(rt_args_idx++);      // 21
+    uint32_t mcast_noc_y_end = get_arg_val<uint32_t>(rt_args_idx++);      // 22
 
-    DPRINT_DISPATCH << "Writer combined kernel: experts=[" << expert_start_idx << "," << expert_end_idx << ")"
-                    << ENDL();
+    constexpr uint32_t DIR_INVALID = 0xFFFFFFFF;
+    bool is_init_core = (dispatch_core_idx == 0);
+    bool is_local_only = (assigned_direction == DIR_INVALID);
+
+    DPRINT_DISPATCH << "Writer combined kernel: dispatch_core=" << dispatch_core_idx << "/" << num_dispatch_cores
+                    << " assigned_dir=" << assigned_direction << " assigned_link=" << assigned_link
+                    << " is_local_only=" << (uint32_t)is_local_only << ENDL();
 
 #ifndef DEST_CHIP_ID
 #define DEST_CHIP_ID
@@ -134,28 +148,34 @@ void kernel_main() {
         reinterpret_cast<volatile tt::tt_fabric::LowLatencyPacketHeader*>(packet_header_buffer_address);
 
     std::array<std::array<tt::tt_fabric::WorkerToFabricEdmSender, num_links>, 4> fabric_connections;
-    {
+
+    if (!is_local_only) {
         DeviceZoneScopedN("dispatch-combined-open-connections");
-        for (uint32_t dir = 0; dir < 4; dir++) {
-            for (uint32_t link = 0; link < num_links; link++) {
+        if (is_init_core) {
+            // Core 0: build connections for ALL active directions (for init sync)
+            for (uint32_t dir = 0; dir < 4; dir++) {
                 if (directions[dir]) {
-                    fabric_connections[dir][link] =
+                    fabric_connections[dir][0] =
                         tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(
                             rt_args_idx);
-                    fabric_connections[dir][link].open_start();
+                    fabric_connections[dir][0].open_start();
                 }
             }
-        }
-        for (uint32_t dir = 0; dir < 4; dir++) {
-            for (uint32_t link = 0; link < num_links; link++) {
+            for (uint32_t dir = 0; dir < 4; dir++) {
                 if (directions[dir]) {
-                    fabric_connections[dir][link].open_finish();
+                    fabric_connections[dir][0].open_finish();
                 }
             }
+        } else {
+            // Cores 1+: build connection for assigned direction only
+            fabric_connections[assigned_direction][0] =
+                tt::tt_fabric::WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(rt_args_idx);
+            fabric_connections[assigned_direction][0].open_start();
+            fabric_connections[assigned_direction][0].open_finish();
         }
     }
 
-    {
+    if (is_init_core && !is_local_only) {
         DeviceZoneScopedN("dispatch-combined-init-sync");
         std::array<tt::tt_fabric::WorkerToFabricEdmSender, 4> init_connections;
         for (uint32_t dir = 0; dir < 4; dir++) {
@@ -182,11 +202,26 @@ void kernel_main() {
                 fabric_connections[dir][0] = init_connections[dir];
             }
         }
-    }
 
-    {
-        DeviceZoneScopedN("dispatch-combined-wait-init");
-        noc_semaphore_wait((uint32_t*)init_semaphore_address, num_devices - 1);
+        {
+            DeviceZoneScopedN("dispatch-combined-wait-init");
+            noc_semaphore_wait((uint32_t*)init_semaphore_address, num_devices - 1);
+            noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
+        }
+
+        // Signal init-done to secondary cores via multicast
+        if (num_secondary_cores > 0) {
+            noc_semaphore_set((uint32_t*)init_semaphore_address, 1);
+            uint64_t mcast_init_done = get_noc_multicast_addr(
+                mcast_noc_x_start, mcast_noc_y_start, mcast_noc_x_end, mcast_noc_y_end, init_semaphore_address);
+            noc_semaphore_set_multicast(init_semaphore_address, mcast_init_done, num_secondary_cores);
+            noc_async_write_barrier();
+            noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
+        }
+    } else if (!is_init_core && !is_local_only) {
+        // Wait for init-done from core 0
+        DeviceZoneScopedN("dispatch-combined-wait-init-done");
+        noc_semaphore_wait((uint32_t*)init_semaphore_address, 1);
         noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
     }
 
@@ -242,14 +277,16 @@ void kernel_main() {
     }
 
 #ifdef DEST_CHIP_ID
-    {
+    if (!is_local_only) {
         DeviceZoneScopedN("dispatch-combined-close-connections");
-        for (uint32_t dir = 0; dir < 4; dir++) {
-            for (uint32_t link = 0; link < num_links; link++) {
+        if (is_init_core) {
+            for (uint32_t dir = 0; dir < 4; dir++) {
                 if (directions[dir]) {
-                    fabric_connections[dir][link].close();
+                    fabric_connections[dir][0].close();
                 }
             }
+        } else {
+            fabric_connections[assigned_direction][0].close();
         }
     }
 #endif
