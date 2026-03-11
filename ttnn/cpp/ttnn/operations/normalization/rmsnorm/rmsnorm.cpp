@@ -31,6 +31,10 @@ Tensor rms_norm(
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().size();
 
+    TT_FATAL(
+        input_tensor.layout() != Layout::ROW_MAJOR,
+        "ttnn::rms_norm does not support ROW_MAJOR input tensors. Use TILE layout.");
+
     // For 0V tensors
     if (input_tensor.logical_volume() == 0) [[unlikely]] {
         return ttnn::clone(input_tensor, /*dtype=*/std::nullopt, output_memory_config, compute_kernel_config);
