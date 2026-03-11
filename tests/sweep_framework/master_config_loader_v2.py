@@ -349,6 +349,8 @@ class MasterConfigLoader:
                 master_file_path = override
             else:
                 logger.error(f"❌ --master-trace path does not exist: {override}")
+                logger.error("Falling back to default master trace resolution.")
+                MasterConfigLoader._master_file_override = None
 
         if master_file_path is None and MasterConfigLoader._master_file_override is None:
             traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
