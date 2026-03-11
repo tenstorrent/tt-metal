@@ -420,10 +420,8 @@ std::vector<CoreCoord> Tensor::get_cores_with_shards() const {
 
         const auto& buffer_dist_spec = BufferDistributionSpec::from_shard_spec(
             this->padded_shape(),
-            Shape(this->shard_spec()->shape),
             this->tensor_spec().tensor_layout().compute_page_shape(this->tensor_spec().physical_shape()),
-            this->shard_spec()->grid,
-            this->shard_spec()->orientation,
+            this->shard_spec().value(),
             this->memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED
                 ? ShardDistributionStrategy::GRID_2D
                 : ShardDistributionStrategy::ROUND_ROBIN_1D);

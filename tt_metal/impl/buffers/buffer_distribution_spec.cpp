@@ -5,6 +5,7 @@
 #include "buffer_distribution_spec.hpp"
 #include <tt_stl/assert.hpp>
 
+#include <tt-metalium/buffer.hpp>
 #include <tt-metalium/math.hpp>
 
 #include <algorithm>
@@ -96,6 +97,21 @@ BufferDistributionSpec BufferDistributionSpec::from_shard_spec(
     auto shard_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(std::move(shard_shape), page_shape);
     return BufferDistributionSpec(
         tensor_shape_in_pages, shard_shape_in_pages, core_range_set, shard_orientation, shard_distribution_strategy);
+}
+
+BufferDistributionSpec BufferDistributionSpec::from_shard_spec(
+    Shape tensor_shape,
+    Shape2D page_shape,
+    const ShardSpec& shard_spec,
+    ShardDistributionStrategy shard_distribution_strategy) {
+    auto tensor_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(std::move(tensor_shape), page_shape);
+    auto shard_shape_in_pages = CMAKE_UNIQUE_NAMESPACE::convert_shape_to_pages(Shape(shard_spec.shape), page_shape);
+    return BufferDistributionSpec(
+        tensor_shape_in_pages,
+        shard_shape_in_pages,
+        shard_spec.grid,
+        shard_spec.orientation,
+        shard_distribution_strategy);
 }
 
 BufferDistributionSpec::BufferDistributionSpec(

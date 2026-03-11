@@ -12,6 +12,8 @@
 
 namespace tt::tt_metal {
 
+struct ShardSpec;
+
 namespace detail {
 // TODO: These functions in the detail namespace are sharding utility functions and should be moved to a separate
 // header.
@@ -31,6 +33,12 @@ public:
         Shape2D page_shape,
         const CoreRangeSet& core_range_set,
         ShardOrientation shard_orientation,
+        ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D);
+
+    static BufferDistributionSpec from_shard_spec(
+        Shape tensor_shape,
+        Shape2D page_shape,
+        const ShardSpec& shard_spec,
         ShardDistributionStrategy shard_distribution_strategy = ShardDistributionStrategy::ROUND_ROBIN_1D);
 
     BufferDistributionSpec(
