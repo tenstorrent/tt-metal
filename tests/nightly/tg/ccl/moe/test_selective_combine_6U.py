@@ -27,7 +27,7 @@ from tracy import signpost
 torch.set_printoptions(threshold=float("inf"))
 
 
-def _device_mesh_iterator(mesh_shape):
+def device_mesh_iterator(mesh_shape):
     for m0 in range(mesh_shape[0]):
         for m1 in range(mesh_shape[1]):
             device = m0 * mesh_shape[1] + m1
@@ -71,7 +71,7 @@ def gen_dense_metadata(batch, seq, experts, select_experts_k, mesh_shape, cluste
     # 1 mapping value per token + 12 bytes padding
     dense_token_maps = torch.zeros([experts, batch * seq + 1, 4], dtype=torch.int32)
 
-    for m0, m1, rec_d in _device_mesh_iterator(mesh_shape):
+    for m0, m1, rec_d in device_mesh_iterator(mesh_shape):
         device_expert_list = get_experts_on_device(experts, expert_mapping, rec_d)
 
         for b in range(batch):
@@ -136,7 +136,7 @@ def gen_dense_input_contribs(
     assert len(block_counts) == experts
 
     dense_contribs = 0
-    for m0, m1, rec_d in _device_mesh_iterator(mesh_shape):
+    for m0, m1, rec_d in device_mesh_iterator(mesh_shape):
         device_dense_idxs = [0] * num_local_experts
         device_blocked_dense_counts = [0] * num_local_experts
         for dt in range(dense_metadata_len[rec_d]):
@@ -199,7 +199,7 @@ def gen_output_ref(
 
     batch_rep_idxr = get_batch_cluster_idxr(cluster_axis, batch)
 
-    for m0, m1, rec_d in _device_mesh_iterator(mesh_shape):
+    for m0, m1, rec_d in device_mesh_iterator(mesh_shape):
         device_dense_idxs = [0] * num_local_experts
         device_blocked_dense_counts = [0] * num_local_experts
         for dt in range(dense_metadata_len[rec_d]):
