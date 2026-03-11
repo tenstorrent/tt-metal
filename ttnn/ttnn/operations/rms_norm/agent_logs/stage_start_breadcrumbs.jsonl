@@ -1,0 +1,1 @@
+{"stage":"rms_norm_no_gamma","description":"Full RMS norm without gamma: add_eps + rsqrt + 2nd tilize + mul_col. Output restores to full input shape.","ts":"2026-03-11T18:15:08+00:00"}

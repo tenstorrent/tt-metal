@@ -11,6 +11,7 @@ Work unit: tile-row (32 rows x full W, producing Wt tiles)
 Total units: N * C * Ht where Ht = H / 32
 """
 
+import struct
 from pathlib import Path
 from typing import Optional
 
@@ -253,21 +254,24 @@ def create_program_descriptor(
         )
     )
 
-    # cb_normed (c_28): 1 page, intermediate format (if gamma, streaming)
-    if has_gamma:
-        cbs.append(
-            ttnn.CBDescriptor(
-                total_size=1 * intermed_tile_size,
-                core_ranges=all_cores,
-                format_descriptors=[
-                    ttnn.CBFormatDescriptor(
-                        buffer_index=CB_NORMED,
-                        data_format=intermed_dtype,
-                        page_size=intermed_tile_size,
-                    )
-                ],
-            )
+    # cb_normed (c_28): intermediate format
+    # For no-gamma RM: Wt pages (mul_col output -> untilize input)
+    # For gamma: 1 page streaming (mul_col -> mul_row)
+    # For no-gamma TILE: 1 page (not used but allocated for simplicity)
+    normed_pages = Wt if (is_input_rm and not has_gamma) else 1
+    cbs.append(
+        ttnn.CBDescriptor(
+            total_size=normed_pages * intermed_tile_size,
+            core_ranges=all_cores,
+            format_descriptors=[
+                ttnn.CBFormatDescriptor(
+                    buffer_index=CB_NORMED,
+                    data_format=intermed_dtype,
+                    page_size=intermed_tile_size,
+                )
+            ],
         )
+    )
 
     # ========== 4. COMPILE-TIME AND RUNTIME ARGS ==========
 
@@ -293,6 +297,9 @@ def create_program_descriptor(
     grid_width = compute_grid.x
     grid_height = compute_grid.y
 
+    # Bit-cast epsilon float to uint32_t for passing as runtime arg
+    eps_u32 = struct.unpack("I", struct.pack("f", epsilon))[0]
+
     current_row = 0
     for core_range in core_group_1.ranges():
         for y in range(core_range.start.y, core_range.end.y + 1):
@@ -304,6 +311,7 @@ def create_program_descriptor(
                     current_row,  # start_row_id
                     Wt,  # Wt
                     gamma_addr,  # gamma_addr
+                    eps_u32,  # epsilon (float bit-cast to uint32)
                 ]
                 current_row += tiles_per_core_g1
 
@@ -317,6 +325,7 @@ def create_program_descriptor(
                     current_row,
                     Wt,
                     gamma_addr,
+                    eps_u32,
                 ]
                 current_row += tiles_per_core_g2
 
