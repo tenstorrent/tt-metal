@@ -4,6 +4,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/socket_api.h"
+#include "pcie_noc_utils.h"
 
 void kernel_main() {
     // Get this value from MeshSocket struct on host
