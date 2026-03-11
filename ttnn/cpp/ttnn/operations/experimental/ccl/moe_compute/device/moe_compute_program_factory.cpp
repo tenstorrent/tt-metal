@@ -1131,7 +1131,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         .dense_token_counts_tensor = tilize_per_expert_total_tokens_output_tensor
         //.optional_output_tensor = std::nullopt,
     };
-    auto selective_reduce_combine_artifacts = ttnn::build_selective_reduce_combine_program_artifacts(
+    auto selective_reduce_combine_artifacts = build_selective_reduce_combine_program_artifacts(
         program,
         combine_params,
         mesh_coordinate,
@@ -1253,7 +1253,7 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
                 .dense_token_counts_tensor = tilize_per_expert_total_tokens_output_tensor,
                 .optional_output_tensor = std::nullopt,
             };
-            ttnn::selective_reduce_combine_helper_override_runtime_arguments(
+            selective_reduce_combine_helper_override_runtime_arguments(
                 program,
                 reader_kernel_id,
                 writer_kernel_id,

@@ -49,9 +49,7 @@ private:
         const GlobalSemaphore& init_semaphore,
         const GlobalSemaphore& cross_device_semaphore);
 };
-}  // namespace ttnn::experimental::prim
 
-namespace ttnn {
 using SelectiveReduceCombineProgramArtifacts = experimental::prim::SelectiveReduceCombineProgramArtifacts;
 
 // Builder function that creates kernels and returns artifacts
@@ -79,4 +77,4 @@ void selective_reduce_combine_helper_override_runtime_arguments(
     const GlobalSemaphore& cross_device_semaphore,
     const std::optional<GlobalSemaphore>& optional_cross_device_semaphore);
 
-}  // namespace ttnn
+}  // namespace ttnn::experimental::prim
