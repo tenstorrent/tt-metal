@@ -6,4 +6,4 @@ TT_METAL_WRITE_DEBUG_DELAY_CORES=0,0 \
 TT_METAL_READ_DEBUG_DELAY_RISCVS=BR \
 TT_METAL_WRITE_DEBUG_DELAY_RISCVS=BR \
 TT_METAL_PROFILER_PROGRAM_SUPPORT_COUNT=10000 \
-python -m tracy -r -v -p "${TT_METAL_HOME}/build/tt-train/sources/examples/nano_gpt/nano_gpt $*"
+python -m tracy -r -v -p "$*"
