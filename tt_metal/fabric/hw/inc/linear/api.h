@@ -518,7 +518,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_set_state(
 
 // clang-format off
 /**
- * Issues a unicast scatter write from local L1 to destination chunks (split into up to four chunks).
+ * Issues a single-packet unicast scatter write from local L1 to destination chunks (split into up to four chunks).
  *
  * Return value: None
  *
@@ -533,7 +533,7 @@ FORCE_INLINE void fabric_unicast_noc_unicast_atomic_inc_set_state(
  */
 // clang-format on
 template <typename FabricSenderType>
-FORCE_INLINE void fabric_unicast_noc_scatter_write(
+FORCE_INLINE void fabric_unicast_noc_scatter_write_single_packet(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
@@ -551,7 +551,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
 
 // clang-format off
 /**
- * Issues a unicast scatter write for all headers in a route via a connection manager.
+ * Issues a single-packet unicast scatter write for all headers in a route via a connection manager.
  *
  * Return value: None
  *
@@ -565,7 +565,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
  * | num_hops                              | Per-header unicast hop counts            | uint8_t*                                       | True     |
  */
 // clang-format on
-FORCE_INLINE void fabric_unicast_noc_scatter_write(
+FORCE_INLINE void fabric_unicast_noc_scatter_write_single_packet(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
@@ -575,14 +575,52 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
         fabric_set_unicast_route(connection_manager, packet_header, i);
-        fabric_unicast_noc_scatter_write(
+        fabric_unicast_noc_scatter_write_single_packet(
             &slot.sender, packet_header, src_addr, size, noc_unicast_scatter_command_header, num_hops[i]);
     });
 }
 
 // clang-format off
 /**
- * Issues a unicast fused scatter write + atomic increment (2 scatter chunks + semaphore inc).
+ * Unicast scatter write (passthrough): NocUnicastScatterCommandHeader carries pre-computed NOC scatter
+ * addresses that cannot be independently chunked. Payloads must not exceed FABRIC_MAX_PACKET_SIZE.
+ * For large payloads, use addrgen overloads (fabric_unicast_noc_scatter_write with AddrGenType).
+ * This wrapper preserves naming convention; behavior is identical to _single_packet.
+ */
+// clang-format on
+template <typename FabricSenderType>
+FORCE_INLINE void fabric_unicast_noc_scatter_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header,
+    uint8_t num_hops) {
+    fabric_unicast_noc_scatter_write_single_packet(
+        client_interface, packet_header, src_addr, size, noc_unicast_scatter_command_header, num_hops);
+}
+
+// clang-format off
+/**
+ * Unicast scatter write (passthrough, route variant): NocUnicastScatterCommandHeader carries pre-computed
+ * NOC scatter addresses that cannot be independently chunked. Payloads must not exceed FABRIC_MAX_PACKET_SIZE.
+ * For large payloads, use addrgen overloads. This wrapper preserves naming convention.
+ */
+// clang-format on
+FORCE_INLINE void fabric_unicast_noc_scatter_write(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header,
+    uint8_t* num_hops) {
+    fabric_unicast_noc_scatter_write_single_packet(
+        connection_manager, route_id, src_addr, size, noc_unicast_scatter_command_header, num_hops);
+}
+
+// clang-format off
+/**
+ * Issues a single-packet unicast fused scatter write + atomic increment (2 scatter chunks + semaphore inc).
  *
  * Return value: None
  *
@@ -597,7 +635,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
  */
 // clang-format on
 template <typename FabricSenderType>
-FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
+FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_single_packet(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
@@ -616,7 +654,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
 
 // clang-format off
 /**
- * Issues a unicast fused scatter write + atomic increment for all headers in a route via a connection manager.
+ * Issues a single-packet unicast fused scatter write + atomic increment for all headers in a route via a connection manager.
  *
  * Return value: None
  *
@@ -630,7 +668,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
  * | num_hops                                          | Per-header unicast hop counts     | uint8_t*                                                  | True     |
  */
 // clang-format on
-FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
+FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc_single_packet(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
@@ -640,7 +678,7 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
         fabric_set_unicast_route(connection_manager, packet_header, i);
-        fabric_unicast_noc_fused_scatter_write_atomic_inc(
+        fabric_unicast_noc_fused_scatter_write_atomic_inc_single_packet(
             &slot.sender,
             packet_header,
             src_addr,
@@ -648,6 +686,44 @@ FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
             noc_unicast_scatter_atomic_inc_fused_command_header,
             num_hops[i]);
     });
+}
+
+// clang-format off
+/**
+ * Unicast fused scatter write + atomic inc (passthrough): NocUnicastScatterAtomicIncFusedCommandHeader
+ * carries pre-computed scatter addresses that cannot be independently chunked. Payloads must not exceed
+ * FABRIC_MAX_PACKET_SIZE. For large payloads, use addrgen overloads. This wrapper preserves naming convention;
+ * behavior is identical to _single_packet.
+ */
+// clang-format on
+template <typename FabricSenderType>
+FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader noc_unicast_scatter_atomic_inc_fused_command_header,
+    uint8_t num_hops) {
+    fabric_unicast_noc_fused_scatter_write_atomic_inc_single_packet(
+        client_interface, packet_header, src_addr, size, noc_unicast_scatter_atomic_inc_fused_command_header, num_hops);
+}
+
+// clang-format off
+/**
+ * Unicast fused scatter write + atomic inc (passthrough, route variant): NocUnicastScatterAtomicIncFusedCommandHeader
+ * carries pre-computed scatter addresses that cannot be independently chunked. Payloads must not exceed
+ * FABRIC_MAX_PACKET_SIZE. For large payloads, use addrgen overloads. This wrapper preserves naming convention.
+ */
+// clang-format on
+FORCE_INLINE void fabric_unicast_noc_fused_scatter_write_atomic_inc(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader noc_unicast_scatter_atomic_inc_fused_command_header,
+    uint8_t* num_hops) {
+    fabric_unicast_noc_fused_scatter_write_atomic_inc_single_packet(
+        connection_manager, route_id, src_addr, size, noc_unicast_scatter_atomic_inc_fused_command_header, num_hops);
 }
 
 // clang-format off
@@ -1821,7 +1897,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_set_state(
 
 // clang-format off
 /**
- * Multicast unicast scatter write: issues a unicast scatter write with multicast routing metadata.
+ * Single-packet multicast unicast scatter write: issues a unicast scatter write with multicast routing metadata.
  *
  * Return value: None
  *
@@ -1837,7 +1913,7 @@ FORCE_INLINE void fabric_multicast_noc_unicast_atomic_inc_set_state(
  */
 // clang-format on
 template <typename FabricSenderType>
-FORCE_INLINE void fabric_multicast_noc_scatter_write(
+FORCE_INLINE void fabric_multicast_noc_scatter_write_single_packet(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
@@ -1856,7 +1932,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
 
 // clang-format off
 /**
- * Multicast unicast scatter write (route variant): issues writes for all headers using multicast metadata.
+ * Single-packet multicast unicast scatter write (route variant): issues writes for all headers using multicast metadata.
  *
  * Return value: None
  *
@@ -1871,7 +1947,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
  * | range                                 | Per-header multicast range              | uint8_t*                                      | True     |
  */
 // clang-format on
-FORCE_INLINE void fabric_multicast_noc_scatter_write(
+FORCE_INLINE void fabric_multicast_noc_scatter_write_single_packet(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
@@ -1882,7 +1958,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
         fabric_set_mcast_route(connection_manager, packet_header, range, i);
-        fabric_multicast_noc_scatter_write(
+        fabric_multicast_noc_scatter_write_single_packet(
             &slot.sender,
             packet_header,
             src_addr,
@@ -1891,6 +1967,46 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
             start_distance[i],
             range[i]);
     });
+}
+
+// clang-format off
+/**
+ * Multicast scatter write (passthrough): NocUnicastScatterCommandHeader carries pre-computed NOC scatter
+ * addresses that cannot be independently chunked. Payloads must not exceed FABRIC_MAX_PACKET_SIZE.
+ * For large payloads, use addrgen overloads (fabric_multicast_noc_scatter_write with AddrGenType).
+ * This wrapper preserves naming convention; behavior is identical to _single_packet.
+ */
+// clang-format on
+template <typename FabricSenderType>
+FORCE_INLINE void fabric_multicast_noc_scatter_write(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header,
+    uint8_t start_distance,
+    uint8_t range) {
+    fabric_multicast_noc_scatter_write_single_packet(
+        client_interface, packet_header, src_addr, size, noc_unicast_scatter_command_header, start_distance, range);
+}
+
+// clang-format off
+/**
+ * Multicast scatter write (passthrough, route variant): NocUnicastScatterCommandHeader carries pre-computed
+ * NOC scatter addresses that cannot be independently chunked. Payloads must not exceed FABRIC_MAX_PACKET_SIZE.
+ * For large payloads, use addrgen overloads. This wrapper preserves naming convention.
+ */
+// clang-format on
+FORCE_INLINE void fabric_multicast_noc_scatter_write(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastScatterCommandHeader noc_unicast_scatter_command_header,
+    uint8_t* start_distance,
+    uint8_t* range) {
+    fabric_multicast_noc_scatter_write_single_packet(
+        connection_manager, route_id, src_addr, size, noc_unicast_scatter_command_header, start_distance, range);
 }
 
 // clang-format off
@@ -2374,7 +2490,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
 
 // clang-format off
 /**
- * Multicast fused scatter write + atomic increment (2 scatter chunks + semaphore inc).
+ * Single-packet multicast fused scatter write + atomic increment (2 scatter chunks + semaphore inc).
  *
  * Return value: None
  *
@@ -2390,7 +2506,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_unicast_with_atomic_inc(
  */
 // clang-format on
 template <typename FabricSenderType>
-FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
+FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_single_packet(
     tt_l1_ptr FabricSenderType* client_interface,
     volatile PACKET_HEADER_TYPE* packet_header,
     uint32_t src_addr,
@@ -2410,7 +2526,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
 
 // clang-format off
 /**
- * Multicast fused scatter write + atomic increment (route variant): issues for all headers.
+ * Single-packet multicast fused scatter write + atomic increment (route variant): issues for all headers.
  *
  * Return value: None
  *
@@ -2425,7 +2541,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
  * | range                                             | Per-header multicast range       | uint8_t*                                                   | True     |
  */
 // clang-format on
-FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
+FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc_single_packet(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     uint8_t route_id,
     uint32_t src_addr,
@@ -2436,7 +2552,7 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
     PacketHeaderPool::for_each_header(route_id, [&](volatile PACKET_HEADER_TYPE* packet_header, uint8_t i) {
         auto& slot = connection_manager.get(i);
         fabric_set_mcast_route(connection_manager, packet_header, range, i);
-        fabric_multicast_noc_fused_scatter_write_atomic_inc(
+        fabric_multicast_noc_fused_scatter_write_atomic_inc_single_packet(
             &slot.sender,
             packet_header,
             src_addr,
@@ -2445,6 +2561,49 @@ FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
             start_distance[i],
             range[i]);
     });
+}
+
+// clang-format off
+/**
+ * Multicast fused scatter write + atomic inc (passthrough): NocUnicastScatterAtomicIncFusedCommandHeader
+ * carries pre-computed scatter addresses and multicast range that cannot be independently chunked.
+ * Payloads must not exceed FABRIC_MAX_PACKET_SIZE. For large payloads, use addrgen overloads.
+ * This wrapper preserves naming convention; behavior is identical to _single_packet.
+ */
+// clang-format on
+template <typename FabricSenderType>
+FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
+    tt_l1_ptr FabricSenderType* client_interface,
+    volatile PACKET_HEADER_TYPE* packet_header,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader noc_unicast_scatter_atomic_inc_fused_command_header,
+    uint8_t start_distance,
+    uint8_t range) {
+    fabric_multicast_noc_fused_scatter_write_atomic_inc_single_packet(
+        client_interface, packet_header, src_addr, size, noc_unicast_scatter_atomic_inc_fused_command_header,
+        start_distance, range);
+}
+
+// clang-format off
+/**
+ * Multicast fused scatter write + atomic inc (passthrough, route variant): NocUnicastScatterAtomicIncFusedCommandHeader
+ * carries pre-computed scatter addresses and multicast range that cannot be independently chunked.
+ * Payloads must not exceed FABRIC_MAX_PACKET_SIZE. For large payloads, use addrgen overloads.
+ * This wrapper preserves naming convention.
+ */
+// clang-format on
+FORCE_INLINE void fabric_multicast_noc_fused_scatter_write_atomic_inc(
+    tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
+    uint8_t route_id,
+    uint32_t src_addr,
+    uint32_t size,
+    tt::tt_fabric::NocUnicastScatterAtomicIncFusedCommandHeader noc_unicast_scatter_atomic_inc_fused_command_header,
+    uint8_t* start_distance,
+    uint8_t* range) {
+    fabric_multicast_noc_fused_scatter_write_atomic_inc_single_packet(
+        connection_manager, route_id, src_addr, size, noc_unicast_scatter_atomic_inc_fused_command_header,
+        start_distance, range);
 }
 
 // clang-format off
@@ -3114,7 +3273,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
         auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
 
         // Small pages: use scatter operation
-        fabric_unicast_noc_scatter_write<FabricSenderType>(
+        fabric_unicast_noc_scatter_write_single_packet<FabricSenderType>(
             client_interface,
             packet_header,
             src_addr,
@@ -3682,7 +3841,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
         auto noc_address1 = tt::tt_fabric::linear::addrgen_detail::get_noc_address(addrgen, page_id1, offset1);
 
         // Small pages: use single scatter operation
-        fabric_multicast_noc_scatter_write(
+        fabric_multicast_noc_scatter_write_single_packet(
             client_interface,
             packet_header,
             src_addr,
