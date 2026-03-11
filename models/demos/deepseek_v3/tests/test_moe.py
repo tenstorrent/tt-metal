@@ -11,6 +11,7 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
+from models.demos.deepseek_v3.tt.model.row_batched_model import get_fabric_config
 from models.demos.deepseek_v3.tt.moe import MoE
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -39,7 +40,7 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": get_fabric_config()},
     ],
     indirect=True,
 )
@@ -57,6 +58,7 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
     ],
 )
 def test_forward_pass(
+    device_params,
     mode,
     num_tokens,
     set_deterministic_env,
@@ -96,7 +98,9 @@ def test_forward_pass(
     )
 
     # Generate appropriate config using utility function
-    model_config = get_model_config(MoE, mode, hf_config, mesh_device, topk_fallback=topk_fallback)
+    model_config = get_model_config(
+        MoE, mode, hf_config, mesh_device, device_params["fabric_config"], topk_fallback=topk_fallback
+    )
 
     # Create a new model state with CCL
     model_state = MoE.create_state(hf_config, mesh_device, ccl)

@@ -26,8 +26,9 @@ void kernel_main() {
     constexpr uint32_t num_joint_k_chunks = get_compile_time_arg_val(15);
     constexpr uint32_t num_q_chunks = get_compile_time_arg_val(16);
     constexpr uint32_t ring_size = get_compile_time_arg_val(17);
+    constexpr uint32_t qk_subblock_h = get_compile_time_arg_val(18);
 
-    constexpr auto q_args = TensorAccessorArgs<18>();
+    constexpr auto q_args = TensorAccessorArgs<19>();
     constexpr auto k_args = TensorAccessorArgs<q_args.next_compile_time_args_offset()>();
     constexpr auto v_args = TensorAccessorArgs<k_args.next_compile_time_args_offset()>();
     constexpr auto gathered_k_args = TensorAccessorArgs<v_args.next_compile_time_args_offset()>();
@@ -60,6 +61,8 @@ void kernel_main() {
     const uint32_t next_physical_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t next_physical_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t next_core_q_chunks = get_arg_val<uint32_t>(argidx++);
+    const uint32_t mcast_num_dests = get_arg_val<uint32_t>(argidx++);
+    const uint32_t mcast_sender_wait = get_arg_val<uint32_t>(argidx++);
 
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         true, /* wait_for_op_signal */
@@ -67,13 +70,14 @@ void kernel_main() {
 
     // After fused-op receiver consumed its runtime args, remaining RT args are S&F chain metadata
 
-    // Compile-time semaphore ids are appended after all TensorAccessorArgs()
+    // Compile-time semaphore ids and mcast flag are appended after all TensorAccessorArgs()
     uint32_t sender_semaphore_addr =
         get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset()));
     uint32_t receiver_semaphore_addr =
         get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 1));
     uint32_t valid_semaphore_addr =
         get_semaphore(get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 2));
+    constexpr bool mcast_enabled = get_compile_time_arg_val(joint_v_args.next_compile_time_args_offset() + 3) == 1;
 
     // VALID sem used to write L1-L1 valid semaphore
     volatile tt_l1_ptr uint32_t* valid_semaphore_addr_ptr =
@@ -85,9 +89,29 @@ void kernel_main() {
 
     volatile tt_l1_ptr uint32_t* sender_semaphore_addr_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sender_semaphore_addr);
+
+    uint64_t receiver_semaphore_noc_addr = 0;
+    uint64_t mcast_base_noc_addr = 0;
+    uint64_t mcast_sem_noc_addr = 0;
+    uint32_t sender_wait_count = 1;
+
     const uint64_t sender_semaphore_noc_addr = get_noc_addr(prev_physical_x, prev_physical_y, sender_semaphore_addr);
-    const uint64_t receiver_semaphore_noc_addr =
-        get_noc_addr(next_physical_x, next_physical_y, receiver_semaphore_addr);
+
+    if constexpr (mcast_enabled) {
+        if (is_injector) {
+            // prev_physical = mcast_start (first receiver), next_physical = mcast_end (last receiver)
+            mcast_base_noc_addr = get_noc_multicast_addr(
+                prev_physical_x,
+                prev_physical_y,
+                next_physical_x,
+                next_physical_y,
+                0);  // addr=0; will OR in actual L1 addr at use site
+            mcast_sem_noc_addr = mcast_base_noc_addr | receiver_semaphore_addr;
+            sender_wait_count = mcast_sender_wait;
+        }
+    } else {
+        receiver_semaphore_noc_addr = get_noc_addr(next_physical_x, next_physical_y, receiver_semaphore_addr);
+    }
 
     constexpr uint32_t cb_q_in = tt::CBIndex::c_0;
     constexpr uint32_t cb_k_in = tt::CBIndex::c_1;
@@ -99,6 +123,8 @@ void kernel_main() {
 
     constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
     constexpr uint32_t v_chunk_tiles = Sk_chunk_t * DHt;
+    constexpr uint32_t q_num_subblocks = Sq_chunk_t / qk_subblock_h;
+    constexpr bool use_q_subblock_push = (q_num_subblocks > 1);
 
     const auto q_reader = TensorAccessor(q_args, q_addr, q_tile_bytes);
     const auto local_k_reader = TensorAccessor(k_args, k_addr, k_tile_bytes);
@@ -154,26 +180,23 @@ void kernel_main() {
             const bool is_joint_q = q_chunk >= num_local_q_chunks;
 
             Slice q_slice;
-            uint32_t end_seq_tile;
+            uint32_t q_end_seq_tile;
             if (is_joint_q) {
                 // Get row index into the joint Q tensor
                 const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
                 q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt);
-                end_seq_tile = Lt;
+                q_end_seq_tile = Lt;
             } else {
                 // Index into the Q input tensor
                 q_slice = Slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
-                end_seq_tile = local_padded_Nt;
+                q_end_seq_tile = local_padded_Nt;
             }
 
-            read_block(
-                is_joint_q ? joint_q_generator : q_generator,
-                q_slice,
-                end_seq_tile,
-                cb_q_in,
-                q_tile_bytes,
-                false /*transpose*/
-            );
+            // Chain forwarding conditions are k_chunk-invariant — compute once before the KV loop
+            const uint32_t q_iter_local = global_q_chunk - global_q_start;
+            const bool should_forward = is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
+                                        (q_iter_local < next_core_q_chunks);
+            const bool should_receive = is_chain_participant && !is_injector && (nb == chain_batch && nq == chain_head);
 
             for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
                 /**
@@ -209,20 +232,22 @@ void kernel_main() {
                         end_seq_tile = std::min(logical_nt, local_padded_Nt);
                     } else {
                         // Gathered KV
-                        const uint32_t ring_iter_kv_start_tile = ring_id * local_padded_Nt;
                         const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
                         kv_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
                         end_seq_tile = std::min(logical_nt, local_padded_Nt * (ring_id + 1));
                     }
                 }
 
-                // Determine if this Q iteration is within this core's chain segment for (batch, head)
-                const uint32_t q_iter_local = global_q_chunk - global_q_start;
-
                 // K: either read locally (injector or not participant) or receive from previous core
                 cb_reserve_back(cb_k_in, k_chunk_tiles);
                 uint32_t cb_k_start_address = get_write_ptr(cb_k_in);
-                if (is_injector || !is_chain_participant || (nb != chain_batch || nq != chain_head)) {
+                if (should_receive) {
+                    // Receive forwarded K chunk from previous core
+                    noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
+                    noc_semaphore_inc(sender_semaphore_noc_addr, 1);
+                    noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
+                    cb_push_back(cb_k_in, k_chunk_tiles);
+                } else {
                     read_block(
                         kv_chunk_is_joint ? joint_k_generator
                                           : (ring_iter == 0 ? local_k_generator : gathered_k_generator),
@@ -232,29 +257,68 @@ void kernel_main() {
                         k_tile_bytes,
                         true /*transpose*/
                     );
-                } else {
-                    // Receive forwarded K chunk from previous core
-                    noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
-                    noc_semaphore_inc(sender_semaphore_noc_addr, 1);
-                    noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
-                    cb_push_back(cb_k_in, k_chunk_tiles);
                 }
 
-                // Forward K chunk to next core if applicable
-                if (is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
-                    (q_iter_local < next_core_q_chunks)) {
-                    noc_semaphore_wait(sender_semaphore_addr_ptr, 1);
+                // Forward K chunk to next core(s): initiate async write (NOC write channel)
+                // For mcast: send linked data + companion semaphore back-to-back.
+                if (should_forward) {
+                    noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
                     noc_semaphore_set(sender_semaphore_addr_ptr, 0);
-                    uint64_t k_unicast_data_addr = get_noc_addr(next_physical_x, next_physical_y, cb_k_start_address);
-                    noc_async_write(cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
-                    noc_async_writes_flushed();
-                    noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
+                    if constexpr (mcast_enabled) {
+                        uint64_t k_mcast_addr = mcast_base_noc_addr | cb_k_start_address;
+                        noc_async_write_multicast(
+                            cb_k_start_address,
+                            k_mcast_addr,
+                            k_chunk_tiles * k_tile_bytes,
+                            mcast_num_dests,
+                            true /* linked: semaphore mcast follows */);
+                        noc_semaphore_set_multicast(valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
+                    } else {
+                        uint64_t k_unicast_data_addr =
+                            get_noc_addr(next_physical_x, next_physical_y, cb_k_start_address);
+                        noc_async_write(cb_k_start_address, k_unicast_data_addr, k_chunk_tiles * k_tile_bytes);
+                        noc_async_writes_flushed();
+                        noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
+                    }
+                }
+
+                // Download Q on the first K iteration — after K is downloaded and forwarded.
+                // Push Q one subblock at a time so compute can start QK matmul incrementally.
+                // Placed after K forward so no outstanding NOC writes remain
+                // (noc_async_read_barrier inside subblock read would deadlock with in-flight writes).
+                if (k_chunk == 0) {
+                    if constexpr (use_q_subblock_push) {
+                        const auto& q_gen = is_joint_q ? joint_q_generator : q_generator;
+                        for (uint32_t q_sub = 0; q_sub < q_num_subblocks; ++q_sub) {
+                            const uint32_t sb_row_start = q_slice.d2_start + q_sub * qk_subblock_h;
+                            const uint32_t sb_row_end = sb_row_start + qk_subblock_h;
+                            Slice q_sub_slice(q_slice.d0, q_slice.d1, sb_row_start, sb_row_end, 0, DHt);
+                            read_block(
+                                q_gen, q_sub_slice, q_end_seq_tile, cb_q_in, q_tile_bytes, false /*transpose*/
+                            );
+                        }
+                    } else {
+                        read_block(
+                            is_joint_q ? joint_q_generator : q_generator,
+                            q_slice,
+                            q_end_seq_tile,
+                            cb_q_in,
+                            q_tile_bytes,
+                            false /*transpose*/
+                        );
+                    }
                 }
 
                 // V: either read locally (injector or not participant) or receive from previous core
                 cb_reserve_back(cb_v_in, v_chunk_tiles);
                 uint32_t cb_v_start_address = get_write_ptr(cb_v_in);
-                if (is_injector || !is_chain_participant || (nb != chain_batch || nq != chain_head)) {
+                if (should_receive) {
+                    // Receive forwarded V chunk from previous core
+                    noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
+                    noc_semaphore_inc(sender_semaphore_noc_addr, 1);
+                    noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
+                    cb_push_back(cb_v_in, v_chunk_tiles);
+                } else {
                     read_block(
                         kv_chunk_is_joint ? joint_v_generator
                                           : (ring_iter == 0 ? local_v_generator : gathered_v_generator),
@@ -264,23 +328,28 @@ void kernel_main() {
                         v_tile_bytes,
                         false /*transpose*/
                     );
-                } else {
-                    // Receive forwarded V chunk from previous core
-                    noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
-                    noc_semaphore_inc(sender_semaphore_noc_addr, 1);
-                    noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
-                    cb_push_back(cb_v_in, v_chunk_tiles);
                 }
 
-                // Forward V chunk to next core if applicable
-                if (is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
-                    (q_iter_local < next_core_q_chunks)) {
-                    noc_semaphore_wait(sender_semaphore_addr_ptr, 1);
+                // Forward V chunk to next core(s) if applicable
+                if (should_forward) {
+                    noc_semaphore_wait(sender_semaphore_addr_ptr, sender_wait_count);
                     noc_semaphore_set(sender_semaphore_addr_ptr, 0);
-                    uint64_t v_unicast_data_addr = get_noc_addr(next_physical_x, next_physical_y, cb_v_start_address);
-                    noc_async_write(cb_v_start_address, v_unicast_data_addr, v_chunk_tiles * v_tile_bytes);
-                    noc_async_writes_flushed();
-                    noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
+                    if constexpr (mcast_enabled) {
+                        uint64_t v_mcast_addr = mcast_base_noc_addr | cb_v_start_address;
+                        noc_async_write_multicast(
+                            cb_v_start_address,
+                            v_mcast_addr,
+                            v_chunk_tiles * v_tile_bytes,
+                            mcast_num_dests,
+                            true /* linked: semaphore mcast follows */);
+                        noc_semaphore_set_multicast(valid_semaphore_addr, mcast_sem_noc_addr, mcast_num_dests);
+                    } else {
+                        uint64_t v_unicast_data_addr =
+                            get_noc_addr(next_physical_x, next_physical_y, cb_v_start_address);
+                        noc_async_write(cb_v_start_address, v_unicast_data_addr, v_chunk_tiles * v_tile_bytes);
+                        noc_async_writes_flushed();
+                        noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
+                    }
                 }
             }
         }
