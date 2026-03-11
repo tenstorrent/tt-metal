@@ -3,9 +3,11 @@
 
 import itertools
 from pathlib import Path
+from time import perf_counter
 from typing import Any, Sequence
 
 import torch
+from loguru import logger
 from tqdm.auto import tqdm
 from tracy import signpost
 from transformers.configuration_utils import PretrainedConfig
@@ -165,26 +167,49 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
     ) -> ModelState:
-        state = {
+        state: ModelState = {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "num_rows": mesh_device.shape[0],
             "num_mlp_layers": hf_config.first_k_dense_replace,
             "num_moe_layers": hf_config.num_hidden_layers - hf_config.first_k_dense_replace,
-            "mlp_decoder_block": [
-                DecoderBlock2D.create_shared_state(
-                    hf_config,
-                    mesh_device,
-                )
-            ],
-            "moe_decoder_block": [
-                MoEDecoderBlock2D.create_shared_state(
-                    hf_config,
-                    mesh_device,
-                )
-            ],
         }
+
+        shared_state_steps: list[tuple[str, str, Any]] = [
+            (
+                "MLP decoder block shared state",
+                "mlp_decoder_block",
+                lambda: [
+                    DecoderBlock2D.create_shared_state(
+                        hf_config,
+                        mesh_device,
+                    )
+                ],
+            ),
+            (
+                "MoE decoder block shared state",
+                "moe_decoder_block",
+                lambda: [
+                    MoEDecoderBlock2D.create_shared_state(
+                        hf_config,
+                        mesh_device,
+                    )
+                ],
+            ),
+        ]
         if cls._has_mtp_layer(hf_config):
-            state["mtp"] = MTP2D.create_shared_state(hf_config, mesh_device)
+            shared_state_steps.append(
+                ("MTP shared state", "mtp", lambda: MTP2D.create_shared_state(hf_config, mesh_device))
+            )
+
+        total_steps = len(shared_state_steps)
+        overall_start = perf_counter()
+        logger.info(f"Creating RowBatchedModel shared state ({total_steps} steps)...")
+        for step_idx, (label, key, factory) in enumerate(shared_state_steps, start=1):
+            step_start = perf_counter()
+            logger.info(f"[{step_idx}/{total_steps}] Creating {label}...")
+            state[key] = factory()
+            logger.info(f"[{step_idx}/{total_steps}] Created {label} in {perf_counter() - step_start:.2f}s")
+        logger.info(f"Created RowBatchedModel shared state in {perf_counter() - overall_start:.2f}s")
         return state
 
     @classmethod

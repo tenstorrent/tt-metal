@@ -2,8 +2,10 @@
 # SPDX-License-Identifier: Apache-2.0
 
 from pathlib import Path
+from time import perf_counter
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import ttnn
@@ -229,8 +231,12 @@ class MTP2D(AbstractModule):
 
     @classmethod
     def create_shared_state(cls, hf_config: PretrainedConfig, mesh_device: ttnn.MeshDevice) -> ModelState:
+        logger.info("Creating MTP shared state...")
+        decoder_block_start = perf_counter()
+        decoder_block_shared_state = MoEDecoderBlock2D.create_shared_state(hf_config, mesh_device)
+        logger.info(f"Created MTP decoder block shared state in {perf_counter() - decoder_block_start:.2f}s")
         return {
-            "decoder_block": MoEDecoderBlock2D.create_shared_state(hf_config, mesh_device),
+            "decoder_block": decoder_block_shared_state,
         }
 
     @classmethod
