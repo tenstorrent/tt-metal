@@ -303,9 +303,7 @@ class TestImportGraphUnit:
         report = _make_report(mock_graph)
         conn, cursor = _import_to_db(report, tmp_path)
 
-        cursor.execute(
-            "SELECT operation_id, device_id, address, max_size_per_bank, buffer_type, buffer_type_value FROM buffers"
-        )
+        cursor.execute("SELECT operation_id, device_id, address, max_size_per_bank, buffer_type FROM buffers")
         rows = cursor.fetchall()
 
         assert len(rows) == 1
@@ -313,8 +311,7 @@ class TestImportGraphUnit:
         assert rows[0][1] == 0  # device_id
         assert rows[0][2] == 12345  # address
         assert rows[0][3] == 4096  # size
-        assert rows[0][4] == "L1"  # buffer_type (text)
-        assert rows[0][5] == 1  # buffer_type_value (1=L1)
+        assert rows[0][4] == 1  # buffer_type (1=L1)
 
         conn.close()
 
@@ -370,17 +367,16 @@ class TestImportGraphUnit:
         report = _make_report(nodes)
         conn, cursor = _import_to_db(report, tmp_path)
 
-        cursor.execute("SELECT address, buffer_type, buffer_type_value FROM buffers ORDER BY address")
+        cursor.execute("SELECT address, buffer_type FROM buffers ORDER BY address")
         rows = cursor.fetchall()
-        addr_to_type = {addr: (bt, btv) for addr, bt, btv in rows}
+        addr_to_type = {addr: bt for addr, bt in rows}
 
         for i, (type_name, expected_int) in enumerate(type_map.items()):
             addr = (1 + i * 3) * 10000
-            actual_name, actual_val = addr_to_type.get(addr, (None, None))
-            assert actual_name == type_name, f"Expected buffer_type '{type_name}', got '{actual_name}' at addr {addr}"
+            actual_val = addr_to_type.get(addr)
             assert (
                 actual_val == expected_int
-            ), f"Buffer type '{type_name}' at addr {addr}: expected {expected_int}, got {actual}"
+            ), f"Buffer type '{type_name}' at addr {addr}: expected {expected_int}, got {actual_val}"
 
         conn.close()
 
@@ -421,10 +417,9 @@ class TestImportGraphUnit:
         report = _make_report(mock_graph)
         conn, cursor = _import_to_db(report, tmp_path)
 
-        cursor.execute("SELECT buffer_type, buffer_type_value FROM buffers WHERE address=99999")
-        bt, btv = cursor.fetchone()
-        assert bt == "L1_SMALL", f"buffer_type should be 'L1_SMALL', got '{bt}'"
-        assert btv == 3, f"buffer_type_value should be 3, got {btv}"
+        cursor.execute("SELECT buffer_type FROM buffers WHERE address=99999")
+        (bt,) = cursor.fetchone()
+        assert bt == 3, f"buffer_type should be 3 (L1_SMALL), got {bt}"
 
         conn.close()
 
@@ -507,18 +502,13 @@ class TestImportGraphUnit:
         report = _make_report(mock_graph)
         conn, cursor = _import_to_db(report, tmp_path)
 
-        cursor.execute(
-            "SELECT address, buffer_type, buffer_type_value FROM buffers WHERE operation_id=2 ORDER BY address"
-        )
+        cursor.execute("SELECT address, buffer_type FROM buffers WHERE operation_id=2 ORDER BY address")
         rows = cursor.fetchall()
         assert len(rows) == 3, f"Op 2 should have 3 cumulative buffers, got {len(rows)}"
-        type_by_addr = {addr: (bt, btv) for addr, bt, btv in rows}
-        assert type_by_addr[1000][0] == "DRAM", f"DRAM buffer should be 'DRAM', got {type_by_addr[1000][0]}"
-        assert type_by_addr[1000][1] == 0, f"DRAM buffer_type_value should be 0, got {type_by_addr[1000][1]}"
-        assert type_by_addr[2000][0] == "L1_SMALL", f"L1_SMALL buffer should be 'L1_SMALL', got {type_by_addr[2000][0]}"
-        assert type_by_addr[2000][1] == 3, f"L1_SMALL buffer_type_value should be 3, got {type_by_addr[2000][1]}"
-        assert type_by_addr[3000][0] == "L1", f"L1 buffer should be 'L1', got {type_by_addr[3000][0]}"
-        assert type_by_addr[3000][1] == 1, f"L1 buffer_type_value should be 1, got {type_by_addr[3000][1]}"
+        type_by_addr = {addr: bt for addr, bt in rows}
+        assert type_by_addr[1000] == 0, f"DRAM buffer should be 0, got {type_by_addr[1000]}"
+        assert type_by_addr[2000] == 3, f"L1_SMALL buffer should be 3, got {type_by_addr[2000]}"
+        assert type_by_addr[3000] == 1, f"L1 buffer should be 1, got {type_by_addr[3000]}"
 
         conn.close()
 
@@ -735,7 +725,7 @@ class TestImportGraphUnit:
         conn, cursor = _import_to_db(report, tmp_path)
 
         cursor.execute(
-            "SELECT tensor_id, shape, dtype, layout, memory_config, device_id, address, buffer_type, buffer_type_value, size FROM tensors"
+            "SELECT tensor_id, shape, dtype, layout, memory_config, device_id, address, buffer_type, size FROM tensors"
         )
         rows = cursor.fetchall()
 
@@ -748,9 +738,8 @@ class TestImportGraphUnit:
         assert "DRAM" in row[4]  # memory_config
         assert row[5] == 0  # device_id
         assert row[6] == 12345678  # address
-        assert row[7] == "DRAM"  # buffer_type (text, stripped of prefix)
-        assert row[8] == 0  # buffer_type_value (0=DRAM)
-        assert row[9] == 2048  # size in bytes
+        assert row[7] == 0  # buffer_type (0=DRAM)
+        assert row[8] == 2048  # size in bytes
 
         conn.close()
 
@@ -2391,15 +2380,11 @@ class TestResNet50Patterns:
         """Buffers should support DRAM and L1 buffer types."""
         conn, cursor = self._import_resnet(tmp_path)
 
-        cursor.execute("SELECT DISTINCT buffer_type, buffer_type_value FROM buffers ORDER BY buffer_type_value")
-        types = [(r[0], r[1]) for r in cursor.fetchall()]
-        type_names = {t[0] for t in types}
-        type_values = {t[1] for t in types}
-        assert len(types) >= 2, f"Should have at least DRAM and L1 buffer types, got {types}"
-        assert "DRAM" in type_names, "Missing DRAM buffer type"
-        assert "L1" in type_names, "Missing L1 buffer type"
-        assert 0 in type_values, "Missing buffer_type_value 0 (DRAM)"
-        assert 1 in type_values, "Missing buffer_type_value 1 (L1)"
+        cursor.execute("SELECT DISTINCT buffer_type FROM buffers ORDER BY buffer_type")
+        type_values = {r[0] for r in cursor.fetchall()}
+        assert len(type_values) >= 2, f"Should have at least DRAM and L1 buffer types, got {type_values}"
+        assert 0 in type_values, "Missing buffer_type 0 (DRAM)"
+        assert 1 in type_values, "Missing buffer_type 1 (L1)"
         conn.close()
 
     def test_cumulative_buffers_reflect_allocations_and_deallocations(self, tmp_path):
