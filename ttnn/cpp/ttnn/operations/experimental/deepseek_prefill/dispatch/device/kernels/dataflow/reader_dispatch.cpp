@@ -125,12 +125,13 @@ void kernel_main() {
     DPRINT_DISPATCH << "Fetching offset tensor offsets_pages=" << offsets_pages
                     << " offset_page_size=" << offsets_page_size << ENDL();
     const auto offsets_addr_gen = TensorAccessor(offsets_args, offsets_tensor_address, offsets_page_size);
+    // Reserve all pages upfront, then manually increment write address per page
+    cb_reserve_back(cb_offsets_id, offsets_pages);
+    uint32_t l1_write_addr = get_write_ptr(cb_offsets_id);
     for (uint32_t i = 0; i < offsets_pages; i++) {
         DPRINT_DISPATCH << "Fetching offsets tensor index: " << i << ENDL();
-        cb_reserve_back(cb_offsets_id, 1);
-
-        uint32_t l1_write_addr = get_write_ptr(cb_offsets_id);
         noc_async_read_page(i, offsets_addr_gen, l1_write_addr);
+        l1_write_addr += aligned_offsets_page_size;
     }
     noc_async_read_barrier();
     cb_push_back(cb_offsets_id, offsets_pages);
@@ -141,12 +142,13 @@ void kernel_main() {
                     << " dispatch_table_page_size=" << dispatch_table_page_size << ENDL();
     const auto dispatch_table_addr_gen =
         TensorAccessor(dispatch_table_args, dispatch_table_tensor_address, dispatch_table_page_size);
+    // Reserve all pages upfront, then manually increment write address per page
+    cb_reserve_back(cb_dispatch_table_id, dispatch_table_pages);
+    l1_write_addr = get_write_ptr(cb_dispatch_table_id);
     for (uint32_t i = 0; i < dispatch_table_pages; i++) {
         DPRINT_DISPATCH << "Fetching dispatch table tensor index: " << i << ENDL();
-        cb_reserve_back(cb_dispatch_table_id, 1);
-
-        uint32_t l1_write_addr = get_write_ptr(cb_dispatch_table_id);
         noc_async_read_page(i, dispatch_table_addr_gen, l1_write_addr);
+        l1_write_addr += aligned_dispatch_table_page_size;
     }
     noc_async_read_barrier();
     cb_push_back(cb_dispatch_table_id, dispatch_table_pages);

@@ -106,18 +106,18 @@ class TorchDispatchModule(torch.nn.Module):
                 dispatched: shape (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
                 metadata: shape (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
         """
-        logger.info(f"[TorchDispatchModule.forward] INPUT SHAPES:")
-        logger.info(f"  x.shape={x.shape}")
-        logger.info(f"  weights.shape={weights.shape}")
-        logger.info(f"  indices.shape={indices.shape}")
-        logger.info(f"  expert_offsets.shape={expert_offsets.shape}")
-        logger.info(f"[TorchDispatchModule.forward] CONFIG:")
-        logger.info(f"  dispatch_group_size={self.dispatch_group_size}, experts_per_chip={self.experts_per_chip}")
-        logger.info(f"  num_routed_experts={self.num_routed_experts}, num_experts_per_tok={self.num_experts_per_tok}")
-        logger.info(
+        logger.debug(f"[TorchDispatchModule.forward] INPUT SHAPES:")
+        logger.debug(f"  x.shape={x.shape}")
+        logger.debug(f"  weights.shape={weights.shape}")
+        logger.debug(f"  indices.shape={indices.shape}")
+        logger.debug(f"  expert_offsets.shape={expert_offsets.shape}")
+        logger.debug(f"[TorchDispatchModule.forward] CONFIG:")
+        logger.debug(f"  dispatch_group_size={self.dispatch_group_size}, experts_per_chip={self.experts_per_chip}")
+        logger.debug(f"  num_routed_experts={self.num_routed_experts}, num_experts_per_tok={self.num_experts_per_tok}")
+        logger.debug(
             f"  metadata_len={self.metadata_len}, max_dispatched_tokens_per_expert={self.max_dispatched_tokens_per_expert}"
         )
-        logger.info(f"  num_dispatch_groups={self.num_dispatch_groups}")
+        logger.debug(f"  num_dispatch_groups={self.num_dispatch_groups}")
 
         assert (
             self.dispatch_group_size == x.shape[0] == weights.shape[0] == indices.shape[0]
@@ -171,7 +171,7 @@ class TorchDispatchModule(torch.nn.Module):
                         )
                         offset_copy[chip, routed_expert] += 1
 
-        logger.info(f"[TorchDispatchModule.forward] OUTPUT SHAPES:")
-        logger.info(f"  {dispatched_buffer.shape=}")
-        logger.info(f"  {dispatched_metadata.shape=}")
+        logger.debug(f"[TorchDispatchModule.forward] OUTPUT SHAPES:")
+        logger.debug(f"  {dispatched_buffer.shape=}")
+        logger.debug(f"  {dispatched_metadata.shape=}")
         return dispatched_buffer, dispatched_metadata

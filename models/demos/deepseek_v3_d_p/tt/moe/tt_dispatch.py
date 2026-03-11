@@ -75,7 +75,7 @@ class TtDispatchModule(LightweightModule):
         Returns:
             TTNN tensor sharded across mesh devices
         """
-        logger.info(f"[shard_expert_offsets] INPUT: expert_offsets.shape={expert_offsets.shape}")
+        logger.debug(f"[shard_expert_offsets] INPUT: expert_offsets.shape={expert_offsets.shape}")
         mesh_mapper = ttnn.ShardTensor2dMesh(
             mesh_device,
             mesh_shape=mesh_device.shape,
@@ -88,7 +88,7 @@ class TtDispatchModule(LightweightModule):
             device=mesh_device,
             dtype=ttnn.int32,
         )
-        logger.info(f"[shard_expert_offsets] OUTPUT: result.shape={result.shape}")
+        logger.debug(f"[shard_expert_offsets] OUTPUT: result.shape={result.shape}")
         return result
 
     @staticmethod
@@ -117,14 +117,14 @@ class TtDispatchModule(LightweightModule):
         #   dims = (None, 0): replicate on mesh rows (dispatch), shard tensor dim 0 on mesh cols (groups)
         # For dispatch_axis=1: mesh axis 0 = dispatch groups, mesh axis 1 = dispatch axis
         #   dims = (0, None): shard tensor dim 0 on mesh rows (groups), replicate on mesh cols (dispatch)
-        logger.info(
+        logger.debug(
             f"[shard_expert_dispatch_table] INPUT: expert_dispatch_table.shape={expert_dispatch_table.shape}, dispatch_axis={dispatch_axis}"
         )
         if dispatch_axis == 0:
             dims = (None, 0)
         else:
             dims = (0, None)
-        logger.info(f"[shard_expert_dispatch_table] Using dims={dims}")
+        logger.debug(f"[shard_expert_dispatch_table] Using dims={dims}")
 
         mesh_mapper = ttnn.ShardTensor2dMesh(
             mesh_device,
@@ -138,7 +138,7 @@ class TtDispatchModule(LightweightModule):
             device=mesh_device,
             dtype=ttnn.int32,
         )
-        logger.info(f"[shard_expert_dispatch_table] OUTPUT: result.shape={result.shape}")
+        logger.debug(f"[shard_expert_dispatch_table] OUTPUT: result.shape={result.shape}")
         return result
 
     def forward(
@@ -168,19 +168,19 @@ class TtDispatchModule(LightweightModule):
             dispatched_buffer: Dispatched tokens of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, hidden_dim)
             metadata: Metadata tensor of shape (dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, metadata_len)
         """
-        logger.info(f"[TtDispatchModule.forward] INPUT SHAPES:")
-        logger.info(f"  x.shape={x.shape}")
-        logger.info(f"  weights.shape={weights.shape}")
-        logger.info(f"  indices.shape={indices.shape}")
-        logger.info(f"  tt_expert_offsets.shape={tt_expert_offsets.shape}")
-        logger.info(f"  tt_expert_dispatch_table.shape={tt_expert_dispatch_table.shape}")
-        logger.info(f"[TtDispatchModule.forward] CONFIG:")
-        logger.info(f"  dispatch_group_size={self.dispatch_group_size}, experts_per_chip={self.experts_per_chip}")
-        logger.info(f"  num_routed_experts={self.num_routed_experts}, num_experts_per_tok={self.num_experts_per_tok}")
-        logger.info(
+        logger.debug(f"[TtDispatchModule.forward] INPUT SHAPES:")
+        logger.debug(f"  x.shape={x.shape}")
+        logger.debug(f"  weights.shape={weights.shape}")
+        logger.debug(f"  indices.shape={indices.shape}")
+        logger.debug(f"  tt_expert_offsets.shape={tt_expert_offsets.shape}")
+        logger.debug(f"  tt_expert_dispatch_table.shape={tt_expert_dispatch_table.shape}")
+        logger.debug(f"[TtDispatchModule.forward] CONFIG:")
+        logger.debug(f"  dispatch_group_size={self.dispatch_group_size}, experts_per_chip={self.experts_per_chip}")
+        logger.debug(f"  num_routed_experts={self.num_routed_experts}, num_experts_per_tok={self.num_experts_per_tok}")
+        logger.debug(
             f"  metadata_len={self.metadata_len}, max_dispatched_tokens_per_expert={self.max_dispatched_tokens_per_expert}"
         )
-        logger.info(f"  cluster_axis={self.cluster_axis}, num_links={self.num_links}, topology={self.topology}")
+        logger.debug(f"  cluster_axis={self.cluster_axis}, num_links={self.num_links}, topology={self.topology}")
 
         (
             tt_dispatched_buffer,
@@ -204,8 +204,8 @@ class TtDispatchModule(LightweightModule):
 
         tt_dispatched_buffer_shape = tt_dispatched_buffer.shape
         tt_dispatched_metadata_shape = tt_dispatch_metadata.shape
-        logger.info(f"[TtDispatchModule.forward] OUTPUT SHAPES:")
-        logger.info(f"  tt_dispatched_buffer.shape={tt_dispatched_buffer_shape}")
-        logger.info(f"  tt_dispatch_metadata.shape={tt_dispatched_metadata_shape}")
+        logger.debug(f"[TtDispatchModule.forward] OUTPUT SHAPES:")
+        logger.debug(f"  tt_dispatched_buffer.shape={tt_dispatched_buffer_shape}")
+        logger.debug(f"  tt_dispatch_metadata.shape={tt_dispatched_metadata_shape}")
 
         return (tt_dispatched_buffer, tt_dispatch_metadata)
