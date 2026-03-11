@@ -14,6 +14,36 @@ from models.demos.stable_diffusion_xl_base.tt.model_configs.model_configs_1024x1
 )
 
 
+def get_image_resolution_from_model_config(model_config):
+    """
+    Get the image resolution from a ModelOptimisations instance.
+
+    Args:
+        model_config: A ModelOptimisations instance (either ModelOptimisations512x512 or
+            ModelOptimisations1024x1024).
+
+    Returns:
+        tuple: A tuple of (height, width) representing the image resolution.
+
+    Raises:
+        ValueError: If the model_config type is not recognized.
+
+    Example:
+        >>> model_opt = ModelOptimisations512x512()
+        >>> resolution = get_image_resolution_from_model_config(model_opt)
+        >>> print(resolution)  # (512, 512)
+    """
+    if isinstance(model_config, ModelOptimisations512x512):
+        return (512, 512)
+    elif isinstance(model_config, ModelOptimisations1024x1024):
+        return (1024, 1024)
+    else:
+        raise ValueError(
+            f"Unsupported model_config type: {type(model_config).__name__}. "
+            "Expected ModelOptimisations512x512 or ModelOptimisations1024x1024."
+        )
+
+
 def load_model_optimisations(
     image_resolution,
     conv_act_dtype=None,
