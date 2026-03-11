@@ -6,18 +6,31 @@
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/common.h"
 #include "api/compute/matmul.h"
-
 #include "api/compute/tile_move_copy.h"
+#include "api/compute/transpose_wh_dest.h"
+#include "api/compute/eltwise_unary/binop_with_scalar.h"
+#include "api/compute/eltwise_unary/rsqrt.h"
+#include "ttnn/operations/normalization/kernel_util/generic/bit.h"
+#include "api/compute/bcast.h"
+
 #include "rope_sfpu.h"
+#include "x2_sum.h"
+#include "rms_sum.h"
 
 void kernel_main() {
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
     constexpr uint32_t num_cores = get_named_compile_time_arg_val("num_cores");
+    constexpr uint32_t collector_semaphore_id = get_named_compile_time_arg_val("collector_semaphore_id");
+    constexpr uint32_t collector_physical_x = get_named_compile_time_arg_val("collector_physical_x");
+    constexpr uint32_t collector_physical_y = get_named_compile_time_arg_val("collector_physical_y");
+    constexpr uint32_t first_physical_x = get_named_compile_time_arg_val("first_physical_x");
+    constexpr uint32_t first_physical_y = get_named_compile_time_arg_val("first_physical_y");
 
     // Run-time arguments
     uint32_t argidx = 0;
     const auto dram_bank_id = get_arg_val<uint32_t>(argidx++);
     const auto vchannel = get_arg_val<uint32_t>(argidx++);
+    const auto is_collector = get_arg_val<uint32_t>(argidx++);
     const auto in_addr = get_arg_val<uint32_t>(argidx++);
     const auto w_addr = get_arg_val<uint32_t>(argidx++);
     const auto rope_addr = get_arg_val<uint32_t>(argidx++);
@@ -30,6 +43,8 @@ void kernel_main() {
     constexpr auto cb_c2w_rdy = tt::CBIndex::c_2;
     constexpr auto cb_r2c_rope = tt::CBIndex::c_3;
     constexpr auto cb_s2c_out = tt::CBIndex::c_4;
+    constexpr auto cb_c2w_x2 = tt::CBIndex::c_5;
+    constexpr auto cb_w2c_x2 = tt::CBIndex::c_6;
 
     // Constants for MLA WqkvAb
     constexpr uint32_t k_tiles = 7168 / 32;
@@ -87,6 +102,38 @@ void kernel_main() {
         cb_pop_front(cb_r2c_w, w_tiles_per_block);
     }
 
+    //-------------------------------------------------------------------------
+    // Apply RMSNorm to q_a (all) and kv_a (only NoPE)
+    //-------------------------------------------------------------------------
+
+    uint32_t num_tiles = n_tiles_this_core;
+
+    if (dram_bank_id == 11) {
+        // Last core has only 4 tiles
+        num_tiles = 4;
+    } else if (dram_bank_id < 6) {
+        // First 5 cores have only 5 tiles
+        num_tiles = 5;
+    }
+
+    transpose_wh_dest_init_short</**is_32bit=**/ false>();
+    for (uint32_t dst_idx = 0; dst_idx < n_tiles_this_core; dst_idx++) {
+        transpose_wh_dest</**is_32bit=**/ false>(dst_idx);
+    }
+
+    // Compute sum(X^2) for RMSNorm
+    x2_sum_init();
+    x2_sum_tile(0, num_tiles);
+
+    // Temporary - to keep output in correct order
+    transpose_wh_dest_init_short</**is_32bit=**/ false>();
+    for (uint32_t dst_idx = 0; dst_idx < n_tiles_this_core; dst_idx++) {
+        transpose_wh_dest</**is_32bit=**/ false>(dst_idx);
+    }
+
+    //-------------------------------------------------------------------------
+    // Apply RoPE transformation for kv_a RoPE output
+    //-------------------------------------------------------------------------
     cb_wait_front(cb_r2c_rope, 1);
 
     // Configure unpacker A to Float16_b
@@ -102,9 +149,70 @@ void kernel_main() {
     }
     cb_pop_front(cb_r2c_rope, 1);
 
+    //-------------------------------------------------------------------------
     tile_regs_commit();
+
+    cb_reserve_back(cb_c2w_x2, 2);
     tile_regs_wait();
 
+    pack_tile_block(0, cb_s2c_out, n_tiles_this_core);
+    pack_tile(7, cb_c2w_x2);
+    tile_regs_release();
+    cb_push_back(cb_c2w_x2, 2);
+
+    //-------------------------------------------------------------------------
+    if (is_collector) {
+        tile_regs_acquire();
+        cb_wait_front(cb_w2c_x2, 2);
+        copy_tile_init(cb_w2c_x2);
+        copy_tile(cb_w2c_x2, 0, 0);
+        copy_tile(cb_w2c_x2, 1, 1);
+        cb_pop_front(cb_w2c_x2, 2);
+
+        rms_sum_init();
+        rms_sum_tile(0);
+
+        // Divide the sum by N (1536 and 512 respectively)
+        binop_with_scalar_tile_init();
+        div_unary_tile(0, norm::kernel_util::generic::bit_cast<uint32_t>(1536.0f));
+        div_unary_tile(1, norm::kernel_util::generic::bit_cast<uint32_t>(512.0f));
+
+        // Take rsqrt of the scale factor
+        rsqrt_tile_init</*legacy_compat=*/false>();
+        rsqrt_tile</*legacy_compat=*/false>(0);
+        rsqrt_tile</*legacy_compat=*/false>(1);
+
+        transpose_wh_dest_init_short</**is_32bit=**/ false>();
+        transpose_wh_dest</**is_32bit=**/ false>(0);
+        transpose_wh_dest</**is_32bit=**/ false>(1);
+
+        tile_regs_commit();
+
+        cb_reserve_back(cb_c2w_x2, 2);
+        tile_regs_wait();
+        pack_tile_block(0, cb_c2w_x2, 2);
+        tile_regs_release();
+        cb_push_back(cb_c2w_x2, 2);
+    }
+
+    //-------------------------------------------------------------------------
+    // Apply RMSNorm to q_a (all) and kv_a (only NoPE)
+    //-------------------------------------------------------------------------
+    // Wait for the RMSNorm scale factor to arrive from collector
+    cb_wait_front(cb_w2c_x2, 2);
+
+    mul_bcast_cols_init_short(cb_s2c_out, cb_w2c_x2);
+
+    tile_regs_acquire();
+    uint32_t scale_idx = (dram_bank_id < 9) ? 0 : 1;
+
+    for (uint32_t tile_idx = 0; tile_idx < n_tiles_this_core; tile_idx++) {
+        mul_tiles_bcast_cols(cb_s2c_out, cb_w2c_x2, tile_idx, scale_idx, tile_idx);
+    }
+    tile_regs_commit();
+    cb_pop_front(cb_w2c_x2, 2);
+
+    tile_regs_wait();
     pack_tile_block(0, cb_s2c_out, n_tiles_this_core);
     tile_regs_release();
 

@@ -390,7 +390,7 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
             (num_dram_banks, rope_shard_height, rope_shard_width),
             dtype=rope_dtype,
             device=device,
-            layout=ttnn.TILE_LAYOUT,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
             memory_config=rope_mem_config,
         )
 
@@ -458,6 +458,7 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
             tt_values = prepare_output_tensor(tt_layer_output, num_dram_banks)
             layer_metrics = get_accuracy_metrics(torch_ref_layer, tt_values)
             all_accuracy_metrics[layer_id] = layer_metrics
+            breakpoint()
 
     if dump_outputs:
         torch.set_printoptions(profile="full")
@@ -475,7 +476,7 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
 
 
 SHAPE2TIME = {
-    (32, 7168, 2112, 1, 0): 69,
+    (32, 7168, 2112, 1, 0): 72,
 }
 
 

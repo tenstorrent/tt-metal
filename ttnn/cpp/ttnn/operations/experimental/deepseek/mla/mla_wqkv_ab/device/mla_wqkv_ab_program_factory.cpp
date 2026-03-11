@@ -39,6 +39,8 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
         | cb_c2w_rdy     | CBIndex::c_2  | Float32    | false |    1     |      4          |
         | cb_r2c_rope    | CBIndex::c_3  | Float16_b  | true  |    1     |      2048       |
         | cb_s2c_out(sh) | CBIndex::c_4  | Float16_b  | true  |    6     |      12288      |
+        | cb_c2w_x2      | CBIndex::c_5  | Float16_b  | true  |    2     |      4096       |
+        | cb_w2c_x2      | CBIndex::c_6  | Float16_b  | true  |    2     |      4096       |
         ------------------------------------------------------------------------------------
     */
 
@@ -47,6 +49,8 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
         {"cb_r2c_w", tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, true, 42 * 3},
         {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
         {"cb_r2c_rope", tt::CBIndex::c_3, tt::DataFormat::Float16_b, true, 1},
+        {"cb_c2w_x2", tt::CBIndex::c_5, tt::DataFormat::Float16_b, true, 2},
+        {"cb_w2c_x2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, 2},
     };
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;
@@ -84,9 +88,32 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
         tt::tt_metal::TensorAccessorArgs(*tensor->buffer()).append_to(compile_args);
     }
 
+    // Semaphores used for collector synchronization.
+    const uint32_t collector_semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+
+    // Sort the DRAM cores in ascending order
+    auto dram_bank2core_coords_sorted = dram_bank2core_coords;
+    std::sort(
+        dram_bank2core_coords_sorted.begin(), dram_bank2core_coords_sorted.end(), [&](const auto& a, const auto& b) {
+            return (a.y < b.y) || ((a.y == b.y) && (a.x < b.x));
+        });
+
+    // The collector core is the core which is at the top left
+    const auto collector_core = dram_bank2core_coords_sorted[0];
+    const auto collector_physical_coord =
+        tensor_args.input_tensor.device()->worker_core_from_logical_core(collector_core);
+
+    const auto first_core = dram_bank2core_coords_sorted[11];
+    const auto first_physical_coord = tensor_args.input_tensor.device()->worker_core_from_logical_core(first_core);
+
     std::unordered_map<std::string, uint32_t> named_compile_time_args = {
         {"layer_id", operation_attributes.layer_id},
         {"num_cores", static_cast<uint32_t>(num_cores)},
+        {"collector_semaphore_id", collector_semaphore_id},
+        {"collector_physical_x", collector_physical_coord.x},
+        {"collector_physical_y", collector_physical_coord.y},
+        {"first_physical_x", first_physical_coord.x},
+        {"first_physical_y", first_physical_coord.y},
     };
 
     // Create kernels for the program
@@ -127,6 +154,7 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
     std::vector<uint32_t> runtime_args;
     runtime_args.push_back(0);  // DRAM Bank ID placeholder
     runtime_args.push_back(0);  // VChannel placeholder
+    runtime_args.push_back(0);  // Boolean for collector mode
 
     for (const auto& tensor : tensors) {
         runtime_args.push_back(tensor->buffer()->address());
@@ -155,7 +183,8 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
 
         runtime_args[0] = dram_bank;
         runtime_args[1] = vchannel;
-        // runtime_args[2-5] are already set to tensor addresses and runtime_args[6] stores pos
+        runtime_args[2] = (uint32_t)((core.x == collector_core.x) && (core.y == collector_core.y));
+        // runtime_args[3-6] are already set to tensor addresses and runtime_args[7] stores pos
 
         tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
@@ -188,14 +217,14 @@ void MlaWqkvAbProgramFactory::override_runtime_arguments(
 
     // Update runtime args for all kernels with new tensor addresses/position.
     // Runtime args layout:
-    // [2] = input_tensor address, [3] = w_tensor address, [4] = rope_tensor address, [5] = output_tensor address,
-    // [6] = pos
+    // [3] = input_tensor address, [4] = w_tensor address, [5] = rope_tensor address, [6] = output_tensor address,
+    // [7] = pos
     for (const auto& core : shared_variables.worker_cores) {
         for (const auto& kernel_handle : shared_variables.kernel_handles) {
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
-            runtime_args[3] = tensor_args.w_tensor.buffer()->address();
-            runtime_args[4] = tensor_args.rope_tensor.buffer()->address();
-            runtime_args[6] = operation_attributes.pos;
+            runtime_args[4] = tensor_args.w_tensor.buffer()->address();
+            runtime_args[5] = tensor_args.rope_tensor.buffer()->address();
+            runtime_args[7] = operation_attributes.pos;
         }
     }
 }
