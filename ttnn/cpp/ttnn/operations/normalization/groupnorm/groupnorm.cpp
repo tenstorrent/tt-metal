@@ -92,8 +92,8 @@ ttnn::Tensor get_mask_tensor(
             TT_FATAL(
                 num_virtual_cols > 0,
                 "group_norm: Cannot determine num_virtual_cols for core_grid x={}, num_groups={}, "
-                "num_channels={}. num_virtual_cols must satisfy (num_channels / nvc) %% TILE_SIZE == 0 "
-                "and num_groups %% nvc == 0.",
+                "num_channels={}. num_virtual_cols must satisfy (num_channels / nvc) % TILE_SIZE == 0 "
+                "and num_groups % nvc == 0.",
                 core_grid.value().x,
                 num_groups,
                 num_channel);

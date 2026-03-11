@@ -30,7 +30,7 @@ def test_group_norm(device):
     torch_output_tensor = torch_output_tensor.permute(0, 2, 3, 1).view(N, 1, W * H, C)
 
     # Prepare TTNN input
-    # Determine how to shard the input tensor.
+    # Determine how to shard the input tensor - this example uses height sharding
     # For interleaved (non-sharded) tensors, use ttnn.determine_expected_group_norm_dram_grid_size instead to determine the grid size.
     sharded_mem_config, grid_size = ttnn.determine_expected_group_norm_sharded_config_and_grid_size(
         device=device,
@@ -49,7 +49,16 @@ def test_group_norm(device):
         memory_config=sharded_mem_config,
     )
 
-    # Input mask - this is needed for each group to be able to select the correct elements of the input tensor
+    # To prepare the input tensors, we need to know how many cores split the channel dimension.
+    # For height sharding (as in this example) this is always 1; for block sharding it depends on the shard orientation.
+    num_cores_across_channel = ttnn.get_group_norm_cores_across_channel(
+        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
+        grid_size,
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+
+    # Now create the input tensors, starting with the input mask
+    # This is needed for each group to be able to select the correct elements of the input tensor
     # In general, it will have dimensions of [1, num_groups, 32, 32*block_wt]
 
     # In this example, C=64 and num_groups=2, so each group is 32 channels (i.e. one tile) wide
@@ -59,14 +68,6 @@ def test_group_norm(device):
     # As a result, the input_mask_tensor would be a [1, 4, 32, 32] tensor that selects either the first or second half of the tile
     # e.g. The mask at [0][0][:][:] would be a 32x32 tensor where the left half is 1 and the right half is 0
     # While [0][1][:][:] would be a 32x32 tensor where the left half is 0 and the right half is 1
-    # Determine how many cores split the channel dimension.
-    # For height sharding this is always 1; for block sharding it depends on the shard orientation.
-    num_cores_across_channel = ttnn.get_group_norm_cores_across_channel(
-        ttnn.types.TensorMemoryLayout.HEIGHT_SHARDED,
-        grid_size,
-        ttnn.ShardOrientation.ROW_MAJOR,
-    )
-
     input_mask_tensor = ttnn.create_group_norm_input_mask(
         num_channel=C,
         num_groups=num_groups,
