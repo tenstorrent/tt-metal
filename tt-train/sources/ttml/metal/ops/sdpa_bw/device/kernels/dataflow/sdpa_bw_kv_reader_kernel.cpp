@@ -69,6 +69,69 @@ void kernel_main() {
 
     const uint32_t num_of_groups = q_heads / heads_per_group;
 
+#ifdef BALANCED_PARALLELISM
+    constexpr uint32_t pairs_per_seq = Ht / 2;
+
+    auto read_row = [&](const uint32_t global_row_idx) {
+        const uint32_t kv_start_idx = global_row_idx * kWt;
+
+        read_tiles_by_row(cb_key, key_address_generator, kv_start_idx, kWt, tile_bytes, kWt);
+        read_tiles_by_row(cb_value, value_address_generator, kv_start_idx, kWt, tile_bytes, kWt);
+
+        const uint32_t group_idx = (global_row_idx / Ht) % num_of_groups;
+        const uint32_t batch_idx = global_row_idx / (Ht * num_of_groups);
+
+        const uint32_t first_q_head_idx = group_idx * heads_per_group;
+        const uint32_t q_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * qWt;
+
+        const uint32_t k_row_tile = global_row_idx % Ht;
+
+        // Causal: only read Q rows from k_row_tile to Ht-1
+        const uint32_t q_start_tile = k_row_tile;
+        const uint32_t num_q_tiles_to_read = Ht - k_row_tile;
+
+        uint32_t intermediates_offset = (batch_idx * q_heads + first_q_head_idx) * Ht * num_of_interm_tiles;
+
+        for (uint32_t q_head_idx = 0; q_head_idx < heads_per_group; ++q_head_idx) {
+            for (uint32_t q_idx = 0; q_idx < num_q_tiles_to_read; ++q_idx) {
+                const uint32_t h = q_start_tile + q_idx;
+
+                const uint32_t q_start_idx = q_offset + (q_head_idx * Ht + h) * qWt;
+                read_tiles_by_row(cb_query, query_address_generator, q_start_idx, qWt, tile_bytes, qWt);
+
+                uint32_t intermediates_idx = intermediates_offset + h * num_of_interm_tiles;
+                read_tiles_by_row(
+                    cb_intermediates,
+                    intermediates_address_generator,
+                    intermediates_idx,
+                    num_of_interm_tiles,
+                    tile_bytes,
+                    num_of_interm_tiles);
+
+                read_tiles_by_row(cb_grad_output, grad_output_address_generator, q_start_idx, qWt, tile_bytes, qWt);
+                read_tiles_by_row(cb_attn_output, attn_output_address_generator, q_start_idx, qWt, tile_bytes, qWt);
+            }
+            intermediates_offset += Ht * num_of_interm_tiles;
+        }
+    };
+
+    // Runtime args reuse: num_rows_to_process = num_pairs, start_row = start_pair_idx
+    for (uint32_t p = 0; p < num_rows_to_process; ++p) {
+        const uint32_t global_pair_idx = start_row + p;
+
+        const uint32_t seq_idx = global_pair_idx / pairs_per_seq;
+        const uint32_t pair_in_seq = global_pair_idx % pairs_per_seq;
+
+        const uint32_t light_row_in_seq = pair_in_seq;
+        const uint32_t heavy_row_in_seq = Ht - 1 - pair_in_seq;
+
+        const uint32_t light_global_row = seq_idx * Ht + light_row_in_seq;
+        const uint32_t heavy_global_row = seq_idx * Ht + heavy_row_in_seq;
+
+        read_row(light_global_row);
+        read_row(heavy_global_row);
+    }
+#else
     // process rows of K and V assigned to this core
     // stream rows from Q, dO, O(for all heads associated with this group of K and V)
     for (uint32_t i = 0; i < num_rows_to_process; ++i) {
@@ -142,4 +205,5 @@ void kernel_main() {
             intermediates_offset += Ht * num_of_interm_tiles;  // jump to the head in intermediates
         }
     }
+#endif
 }
