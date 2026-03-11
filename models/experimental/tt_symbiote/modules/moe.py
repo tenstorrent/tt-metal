@@ -641,11 +641,9 @@ class TTNNGlm4MoeMLP(TTNNModule):
         """Create a TTNNGlm4MoeMLP from a PyTorch Glm4MoeMLP layer."""
         tt_module = cls()
         tt_module._fallback_torch_layer = torch_layer
-        tt_module.gate_proj = TTNNLinearSilu.from_torch(
-            torch_layer.gate_proj, linear_class=TTNNLinearIColShardedWRowSharded
-        )
-        tt_module.up_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_layer.up_proj)
-        tt_module.down_proj = TTNNLinearIColShardedWRowSharded.from_torch(torch_layer.down_proj)
+        tt_module.gate_proj = TTNNLinearSilu.from_torch(torch_layer.gate_proj, linear_class=TTNNLinear)
+        tt_module.up_proj = TTNNLinear.from_torch(torch_layer.up_proj)
+        tt_module.down_proj = TTNNLinear.from_torch(torch_layer.down_proj)
         return tt_module
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -1515,6 +1513,20 @@ class TTNNDeepseekV2MoE(TTNNModule):
             shared_out = self.shared_experts(hidden_states_4d)
             if hasattr(shared_out, "to_ttnn"):
                 shared_out = shared_out.to_ttnn
+
+            routed_output = ttnn.to_device(routed_output, self.device)
+            shared_out = ttnn.experimental.all_gather_async(
+                shared_out,
+                dim=3,
+                cluster_axis=1,
+                topology=ttnn.Topology.Ring,
+                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+                num_links=1,
+            )
+
+            print("routed_output.shape : ", routed_output.shape)
+            print("shared_out.shape : ", shared_out.shape)
+
             routed_output = ttnn.add(routed_output, shared_out)
         return ttnn.reshape(routed_output, orig_shape)
 
