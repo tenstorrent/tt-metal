@@ -209,6 +209,19 @@ class DeepseekGenerator(WarmupForwardMixin):
         self._trace_rot_idxs: ttnn.Tensor | None = None
         self._trace_output: ttnn.Tensor | None = None
         self._trace_page_tables_to_use: tuple[ttnn.Tensor, ...] | None = None
+        self._mtp_verify_trace_id: int | None = None
+        self._mtp_verify_trace_tokens: ttnn.Tensor | None = None
+        self._mtp_verify_trace_positions: ttnn.Tensor | None = None
+        self._mtp_verify_trace_rot_idxs: ttnn.Tensor | None = None
+        self._mtp_verify_trace_output: tuple[ttnn.Tensor, ttnn.Tensor] | None = None
+        self._mtp_verify_trace_page_tables: tuple[ttnn.Tensor, ...] | None = None
+        self._mtp_predict_trace_id: int | None = None
+        self._mtp_predict_trace_hidden: ttnn.Tensor | None = None
+        self._mtp_predict_trace_tokens: ttnn.Tensor | None = None
+        self._mtp_predict_trace_positions: ttnn.Tensor | None = None
+        self._mtp_predict_trace_rot_idxs: ttnn.Tensor | None = None
+        self._mtp_predict_trace_output: ttnn.Tensor | None = None
+        self._mtp_predict_trace_page_table: ttnn.Tensor | None = None
         self.enable_trace = enable_trace
         self.enable_mem_profile = enable_mem_profile
         self.signpost = signpost
@@ -439,10 +452,64 @@ class DeepseekGenerator(WarmupForwardMixin):
             if self._trace_page_tables_to_use is not None and self._trace_page_tables_to_use is not self.page_tables_tt:
                 for i, page_table in enumerate(self._trace_page_tables_to_use):
                     try:
+                        MLA2D.release_page_table_alias_runtime_cache(page_table)
                         ttnn.deallocate(page_table)
                     except Exception as e:
                         logger.warning(f"Failed to deallocate trace page table {i}: {e}")
                 del self._trace_page_tables_to_use
+            if self._mtp_verify_trace_id is not None:
+                ttnn.release_trace(self.mesh_device, self._mtp_verify_trace_id)
+                del self._mtp_verify_trace_id
+            if self._mtp_verify_trace_tokens is not None:
+                ttnn.deallocate(self._mtp_verify_trace_tokens)
+                del self._mtp_verify_trace_tokens
+            if self._mtp_verify_trace_positions is not None:
+                ttnn.deallocate(self._mtp_verify_trace_positions)
+                del self._mtp_verify_trace_positions
+            if self._mtp_verify_trace_rot_idxs is not None:
+                ttnn.deallocate(self._mtp_verify_trace_rot_idxs)
+                del self._mtp_verify_trace_rot_idxs
+            if self._mtp_verify_trace_output is not None:
+                verify_logits_tt, verify_hidden_tt = self._mtp_verify_trace_output
+                ttnn.deallocate(verify_logits_tt)
+                ttnn.deallocate(verify_hidden_tt)
+                del self._mtp_verify_trace_output
+            if (
+                self._mtp_verify_trace_page_tables is not None
+                and self._mtp_verify_trace_page_tables is not self.page_tables_tt
+            ):
+                for i, page_table in enumerate(self._mtp_verify_trace_page_tables):
+                    try:
+                        MLA2D.release_page_table_alias_runtime_cache(page_table)
+                        ttnn.deallocate(page_table)
+                    except Exception as e:
+                        logger.warning(f"Failed to deallocate MTP verify trace page table {i}: {e}")
+                del self._mtp_verify_trace_page_tables
+            if self._mtp_predict_trace_id is not None:
+                ttnn.release_trace(self.mesh_device, self._mtp_predict_trace_id)
+                del self._mtp_predict_trace_id
+            if self._mtp_predict_trace_hidden is not None:
+                ttnn.deallocate(self._mtp_predict_trace_hidden)
+                del self._mtp_predict_trace_hidden
+            if self._mtp_predict_trace_tokens is not None:
+                ttnn.deallocate(self._mtp_predict_trace_tokens)
+                del self._mtp_predict_trace_tokens
+            if self._mtp_predict_trace_positions is not None:
+                ttnn.deallocate(self._mtp_predict_trace_positions)
+                del self._mtp_predict_trace_positions
+            if self._mtp_predict_trace_rot_idxs is not None:
+                ttnn.deallocate(self._mtp_predict_trace_rot_idxs)
+                del self._mtp_predict_trace_rot_idxs
+            if self._mtp_predict_trace_output is not None:
+                ttnn.deallocate(self._mtp_predict_trace_output)
+                del self._mtp_predict_trace_output
+            if (
+                self._mtp_predict_trace_page_table is not None
+                and self._mtp_predict_trace_page_table is not self.mtp_page_table_tt
+            ):
+                MLA2D.release_page_table_alias_runtime_cache(self._mtp_predict_trace_page_table)
+                ttnn.deallocate(self._mtp_predict_trace_page_table)
+                del self._mtp_predict_trace_page_table
         except Exception as e:
             logger.warning(f"Failed to cleanup trace state: {e}")
 
@@ -451,6 +518,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             if self.page_tables_tt is not None:
                 for i, page_table in enumerate(self.page_tables_tt):
                     try:
+                        MLA2D.release_page_table_alias_runtime_cache(page_table)
                         ttnn.deallocate(page_table)
                     except Exception as e:
                         logger.warning(f"Failed to deallocate page table {i}: {e}")
@@ -461,6 +529,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.mtp_page_table_host = None
         try:
             if self.mtp_page_table_tt is not None:
+                MLA2D.release_page_table_alias_runtime_cache(self.mtp_page_table_tt)
                 ttnn.deallocate(self.mtp_page_table_tt)
                 del self.mtp_page_table_tt
         except Exception as e:
@@ -519,6 +588,49 @@ class DeepseekGenerator(WarmupForwardMixin):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
+
+    def _tt_from_hidden_states_step(
+        self,
+        hidden_states: torch.Tensor,
+        device: ttnn.Device | ttnn.MeshDevice | None,
+    ) -> ttnn.Tensor:
+        """Hidden states step: [B, H] -> TTNN tensor [1, 1, B, H] sharded across rows/cols."""
+        assert hidden_states.dim() == 2, "hidden_states must be [B, H]"
+        x = hidden_states.view(1, 1, hidden_states.shape[0], hidden_states.shape[1]).to(torch.bfloat16).contiguous()
+        return ttnn.from_torch(
+            x,
+            device=device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device,
+                dims=(-2, -1),
+                mesh_shape=tuple(self.mesh_device.shape),
+            ),
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.TILE_LAYOUT,
+        )
+
+    def _normalize_hidden_host_for_mtp(self, hidden: torch.Tensor) -> torch.Tensor:
+        hidden_size = int(self.hf_config.hidden_size)
+
+        if hidden.dim() == 4:
+            hidden = hidden.squeeze(0).squeeze(0)
+        if hidden.dim() == 3 and hidden.shape[1] == 1:
+            hidden = hidden[:, 0, :]
+        if hidden.dim() == 3 and hidden.shape[-1] == hidden_size:
+            hidden = hidden.reshape(-1, hidden_size)
+
+        if hidden.dim() != 2 or hidden.shape[-1] != hidden_size:
+            raise RuntimeError(f"Unexpected hidden shape for MTP trace path: {tuple(hidden.shape)}")
+
+        return hidden.to(torch.bfloat16).contiguous()
+
+    def _hidden_tt_to_host_for_mtp(self, hidden_tt: ttnn.Tensor) -> torch.Tensor:
+        hidden = ttnn.to_torch(
+            hidden_tt,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
+        )
+        return self._normalize_hidden_host_for_mtp(hidden)
 
     def _tt_from_positions(self, positions: torch.Tensor) -> Tuple[dict, ttnn.Tensor]:
         """Return rope tensors dict and TTNN positions shard for decode.
@@ -709,7 +821,11 @@ class DeepseekGenerator(WarmupForwardMixin):
             page_table=alias_page_table,
             batch_size=self.batch_size_per_row,
         )
+        alias_mask = MLA2D._compute_alias_mask_from_host(alias_page_table)
         out = tuple(ttnn.clone(aliased_tt) for _ in range(self.hf_config.num_hidden_layers))
+        for page_table in out:
+            MLA2D.register_page_table_alias_mask(page_table, alias_mask)
+        MLA2D.release_page_table_alias_runtime_cache(aliased_tt)
         ttnn.deallocate(aliased_tt)
         return out
 
@@ -749,10 +865,16 @@ class DeepseekGenerator(WarmupForwardMixin):
         tokens_step: torch.Tensor,
         positions: torch.Tensor,
         page_table: ttnn.Tensor | None = None,
+        use_trace: bool | None = None,
     ) -> torch.Tensor:
         assert self.enable_mtp, "MTP path requested while MTP is disabled"
         assert tokens_step.dim() == 1, "tokens_step must be [B]"
         assert positions.dim() == 1, "positions must be [B]"
+
+        if use_trace is None:
+            use_trace = self.enable_trace
+        if use_trace:
+            return self._mtp_predict_logits_traced(hidden_states, tokens_step, positions, page_table)
 
         hidden_from_host = not isinstance(hidden_states, ttnn.Tensor)
         if hidden_from_host:
@@ -910,11 +1032,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         num_of_users = tokens_batched.shape[0]
         token_trace = bool(int(os.getenv("DEEPSEEK_TOKEN_TRACE", "0")))
         use_mtp_path = self.enable_mtp and teacher_forcing is None and max_new_tokens > 1 and not self.profile_decode
-        if self.enable_trace and use_mtp_path:
-            raise RuntimeError(
-                "Decode trace is not supported with active MTP verify batching. "
-                "Disable --enable-trace or run with --mtp off."
-            )
         if use_mtp_path and 2 * num_of_prompts > num_of_users:
             logger.warning(
                 f"MTP verify batching needs 2x prompt lanes ({2 * num_of_prompts}) but only {num_of_users} are available; "
@@ -1057,6 +1174,20 @@ class DeepseekGenerator(WarmupForwardMixin):
                 positions = lengths.clone()
 
                 spec_tokens = None
+                decode_page_tables = None
+                use_interleaved = prompt_user_ids is not None and spec_user_ids is not None
+                verify_offset_default = self.batch_size_per_row // 2
+                verify_offset = verify_offset_default if use_interleaved else num_of_prompts
+                if use_mtp_path:
+                    if not use_interleaved:
+                        if verify_offset < num_of_prompts or verify_offset + num_of_prompts > num_of_users:
+                            raise RuntimeError(
+                                f"Invalid verify offset {verify_offset} for "
+                                f"num_prompts={num_of_prompts}, num_users={num_of_users}"
+                            )
+                    decode_page_tables = self._build_mtp_verify_page_tables(
+                        num_prompts=num_of_prompts, verify_offset=verify_offset, interleaved=use_interleaved
+                    )
                 if use_mtp_path and prefill_last_hidden is not None:
                     hidden_size = int(self.hf_config.hidden_size)
                     hidden_tail = torch.zeros((num_of_users, hidden_size), dtype=torch.bfloat16)
@@ -1064,10 +1195,14 @@ class DeepseekGenerator(WarmupForwardMixin):
                         if last_hidden is not None:
                             hidden_tail[i] = last_hidden
                     positions_tail = lengths.clone()
+                    bootstrap_mtp_traces = (
+                        self.enable_trace and self._mtp_predict_trace_id is None and self._mtp_verify_trace_id is None
+                    )
                     spec_logits = self._mtp_predict_logits(
                         hidden_states=hidden_tail,
                         tokens_step=next_tokens,
                         positions=positions_tail,
+                        use_trace=not bootstrap_mtp_traces,
                     )
                     self.ccl.reset_sem_counters()
                     spec_all = self._sample_greedy(spec_logits)
@@ -1075,6 +1210,38 @@ class DeepseekGenerator(WarmupForwardMixin):
                         spec_tokens = spec_all[prompt_user_ids]
                     else:
                         spec_tokens = spec_all[:num_of_prompts]
+
+                    if bootstrap_mtp_traces:
+                        if decode_page_tables is None:
+                            raise RuntimeError("MTP verify page tables were not initialized before trace bootstrap.")
+                        mtp_page_table = self._get_mtp_page_table()
+                        batched_tokens = next_tokens.clone()
+                        batched_positions = positions.clone()
+                        if use_interleaved and prompt_user_ids is not None and spec_user_ids is not None:
+                            batched_tokens[spec_user_ids] = spec_tokens
+                            batched_positions[spec_user_ids] = positions[prompt_user_ids] + 1
+                        else:
+                            batched_tokens[verify_offset : verify_offset + num_of_prompts] = spec_tokens
+                            batched_positions[verify_offset : verify_offset + num_of_prompts] = (
+                                positions[:num_of_prompts] + 1
+                            )
+
+                        self._ensure_mtp_predict_trace_buffers(hidden_tail, next_tokens, positions_tail, mtp_page_table)
+                        self._ensure_mtp_verify_trace_buffers(batched_tokens, batched_positions, decode_page_tables)
+                        self._capture_mtp_verify_trace(
+                            batched_tokens,
+                            batched_positions,
+                            batch_size_per_row=self.batch_size_per_row,
+                            page_tables=decode_page_tables,
+                            run_warmup=True,
+                        )
+                        self._capture_mtp_predict_trace(
+                            hidden_tail,
+                            next_tokens,
+                            positions_tail,
+                            mtp_page_table,
+                            run_warmup=False,
+                        )
 
                 # Record token 0
                 for i in range(num_of_prompts):
@@ -1099,21 +1266,11 @@ class DeepseekGenerator(WarmupForwardMixin):
                     generated_counts = torch.zeros((num_of_prompts,), dtype=torch.int32)
                     if num_of_prompts > 0:
                         generated_counts += 1
-                    use_interleaved = prompt_user_ids is not None and spec_user_ids is not None
-                    verify_offset_default = self.batch_size_per_row // 2
-                    verify_offset = verify_offset_default if use_interleaved else num_of_prompts
-                    if not use_interleaved:
-                        if verify_offset < num_of_prompts or verify_offset + num_of_prompts > num_of_users:
-                            raise RuntimeError(
-                                f"Invalid verify offset {verify_offset} for "
-                                f"num_prompts={num_of_prompts}, num_users={num_of_users}"
-                            )
-                    decode_page_tables = self._build_mtp_verify_page_tables(
-                        num_prompts=num_of_prompts, verify_offset=verify_offset, interleaved=use_interleaved
-                    )
 
                     if spec_tokens is None:
                         raise RuntimeError("MTP spec tokens were not initialized; prefill hidden states missing.")
+                    if decode_page_tables is None:
+                        raise RuntimeError("MTP verify page tables were not initialized.")
                     total_accepts = 0
                     total_verifies = 0
                     skipped_decode_tokens = 0
@@ -1136,21 +1293,36 @@ class DeepseekGenerator(WarmupForwardMixin):
                             )
 
                         logger.info(f"Decoding step {decode_step_idx} for {num_of_prompts} user(s)...")
+                        trace_replay_step = (
+                            self.enable_trace
+                            and self._mtp_verify_trace_id is not None
+                            and self._mtp_predict_trace_id is not None
+                        )
                         profiler.start(f"decode_time_{decode_step_idx}")
-                        logits_2b_tt, hidden_2b_tt = self._decode_step_tt(
-                            tokens_step=batched_tokens,
-                            positions=batched_positions,
-                            batch_size_per_row=self.batch_size_per_row,
-                            page_tables=decode_page_tables,
-                            return_hidden=True,
-                        )
-                        logits_2b = ttnn.to_torch(
-                            logits_2b_tt,
-                            mesh_composer=ttnn.ConcatMesh2dToTensor(
-                                self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
-                            ),
-                        )
-                        ttnn.deallocate(logits_2b_tt)
+                        if trace_replay_step and profiler is not None:
+                            profiler.start(f"trace_execution_{decode_step_idx}")
+                        if self.enable_trace:
+                            logits_2b, hidden_2b = self._mtp_verify_decode_traced(
+                                tokens_step=batched_tokens,
+                                positions=batched_positions,
+                                batch_size_per_row=self.batch_size_per_row,
+                                page_tables=decode_page_tables,
+                            )
+                        else:
+                            logits_2b_tt, hidden_2b_tt = self._decode_step_tt(
+                                tokens_step=batched_tokens,
+                                positions=batched_positions,
+                                batch_size_per_row=self.batch_size_per_row,
+                                page_tables=decode_page_tables,
+                                return_hidden=True,
+                            )
+                            logits_2b = ttnn.to_torch(
+                                logits_2b_tt,
+                                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                                    self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
+                                ),
+                            )
+                            ttnn.deallocate(logits_2b_tt)
                         profiler.end(f"decode_time_{decode_step_idx}")
                         decode_step_idx += 1
                         decode_forward_passes += 1
@@ -1246,44 +1418,32 @@ class DeepseekGenerator(WarmupForwardMixin):
                         tokens_for_spec = next_tokens.clone()
                         positions_for_spec = positions.clone()
 
-                        hidden_for_spec = hidden_2b_tt
-                        if skip_accept_decode and accepted_indices:
+                        hidden_for_spec = hidden_2b if self.enable_trace else hidden_2b_tt
+                        if self.enable_trace or (skip_accept_decode and accepted_indices):
                             # Select hidden[t] for rejects (prompt lane) and hidden[t+1] for accepts (verify lane).
-                            hidden_2b = ttnn.to_torch(
-                                hidden_2b_tt,
-                                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                                    self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
-                                ),
+                            hidden_2b_host = (
+                                hidden_2b if self.enable_trace else self._hidden_tt_to_host_for_mtp(hidden_2b_tt)
                             )
-                            hidden_2b = hidden_2b.squeeze(0).squeeze(0)
-                            hidden_size = int(self.hf_config.hidden_size)
-                            if hidden_2b.dim() == 3 and hidden_2b.shape[-1] == hidden_size:
-                                hidden_2b = hidden_2b.reshape(-1, hidden_size)
-                            if hidden_2b.dim() != 2:
-                                raise RuntimeError(
-                                    f"Unexpected hidden_2b shape for MTP skip selection: {tuple(hidden_2b.shape)}"
-                                )
-
-                            hidden_for_spec = hidden_2b.clone()
+                            hidden_for_spec = hidden_2b_host.clone()
                             accept_mask = accepted_prompt_mask.to(torch.bool)
                             if use_interleaved and prompt_user_ids is not None and spec_user_ids is not None:
                                 max_idx = int(torch.max(spec_user_ids).item()) if spec_user_ids.numel() > 0 else -1
-                                if hidden_2b.shape[0] <= max_idx:
+                                if hidden_2b_host.shape[0] <= max_idx:
                                     raise RuntimeError(
                                         "Hidden batch smaller than max spec user id: "
-                                        f"{hidden_2b.shape[0]} <= {max_idx}"
+                                        f"{hidden_2b_host.shape[0]} <= {max_idx}"
                                     )
-                                hidden_verify = hidden_2b[spec_user_ids]
+                                hidden_verify = hidden_2b_host[spec_user_ids]
                                 if accept_mask.any():
                                     accept_prompt_ids = prompt_user_ids[accept_mask]
                                     hidden_for_spec[accept_prompt_ids] = hidden_verify[accept_mask]
                             else:
-                                if hidden_2b.shape[0] < verify_offset + num_of_prompts:
+                                if hidden_2b_host.shape[0] < verify_offset + num_of_prompts:
                                     raise RuntimeError(
                                         "Hidden batch smaller than verify offset + num_prompts: "
-                                        f"{hidden_2b.shape[0]} < {verify_offset + num_of_prompts}"
+                                        f"{hidden_2b_host.shape[0]} < {verify_offset + num_of_prompts}"
                                     )
-                                hidden_verify = hidden_2b[verify_offset : verify_offset + num_of_prompts]
+                                hidden_verify = hidden_2b_host[verify_offset : verify_offset + num_of_prompts]
                                 if accept_mask.any():
                                     hidden_for_spec[:num_of_prompts][accept_mask] = hidden_verify[accept_mask]
 
@@ -1294,7 +1454,14 @@ class DeepseekGenerator(WarmupForwardMixin):
                         )
                         self.ccl.reset_sem_counters()
                         spec_all = self._sample_greedy(spec_logits_full)
-                        ttnn.deallocate(hidden_2b_tt)
+                        if not self.enable_trace:
+                            ttnn.deallocate(hidden_2b_tt)
+                        if trace_replay_step and profiler is not None:
+                            profiler.end(f"trace_execution_{decode_step_idx - 1}")
+                            logger.info(
+                                f"Trace execution t/s/user @ {decode_step_idx - 1}th token: "
+                                f"{1/profiler.get_duration(f'trace_execution_{decode_step_idx - 1}')}"
+                            )
 
                         if use_interleaved and prompt_user_ids is not None:
                             spec_tokens_next = spec_all[prompt_user_ids]
@@ -1677,6 +1844,234 @@ class DeepseekGenerator(WarmupForwardMixin):
         if return_last_hidden:
             return logits, last_hidden
         return logits  # [1, 1, seq_len, V]
+
+    def _capture_mtp_verify_trace(
+        self,
+        init_tokens: torch.Tensor,
+        positions: torch.Tensor,
+        batch_size_per_row: int,
+        page_tables: tuple[ttnn.Tensor, ...],
+        run_warmup: bool = True,
+    ) -> None:
+        assert self._mtp_verify_trace_id is None, "MTP verify trace already captured"
+
+        self._ensure_mtp_verify_trace_buffers(init_tokens, positions, page_tables)
+        if run_warmup:
+            logger.info("Running warm-up MTP verify decode step (no trace)...")
+            _ = self._decode_step_tt(
+                init_tokens,
+                positions,
+                batch_size_per_row=batch_size_per_row,
+                page_tables=page_tables,
+                return_hidden=True,
+            )
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.synchronize_device(self.mesh_device)
+
+        self.ccl.reset_sem_counters()
+        logger.info("Begin capturing MTP verify decode trace...")
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        rope_tensors = self.rope_setup.get_rot_mats_from_rot_idxs(self._mtp_verify_trace_rot_idxs)
+        self._mtp_verify_trace_output = RowBatchedModel.forward_decode(
+            x=self._mtp_verify_trace_tokens,
+            position_idxs=self._mtp_verify_trace_positions,
+            cfg=self.model_run_config_decode,
+            rope_tensors=rope_tensors,
+            page_tables=self._mtp_verify_trace_page_tables,
+            profile_decode=self.profile_decode,
+            return_hidden=True,
+        )
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        logger.info("MTP verify decode trace capture complete.")
+        self._mtp_verify_trace_id = trace_id
+
+    def _ensure_mtp_verify_trace_buffers(
+        self,
+        init_tokens: torch.Tensor,
+        positions: torch.Tensor,
+        page_tables: tuple[ttnn.Tensor, ...],
+    ) -> None:
+        if self._mtp_verify_trace_tokens is None:
+            self._mtp_verify_trace_tokens = self._tt_from_tokens_step(init_tokens)
+        if self._mtp_verify_trace_positions is None:
+            self._mtp_verify_trace_positions = ttnn.from_torch(
+                positions,
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+                dtype=ttnn.int32,
+            )
+        if self._mtp_verify_trace_rot_idxs is None:
+            self._mtp_verify_trace_rot_idxs = self.rope_setup.get_rot_idxs(positions)
+        if self._mtp_verify_trace_page_tables is None:
+            self._mtp_verify_trace_page_tables = page_tables
+
+    def _mtp_verify_decode_traced(
+        self,
+        tokens_step: torch.Tensor,
+        positions: torch.Tensor,
+        batch_size_per_row: int,
+        page_tables: tuple[ttnn.Tensor, ...],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        if self._mtp_verify_trace_id is None:
+            self._capture_mtp_verify_trace(tokens_step, positions, batch_size_per_row, page_tables)
+        else:
+            assert (
+                self._mtp_verify_trace_tokens is not None
+                and self._mtp_verify_trace_positions is not None
+                and self._mtp_verify_trace_rot_idxs is not None
+                and self._mtp_verify_trace_output is not None
+            )
+            host_tokens = ttnn.from_torch(
+                tokens_step.view(1, 1, -1).to(torch.int32),
+                device=None,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                dtype=ttnn.uint32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(host_tokens, self._mtp_verify_trace_tokens)
+
+            host_positions = ttnn.from_torch(
+                positions.to(torch.int32),
+                device=None,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+                dtype=ttnn.int32,
+            )
+            ttnn.copy_host_to_device_tensor(host_positions, self._mtp_verify_trace_positions)
+
+            host_rot_idxs = self.rope_setup.get_rot_idxs(positions, on_host=True)
+            ttnn.copy_host_to_device_tensor(host_rot_idxs, self._mtp_verify_trace_rot_idxs)
+
+            self.ccl.reset_sem_counters()
+            ttnn.execute_trace(self.mesh_device, self._mtp_verify_trace_id, cq_id=0, blocking=True)
+
+        assert self._mtp_verify_trace_output is not None
+        logits_tt, hidden_tt = self._mtp_verify_trace_output
+        logits = ttnn.to_torch(
+            logits_tt,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
+        )
+        hidden = self._hidden_tt_to_host_for_mtp(hidden_tt)
+        return logits.squeeze(0).squeeze(0), hidden
+
+    def _capture_mtp_predict_trace(
+        self,
+        hidden_states: torch.Tensor,
+        tokens_step: torch.Tensor,
+        positions: torch.Tensor,
+        page_table: ttnn.Tensor,
+        run_warmup: bool = True,
+    ) -> None:
+        assert self._mtp_predict_trace_id is None, "MTP predictor trace already captured"
+
+        self._ensure_mtp_predict_trace_buffers(hidden_states, tokens_step, positions, page_table)
+        if run_warmup:
+            logger.info("Running warm-up MTP predictor step (no trace)...")
+            _ = self._mtp_predict_logits(
+                hidden_states=hidden_states,
+                tokens_step=tokens_step,
+                positions=positions,
+                page_table=page_table,
+                use_trace=False,
+            )
+        ttnn.synchronize_device(self.mesh_device)
+        ttnn.synchronize_device(self.mesh_device)
+
+        self.ccl.reset_sem_counters()
+        logger.info("Begin capturing MTP predictor trace...")
+        trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        rope_tensors = self.rope_setup.get_rot_mats_from_rot_idxs(self._mtp_predict_trace_rot_idxs)
+        self._mtp_predict_trace_output = RowBatchedModel.forward_mtp_decode(
+            hidden_states=self._mtp_predict_trace_hidden,
+            token_ids=self._mtp_predict_trace_tokens,
+            position_idxs=self._mtp_predict_trace_positions,
+            cfg=self.model_run_config_decode,
+            rope_tensors=rope_tensors,
+            page_table=self._mtp_predict_trace_page_table,
+        )
+        ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
+        logger.info("MTP predictor trace capture complete.")
+        self._mtp_predict_trace_id = trace_id
+
+    def _ensure_mtp_predict_trace_buffers(
+        self,
+        hidden_states: torch.Tensor,
+        tokens_step: torch.Tensor,
+        positions: torch.Tensor,
+        page_table: ttnn.Tensor,
+    ) -> None:
+        if self._mtp_predict_trace_hidden is None:
+            self._mtp_predict_trace_hidden = self._tt_from_hidden_states_step(hidden_states, device=self.mesh_device)
+        if self._mtp_predict_trace_tokens is None:
+            self._mtp_predict_trace_tokens = self._tt_from_tokens_step(tokens_step)
+        if self._mtp_predict_trace_positions is None:
+            self._mtp_predict_trace_positions = ttnn.from_torch(
+                positions.to(torch.int32),
+                device=self.mesh_device,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+                dtype=ttnn.int32,
+            )
+        if self._mtp_predict_trace_rot_idxs is None:
+            self._mtp_predict_trace_rot_idxs = self.rope_setup.get_rot_idxs(positions)
+        if self._mtp_predict_trace_page_table is None:
+            self._mtp_predict_trace_page_table = page_table
+
+    def _mtp_predict_logits_traced(
+        self,
+        hidden_states: torch.Tensor | ttnn.Tensor,
+        tokens_step: torch.Tensor,
+        positions: torch.Tensor,
+        page_table: ttnn.Tensor | None = None,
+    ) -> torch.Tensor:
+        hidden_host = (
+            self._hidden_tt_to_host_for_mtp(hidden_states) if isinstance(hidden_states, ttnn.Tensor) else hidden_states
+        )
+        hidden_host = self._normalize_hidden_host_for_mtp(hidden_host)
+
+        mtp_page_table = page_table if page_table is not None else self._get_mtp_page_table()
+        if self._mtp_predict_trace_id is None:
+            self._capture_mtp_predict_trace(hidden_host, tokens_step, positions, mtp_page_table)
+        else:
+            assert (
+                self._mtp_predict_trace_hidden is not None
+                and self._mtp_predict_trace_tokens is not None
+                and self._mtp_predict_trace_positions is not None
+                and self._mtp_predict_trace_rot_idxs is not None
+                and self._mtp_predict_trace_output is not None
+            )
+            host_hidden = self._tt_from_hidden_states_step(hidden_host, device=None)
+            ttnn.copy_host_to_device_tensor(host_hidden, self._mtp_predict_trace_hidden)
+
+            host_tokens = ttnn.from_torch(
+                tokens_step.view(1, 1, -1).to(torch.int32),
+                device=None,
+                mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                dtype=ttnn.uint32,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+            )
+            ttnn.copy_host_to_device_tensor(host_tokens, self._mtp_predict_trace_tokens)
+
+            host_positions = ttnn.from_torch(
+                positions.to(torch.int32),
+                device=None,
+                mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+                dtype=ttnn.int32,
+            )
+            ttnn.copy_host_to_device_tensor(host_positions, self._mtp_predict_trace_positions)
+
+            host_rot_idxs = self.rope_setup.get_rot_idxs(positions, on_host=True)
+            ttnn.copy_host_to_device_tensor(host_rot_idxs, self._mtp_predict_trace_rot_idxs)
+
+            self.ccl.reset_sem_counters()
+            ttnn.execute_trace(self.mesh_device, self._mtp_predict_trace_id, cq_id=0, blocking=True)
+
+        assert self._mtp_predict_trace_output is not None
+        logits = ttnn.to_torch(
+            self._mtp_predict_trace_output,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
+        )
+        return logits.squeeze(0).squeeze(0)
 
     def _capture_decode_trace(
         self,

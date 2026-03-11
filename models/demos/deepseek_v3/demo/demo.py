@@ -300,20 +300,6 @@ def validate_model_path(model_path_str: str, require_safetensors: bool, require_
             raise SystemExit("No .safetensors files found in the model directory. " f"Checked: '{mp}'.")
 
 
-def _trace_mtp_conflict_requested(
-    *,
-    enable_trace: bool,
-    token_accuracy: bool,
-    profile_decode: bool,
-    max_new_tokens: int,
-    random_weights: bool,
-    enable_mtp: bool,
-) -> bool:
-    if not enable_trace or token_accuracy or profile_decode or max_new_tokens <= 1 or random_weights:
-        return False
-    return enable_mtp
-
-
 def run_demo(
     prompts: list[str] | None = None,
     *,
@@ -358,19 +344,6 @@ def run_demo(
         require_safetensors=not random_weights,
         require_tokenizer=not random_weights,
     )
-    if _trace_mtp_conflict_requested(
-        enable_trace=enable_trace,
-        token_accuracy=token_accuracy,
-        profile_decode=profile_decode,
-        max_new_tokens=max_new_tokens,
-        random_weights=random_weights,
-        enable_mtp=enable_mtp,
-    ):
-        raise SystemExit(
-            "--enable-trace is not supported with active MTP decode in the DeepSeek demo. "
-            "Use --mtp off or disable --enable-trace."
-        )
-
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
         raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, or TG.")
@@ -395,6 +368,8 @@ def run_demo(
         # that tracing completes without buffer exhaustion for your target workload.
         BASE_TRACE_REGION_BYTES = 38_070_272
         trace_region_size = BASE_TRACE_REGION_BYTES + int(0.20 * BASE_TRACE_REGION_BYTES)
+        if enable_mtp:
+            trace_region_size = max(trace_region_size, 134_217_728)
         logger.info(f"Trace region size set to {trace_region_size}")
         mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
     else:
