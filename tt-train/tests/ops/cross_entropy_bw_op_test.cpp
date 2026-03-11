@@ -290,7 +290,8 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
         }
     }
 
-    auto input = ttml::autograd::create_tensor(core::from_xtensor(input_tensor, &autograd::ctx().get_device()));
+    auto input = ttml::autograd::create_tensor(
+        core::from_xtensor(input_tensor, &autograd::ctx().get_device()), /* requires_grad */ true);
     auto target = ttml::autograd::create_tensor(core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR));
 

@@ -61,8 +61,10 @@ TEST_F(RMSNormOpTest, RMSNorm_Small_Backward) {
     [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
-    auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
-    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, W}), &autograd::ctx().get_device()));
+    auto example_tensor = autograd::create_tensor(
+        core::from_xtensor(example_xtensor, &autograd::ctx().get_device()), /* requires_grad */ true);
+    auto gamma = autograd::create_tensor(
+        core::ones(ttnn::Shape({1, 1, 1, W}), &autograd::ctx().get_device()), /* requires_grad */ true);
 
     auto result = ops::rmsnorm(example_tensor, gamma, 0.0078125F);
     auto result_xtensor = core::to_xtensor(result->get_value());
@@ -134,8 +136,10 @@ TEST_F(RMSNormOpTest, NIGHTLY_RMSNorm_Backward_Batch) {
     xt::xarray<float> a_xarray = xt::xarray<float>::from_shape(a_shape);
     std::generate(a_xarray.begin(), a_xarray.end(), [cur = 0.0F]() mutable { return (cur++); });
 
-    auto example_tensor = autograd::create_tensor(core::from_xtensor(a_xarray, &autograd::ctx().get_device()));
-    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, 5}), &autograd::ctx().get_device()));
+    auto example_tensor =
+        autograd::create_tensor(core::from_xtensor(a_xarray, &autograd::ctx().get_device()), /* requires_grad */ true);
+    auto gamma = autograd::create_tensor(
+        core::ones(ttnn::Shape({1, 1, 1, 5}), &autograd::ctx().get_device()), /* requires_grad */ true);
 
     auto result = ops::rmsnorm(example_tensor, gamma, 0.0078125F);
     auto result_xtensor = core::to_xtensor(result->get_value());
@@ -184,8 +188,10 @@ TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Small_Backward) {
     [[maybe_unused]] uint32_t N = 1, C = 1, H = 1, W = 8;
 
     xt::xarray<float> example_xtensor = {{{{1.F, 2.F, 3.F, 4.F, 1.F, 2.F, 3.F, 4.F}}}};
-    auto example_tensor = autograd::create_tensor(core::from_xtensor(example_xtensor, &autograd::ctx().get_device()));
-    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, W}), &autograd::ctx().get_device()));
+    auto example_tensor = autograd::create_tensor(
+        core::from_xtensor(example_xtensor, &autograd::ctx().get_device()), /* requires_grad */ true);
+    auto gamma = autograd::create_tensor(
+        core::ones(ttnn::Shape({1, 1, 1, W}), &autograd::ctx().get_device()), /* requires_grad */ true);
 
     auto result = ops::rmsnorm_composite(example_tensor, gamma, 0.0078125F);
     auto result_xtensor = core::to_xtensor(result->get_value());
@@ -257,8 +263,10 @@ TEST_F(RMSNormOpTest, NIGHTLY_CompositeRMSNorm_Backward_Batch) {
     xt::xarray<float> a_xarray = xt::xarray<float>::from_shape(a_shape);
     std::generate(a_xarray.begin(), a_xarray.end(), [cur = 0.0F]() mutable { return (cur++); });
 
-    auto example_tensor = autograd::create_tensor(core::from_xtensor(a_xarray, &autograd::ctx().get_device()));
-    auto gamma = autograd::create_tensor(core::ones(ttnn::Shape({1, 1, 1, 5}), &autograd::ctx().get_device()));
+    auto example_tensor =
+        autograd::create_tensor(core::from_xtensor(a_xarray, &autograd::ctx().get_device()), /* requires_grad */ true);
+    auto gamma = autograd::create_tensor(
+        core::ones(ttnn::Shape({1, 1, 1, 5}), &autograd::ctx().get_device()), /* requires_grad */ true);
 
     auto result = ops::rmsnorm_composite(example_tensor, gamma, 0.0078125F);
     auto result_xtensor = core::to_xtensor(result->get_value());
@@ -326,13 +334,13 @@ static void CompareKernelVsComposite(const std::vector<uint32_t>& shape) {
         gamma_data, []() { return std::uniform_real_distribution<float>(0.0F, 1.0F); }, seed2);
 
     // Test forward pass - kernel vs composite
-    auto x_kernel = autograd::create_tensor(core::from_xtensor(x_data, device));
-    auto gamma_kernel = autograd::create_tensor(core::from_xtensor(gamma_data, device));
+    auto x_kernel = autograd::create_tensor(core::from_xtensor(x_data, device), /* requires_grad */ true);
+    auto gamma_kernel = autograd::create_tensor(core::from_xtensor(gamma_data, device), /* requires_grad */ true);
     auto result_kernel = ops::rmsnorm(x_kernel, gamma_kernel, eps);
     auto result_kernel_xtensor = core::to_xtensor(result_kernel->get_value());
 
-    auto x_composite = autograd::create_tensor(core::from_xtensor(x_data, device));
-    auto gamma_composite = autograd::create_tensor(core::from_xtensor(gamma_data, device));
+    auto x_composite = autograd::create_tensor(core::from_xtensor(x_data, device), /* requires_grad */ true);
+    auto gamma_composite = autograd::create_tensor(core::from_xtensor(gamma_data, device), /* requires_grad */ true);
     auto result_composite = ops::rmsnorm_composite(x_composite, gamma_composite, eps);
     auto result_composite_xtensor = core::to_xtensor(result_composite->get_value());
 
