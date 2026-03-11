@@ -95,7 +95,7 @@ void kernel_main() {
 #endif
 #elif COMPRESSED_MM_IMPL == 0
     // Runtime path: use compressed MOP init (with bfp2 barriers)
-    compressed::custom_mm_compressed_block_init_short<true, true>(cb_in0, cb_in1, cb_out);
+    compressed::custom_mm_compressed_block_init_short<true, true>(cb_in0, cb_in1, cb_out, out_w);
     // Runtime loop: read packed pairs from L1 tensor
     constexpr uint32_t fmt_l1_addr = get_named_compile_time_arg_val("fmt_l1_addr");
     compressed::custom_mm_compressed_block_runtime<num_tiles_k, out_w>(
