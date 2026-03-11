@@ -27,7 +27,6 @@ constexpr uint32_t cb_out = get_compile_time_arg_val(9);
 
 constexpr uint32_t cb_h_acc = get_compile_time_arg_val(10);
 
-// This function relies on untilizing NUM_TILES_IN_TILIZED_CHUNK tiles so we pad up to that amount
 FORCE_INLINE void pack_block_rows_into_tiles(uint32_t cb_in, uint32_t cb_out, uint32_t num_tiles) {
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
@@ -35,30 +34,29 @@ FORCE_INLINE void pack_block_rows_into_tiles(uint32_t cb_in, uint32_t cb_out, ui
     untilize_init(cb_in);
 
     cb_wait_front(cb_in, num_tiles);
-    cb_reserve_back(cb_out, NUM_TILES_IN_TILIZED_CHUNK);
+    cb_reserve_back(cb_out, num_tiles);
 
-    untilize_block(cb_in, NUM_TILES_IN_TILIZED_CHUNK, cb_out);
+    untilize_block(cb_in, num_tiles, cb_out);
 
-    cb_push_back(cb_out, NUM_TILES_IN_TILIZED_CHUNK);
+    cb_push_back(cb_out, num_tiles);
     cb_pop_front(cb_in, num_tiles);
 
     untilize_uninit(cb_in);
 }
 
-// This function relies on tilizing NUM_TILES_IN_TILIZED_CHUNK tiles so we pad up to that amount
 FORCE_INLINE void pack_block_tiles_into_rows(uint32_t cb_in, uint32_t cb_out, uint32_t num_tiles) {
     reconfig_data_format_srca(cb_in);
     pack_reconfig_data_format(cb_out);
 
-    tilize_init(cb_in, NUM_TILES_IN_TILIZED_CHUNK, cb_out);
+    tilize_init(cb_in, num_tiles, cb_out);
 
-    cb_wait_front(cb_in, NUM_TILES_IN_TILIZED_CHUNK);
+    cb_wait_front(cb_in, num_tiles);
     cb_reserve_back(cb_out, num_tiles);
 
-    tilize_block(cb_in, NUM_TILES_IN_TILIZED_CHUNK, cb_out);
+    tilize_block(cb_in, num_tiles, cb_out);
 
     cb_push_back(cb_out, num_tiles);
-    cb_pop_front(cb_in, NUM_TILES_IN_TILIZED_CHUNK);
+    cb_pop_front(cb_in, num_tiles);
 
     tilize_uninit(cb_in, cb_out);
 }
@@ -176,7 +174,7 @@ void kernel_main() {
             pack_block_rows_into_tiles(cb_a_in, cb_a_tilize_in, remaining_tiles_in_chunk);
             pack_block_rows_into_tiles(cb_bx_in, cb_bx_tilize_in, remaining_tiles_in_chunk);
 
-            compute_ht(cb_a_tilize_in, cb_bx_tilize_in, cb_tilize_out, NUM_TILES_IN_TILIZED_CHUNK);
+            compute_ht(cb_a_tilize_in, cb_bx_tilize_in, cb_tilize_out, remaining_tiles_in_chunk);
 
             pack_block_tiles_into_rows(cb_tilize_out, cb_out, remaining_tiles_in_chunk);
         }
