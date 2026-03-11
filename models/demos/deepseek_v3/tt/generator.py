@@ -632,33 +632,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         )
         return self._normalize_hidden_host_for_mtp(hidden)
 
-    def _tt_from_positions(self, positions: torch.Tensor) -> Tuple[dict, ttnn.Tensor]:
-        """Return rope tensors dict and TTNN positions shard for decode.
-
-        positions: [B] int tensor
-        returns: (rope_tensors, tt_positions)
-        """
-        # Build RoPE tensors for current positions
-        rope_setup = RotarySetup(
-            device=self.mesh_device, batch_size_per_row=self.batch_size_per_row, hf_config=self.hf_config
-        )
-        rope_mats = rope_setup.get_rot_mats_table(seq_len=1)
-        rope_tensors = {
-            "cos_matrix": rope_mats["cos_matrix"],
-            "sin_matrix": rope_mats["sin_matrix"],
-            "trans_matrix": rope_mats["trans_matrix"],
-        }
-
-        # Create TTNN position tensor as INT32 with the same sharding pattern used in tests
-        mesh_shape = list(self.mesh_device.shape)
-        tt_positions = ttnn.from_torch(
-            positions.to(torch.int32),
-            device=self.mesh_device,
-            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
-            dtype=ttnn.int32,
-        )
-        return rope_tensors, tt_positions
-
     def _get_page_tables(self) -> tuple[ttnn.Tensor, ...]:
         if hasattr(self, "page_tables_tt") and self.page_tables_tt is not None:
             return self.page_tables_tt
@@ -829,36 +802,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         ttnn.deallocate(aliased_tt)
         return out
 
-    def _build_mtp_verify_mtp_page_table(
-        self,
-        num_prompts: int,
-        verify_offset: int,
-        prompt_indices: List[int] | None = None,
-        interleaved: bool = False,
-    ) -> ttnn.Tensor:
-        """Build an aliased MTP page table where selected verify lanes alias prompt lanes."""
-        if num_prompts <= 0:
-            return ttnn.clone(self._get_mtp_page_table())
-
-        _ = self._get_mtp_page_table()
-        if self.mtp_page_table_host is None:
-            raise RuntimeError("MTP base page table host tensor is not initialized.")
-        base_page_table = self.mtp_page_table_host.to(torch.int32)
-        alias_page_table = _build_verify_alias_page_table_host(
-            base_page_table=base_page_table,
-            num_prompts=num_prompts,
-            verify_offset=verify_offset,
-            prompt_indices=prompt_indices,
-            interleaved=interleaved,
-        )
-
-        return MLA2D.create_page_table(
-            paged_config=self.paged_config,
-            mesh_device=self.mesh_device,
-            page_table=alias_page_table,
-            batch_size=self.batch_size_per_row,
-        )
-
     def _mtp_predict_logits(
         self,
         hidden_states: torch.Tensor | ttnn.Tensor,
@@ -943,6 +886,14 @@ class DeepseekGenerator(WarmupForwardMixin):
                 pad_id = eos_id if eos_id is not None else 0
             pad_id = int(pad_id)
         return int(pad_id)
+
+    @staticmethod
+    def _ordinal(n: int) -> str:
+        if 10 <= (n % 100) <= 20:
+            suffix = "th"
+        else:
+            suffix = {1: "st", 2: "nd", 3: "rd"}.get(n % 10, "th")
+        return f"{n}{suffix}"
 
     def _pad_batch(self, tokens_list: List[List[int]], batch_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """Pad/pack a list of token id sequences to batch of size batch_size.
@@ -1099,9 +1050,10 @@ class DeepseekGenerator(WarmupForwardMixin):
                     signpost(header="prefill")
                 profiler.start("inference_prefill")
                 last_logits = []
+                skipped_prefill_users = 0
                 for user_id in range(num_of_users):
                     if lengths[user_id] == 0:
-                        logger.info(f"Skipping prefill for user_id: {user_id} as prompt length is 0")
+                        skipped_prefill_users += 1
                         last_logits.append(torch.zeros(self.hf_config.vocab_size))
                         continue
                     logger.info(f"Running prefill for user_id: {user_id}")
@@ -1132,6 +1084,8 @@ class DeepseekGenerator(WarmupForwardMixin):
                     last_logits.append(user_out[0, 0, prompt_len - 1, :])
                     self.ccl.reset_sem_counters()
                 last_logits = torch.stack(last_logits)
+                if skipped_prefill_users > 0:
+                    logger.info(f"Skipped prefill for {skipped_prefill_users} user(s) with empty prompts.")
                 profiler.end("inference_prefill")
                 if self.signpost:
                     signpost(header="prefill")
@@ -1459,7 +1413,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                         if trace_replay_step and profiler is not None:
                             profiler.end(f"trace_execution_{decode_step_idx - 1}")
                             logger.info(
-                                f"Trace execution t/s/user @ {decode_step_idx - 1}th token: "
+                                f"Trace execution t/s/user @ {self._ordinal(decode_step_idx - 1)} token: "
                                 f"{1/profiler.get_duration(f'trace_execution_{decode_step_idx - 1}')}"
                             )
 
@@ -1866,7 +1820,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                 return_hidden=True,
             )
         ttnn.synchronize_device(self.mesh_device)
-        ttnn.synchronize_device(self.mesh_device)
 
         self.ccl.reset_sem_counters()
         logger.info("Begin capturing MTP verify decode trace...")
@@ -1974,7 +1927,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                 page_table=page_table,
                 use_trace=False,
             )
-        ttnn.synchronize_device(self.mesh_device)
         ttnn.synchronize_device(self.mesh_device)
 
         self.ccl.reset_sem_counters()
@@ -2214,7 +2166,8 @@ class DeepseekGenerator(WarmupForwardMixin):
             if profiler is not None:
                 profiler.end(f"trace_execution_{gen_idx}")
                 logger.info(
-                    f"Trace execution t/s/user @ {gen_idx}th token: {1/profiler.get_duration(f'trace_execution_{gen_idx}')}"
+                    f"Trace execution t/s/user @ {self._ordinal(gen_idx)} token: "
+                    f"{1/profiler.get_duration(f'trace_execution_{gen_idx}')}"
                 )
             assert self._trace_output is not None
             logits = ttnn.to_torch(
