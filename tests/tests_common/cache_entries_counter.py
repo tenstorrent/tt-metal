@@ -17,10 +17,8 @@ class CacheEntriesCounter:
     @contextmanager
     def measure(self):
         before = self.device.num_program_cache_entries()
-        print(f"[before measure]device.num_program_cache_entries(): {before}")
         yield
         self.total += self.device.num_program_cache_entries() - before
-        print(f"[after measure]device.num_program_cache_entries(): {self.device.num_program_cache_entries()}")
 
     def decorator(self, fn):
         from functools import wraps
