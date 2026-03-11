@@ -32,7 +32,6 @@ from models.demos.gpt_oss.tests.test_factory import TestFactory, parametrize_mes
 
 # Import GPT-OSS components using our refactored patterns
 from models.demos.gpt_oss.tt.common import create_tt_model
-from models.demos.gpt_oss.tt.model_config import ModelArgs
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
 from models.tt_transformers.demo.simple_text_demo import create_tt_page_table, load_inputs
@@ -252,7 +251,7 @@ def prepare_gpt_oss_generator_args(
             1,  # repeat_batches
             8 * 1024,  # max_seq_len
             200,  # max_generated_tokens
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 8 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
             True,  # enable_decode_trace
             True,  # enable_prefill_trace
@@ -269,7 +268,7 @@ def prepare_gpt_oss_generator_args(
             1,  # repeat_batches
             16 * 1024,  # max_seq_len
             200,  # max_generated_tokens
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 16 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
             True,  # enable_decode_trace
             True,  # enable_prefill_trace
@@ -286,7 +285,7 @@ def prepare_gpt_oss_generator_args(
             1,  # repeat_batches
             32 * 1024,  # max_seq_len
             200,  # max_generated_tokens
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 32 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
             True,  # enable_decode_trace
             True,  # enable_prefill_trace
@@ -303,7 +302,7 @@ def prepare_gpt_oss_generator_args(
             1,  # repeat_batches
             64 * 1024,  # max_seq_len
             200,  # max_generated_tokens
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 64 * 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding),
             True,  # enable_decode_trace
             False,  # enable_prefill_trace
@@ -338,7 +337,7 @@ def prepare_gpt_oss_generator_args(
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
             200,  # max_generated_tokens
-            {"page_block_size": 64, "page_max_num_blocks_per_dp": 128 * 1024 // 64},  # page_params
+            {"page_block_size": 64, "page_max_num_blocks_per_dp": 1024 // 64},  # page_params
             {"temperature": 0, "top_p": 0.08},  # sampling_params (greedy decoding)
             True,  # enable_decode_trace
             True,  # enable_prefill_trace
@@ -421,32 +420,8 @@ def test_gpt_oss_demo(
     run_in_ci,
     is_ci_env,
     request,
+    state_dict,
 ):
-    model_path = os.getenv("HF_MODEL", None)
-
-    # Set to False to optimize for execution time.
-    # If True, will always try to load HF weights if path is set.
-    load_model = False
-    if load_model:
-        if model_path is None:
-            logger.warning(
-                "HF_MODEL environment variable not set. Skipping model loading. Will attempt loading from cache"
-            )
-            state_dict = {}
-        else:
-            state_dict = ModelArgs.load_state_dict(model_path, dummy_weights=False)
-    else:
-        assert model_path is not None, "HF_MODEL environment variable must be set"
-        dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[ttnn.bfloat8_b]
-        # Take best guess at model cache path
-        cache_path = os.path.join(model_path, f"tensor_cache_{dtype_str}_{mesh_device.shape}")
-        if os.path.exists(cache_path):
-            state_dict = {}
-        else:
-            logger.warning(f"Model cache not found at {cache_path}. Loading HF weights.")
-            model_path = os.getenv("HF_MODEL", None)
-            state_dict = ModelArgs.load_state_dict(model_path, dummy_weights=False)
-
     """GPT-OSS demo using full tt_transformers generation pipeline"""
     if batch_size > 1 and mesh_shape[0] == 1:
         pytest.skip(
@@ -460,7 +435,7 @@ def test_gpt_oss_demo(
     mesh_device = mesh_device.create_submesh(ttnn.MeshShape(mesh_shape))
 
     # Use our refactored TestFactory for consistent setup
-    setup = TestFactory.setup_test(mesh_device, use_real_weights=load_model)
+    setup = TestFactory.setup_test(mesh_device, use_real_weights=False)
     config = setup["config"]
     mesh_config = setup["mesh_config"]
 
