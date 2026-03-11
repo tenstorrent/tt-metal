@@ -131,6 +131,7 @@ struct Core {
 };
 
 void kernel_main() {
+    DPRINT << "Starting decoder block kernel" << ENDL();
     // ============================================================================
     // NCRISC (Reader + Mcast Receiver) - ReaderConfigDescriptor compiles as NCRISC
     // Named compile-time args: rmsnorm reader, mcast receiver, matmul reader, gather sender
@@ -1967,6 +1968,7 @@ void kernel_main() {
         moe_mcast;
 
     auto mla_body = [&]() __attribute__((always_inline)) __attribute__((always_inline)) {
+        DPRINT << "Starting MLA" << ENDL();
         // ========================================================================
         // CCL Broadcast (optional, skip if single-device mode)
         // ========================================================================
@@ -1977,6 +1979,7 @@ void kernel_main() {
                 bcast(bcast_args);
             }
         }
+        DPRINT << "CCL Broadcast done" << ENDL();
 
 #if defined(COMPILE_FOR_NCRISC)
         if constexpr (Core::is_input_core) {
@@ -2000,6 +2003,7 @@ void kernel_main() {
 
         using FlashMLAOp = deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core>;
 
+        DPRINT << "Starting Attention" << ENDL();
         if (!skip_attention) {
             // ====================================================================
             // Input core: RMSNorm + Mcast send
@@ -2097,7 +2101,7 @@ void kernel_main() {
                     create_q_heads(create_q_heads_args);
                 }
             }
-
+            DPRINT << "Starting KV Cache Branch" << ENDL();
             // ====================================================================
             // KV Cache Branch
             // Non-owning SP devices skip the entire branch and just signal the
@@ -2177,10 +2181,12 @@ void kernel_main() {
                 FlashMLAOp::push_dummy_sdpa_inputs();
             }
         }
+        DPRINT << "Flash MLA done" << ENDL();
 
         // ========================================================================
         // Post SDPA: Reduce-to-All + Matmul4 + Gather2 + Mcast3 + Matmul5 + Gather3 + CCL All-Reduce
         // ========================================================================
+        DPRINT << "Starting Post SDPA" << ENDL();
         {
             DeviceZoneScopedN("POST_SDPA");
             if constexpr (Core::is_sdpa_worker_core) {
@@ -2352,6 +2358,7 @@ void kernel_main() {
 
     auto moe_body = [&]() {
         // 0. Residual Mcast: Broadcast input as residual to mcast receiver cores (pop_src=false)
+        DPRINT << "Starting MoE"
         {
             DeviceZoneScopedN("RESIDUAL_MCAST");
             residual_mcast(moe.routed.residual_mcast_args);
@@ -2440,6 +2447,7 @@ void kernel_main() {
             expert_scale_mcast(moe.routed.expert_scale_mcast_args);
         }
 #endif  // ENABLE_ROUTING
+        DPRINT << "Starting Shared Expert" << ENDL();
 
         // 5c. Shared Expert: Gate Gather (A) — 64 gate cores send to sender core
         //     Uses MoeGather (sender=BRISC) to avoid NOC contention with DRAM matmul (NCRISC)
@@ -2629,6 +2637,7 @@ void kernel_main() {
 
         // 13. ReduceToOneB1: Multi-device reduce-to-one across 4x2 mesh
         //     Reduces final_output from all 8 devices to ROOT1 device
+        DPRINT << "Starting ReduceToOneB1" << ENDL();
 #ifdef ENABLE_REDUCE_TO_ONE
         {
             DeviceZoneScopedN("REDUCE_TO_ONE");
@@ -2668,6 +2677,7 @@ void kernel_main() {
     // ====================================================================
     {
         DeviceZoneScopedN("MCAST_INIT");
+        DPRINT << "Starting Mcast Init" << ENDL();
         mcast.init(mcast_args);
     }
 

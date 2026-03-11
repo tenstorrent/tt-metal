@@ -571,6 +571,7 @@ def create_decoder_block_tensors(
 
     shard_cores_list = ttnn.corerange_to_cores(gate_proj_core_ranges, row_wise=True)
     aggregator_core = shard_cores_list[0]
+    print("Aggregator core", aggregator_core)
     reduce_output_shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(aggregator_core, aggregator_core)})
     reduce_output_mem = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED,
