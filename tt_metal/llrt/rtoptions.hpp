@@ -321,6 +321,9 @@ class RunTimeOptions {
     // Dump JIT build commands to stdout for debugging
     bool dump_build_commands = false;
 
+    // Disable use of pre-compiled firmware and fall back to JIT compilation.
+    bool disable_precompiled_fw = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -719,6 +722,9 @@ public:
     bool get_disable_xip_dump() const { return disable_xip_dump; }
 
     bool get_dump_build_commands() const { return dump_build_commands; }
+
+    bool get_disable_precompiled_fw() const { return disable_precompiled_fw; }
+    void set_disable_precompiled_fw(bool disable) { disable_precompiled_fw = disable; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
