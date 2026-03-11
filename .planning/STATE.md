@@ -2,8 +2,8 @@
 
 ## Current Position
 - **Phase:** 01-fabric-auto-packetization
-- **Current Plan:** 07 (checkpoint pending)
-- **Status:** Checkpoint - Hardware verification pending
+- **Current Plan:** 08 (complete)
+- **Status:** Phase complete (all 8 plans done)
 
 ## Progress
 - Plan 01: COMPLETE (test infrastructure scaffolding)
@@ -12,7 +12,8 @@
 - Plan 04: COMPLETE (mesh/api.h unicast + multicast renames)
 - Plan 05: COMPLETE (mesh/api.h scatter + fused-scatter renames)
 - Plan 06: COMPLETE (mesh/api.h new addrgen overloads)
-- Plan 07: IN PROGRESS (Task 1 complete, Task 2 checkpoint pending)
+- Plan 07: COMPLETE (integration test runners + device kernels)
+- Plan 08: COMPLETE (gap closure - compile-probe kernels for 7 missing wrapper families)
 
 ## Decisions
 - Used (c) 2025 Tenstorrent AI ULC copyright for new test files
@@ -29,6 +30,8 @@
 - _with_state scatter large-page path sets noc_send_type to NOC_UNICAST_WRITE before fallback
 - Raw-size kernels pass NOC address components to device, compute 64-bit addr on-device via safe_get_noc_addr
 - Reused rx_addrgen.cpp receiver kernel for completion signaling (protocol-agnostic semaphore wait)
+- Used second Program objects in compile-only tests to work around 2-kernel-per-program RISCV limit
+- Compile-probe kernels use dummy args for template instantiation (not runtime-correct)
 
 ## Blockers
 None
@@ -44,7 +47,8 @@ None
 | 01    | 05   | 6min     | 2     | 1     |
 | 01    | 06   | 5min     | 2     | 1     |
 | 01    | 07   | 7min     | 1     | 5     |
+| 01    | 08   | 3min     | 2     | 4     |
 
 ## Last Session
-- **Timestamp:** 2026-03-11T01:51:43Z
-- **Stopped At:** 01-07-PLAN.md Task 2 checkpoint (hardware verification pending)
+- **Timestamp:** 2026-03-11T03:39:05Z
+- **Stopped At:** Completed 01-08-PLAN.md (all phase 01 plans complete)
