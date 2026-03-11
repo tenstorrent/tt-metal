@@ -3,8 +3,8 @@
   "op_path": "ttnn/ttnn/operations/softmax",
   "spec_path": "ttnn/ttnn/operations/softmax/op_design.md",
   "layout": "TILE_LAYOUT",
-  "current_stage_index": 1,
-  "last_passing_commit": "6d8b0016157d4d9a77cb765e3a6c12923364225c",
+  "current_stage_index": 2,
+  "last_passing_commit": "adeea77856a247e568ca1d13ab044b1029126cff",
   "stages": [
     {
       "name": "data_pipeline",
@@ -65,12 +65,28 @@
       "output_shape_expr": "",
       "compare_slice": "",
       "dtype_parametrize": "",
-      "status": "in_progress",
-      "commit": null,
+      "status": "passed",
+      "commit": "adeea77856a247e568ca1d13ab044b1029126cff",
       "attempts": 0,
-      "free_retries": 0,
+      "free_retries": 1,
       "max_attempts": 6,
-      "failure_history": []
+      "failure_history": [
+        {
+          "classification": "compilation_error",
+          "summary": "Compilation error: etovic/2026_03_11/1702_mstaletovic_NewOrchestrator/clones/softmax_run1/tt-metal/ttnn/ttnn/operations/softmax/kernels/compute_softmax.cpp:11:10: fatal error: api/compute/eltwise_unary/sfpu/exp.h: No su",
+          "details": {
+            "error_snippet": "etovic/2026_03_11/1702_mstaletovic_NewOrchestrator/clones/softmax_run1/tt-metal/ttnn/ttnn/operations/softmax/kernels/compute_softmax.cpp:11:10: fatal error: api/compute/eltwise_unary/sfpu/exp.h: No such file or directory\n   11 | #include \"api/compute/eltwise_unary/sfpu/exp.h\"\n      |          ^~~~~~"
+          },
+          "suggested_action": "Check includes and template parameters. Verify kernel API signatures. Ensure compute_kernel_hw_startup() is called before helpers.",
+          "attempt": 0,
+          "free_retries": 1,
+          "cost": "FREE",
+          "stage": "exp_only",
+          "remaining_attempts": 6,
+          "remaining_free_retries": 9,
+          "budget_exhausted": false
+        }
+      ]
     },
     {
       "name": "softmax_dim_w",
@@ -99,7 +115,7 @@
       "output_shape_expr": "",
       "compare_slice": "",
       "dtype_parametrize": "",
-      "status": "pending",
+      "status": "in_progress",
       "commit": null,
       "attempts": 0,
       "free_retries": 0,

@@ -2,12 +2,13 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Softmax - Compute Kernel
-// Stage 1 (data_pipeline): Simple copy from c_0 to c_16 (identity passthrough)
+// Stage 2 (exp_only): Copy tile from c_0, apply exp_tile, pack to c_16
 
 #include "api/compute/common.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/pack.h"
 #include "api/compute/cb_api.h"
+#include "api/compute/eltwise_unary/exp.h"
 
 constexpr uint32_t cb_input = tt::CBIndex::c_0;
 constexpr uint32_t cb_scaler = tt::CBIndex::c_1;
@@ -23,6 +24,7 @@ void kernel_main() {
     // Initialize compute hardware
     compute_kernel_hw_startup(cb_input, cb_scaler, cb_output);
     copy_tile_init(cb_input);
+    exp_tile_init<false>();  // exact exp (not approximate)
 
     for (uint32_t t = 0; t < num_tiles; ++t) {
         // Wait for input tile
@@ -31,9 +33,10 @@ void kernel_main() {
         // Reserve output space
         cb_reserve_back(cb_output, 1);
 
-        // Copy tile from c_0 to c_16 via DST
+        // Copy tile to DST, apply exp, pack to output
         tile_regs_acquire();
         copy_tile(cb_input, 0, 0);  // CB tile index 0 -> DST register 0
+        exp_tile<false>(0);         // exact exp in-place on DST[0]
         tile_regs_commit();
 
         tile_regs_wait();
