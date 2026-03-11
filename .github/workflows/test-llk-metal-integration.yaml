@@ -54,7 +54,8 @@ on:
         description: "Name of the test branch created"
         value: ${{ jobs.setup.outputs.test-branch-name }}
       all-post-commit-result:
-        description: "Result of All post-commit tests (status:url format)"
+        description: 'Result of Sanity tests (status:url format)'
+
         value: ${{ jobs.run-tests.outputs.all-post-commit-result }}
       blackhole-result:
         description: "Result of Blackhole post-commit tests (status:url format)"
@@ -123,7 +124,7 @@ jobs:
         run: |
           echo "🔍 Proactively cancelling any previous spawned workflows for this branch..."
           MIRRORED_BRANCH="${{ inputs.mirrored_branch }}"
-          SPAWNED_WORKFLOWS=("all-post-commit-workflows.yaml" "blackhole-post-commit.yaml" "tt-metal-l2-nightly.yaml" "perf-device-models.yaml")
+          SPAWNED_WORKFLOWS=("sanity-tests.yaml" "blackhole-post-commit.yaml" "tt-metal-l2-nightly.yaml" "perf-device-models.yaml")
           STATUSES=("queued" "in_progress")
 
           for workflow in "${SPAWNED_WORKFLOWS[@]}"; do
@@ -240,8 +241,8 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - workflow: "all-post-commit-workflows.yaml"
-            name: "All Post Commit Workflows"
+          - workflow: "sanity-tests.yaml"
+            name: "Sanity tests"
             output-key: "all-post-commit-result"
             should-run: ${{ inputs.run_all_post_commit }}
             arch: "" # all-post-commit doesn't use architecture parameter
@@ -251,7 +252,7 @@ jobs:
             should-run: ${{ inputs.run_blackhole_post_commit }}
             arch: "" # blackhole-post-commit doesn't use architecture parameter
           - workflow: "tt-metal-l2-nightly.yaml"
-            name: "TT-Metal L2 Nightly APC"
+            name: "TT-Metal L2 Nightly and Sanity"
             output-key: "tt-metal-l2-nightly-result"
             should-run: ${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}
             arch: "dynamic" # architecture determined at runtime based on enabled tests
@@ -430,7 +431,7 @@ jobs:
           PARENT_BRANCH_NAME: ${{ needs.setup.outputs.parent-branch-name }}
         run: |
           echo "🔄 Parent workflow cancelled - cleaning up spawned workflows..."
-          SPAWNED_WORKFLOWS=("all-post-commit-workflows.yaml" "blackhole-post-commit.yaml" "tt-metal-l2-nightly.yaml" "perf-device-models.yaml")
+          SPAWNED_WORKFLOWS=("sanity-tests.yaml" "blackhole-post-commit.yaml" "tt-metal-l2-nightly.yaml" "perf-device-models.yaml")
           STATUSES=("queued" "in_progress")
 
           for workflow in "${SPAWNED_WORKFLOWS[@]}"; do
@@ -496,7 +497,7 @@ jobs:
             echo "**Test Branch:** ${{ needs.setup.outputs.test-branch-name }}" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Test Configuration:**" >> $GITHUB_STEP_SUMMARY
-            echo "- All Post-Commit Tests: ${{ inputs.run_all_post_commit && '🟢 Enabled' || '⚪ Disabled' }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Sanity tests: ${{ inputs.run_all_post_commit && '🟢 Enabled' || '⚪ Disabled' }}" >> $GITHUB_STEP_SUMMARY
             echo "- Blackhole Post-Commit Tests: ${{ inputs.run_blackhole_post_commit && '🟢 Enabled' || '⚪ Disabled' }}" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
 
@@ -547,9 +548,9 @@ jobs:
             }
 
             # Check results for each workflow type
-            check_workflow_result "all-post-commit-workflows.yaml" "All Post-Commit Tests" "${{ inputs.run_all_post_commit }}"
+            check_workflow_result "sanity-tests.yaml" "Sanity tests" "${{ inputs.run_all_post_commit }}"
             check_workflow_result "blackhole-post-commit.yaml" "Blackhole Post-Commit Tests" "${{ inputs.run_blackhole_post_commit }}"
-            check_workflow_result "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly APC Tests" "${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}"
+            check_workflow_result "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly Tests and Sanity" "${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}"
             check_workflow_result "perf-device-models.yaml" "Device Perf Regressions" "${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}"
 
             echo "" >> $GITHUB_STEP_SUMMARY

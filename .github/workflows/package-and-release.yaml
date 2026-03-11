@@ -192,7 +192,7 @@ jobs:
 
       - name: Publish to PyPI (Trusted Publishing)
         if: ${{ !inputs.dry-run }}
-        uses: pypa/gh-action-pypi-publish@release/v1
+        uses: pypa/gh-action-pypi-publish@ed0c539abdc6b55ad89f3ea7b8e96860a5ddef80 # v1.13.0
 
   create-changelog:
     needs: [create-tag, release-precheck]

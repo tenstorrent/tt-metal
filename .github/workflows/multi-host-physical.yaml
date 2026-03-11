@@ -104,7 +104,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
@@ -159,7 +158,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
@@ -215,7 +213,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
