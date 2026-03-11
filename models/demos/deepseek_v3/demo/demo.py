@@ -253,7 +253,7 @@ def create_parser() -> argparse.ArgumentParser:
         "--mtp-skip-on-accept",
         choices=["auto", "on", "off"],
         default="auto",
-        help="Control MTP skip-on-accept behavior: auto (env/default), on (force), off (disable).",
+        help="Control MTP skip-on-accept behavior: auto (default), on (force), off (disable).",
     )
     p.add_argument(
         "--compare-output",

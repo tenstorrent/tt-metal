@@ -38,10 +38,6 @@ from models.perf.benchmarking_utils import BenchmarkProfiler
 MAX_SEQ_LEN = 2048
 
 
-def _debug_mtp_enabled() -> bool:
-    return os.getenv("DEBUG_MTP", "0") == "1"
-
-
 def _build_verify_alias_page_table_host(
     base_page_table: torch.Tensor,
     num_prompts: int,
@@ -84,89 +80,6 @@ def _build_verify_alias_page_table_host(
             alias_page_table[dst_row] = alias_page_table[src_row]
 
     return alias_page_table
-
-
-def _log_verify_alias_page_table(
-    *,
-    label: str,
-    base_page_table: torch.Tensor,
-    alias_page_table: torch.Tensor,
-    num_prompts: int,
-    verify_offset: int,
-    prompt_indices: List[int] | None,
-    interleaved: bool,
-) -> None:
-    logger.info(
-        "{} base page table (shape={}): {}",
-        label,
-        tuple(int(dim) for dim in base_page_table.shape),
-        base_page_table.tolist(),
-    )
-    num_rows = int(alias_page_table.shape[0])
-    if interleaved:
-        if prompt_indices is None:
-            for row in range(1, num_rows, 2):
-                logger.info("{} interleaved alias: row={} -> row={}", label, row, row - 1)
-        else:
-            for i in prompt_indices:
-                if i < 0:
-                    continue
-                src_row = (2 * i) % num_rows
-                dst_row = (src_row + 1) % num_rows
-                logger.info(
-                    "{} interleaved selective alias: prompt_idx={} row={} -> row={}", label, i, dst_row, src_row
-                )
-    else:
-        prompt_indices_to_log = prompt_indices if prompt_indices is not None else list(range(num_prompts))
-        for i in prompt_indices_to_log:
-            if i < 0 or i >= num_prompts:
-                continue
-            src_row = i % num_rows
-            dst_row = (verify_offset + i) % num_rows
-            logger.info(
-                "{} verify alias: prompt_idx={} src_row={} -> verify_row={} (verify_offset={})",
-                label,
-                i,
-                src_row,
-                dst_row,
-                verify_offset,
-            )
-    logger.info(
-        "{} aliased page table (shape={}): {}",
-        label,
-        tuple(int(dim) for dim in alias_page_table.shape),
-        alias_page_table.tolist(),
-    )
-
-
-def _summarize_live_accept_bins(
-    records: list[tuple[int, int, bool]],
-    *,
-    bin_size: int = 32,
-) -> list[dict[str, int | float]]:
-    bins: dict[int, dict[str, int | float]] = {}
-    for _prompt_idx, trajectory_step, accepted in records:
-        bin_idx = max(trajectory_step, 0) // bin_size
-        if bin_idx not in bins:
-            start = bin_idx * bin_size
-            bins[bin_idx] = {
-                "start": start,
-                "end": start + bin_size - 1,
-                "accepts": 0,
-                "total": 0,
-            }
-        bins[bin_idx]["total"] += 1
-        if accepted:
-            bins[bin_idx]["accepts"] += 1
-
-    out: list[dict[str, int | float]] = []
-    for bin_idx in sorted(bins):
-        entry = bins[bin_idx]
-        total = int(entry["total"])
-        accepts = int(entry["accepts"])
-        entry["rate"] = accepts / max(total, 1)
-        out.append(entry)
-    return out
 
 
 def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -969,16 +882,6 @@ class DeepseekGenerator(WarmupForwardMixin):
             prompt_indices=prompt_indices,
             interleaved=interleaved,
         )
-        if _debug_mtp_enabled():
-            _log_verify_alias_page_table(
-                label="MTP",
-                base_page_table=base_page_table,
-                alias_page_table=alias_page_table,
-                num_prompts=num_prompts,
-                verify_offset=verify_offset,
-                prompt_indices=prompt_indices,
-                interleaved=interleaved,
-            )
 
         aliased_tt = MLA2D.create_page_table(
             paged_config=self.paged_config,
@@ -1012,16 +915,6 @@ class DeepseekGenerator(WarmupForwardMixin):
             prompt_indices=prompt_indices,
             interleaved=interleaved,
         )
-        if _debug_mtp_enabled():
-            _log_verify_alias_page_table(
-                label="MTP MTP",
-                base_page_table=base_page_table,
-                alias_page_table=alias_page_table,
-                num_prompts=num_prompts,
-                verify_offset=verify_offset,
-                prompt_indices=prompt_indices,
-                interleaved=interleaved,
-            )
 
         return MLA2D.create_page_table(
             paged_config=self.paged_config,
@@ -1349,8 +1242,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                     for i, last_hidden in enumerate(prefill_last_hidden):
                         if last_hidden is not None:
                             hidden_tail[i] = last_hidden
-                    bootstrap_pos_delta = int(os.getenv("DEEPSEEK_MTP_BOOTSTRAP_POS_DELTA", "0"))
-                    positions_tail = lengths.clone() + bootstrap_pos_delta
+                    positions_tail = lengths.clone()
                     spec_logits = self._mtp_predict_logits(
                         hidden_states=hidden_tail,
                         tokens_step=next_tokens,
@@ -1383,102 +1275,29 @@ class DeepseekGenerator(WarmupForwardMixin):
                 decode_step_user_tokens: List[List[int]] = []
                 mtp_accept_rate = None
                 mtp_accepts = None
-                debug_mtp = _debug_mtp_enabled()
-                debug_mtp_steps = 3
-                debug_mtp_step_idx = 0
-                mtp_step_trace = debug_mtp
-                live_accept_progress_records: list[tuple[int, int, bool]] = []
                 if use_mtp_path:
-                    if self.mtp_skip_on_accept is None:
-                        skip_accept_decode = os.getenv("DEEPSEEK_MTP_DISABLE_SKIP_ACCEPT", "0") != "1"
-                    else:
-                        skip_accept_decode = bool(self.mtp_skip_on_accept)
+                    skip_accept_decode = True if self.mtp_skip_on_accept is None else bool(self.mtp_skip_on_accept)
                     logger.info(f"MTP skip-on-accept path enabled: {skip_accept_decode}")
                     generated_counts = torch.zeros((num_of_prompts,), dtype=torch.int32)
                     if num_of_prompts > 0:
                         generated_counts += 1
                     use_interleaved = prompt_user_ids is not None and spec_user_ids is not None
                     verify_offset_default = self.batch_size_per_row // 2
-                    verify_offset = int(
-                        os.getenv(
-                            "DEEPSEEK_MTP_VERIFY_OFFSET",
-                            str(verify_offset_default if use_interleaved else num_of_prompts),
-                        )
-                    )
+                    verify_offset = verify_offset_default if use_interleaved else num_of_prompts
                     if not use_interleaved:
                         if verify_offset < num_of_prompts or verify_offset + num_of_prompts > num_of_users:
                             raise RuntimeError(
-                                f"Invalid DEEPSEEK_MTP_VERIFY_OFFSET={verify_offset} for "
+                                f"Invalid verify offset {verify_offset} for "
                                 f"num_prompts={num_of_prompts}, num_users={num_of_users}"
                             )
-                    if _debug_mtp_enabled():
-                        batch_per_shard = even_int_div(self.batch_size_per_row, self.dp_factor)
-                        mesh_rows = int(self.mesh_device.shape[0])
-                        logger.info(
-                            "MTP lane assignment: num_prompts={} num_users={} verify_offset={} batch_size_per_row={} "
-                            "batch_per_shard={} dp_factor={} mesh_shape={}",
-                            num_of_prompts,
-                            num_of_users,
-                            verify_offset,
-                            self.batch_size_per_row,
-                            batch_per_shard,
-                            self.dp_factor,
-                            tuple(int(dim) for dim in self.mesh_device.shape),
-                        )
-                        for i in range(num_of_prompts):
-                            if use_interleaved and prompt_user_ids is not None and spec_user_ids is not None:
-                                prompt_user = int(prompt_user_ids[i].item())
-                                spec_user = int(spec_user_ids[i].item())
-                                local_user_in_row = i % (self.batch_size_per_row // 2)
-                                dp_col = local_user_in_row // 2
-                                batch_row = local_user_in_row % 2
-                                logger.info(
-                                    "MTP interleaved map: prompt_idx={} local_user_in_row={} dp_col={} batch_row={} "
-                                    "prompt_user_id={} spec_user_id={}",
-                                    i,
-                                    local_user_in_row,
-                                    dp_col,
-                                    batch_row,
-                                    prompt_user,
-                                    spec_user,
-                                )
-                            else:
-                                prompt_user = i
-                                spec_user = verify_offset + i
-                            for lane_label, user_id in (("prompt", prompt_user), ("spec", spec_user)):
-                                mesh_row = int(user_id // self.batch_size_per_row) if self.batch_size_per_row else 0
-                                batch_row = int(user_id % batch_per_shard) if batch_per_shard else 0
-                                logger.info(
-                                    "MTP lane: prompt_idx={} lane={} user_id={} mesh_row={}/{} batch_row={}/{}",
-                                    i,
-                                    lane_label,
-                                    user_id,
-                                    mesh_row,
-                                    mesh_rows,
-                                    batch_row,
-                                    batch_per_shard,
-                                )
                     decode_page_tables = self._build_mtp_verify_page_tables(
                         num_prompts=num_of_prompts, verify_offset=verify_offset, interleaved=use_interleaved
                     )
 
                     if spec_tokens is None:
                         raise RuntimeError("MTP spec tokens were not initialized; prefill hidden states missing.")
-                    if debug_mtp:
-                        debug_prompt_uid = (
-                            int(prompt_user_ids[0].item()) if use_interleaved and prompt_user_ids is not None else 0
-                        )
-                        logger.info(
-                            "MTP bootstrap: curr[0]={} spec[0]={} pos[0]={}".format(
-                                int(next_tokens[debug_prompt_uid].item()),
-                                int(spec_tokens[0].item()),
-                                int(positions[debug_prompt_uid].item()),
-                            )
-                        )
                     total_accepts = 0
                     total_verifies = 0
-                    total_accepts_alt = 0
-                    total_verifies_alt = 0
                     skipped_decode_tokens = 0
                     accepted_committed_second_token = 0
 
@@ -1555,7 +1374,6 @@ class DeepseekGenerator(WarmupForwardMixin):
 
                             total_verifies += 1
                             accepted = next_value == int(spec_tokens[i].item())
-                            live_accept_progress_records.append((i, generated_before - 1, accepted))
                             if use_interleaved and prompt_user_ids is not None:
                                 prompt_uid = int(prompt_user_ids[i].item())
                             else:
@@ -1595,132 +1413,8 @@ class DeepseekGenerator(WarmupForwardMixin):
                             for i in range(num_of_prompts)
                             if accepted_prompt_mask[i] and generated_counts[i] < max_new_tokens
                         ]
-                        if mtp_step_trace:
-                            for i in range(num_of_prompts):
-                                prev_spec_token = int(spec_tokens[i].item())
-                                next_pred_token = int(pred_next[i].item())
-                                verify_lane_pred_token = int(pred_after_spec[i].item())
-                                prev_spec_accepted = next_pred_token == prev_spec_token
-                                if use_interleaved and prompt_user_ids is not None and spec_user_ids is not None:
-                                    prompt_uid = int(prompt_user_ids[i].item())
-                                    spec_uid = int(spec_user_ids[i].item())
-                                else:
-                                    prompt_uid = i
-                                    spec_uid = verify_offset + i
-                                next_lane_pos = int(batched_positions[prompt_uid].item())
-                                verify_lane_pos = int(batched_positions[spec_uid].item())
-                                updated_pos = int(positions[prompt_uid].item())
-                                logger.info(
-                                    "MTP_STEP user={} step={} "
-                                    "next_lane(pred_token={}, pos={}) "
-                                    "spec_lane(input_spec_token={}, verify_pred_token={}, pos={}) "
-                                    "prev_spec_accepted={} updated_pos={} next_verify_pos={}".format(
-                                        i,
-                                        decode_step_idx - 1,
-                                        next_pred_token,
-                                        next_lane_pos,
-                                        prev_spec_token,
-                                        verify_lane_pred_token,
-                                        verify_lane_pos,
-                                        prev_spec_accepted,
-                                        updated_pos,
-                                        updated_pos + 1,
-                                    )
-                                )
                         if skip_accept_decode and accepted_indices:
                             skipped_decode_tokens += len(accepted_indices)
-                            logger.info(
-                                f"MTP true-skip committed second token at step {decode_step_idx - 1}: {accepted_indices}"
-                            )
-
-                        if debug_mtp and debug_mtp_step_idx < debug_mtp_steps:
-                            debug_mtp_step_idx += 1
-                            debug_prompt_uid = (
-                                int(prompt_user_ids[0].item()) if use_interleaved and prompt_user_ids is not None else 0
-                            )
-                            logger.info(
-                                "MTP debug step {}: curr[0]={} pos[0]={} pred_next[0]={} spec[0]={} pred_after_spec[0]={}".format(
-                                    debug_mtp_step_idx,
-                                    int(next_tokens[debug_prompt_uid].item()),
-                                    int(positions_before[debug_prompt_uid].item()),
-                                    int(pred_next[0].item()),
-                                    int(spec_tokens[0].item()),
-                                    int(pred_after_spec[0].item()),
-                                )
-                            )
-
-                        if debug_mtp:
-                            for i in range(num_of_prompts):
-                                if generated_counts[i] >= max_new_tokens:
-                                    continue
-                                total_verifies_alt += 1
-                                if int(pred_after_spec[i].item()) == int(spec_tokens[i].item()):
-                                    total_accepts_alt += 1
-                            accepted_indices = torch.nonzero(accepted_prompt_mask).flatten().tolist()
-                            if accepted_indices:
-                                if use_interleaved and prompt_user_ids is not None:
-                                    accepted_pos = {
-                                        i: int(positions_before[int(prompt_user_ids[i].item())].item())
-                                        for i in accepted_indices
-                                    }
-                                else:
-                                    accepted_pos = {i: int(positions_before[i].item()) for i in accepted_indices}
-                                accepted_next = {i: int(pred_next[i].item()) for i in accepted_indices}
-                                accepted_spec = {i: int(spec_tokens[i].item()) for i in accepted_indices}
-                                accepted_next_text = {}
-                                accepted_spec_text = {}
-                                if self.tokenizer is not None:
-                                    for i in accepted_indices:
-                                        accepted_next_text[i] = repr(self.tokenizer.decode([accepted_next[i]]))
-                                        accepted_spec_text[i] = repr(self.tokenizer.decode([accepted_spec[i]]))
-                                logger.info(
-                                    "MTP accepts at step {}: idx={} pos={} pred_next={} spec={} pred_next_text={} spec_text={}".format(
-                                        decode_step_idx - 1,
-                                        accepted_indices,
-                                        accepted_pos,
-                                        accepted_next,
-                                        accepted_spec,
-                                        accepted_next_text if self.tokenizer is not None else "n/a",
-                                        accepted_spec_text if self.tokenizer is not None else "n/a",
-                                    )
-                                )
-                            rejected_indices = [
-                                i
-                                for i in range(num_of_prompts)
-                                if (not accepted_prompt_mask[i]) and generated_counts[i] < max_new_tokens
-                            ]
-                            if rejected_indices:
-                                if use_interleaved and prompt_user_ids is not None:
-                                    rejected_pos = {
-                                        i: int(positions_before[int(prompt_user_ids[i].item())].item())
-                                        for i in rejected_indices
-                                    }
-                                else:
-                                    rejected_pos = {i: int(positions_before[i].item()) for i in rejected_indices}
-                                rejected_next = {i: int(pred_next[i].item()) for i in rejected_indices}
-                                rejected_spec = {i: int(spec_tokens[i].item()) for i in rejected_indices}
-                                rejected_after = {i: int(pred_after_spec[i].item()) for i in rejected_indices}
-                                rejected_next_text = {}
-                                rejected_spec_text = {}
-                                rejected_after_text = {}
-                                if self.tokenizer is not None:
-                                    for i in rejected_indices:
-                                        rejected_next_text[i] = repr(self.tokenizer.decode([rejected_next[i]]))
-                                        rejected_spec_text[i] = repr(self.tokenizer.decode([rejected_spec[i]]))
-                                        rejected_after_text[i] = repr(self.tokenizer.decode([rejected_after[i]]))
-                                logger.info(
-                                    "MTP rejects at step {}: idx={} pos={} pred_next={} spec={} pred_after_spec={} pred_next_text={} spec_text={} pred_after_text={}".format(
-                                        decode_step_idx - 1,
-                                        rejected_indices,
-                                        rejected_pos,
-                                        rejected_next,
-                                        rejected_spec,
-                                        rejected_after,
-                                        rejected_next_text if self.tokenizer is not None else "n/a",
-                                        rejected_spec_text if self.tokenizer is not None else "n/a",
-                                        rejected_after_text if self.tokenizer is not None else "n/a",
-                                    )
-                                )
 
                         # Keep non-prompt lanes advancing to preserve tensor shapes.
                         non_prompt_mask = torch.ones((num_of_users,), dtype=torch.bool)
@@ -1791,13 +1485,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                         else:
                             spec_tokens_next = spec_all[:num_of_prompts]
                         spec_tokens = spec_tokens_next
-                        if mtp_step_trace:
-                            for i in range(num_of_prompts):
-                                logger.info(
-                                    "MTP_STEP_NEXT_SPEC user={} step={} next_spec_token={}".format(
-                                        i, decode_step_idx - 1, int(spec_tokens[i].item())
-                                    )
-                                )
                         decode_step_active_masks.append(step_active_mask)
                         decode_step_user_tokens.append(step_user_tokens)
 
@@ -1813,25 +1500,10 @@ class DeepseekGenerator(WarmupForwardMixin):
                                 accepted_committed_second_token if skip_accept_decode else 0,
                             )
                         )
-                        if debug_mtp and live_accept_progress_records:
-                            overall_bins = _summarize_live_accept_bins(live_accept_progress_records)
-                            logger.info("MTP live accept bins overall: {}", overall_bins)
-
-                            prompt0_records = [record for record in live_accept_progress_records if record[0] == 0]
-                            if prompt0_records:
-                                prompt0_bins = _summarize_live_accept_bins(prompt0_records)
-                                prompt0_steps = [record[1] for record in prompt0_records]
-                                logger.info("MTP live accept bins prompt0: {}", prompt0_bins)
-                                logger.info("MTP live accept visited trajectory steps prompt0: {}", prompt0_steps)
                         if self.min_mtp_accept_rate is not None and mtp_accept_rate < self.min_mtp_accept_rate:
                             raise RuntimeError(
                                 f"MTP accept rate {mtp_accept_rate:.3f} below required minimum "
                                 f"{self.min_mtp_accept_rate:.3f}"
-                            )
-                        if debug_mtp and total_verifies_alt > 0:
-                            alt_rate = total_accepts_alt / total_verifies_alt
-                            logger.info(
-                                f"MTP alt accept rate (spec vs pred_after_spec): {total_accepts_alt}/{total_verifies_alt} = {alt_rate:.3f}"
                             )
                     elif self.min_mtp_accept_rate is not None:
                         raise RuntimeError("MTP verification produced zero samples; cannot validate accept rate.")
@@ -2081,9 +1753,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             # Prime MTP cache for this user using prompt tokens.
             mtp_page_table = self._get_mtp_page_table()
             full_seq_len = int(hidden_tt.shape[2])
-            if os.getenv("DEEPSEEK_MTP_SKIP_PREFILL", "0") == "1":
-                logger.info("Skipping MTP prefill priming (DEEPSEEK_MTP_SKIP_PREFILL=1).")
-            elif full_seq_len > 0 and prompt_len is not None and prompt_len > 1:
+            if full_seq_len > 0 and prompt_len is not None and prompt_len > 1:
                 # Prime MTP cache with aligned pairs: hidden[t] + token[t+1].
                 # Keep base prefill parity-safe, then pad only the MTP priming sequence so
                 # reduce_scatter sees a ring-compatible tile count.
