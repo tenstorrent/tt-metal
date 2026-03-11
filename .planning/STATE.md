@@ -2,9 +2,9 @@
 
 ## Current Position
 - **Phase:** 02-silicon-data-transfer-validation
-- **Current Plan:** 2 of 2 complete in Phase
-- **Status:** Plan 02 complete -- all 9 families have silicon test coverage
-- **Next:** Silicon test execution on hardware
+- **Current Plan:** 3 of 3 complete in Phase
+- **Status:** Phase 02 complete -- all silicon tests run on hardware, 16/17 pass (SparseMulticast deferred issue #36581)
+- **Next:** Phase complete
 
 ## Project Reference
 
@@ -25,10 +25,12 @@
 - MeshGraph::chip_to_coordinate for bounding-box computation in multicast runner
 - Sparse multicast test inlined in test file (different dispatch from multicast runner)
 - Linear 1D tests reuse mesh multicast kernels (per-direction fanout degenerates in 1D)
+- SparseMulticast GTEST_SKIP is essential -- removing it causes Ethernet core lockup (issue #36581 confirmed real)
+- Phase gate accepted at 8/9 families validated; SparseMulticast deferred pending firmware fix
 
 ## Blockers
 None
 
 ## Last Session
 - **Timestamp:** 2026-03-11
-- **Stopped At:** Completed 02-02-PLAN.md (multicast/sparse silicon tests)
+- **Stopped At:** Completed 02-03-PLAN.md (silicon test execution -- phase 02 complete)
