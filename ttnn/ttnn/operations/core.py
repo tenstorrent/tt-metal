@@ -334,6 +334,7 @@ def from_torch(
         # and types unsupported by Torch/NumPy (e.g., bfloat8).
         # This allows type conversion: int64 -> bf16 -> bf8/4.
         # NumPy does not support bfloat16, so we use a Torch tensor instead.
+        # float32 as an intermediate type is not used due to limited amount of L1 memory.
         tensor = torch.from_numpy(tensor)
 
     return ttnn.Tensor(
