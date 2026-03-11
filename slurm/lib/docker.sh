@@ -18,16 +18,31 @@ fi
 # all deps already installed by create_venv.sh.
 native_run() {
     local commands="$1"
+    local ws="${WORKSPACE:-.}"
+    local venv_dir="${ws}/python_env"
 
     log_info "Running natively (NO_DOCKER=1)"
 
-    if [[ -f "${WORKSPACE:-.}/python_env/bin/activate" ]]; then
-        log_info "Activating venv: ${WORKSPACE:-.}/python_env"
+    # Ensure the venv's Python stdlib is bundled (self-contained).
+    # uv's --managed-python copies the binary but not the stdlib;
+    # without bundling, Python can't find 'encodings' on compute nodes.
+    if [[ -d "${venv_dir}" ]]; then
+        if ! ls "${venv_dir}"/lib/python3*/encodings/__init__.py &>/dev/null; then
+            local bundle_script="${ws}/scripts/bundle_python_into_venv.sh"
+            if [[ -x "${bundle_script}" ]]; then
+                log_info "Bundling Python stdlib into venv for multi-host portability..."
+                "${bundle_script}" "${venv_dir}" --force
+            else
+                log_warn "Python stdlib not bundled in venv and bundle script not found at ${bundle_script}"
+                log_warn "Run: scripts/bundle_python_into_venv.sh python_env --force"
+            fi
+        fi
+
+        log_info "Activating venv: ${venv_dir}"
         # shellcheck disable=SC1091
-        source "${WORKSPACE:-.}/python_env/bin/activate"
+        source "${venv_dir}/bin/activate"
     fi
 
-    local ws="${WORKSPACE:-.}"
     export TT_METAL_HOME="${ws}"
     export PYTHONPATH="${ws}:${ws}/ttnn:${ws}/tools"
     export LD_LIBRARY_PATH="${ws}/build/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
@@ -38,7 +53,7 @@ native_run() {
     log_info "PYTHONPATH=${PYTHONPATH}"
     log_info "Running: ${commands}"
 
-    (cd "${WORKSPACE:-.}" && bash -c "set -euo pipefail; $commands")
+    (cd "${ws}" && bash -c "set -euo pipefail; $commands")
     local rc=$?
 
     if [[ $rc -ne 0 ]]; then
