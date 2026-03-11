@@ -107,9 +107,9 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     constexpr uint32_t w0_w1_bytes_per_block = w0_w1_tiles_per_block * w0_w1_tile_size;
     constexpr uint32_t w0_w1_bytes_per_txn = w0_w1_tiles_per_txn * w0_w1_tile_size;
-    DPRINT << "w0_w1_bytes_per_txn" << w0_w1_bytes_per_txn << ENDL();
-    DPRINT << "w0_w1_tiles_per_txn" << w0_w1_tiles_per_txn << ENDL();
-    DPRINT << "w0_w1_tile_size" << w0_w1_tile_size << ENDL();
+    // DPRINT << "w0_w1_bytes_per_txn" << w0_w1_bytes_per_txn << ENDL();
+    // DPRINT << "w0_w1_tiles_per_txn" << w0_w1_tiles_per_txn << ENDL();
+    // DPRINT << "w0_w1_tile_size" << w0_w1_tile_size << ENDL();
     constexpr uint32_t w2_bytes_per_block = w2_tiles_per_block * w2_tile_size;
     constexpr uint32_t w2_bytes_per_txn = w2_tiles_per_txn * w2_tile_size;
 

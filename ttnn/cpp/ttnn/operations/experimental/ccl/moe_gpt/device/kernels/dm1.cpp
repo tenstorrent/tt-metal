@@ -98,7 +98,7 @@ void kernel_main() {
     // 6 buffers for A2A intermediate data. 6 divides 12 (steps per iter),
     // so buffer indices cycle back to 0 after a full ring rotation.
     // 5 steps of slack between write and overwrite is sufficient for compute.
-    constexpr uint32_t NUM_A2A_BUFFERS = 6;
+    constexpr uint32_t NUM_A2A_BUFFERS = 12;
     uint32_t LOCAL_BUFFER_OFFSET[NUM_A2A_BUFFERS];
     for (uint32_t i = 0; i < NUM_A2A_BUFFERS; ++i) {
         LOCAL_BUFFER_OFFSET[i] = local_base_addr + i * a2a_xfer_bytes_per_step;

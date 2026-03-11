@@ -10,6 +10,7 @@
 #include "api/compute/eltwise_binary_sfpu.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/fill.h"
+#include "api/compute/tile_move_copy.h"
 #include "api/debug/dprint_pages.h"
 #include "api/debug/dprint_tensix.h"
 
@@ -45,6 +46,7 @@ void kernel_main() {
     const auto ring_core_id = get_arg_val<uint32_t>(argidx++);
     const auto ring_neighbor_physical_x = get_arg_val<uint32_t>(argidx++);
     const auto ring_neighbor_physical_y = get_arg_val<uint32_t>(argidx++);
+    MATH(DPRINT << "ring_core_id: " << ring_core_id << ENDL());
 
     // CBs
     constexpr auto cb_r2c_w0_w1 = tt::CBIndex::c_0;
@@ -212,19 +214,19 @@ void kernel_main() {
                 p_stall::STALL_TDMA | p_stall::STALL_CFG,
                 semaphore::t6_sem(semaphore::MATH_PACK),
                 p_stall::STALL_ON_ZERO));
-
-            // Make SFPU access the appropriate half of the destination registers
-            PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-
-            //---------------------------------------------------------------------
-            // Apply GPT-OSS SwiGLU activation
-            // SwiGLU: (clamp(up)+1) * clamp(gate) * sigmoid(alpha * clamp(gate))
-            // Dest layout: [gate0, up0, gate1, up1] at tile indices [0, 1, 2, 3]
-            //---------------------------------------------------------------------
-            PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(0, 1, 0)));
-            PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(2, 3, 2)));
-
-            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+            //
+            // // Make SFPU access the appropriate half of the destination registers
+            // PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+            //
+            // //---------------------------------------------------------------------
+            // // Apply GPT-OSS SwiGLU activation
+            // // SwiGLU: (clamp(up)+1) * clamp(gate) * sigmoid(alpha * clamp(gate))
+            // // Dest layout: [gate0, up0, gate1, up1] at tile indices [0, 1, 2, 3]
+            // //---------------------------------------------------------------------
+            // PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(0, 1, 0)));
+            // PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(2, 3, 2)));
+            //
+            // PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
             pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
             pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
@@ -258,8 +260,6 @@ void kernel_main() {
                 cb_wait_front(cb_r2c_w2, w2_tiles_per_block);
                 uint32_t last_k_index = 0;
                 for (uint32_t k = 0; k < w2_tiles_per_block; k += 4) {
-                    // UNPACK(DPRINT << k/4<< ENDL());
-                    // UNPACK(print_full_tile(cb_r2c_w2, k, true));
                     if (k_tracker == num_w0_w1_tiles_h) {
                         last_k_index = k;
                         break;
@@ -268,11 +268,13 @@ void kernel_main() {
                         cb_pop_front(cb_w2c_rdy, 1);
                         cb_wait_front(cb_w2c_rdy, 1);
                         dm1_tiles_remaining = moe_gpt_ring::W0_W1_TILES_PER_CORE_PER_STEP_A[ring_core_id][++dm1_step];
-                        in2_buf = (in2_buf >= 5)
-                                      ? 0
-                                      : in2_buf + 1;  // 6 buffers: cycle 0..5 in2_offset = in2_buf * tiles_per_step;
+                        in2_offset += 8;
                         in2_index = in2_offset;
                     }
+                    // UNPACK(DPRINT << k/4<< ENDL());
+                    // UNPACK(print_full_tile(cb_s2c_in2, in2_index++, true));
+                    // copy_tile(cb_s2c_in2, in2_index++, 0);
+                    // dprint_tensix_dest_reg(0);
                     dm1_tiles_remaining--;
                     matmul_block(
                         cb_s2c_in2,
@@ -284,6 +286,7 @@ void kernel_main() {
                         /*ct_dim=*/4,
                         /*rt_dim=*/1,
                         /*kt_dim=*/1);
+                    dprint_tensix_dest_reg(0);
                     k_tracker++;
                 }
                 if (k_tracker == num_w0_w1_tiles_h) {

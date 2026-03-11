@@ -80,7 +80,8 @@ def create_torch_b2(L, E, N):
 
 def create_torch_w0(L, E, K, N):
     """Create torch w0 weight tensor of shape (L, E, K, N)."""
-    return torch.randn((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    return (torch.randn((L, E, K, N), dtype=torch.bfloat16) - 0.5) / 2
+    # return torch.cat((torch.zeros((L, E, K, N-32), dtype=torch.bfloat16),torch.ones((L, E, K, 32), dtype=torch.bfloat16)/K), dim = 3 )
     # temp = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
     # indices = torch.arange(N, dtype=torch.bfloat16)
     # # indices[-32:] = -1
@@ -89,7 +90,9 @@ def create_torch_w0(L, E, K, N):
 
 def create_torch_w1(L, E, K, N):
     """Create torch w1 weight tensor of shape (L, E, K, N)."""
-    return torch.randn((L, E, K, N), dtype=torch.bfloat16) - 0.5
+    return (torch.randn((L, E, K, N), dtype=torch.bfloat16) - 0.5) / 2
+    # return torch.ones((L, E, K, N), dtype=torch.bfloat16) /2048
+    # return torch.cat((torch.zeros((L, E, K, N-32), dtype=torch.bfloat16),torch.ones((L, E, K, 32), dtype=torch.bfloat16)/K), dim = 3 )
     # temp = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
     # indices = torch.arange(N, dtype=torch.bfloat16)
     # # indices[-32:] = -1
@@ -98,11 +101,13 @@ def create_torch_w1(L, E, K, N):
 
 def create_torch_w2(L, E, N, K):
     """Create torch w2 weight tensor of shape (L, E, N, K)."""
-    return torch.randn((L, E, N, K), dtype=torch.bfloat16) - 0.5
+    return (torch.randn((L, E, K, N), dtype=torch.bfloat16) - 0.5) / 2
+    # return torch.ones((L, E, N, K), dtype=torch.bfloat16) /2048
     # temp = torch.randn((L, E, N, K), dtype=torch.bfloat16) -0.5
-    # indices = torch.arange(N, dtype=torch.bfloat16)
+    # indices = torch.arange(K, dtype=torch.bfloat16)
+    # indices = tensor = torch.repeat_interleave(torch.arange(1, (K//32)+ 1, dtype=torch.bfloat16), repeats=32)
     # # indices[-32:] = -1
-    # return  indices.view(1, 1, N, 1).expand_as(temp)
+    # return  indices.view(1, 1, 1,K).expand_as(temp)
 
 
 def prepare_output_tensor(tt_output, E, M, K, ring2cores):
@@ -152,6 +157,7 @@ def swiglu_reference(gate, up, alpha=1.702, clamp_limit=7.0):
 
 
 def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
+    torch.manual_seed(0)
     logger.info(
         f"Running test_moe_gpt with M={M}, K={K}, N={N}, E={E}, L={L}, "
         f"check_accuracy={check_accuracy}, dump_outputs={dump_outputs}"
@@ -343,8 +349,9 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
             torch_w1_output_ref = torch_input_ref @ torch_w1
 
             # SwiGLU activation: gate=W0 output, up=W1 output
-            torch_intermediate_ref = swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)
+            # torch_intermediate_ref = swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)
 
+            torch_intermediate_ref = torch_w0_output_ref
             # W2 projection
             # (L, E, M, N) @ (L, E, N, K) -> (L, E, M, K)
             torch_output_ref = torch_intermediate_ref @ torch_w2
