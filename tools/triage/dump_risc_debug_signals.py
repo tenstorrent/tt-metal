@@ -26,11 +26,10 @@ from dispatcher_data import run as get_dispatcher_data, DispatcherData
 from elfs_cache import run as get_elfs_cache, ElfsCache
 from ttexalens.coordinate import OnChipCoordinate
 from ttexalens.context import Context
-from ttexalens.device import Device
 from ttexalens.tt_exalens_lib import read_words_from_device, write_words_to_device
 
 script_config = ScriptConfig(
-    depends=["run_checks", "dump_broken_components", "dispatcher_data", "elfs_cache"],
+    depends=["run_checks", "check_broken_components", "dispatcher_data", "elfs_cache"],
     disabled=os.getenv("TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI") is None,
 )
 
@@ -96,28 +95,24 @@ def run(args, context: Context):
     all_debug_bus_data = defaultdict(dict)
     session = get_triage_session()
 
-    def check_device(device: Device) -> None:
-        if not session.is_device_in_broken_cores(device):
+    def check_block(location: OnChipCoordinate) -> None:
+        broken_cores = session.get_location_broken_cores(location)
+        if not broken_cores:
             return None
 
-        broken_cores = session.get_device_broken_cores(device)
+        failed_riscs = [bc.risc_name for bc in broken_cores]
+        result = collect_debug_bus_signals(location, failed_riscs, dispatcher_data, elfs_cache)
+        if result is None:
+            return None
 
-        # Group broken cores by location
-        broken_by_location: dict[OnChipCoordinate, list[str]] = defaultdict(list)
-        for bc in broken_cores:
-            broken_by_location[bc.location].append(bc.risc_name)
-
-        for location, failed_riscs in broken_by_location.items():
-            result = collect_debug_bus_signals(location, failed_riscs, dispatcher_data, elfs_cache)
-            if result is None:
-                continue
-            block_type = run_checks.get_block_type(location)
-            if block_type not in all_debug_bus_data[f"Device {device.id}"]:
-                all_debug_bus_data[f"Device {device.id}"][block_type] = defaultdict(dict)
-            all_debug_bus_data[f"Device {device.id}"][block_type][f"location: {location.to_user_str()}"] = result
+        device = location.device
+        block_type = run_checks.get_block_type(location)
+        if block_type not in all_debug_bus_data[f"Device {device.id}"]:
+            all_debug_bus_data[f"Device {device.id}"][block_type] = defaultdict(dict)
+        all_debug_bus_data[f"Device {device.id}"][block_type][f"location: {location.to_user_str()}"] = result
         return None
 
-    run_checks.run_per_device_check(check_device)
+    run_checks.run_per_block_check(check_block)
 
     if all_debug_bus_data:
         output_path = args["--path"] if args["--path"] else "debug_bus_signal_groups.json"

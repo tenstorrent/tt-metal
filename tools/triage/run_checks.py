@@ -38,11 +38,12 @@ from triage import (
     triage_field,
     recurse_field,
     run_script,
-    log_warning,
+    log_warning_device,
+    log_warning_risc,
     create_progress,
     log_check,
 )
-from triage_session import BrokenCore, get_triage_session
+from triage_session import get_triage_session
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
@@ -273,8 +274,8 @@ class RunChecks:
                     except TimeoutDeviceRegisterError as e:
                         self._session.add_broken_device(device)
                         if print_broken_devices:
-                            log_warning(
-                                f"Triage broke device {device.id} with: {e}. This device will be skipped from now on."
+                            log_warning_device(
+                                device, f"Triage broke device with: {e}. This device will be skipped from now on."
                             )
                         if device.is_local:
                             # We are classifying remote devices as broken since we cannot access them if their local device is broken
@@ -282,12 +283,13 @@ class RunChecks:
                                 # Broken remote devices will inherit the error from the local device
                                 self._session.add_broken_device(remote_device)
                                 if print_broken_devices:
-                                    log_warning(
-                                        f"Device {remote_device.id} will be skipped from now on due to its local device (device {device.id}) being broken."
+                                    log_warning_device(
+                                        remote_device,
+                                        f"Will be skipped from now on due to its local device (device {device.id}) being broken.",
                                     )
                         continue
                     except Exception as e:
-                        log_warning(f"Skipping device {device.id}: {str(e)}")
+                        log_warning_device(device, f"Skipping: {str(e)}")
                         continue
                     # Use the common result collection helper
                     self._collect_results(
@@ -371,19 +373,12 @@ class RunChecks:
                 try:
                     check_result = check(location, risc_name)
                 except RiscHaltError as e:
-                    if self._session.is_core_broken(location._device, location, risc_name):
-                        # If the core is already broken we do not need to add it again
-                        continue
-                    self._session.add_broken_core(location._device, BrokenCore(location, risc_name))
+                    self._session.add_broken_core(location, risc_name)
                     if print_broken_cores:
-                        log_warning(
-                            f"Core {risc_name} broken at {location.to_user_str()} at device {location.device_id}: {e}."
-                        )
+                        log_warning_risc(risc_name, location, f"Broken: {e}.")
                     continue
                 except Exception as e:
-                    log_warning(
-                        f"Skipping {risc_name} at {location.to_user_str()} at device {location.device_id}: {str(e)}"
-                    )
+                    log_warning_risc(risc_name, location, f"Skipping: {str(e)}")
                     continue
 
                 # Use the common result collection helper

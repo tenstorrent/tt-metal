@@ -570,6 +570,21 @@ def log_warning(message: str) -> None:
         WARNING_CHECKS.append(message)
 
 
+def log_warning_device(device: Device, message: str) -> None:
+    log_warning(f"Device {device.id}: {message}")
+
+
+def log_warning_location(location: OnChipCoordinate, message: str) -> None:
+    device = location.device
+    block_type = location.noc_block.block_type
+    location_str = location.to_user_str()
+    log_warning_device(device, f"{block_type} [{location_str}]: {message}")
+
+
+def log_warning_risc(risc_name: str, location: OnChipCoordinate, message: str) -> None:
+    log_warning_location(location, f"{risc_name}: {message}")
+
+
 def serialize_result(script: TriageScript | None, result, execution_time: str = ""):
     from dataclasses import fields, is_dataclass
 
@@ -733,7 +748,7 @@ def _patch_risc_debug(context: Context) -> None:
     cont() is a no-op and ensure_halted() only halts, never continues.
 
     Also patches halt() to record which cores triage halted, so that
-    dump_broken_components can verify they are still halted at the end.
+    check_broken_components can verify they are still halted at the end.
 
     More info at tt-exalens:#908
     """
