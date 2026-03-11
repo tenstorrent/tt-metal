@@ -23,4 +23,4 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/tools
 )
 
-target_precompile_headers(watcher_dump REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(watcher_dump TT::CommonPCH)
