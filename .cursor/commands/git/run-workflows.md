@@ -8,9 +8,9 @@ Analyze branch changes to determine affected build products, trace which tests/s
    - Run `git diff --name-only origin/main...HEAD` to list all changed files
    - Group files by type: C++/headers, Python, CMake, configs, etc.
 
-2. **Decide whether to use all-post-commit-workflows.yaml**
+2. **Decide whether to use sanity-tests.yaml**
 
-   `all-post-commit-workflows.yaml` encapsulates these workflows:
+   `sanity-tests.yaml` encapsulates these workflows:
    - `ttnn-post-commit.yaml`
    - `models-post-commit.yaml`
    - `tt-train-post-commit.yaml`
@@ -18,7 +18,7 @@ Analyze branch changes to determine affected build products, trace which tests/s
    - `t3000-fast-tests-impl.yaml`
    - `ops-post-commit.yaml`
 
-   **Run `all-post-commit-workflows.yaml` instead of the above individual workflows when:**
+   **Run `sanity-tests.yaml` instead of the above individual workflows when:**
    - `conftest.py` changed (affects all pytest-based tests)
    - Multiple workflow files changed (3+)
    - Core test infrastructure changed (`tests/scripts/run_tests.py`, test utilities)
@@ -27,10 +27,10 @@ Analyze branch changes to determine affected build products, trace which tests/s
    - Submodule references changed
 
    ```bash
-   gh workflow run all-post-commit-workflows.yaml --ref $(git branch --show-current)
+   gh workflow run sanity-tests.yaml --ref $(git branch --show-current)
    ```
 
-   **Important:** Still continue analysis for workflows NOT covered by all-post-commit, such as:
+   **Important:** Still continue analysis for workflows NOT covered by sanity tests, such as:
    - Galaxy tests (`galaxy-*.yaml`)
    - T3000 demo/integration/perf/unit tests (`t3000-demo-tests.yaml`, `t3000-integration-tests.yaml`, etc.)
    - Single-card demo tests (`single-card-demo-tests.yaml`)
