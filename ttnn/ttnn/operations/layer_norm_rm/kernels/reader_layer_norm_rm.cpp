@@ -3,7 +3,7 @@
 
 // Layer Norm RM - Reader Kernel
 // Reads RM sticks from DRAM via TensorAccessor.
-// Per tile-row: reads same 32 sticks (currently 1 pass for stage 1).
+// Per tile-row: reads same 32 sticks N times (N passes).
 // At program start: fills scaler CB with 1/W, epsilon CB with eps.
 
 #include "api/dataflow/dataflow_api.h"
@@ -19,6 +19,9 @@ constexpr uint32_t stick_size = get_compile_time_arg_val(0);
 constexpr uint32_t has_gamma = get_compile_time_arg_val(1);
 constexpr uint32_t has_beta = get_compile_time_arg_val(2);
 constexpr auto input_tensor_args = TensorAccessorArgs<3>();
+
+// Number of passes per tile-row: currently 2 (mean + subtract)
+constexpr uint32_t NUM_PASSES = 2;
 
 void kernel_main() {
     // Runtime args
@@ -49,23 +52,22 @@ void kernel_main() {
     eps_conv.u = static_cast<uint32_t>(eps_bf16) << 16;
     dataflow_kernel_lib::prepare_reduce_scaler<c_3>(eps_conv.f);
 
-    // Main loop: for each tile-row, read 32 sticks and push to c_0
-    // For stage 1 (data_pipeline): only 1 pass per tile-row
+    // Main loop: for each tile-row, read 32 sticks NUM_PASSES times
     uint32_t stick_id = start_stick_id;
     constexpr uint32_t STICKS_PER_TILE_ROW = 32;
 
     for (uint32_t tr = 0; tr < num_tile_rows; ++tr) {
-        // Pass 1: Read 32 sticks into c_0
-        cb_reserve_back(c_0, Wt);
-        uint32_t l1_write_addr = get_write_ptr(c_0);
-        for (uint32_t s = 0; s < STICKS_PER_TILE_ROW; ++s) {
-            uint64_t noc_addr = input_accessor.get_noc_addr(stick_id + s);
-            noc_async_read(noc_addr, l1_write_addr, stick_size);
-            l1_write_addr += stick_size;
+        for (uint32_t pass = 0; pass < NUM_PASSES; ++pass) {
+            cb_reserve_back(c_0, Wt);
+            uint32_t l1_write_addr = get_write_ptr(c_0);
+            for (uint32_t s = 0; s < STICKS_PER_TILE_ROW; ++s) {
+                uint64_t noc_addr = input_accessor.get_noc_addr(stick_id + s);
+                noc_async_read(noc_addr, l1_write_addr, stick_size);
+                l1_write_addr += stick_size;
+            }
+            noc_async_read_barrier();
+            cb_push_back(c_0, Wt);
         }
-        noc_async_read_barrier();
-        cb_push_back(c_0, Wt);
-
         stick_id += STICKS_PER_TILE_ROW;
     }
 }

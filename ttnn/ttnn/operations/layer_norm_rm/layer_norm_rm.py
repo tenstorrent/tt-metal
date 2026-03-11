@@ -45,9 +45,8 @@ def layer_norm_rm(
     device = input_tensor.device()
     output_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
 
-    # Output shape: reduced (tile-aligned W=32) for reduce stages
-    input_shape = list(input_tensor.shape)
-    output_shape = input_shape[:-1] + [32]
+    # Output shape is same as input
+    output_shape = list(input_tensor.shape)
 
     # Allocate output tensor on device (positional args, ROW_MAJOR_LAYOUT)
     output_tensor = ttnn.allocate_tensor_on_device(
