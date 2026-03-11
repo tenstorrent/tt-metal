@@ -103,6 +103,7 @@ tt_metal/test @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypa
 tt_metal/tools/* @kmabeeTT @nhuang-tt @mo-tenstorrent @ihamer-tt @tenstorrent/codeowner-bypass
 tt_metal/tools/lightmetal_runner @kmabeeTT @tenstorrent/codeowner-bypass
 tt_metal/tools/mem_bench @nhuang-tt @tenstorrent/codeowner-bypass # should be moved to tests micro benchmark?
+tt_metal/tools/precompile_fw @ruizhangTT @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/ @mo-tenstorrent @nhuang-tt @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/event_metadata.hpp @bgrady-tt @sohaibnadeemTT @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/fabric_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @tenstorrent/codeowner-bypass
@@ -325,7 +326,7 @@ models/demos/wormhole @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeown
 models/demos/t3000 @uaydonat @yieldthought @cglagovichTT @tenstorrent/codeowner-bypass
 models/tt_transformers @cglagovichTT @yieldthought @mtairum @uaydonat @gwangTT @ppetrovicTT @tenstorrent/codeowner-bypass
 models/demos/llama3_70b_galaxy @johanna-rock-tt @kpaigwar @sraizada-tt @djordje-tt @mtairum @yalrawwashTT @alingTT @tenstorrent/codeowner-bypass
-models/tt_transformers/tt/generator*.py @cglagovichTT @yieldthought @mtairum @skhorasganiTT @ppetrovicTT @uaydonat @tenstorrent/codeowner-bypass
+models/tt_transformers/tt/generator*.py @gwangTT @cglagovichTT @yieldthought @mtairum @skhorasganiTT @ppetrovicTT @uaydonat @tenstorrent/codeowner-bypass
 models/demos/qwen25_vl @gwangTT @ssanjayTT @yieldthought @uaydonat @tenstorrent/codeowner-bypass
 models/demos/qwen3_vl @ssanjayTT @gwangTT @tenstorrent/codeowner-bypass
 models/demos/falcon7b_common @skhorasganiTT @djordje-tt @uaydonat @tenstorrent/codeowner-bypass
