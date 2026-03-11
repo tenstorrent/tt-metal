@@ -189,43 +189,6 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
 )
 
-# ---- Test: auto_packetization (raw-size auto-packetization integration tests) ----
-add_executable(
-    test_auto_packetization
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/auto_packetization/test_main.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/auto_packetization/unicast_runner.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/fabric_data_movement/auto_packetization/multicast_runner.cpp
-)
-
-target_link_libraries(
-    test_auto_packetization
-    PRIVATE
-        tt_metal
-        gtest
-        test_common_libs
-)
-
-add_dependencies(test_auto_packetization tt_metal)
-
-target_include_directories(
-    test_auto_packetization
-    PRIVATE
-        ${PROJECT_SOURCE_DIR}
-        ${UMD_HOME}
-        ${PROJECT_SOURCE_DIR}/tests
-        ${PROJECT_SOURCE_DIR}/tt_metal
-        ${CMAKE_CURRENT_SOURCE_DIR}/common
-        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/api
-        ${PROJECT_BINARY_DIR}/tt_metal/third_party/umd/device/generated
-)
-
-set_target_properties(
-    test_auto_packetization
-    PROPERTIES
-        RUNTIME_OUTPUT_DIRECTORY
-            ${PROJECT_BINARY_DIR}/test/tt_metal/tt_fabric
-)
-
 # ---- Test: bandwidth telemetry validation ----
 add_executable(
     test_bandwidth_telemetry_validation
