@@ -93,9 +93,11 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
         input_cb_num_tiles = num_input_tiles;
         num_cos_sin_tiles = num_input_tiles;
     }
-    // When cos/sin are sharded, CB size is exactly one shard row (head_dim_t tiles).
+    // When cos/sin are sharded: fast path (seq_per_core==1) uses globally-allocated L1 view;
+    // reload path (seq_per_core>1) reads each row via TensorAccessor.
+    const bool cos_sin_sharded_reload = cos_sin_sharded && (seq_per_core > 1);
     if (cos_sin_sharded) {
-        num_cos_sin_tiles = head_dim_t;
+        num_cos_sin_tiles = cos_sin_sharded_reload ? num_input_tiles : head_dim_t;
     }
 
     auto* src_buffer = input.buffer();
@@ -116,17 +118,31 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
     std::optional<CBHandle> cb_cos_handle;
     std::optional<CBHandle> cb_sin_handle;
     if (cos_sin_sharded) {
-        auto cos_cb_cfg = tt_metal::CircularBufferConfig(
-                              num_cos_sin_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
-                              .set_page_size(cos_cb_index, cos_single_tile_size)
-                              .set_globally_allocated_address(*cos_buffer);
-        cb_cos_handle = tt_metal::CreateCircularBuffer(program, all_cores, cos_cb_cfg);
+        if (cos_sin_sharded_reload) {
+            tt_metal::CircularBufferConfig cos_cb_cfg =
+                tt_metal::CircularBufferConfig(
+                    num_cos_sin_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
+                    .set_page_size(cos_cb_index, cos_single_tile_size);
+            tt_metal::CreateCircularBuffer(program, all_cores, cos_cb_cfg);
 
-        auto sin_cb_cfg = tt_metal::CircularBufferConfig(
-                              num_cos_sin_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
-                              .set_page_size(sin_cb_index, sin_single_tile_size)
-                              .set_globally_allocated_address(*sin_buffer);
-        cb_sin_handle = tt_metal::CreateCircularBuffer(program, all_cores, sin_cb_cfg);
+            tt_metal::CircularBufferConfig sin_cb_cfg =
+                tt_metal::CircularBufferConfig(
+                    num_cos_sin_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
+                    .set_page_size(sin_cb_index, sin_single_tile_size);
+            tt_metal::CreateCircularBuffer(program, all_cores, sin_cb_cfg);
+        } else {
+            auto cos_cb_cfg = tt_metal::CircularBufferConfig(
+                                  num_cos_sin_tiles * cos_single_tile_size, {{cos_cb_index, cos_cb_data_format}})
+                                  .set_page_size(cos_cb_index, cos_single_tile_size)
+                                  .set_globally_allocated_address(*cos_buffer);
+            cb_cos_handle = tt_metal::CreateCircularBuffer(program, all_cores, cos_cb_cfg);
+
+            auto sin_cb_cfg = tt_metal::CircularBufferConfig(
+                                  num_cos_sin_tiles * sin_single_tile_size, {{sin_cb_index, sin_cb_data_format}})
+                                  .set_page_size(sin_cb_index, sin_single_tile_size)
+                                  .set_globally_allocated_address(*sin_buffer);
+            cb_sin_handle = tt_metal::CreateCircularBuffer(program, all_cores, sin_cb_cfg);
+        }
     } else {
         tt_metal::CircularBufferConfig cb_cos_config =
             tt_metal::CircularBufferConfig(
@@ -191,6 +207,7 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
 
     std::map<std::string, std::string> kernel_defines;
     kernel_defines["RELOAD_IMPL"] = use_reload_impl ? "1" : "0";
+    kernel_defines["COS_SIN_SHARDED_RELOAD"] = cos_sin_sharded_reload ? "1" : "0";
 
     std::vector<uint32_t> reader_compile_time_args = {
         (std::uint32_t)input_cb_index,
@@ -203,6 +220,7 @@ RotaryEmbeddingLlamaMultiCore::cached_program_t RotaryEmbeddingLlamaMultiCore::c
         (std::uint32_t)freq_per_head,
         (std::uint32_t)trans_mat_sharded,
         (std::uint32_t)cos_sin_sharded,
+        (std::uint32_t)cos_sin_sharded_reload,
     };
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(cos_buffer).append_to(reader_compile_time_args);

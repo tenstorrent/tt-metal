@@ -26,7 +26,8 @@ void kernel_main() {
     constexpr bool freq_per_head = get_compile_time_arg_val(7) == 1;
     constexpr bool trans_mat_sharded = get_compile_time_arg_val(8) == 1;
     constexpr bool cos_sin_sharded = get_compile_time_arg_val(9) == 1;
-    constexpr auto input_args = TensorAccessorArgs<10>();
+    constexpr bool cos_sin_sharded_reload = get_compile_time_arg_val(10) == 1;
+    constexpr auto input_args = TensorAccessorArgs<11>();
     constexpr auto cos_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
     constexpr auto sin_args = TensorAccessorArgs<cos_args.next_compile_time_args_offset()>();
     constexpr auto trans_mat_args = TensorAccessorArgs<sin_args.next_compile_time_args_offset()>();
@@ -57,15 +58,34 @@ void kernel_main() {
     }
 
     // ------------------------------------------------------------------
-    // Sharded cos/sin path: data is already in L1 per shard.
+    // Sharded cos/sin path: fast (1 seq tile/core, L1 view) vs reload (multi seq, read via TensorAccessor)
     // ------------------------------------------------------------------
     if constexpr (cos_sin_sharded) {
+#if COS_SIN_SHARDED_RELOAD == 1
+        const uint32_t cos_tile_bytes = get_tile_size(cos_cb_id);
+        const uint32_t sin_tile_bytes = get_tile_size(sin_cb_id);
+        const auto s1 = TensorAccessor(cos_args, cos_addr, cos_tile_bytes);
+        const auto s2 = TensorAccessor(sin_args, sin_addr, sin_tile_bytes);
+#endif
+
         for (uint32_t batch_id = batch_start; batch_id < batch_end; ++batch_id) {
             for (uint32_t head_num = 0; head_num < n_heads; ++head_num) {
                 for (uint32_t seq_tile = seq_t_start; seq_tile < seq_t_end; ++seq_tile) {
                     cb_reserve_back(cos_cb_id, Wt);
-                    cb_push_back(cos_cb_id, Wt);
                     cb_reserve_back(sin_cb_id, Wt);
+#if COS_SIN_SHARDED_RELOAD == 1
+                    uint32_t cos_l1_write_addr = get_write_ptr(cos_cb_id);
+                    uint32_t sin_l1_write_addr = get_write_ptr(sin_cb_id);
+                    uint32_t cos_sin_curr_idx = freq_per_head ? (head_num * Ht * Wt + seq_tile * Wt) : (seq_tile * Wt);
+                    for (uint32_t j = 0; j < Wt; ++j) {
+                        noc_async_read_tile(cos_sin_curr_idx, s1, cos_l1_write_addr);
+                        cos_l1_write_addr += cos_tile_bytes;
+                        noc_async_read_tile(cos_sin_curr_idx, s2, sin_l1_write_addr);
+                        sin_l1_write_addr += sin_tile_bytes;
+                        cos_sin_curr_idx++;
+                    }
+#endif
+                    cb_push_back(cos_cb_id, Wt);
                     cb_push_back(sin_cb_id, Wt);
 
                     cb_reserve_back(input_cb_id, Wt);
