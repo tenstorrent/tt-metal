@@ -58,7 +58,7 @@ void bind_bernoulli_operation(nb::module_& mod) {
         doc,
         ttnn::nanobind_arguments_t{
             nb::arg("input"),
-            nb::arg("seed") = 0,
+            nb::arg("seed") = nb::none(),
             nb::kw_only(),
             nb::arg("output") = nb::none(),
             nb::arg("dtype") = nb::none(),

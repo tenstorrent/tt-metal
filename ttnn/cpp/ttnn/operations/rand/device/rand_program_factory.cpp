@@ -14,10 +14,9 @@ namespace ttnn::operations::rand {
 using namespace tt;
 using namespace tt::tt_metal;
 
-std::mt19937 rng(std::time(nullptr));
-std::uniform_int_distribution distribution(1, std::numeric_limits<int32_t>::max());
+std::uniform_int_distribution distribution(0, std::numeric_limits<int32_t>::max());
 
-auto get_random_seed() -> uint32_t { return distribution(rng); }
+auto get_random_seed(std::mt19937& rng) -> uint32_t { return distribution(rng); }
 
 RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::ProgramFactory::create(
     const operation_attributes_t& operation_attributes,
@@ -86,6 +85,9 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
             .compile_args = compute_compile_time_args,
         });
 
+    std::mt19937 rng = operation_attributes.seed.has_value() ? std::mt19937(*operation_attributes.seed)
+                                                             : std::mt19937(std::time(nullptr));
+
     uint32_t tile_offset = 0;
     for (int i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
@@ -106,8 +108,7 @@ RandDeviceOperation::ProgramFactory::cached_program_t RandDeviceOperation::Progr
         f2u_from.f = operation_attributes.from;
         f2u_to.f = operation_attributes.to - eps;  // -eps make sure that generated number is < operation_attributes.to
 
-        // Each core has its own seed to increase the number of generated random numbers
-        uint32_t seed = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+        uint32_t seed = get_random_seed(rng);
 
         std::vector<uint32_t> compute_runtime_args = {seed, f2u_from.u, f2u_to.u, tile_offset, units_per_core};
         SetRuntimeArgs(program, compute_kernel_id, core, compute_runtime_args);
@@ -135,10 +136,13 @@ void RandDeviceOperation::ProgramFactory::override_runtime_arguments(
 
     const uint32_t output_addr = output.buffer()->address();
 
+    std::mt19937 rng = operation_attributes.seed.has_value() ? std::mt19937(*operation_attributes.seed)
+                                                             : std::mt19937(std::time(nullptr));
+
     for (int i = 0; i < cores.size(); ++i) {
         {
             auto& runtime_args = GetRuntimeArgs(program, compute_kernel_id, cores[i]);
-            runtime_args[0] = operation_attributes.seed != 0 ? operation_attributes.seed + i : get_random_seed();
+            runtime_args[0] = get_random_seed(rng);
         }
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, cores[i]);
