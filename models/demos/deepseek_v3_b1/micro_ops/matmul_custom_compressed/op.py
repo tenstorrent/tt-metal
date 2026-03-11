@@ -39,23 +39,40 @@ _IMPL_TO_DEFINE = {
 }
 
 
-def pack_pairs_as_ctas(assignment_flat: np.ndarray) -> list[int]:
-    """Pack pairs of tiles into uint32 CTAs for runtime loop.
+_CB_ADDR_SHIFT = 4  # CIRCULAR_BUFFER_COMPUTE_ADDR_SHIFT for TRISC on Blackhole
+# Must match MEM_ZEROS_BASE from dev_mem_map.h: ((MEM_MAILBOX_END + 31) & ~31)
+# MEM_MAILBOX_END = MEM_MAILBOX_BASE(96) + MEM_MAILBOX_SIZE(12896) = 12992
+_MEM_ZEROS_BASE = 12992
+_ZEROS_ADDR_SHIFTED = _MEM_ZEROS_BASE >> _CB_ADDR_SHIFT  # 812
 
-    Each uint32: [size1:8 | size0:8 | fmt1:8 | fmt0:8]
-    where fmt = DATA_FORMATS[idx] and size = TILE_SIZES_SHIFTED[idx].
+
+def pack_tile_pairs(assignment_flat: np.ndarray, base_addr_shifted: int) -> list[int]:
+    """Pack per-pair metadata as two uint32s: lo=[addr0:24|fmt0:8], hi=[addr1:24|fmt1:8].
+
+    Kernel loads both uint32s per pair (adjacent in memory). Each uint32 has the
+    absolute THCON-shifted address and DataFormat value — zero per-tile arithmetic.
+
+    Args:
+        assignment_flat: 1D array of format indices (0=bfp8, 1=bfp4, 2=bfp2, 3=bfp0).
+        base_addr_shifted: THCON-shifted base address of the weight shard (buffer_address >> 4).
+
+    Returns:
+        List of uint32, two per pair (interleaved: info0, info1, info0, info1, ...).
     """
     assert len(assignment_flat) % 2 == 0, f"Need even tile count, got {len(assignment_flat)}"
     result = []
-    for i in range(0, len(assignment_flat), 2):
-        a0, a1 = int(assignment_flat[i]), int(assignment_flat[i + 1])
-        packed = (
-            _DATA_FORMATS[a0]
-            | (_DATA_FORMATS[a1] << 8)
-            | (_TILE_SIZES_SHIFTED[a0] << 16)
-            | (_TILE_SIZES_SHIFTED[a1] << 24)
-        )
-        result.append(packed)
+    cum_offset_shifted = 0
+    for i in range(len(assignment_flat)):
+        a = int(assignment_flat[i])
+        if a == 3:  # bfp0 / zero tile
+            fmt = _DATA_FORMATS[2]  # bfp2 format for zero-tile decode
+            addr = _ZEROS_ADDR_SHIFTED
+        else:
+            fmt = _DATA_FORMATS[a]
+            addr = base_addr_shifted + cum_offset_shifted
+            cum_offset_shifted += _TILE_SIZES_SHIFTED[a]
+        assert addr <= 0xFFFFFF, f"Address {addr} exceeds 24 bits"
+        result.append((addr << 8) | fmt)
     return result
 
 
@@ -170,23 +187,26 @@ class MatmulCustomCompressed:
                 core_values.append((core_coord, ctas))
             per_core_pos_cta = PerCorePositionalCTADescriptor(core_values=core_values)
         else:
-            # Runtime path: create packed pairs tensor in L1
+            # Runtime path: create per-tile metadata tensor in L1
+            # Each tile gets one uint32: [abs_addr:24 | fmt:8], precomputed with absolute addresses.
             all_cores = ttnn.corerange_to_cores(core_grid)
-            num_pairs = num_tiles_k * out_w // 2
+            num_tiles = num_tiles_k * out_w
+            # fifo_rd_ptr - 1: the -1 is a HW convention for THCON address registers
+            base_addr_shifted = (data_tensor.buffer_address() >> _CB_ADDR_SHIFT) - 1
             shard_data = []
             for core_coord in all_cores:
                 shard_assignment = ct.get_assignment_per_shard(core_coord)
-                pairs = pack_pairs_as_ctas(shard_assignment)
-                shard_data.extend(pairs)
+                tiles = pack_tile_pairs(shard_assignment, base_addr_shifted)
+                shard_data.extend(tiles)
 
             num_cores = len(all_cores)
-            fmt_torch = torch.tensor(shard_data, dtype=torch.int32).reshape(num_cores, num_pairs)
-            fmt_shard_spec = ttnn.ShardSpec(core_grid, [1, num_pairs * 4], ttnn.ShardOrientation.ROW_MAJOR)
+            fmt_torch = torch.tensor(shard_data, dtype=torch.int32).reshape(num_cores, num_tiles)
+            fmt_shard_spec = ttnn.ShardSpec(core_grid, [1, num_tiles * 4], ttnn.ShardOrientation.ROW_MAJOR)
             fmt_mem_config = ttnn.MemoryConfig(
                 ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, fmt_shard_spec
             )
             fmt_tensor = ttnn.from_torch(
-                fmt_torch.view(torch.uint8).reshape(num_cores, num_pairs * 4),
+                fmt_torch.view(torch.uint8).reshape(num_cores, num_tiles * 4),
                 dtype=ttnn.uint8,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 device=a_tensor.device(),
