@@ -1,455 +1,555 @@
-# LERP (Linear Interpolation) Implementation Analysis
+# LERP Implementation Analysis
 
 ## Overview
 
-LERP computes element-wise linear interpolation: `out = input + weight * (end - input)`. It is a ternary SFPU operation taking three inputs (input/start, end, weight) and producing one output. The operation supports three variant modes: TTT (tensor-tensor-tensor), TTS (tensor-tensor-scalar where weight is scalar), and TST (tensor-scalar-tensor where end is scalar). It also supports multiple broadcast types (none, column, row, scalar, outer) for each variant.
+LERP (Linear Interpolation) computes `output = input + weight * (end - input)`, which is equivalent to `output = (1 - weight) * input + weight * end`. It is implemented as a ternary SFPU operation within the shared ternary device operation framework, alongside WHERE, ADDCMUL, and ADDCDIV.
 
 **Program factory path**: `ttnn/cpp/ttnn/operations/eltwise/ternary/device/ternary_program_factory.cpp`
 
+LERP supports two variants:
+- **TTT** (tensor-tensor-tensor): `lerp(input, end, weight)` where all three operands are tensors
+- **TTS** (tensor-tensor-scalar): `lerp(input, end, scalar_weight)` where weight is a scalar float
+
+The operation is parameterized through preprocessor defines (`TERNARY_SFPU_OP_INIT` = `lerp_tile_init`, `TERNARY_SFPU_OP_FUNC` = `lerp_tile<DataFormat>`) injected by the program factory, reusing the same kernel source files as the WHERE operation.
+
 ## Work Unit Definition
 
-One work unit is a single 32x32 tile. The operation processes tiles one at a time (`num_tiles_per_cycle = 1`). Each cycle reads one tile from each input, applies the SFPU lerp computation, and writes one output tile.
+One work unit is **one 32x32 tile**. Each tile is processed independently through the read-compute-write pipeline. The compute kernel processes `num_tiles_per_cycle = 1` tile per iteration: it copies 3 input tiles (or 2 tiles + 1 scalar fill) into destination registers, executes the LERP SFPU operation, and packs 1 output tile.
 
 ## Tensor Format and Layout
 
 ### Input Tensors
 
-| Property | Input 0 (predicate/start) | Input 1 (end) | Input 2 (weight) |
+| Property | Input A (predicate/input) | Input B (end / true) | Input C (weight / false) |
 |---|---|---|---|
-| Dimension Convention | NCHW (up to 5D+, dims > 5 collapsed) | NCHW | NCHW |
-| Tensor Layout | TILE (32x32) | TILE (32x32) | TILE (32x32) or Scalar |
-| Memory Layout | Interleaved or Sharded (Height/Width/Block) | Interleaved or Sharded | Interleaved or Sharded |
+| Semantic Role | Base value (`input`) | End value (`end`) | Weight (`weight`) |
+| CB Assignment | c_0 | c_1 | c_2 (TTT only) |
+| Dimension Convention | Up to rank 6+ (collapsed beyond 5) | Same | Same |
+| Tensor Layout | TILE (32x32) | TILE (32x32) | TILE (32x32) or scalar |
+| Memory Layout | Interleaved or Sharded (L1) | Interleaved or Sharded (L1) | Interleaved or Sharded (L1) |
 | Buffer Type | DRAM or L1 | DRAM or L1 | DRAM or L1 |
-| Data Type | BFLOAT16, FLOAT32 | BFLOAT16, FLOAT32 | BFLOAT16, FLOAT32 |
-
-For LERP, the naming convention from the generic ternary framework maps as:
-- "predicate" (CB0) = **input/start** tensor
-- "value_true" (CB1) = **end** tensor
-- "value_false" (CB2) = **weight** tensor (for TTT variant)
-
-In TTS variant, weight is a scalar runtime argument and CB2 is not used. TST variant is theoretically supported (end is scalar), though less common for lerp.
+| Data Type | BFLOAT16, FLOAT32 | BFLOAT16, FLOAT32 | BFLOAT16, FLOAT32 (or scalar float for TTS) |
 
 ### Output Tensor
 
 | Property | Output |
 |---|---|
-| Dimension Convention | NCHW (broadcasted shape of inputs) |
+| CB Assignment | c_3 |
 | Tensor Layout | TILE (32x32) |
-| Memory Layout | Interleaved or Sharded |
+| Memory Layout | Interleaved or Sharded (L1) |
 | Buffer Type | DRAM or L1 |
-| Data Type | BFLOAT16, FLOAT32 |
+| Data Type | Same as input dtype (or explicitly specified) |
 
 ### Layout Transformations
 
-No tilize/untilize is performed. All inputs and outputs must already be in TILE layout. Broadcasting is handled at the sub-tile level in the compute kernel (column broadcast via SFPI fill) or at the reader level (row/outer broadcast via tile replication). For non-BFLOAT16 row broadcast, the reader fills entire tiles; for BFLOAT16 row broadcast, the LLK `unary_bcast<ROW>` is used in the compute kernel.
+No explicit tilize/untilize is performed in the kernel. All inputs must already be in tiled format. For the TTS variant, the scalar weight is filled into a destination register using `fill_tile` (float) or `fill_tile_int` (int) rather than being read from memory. For column/scalar broadcast cases, the reader kernel fills tiles with first-column/first-row/first-element values using dataflow helper functions.
 
 ## Data Flow Pattern
 
-### TTT No-Broadcast Path (simplest case)
-1. **Reader** reads one tile each from input (CB0), end (CB1), weight (CB2) from DRAM/L1 via NoC, pushes to respective CBs
-2. **Compute** waits for all three CBs, copies tiles to DEST registers 0/1/2 via `copy_tile`, runs SFPU `lerp_tile`, packs result to CB3
-3. **Writer** waits for CB3, writes output tile to DRAM/L1 via NoC
+### TTT Variant (No Broadcast)
+1. **Reader** reads tile `i` from each of the 3 input tensors via TensorAccessor (NoC read from DRAM/L1 interleaved) into CBs c_0, c_1, c_2
+2. **Compute** waits for 1 tile on each of c_0, c_1, c_2; copies them to DST registers 0, 1, 2; calls `lerp_tile_init()` then `lerp_tile(0, 1, 2, 0)` on SFPU; packs result from DST[0] to c_3
+3. **Writer** waits for 1 tile on c_3; writes it to output via TensorAccessor (NoC write to DRAM/L1)
 
-### TTT Column/Scalar Broadcast Path
-1. **Reader** reads tiles accounting for broadcast (broadcast tensors read once, non-broadcast tensors read per-tile)
-2. **Compute** uses `process_tile()` loop with `tile_freq`/`tile_start` to repeat broadcast tiles across the broadcast dimension. Broadcast CBs are waited/popped outside the inner loop; non-broadcast CBs are waited/popped inside.
-3. **Writer** writes output tiles sequentially
-
-### TTT Row Broadcast Path (BFLOAT16)
-1. **Reader** reads row-broadcast tiles (single row of tiles) into pre-CBs (CB0-CB2)
-2. **Compute** uses `unary_bcast<ROW>` LLK to expand row tiles into full tiles in bcast CBs (CB4-CB6), then runs ternary SFPU on the effective CBs
-3. **Writer** writes output tiles
-
-### TTS/TST Path
-1. **Reader** reads two tensors into CB0 and CB1
-2. **Compute** copies tensor tiles to DEST, uses `fill_tile` to fill scalar value into the remaining DEST register, then runs SFPU `lerp_tile`
-3. **Writer** writes output
+### TTS Variant (No Broadcast)
+1. **Reader** reads tile `i` from input A (predicate) into c_0 and tile `i` from input B (end/true) into c_1
+2. **Compute** waits for tiles on c_0 and c_1; copies predicate to DST[0], true tensor to DST[1]; fills scalar weight into DST[2] via `fill_tile(2, scalar_val)`; calls `lerp_tile(0, 1, 2, 0)`; packs to c_3
+3. **Writer** writes output tile from c_3 to DRAM/L1
 
 ### Sharded Path
-When inputs/output are sharded in L1, the reader simply does `cb_reserve_back`/`cb_push_back` to expose the already-present L1 shard data to the compute kernel. The writer is also a no-op when the output is sharded (data stays in L1).
+When all tensors are sharded in L1 on the same core grid, the reader simply does `cb_reserve_back` + `cb_push_back` to expose the already-present L1 data through the CB. No NoC reads occur. The writer similarly skips writes since output is already in L1.
 
 ## Circular Buffer Configuration
 
-### TTT Variant (No Broadcast / Outer Broadcast)
+### Base Configuration (TTT, No Broadcast)
 
-| CB ID | Purpose | Capacity (tiles) | Block Size (tiles) | Buffering | Producer | Consumer |
-|---|---|---|---|---|---|---|
-| c_0 | Input/start tensor | 2 (or shard volume if sharded) | 1 | Double-buffered | Reader | Compute |
-| c_1 | End tensor | 2 (or shard volume if sharded) | 1 | Double-buffered | Reader | Compute |
-| c_2 | Weight tensor | 2 (or shard volume if sharded) | 1 | Double-buffered | Reader | Compute |
-| c_3 | Output tensor | 2 (or shard volume if sharded) | 1 | Double-buffered | Compute | Writer |
+| CB ID | Name | Purpose | Capacity (tiles) | Block Size (tiles) | Buffering | Producer | Consumer |
+|---|---|---|---|---|---|---|---|
+| c_0 | predicate_tensor_cb | Input A (input/base value) | 2 (or shard volume) | 1 | Double-buffered | Reader | Compute |
+| c_1 | value_true_tensor_cb | Input B (end value) | 2 (or shard volume) | 1 | Double-buffered | Reader | Compute |
+| c_2 | value_false_tensor_cb | Input C (weight) | 2 (or shard volume) | 1 | Double-buffered | Reader | Compute |
+| c_3 | output_tensor_cb | Output | 2 (or shard volume) | 1 | Double-buffered | Compute | Writer |
 
-### TTT Variant (Row Broadcast, BFLOAT16)
-All of the above plus:
+### Additional CBs for ROW_BCAST (TTT, bfloat16 only)
 
-| CB ID | Purpose | Capacity (tiles) | Block Size (tiles) | Buffering | Producer | Consumer |
-|---|---|---|---|---|---|---|
-| c_4 | Broadcast-expanded input | 2 | 1 | Double-buffered | Compute (bcast stage) | Compute (SFPU stage) |
-| c_5 | Broadcast-expanded end | 2 | 1 | Double-buffered | Compute (bcast stage) | Compute (SFPU stage) |
-| c_6 | Broadcast-expanded weight | 2 | 1 | Double-buffered | Compute (bcast stage) | Compute (SFPU stage) |
+| CB ID | Name | Purpose | Capacity (tiles) | Block Size (tiles) | Buffering | Producer | Consumer |
+|---|---|---|---|---|---|---|---|
+| c_4 | cb_bcast_a | Broadcast-expanded A | 2 | 1 | Double-buffered | Compute (bcast stage) | Compute (SFPU stage) |
+| c_5 | cb_bcast_b | Broadcast-expanded B | 2 | 1 | Double-buffered | Compute (bcast stage) | Compute (SFPU stage) |
+| c_6 | cb_bcast_c | Broadcast-expanded C | 2 | 1 | Double-buffered | Compute (bcast stage) | Compute (SFPU stage) |
 
-### TTS/TST Variant
+### TTS Variant
 
-| CB ID | Purpose | Capacity (tiles) | Block Size (tiles) | Buffering | Producer | Consumer |
-|---|---|---|---|---|---|---|
-| c_0 | Input/start tensor | 2 (or shard volume) | 1 | Double-buffered | Reader | Compute |
-| c_1 | End tensor (TTS) or Weight tensor (TST) | 2 (or shard volume) | 1 | Double-buffered | Reader | Compute |
-| c_3 | Output tensor | 2 (or shard volume) | 1 | Double-buffered | Compute | Writer |
+| CB ID | Name | Purpose | Capacity (tiles) | Block Size (tiles) | Buffering | Producer | Consumer |
+|---|---|---|---|---|---|---|---|
+| c_0 | predicate_tensor_cb | Input A (input/base value) | 2 (or shard volume) | 1 | Double-buffered | Reader | Compute |
+| c_1 | value_true_tensor_cb | Input B (end value) | 2 (or shard volume) | 1 | Double-buffered | Reader | Compute |
+| c_3 | output_tensor_cb | Output | 2 (or shard volume) | 1 | Double-buffered | Compute | Writer |
+
+Note: c_2 is not allocated for TTS since the weight is a scalar filled directly into a DST register.
 
 ## Pipeline Pattern Summary
 
-All CBs are allocated with capacity 2 and consumed 1 tile at a time, enabling double-buffering. This allows the reader to prefetch the next tile while the compute kernel processes the current one, and compute to produce the next output while the writer drains the current one.
-
-For sharded tensors, the CB capacity equals the shard volume (all tiles in the shard), so the entire shard is available at once -- no pipelining needed since data is already in L1.
+All CBs are allocated with capacity = 2 tiles and consumed/produced 1 tile at a time, enabling **double-buffering**. This allows the reader to fill the next tile while compute processes the current tile, and compute to produce the next output while the writer drains the current one. When sharded, CB capacity equals the shard volume, enabling the entire shard to be processed without per-tile NoC transfers.
 
 ## Index Calculations
 
-The reader kernel uses a multi-dimensional index decomposition to map a linear tile ID to per-tensor tile offsets. For each tensor, strides are computed as:
-- `nD_stride = Ht * Wt * C * N * D * (ND > 1)`
-- `d_stride = Ht * Wt * C * N * (D > 1)`
-- `n_stride = Ht * Wt * C * (N > 1)`
-- `c_stride = Ht * Wt * (C > 1)`
+### Interleaved Mode
 
-The stride being zero when a dimension is 1 implements broadcasting along that dimension.
+The reader and writer use `TensorAccessor` for address resolution. Logical tile indices are computed from a linear `start_tile_id` decomposed into multi-dimensional coordinates:
 
-For width-sharded tensors, the reader limits tile iteration to `start_tw + dst_shard_width` rather than the full `Wt`, and the writer adjusts the output offset to skip the non-shard portion of each row.
+```
+tiles_per_n = C * Ht * Wt
+tiles_per_d = N * tiles_per_n
+tiles_per_nd = D * tiles_per_d
+
+start_nd = start_tile_id / tiles_per_nd
+start_d  = (start_tile_id % tiles_per_nd) / tiles_per_d
+start_n  = ... / tiles_per_n
+start_c  = ... / HtWt
+start_th = ... / Wt
+start_tw = ... % Wt
+```
+
+For broadcast cases, each input tensor maintains its own stride structure (`nD_stride`, `d_stride`, `n_stride`, `c_stride`), which are set to 0 for dimensions that should broadcast (dimension size = 1). This causes the tile offset to not advance for broadcast dimensions.
+
+### Sharded Mode
+
+For sharded tensors, `c_start_id` is computed based on the shard position in the grid:
+
+```
+c_start_id = (core_index / num_shards_per_width) * (c_shard_height * output_Wt)
+           + (core_index % num_shards_per_width) * c_shard_width
+```
+
+The `ShardShapeGenerator` class handles edge cases where the last core(s) may have fewer tiles than the nominal shard shape.
 
 ## Memory Access Patterns
 
 ### Read Pattern
-- **Interleaved**: Sequential tile reads within each (nd, d, n, c, h) row, with stride jumps between rows and higher dimensions. Each tile read is a NoC async read followed by a barrier.
-- **Sharded**: No reads needed; data already in L1. Reader just exposes the shard via `cb_reserve_back`/`cb_push_back`.
+
+- **Interleaved (no broadcast)**: Sequential tile reads with stride-based offset calculation for multi-dimensional iteration. Tiles are read in the order: nD -> D -> N -> C -> Ht -> Wt (innermost). Each of the 3 inputs is read at its own computed offset.
+- **Interleaved (broadcast)**: Same iteration order, but broadcast inputs have zero strides for broadcast dimensions, causing repeated reads of the same tile.
+- **Sharded**: No NoC reads; L1 data is exposed through CB reserve/push.
 
 ### Write Pattern
-- **Interleaved**: Sequential tile writes mirroring the reader's iteration order. Each tile is written via NoC async write with barrier.
-- **Sharded**: No writes needed; output remains in L1.
+
+- **Interleaved**: Sequential tile writes following the same nD -> D -> N -> C -> Ht -> Wt order, with `noc_async_write_page` per tile.
+- **Width-sharded**: Writer adjusts `dst_tile_offset` by `(Wt - dst_shard_width)` after each tile row to skip tiles belonging to other shards.
+- **Fully sharded output**: Writer is a no-op (DST_SHARDED=1 disables the writer body).
 
 ## Core Distribution Strategy
 
-| Property | Value |
-|---|---|
-| Grid Topology | Rectangular (prefers zero-start grid at (0,0)) |
-| Work Splitting | `split_work_to_cores()` divides total output tiles across available cores |
-| Core Group 1 | Gets `num_tiles_per_core_group_1` tiles |
-| Core Group 2 | Gets `num_tiles_per_core_group_2` tiles (may be 0 for remainder cores) |
-| Load Balancing | Even split with remainder distributed to core_group_2 |
-| Remainder Handling | Cores not in either group get zero-args (no-op) |
-| Sharded | Core grid from shard spec; each core processes its shard |
-| Row Major | Default true; follows shard orientation if sharded |
+| Property | Interleaved Mode | Sharded Mode |
+|---|---|---|
+| Grid Topology | Rectangular grid from `worker_grid` | Shard grid from tensor shard spec |
+| Work Splitting | `split_work_to_cores()` divides total output tiles | Each core processes its shard volume |
+| Core Group 1 | Cores with `num_tiles_per_core_group_1` tiles | All shard cores (equal work) |
+| Core Group 2 | Cores with `num_tiles_per_core_group_1 - 1` tiles (remainder) | N/A |
+| Load Balancing | Remainder tiles distributed to first N cores | Edge shards may have fewer tiles (handled by ShardShapeGenerator) |
+| No-op Cores | Cores outside both groups get zero args and skip | Cores outside shard grid get zero args |
+| Row-major preference | Grid traversed row-major unless shard orientation says otherwise | Follows shard orientation |
+
+The factory supports two grid strategies:
+1. **zero_start_grid**: When the grid starts at (0,0) with a single rectangular range, uses `grid_to_cores` with compute grid dimensions for efficient enumeration.
+2. **General grid**: Uses `corerange_to_cores` or `grid_to_cores_with_noop` for arbitrary core ranges.
 
 ## Arguments
 
 ### Compile-Time Arguments
 
-#### Compute Kernel
+#### Reader (TTT variant)
 
 | Index | Name | Type | Description |
 |---|---|---|---|
-| 0 | num_tiles_per_cycle | uint32_t | Always 1; tiles processed per read-compute-write cycle |
-| 1 | scalar_is_true_value | uint32_t | 0 for TTS (scalar is "false"/weight), 1 for TST (scalar is "true"/end); TTT variant ignores this |
+| 0 | cb_id_src0 | uint32_t | CB index for predicate tensor (c_0) |
+| 1 | cb_id_src1 | uint32_t | CB index for true/end tensor (c_1) |
+| 2 | cb_id_src2 | uint32_t | CB index for false/weight tensor (c_2) |
+| 3+ | TensorAccessorArgs (src0) | varies | Compile-time tensor accessor config for input A |
+| N+ | TensorAccessorArgs (src1) | varies | Compile-time tensor accessor config for input B |
+| M+ | TensorAccessorArgs (src2) | varies | Compile-time tensor accessor config for input C |
+| last | has_sharding | uint32_t | 1 if sharded path is used, 0 otherwise |
 
-#### Reader Kernel (TTT)
+#### Reader (TTS variant)
 
 | Index | Name | Type | Description |
 |---|---|---|---|
-| 0 | cb_id_src0 | uint32_t | CB index for input/start tensor (c_0) |
-| 1 | cb_id_src1 | uint32_t | CB index for end tensor (c_1) |
-| 2 | cb_id_src2 | uint32_t | CB index for weight tensor (c_2) |
-| 3+ | TensorAccessorArgs (src0) | varies | Compile-time tensor accessor config for input tensor |
-| ... | TensorAccessorArgs (src1) | varies | Compile-time tensor accessor config for end tensor |
-| ... | TensorAccessorArgs (src2) | varies | Compile-time tensor accessor config for weight tensor |
-| last | has_sharding | uint32_t | 1 if using native L1 sharding, 0 otherwise |
+| 0 | cb_id_in0 | uint32_t | CB index for predicate tensor (c_0) |
+| 1 | cb_id_in1 | uint32_t | CB index for true/end tensor (c_1) |
+| 2+ | TensorAccessorArgs (src0) | varies | Compile-time tensor accessor config for input A |
+| N+ | TensorAccessorArgs (src1) | varies | Compile-time tensor accessor config for input B |
 
-#### Writer Kernel
+#### Writer
 
 | Index | Name | Type | Description |
 |---|---|---|---|
 | 0 | cb_id_out | uint32_t | CB index for output tensor (c_3) |
 | 1+ | TensorAccessorArgs (dst) | varies | Compile-time tensor accessor config for output |
-| last | has_sharding | uint32_t | 1 if output is sharded, 0 otherwise |
+| last | has_sharding | uint32_t | 1 if sharded output, 0 otherwise |
+
+#### Compute
+
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0 | num_tiles_per_cycle | uint32_t | Always 1 - tiles processed per iteration |
+| 1 | scalar_is_true_value | uint32_t | 0 for TTS (scalar is false/weight), 1 for TST |
 
 ### Runtime Arguments
 
-#### Compute Kernel
+#### Reader (27 args)
 
 | Index | Name | Type | Description |
 |---|---|---|---|
-| 0 | num_tiles | uint32_t | Number of tiles this core must process |
-| 1 | freq | uint32_t | Broadcast frequency (tiles before broadcast tile repeats); 0 for no-broadcast/row-broadcast |
-| 2 | counter | uint32_t | Starting tile offset within broadcast cycle |
-| 3 | scalar_arg | uint32_t | Packed scalar value (bit-cast float/int); 0 for TTT variant |
-
-#### Reader Kernel (TTT)
-
-| Index | Name | Type | Description |
-|---|---|---|---|
-| 0 | src0_addr | uint32_t | DRAM/L1 address of input/start tensor |
-| 1 | src1_addr | uint32_t | DRAM/L1 address of end tensor |
-| 2 | src2_addr | uint32_t | DRAM/L1 address of weight tensor |
-| 3 | num_tiles | uint32_t | Tiles per core |
+| 0 | src0_addr | uint32_t | DRAM address of predicate/input tensor |
+| 1 | src1_addr | uint32_t | DRAM address of end/true tensor |
+| 2 | src2_addr | uint32_t | DRAM address of weight/false tensor (0 for TTS) |
+| 3 | num_tiles | uint32_t | Number of output tiles for this core |
 | 4 | start_id | uint32_t | Starting tile ID for this core |
-| 5-8 | pred strides | uint32_t | nD/d/n/c strides for input tensor |
-| 9-14 | output dims | uint32_t | D, N, C, Ht, Wt, ND of output shape |
-| 15-19 | true strides + count | uint32_t | nD/d/n/c strides and tile count for end tensor |
-| 20-24 | false strides + count | uint32_t | nD/d/n/c strides and tile count for weight tensor |
-| 25 | dst_shard_width | uint32_t | Width of output shard in tiles (0 if not sharded) |
-| 26 | src_num_tiles | uint32_t | Total tiles in input shard (0 if not sharded) |
+| 5 | nD_stride | uint32_t | Predicate stride for >5D dims |
+| 6 | d_stride | uint32_t | Predicate stride for dim -5 |
+| 7 | n_stride | uint32_t | Predicate stride for dim -4 |
+| 8 | c_stride | uint32_t | Predicate stride for dim -3 |
+| 9 | D | uint32_t | Output dim -5 size |
+| 10 | N | uint32_t | Output dim -4 size |
+| 11 | C | uint32_t | Output dim -3 size |
+| 12 | Ht | uint32_t | Output height in tiles |
+| 13 | Wt | uint32_t | Output width in tiles |
+| 14 | cND | uint32_t | Collapsed >5D dimension size |
+| 15-18 | true/B strides | uint32_t | nD/d/n/c strides for true/end tensor |
+| 19 | b_num_tiles | uint32_t | True tensor shard tile count (sharded) |
+| 20-23 | false/C strides | uint32_t | nD/d/n/c strides for weight/false tensor |
+| 24 | f_num_tiles | uint32_t | False tensor shard tile count (sharded) |
+| 25 | dst_shard_width | uint32_t | Output shard width in tiles (0 if not sharded) |
+| 26 | src0_num_tiles | uint32_t | Predicate tensor shard tile count (sharded) |
 
-#### Writer Kernel
+#### Writer (11 args)
 
 | Index | Name | Type | Description |
 |---|---|---|---|
-| 0 | dst_addr | uint32_t | DRAM/L1 address of output buffer |
-| 1 | num_tiles | uint32_t | Tiles this core must write |
-| 2 | start_id | uint32_t | Starting tile ID |
-| 3 | dst_shard_width | uint32_t | Shard width in tiles |
-| 4-9 | output dims | uint32_t | D, N, C, Ht, Wt, ND |
-| 10 | padding | uint32_t | Reserved (0) |
+| 0 | dst_addr | uint32_t | DRAM address of output tensor |
+| 1 | num_tiles | uint32_t | Number of tiles to write for this core |
+| 2 | start_id | uint32_t | Starting tile ID for output |
+| 3 | dst_shard_width | uint32_t | Shard width in tiles (0 if not sharded) |
+| 4-8 | D, N, C, Ht, Wt | uint32_t | Output tensor dimensions |
+| 9 | cND | uint32_t | Collapsed >5D dimension |
+| 10 | padding | uint32_t | Unused (always 0) |
+
+#### Compute (4 args)
+
+| Index | Name | Type | Description |
+|---|---|---|---|
+| 0 | num_tiles | uint32_t | Number of tiles to process on this core |
+| 1 | freq | uint32_t | Broadcast frequency (Wt for COL_BCAST, HtWt for SCALAR_BCAST, 0 for NONE) |
+| 2 | counter | uint32_t | Starting position within broadcast cycle |
+| 3 | scalar_arg | uint32_t | Packed scalar value (bit-cast float for TTS, 0 for TTT) |
 
 ## Kernel Implementations
 
-### Reader Kernel (TTT No-Broadcast/Outer-Broadcast)
+### Reader Kernels
 
+LERP uses several reader kernels depending on variant and broadcast type:
+
+#### TTT No-Broadcast / Outer-Broadcast Reader
 - **File**: `ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/dataflow/ternary_reader_nosubtilebcast_ttt.cpp`
-- **Key Logic**: Iterates through ND, D, N, C, H, W dimensions using stride-based offsets for each of the three tensors. Handles both interleaved (NoC reads) and sharded (L1 expose) paths via `SRC_SHARDED_A/B/C` defines. Broadcasting along outer dimensions is achieved through zero strides -- when a dimension is 1 for a tensor, its stride is 0, so the tile offset does not advance.
+- **Key Logic**: Reads tiles from 3 input tensors using nested 6D loops (nD, D, N, C, Ht, Wt). Each tensor has independent stride calculations for broadcast support. Supports conditional sharding via `SRC_SHARDED_A/B/C` defines -- sharded tensors skip NoC reads entirely. Uses `TensorAccessor` for page-level address resolution.
+
+#### TTS/TST No-Broadcast Reader
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/dataflow/ternary_reader_nobcast_tst_tts.cpp`
+- **Key Logic**: Simple linear tile loop reading 2 tensors (predicate + one operand) using the same tile ID for both. No broadcast logic needed.
+
+#### Other Reader Variants
+- **Col Broadcast TTT**: `ternary_reader_colbcast_ttt.cpp` - fills tiles with first column values for broadcast inputs
+- **Row Broadcast TTT**: `ternary_reader_rowbcast_ttt.cpp` - fills tiles with first row values or passes through for LLK broadcast
+- **Scalar Broadcast TTT**: `ternary_reader_scalar_ttt.cpp` - fills tiles with first element for (1,1) shaped inputs
+- **TTS/TST broadcast variants**: `tts_tst_reader_col_bcast.cpp`, `tts_tst_reader_row_bcast.cpp`, `tst_tts_reader_scalar_bcast.cpp`, `tst_tts_reader_outer_bcast.cpp`
+
+### Compute Kernels
+
+#### TTT No-Broadcast Compute
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_sfpu_no_bcast_ttt.cpp`
+- **Key Logic**: Per-tile loop: waits for 3 input tiles on c_0/c_1/c_2, copies each to DST[0]/DST[1]/DST[2] via `copy_tile`, calls `lerp_tile_init()` then `lerp_tile<DataFormat>(0, 1, 2, 0)`, packs DST[0] to c_3. Pure SFPU execution path.
+
+#### TTS/TST No-Broadcast Compute
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_sfpu_no_bcast_tts_tst.cpp`
+- **Key Logic**: Same as TTT but only 2 CBs. Copies predicate to DST[0], tensor operand to DST[1] (TTS) or DST[2] (TST), fills scalar into the remaining register using `fill_tile`. Compile-time arg `scalar_is_true` selects register assignment.
+
+#### TTT Col/Scalar Broadcast Compute
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_sfpu_col_scalar_bcast_ttt.cpp`
+- **Key Logic**: Uses `freq` and `tile_start` runtime args to control broadcast tile reuse. Broadcast CBs are waited/popped outside the inner loop; non-broadcast CBs inside. `BCAST_A/B/C` defines control which inputs are broadcast.
+
+#### TTT Row Broadcast Compute (bfloat16 only)
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_sfpu_row_bcast_ttt.cpp`
+- **Key Logic**: Uses `unary_bcast<BroadcastType::ROW>` LLK to expand row-broadcast tiles into intermediate CBs (c_4/c_5/c_6), then performs the standard SFPU ternary op on the expanded tiles. Only used when all inputs are bfloat16 (`is_llk_bcast` check).
+
+#### TTS/TST Col/Scalar Broadcast Compute
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_sfpu_col_scalar_bcast_tts_tst.cpp`
+- **Key Logic**: Combines broadcast-aware CB management with scalar fill. Uses `BCAST_A/B/C` defines similar to TTT broadcast but handles scalar fill for the missing tensor operand.
 
 ### Writer Kernel
 
 - **File**: `ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/dataflow/ternary_writer_nobcast.cpp`
-- **Key Logic**: Mirrors reader iteration order. For interleaved outputs, writes one tile at a time with NoC async write + barrier. For sharded outputs (`DST_SHARDED` define), the entire kernel body is compiled out -- output stays in L1.
+- **Key Logic**: Single writer kernel used for all variants and broadcast types. Nested 6D loop matching reader structure. For width-sharded outputs, adjusts tile offset by `(Wt - dst_shard_width)` after each tile row. Entire body is compiled out when `DST_SHARDED=1`.
 
-### Compute Kernel
+## Implementation Notes
 
-The LERP operation uses one of five compute kernel files depending on variant and broadcast type:
+1. **Shared Kernel Framework**: LERP reuses the exact same kernel source files as WHERE and other ternary ops. The operation-specific behavior is injected via `TERNARY_SFPU_OP_INIT` and `TERNARY_SFPU_OP_FUNC` preprocessor defines, which resolve to `lerp_tile_init` and `lerp_tile<DataFormat>`.
 
-| Variant | Broadcast | Compute Kernel File |
-|---|---|---|
-| TTT | None, Outer | `ternary_sfpu_no_bcast_ttt.cpp` |
-| TTT | Column, Scalar | `ternary_sfpu_col_scalar_bcast_ttt.cpp` |
-| TTT | Row (BF16) | `ternary_sfpu_row_bcast_ttt.cpp` |
-| TTS/TST | None, Outer, Row | `ternary_sfpu_no_bcast_tts_tst.cpp` |
-| TTS/TST | Column, Scalar | `ternary_sfpu_col_scalar_bcast_tts_tst.cpp` |
+2. **No TST Variant for LERP**: Unlike WHERE which supports TTT/TTS/TST, the kernel config map for LERP only registers TTT and TTS variants. This is because LERP semantically has `(input, end, weight)` -- making the weight a scalar (TTS) is natural, but making `end` a scalar while `weight` is a tensor (TST) is uncommon.
 
-All kernels share the same SFPU dispatch pattern: they load tiles to DEST[0], DEST[1], DEST[2], call `TERNARY_SFPU_OP_INIT()` and `TERNARY_SFPU_OP_FUNC(0, 1, 2, 0)`, then pack DEST[0] to the output CB. The difference is only in how tiles are acquired (direct vs broadcast-aware synchronization) and whether scalars are filled via `fill_tile`.
+3. **Broadcast Type Detection**: The program factory determines broadcast type at the host level by comparing tensor shapes. For example, if `input` has shape `(1,1,32,1)` and `end` has shape `(1,1,32,32)`, this triggers `COL_BCAST`. The broadcast type controls kernel selection and runtime argument setup.
 
-#### Compute Kernel File (Primary: TTT No-Broadcast)
+4. **LLK Row Broadcast Optimization**: For the TTT variant with ROW_BCAST and all-bfloat16 inputs, a special optimization uses the hardware `unary_bcast<BroadcastType::ROW>` LLK instruction instead of software tile filling. This requires 3 additional intermediate CBs (c_4, c_5, c_6).
 
-`ttnn/cpp/ttnn/operations/eltwise/ternary/device/kernels/compute/ternary_sfpu_no_bcast_ttt.cpp`
+5. **Program Caching**: The `override_runtime_arguments` method enables program reuse across calls with different data but same shapes/configs. It updates buffer addresses and tile counts without rebuilding kernels.
 
-#### Annotated Compute Kernel Source (TTT No-Broadcast)
+6. **FP32 Destination Accumulation**: When output dtype is FLOAT32, INT32, or UINT32, `fp32_dest_acc_en` is set and `UnpackToDestMode::UnpackToDestFp32` is configured for relevant CBs, ensuring full precision in the destination register file.
 
-```cpp
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
-//
-// SPDX-License-Identifier: Apache-2.0
+7. **Uneven Shard Fallback**: When any input or output tensor has uneven sharding (shard shape does not evenly divide the tensor), the factory falls back to interleaved mode (treating all tensors as if they were interleaved) to avoid deadlocks from cores having different shard sizes.
 
-#include <cstdint>
+## External Knowledge Sources
 
-#include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp"
-#include "ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/where.h"
-#include "api/compute/eltwise_unary/lerp.h"     // provides lerp_tile() and lerp_tile_init()
+### DeepWiki Queries
 
-void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);  // runtime arg 0: total tiles for this core
+1. **Query**: "How does the ternary eltwise operation work in TTNN? What is the program factory structure for ternary operations like lerp? What kernels are used?"
+   **Reason**: Needed initial architectural overview of ternary operation framework before diving into source code.
+   **Key Findings**: Confirmed that LERP is one of four ternary op types (WHERE, LERP, ADDCMUL, ADDCDIV), shares the same program factory with operation-specific behavior via defines, supports TTT/TTS/TST variants, and uses SFPU functions `lerp_tile_init`/`lerp_tile<DataFormat>`.
 
-    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // always 1
+### Documentation References
 
-    constexpr auto cb_pre_in1 = tt::CBIndex::c_0;  // CB for input/start tensor
-    constexpr auto cb_pre_in2 = tt::CBIndex::c_1;  // CB for end tensor
-    constexpr auto cb_pre_in3 = tt::CBIndex::c_2;  // CB for weight tensor
-    constexpr auto cb_out = tt::CBIndex::c_3;       // CB for output tensor
+1. **Source**: `ttnn/cpp/ttnn/operations/eltwise/ternary/device/ternary_op_utils.cpp` (kernel config map, lines 164-254)
+   **Reason**: Needed to understand which kernel files map to which (op_type, variant, broadcast_type) combinations.
+   **Key Information**: LERP registers 11 kernel configurations (5 TTT + 6 TTS), sharing the same kernel files as WHERE but with different compute defines.
 
-    unary_op_init_common(cb_pre_in1, cb_out);  // initializes unpack/pack pipeline for SFPU mode
+2. **Source**: `ttnn/cpp/ttnn/operations/eltwise/ternary/common/ternary_op_types.hpp`
+   **Reason**: Needed enum definitions for operation types, variants, and broadcast types.
+   **Key Information**: LERP formula is documented as `out = input + weight * (end - input)`. Seven broadcast types are supported including NONE, OUTER, COL, ROW, SCALAR, SCALAR_A, SCALAR_B.
 
-    for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        // Wait for reader to produce one tile in each input CB
-        cb_wait_front(cb_pre_in1, num_tiles_per_cycle);  // wait for input/start tile
-        cb_wait_front(cb_pre_in2, num_tiles_per_cycle);  // wait for end tile
-        cb_wait_front(cb_pre_in3, num_tiles_per_cycle);  // wait for weight tile
+3. **Source**: `ttnn/cpp/ttnn/operations/eltwise/ternary/device/ternary_device_operation.hpp`
+   **Reason**: Needed to understand the operation attributes and tensor args structure.
+   **Key Information**: Operation attributes include `ternary_op_type`, `ternary_variant`, `broadcast_type`, `scalar_input_a`, `scalar_input_b`, and `worker_grid`. The program factory caches reader/writer/compute kernel handles.
 
-        cb_reserve_back(cb_out, num_tiles_per_cycle);  // reserve space in output CB for writer
+## SFPU Kernel Implementation
+This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to.
 
-        tile_regs_acquire();  // acquire DEST register file for exclusive use
+### SFPU Abstraction Layers
 
-        // Unpack (copy) tiles from CBs into DEST registers via the unpack pipeline
-        copy_tile_to_dst_init_short(cb_pre_in1);  // configure unpacker for cb_pre_in1 format
-        copy_tile(cb_pre_in1, 0, 0);              // copy tile 0 from cb_pre_in1 -> DEST[0] (input/start)
+| Layer | File Path |
+|-------|-----------|
+| **API Header** | `tt_metal/hw/inc/api/compute/eltwise_unary/lerp.h` |
+| **LLK Dispatch** | `tt_metal/hw/ckernels/{blackhole,wormhole_b0}/metal/llk_api/llk_sfpu/llk_math_eltwise_ternary_sfpu_lerp.h` |
+| **Core SFPU Implementation** | `tt_metal/hw/ckernels/{blackhole,wormhole_b0}/metal/llk_api/llk_sfpu/ckernel_sfpu_lerp.h` |
+| **Parameters Dispatch** | `tt_metal/third_party/tt_llk/tt_llk_{blackhole,wormhole_b0}/llk_lib/llk_math_eltwise_ternary_sfpu_params.h` |
 
-        copy_tile_to_dst_init_short(cb_pre_in2);  // reconfigure unpacker for cb_pre_in2 format
-        copy_tile(cb_pre_in2, 0, 1);              // copy tile 0 from cb_pre_in2 -> DEST[1] (end)
+### Call Chain
 
-        copy_tile_to_dst_init_short(cb_pre_in3);  // reconfigure unpacker for cb_pre_in3 format
-        copy_tile(cb_pre_in3, 0, 2);              // copy tile 0 from cb_pre_in3 -> DEST[2] (weight)
+1. The compute kernel calls `TERNARY_SFPU_OP_INIT()` which resolves to `lerp_tile_init()`, and `TERNARY_SFPU_OP_FUNC(0, 1, 2, 0)` which resolves to `lerp_tile<DataFormat>(0, 1, 2, 0)` -- both defined in the API header `lerp.h`.
+2. `lerp_tile<DataFormat>` wraps `MATH((llk_math_eltwise_ternary_sfpu_lerp<APPROX, DST_ACCUM_MODE, data_format>(idst0, idst1, idst2, odst)))`, which calls the LLK dispatch function.
+3. `llk_math_eltwise_ternary_sfpu_lerp` calls `_llk_math_eltwise_ternary_sfpu_params_<APPROXIMATE>()`, passing `sfpu::calculate_lerp<...>` as the callable and the four DST indices.
+4. `_llk_math_eltwise_ternary_sfpu_params_` handles sync/stall, then iterates over 4 tile faces (in RC vector mode), calling `calculate_lerp(...)` for each face, with `TTI_SETRWC` between faces to advance the DEST pointer by 16 rows.
+5. `calculate_lerp` is the core SFPU function -- it loops 8 iterations (one per pair of rows within a face), performing the lerp formula `in0 + in2 * (in1 - in0)` using SFPI vector operations on DEST registers.
+6. `lerp_tile_init()` calls `llk_math_eltwise_ternary_sfpu_lerp_init<APPROX>()`, which calls `_llk_math_eltwise_ternary_sfpu_init_<SfpuType::lerp>()` to configure SFPU config registers and address modes.
 
-        // For LERP: expands to lerp_tile_init() then lerp_tile<format>(0, 1, 2, 0)
-        TERNARY_SFPU_OP_INIT();           // configures SFPU pipeline for lerp operation
-        TERNARY_SFPU_OP_FUNC(0, 1, 2, 0); // SFPU lerp: DEST[0] = DEST[0] + DEST[2] * (DEST[1] - DEST[0])
-
-        tile_regs_commit();  // signal that DEST writes are complete, hand off to packer
-        tile_regs_wait();    // wait for packer to be ready to read DEST
-
-        pack_tile(0, cb_out);  // pack DEST[0] (result) into output CB
-
-        tile_regs_release();  // release DEST registers for next iteration
-
-        cb_push_back(cb_out, num_tiles_per_cycle);    // publish output tile to writer
-        cb_pop_front(cb_pre_in1, num_tiles_per_cycle); // free consumed input/start tile
-        cb_pop_front(cb_pre_in2, num_tiles_per_cycle); // free consumed end tile
-        cb_pop_front(cb_pre_in3, num_tiles_per_cycle); // free consumed weight tile
-    }
-}
-```
-
-### SFPU Kernel Implementation
-
-#### SFPU Kernel File
-
-`tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_lerp.h`
-(Identical for Blackhole: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_lerp.h`)
-
-#### Annotated SFPU Kernel Source
+### Annotated SFPU Kernel Source
 
 ```cpp
-// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
-//
-// SPDX-License-Identifier: Apache-2.0
-
-#pragma once
-
-#include "llk_defs.h"
-#include "sfpi.h"                   // SFPI programming interface: vFloat, dst_reg, etc.
-#include "ckernel_sfpu_binary.h"    // shared binary SFPU utilities
+// File: tt_metal/hw/ckernels/{blackhole,wormhole_b0}/metal/llk_api/llk_sfpu/ckernel_sfpu_lerp.h
+// (Blackhole and Wormhole versions are identical)
 
 namespace ckernel::sfpu {
 
 template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en, DataFormat data_format, int ITERATIONS>
-inline void calculate_lerp(
-    const uint dst_index_in0,  // DEST register index for input/start tile
-    const uint dst_index_in1,  // DEST register index for end tile
-    const uint dst_index_in2,  // DEST register index for weight tile
-    const uint dst_index_out) {  // DEST register index for output tile (same as in0 typically)
+inline void calculate_lerp( // APPROXIMATION_MODE is passed through but unused; ITERATIONS=8
+    const uint dst_index_in0,  // input (start)
+    const uint dst_index_in1,  // end
+    const uint dst_index_in2,  // weight
+    const uint dst_index_out) {
     static_assert(
         data_format == DataFormat::Float32 || data_format == DataFormat::Float16_b,
         "Unsupported data format for calculate_lerp(). Supported data formats are: Float32, Float16_b.");
 
-    // Each tile in DEST has 32 rows when accessed via SFPI (64 / SFP_DESTREG_STRIDE = 32)
-    // A 32x32 tile has 1024 elements = 4 faces * 16 rows * 16 cols
-    // SFPI processes one row (16 elements) per iteration via SIMD vector operations
-    // With ITERATIONS=8, the outer loop runs 8 times; the #pragma unroll 8 expands it
-    // This covers 8 rows per face, and the _llk_math_eltwise_ternary_sfpu_params_ wrapper
-    // calls this function multiple times for different faces (RC mode = all 4 faces)
+    // Each tile in DEST occupies 64 rows; SFPI accesses even rows only (stride=2), so 32 SFPI-addressable rows per tile
     constexpr uint dst_tile_size_sfpi = 32;
-
-    // lerp formula: out = input + weight * (end - input)
+    // lerp: out = input + weight * (end - input)
 #pragma GCC unroll 8
     for (int d = 0; d < ITERATIONS; d++) {
-        // Load one row (16 elements) from each input tile's current face row
-        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];  // input/start value
-        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];  // end value
-        sfpi::vFloat in2 = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi];  // weight value
-
-        // Compute lerp: input + weight * (end - input)
-        // This uses SFPU vector float arithmetic: subtract, multiply, add
-        // Each operation processes 16 elements in parallel (one SFPI row)
-        sfpi::vFloat result = in0 + in2 * (in1 - in0);
-
-        // When not using FP32 DEST accumulation, round result to BF16
-        // This prevents precision loss when the DEST register is in BF16 mode
+        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi]; // SFPLOAD from DEST tile 0
+        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi]; // SFPLOAD from DEST tile 1
+        sfpi::vFloat in2 = sfpi::dst_reg[dst_index_in2 * dst_tile_size_sfpi]; // SFPLOAD from DEST tile 2
+        sfpi::vFloat result = in0 + in2 * (in1 - in0); // SFPMUL + SFPADD sequence (see instruction breakdown below)
         if constexpr (!is_fp32_dest_acc_en) {
-            result = float32_to_bf16_rne(result);  // round-to-nearest-even BF16 conversion
+            result = float32_to_bf16_rne(result); // Round-to-nearest-even truncation for bf16 output
         }
-
-        // Write result back to the output DEST register at the current row
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-
-        // Advance the SFPI row pointer to the next row within the face
-        sfpi::dst_reg++;
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result; // SFPSTORE to DEST tile 0
+        sfpi::dst_reg++; // INCRWC: advance DEST row pointer by SFP_DESTREG_STRIDE (2)
     }
 }
 
 }  // namespace ckernel::sfpu
 ```
 
-#### SFPU Instructions Used
+The `float32_to_bf16_rne` helper used when `is_fp32_dest_acc_en == false`:
 
-| Instruction/Intrinsic | Description |
-|---|---|
-| `sfpi::dst_reg[idx]` (load) | Loads a row of 16 float elements from the DEST register file at the given offset into an SFPI `vFloat` vector register |
-| `sfpi::dst_reg[idx]` (store) | Stores a `vFloat` vector register back to the DEST register file at the given offset |
-| `sfpi::dst_reg++` | Advances the SFPI base row pointer by 1, moving to the next row within the tile face |
-| `operator-` (vFloat) | SFPU vector subtract: computes element-wise `in1 - in0` (16 elements) |
-| `operator*` (vFloat) | SFPU vector multiply: computes element-wise `in2 * (in1 - in0)` (16 elements) |
-| `operator+` (vFloat) | SFPU vector add: computes element-wise `in0 + product` (16 elements) |
-| `float32_to_bf16_rne` | Converts FP32 result to BF16 using round-to-nearest-even; used when DEST is not in FP32 accumulation mode |
+```cpp
+// File: tt_metal/hw/ckernels/{blackhole,wormhole_b0}/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h
 
-#### SFPU Register Usage
+namespace ckernel::sfpu {
 
-- **DEST[0]** (dst_index_in0): Holds the input/start tile. Also serves as the output destination (dst_index_out = 0), so results overwrite the input tile in-place.
-- **DEST[1]** (dst_index_in1): Holds the end tile. Read-only during SFPU execution.
-- **DEST[2]** (dst_index_in2): Holds the weight tile. Read-only during SFPU execution.
-- **vFloat registers**: Three temporaries (`in0`, `in1`, `in2`) and one result (`result`) used within each SFPI iteration. These are SFPU-internal vector registers holding 16 float elements each.
+sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
+    sfpi::vUInt bits = sfpi::reinterpret<sfpi::vUInt>(in);          // No-op reinterpret (same register)
+    sfpi::vUInt lsb = (bits >> 16) & 1;                             // SFPSHFT + SFPAND: extract bit 16
+    bits = bits + 0x7fffU + lsb;                                    // SFPXIADD: add rounding bias
+    bits = bits & 0xFFFF0000U;                                      // SFPAND: clear lower 16 bits
+    return sfpi::reinterpret<sfpi::vFloat>(bits);                   // No-op reinterpret back
+}
 
-#### SFPU Execution Flow
+}  // namespace ckernel::sfpu
+```
 
-1. **Tile Acquisition**: The compute kernel calls `cb_wait_front` on CB0, CB1, CB2 to ensure reader has produced tiles.
-2. **Unpack to DEST**: `copy_tile` is called three times to unpack tiles from CBs into DEST[0] (input), DEST[1] (end), DEST[2] (weight). Each `copy_tile_to_dst_init_short` reconfigures the unpacker for the source CB's data format.
-3. **SFPU Init**: `lerp_tile_init()` calls `llk_math_eltwise_ternary_sfpu_lerp_init<APPROX>()` which calls `_llk_math_eltwise_ternary_sfpu_init_<SfpuType::lerp>()` to configure the SFPU pipeline.
-4. **SFPU Math**: `lerp_tile<format>(0, 1, 2, 0)` dispatches through the LLK layer:
-   - `_llk_math_eltwise_ternary_sfpu_params_` is called with `calculate_lerp` as the function pointer
-   - It calls `_llk_math_eltwise_ternary_sfpu_start_` to set up the SFPU
-   - In RC (all faces) mode, `calculate_lerp` is called 4 times (once per face), each time processing 8 rows of 16 elements = 128 elements per face, totaling 512 elements per tile half. With 2 half-tiles this covers the full 1024-element tile.
-   - Each invocation of `calculate_lerp` loops 8 times (ITERATIONS=8), processing one row of 16 elements per iteration via SFPI SIMD vector operations
-   - `_llk_math_eltwise_ternary_sfpu_done_` finalizes the SFPU
-5. **Pack**: `pack_tile(0, cb_out)` packs DEST[0] (which now holds the lerp result) into the output CB.
-6. **Tile Release**: `cb_push_back` publishes the output; `cb_pop_front` frees input tiles.
+The parameters dispatch function (identical for Blackhole and Wormhole):
 
-#### SFPU Configuration
+```cpp
+// File: tt_metal/third_party/tt_llk/tt_llk_{blackhole,wormhole_b0}/llk_lib/llk_math_eltwise_ternary_sfpu_params.h
 
-- **TERNARY_SFPU_OP_INIT** define: Resolves to `lerp_tile_init` for LERP op type
-- **TERNARY_SFPU_OP_FUNC** define: Resolves to `lerp_tile<DataFormat::Float32>` or `lerp_tile<DataFormat::Float16_b>` depending on the input tensor's data type
-- **APPROX**: Template parameter inherited from the compute config; controls approximation mode (not used by lerp since it only uses basic arithmetic)
-- **DST_ACCUM_MODE**: Set to `is_fp32_dest_acc_en` based on output data format. When true, DEST registers use FP32 accumulation; when false, BF16 with explicit `float32_to_bf16_rne` rounding
-- **Math Fidelity**: Not directly applicable to lerp (no LUT operations); the operation uses only basic SFPU arithmetic (+, -, *)
-- **UnpackToDestMode**: Set per-CB based on tensor dtype. Float32 tensors use `UnpackToDestFp32`; others use `Default`
+template <bool APPROXIMATE, typename Callable, typename... Args>
+inline void _llk_math_eltwise_ternary_sfpu_params_(
+    Callable&& sfpu_func,
+    std::uint32_t dst_index_in0,
+    std::uint32_t dst_index_in1,
+    std::uint32_t dst_index_in2,
+    std::uint32_t dst_index_out,
+    int vector_mode = static_cast<int>(VectorMode::RC),
+    Args&&... args)
+{
+    LLK_ASSERT((dst_index_in0 < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "dst_index_in0 exceeds max dest tiles");
+    LLK_ASSERT((dst_index_in1 < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "dst_index_in1 exceeds max dest tiles");
+    LLK_ASSERT((dst_index_in2 < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "dst_index_in2 exceeds max dest tiles");
+    LLK_ASSERT((dst_index_out < get_dest_max_tiles<DST_SYNC_MODE, DST_ACCUM_MODE, DstTileShape::Tile32x32>()), "dst_index_out exceeds max dest tiles");
 
-#### Hardware Compatibility Notes
+    _llk_math_eltwise_ternary_sfpu_start_<DST_SYNC_MODE>(0); // Set DEST write address, stall until SFPU ready
 
-The SFPU lerp kernel implementation is **identical** between Wormhole B0 and Blackhole architectures. Both `ckernel_sfpu_lerp.h` files contain the same `calculate_lerp` function. The LLK wrapper `llk_math_eltwise_ternary_sfpu_lerp.h` is also identical across architectures. The only architecture-specific component is the underlying `_llk_math_eltwise_ternary_sfpu_params_` function (in the tt_llk submodule), which handles face iteration and SFPU pipeline setup -- but its interface and behavior are the same.
+    // VectorMode::RC: process all 4 faces of the 32x32 tile (each face = 16x16)
+    for (int face = 0; face < 4; face++)
+    {
+        std::forward<Callable>(sfpu_func)(dst_index_in0, dst_index_in1, dst_index_in2, dst_index_out, std::forward<Args>(args)...);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D); // Advance DEST pointer by 8
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D); // Advance DEST pointer by 8 (total +16 rows per face)
+    }
 
-INT32 and UINT32 data types are **not supported** for LERP (unlike WHERE which supports them). The `get_compute_defines` function only generates Float32 and Float16_b format templates for LERP.
+    _llk_math_eltwise_ternary_sfpu_done_(); // Clear DEST addr, stall until SFPU done, clear addr mod base
+}
+```
 
-## Implementation Notes
+The init function (identical for Blackhole and Wormhole):
 
-1. **Shared Infrastructure with WHERE**: LERP reuses the same program factory, compute kernels, reader/writer kernels, and CB configuration as the WHERE operation. The only difference is the `TERNARY_SFPU_OP_INIT` and `TERNARY_SFPU_OP_FUNC` defines, which are set to `lerp_tile_init`/`lerp_tile` instead of `where_tile_init`/`where_tile`.
+```cpp
+// File: tt_metal/third_party/tt_llk/tt_llk_{blackhole,wormhole_b0}/llk_lib/llk_math_eltwise_ternary_sfpu.h
 
-2. **In-place Output**: The SFPU result is written to DEST[0] (same register as input/start), meaning the lerp output overwrites the input tile. This is efficient since input is consumed and no longer needed.
+template <SfpuType sfpu_op>
+inline void eltwise_ternary_sfpu_configure_addrmod()
+{
+    addr_mod_t {
+        .srca = {.incr = 0},
+        .srcb = {.incr = 0},
+        .dest = {.incr = 0},
+    }
+        .set(ADDR_MOD_7);
 
-3. **Broadcast Handling**: The operation supports complex broadcast patterns including column broadcast (weight dimension = 1), row broadcast (height dimension = 1), scalar broadcast (both H and W = 1), and outer dimension broadcast (only batch/channel dimensions differ). Each pattern uses a different reader and compute kernel pair.
+    // ADDR_MOD_6 with dest.incr=2 is only configured for SfpuType::where, NOT for lerp
+    if (sfpu_op == SfpuType::where)
+    {
+        addr_mod_t {
+            .srca = {.incr = 0},
+            .srcb = {.incr = 0},
+            .dest = {.incr = 2},
+        }
+            .set(ADDR_MOD_6);
+    }
+}
 
-4. **No FPU Path for LERP**: Unlike ADDCMUL/ADDCDIV which have FPU variants for matching-dtype BFLOAT16 inputs, LERP always uses the SFPU path. The `is_fpu` flag is only set for ADDCMUL/ADDCDIV operations.
+template <SfpuType sfpu_op>
+inline void _llk_math_eltwise_ternary_sfpu_init_()
+{
+    sfpu::_init_sfpu_config_reg();                          // SFPCONFIG: reset SFPU config register
+    eltwise_ternary_sfpu_configure_addrmod<sfpu_op>();      // Configure ADDR_MOD_7 with all-zero increments
+    math::reset_counters(p_setrwc::SET_ABD_F);              // SETRWC: reset all RWC counters (A, B, D, Fidelity)
+}
+```
 
-5. **TTS Variant for Common Use Case**: When LERP is called with a scalar weight (the most common PyTorch usage pattern), it uses the TTS variant which avoids allocating and reading a third tensor, instead using `fill_tile` to broadcast the scalar into DEST[2].
+### SFPU Instructions Used
+
+| Instruction | SFPI Intrinsic | Usage in LERP |
+|---|---|---|
+| **SFPLOAD** | `__builtin_rvtt_sfpload` | Load 32 elements from a DEST register row into an LREG. Used 3 times per iteration to load `in0`, `in1`, `in2` from DST tiles 0, 1, 2. |
+| **SFPSTORE** | `__builtin_rvtt_sfpstore` | Store 32 elements from an LREG back to a DEST register row. Used once per iteration to write the result to DST tile 0. |
+| **SFPADD** | `__builtin_rvtt_sfpadd` | Lanewise FP32 addition: `VD = VB + VC`. Used for `in1 - in0` (subtraction via negated operand) and for the final `in0 + (in2 * diff)` addition. |
+| **SFPMUL** | `__builtin_rvtt_sfpmul` | Lanewise FP32 multiplication: `VD = VA * VB`. Used for `in2 * (in1 - in0)`. |
+| **SFPSHFT** | `__builtin_rvtt_sfpshft_i` | Logical right shift by immediate. Used in `float32_to_bf16_rne` to extract bit 16 (`bits >> 16`). |
+| **SFPAND** | `__builtin_rvtt_sfpand` | Bitwise AND. Used in `float32_to_bf16_rne` twice: to isolate LSB (`& 1`) and to clear lower 16 bits (`& 0xFFFF0000`). |
+| **SFPXIADD** | `__builtin_rvtt_sfpxiadd_i` | Unsigned integer addition with immediate. Used in `float32_to_bf16_rne` to add the rounding bias (`bits + 0x7fffU + lsb`). |
+| **INCRWC** | `__builtin_rvtt_ttincrwc` | Increment DEST RWC pointer by `SFP_DESTREG_STRIDE` (2). Used via `dst_reg++` at the end of each iteration to advance to the next row pair. |
+| **SETRWC** | `TTI_SETRWC` | Set RWC pointers directly. Used between faces to advance DEST pointer by 16 rows (2 x `SETRWC(CR_D, 8)`), and in init to reset all counters. |
+| **STALLWAIT** | `TTI_STALLWAIT` | Stall until SFPU/MATH pipeline is ready. Used in `_start_` (stall SFPU on MATH) and `_done_` (stall CFG on SFPU completion). |
+| **SFPCONFIG** | `TTI_SFPCONFIG` | Configure SFPU control register. Used in `_init_sfpu_config_reg()` to reset the SFPU configuration state. |
+
+Note: When `is_fp32_dest_acc_en == true` (FP32 output mode), the `float32_to_bf16_rne` conversion is skipped entirely, eliminating SFPSHFT, SFPAND, and SFPXIADD from the instruction stream. In that case, only SFPLOAD, SFPSTORE, SFPADD, SFPMUL, and INCRWC are used per iteration.
+
+### SFPU Register Usage
+
+**DEST Register File (shared between FPU and SFPU):**
+- **DST[0]** (rows 0-63): Holds the `input` (start) tile. Loaded from CB c_0 via `copy_tile`. Also serves as the output tile -- `calculate_lerp` writes results back here since `dst_index_out == 0`.
+- **DST[1]** (rows 64-127): Holds the `end` tile. Loaded from CB c_1 via `copy_tile`.
+- **DST[2]** (rows 128-191): Holds the `weight` tile. Loaded from CB c_2 via `copy_tile` (TTT) or filled with scalar via `fill_tile` (TTS).
+
+**LREG (SFPU Local Registers):**
+The SFPU has 8 local vector registers (LREG0-LREG7), each holding 32 FP32 elements. Within `calculate_lerp`, the compiler allocates LREGs for:
+- `in0`: Loaded from DST[0] via SFPLOAD
+- `in1`: Loaded from DST[1] via SFPLOAD
+- `in2`: Loaded from DST[2] via SFPLOAD
+- `result` / temporaries: Intermediate values from subtraction (`in1 - in0`), multiplication (`in2 * diff`), and addition (`in0 + product`)
+- When `float32_to_bf16_rne` is inlined, additional LREG usage for `bits`, `lsb`, and intermediate rounding values
+
+**RWC (Read/Write Counter) Registers:**
+- **RWC.Dst**: The DEST row pointer. Starts at 0 (set by `_llk_math_eltwise_ternary_sfpu_start_`), auto-incremented by 2 via `dst_reg++` (INCRWC) within each iteration, and advanced by 16 via `SETRWC(CR_D, 8)` x2 between faces. After all 4 faces: 4 * (8*2 + 16) = 128 rows total traversed, but RWC wraps modulo the active DEST region.
+
+### Address Mode Configuration
+
+LERP uses `SfpuType::lerp` when calling `_llk_math_eltwise_ternary_sfpu_init_`, which configures:
+
+**ADDR_MOD_7** (the only address mode set for lerp):
+| Field | Value | Description |
+|---|---|---|
+| `srca.incr` | 0 | No SrcA auto-increment (SrcA not used by SFPU) |
+| `srcb.incr` | 0 | No SrcB auto-increment (SrcB not used by SFPU) |
+| `dest.incr` | 0 | No DEST auto-increment from address mode (manual control via INCRWC/SETRWC) |
+
+Unlike WHERE (which also sets `ADDR_MOD_6` with `dest.incr = 2` for its conditional store pattern), LERP only needs `ADDR_MOD_7` with all-zero increments. This is because LERP performs unconditional load/store on every row -- the DEST pointer advancement is handled entirely by explicit `dst_reg++` (INCRWC) calls within the loop and `SETRWC` calls between faces.
+
+The address mode configuration is **identical** for Wormhole and Blackhole. The only difference between the two architectures in the ternary SFPU flow is that Wormhole's `_llk_math_eltwise_ternary_sfpu_start_` calls `math::set_addr_mod_base()` (which selects ADDR_MOD_4..7 as the active bank), while Blackhole skips this call (and instead uses `TTI_SETC16(2, 0)` in `_done_` to clear the addr mod base). The net effect is the same: ADDR_MOD_7 is active during SFPU execution.
 
 ## External Knowledge Sources
 
 ### DeepWiki Queries
 
-1. **Query**: "How does the ternary eltwise program factory work for operations like lerp? What kernels does it use and how does it distribute work across cores?"
-   **Reason**: Initial reconnaissance to understand the program factory structure and kernel selection mechanism.
-   **Key Findings**: Confirmed that LERP uses `TernaryKernelConfig` for kernel selection based on op type, variant, and broadcast type. Work distribution uses `split_work_to_cores()`. Shared infrastructure with WHERE.
+1. **Query**: "How does the ternary eltwise operation work in TTNN? What is the program factory structure for ternary operations like lerp? What kernels are used?"
+   **Reason**: Needed initial architectural overview of ternary operation framework before diving into source code.
+   **Key Findings**: Confirmed that LERP is one of four ternary op types (WHERE, LERP, ADDCMUL, ADDCDIV), shares the same program factory with operation-specific behavior via defines, supports TTT/TTS/TST variants, and uses SFPU functions `lerp_tile_init`/`lerp_tile<DataFormat>`.
 
-2. **Query**: "Where is the function `_llk_math_eltwise_ternary_sfpu_params_` defined? What does it do?"
-   **Reason**: Needed to understand the LLK wrapper that iterates over tile faces when dispatching the SFPU kernel.
-   **Key Findings**: Defined in `tt_llk` submodule under `llk_lib/llk_math_eltwise_ternary_sfpu_params.h`. It handles face iteration (RC mode = all 4 faces), SFPU start/done lifecycle, and dispatches the provided sfpu_func for each face.
+2. **Query**: "How does dst_reg indexing work in SFPI? What SFPU instructions are generated by vFloat loads from dst_reg, vFloat arithmetic (add, subtract, multiply), and stores back to dst_reg? What does the dst_reg++ increment do?"
+   **Reason**: Needed to understand the SFPI-to-instruction mapping for the core LERP kernel operations.
+   **Key Findings**: `dst_reg[index]` loads use `SFPLOAD`, stores use `SFPSTORE`, addition maps to `SFPADD`, multiplication maps to `SFPMUL`, subtraction is `SFPADD` with negated operand. `dst_reg++` emits `INCRWC` which advances the DEST pointer by `SFP_DESTREG_STRIDE` (2).
 
-### Documentation References
+3. **Query**: "What SFPU instructions correspond to dst_reg loads (LOADDST), dst_reg stores (STOREDST), vFloat addition/subtraction/multiplication in SFPI? How does SETRWC work for advancing the dest register pointer between faces?"
+   **Reason**: Needed ISA-level confirmation of instruction opcodes and SETRWC semantics.
+   **Key Findings**: Confirmed SFPLOAD (opcode 0x84-range), SFPSTORE, SFPADD (0x85), SFPMUL (0x86), SFPMAD (0x84). SETRWC (opcode 0x37) directly sets RWC pointer values including Dst.
 
-1. **Source**: `ttnn/cpp/ttnn/operations/eltwise/ternary/device/ternary_op_utils.cpp`
-   **Reason**: Needed to understand kernel file path mapping and compute defines for LERP.
-   **Key Information**: LERP maps to `lerp_tile_init`/`lerp_tile<format>` defines. Kernel config map shows LERP uses same kernel files as WHERE.
+4. **Query**: "How do vUInt bitwise operations (shift right, AND, addition) map to SFPU instructions? What instructions are used for reinterpret between vFloat and vUInt?"
+   **Reason**: Needed to understand instruction mapping for the `float32_to_bf16_rne` helper function.
+   **Key Findings**: Shift right maps to `SFPSHFT` (`sfpshft_i`), AND maps to `SFPAND`, integer addition maps to `SFPXIADD` (`sfpxiadd_i`/`sfpxiadd_v`). `reinterpret<>` is a zero-cost cast -- no instruction emitted.
 
-2. **Source**: `ttnn/cpp/ttnn/operations/eltwise/ternary/common/ternary_op_types.hpp`
-   **Reason**: Needed enum definitions for op types, variants, and broadcast types.
-   **Key Information**: LERP = linear interpolation `out = input + weight * (end - input)`. Supports TTT, TTS, TST variants.
+### Confluence References
+
+Not consulted for this analysis. The SFPU instructions used in LERP (SFPLOAD, SFPSTORE, SFPADD, SFPMUL, SFPSHFT, SFPAND, SFPXIADD) are well-documented in DeepWiki and the source code.
+
+### Glean References
+
+Not consulted for this analysis. No confidential hardware specifications were needed beyond what was available in the open-source codebase and DeepWiki.

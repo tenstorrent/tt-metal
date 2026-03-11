@@ -1,9 +1,12 @@
 # ERFINV Implementation Analysis
 
 ## Overview
-The ERFINV operation computes the element-wise inverse error function (`erfinv(x)`) on each element of an input tensor. For a given input `x` in the range `(-1, 1)`, it returns the value `y` such that `erf(y) = x`. The implementation uses a Winitzki (2008) approximation that combines logarithm and square root sub-computations on the SFPU.
 
-**Program factory path**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp` (shared by all standard unary SFPU operations; ERFINV hits the `default` path in `get_compute_kernel_path`, selecting `eltwise_sfpu.cpp`).
+ERFINV computes the element-wise inverse error function on each element of the input tensor. Given an input `x` in the range `(-1, 1)`, it returns the value `y` such that `erf(y) = x`. The function is undefined for `|x| > 1` (returns NaN) and returns +/-infinity at `|x| = 1`.
+
+ERFINV is a standard unary SFPU operation that uses the shared unary program factory. It does not have a dedicated program factory or specialized kernels -- it plugs into the generic `eltwise_sfpu.cpp` compute kernel via preprocessor defines.
+
+**Program factory path**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp`
 
 ## Work Unit Definition
 
@@ -11,8 +14,8 @@ The ERFINV operation computes the element-wise inverse error function (`erfinv(x
 |-----------|-------|
 | **Granularity** | tile |
 | **Unit size** | 1 tile (32x32 elements) |
-| **Total units** | `num_pages` = total tiles in the input tensor |
-| **Loop structure** | Outer loop over blocks (`per_core_block_cnt` iterations), inner loop over tiles within each block (`per_core_block_dim` = 1 tile). Effectively one tile per iteration. |
+| **Total units** | `num_pages` = total number of tiles in the input tensor |
+| **Loop structure** | Outer loop over `per_core_block_cnt` blocks, inner loop over `per_core_block_dim` tiles (always 1 for this factory) |
 
 ## Tensor Format and Layout
 
@@ -20,12 +23,12 @@ The ERFINV operation computes the element-wise inverse error function (`erfinv(x
 
 | Property | Input Tensor |
 |----------|--------------|
-| **Logical shape** | Arbitrary (flattened to total tiles) |
-| **Dimension convention** | N/A (elementwise, shape-agnostic) |
-| **Tensor layout** | TILE_LAYOUT (or ROW_MAJOR; CB page size adjusts accordingly) |
+| **Logical shape** | Any shape (flattened to tiles) |
+| **Dimension convention** | N/A (operates element-wise on all tiles) |
+| **Tensor layout** | TILE_LAYOUT (also supports ROW_MAJOR) |
 | **Memory layout** | INTERLEAVED |
-| **Buffer type** | DRAM (or L1) |
-| **Data type** | BFLOAT16 (typical), FLOAT32, INT32, UINT32 supported |
+| **Buffer type** | DRAM or L1 |
+| **Data type** | BFLOAT16, FLOAT32 |
 
 ### Output Tensor
 
@@ -35,21 +38,28 @@ The ERFINV operation computes the element-wise inverse error function (`erfinv(x
 | **Dimension convention** | Same as input |
 | **Tensor layout** | Same as input |
 | **Memory layout** | INTERLEAVED |
-| **Buffer type** | DRAM (or L1) |
-| **Data type** | Same as input (or as specified by output dtype) |
+| **Buffer type** | DRAM or L1 |
+| **Data type** | Same as input (or may differ if output dtype is configured) |
 
 ### Layout Transformations
-None. The operation is a pure elementwise unary; no tilize/untilize or reshard occurs within the program factory.
+
+No layout transformations are performed. The operation is a pure element-wise unary; input and output have identical shapes and layouts. The data format conversion between input and output (if different) is handled transparently by the unpacker and packer hardware.
 
 ## Data Flow Pattern
 
 | Stage | Kernel | Reads From | Writes To | CB Operations |
 |-------|--------|------------|-----------|---------------|
-| 1 | Reader | DRAM (src_addr) | CB c_0 | `cb_reserve_back(c_0, 1)`, `noc_async_read_page`, `cb_push_back(c_0, 1)` |
-| 2 | Compute | CB c_0 | CB c_2 | `cb_wait_front(c_0, 1)`, `copy_tile`, SFPU op chain (erfinv), `pack_tile(0, c_2)`, `cb_pop_front(c_0, 1)` |
-| 3 | Writer | CB c_2 | DRAM (dst_addr) | `cb_wait_front(c_2, 1)`, `noc_async_write_page`, `cb_pop_front(c_2, 1)` |
+| 1 | Reader (BRISC) | DRAM/L1 (interleaved pages) | CB c_0 | `cb_reserve_back(c_0, 1)`, `noc_async_read_page`, `noc_async_read_barrier`, `cb_push_back(c_0, 1)` |
+| 2 | Compute (TRISC) | CB c_0 | CB c_2 | `cb_wait_front(c_0, 1)`, `copy_tile`, `erfinv_tile_init` + `erfinv_tile`, `pack_tile`, `cb_pop_front(c_0, 1)`, `cb_reserve_back(c_2, per_core_block_dim)` / `cb_push_back(c_2, per_core_block_dim)` |
+| 3 | Writer (NCRISC) | CB c_2 | DRAM/L1 (interleaved pages) | `cb_wait_front(c_2, 1)`, `noc_async_write_page`, `cb_pop_front(c_2, 1)` |
 
-The reader fetches one tile at a time from DRAM into CB c_0. The compute kernel unpacks the tile from c_0 into DEST registers, applies the SFPU erfinv operation, and packs the result into CB c_2. The writer drains one tile at a time from c_2 back to DRAM.
+### Detailed Data Flow
+
+1. **Reader** iterates over its assigned tile range (`start_id` to `start_id + num_pages`). For each tile, it reserves one page in CB c_0, issues a NoC read from the interleaved buffer using `TensorAccessor` for address translation, waits for the read to complete, then pushes one page.
+
+2. **Compute** runs an outer loop over `per_core_block_cnt` blocks. For each block, it reserves `per_core_block_dim` (=1) output pages in CB c_2, then for each tile: acquires tile registers, waits for one input tile in CB c_0, copies it to DST register 0, executes the SFPU op chain (`erfinv_tile_init(); erfinv_tile(0);`), commits tile registers, waits for pack, packs the result from DST register 0 to CB c_2, pops the input tile from CB c_0, and releases tile registers. After the inner loop, pushes the block to CB c_2.
+
+3. **Writer** iterates over the same tile range. For each tile, it waits for one page in CB c_2, reads the L1 address, issues a NoC write to the interleaved output buffer, flushes writes, and pops one page. After all tiles, issues a write barrier.
 
 ## Circular Buffer Configuration
 
@@ -58,394 +68,454 @@ The reader fetches one tile at a time from DRAM into CB c_0. The compute kernel 
 | c_0 | src0 | Input staging | 2 tiles | 1 tile | Double | Reader | Compute | Program |
 | c_2 | output | Output staging | 2 tiles | 1 tile | Double | Compute | Writer | Program |
 
-ERFINV does not require the temporary CB c_1 (that buffer is only allocated for HARDSHRINK, CBRT, and LOGIT).
+Note: CB c_1 (tmp0) is **not** allocated for ERFINV. It is only created for HARDSHRINK, CBRT, and LOGIT operations.
+
+### CB Page Size
+
+- For TILE_LAYOUT: page size = `tile_size(cb_data_format)` which is format-dependent (e.g., 2048 bytes for BFLOAT16 with 32x32 tiles, 4096 bytes for FLOAT32).
+- For ROW_MAJOR: page size = `buffer->page_size()`.
 
 ## Pipeline Pattern Summary
-Both c_0 and c_2 are double-buffered (capacity = 2x block size). This allows the reader to write the next tile into c_0 while the compute kernel processes the current tile, and the compute kernel to write into c_2 while the writer drains the previous result. This enables a 3-stage pipelined overlap of reader, compute, and writer.
+
+Both CB c_0 and CB c_2 have capacity = 2 tiles and block size = 1 tile, yielding **double-buffered** pipelines. This allows the reader to fill one slot while compute processes the other, and similarly compute can fill one output slot while the writer drains the other. This enables overlap between all three pipeline stages.
 
 ## Index Calculations
-Tiles are indexed linearly by a flat page ID. The program factory computes a `start_id` for each core (the cumulative number of tiles assigned to preceding cores) and a `num_pages` count. The reader and writer iterate `i` from `start_id` to `start_id + num_pages`, using `TensorAccessor` to translate the flat page index into a physical DRAM NoC address via `noc_async_read_page(i, ...)` and `noc_async_write_page(i, ...)`.
+
+Index-to-address mapping is handled entirely by `TensorAccessor`, which is constructed from `TensorAccessorArgs` at compile time. The key parameters are packed into compile-time args via `TensorAccessorArgs(*buffer).append_to(compile_time_args)`.
+
+On the device side, the reader constructs:
+```cpp
+const auto s = TensorAccessor(src_args, src_addr, page_bytes);
+```
+
+The `noc_async_read_page(i, s, l1_write_addr)` call uses the TensorAccessor to translate logical page index `i` to a physical {NoC address, bank offset} pair. For interleaved buffers, this involves:
+- Computing `bank_id = page_index % num_banks`
+- Computing `page_offset = page_index / num_banks * page_size`
+- Looking up the bank's NoC coordinates and base address
+
+The writer uses an analogous `TensorAccessor` constructed from `dst_args` at compile-time arg index 1.
 
 ## Memory Access Patterns
 
 ### Read Pattern
-Sequential page reads. The reader iterates through tiles in ascending page order (`start_id` to `start_id + num_pages`). Each tile read is a single NoC transaction followed by a read barrier, resulting in one outstanding read at a time per core.
+
+**Sequential page reads**: The reader iterates linearly from `start_id` to `start_id + num_pages`, reading one page at a time. For interleaved buffers, consecutive page indices map to different DRAM banks in a round-robin pattern, distributing NoC traffic across banks. Each read is immediately followed by a barrier (`noc_async_read_barrier`), making this a synchronous one-page-at-a-time pattern.
 
 ### Write Pattern
-Sequential page writes. The writer iterates in the same ascending order. Writes are flushed after each page (`noc_async_writes_flushed`), with a final write barrier at the end.
+
+**Sequential page writes**: The writer iterates linearly over the same page range, writing one page at a time. Writes use `noc_async_writes_flushed()` after each page (not a full barrier), which only ensures the write has left the local NoC interface. A full `noc_async_write_barrier()` is issued after all pages are written.
 
 ## Core Distribution Strategy
 
 | Attribute | Value |
 |-----------|-------|
-| **Grid topology** | 2D (compute_with_storage_grid_size) |
-| **Grid dimensions** | Device-dependent (e.g., 8x8 on Wormhole) |
+| **Grid topology** | 2D (column-major iteration) |
+| **Grid dimensions** | `compute_with_storage_grid_size` (device-dependent, e.g., 8x8 on Wormhole) |
 | **Total cores** | `num_cores` (determined by `split_work_to_cores`) |
 | **Work per core** | `num_pages_per_core_group_1` or `num_pages_per_core_group_2` tiles |
-| **Load balancing** | Two core groups: group 1 gets `ceil(num_pages / num_cores)` tiles, group 2 gets `floor(num_pages / num_cores)` tiles |
+| **Load balancing** | Two-group remainder distribution |
 
-Core linearization uses column-major order: `core = {i / num_cores_y, i % num_cores_y}`. The `split_work_to_cores` utility divides the total tiles as evenly as possible, with remainder tiles distributed to group 1 cores.
+### Remainder Handling
+
+`split_work_to_cores(grid_size, num_pages)` divides tiles across cores:
+- If `num_pages` divides evenly: all cores get `num_pages / num_cores` tiles (core_group_2 is empty).
+- If remainder exists: `core_group_1` gets `floor(num_pages / num_cores) + 1` tiles, `core_group_2` gets `floor(num_pages / num_cores)` tiles. The number of cores in group_1 equals the remainder.
+
+### Core Enumeration
+
+Cores are enumerated in **column-major** order: `core = {i / num_cores_y, i % num_cores_y}`. This means core index 0 maps to (0,0), index 1 to (0,1), etc., filling columns first.
+
+Two separate compute kernels are compiled -- one for core_group_1 and one for core_group_2 -- because `per_core_block_cnt` is a compile-time argument and differs between the groups.
 
 ## Arguments
 
 ### Compile-Time Arguments
 
 #### Reader Kernel
+
 | Index | Name | Type | Description |
 |-------|------|------|-------------|
-| 0+ | TensorAccessorArgs | uint32_t[] | Encodes buffer type, page size, bank mapping for the source buffer |
+| 0+ | TensorAccessorArgs(src) | uint32_t[] | Packed tensor accessor parameters for source buffer (rank, num_banks, shape, bank coords) |
 
 #### Writer Kernel
+
 | Index | Name | Type | Description |
 |-------|------|------|-------------|
-| 0 | output_cb_index | uint32_t | CB index for output (c_2 = 2) |
-| 1+ | TensorAccessorArgs | uint32_t[] | Encodes buffer type, page size, bank mapping for the destination buffer |
+| 0 | cb_id_out | uint32_t | Output circular buffer index (= c_2 = 2) |
+| 1+ | TensorAccessorArgs(dst) | uint32_t[] | Packed tensor accessor parameters for destination buffer |
 
 #### Compute Kernel
+
 | Index | Name | Type | Description |
 |-------|------|------|-------------|
-| 0 | per_core_block_cnt | uint32_t | Number of tile blocks this core processes |
+| 0 | per_core_block_cnt | uint32_t | Number of tile blocks to process on this core |
 | 1 | per_core_block_dim | uint32_t | Tiles per block (always 1 for this factory) |
-
-Additionally, the compute kernel receives preprocessor defines:
-- `SFPU_OP_ERFINV_INCLUDE=1` -- gates inclusion of `erfinv.h`
-- `SFPU_OP_CHAIN_0` -- expands to `erfinv_tile_init(); erfinv_tile(0);` (init + execute macros)
-- `INP_FLOAT` or `INP_FLOAT32` etc. -- input dtype flag
 
 ### Runtime Arguments
 
 #### Reader Kernel
+
 | Index | Name | Type | Description |
 |-------|------|------|-------------|
 | 0 | src_addr | uint32_t | Source buffer base address in DRAM/L1 |
-| 1 | num_pages | uint32_t | Number of tiles this core reads |
-| 2 | start_id | uint32_t | First tile page index for this core |
+| 1 | num_pages | uint32_t | Number of pages (tiles) to read on this core |
+| 2 | start_id | uint32_t | Starting page index for this core |
 
 #### Writer Kernel
+
 | Index | Name | Type | Description |
 |-------|------|------|-------------|
 | 0 | dst_addr | uint32_t | Destination buffer base address in DRAM/L1 |
-| 1 | num_pages | uint32_t | Number of tiles this core writes |
-| 2 | start_id | uint32_t | First tile page index for this core |
+| 1 | num_pages | uint32_t | Number of pages (tiles) to write on this core |
+| 2 | start_id | uint32_t | Starting page index for this core |
 
 #### Compute Kernel
+
 | Index | Name | Type | Description |
 |-------|------|------|-------------|
 | 0 | packed_scalar1 | uint32_t | Unused for ERFINV (always 0) |
 | 1 | packed_scalar2 | uint32_t | Unused for ERFINV (always 0) |
 
+### Preprocessor Defines (Compile-Time)
+
+The program factory sets these defines on the compute kernel:
+
+| Define | Value | Description |
+|--------|-------|-------------|
+| `SFPU_OP_ERFINV_INCLUDE` | `1` | Enables inclusion of `erfinv.h` via `sfpu_split_includes.h` |
+| `SFPU_OP_CHAIN_0` | `erfinv_tile_init(); erfinv_tile(0);` | The SFPU op chain executed per tile |
+| `SFPU_OP_CHAIN_0_INIT_0` | `erfinv_tile_init();` | Initialization call |
+| `SFPU_OP_CHAIN_0_FUNC_0` | `erfinv_tile(0);` | Per-tile function call |
+| `INP_FLOAT` or `INP_FLOAT32` | `1` | Input data type indicator |
+
+### Compute Configuration
+
+| Parameter | Value |
+|-----------|-------|
+| `math_fidelity` | HiFi4 |
+| `fp32_dest_acc_en` | From `args.fp32_dest_acc_en` |
+| `math_approx_mode` | `false` (ERFINV returns false from `get_op_approx_mode`) |
+
 ## Kernel Implementations
+
+### Reader Kernel
 
 | Kernel | Core | NOC | Input | Output | Operations |
 |--------|------|-----|-------|--------|------------|
-| reader | BRISC (RISCV_0) | NOC0 | DRAM | CB c_0 | Sequential tile reads via TensorAccessor |
-| compute | TRISC_MATH (RISCV_2) | N/A | CB c_0 | CB c_2 | Unpack tile, SFPU erfinv, pack tile |
-| writer | NCRISC (RISCV_1) | NOC1 | CB c_2 | DRAM | Sequential tile writes via TensorAccessor |
+| reader_unary_interleaved_start_id | BRISC (RISCV_0) | NOC0 | DRAM/L1 interleaved buffer | CB c_0 | Sequential page read via TensorAccessor |
 
-### Reader Kernel
 - **File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp`
-- **Key Logic**: Reads tiles one at a time from DRAM using `noc_async_read_page` with a `TensorAccessor` constructed from compile-time args. Each tile read is individually barriered before pushing to CB c_0.
-
-### Writer Kernel
-- **File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`
-- **Key Logic**: Writes tiles one at a time to DRAM using `noc_async_write_page` with a `TensorAccessor`. Flushes after each page write. Supports an `OUT_SHARDED` mode (not used here) that simply waits for all tiles in CB.
+- **Key Logic**: Reads `num_pages` tiles starting from `start_id`. Each iteration: reserves 1 page in CB c_0, computes L1 write address, issues `noc_async_read_page` using TensorAccessor, barriers, then pushes. Supports optional `BACKWARDS` define for reverse iteration (not used in standard ERFINV).
 
 ### Compute Kernel
-This section combines the full annotated source code of the compute kernel with architectural analysis.
 
-#### Compute Kernel File
-`ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp`
+| Kernel | Core | NOC | Input | Output | Operations |
+|--------|------|-----|-------|--------|------------|
+| eltwise_sfpu | TRISC (math RISCV) | N/A | CB c_0 | CB c_2 | SFPU erfinv computation |
 
-#### Annotated Compute Kernel Source
-```cpp
-// SPDX-FileCopyrightText: (c) 2023 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp`
+- **Key Logic**: Generic SFPU compute kernel. Calls `init_sfpu(c_0, c_2)` to configure unpacker/packer. Outer loop runs `per_core_block_cnt` times, inner loop runs `per_core_block_dim` (=1) times. Per tile: acquires DST registers, waits for input in c_0, copies tile to DST[0], executes the `SFPU_OP_CHAIN_0` macro (which expands to `erfinv_tile_init(); erfinv_tile(0);`), commits and waits for packing, packs the result from DST register 0 to CB c_2, pops input, releases registers. Pushes block after inner loop.
 
-#include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/trigonometry.h"
-#include "api/compute/mul_int_sfpu.h"
-#include "api/compute/eltwise_unary/rpow.h"
-#include "api/compute/eltwise_unary/rdiv.h"
-#include "api/compute/eltwise_unary/fill.h"
+### Writer Kernel
 
-void kernel_main() {
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);  // number of blocks (tiles) to process on this core
-    uint32_t per_core_block_dim = get_compile_time_arg_val(1);  // tiles per block; always 1 for ERFINV
+| Kernel | Core | NOC | Input | Output | Operations |
+|--------|------|-----|-------|--------|------------|
+| writer_unary_interleaved_start_id | NCRISC (RISCV_1) | NOC1 | CB c_2 | DRAM/L1 interleaved buffer | Sequential page write via TensorAccessor |
 
-    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);  // initialize unpack/pack hardware for CB c_0 -> c_2 path
-    for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);  // reserve space in output CB for 1 tile
-        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            tile_regs_acquire();  // acquire exclusive access to DEST register file
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`
+- **Key Logic**: Writes `num_pages` tiles starting from `start_id`. Each iteration: waits for 1 page in CB c_2, reads L1 address, issues `noc_async_write_page` using TensorAccessor, flushes, pops. Final `noc_async_write_barrier` after loop. Supports `OUT_SHARDED` define (not used in interleaved factory).
 
-            // Pop tile after tile, copy to DST and pack
-            cb_wait_front(tt::CBIndex::c_0, 1);  // wait for reader to produce 1 tile in input CB
+### SFPU Implementation
 
-            copy_tile(tt::CBIndex::c_0, 0, 0);  // unpack tile 0 from CB c_0 into DEST[0]
+- **File (Wormhole)**: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erfinv.h`
+- **File (Blackhole)**: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_erfinv.h`
+- **Algorithm**: Based on the Winitzki (2008) approximation: `erfinv(x) = sign(x) * sqrt(-2/(pi*a) - log(1-x^2)/2 + sqrt((2/(pi*a) + log(1-x^2)/2)^2 - log(1-x^2)/a))` where `a = 0.147`.
+- **Key constants**: `TwoPiA = 4.330746750799873` (2/(pi*a)), `OneDivA = 6.802721088435375` (1/a).
+- **SFPU iteration count**: 8 iterations per call (processes 8 elements of the 32-wide SFPU vector, requiring 4 calls to cover a full 32-element row; the tile has 32 rows, but the SFPU processes face elements).
+- **Dependencies**: Calls `calculate_log_body` (from `ckernel_sfpu_log.h`) for natural log computation, and a custom `calculate_sqrt_custom` using the fast inverse square root trick (magic number `0x5f37`).
+- **Edge cases**: `|x| == 1` returns +/-infinity; `|x| > 1` returns NaN; the sign of the result is restored from the original input using `sfpi::setsgn`.
+- **Initialization**: `erfinv_init()` calls `log_init<false, false, false>()` since the algorithm depends on the log SFPU function.
 
-#ifdef SFPU_OP_CHAIN_0
-            SFPU_OP_CHAIN_0  // expands to: erfinv_tile_init(); erfinv_tile(0);
-            // erfinv_tile_init() calls erfinv_init<APPROX>() which sets up log LUT constants
-            // erfinv_tile(0) dispatches calculate_erfinv<APPROX>() on DEST[0] via SFPU
-#endif
+## Implementation Notes
 
-            tile_regs_commit();  // signal that DEST registers are ready for pack stage
+1. **No scalar parameters**: Unlike operations such as HARDSHRINK or WHERE_TSS, ERFINV takes no scalar parameters. The `packed_scalar1` and `packed_scalar2` runtime args passed to the compute kernel are always 0.
 
-            tile_regs_wait();  // wait for pack stage to be ready to consume DEST
+2. **Shared program factory**: ERFINV does not have its own program factory. It uses the general-purpose `UnaryProgramFactory` and is differentiated entirely through preprocessor defines set by `get_block_defines` and `update_macro_defines`.
 
-            pack_tile(0, tt::CBIndex::c_2);  // pack DEST[0] result into output CB c_2
+3. **No temporary CB needed**: CB c_1 is only allocated for HARDSHRINK, CBRT, and LOGIT. ERFINV does not require intermediate scratch space at the CB level.
 
-            cb_pop_front(tt::CBIndex::c_0, 1);  // free the consumed tile in input CB
+4. **Identical Wormhole/Blackhole implementations**: The SFPU kernel code is byte-for-byte identical between the two architecture backends, meaning the algorithm has no architecture-specific optimizations.
 
-            tile_regs_release();  // release DEST registers for next iteration
-        }
-        cb_push_back(tt::CBIndex::c_2, per_core_block_dim);  // publish 1 tile to writer
-    }
-}
-```
+5. **Custom sqrt implementation**: The SFPU erfinv kernel uses its own `calculate_sqrt_custom` function instead of the standard SFPU sqrt. This uses the fast inverse square root algorithm (Quake III-style) with two Newton-Raphson refinement iterations, multiplied by the original value to get the square root.
 
-### SFPU Kernel Implementation
+6. **FP32 intermediate log**: The `calculate_log_body` call uses the template parameter `true` for the third parameter (`use_fp32`), ensuring intermediate log computation avoids bfloat16 rounding errors that would accumulate in the multi-step erfinv formula.
+
+7. **Program caching**: The `override_runtime_arguments` method only updates buffer addresses (indices 0 of reader/writer runtime args). This enables efficient program reuse when only tensor addresses change between invocations.
+
+## External Knowledge Sources
+
+### DeepWiki Queries
+
+1. **Query**: "How is the unary program factory structured for eltwise unary operations?"
+   **Reason**: Needed to understand the three factory variants (interleaved, sharded, sub-core-grid) and how kernels are configured.
+   **Key Findings**: Three variants exist; ERFINV uses the default interleaved variant. The factory creates reader/compute/writer kernels with TensorAccessor-based address translation.
+
+2. **Query**: "How does split_work_to_cores work?"
+   **Reason**: Needed to understand core distribution and remainder handling.
+   **Key Findings**: Returns two core groups: group_1 gets `floor + 1` tiles (remainder cores), group_2 gets `floor` tiles. Column-major core enumeration.
+
+3. **Query**: "How does TensorAccessorArgs work in tt-metal?"
+   **Reason**: Needed to understand compile-time vs runtime argument generation for reader/writer kernels.
+   **Key Findings**: TensorAccessorArgs packs tensor layout info (rank, num_banks, shape, bank coords) into compile-time args. On-device, TensorAccessor translates logical page indices to physical NoC addresses.
+
+### Documentation References
+
+1. **Source**: `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp`
+   **Reason**: Traced ERFINV through `get_macro_definition` (returns `SFPU_OP_ERFINV_INCLUDE`), `get_block_defines` (generates SFPU_OP_CHAIN defines), `get_compute_kernel_path` (falls through to default `eltwise_sfpu.cpp`), and `get_op_approx_mode` (returns false).
+   **Key Information**: ERFINV has no special-case handling in the program factory -- it uses all default paths.
+
+2. **Source**: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erfinv.h`
+   **Reason**: Contains the actual SFPU algorithm implementation.
+   **Key Information**: Uses Winitzki's 2008 approximation with custom sqrt and log dependencies. Processes 8 SFPU elements per iteration. Handles edge cases (|x|=1 gives inf, |x|>1 gives NaN).
+
+## SFPU Kernel Implementation
+
 This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to.
 
-#### SFPU Kernel File
-`tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erfinv.h`
-(Identical implementation exists for Blackhole at `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_erfinv.h`)
+### SFPU Abstraction Layers
 
-#### Annotated SFPU Kernel Source
+| Layer | File Path |
+|-------|-----------|
+| **API Header** | `tt_metal/hw/inc/api/compute/eltwise_unary/erfinv.h` |
+| **LLK Dispatch** | `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h` (macro layer) and `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h` (params dispatch) |
+| **Core SFPU Implementation** | `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erfinv.h` |
+| **Parameters Dispatch** | `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h` (combined with LLK dispatch) |
+
+### Call Chain
+
+1. The compute kernel macro `SFPU_OP_CHAIN_0` expands to `erfinv_tile_init(); erfinv_tile(0);`, calling the API-level functions defined in `erfinv.h`.
+2. `erfinv_tile(idst)` invokes the macro `SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_erfinv, RC, APPROX, idst)`, which expands to `_llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>(ckernel::sfpu::calculate_erfinv<APPROXIMATE>, idst, (int)VectorMode::RC)`.
+3. `_llk_math_eltwise_unary_sfpu_params_` (in `llk_math_eltwise_unary_sfpu_params.h`) sets the DST write address, stalls until the SFPU is ready, then iterates over 4 faces (VectorMode::RC), calling `ckernel::sfpu::calculate_erfinv<APPROXIMATE>()` for each face and advancing the DEST pointer by 16 rows (2x `TTI_SETRWC` with increment 8) between faces.
+4. `erfinv_tile_init()` invokes `SFPU_INIT_KERNEL_CALL(erfinv, sfpu::erfinv_init, APPROX)`, which calls `llk_math_eltwise_unary_sfpu_init<SfpuType::erfinv, APPROXIMATE>(erfinv_init<APPROXIMATE>)`. This first calls `_llk_math_eltwise_unary_sfpu_init_<SfpuType::erfinv>()` to configure the SFPU config register, set up ADDR_MOD_7 (all increments = 0), and reset counters, then calls `erfinv_init<APPROXIMATE>()` which programs the LUT registers (`vConstFloatPrgm0`, `vConstFloatPrgm1`, `vConstFloatPrgm2`) with log-related constants.
+
+### Annotated SFPU Kernel Source
+
 ```cpp
-// SPDX-FileCopyrightText: (c) 2023 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
+// File: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_erfinv.h
 
-#pragma once
-
-#include "ckernel.h"
-#include "ckernel_defs.h"
-#include "ckernel_sfpu_log.h"  // provides calculate_log_body and log_init
-
-#include "sfpi.h"  // SFPI intrinsic programming interface for SFPU
-
-namespace ckernel {
-namespace sfpu {
-
-// Custom square root using the fast inverse square root (Quake III) algorithm.
-// Used instead of the standard sqrt to avoid dependency on the general sqrt SFPU path.
 template <bool APPROXIMATION_MODE>
-sfpi_inline sfpi::vFloat calculate_sqrt_custom(sfpi::vFloat in) {
+sfpi_inline sfpi::vFloat calculate_sqrt_custom(sfpi::vFloat in) { // APPROXIMATION_MODE is unused in this function
     sfpi::vFloat val = in;
     sfpi::vFloat out;
-    v_if(val != 0.0f) {  // SFPU conditional: skip sqrt for zero inputs
-        // 0x5f37 is the bfloat16 version of the "magic number" 0x5f3759df from the
-        // fast inverse square root algorithm. It provides an initial approximation.
+    v_if(val != 0.0f) {
+        // Fast inverse square root (Quake III algorithm) with magic constant 0x5f37
         sfpi::vUInt magic = sfpi::reinterpret<sfpi::vUInt>(sfpi::vFloat(sfpi::s2vFloat16b(0x5f37)));
-        // Initial approximation of 1/sqrt(val) via bit manipulation
         sfpi::vFloat approx = sfpi::reinterpret<sfpi::vFloat>(magic - (sfpi::reinterpret<sfpi::vUInt>(val) >> 1));
         sfpi::vFloat neg_half_val = val * -0.5f;
-        // Two Newton-Raphson iterations to refine the inverse square root approximation
-        approx = ((approx * approx) * neg_half_val + 1.5f) * approx;  // iteration 1
-        approx = ((approx * approx) * neg_half_val + 1.5f) * approx;  // iteration 2
-        // Convert from 1/sqrt(val) to sqrt(val) by multiplying by val
-        out = approx * val;
+        approx = ((approx * approx) * neg_half_val + 1.5f) * approx; // Newton-Raphson iteration 1
+        approx = ((approx * approx) * neg_half_val + 1.5f) * approx; // Newton-Raphson iteration 2
+        out = approx * val; // Convert 1/sqrt(x) to sqrt(x) by multiplying by x
     }
-    v_else { out = val; }  // sqrt(0) = 0
+    v_else { out = val; } // sqrt(0) = 0
     v_endif;
     return out;
 }
 
-// Core erfinv computation body using Winitzki's 2008 approximation.
-// Formula: erfinv(x) = sign(x) * sqrt( -2/(pi*a) - ln(1-x^2)/2
-//                        + sqrt( (2/(pi*a) + ln(1-x^2)/2)^2 - ln(1-x^2)/a ) )
-// where a = 0.147 is the approximation constant.
 template <bool APPROXIMATION_MODE>
 sfpi_inline sfpi::vFloat calculate_erfinv_body(sfpi::vFloat in) {
+    // Implementation notes, see the original file for more details
+
     // Compute log(1 - x^2)
-    sfpi::vFloat log_value = in * in;           // x^2
-    log_value = 1 - log_value;                  // 1 - x^2
-    // Use calculate_log_body with fp32 accumulation (third template param = true)
-    // to avoid precision loss in intermediate steps
-    log_value = calculate_log_body<false, false, true>(log_value, 0);  // ln(1 - x^2)
+    sfpi::vFloat log_value = in * in;
+    log_value = 1 - log_value;
+    log_value = calculate_log_body<false, false, true>(log_value, 0); // FAST_APPROX=false, HAS_BASE_SCALING=false, is_fp32_dest_acc_en=true
 
-    sfpi::vFloat temp = log_value * 0.5;  // ln(1 - x^2) / 2
+    sfpi::vFloat temp = log_value * 0.5;
 
-    // Precomputed constants from a = 0.147:
-    constexpr float TwoPiA = 4.330746750799873f;   // 2 / (pi * 0.147)
-    constexpr float OneDivA = 6.802721088435375f;   // 1 / 0.147
+    // a = 0.147; TwoPiA = 2/(pi*a) = 4.330746750799873; OneDivA = 1/a = 6.802721088435375
+    constexpr float TwoPiA = 4.330746750799873f;
+    constexpr float OneDivA = 6.802721088435375f;
 
-    // temp = -(2/(pi*a) + ln(1-x^2)/2)
+    // tmp = -( 2/(pi*a) + log(1 - x^2)/2 )
     temp = TwoPiA + temp;
     temp = -temp;
 
-    // Discriminant: temp^2 - ln(1-x^2)/a
+    // calculated_value = temp + sqrt( temp^2 - log_value / a )
     sfpi::vFloat calculated_value = (temp * temp) - (log_value * OneDivA);
-    // Inner sqrt
     sfpi::vFloat intermediate_result = calculate_sqrt_custom<false>(calculated_value);
-    // temp + sqrt(discriminant)
     calculated_value = temp + intermediate_result;
 
-    // Outer sqrt gives the final unsigned result
+    // result = sqrt(calculated_value)
     sfpi::vFloat result = calculate_sqrt_custom<false>(calculated_value);
 
     return result;
 }
 
-// Main SFPU microcode entry point for erfinv.
-// Processes all 8 rows (faces) of a tile column in DEST.
 template <bool APPROXIMATION_MODE>
-inline void calculate_erfinv() {
-    // SFPU microcode: 8 iterations process 8 rows of 4 elements each (one tile face column)
-    // A 32x32 tile has 4 faces of 16x16; each face has 16 rows; the SFPU processes
-    // 4 elements per SIMD lane, so 8 iterations cover 32 rows (one column of all faces).
+inline void calculate_erfinv() { // APPROXIMATION_MODE=false (get_op_approx_mode returns false for erfinv)
     constexpr int ITERATIONS = 8;
     for (int d = 0; d < ITERATIONS; d++) {
-        sfpi::vFloat v = sfpi::dst_reg[0];  // load 4 elements from current DEST row
+        sfpi::vFloat v = sfpi::dst_reg[0]; // Load element from DEST register
         sfpi::vFloat result;
 
-        // erfinv is an odd function: erfinv(-x) = -erfinv(x)
-        // Compute on |x| to simplify edge-case handling, then restore sign.
-        sfpi::vFloat abs_v = sfpi::abs(v);  // |x|
+        // erfinv(-x) = -erfinv(x), so compute on |x| and restore sign later
+        sfpi::vFloat abs_v = sfpi::abs(v);
 
-        v_if(abs_v == 1.0f) {
-            result = std::numeric_limits<float>::infinity();  // erfinv(+/-1) = +/-inf
-        }
+        v_if(abs_v == 1.0f) { result = std::numeric_limits<float>::infinity(); } // erfinv(+/-1) = +/-inf
         v_elseif(abs_v > 1.0f) {
-            result = std::numeric_limits<float>::quiet_NaN();  // erfinv outside [-1,1] is NaN
+            result = std::numeric_limits<float>::quiet_NaN(); // undefined for |x| > 1
         }
-        v_else {
-            result = calculate_erfinv_body<true>(abs_v);  // main approximation
-        }
+        v_else { result = calculate_erfinv_body<true>(abs_v); }
         v_endif;
 
-        result = sfpi::setsgn(result, v);  // restore the original sign of the input
+        result = sfpi::setsgn(result, v); // Restore original sign from input
 
-        sfpi::dst_reg[0] = result;  // write result back to DEST
-        sfpi::dst_reg++;            // advance to next row (4-element SIMD group)
+        sfpi::dst_reg[0] = result; // Store result back to DEST register
+        sfpi::dst_reg++; // Advance DEST register pointer by 1 row
     }
 }
 
-// Initialization function: sets up logarithm LUT constants in SFPU programmable registers.
 template <bool APPROXIMATION_MODE>
 void erfinv_init() {
-    // log_init<false, false, false>() loads ln(2) and polynomial coefficients
-    // into vConstFloatPrgm0/1/2 for use by calculate_log_body.
-    log_init<false, false, false>();
+    log_init<false, false, false>(); // Programs vConstFloatPrgm0=ln(2), vConstFloatPrgm1, vConstFloatPrgm2 for log polynomial
 }
-
-}  // namespace sfpu
-}  // namespace ckernel
 ```
 
-#### LLK API Wrapper
-**File**: `tt_metal/hw/inc/api/compute/eltwise_unary/erfinv.h`
+The `calculate_log_body` function (from `ckernel_sfpu_log.h`) called with `<false, false, true>` (FAST_APPROX=false, HAS_BASE_SCALING=false, is_fp32_dest_acc_en=true) computes `ln(x)` using:
 
 ```cpp
-// erfinv_tile dispatches calculate_erfinv on the tile at DEST[idst].
-// SFPU_UNARY_NO_PARAM_KERNEL_FN expands to:
-//   _llk_math_eltwise_unary_sfpu_params_<APPROX>(
-//       ckernel::sfpu::calculate_erfinv<APPROX>, idst, (int)VectorMode::RC)
-ALWI void erfinv_tile(uint32_t idst) {
-    MATH(SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_erfinv, RC, APPROX, idst));
-}
+// File: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_log.h
+// (relevant excerpt for the is_fp32_dest_acc_en=true path used by erfinv)
 
-// erfinv_tile_init calls erfinv_init which loads log LUT constants.
-ALWI void erfinv_tile_init() {
-    MATH(SFPU_INIT_KERNEL_CALL(erfinv, sfpu::erfinv_init, APPROX));
+template <bool HAS_BASE_SCALING>
+sfpi_inline sfpi::vFloat calculate_log_f32_body(sfpi::vFloat val, const uint log_base_scale_factor) {
+    sfpi::vFloat result;
+
+    sfpi::vInt exp = sfpi::exexp(val); // Extract debiased exponent
+
+    v_if(sfpi::reinterpret<sfpi::vInt>(val) == 0x7F800000) {
+        result = std::numeric_limits<float>::infinity();
+    }
+    v_elseif(exp == 128 || val < 0.f) {
+        result = std::numeric_limits<float>::quiet_NaN();
+    }
+    v_elseif(val == 0.0f) {
+        result = -std::numeric_limits<float>::infinity();
+    }
+    v_else {
+        sfpi::vFloat m = sfpi::setexp(val, 127); // Normalize mantissa to [1, 2)
+
+        constexpr float SQRT2 = 1.4142135381698608f;
+        v_if(m >= SQRT2) {
+            m = m * 0.5f;
+            exp = exp + 1;
+        }
+        v_endif;
+
+        // z = (m - 1) / (m + 1), maps to [-0.172, 0.172]
+        sfpi::vFloat m_minus_1 = m - sfpi::vConst1;
+        sfpi::vFloat m_plus_1 = m + sfpi::vConst1;
+        sfpi::vFloat m_plus_1_recip = _sfpu_reciprocal_<2>(m_plus_1); // 2 Newton-Raphson iterations
+        sfpi::vFloat z = m_minus_1 * m_plus_1_recip;
+        sfpi::vFloat z2 = z * z;
+
+        // Horner's method: p = 1 + z^2/3 + z^4/5 + z^6/7 + z^8/9 + z^10/11
+        sfpi::vFloat p = PolynomialEvaluator::eval(
+            z2,
+            sfpi::vConst1,
+            0.3333333333333333f,
+            0.2f,
+            0.14285714285714285f,
+            0.1111111111111111f,
+            .09090909090909091f);
+
+        sfpi::vFloat ln_m = 2.0f * (z * p);
+
+        v_if(exp < 0) {
+            sfpi::vInt exp_abs = ~exp + 1; // Two's complement negation
+            exp = sfpi::setsgn(exp_abs, 1); // Convert to sign-magnitude for int32_to_float
+        }
+        v_endif;
+
+        sfpi::vFloat expf = sfpi::int32_to_float(exp, 0);
+
+        constexpr float LN2 = 0.69314718246459961f;
+        result = expf * LN2 + ln_m; // ln(x) = exp * ln(2) + ln(m)
+    }
+    v_endif;
+
+    return result;
 }
 ```
 
-#### SFPU Instructions Used
+### SFPU Instructions Used
 
-| Instruction / Intrinsic | Description |
-|------------------------|-------------|
-| `sfpi::dst_reg[0]` (load) | Loads 4 elements from the current DEST register row into an SFPU vector register |
-| `sfpi::dst_reg[0]` (store) | Writes 4 elements back to the current DEST register row |
-| `sfpi::dst_reg++` | Advances the DEST register row pointer by one (next 4-element group) |
-| `sfpi::abs(v)` | Computes element-wise absolute value via sign-bit manipulation |
-| `sfpi::setsgn(result, v)` | Copies the sign bit of `v` onto `result`, restoring the original sign |
-| `sfpi::reinterpret<vUInt>(vFloat)` | Bit-casts a float vector to unsigned integer vector (no conversion) |
-| `sfpi::reinterpret<vFloat>(vUInt)` | Bit-casts an unsigned integer vector back to float vector |
-| `sfpi::s2vFloat16b(0x5f37)` | Loads an immediate bfloat16 scalar into a vector float register |
-| `v_if / v_elseif / v_else / v_endif` | SFPU predicated execution (condition codes set per SIMD lane) |
-| Arithmetic: `*`, `+`, `-`, `>>` | SFPU vector multiply, add, subtract, right-shift (on vUInt) |
-| `calculate_log_body<false,false,true>()` | Computes natural logarithm using polynomial approximation with fp32 DEST accumulation |
+The erfinv kernel and its dependencies use the following SFPU instructions and intrinsics:
 
-#### SFPU Register Usage
+| Instruction/Intrinsic | Description |
+|----------------------|-------------|
+| `sfpi::dst_reg[0]` (SFPLOAD/SFPSTORE) | Loads from / stores to the DEST register file. Each access reads or writes one element from the current DEST row. |
+| `sfpi::dst_reg++` (SFPINCRWC) | Increments the DEST register row pointer by 1, advancing to the next element in the SFPU iteration. |
+| `sfpi::abs(v)` | Computes absolute value by clearing the sign bit of a float. |
+| `sfpi::setsgn(result, v)` (SFPSETSGN) | Copies the sign bit from `v` to `result`, used to restore the original sign after computing on `|x|`. |
+| `sfpi::setexp(val, 127)` (SFPSETEXP) | Sets the exponent field of a float to 127 (bias), normalizing the mantissa to the range [1, 2). Used in log computation. |
+| `sfpi::exexp(val)` (SFPEXEXP) | Extracts the debiased exponent from a float as an integer. Returns `exp - 127` for normal floats. |
+| `sfpi::int32_to_float(exp, 0)` (SFPCAST) | Converts a sign-magnitude integer to a floating-point value. The second argument (0) specifies no shift. |
+| `sfpi::reinterpret<vUInt>(vFloat)` (SFPLUT) | Reinterprets the bit pattern of a float as an unsigned integer (or vice versa) without conversion. Used for bit manipulation in the fast inverse sqrt. |
+| `sfpi::s2vFloat16b(0x5f37)` | Creates a BFloat16 constant from a raw hex value and broadcasts it across the SFPU vector lanes. |
+| `sfpi::float_to_fp16b(result, 0)` (SFPCAST) | Converts a float32 value to BFloat16 format. Not used in erfinv's fp32 path but present in log's non-fp32 path. |
+| `v_if / v_elseif / v_else / v_endif` (SFPSETCC/SFPENCC/SFPCOMPC) | Conditional execution macros that set/enable/complement the SFPU condition codes (CC). These control per-lane predication: only lanes with CC=true execute subsequent instructions. |
+| `_sfpu_reciprocal_<2>(x)` | Computes 1/x using the SFPU's built-in reciprocal approximation with 2 Newton-Raphson refinement iterations. Used inside `calculate_log_f32_body`. |
+| `PolynomialEvaluator::eval(...)` | Evaluates a polynomial using Horner's method. Compiles down to a sequence of SFPMAD (multiply-add) instructions. |
+| `TTI_STALLWAIT` | Stalls the pipeline until the specified condition is met. Used at SFPU entry (wait for math unit) and exit (wait for SFPU completion). |
+| `TTI_SETRWC` | Sets the read/write counters for DEST register addressing. Used by the params dispatch to advance between tile faces. |
+| Arithmetic operators (`*`, `+`, `-`, `>>`) | Map to SFPMUL, SFPADD, SFPSUB, and SFPSHFT instructions respectively. These are the core ALU operations performed on SFPU vector registers. |
+
+### SFPU Register Usage
 
 | Register | Usage |
 |----------|-------|
-| **DEST[0]** (and successive rows) | Input tile data loaded by `copy_tile`; overwritten with erfinv result |
-| **dst_reg pointer** | Iterates through 8 rows per `calculate_erfinv` call (32 rows = full tile column) |
-| **vConstFloatPrgm0** | Holds `ln(2) = 0.693147...` for log computation (loaded by `log_init`) |
-| **vConstFloatPrgm1** | Holds polynomial coefficient `-2.0069785...` for log computation |
-| **vConstFloatPrgm2** | Holds polynomial coefficient `3.7675004...` for log computation |
-| **SFPU local vFloat registers** | `v`, `abs_v`, `result`, `log_value`, `temp`, `calculated_value`, `approx`, etc. -- all temporary vector registers used during computation |
+| **DEST registers (dst_reg)** | The primary data source and sink. Each iteration loads one element from DEST row 0, processes it through the erfinv algorithm, writes the result back to DEST row 0, then increments the row pointer. Over 8 iterations, this processes 8 consecutive rows of a 16-row face. |
+| **SFPU LREGs (L0-L7)** | Implicit temporaries used by the SFPI compiler for intermediate values (`val`, `approx`, `log_value`, `temp`, `calculated_value`, `result`, etc.). The compiler allocates these automatically. The erfinv kernel has high register pressure due to nested function calls (erfinv_body calls log_body and sqrt_custom). |
+| **vConstFloatPrgm0** | Programmed to `0.69314718246459961f` (ln(2)) during `erfinv_init()` via `log_init`. Used by `calculate_log_f32_body` for the exponent correction term `exp * ln(2)`. |
+| **vConstFloatPrgm1** | Programmed to `-2.0069785118103027` during `log_init`. Used by the non-fp32 `calculate_log_body` polynomial (not the fp32 path used by erfinv). |
+| **vConstFloatPrgm2** | Programmed to `3.767500400543213` during `log_init`. Same as above -- used by the non-fp32 log path. |
+| **vConst1** | Hardware constant register holding `1.0f`. Used in `calculate_log_f32_body` for `m - 1` and `m + 1` computations. |
 
-#### SFPU Execution Flow
+### Address Mode Configuration
 
-1. **Tile acquisition**: The compute kernel calls `cb_wait_front(c_0, 1)` to ensure a tile is available.
-2. **Unpack to DEST**: `copy_tile(c_0, 0, 0)` unpacks the tile from CB c_0 into DEST register 0, converting from the CB data format to the DEST accumulator format.
-3. **SFPU init**: `erfinv_tile_init()` calls `log_init<false, false, false>()`, which loads `ln(2)` and two polynomial coefficients into SFPU programmable constant registers (`vConstFloatPrgm0/1/2`). These are needed by the internal `calculate_log_body` function.
-4. **SFPU dispatch**: `erfinv_tile(0)` calls `_llk_math_eltwise_unary_sfpu_params_` which sets up the DEST tile index and invokes `calculate_erfinv<APPROX>()` in `VectorMode::RC` (row-column mode, processing all faces).
-5. **Per-row loop (8 iterations)**: Each iteration processes one 4-element SIMD row:
-   - Load 4 elements from `dst_reg[0]`
-   - Compute `|x|`; handle edge cases (`|x| == 1` yields infinity, `|x| > 1` yields NaN)
-   - For valid inputs, call `calculate_erfinv_body`:
-     - Compute `ln(1 - x^2)` via `calculate_log_body`
-     - Compute intermediate terms using Winitzki's formula
-     - Two calls to `calculate_sqrt_custom` (fast inverse sqrt + Newton-Raphson)
-   - Restore original sign via `setsgn`
-   - Write result back to `dst_reg[0]`; advance `dst_reg++`
-6. **Pack**: `pack_tile(0, c_2)` packs the transformed DEST data into output CB c_2.
-7. **Release**: `cb_pop_front(c_0, 1)` frees the input tile; `cb_push_back(c_2, 1)` publishes the output tile.
+The erfinv operation uses `ADDR_MOD_7` configured during `_llk_math_eltwise_unary_sfpu_init_<SfpuType::erfinv>()`. Since erfinv is not one of the special-cased types (topk_local_sort, typecast, unary_max/min, reciprocal), only the default ADDR_MOD_7 is set.
 
-#### SFPU Configuration
+**ADDR_MOD_7 configuration (identical on Wormhole and Blackhole):**
 
-| Setting | Value | Effect |
-|---------|-------|--------|
-| **math_fidelity** | HiFi4 | Highest fidelity FPU mode (not directly used by SFPU, but set in ComputeConfig) |
-| **math_approx_mode** | `false` | `get_op_approx_mode` returns `false` for all ops by default; ERFINV uses exact mode. The `APPROX` template parameter passed to `calculate_erfinv` will be `false`. |
-| **fp32_dest_acc_en** | Configurable | When enabled, DEST registers use fp32 accumulation; `calculate_log_body` is called with `is_fp32_dest_acc_en=true` for higher precision |
-| **unpack_to_dest_mode** | Default (or UnpackToDestFp32 if `preserve_fp32_precision`) | Controls whether unpack converts to fp32 in DEST |
-| **SFPU_OP_ERFINV_INCLUDE** | `1` | Preprocessor define that gates inclusion of `erfinv.h` via `sfpu_split_includes.h` |
-| **Log LUT constants** | Loaded by `log_init` into `vConstFloatPrgm0/1/2` | Required by the internal `calculate_log_body` call |
+```
+addr_mod_t {
+    .srca = {.incr = 0},
+    .srcb = {.incr = 0},
+    .dest = {.incr = 0},
+}
+```
 
-#### Hardware Compatibility Notes
-The SFPU kernel implementations for Wormhole B0 and Blackhole are **identical** (byte-for-byte the same `ckernel_sfpu_erfinv.h`). The erfinv operation uses only standard SFPI intrinsics (`vFloat` arithmetic, `reinterpret`, `abs`, `setsgn`, conditional execution) and the shared `calculate_log_body` function, all of which are available on both architectures. No architecture-specific instructions or divergent behavior is present.
+All increment fields are zero. This means the SFPU does not auto-increment any source or destination register addresses between instructions -- all address advancement is handled explicitly by the SFPU kernel code via `sfpi::dst_reg++` (which compiles to `SFPINCRWC`) and by the params dispatch via `TTI_SETRWC` between faces.
 
-## Implementation Notes
-
-1. **Algorithm choice**: The Winitzki (2008) approximation was chosen for its balance of accuracy and computational simplicity on the SFPU. It requires only log, sqrt, and basic arithmetic -- no iterative root-finding or lookup tables beyond the log constants.
-
-2. **Custom sqrt**: The implementation uses a dedicated `calculate_sqrt_custom` function based on the fast inverse square root trick (adapted for bfloat16 with magic number `0x5f37`) followed by two Newton-Raphson refinement iterations, rather than calling the standard SFPU sqrt. This avoids additional SFPU pipeline configuration overhead and keeps the erfinv kernel self-contained (only depending on log).
-
-3. **Precision strategy**: The `calculate_log_body` is called with `is_fp32_dest_acc_en=true` (third template parameter) to use fp32 accumulation during the logarithm computation, reducing intermediate rounding errors that would otherwise accumulate through the multi-step erfinv formula.
-
-4. **Edge case handling**: The kernel explicitly handles `|x| == 1` (returns infinity) and `|x| > 1` (returns NaN) using SFPU predicated execution (`v_if`/`v_elseif`). The odd symmetry of erfinv is exploited by computing on `|x|` and restoring the sign via `setsgn`.
-
-5. **No runtime parameters**: Unlike parameterized unary ops (e.g., HARDSHRINK with a threshold), ERFINV takes no scalar parameters. The `packed_scalar1` and `packed_scalar2` runtime args are always 0.
-
-6. **Double buffering**: Both input and output CBs have capacity for 2 tiles, enabling overlap between the reader producing the next tile and the compute kernel processing the current one.
+The Wormhole and Blackhole implementations are identical for this operation. Both configure ADDR_MOD_7 with zero increments, and neither sets ADDR_MOD_6 (only done for topk, typecast, and unary_max/min operations, plus reciprocal on Blackhole).
 
 ## External Knowledge Sources
 
 ### DeepWiki Queries
-1. **Query**: "How does the unary program factory work for SFPU operations?"
-   **Reason**: To understand the overall structure of `unary_program_factory.cpp` and how it sets up kernels.
-   **Key Findings**: The factory creates reader/compute/writer kernels, uses `split_work_to_cores` for distribution, and sets SFPU operation defines via `get_block_defines`. ERFINV uses the default `eltwise_sfpu.cpp` compute kernel path.
 
-2. **Query**: "How is the erfinv (inverse error function) SFPU operation implemented?"
-   **Reason**: To identify the kernel files, LLK macros, and initialization functions involved.
-   **Key Findings**: The core SFPU implementation is in `ckernel_sfpu_erfinv.h`, wrapped by `erfinv.h` using `SFPU_UNARY_NO_PARAM_KERNEL_FN` and `SFPU_INIT_KERNEL_CALL` macros. Initialization calls `log_init` to set up logarithm constants.
+1. **Query**: "How is the erfinv SFPU kernel implemented? What is the call chain from the compute kernel API through LLK to the ckernel SFPU implementation for erfinv? What files contain the SFPU kernel for erfinv?"
+   **Reason**: Needed to identify all file paths in the abstraction chain and understand the overall architecture of the erfinv SFPU dispatch.
+   **Key Findings**: Identified the API header (`erfinv.h`), the macro expansion path (`SFPU_UNARY_NO_PARAM_KERNEL_FN`), the LLK params dispatch function, and the core SFPU implementation file. Confirmed the algorithm is based on Winitzki's 2008 approximation with dependencies on `calculate_log_body` and `calculate_sqrt_custom`.
 
-### Documentation References
-1. **Source**: `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp`
-   **Reason**: To confirm the compute kernel path selection, macro definitions, and approx mode for ERFINV.
-   **Key Information**: ERFINV maps to macro `SFPU_OP_ERFINV_INCLUDE`, init/func pair `erfinv_tile_init()`/`erfinv_tile(0)`, default compute path `eltwise_sfpu.cpp`, and `get_op_approx_mode` returns `false`.
+2. **Query**: "How is the erfinv SFPU kernel implemented in the LLK layer? What is the ckernel_sfpu function for erfinv, and what SFPU instructions does it use?"
+   **Reason**: Needed detail on the LLK-level dispatch, addr_mod configuration, and the `_llk_math_eltwise_unary_sfpu_init_`/`_llk_math_eltwise_unary_sfpu_params_` functions.
+   **Key Findings**: Confirmed the addr_mod configuration uses ADDR_MOD_7 with all-zero increments. The params function handles face iteration with TTI_SETRWC instructions. The init function calls `_init_sfpu_config_reg()`, configures addr_mod, and resets counters.
 
-2. **Source**: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h`
-   **Reason**: To understand the `SFPU_UNARY_NO_PARAM_KERNEL_FN` and `SFPU_INIT_KERNEL_CALL` macro expansions.
-   **Key Information**: `SFPU_UNARY_NO_PARAM_KERNEL_FN(FN, MODE, APPROX, DST_IDX)` expands to `_llk_math_eltwise_unary_sfpu_params_<APPROX>(ckernel::sfpu::FN<APPROX>, DST_IDX, (int)VectorMode::MODE)`.
+### Confluence References
+
+No Confluence references were consulted for this analysis. The SFPU ISA page was not needed because the erfinv kernel uses only standard SFPI intrinsics (arithmetic, conditional execution, register load/store) that are well-documented in the DeepWiki sources and the source code itself.
+
+### Glean References
+
+No Glean references were consulted for this analysis.

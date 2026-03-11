@@ -1,455 +1,611 @@
 # DIV (binary_ng) Implementation Analysis
 
 ## Overview
-The DIV operation computes element-wise floating-point division: `c = a / b`. It is part of the `binary_ng` ("next generation") binary operation framework in TTNN. When used as an SFPU operation (which is the case for FLOAT32/FLOAT32 inputs or INT32/INT32 inputs), it dispatches to a dedicated SFPU division kernel (`div_binary_tile`) that computes division via reciprocal approximation followed by multiplication. For non-SFPU paths (e.g., BFLOAT16), DIV is decomposed into `RECIP(b) * a` using the FPU MUL pipeline with a unary reciprocal pre-processing step on the RHS.
 
-This analysis focuses on the **SFPU path** (floating-point DIV) and the **INT32 path** (`div_int32_tile`).
+The DIV operation performs element-wise division `c = a / b` using the `binary_ng` (next-generation binary) framework. It supports two execution paths depending on data types and configuration:
 
-**Program Factory Path**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_program_factory.cpp`
+1. **SFPU path** (default for most dtypes): Uses `SfpuBinaryOp::DIV` which calls `div_binary_tile` (float) or `div_int32_tile` (INT32) on the SFPU vector unit.
+2. **FPU path** (non-SFPU mode): Decomposes into `RECIP(b)` followed by `MUL(a, reciprocal_b)` on the FPU matrix unit.
+
+The operation supports tensor-tensor division, tensor-scalar division, and broadcasting across all dimensions (row, column, scalar, mixed).
+
+**Program factory path**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_program_factory.cpp`
 
 ## Work Unit Definition
-One work unit is **one tile** (32x32 elements). The compute kernel processes `num_tiles_per_cycle = 1` tile per read-compute-write cycle. Each cycle loads one LHS tile and one RHS tile into DEST registers, performs the SFPU division, and packs the result to the output circular buffer.
+
+| Attribute | Value |
+|-----------|-------|
+| **Granularity** | tile |
+| **Unit size** | 1 tile (32x32 elements) |
+| **Total units** | `c.physical_volume() / (tile_height * tile_width)` -- total output tiles |
+| **Loop structure** | Per-core loop over assigned tiles; nested 6-deep loops (nD, D, N, C, Ht, Wt) for index mapping with broadcasting strides |
 
 ## Tensor Format and Layout
 
 ### Input Tensor(s)
 
-| Property | Tensor A (LHS) | Tensor B (RHS) |
-|---|---|---|
-| Dimension Convention | ND, D, N, C, H, W (dims > 5 collapsed into ND) | Same as A, with broadcasting |
-| Tensor Layout | TILED (32x32) | TILED (32x32) |
-| Memory Layout | Interleaved (DRAM/L1) or Sharded (L1) | Interleaved (DRAM/L1) or Sharded (L1), or scalar |
-| Buffer Type | DRAM or L1 | DRAM or L1 |
-| Data Type | FLOAT32, INT32, BFLOAT16 | Same as A (or scalar) |
+| Property | Input Tensor A | Input Tensor B (optional) |
+|----------|---------------|--------------------------|
+| **Logical shape** | Arbitrary rank (up to 6+) | Arbitrary rank (broadcastable to A) |
+| **Dimension convention** | [..., D, N, C, H, W] (last 5 dims) | [..., D, N, C, H, W] |
+| **Tensor layout** | TILE_LAYOUT | TILE_LAYOUT |
+| **Memory layout** | INTERLEAVED or SHARDED (HEIGHT, WIDTH, BLOCK) | INTERLEAVED or SHARDED |
+| **Buffer type** | DRAM or L1 | DRAM or L1 |
+| **Data type** | BFLOAT16, FLOAT32, INT32 | BFLOAT16, FLOAT32, INT32 (or scalar float) |
 
-When B is a scalar (not a tensor), it is packed into a single tile by the writer kernel using `fill_with_val` and placed into CB c_1.
+When `b` is absent (scalar mode), the scalar value is packed into a runtime argument and written into a single tile by the writer kernel.
 
 ### Output Tensor(s)
 
-| Property | Tensor C (Output) |
-|---|---|
-| Dimension Convention | ND, D, N, C, H, W (broadcast-expanded) |
-| Tensor Layout | TILED (32x32) |
-| Memory Layout | Interleaved (DRAM/L1) or Sharded (L1) |
-| Buffer Type | DRAM or L1 |
-| Data Type | Same as input dtype (FLOAT32, INT32, BFLOAT16) |
+| Property | Output Tensor C |
+|----------|----------------|
+| **Logical shape** | Broadcast-compatible output of A and B shapes |
+| **Dimension convention** | [..., D, N, C, H, W] |
+| **Tensor layout** | TILE_LAYOUT |
+| **Memory layout** | INTERLEAVED or SHARDED |
+| **Buffer type** | DRAM or L1 |
+| **Data type** | Same as input (BFLOAT16/FLOAT32); INT32 inputs produce FLOAT32 output for DIV |
 
 ### Layout Transformations
-No tilize/untilize conversions occur within the program factory. Input tensors must already be in tiled layout. When SFPU path is active and the operation is not POWER, `UnpackToDestMode::UnpackToDestFp32` is enabled for all source CBs, meaning data is unpacked to FP32 in DEST registers regardless of the input format.
+
+- No explicit tilize/untilize in the kernels; all data is expected in TILE_LAYOUT.
+- For INT32 DIV, the output dtype is automatically converted to FLOAT32 (handled at the device operation level, not in the program factory).
+- When input and output dtypes differ and the operation is not integer division, a TYPECAST post-activation is appended.
 
 ## Data Flow Pattern
 
-### Two-Tensor Path (A op B, both tensors)
-1. **Reader kernel** (ReaderNoBcastNg) reads tiles from both tensor A and tensor B into CB c_0 and CB c_1, handling broadcasting via stride manipulation
-2. **Compute kernel** waits for tiles in CB c_0 and CB c_1, copies them to DEST registers, executes `BINARY_SFPU_OP` (which is `div_binary_tile`), and packs the result to CB c_2
-3. **Writer kernel** (WriterNoBcastNg) reads tiles from CB c_2 and writes them to the output tensor
+### Path 1: Tensor-Tensor DIV (b is a tensor)
 
-### Scalar Path (A op scalar)
-1. **Reader kernel** (ReaderNoBcast) reads tiles from tensor A into CB c_0
-2. **Writer kernel** (WriterScalar) fills a single tile in CB c_1 with the scalar value, then writes output tiles from CB c_2 to DRAM
-3. **Compute kernel** (ComputeScalar) waits for the scalar tile in CB c_1 once, then for each LHS tile: copies both to DEST, executes `BINARY_SFPU_OP`, packs to CB c_2
+| Stage | Kernel | Reads From | Writes To | CB Operations |
+|-------|--------|------------|-----------|---------------|
+| 1 | Reader (ng) | DRAM/L1 (A and B) | CB c_0 (A), CB c_1 (B) | reserve_back, noc_async_read_page, push_back (per tile, for both A and B) |
+| 2 | Compute | CB c_0, CB c_1 | CB c_2 | wait_front, copy_tile to DST regs, SFPU div_binary_tile or FPU RECIP+MUL, pack_tile, push_back, pop_front |
+| 3 | Writer (ng) | CB c_2 | DRAM/L1 (C) | wait_front, noc_async_write_page, pop_front |
 
-### Broadcast Path (various SubtileBroadcastTypes)
-The broadcast input is loaded once and reused for multiple tiles of the other input. The `process_tile` function in `eltwise_binary_sfpu.cpp` handles this with a nested loop structure controlled by `tile_freq` and `tile_start` runtime arguments.
+The reader kernel reads both A and B tiles (using the `kernels_ng/dataflow/reader_interleaved_no_bcast.cpp` reader which handles both inputs). The writer uses `kernels_ng/dataflow/writer_interleaved_no_bcast.cpp`.
+
+### Path 2: Tensor-Scalar DIV (b is a scalar)
+
+| Stage | Kernel | Reads From | Writes To | CB Operations |
+|-------|--------|------------|-----------|---------------|
+| 1a | Writer (scalar) | Scalar arg | CB c_1 | Fills one tile with scalar value (once), push_back |
+| 1b | Reader (old) | DRAM/L1 (A only) | CB c_0 | reserve_back, noc_async_read_page, push_back (per tile) |
+| 2 | Compute (scalar) | CB c_0, CB c_1 | CB c_2 | wait_front on RHS once (scalar stays), per-tile: wait_front LHS, compute, pack, push_back, pop_front LHS |
+| 3 | Writer (scalar) | CB c_2 | DRAM/L1 (C) | wait_front, noc_async_write_page, pop_front |
+
+In scalar mode, the writer kernel (`writer_interleaved_scalar.cpp`) both fills the scalar tile into CB c_1 and writes output tiles from CB c_2. The reader only reads input A.
+
+### Sharded Path
+
+When native L1 sharding is active, the reader does `cb_reserve_back` + `cb_push_back` for the entire shard (no NoC reads needed since data is already in L1). The writer similarly skips NoC writes for sharded output. CB addresses are updated dynamically via `UpdateDynamicCircularBufferAddress`.
 
 ## Circular Buffer Configuration
 
-| CB ID | Name | Purpose | Capacity (tiles) | Data Format | Producer | Consumer | Buffering |
-|---|---|---|---|---|---|---|---|
-| c_0 | cb_pre_lhs / cb_src_a | Input A tiles | 2 (interleaved) or shard volume (sharded) | A's data format | Reader | Compute | Double-buffered (interleaved) |
-| c_1 | cb_pre_rhs / cb_src_b | Input B tiles or scalar tile | 2 (tensor) or 1 (scalar) or shard volume (sharded) | B's data format | Reader/Writer(scalar) | Compute | Double-buffered (tensor) / Single-buffered (scalar) |
-| c_2 | cb_out / cb_dst | Output C tiles | 2 (interleaved) or shard volume (sharded) | C's data format | Compute | Writer | Double-buffered (interleaved) |
-| c_3 | cb_post_lhs | LHS after activation preprocessing | 1 | A's data format | Compute (preprocess) | Compute (main) | Single-buffered (only if LHS activations present) |
-| c_4 | cb_post_rhs | RHS after activation preprocessing | 1 | B's data format | Compute (preprocess) | Compute (main) | Single-buffered (only if RHS activations present) |
-| c_5 | Row bcast A scratch | Scratch for ROW_A or ROW_A_COL_B bcast | 2 | A's data format | Reader | Compute | Double-buffered (only if applicable bcast type) |
-| c_6 | Row bcast B scratch | Scratch for ROW_B or ROW_B_COL_A bcast | 2 | B's data format | Reader | Compute | Double-buffered (only if applicable bcast type) |
+### Non-sharded (Interleaved) Mode
 
-For the standard DIV operation with no pre/post activations, only CB c_0, c_1, and c_2 are active. CB c_3 and c_4 are unused since DIV has no `process_lhs` or `process_rhs` defined in `OpConfig`.
+| CB ID | Name | Purpose | Capacity | Block Size | Buffering | Producer | Consumer | Lifetime |
+|-------|------|---------|----------|------------|-----------|----------|----------|----------|
+| c_0 | cb_src_a | Input A tiles | 2 tiles | 1 tile | Double | Reader | Compute | Block |
+| c_1 | cb_src_b | Input B tiles (or scalar tile) | 2 tiles (tensor) / 1 tile (scalar) | 1 tile | Double / Single | Reader or Writer(scalar) | Compute | Block / Program (scalar stays) |
+| c_2 | cb_out | Output tiles | 2 tiles | 1 tile | Double | Compute | Writer | Block |
+| c_3 | cb_lhs_interim | LHS activation intermediate | 1 tile | 1 tile | Single | Compute (preprocess) | Compute (main) | Block |
+| c_4 | cb_rhs_interim | RHS activation intermediate | 1 tile | 1 tile | Single | Compute (preprocess) | Compute (main) | Block |
+
+Notes:
+- CB c_3 is only created when LHS pre-activations are non-empty (not the case for standard DIV).
+- CB c_4 is only created when RHS pre-activations are non-empty. For FPU DIV, `process_rhs = RECIP` so c_4 IS created with capacity 1.
+- CBs c_5 and c_6 are created for ROW_A/ROW_B broadcast patterns (capacity 2 tiles each) but are not relevant for the standard no-broadcast DIV path.
+
+### Sharded Mode
+
+In sharded mode, CB capacities are set to the shard volume (number of tiles per shard) instead of 2. The CB is backed directly by the sharded buffer in L1.
 
 ## Pipeline Pattern Summary
-- **Interleaved mode**: CB c_0 and c_1 have capacity=2 (double-buffered), allowing the reader to fill the next tile while compute processes the current one. CB c_2 has capacity=2 (double-buffered), allowing compute to produce while writer drains.
-- **Sharded mode**: CB capacities match shard volumes. All tiles are pre-loaded by the reader via `cb_reserve_back`/`cb_push_back` on the sharded buffer, then consumed sequentially by compute.
-- **Scalar mode**: CB c_1 holds exactly 1 tile (the scalar), loaded once and never popped until all output tiles are produced.
+
+- **Non-sharded**: CB c_0 and c_1 have capacity=2, block_size=1 -- **Double-buffered**. This allows the reader to write the next tile while compute processes the current one. CB c_2 is also double-buffered for the same overlap between compute and writer.
+- **Scalar mode**: CB c_1 has capacity=1 -- **Single-buffered** (scalar tile written once and consumed repeatedly without being popped until the end).
+- **Sharded mode**: CBs are sized to the full shard -- effectively **Single-buffered** at the shard level (entire shard is available at once).
 
 ## Index Calculations
-The reader kernel computes a multi-dimensional tile offset from the output `start_tile_id`:
-- `start_tile_id` is decomposed into `(nd, d, n, c, th, tw)` coordinates based on the output tensor shape `(cND, D, N, C, Ht, Wt)`
-- Each input tensor has its own stride per dimension, computed as `dim_size * (dim_size > 1)` -- this cleverly handles broadcasting by setting the stride to 0 when a dimension has size 1
-- The input tile offset is: `nd * nD_stride + d * d_stride + n * n_stride + c * c_stride + th * Wt + tw`
 
-For sharded tensors, `dst_shard_width` limits the `tw` loop to only iterate over the tiles within the shard.
+The reader kernel maps a linear `start_tile_id` into a 6D coordinate system `(nD, D, N, C, Ht, Wt)` using modular arithmetic:
+
+```
+tiles_per_nd = D * N * C * Ht * Wt
+start_nd = start_tile_id / tiles_per_nd
+offset_nd = start_tile_id % tiles_per_nd
+...
+start_tw = offset_c % Wt
+```
+
+For broadcasting, each input tensor has its own stride pattern computed in the program factory:
+- `nD_stride = Ht * Wt * C * N * D * (nD > 1)` -- zero if dimension is 1 (broadcast)
+- `d_stride = Ht * Wt * C * N * (D > 1)`
+- `n_stride = Ht * Wt * C * (N > 1)`
+- `c_stride = Ht * Wt * (C > 1)`
+
+The `(dim > 1)` multiplier causes the stride to be zero when a dimension has size 1, effectively broadcasting along that dimension. The reader uses stride-based offsets to walk through input tiles while the output iterates linearly through the full output shape.
 
 ## Memory Access Patterns
 
 ### Read Pattern
-- **Interleaved**: Tiles are read one at a time via `noc_async_read_page` with barrier after each tile. The iteration order is ND-major: nd -> d -> n -> c -> th -> tw (innermost). For broadcasting, the input stride is 0 in broadcast dimensions, causing the same tile to be re-read.
-- **Sharded**: All tiles are already in L1. The reader simply marks them available via `cb_reserve_back`/`cb_push_back`.
+- **Interleaved**: Sequential tile reads within each tile-row (Wt dimension), then advancing through Ht, C, N, D, nD. Each tile is read individually via `noc_async_read_page` with a barrier after each tile (or after each A+B pair in the ng reader).
+- **Sharded**: No explicit reads -- data is already in L1. The CB is made to point to the shard buffer.
+- For broadcasting, the input tile offsets use stride-based indexing that may revisit the same tiles (stride=0 for broadcast dimensions).
 
 ### Write Pattern
-- **Interleaved**: Tiles written one at a time via `noc_async_write_page` with barrier, following the same ND-major iteration order.
-- **Sharded**: Output buffer is already in L1 at the correct address. Writer is a no-op (tiles stay in the sharded CB).
+- **Interleaved**: Sequential tile writes using `noc_async_write_page` with per-tile barriers. Output tile offset grows linearly from `start_tile_id`.
+- **Sharded**: No explicit writes -- output is already in L1 shard buffer.
 
 ## Core Distribution Strategy
 
-| Property | Value |
-|---|---|
-| Grid Topology | Rectangular grid from `operation_attributes.worker_grid` |
-| Work Splitting | Output tiles distributed evenly across cores via `split_work_to_cores` |
-| Load Balancing | Two core groups: group 1 gets `ceil(total_tiles / num_cores)` tiles, group 2 gets the remainder |
-| Remainder Handling | Cores not in group 1 or group 2 receive zero-tile runtime args and are effectively no-ops |
-| Sharded Mode | Core grid determined by shard spec; each core processes its own shard |
-| Zero-Start Optimization | When the grid starts at (0,0) and is a single rectangle, a faster work distribution algorithm is used |
+| Attribute | Value |
+|-----------|-------|
+| **Grid topology** | 2D (rectangular grid) |
+| **Grid dimensions** | Device-dependent (from `operation_attributes.worker_grid`) |
+| **Total cores** | `compute_with_storage_grid.x * compute_with_storage_grid.y` (zero-start grid) or `all_device_cores.num_cores()` |
+| **Work per core** | `num_tiles_per_core_group_1` or `num_tiles_per_core_group_2` (remainder group) |
+| **Load balancing** | Two-group split: `split_work_to_cores` divides total output tiles across cores. Group 1 gets `ceil(total/cores)` tiles, Group 2 gets `floor(total/cores)` tiles. Cores outside both groups get zero-filled args (no-op). |
+
+For sharded mode, work distribution follows the shard grid directly -- each core processes its own shard.
 
 ## Arguments
 
 ### Compile-Time Arguments
 
+**Compute Kernel:**
+
 | Index | Name | Type | Description |
-|---|---|---|---|
-| 0 | num_tiles_per_cycle | uint32_t | Always 1 -- number of output tiles produced per compute cycle |
-| (via defines) | BINARY_SFPU_INIT | string | `div_binary_tile_init();` -- SFPU init macro for reciprocal LUT |
-| (via defines) | BINARY_SFPU_OP | string | `div_binary_tile` -- SFPU operation function name |
-| (via defines) | BCAST_INPUT | string | `""` (no bcast) or `"0"` (bcast A) or `"1"` (bcast B) |
-| (reader CT) | TensorAccessor args | varies | Compile-time portion of TensorAccessor for A and B |
-| (reader CT) | has_sharding | uint32_t | 0 or 1 -- whether sharded mode is active |
-| (writer CT) | TensorAccessor args | varies | Compile-time portion of TensorAccessor for C |
-| (writer CT) | has_sharding | uint32_t | 0 or 1 |
+|-------|------|------|-------------|
+| 0 | num_tiles_per_cycle | uint32_t | Always 1 -- tiles produced per read-compute-write cycle |
+
+**Reader Kernel (compile-time via TensorAccessorArgs):**
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0..N | tensor_accessor_a | varies | TensorAccessor compile-time args for buffer A |
+| N+1..M | tensor_accessor_b | varies | TensorAccessor compile-time args for buffer B |
+| M+1 | has_sharding | uint32_t | 1 if native L1 sharding is active, 0 otherwise |
+
+**Writer Kernel (compile-time via TensorAccessorArgs):**
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0..N | tensor_accessor_c | varies | TensorAccessor compile-time args for buffer C |
+| N+1 | has_sharding | uint32_t | 1 if native L1 sharding is active, 0 otherwise |
 
 ### Runtime Arguments
 
-**Reader** (21 args for two-tensor path):
+**Reader Kernel (21 args):**
 
 | Index | Name | Type | Description |
-|---|---|---|---|
-| 0 | src_addr | uint32_t | DRAM address of tensor A |
-| 1 | start_tile_id | uint32_t | Starting output tile ID for this core |
-| 2 | src_num_tiles (a) | uint32_t | Number of A tiles in shard (sharded only) |
-| 3 | dst_num_tiles | uint32_t | Total output tiles assigned to this core |
-| 4 | dst_shard_width | uint32_t | Shard width in tiles (sharded only, 0 otherwise) |
-| 5-8 | nD/d/n/c strides (A) | uint32_t | Broadcast-aware strides for tensor A |
-| 9-14 | D, N, C, Ht, Wt, cND | uint32_t | Output tensor shape dimensions |
-| 15 | src_addr_b | uint32_t | DRAM address of tensor B |
-| 16-19 | nD/d/n/c strides (B) | uint32_t | Broadcast-aware strides for tensor B |
-| 20 | src_num_tiles_b | uint32_t | Number of B tiles in shard (sharded only) |
+|-------|------|------|-------------|
+| 0 | src_addr | uint32_t | Input A buffer address |
+| 1 | start_tile_id | uint32_t | Starting output tile ID for this core (c_start_id) |
+| 2 | src_num_tiles (a) | uint32_t | Number of A tiles in shard (sharded mode) |
+| 3 | dst_num_tiles | uint32_t | Number of output tiles for this core |
+| 4 | dst_shard_width | uint32_t | Shard width in tiles (sharded mode, 0 otherwise) |
+| 5 | nD_stride | uint32_t | A's stride for collapsed nD dimension |
+| 6 | d_stride | uint32_t | A's stride for D dimension |
+| 7 | n_stride | uint32_t | A's stride for N dimension |
+| 8 | c_stride | uint32_t | A's stride for C dimension |
+| 9 | D | uint32_t | Output D dimension |
+| 10 | N | uint32_t | Output N dimension |
+| 11 | C | uint32_t | Output C dimension |
+| 12 | Ht | uint32_t | Output height in tiles |
+| 13 | Wt | uint32_t | Output width in tiles |
+| 14 | cND | uint32_t | Collapsed nD dimension of output |
+| 15 | src_addr_b | uint32_t | Input B buffer address (0 if scalar) |
+| 16 | nD_stride_b | uint32_t | B's stride for nD dimension |
+| 17 | d_stride_b | uint32_t | B's stride for D dimension |
+| 18 | n_stride_b | uint32_t | B's stride for N dimension |
+| 19 | c_stride_b | uint32_t | B's stride for C dimension |
+| 20 | src_num_tiles_b | uint32_t | Number of B tiles in shard |
 
-**Writer** (11 args for two-tensor path):
+**Writer Kernel (11 args, tensor-tensor mode):**
 
 | Index | Name | Type | Description |
-|---|---|---|---|
-| 0 | dst_addr | uint32_t | DRAM address of output tensor C |
+|-------|------|------|-------------|
+| 0 | dst_addr | uint32_t | Output C buffer address |
 | 1 | start_tile_id | uint32_t | Starting output tile ID |
-| 2 | dst_num_tiles | uint32_t | Total output tiles for this core |
+| 2 | dst_num_tiles | uint32_t | Number of output tiles for this core |
 | 3 | dst_shard_width | uint32_t | Shard width in tiles |
-| 4-10 | D, N, C, Ht, Wt, cND, 0 | uint32_t | Output shape dimensions + padding |
+| 4 | D | uint32_t | Output D dimension |
+| 5 | N | uint32_t | Output N dimension |
+| 6 | C | uint32_t | Output C dimension |
+| 7 | Ht | uint32_t | Output height in tiles |
+| 8 | Wt | uint32_t | Output width in tiles |
+| 9 | cND | uint32_t | Collapsed nD dimension |
+| 10 | (unused) | uint32_t | Set to 0 |
 
-**Compute** (4 args):
+**Writer Kernel (11 args, scalar mode):**
 
 | Index | Name | Type | Description |
-|---|---|---|---|
-| 0 | num_tiles | uint32_t | Total output tiles for this core |
-| 1 | tile_freq | uint32_t | Broadcast repeat frequency (1 for no bcast, Ht*Wt for scalar bcast, Wt for col bcast) |
-| 2 | tile_start | uint32_t | Starting offset within the broadcast cycle |
-| 3 | compute_scalar_value | uint32_t | Unused for standard DIV (set to 0) |
+|-------|------|------|-------------|
+| 0 | packed_scalar | uint32_t | Scalar value packed as bfloat16x2 or float bits |
+| 1 | dst_addr | uint32_t | Output C buffer address |
+| 2 | start_tile_id | uint32_t | Starting output tile ID |
+| 3 | dst_num_tiles | uint32_t | Number of output tiles |
+| 4 | dst_shard_width | uint32_t | Shard width in tiles |
+| 5-10 | D, N, C, Ht, Wt, cND | uint32_t | Output shape dimensions |
+
+**Compute Kernel (4 args):**
+
+| Index | Name | Type | Description |
+|-------|------|------|-------------|
+| 0 | num_tiles | uint32_t | Total tiles to process on this core |
+| 1 | freq | uint32_t | Broadcast frequency (1 for no-bcast, Wt for col-bcast, Ht*Wt for scalar-bcast) |
+| 2 | counter | uint32_t | Starting broadcast counter position |
+| 3 | compute_scalar_value | uint32_t | Reserved for quantization zero-point (0 for DIV) |
 
 ## Kernel Implementations
 
-### Reader Kernel (Two-Tensor Path)
+### SFPU Compute Kernel (Tensor-Tensor, No Broadcast)
+
+| Kernel | Core | NOC | Input | Output | Operations |
+|--------|------|-----|-------|--------|------------|
+| compute | RISCV_2 (compute) | N/A | CB c_0 (A), CB c_1 (B) | CB c_2 (C) | copy_tile A to DST[0], copy_tile B to DST[1], div_binary_tile(0,1,0), pack_tile(0, c_2) |
+
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_no_bcast.cpp`
+- **Key Logic**: For each output tile: wait for both LHS and RHS tiles, acquire tile registers, copy LHS to DST register slot 0, copy RHS to DST register slot 1, execute `BINARY_SFPU_OP(0, 1, 0)` which expands to `div_binary_tile(0, 1, 0)`, optionally run post-activations, commit registers, pack result to output CB. The `copy_tile_to_dst_init_short_with_dt` calls handle data format reconfiguration between the two inputs.
+
+### FPU Compute Kernel (Tensor-Tensor, No Broadcast)
+
+| Kernel | Core | NOC | Input | Output | Operations |
+|--------|------|-----|-------|--------|------------|
+| compute | RISCV_2 (compute) | N/A | CB c_0 (A), CB c_4 (RECIP(B)) | CB c_2 (C) | RECIP preprocess on B, then MUL tiles |
+
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_no_bcast.cpp`
+- **Key Logic**: In FPU mode, DIV is decomposed: `process_rhs = RECIP` causes CB c_4 to be allocated and a PREPROCESS step runs RECIP on each B tile before the main FPU MUL operation. The `BINARY_OP` macro expands to `mul_tiles(cb_post_lhs, cb_post_rhs, 0, 0, 0)`.
+
+### SFPU Compute Kernel (Scalar)
+
+| Kernel | Core | NOC | Input | Output | Operations |
+|--------|------|-----|-------|--------|------------|
+| compute | RISCV_2 (compute) | N/A | CB c_0 (A), CB c_1 (scalar B) | CB c_2 (C) | RHS waited once, per-tile: copy A to DST[0], copy scalar to DST[1], div_binary_tile, pack |
+
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_scalar.cpp`
+- **Key Logic**: The scalar tile in CB c_1 is waited on once before the loop and popped once after the loop ends. Each iteration only waits/pops the LHS tile.
+
+### Reader Kernel (Tensor-Tensor, ng)
+
+| Kernel | Core | NOC | Input | Output | Operations |
+|--------|------|-----|-------|--------|------------|
+| reader | RISCV_0 (data movement) | NOC0 | DRAM/L1 (A and B) | CB c_0, CB c_1 | Read A and B tiles with broadcasting strides |
+
 - **File**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/reader_interleaved_no_bcast.cpp`
-- **Key Logic**: Reads tiles for both A and B tensors in lockstep. Uses TensorAccessor for DRAM page addressing. Supports sharded inputs via conditional compilation (`SRC_SHARDED`, `SRC_SHARDED_B`). Broadcasting is handled entirely through stride values -- when a dimension is broadcast (size 1), its stride is set to 0, causing the same tiles to be re-read.
+- **Key Logic**: This reader handles BOTH input tensors A and B. It iterates through the 6D output tile space using nested loops, reading corresponding A and B tiles using their respective stride-based offsets. For each tile position, it reads one A tile and one B tile, waits for the NoC barrier, then pushes both. When sharded, it simply does `cb_reserve_back` + `cb_push_back` for the full shard count.
 
-### Reader Kernel (Scalar Path)
-- **File**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/reader_interleaved_no_bcast.cpp`
-- **Key Logic**: Reads only tensor A tiles. The scalar is handled by the writer kernel.
+### Writer Kernel (Tensor-Tensor, ng)
 
-### Writer Kernel (Two-Tensor Path)
+| Kernel | Core | NOC | Input | Output | Operations |
+|--------|------|-----|-------|--------|------------|
+| writer | RISCV_1 (data movement) | NOC1 | CB c_2 | DRAM/L1 (C) | Write output tiles sequentially |
+
 - **File**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels_ng/dataflow/writer_interleaved_no_bcast.cpp`
-- **Key Logic**: Writes output tiles from CB c_2 to DRAM. For sharded outputs, the writer is effectively a no-op since data is already in L1.
+- **Key Logic**: Iterates through the same 6D loop structure as the reader but writes output tiles. For each tile: wait for compute to produce it in CB c_2, get the read pointer, write via `noc_async_write_page`, barrier, pop. When sharded, the entire section is skipped (output is already in L1).
 
-### Writer Kernel (Scalar Path)
+### Writer Kernel (Scalar mode)
+
+| Kernel | Core | NOC | Input | Output | Operations |
+|--------|------|-----|-------|--------|------------|
+| writer | RISCV_1 (data movement) | NOC1 | Scalar arg, CB c_2 | CB c_1 (scalar fill), DRAM/L1 (C) | Fill scalar tile once, then write output tiles |
+
 - **File**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/writer_interleaved_scalar.cpp`
-- **Key Logic**: Fills a single tile in CB c_1 with the packed scalar value, then writes output tiles from CB c_2 to DRAM. The scalar fill uses `fill_with_val<1024, float>` for FLOAT32 or `fill_with_val_bfloat16` for BFLOAT16.
+- **Key Logic**: First fills a single tile in CB c_1 with the packed scalar value (using `fill_with_val` or `fill_with_val_bfloat16`), then enters the same 6D write loop as the tensor-tensor writer.
 
-### Compute Kernel
+### Reader Kernel (Scalar mode, old)
 
-#### Compute Kernel File (No Broadcast -- primary path)
-`ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_binary_sfpu_no_bcast.cpp`
+| Kernel | Core | NOC | Input | Output | Operations |
+|--------|------|-----|-------|--------|------------|
+| reader | RISCV_0 (data movement) | NOC0 | DRAM/L1 (A only) | CB c_0 | Read A tiles only |
 
-#### Annotated Compute Kernel Source
-
-```cpp
-// SPDX-FileCopyrightText: (c) 2025 Tenstorrent AI ULC
-//
-// SPDX-License-Identifier: Apache-2.0
-
-#include <cstdint>
-
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-
-#include "api/compute/eltwise_binary_sfpu.h"
-#include "api/compute/binary_bitwise_sfpu.h"
-#include "api/compute/binary_shift.h"
-#include "api/compute/add_int_sfpu.h"
-#include "api/compute/sub_int_sfpu.h"
-#include "api/compute/mul_int_sfpu.h"
-#include "api/compute/div_int32_floor.h"
-#include "api/compute/div_int32_sfpu.h"
-#include "api/compute/remainder_int32.h"
-#include "api/compute/binary_fmod.h"
-#include "api/compute/quantization.h"
-#include "api/compute/binary_max_min.h"
-#include "api/compute/gcd.h"
-#include "api/compute/lcm.h"
-#include "api/compute/xlogy.h"
-#include "api/compute/binary_comp.h"
-
-#include "eltwise_utils_common.hpp"
-#include "eltwise_utils_sfpu.hpp"
-
-void kernel_main() {
-    uint32_t num_tiles = get_arg_val<uint32_t>(0);  // runtime arg: total tiles this core must process
-
-    constexpr uint32_t num_tiles_per_cycle = get_compile_time_arg_val(0);  // always 1
-
-    constexpr auto cb_pre_lhs = tt::CBIndex::c_0;   // input A circular buffer
-    constexpr auto cb_pre_rhs = tt::CBIndex::c_1;   // input B circular buffer
-    constexpr auto cb_out = tt::CBIndex::c_2;        // output C circular buffer
-
-    // If LHS/RHS activations are defined, use intermediate CBs c_3/c_4; otherwise alias to pre CBs
-    constexpr auto cb_post_lhs = HAS_ACTIVATIONS(LHS) ? tt::CBIndex::c_3 : cb_pre_lhs;
-    constexpr auto cb_post_rhs = HAS_ACTIVATIONS(RHS) ? tt::CBIndex::c_4 : cb_pre_rhs;
-
-    unary_op_init_common(cb_post_lhs, cb_out);  // initialize unpack/pack pipeline for LHS->OUT path
-#ifdef PACK_RELU
-    PACK((llk_pack_relu_config(ReluType::ZERO_RELU)));  // configure packer for ReLU clamping if enabled
-#endif
-
-    // For DIV with no activations: BINARY_SFPU_INIT expands to div_binary_tile_init()
-    // which calls _sfpu_binary_init_<APPROX, BinaryOp::DIV>() to initialize reciprocal LUT
-#if not(HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
-    BINARY_SFPU_INIT  // div_binary_tile_init(); -- sets up SFPU reciprocal lookup tables
-#endif
-
-    for (uint32_t tile_id = 0; tile_id < num_tiles; ++tile_id) {
-        // PREPROCESS macros are no-ops for DIV (no lhs/rhs activations)
-        PREPROCESS(LHS, cb_pre_lhs, cb_post_lhs, cb_out, num_tiles_per_cycle);
-        cb_wait_front(cb_post_lhs, num_tiles_per_cycle);  // wait for 1 LHS tile from reader
-
-        PREPROCESS(RHS, cb_pre_rhs, cb_post_rhs, cb_out, num_tiles_per_cycle);
-        cb_wait_front(cb_post_rhs, num_tiles_per_cycle);  // wait for 1 RHS tile from reader
-
-        cb_reserve_back(cb_out, num_tiles_per_cycle);  // reserve space in output CB for 1 tile
-
-#if (HAS_ACTIVATIONS(LHS) or HAS_ACTIVATIONS(RHS)) and not(HAS_ACTIVATIONS(POST))
-        BINARY_SFPU_INIT
-#endif
-        tile_regs_acquire();  // acquire exclusive access to DEST register file
-
-        // Copy LHS tile to DEST[0] (even index)
-        copy_tile_to_dst_init_short_with_dt(cb_post_rhs, cb_post_lhs);  // configure unpacker for LHS format
-        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_post_lhs, i, i * 2);  // copy tile 0 from CB to DEST[0]
-        }
-
-        // Copy RHS tile to DEST[1] (odd index)
-        copy_tile_to_dst_init_short_with_dt(cb_post_lhs, cb_post_rhs);  // reconfigure unpacker for RHS format
-        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            copy_tile(cb_post_rhs, i, i * 2 + 1);  // copy tile 0 from CB to DEST[1]
-
-#if HAS_ACTIVATIONS(POST)
-            BINARY_SFPU_INIT
-#endif
-            // BINARY_SFPU_OP expands to: div_binary_tile(0, 1, 0)
-            // Performs DEST[0] = DEST[0] / DEST[1] using SFPU reciprocal + multiply
-            BINARY_SFPU_OP(i * 2, i * 2 + 1, i * 2);
-
-            // PROCESS_POST_ACTIVATIONS is empty for plain DIV (no post-processing)
-            PROCESS_POST_ACTIVATIONS(i * 2);
-        }
-        tile_regs_commit();  // signal that DEST registers are ready for packing
-
-        tile_regs_wait();  // wait for pack stage to be ready
-        for (uint32_t i = 0; i < num_tiles_per_cycle; ++i) {
-            pack_tile(i * 2, cb_out);  // pack DEST[0] result into output CB c_2
-        }
-        tile_regs_release();  // release DEST registers
-
-        cb_push_back(cb_out, num_tiles_per_cycle);     // publish output tile to writer
-        cb_pop_front(cb_post_lhs, num_tiles_per_cycle); // free consumed LHS tile
-        cb_pop_front(cb_post_rhs, num_tiles_per_cycle); // free consumed RHS tile
-    }
-}
-```
-
-### SFPU Kernel Implementation
-
-#### SFPU Kernel File
-- **Blackhole**: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h` (contains `calculate_sfpu_binary_div`)
-- **Wormhole**: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h` (identical implementation)
-- **LLK base** (shared): `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary.h` (contains `_calculate_sfpu_binary_` with DIV case and `_sfpu_binary_init_`)
-
-There are two code paths for DIV in the SFPU:
-
-1. **`calculate_sfpu_binary_div`** (arch-specific, used for floating-point DIV via `div_binary_tile`) -- specialized division with edge-case handling
-2. **`_calculate_sfpu_binary_<..., BinaryOp::DIV>`** (LLK base, generic binary) -- simpler division without edge-case handling
-
-The program factory routes to `calculate_sfpu_binary_div` via `llk_math_eltwise_binary_sfpu_binop_div`.
-
-#### Annotated SFPU Kernel Source (calculate_sfpu_binary_div -- primary path)
-
-```cpp
-template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
-inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
-    // Each tile in DEST occupies 32 rows when accessed via SFPI (64 / SFP_DESTREG_STRIDE = 32)
-    // A full 32x32 tile has 4 faces of 16x16, each face = 8 iterations of vector width 32
-    constexpr uint dst_tile_size_sfpi = 32;
-
-    // ITERATIONS = 8: processes 8 rows per face, called 4 times (once per face) by the params wrapper
-    for (int d = 0; d < ITERATIONS; d++) {
-        // Load one row (vector of 32 elements) from LHS tile in DEST
-        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
-        // Load corresponding row from RHS tile in DEST
-        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
-
-        // Core division: multiply LHS by reciprocal of RHS
-        // _sfpu_reciprocal_<2> uses 2 Newton-Raphson iterations for high accuracy
-        sfpi::vFloat result = in0 * _sfpu_reciprocal_<2>(in1);
-
-        // Handle division edge cases using SFPU conditional execution (predicated lanes)
-        v_if(in1 == 0) {
-            // 0/0 = NaN
-            v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); }
-            v_else {
-                // x/0 = +/-Inf (sign matches numerator)
-                result = std::numeric_limits<float>::infinity();
-                result = sfpi::setsgn(result, in0);  // copy sign from numerator
-            }
-            v_endif;
-        }
-        // x/x = 1.0 exactly (avoids floating-point imprecision in reciprocal)
-        v_elseif(in0 == in1) { result = sfpi::vConst1; }
-        v_endif;
-
-        // When not in FP32 accumulation mode, round result to BF16 using RNE
-        if constexpr (!is_fp32_dest_acc_en) {
-            result = float32_to_bf16_rne(result);
-        }
-
-        // Write result back to output position in DEST
-        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
-        // Advance SFPI row pointer to next row within the face
-        sfpi::dst_reg++;
-    }
-}
-```
-
-#### Annotated SFPU Init Source
-
-```cpp
-template <bool APPROXIMATION_MODE /*unused*/, BinaryOp BINOP>
-inline void _sfpu_binary_init_()
-{
-    if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::POW)
-    {
-        // Initialize the reciprocal lookup table (LUT) in SFPU L-registers
-        // Uses 2 Newton-Raphson iterations (non-approximate mode) for precision
-        _init_sfpu_reciprocal_<false>();
-    }
-    // ... other BINOP cases omitted
-}
-```
-
-#### SFPU Instructions Used
-
-| Instruction / Intrinsic | Description |
-|---|---|
-| `sfpi::dst_reg[offset]` (read) | Load a vector of 32 FP32 elements from the specified DEST register row |
-| `sfpi::dst_reg[offset]` (write) | Store a vector of 32 FP32 elements to the specified DEST register row |
-| `sfpi::dst_reg++` | Advance the SFPI destination register row pointer by 1 |
-| `_sfpu_reciprocal_<2>(x)` | Compute 1/x using SFPU reciprocal with 2 Newton-Raphson refinement iterations |
-| `v_if(cond) { ... } v_endif` | SFPU predicated conditional execution -- sets lane mask based on condition |
-| `v_elseif(cond) { ... } v_endif` | SFPU predicated else-if branch |
-| `v_else { ... } v_endif` | SFPU predicated else branch |
-| `sfpi::setsgn(value, source)` | Copy the sign bit from `source` to `value` |
-| `sfpi::vConst1` | SFPU constant register holding 1.0f |
-| `sfpi::reinterpret<vUInt>(x)` | Reinterpret float bits as unsigned integer (used in BF16 rounding) |
-| `float32_to_bf16_rne(x)` | Software BF16 rounding using IEEE 754 Round-to-Nearest-Even |
-
-#### SFPU Register Usage
-
-- **DEST registers**: Two tile slots used -- `dst_index_in0 * 32` for LHS (tile 0) and `dst_index_in1 * 32` for RHS (tile 1). Output overwrites `dst_index_out * 32` (same as LHS, tile 0).
-- **SFPI row pointer** (`dst_reg`): Auto-incremented through 8 rows per face. The `_llk_math_eltwise_binary_sfpu_params_` wrapper advances through all 4 faces of the 32x32 tile via `TTI_SETRWC` instructions.
-- **L-registers**: Used internally by `_sfpu_reciprocal_` for the Newton-Raphson LUT coefficients, initialized by `_init_sfpu_reciprocal_<false>()`.
-- **Condition codes**: Used by `v_if`/`v_elseif`/`v_else` for per-lane predication.
-
-#### SFPU Execution Flow
-
-1. **Initialization**: `div_binary_tile_init()` calls `llk_math_eltwise_binary_sfpu_binop_init<APPROX, BinaryOp::DIV>()`, which:
-   - Calls `_llk_math_eltwise_binary_sfpu_init_<SfpuType::unused>()` to configure address modes and reset counters
-   - Calls `_sfpu_binary_init_<APPROX, BinaryOp::DIV>()` to initialize the reciprocal LUT
-
-2. **Per-tile execution**: `div_binary_tile(idst0, idst1, odst)` calls `llk_math_eltwise_binary_sfpu_binop_div<APPROX, BinaryOp::DIV, DST_ACCUM_MODE>(idst0, idst1, odst)`, which:
-   - Calls `_llk_math_eltwise_binary_sfpu_params_` with `calculate_sfpu_binary_div` as the callable
-   - `_llk_math_eltwise_binary_sfpu_params_` sets the DEST write address, stalls until SFPU is ready, then:
-     - In **RC mode** (default): iterates 4 times (once per face), calling `calculate_sfpu_binary_div` each time, advancing DEST pointer by 16 rows between faces via `TTI_SETRWC`
-     - Each call to `calculate_sfpu_binary_div` processes 8 rows (ITERATIONS=8), covering one 16x16 face
-   - After all 4 faces: clears the DEST register address
-
-3. **Division math per row**: For each of the 8 rows per face (32 elements per row):
-   - Load `in0` from DEST[idst0] and `in1` from DEST[idst1]
-   - Compute `result = in0 * reciprocal(in1)` using Newton-Raphson reciprocal
-   - Handle edge cases: 0/0 -> NaN, x/0 -> signed Inf, x/x -> 1.0
-   - Optionally round to BF16 if not in FP32 accumulation mode
-   - Store result to DEST[odst]
-
-#### SFPU Configuration
-
-- **`fp32_dest_acc_en`**: Enabled when output format is FLOAT32/INT32/UINT32, or when both inputs are FLOAT32/INT32/UINT32. Controls whether BF16 rounding is applied post-division.
-- **`UnpackToDestMode::UnpackToDestFp32`**: Set for all source CBs (c_0, c_1, c_3, c_4) when the operation is SFPU and not POWER. This ensures data is unpacked to full FP32 precision in DEST.
-- **`APPROX`**: Template parameter controlling approximation mode. When true, `_sfpu_reciprocal_<0>` uses 0 Newton-Raphson iterations (fast but less accurate); when false, `_sfpu_reciprocal_<2>` uses 2 iterations (more accurate).
-- **Reciprocal LUT**: Initialized by `_init_sfpu_reciprocal_<false>()` during `div_binary_tile_init()`. Stores initial reciprocal approximation coefficients in SFPU L-registers.
-
-#### Hardware Compatibility Notes
-The `calculate_sfpu_binary_div` implementation is **identical** between Wormhole B0 and Blackhole architectures. Both use the same reciprocal approximation algorithm, the same edge-case handling, and the same BF16 rounding logic. The underlying `_sfpu_reciprocal_` intrinsic is provided by the SFPI library which abstracts hardware differences.
-
-The LLK base layer (`tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary.h`) contains a simpler generic `_calculate_sfpu_binary_` template with a `BinaryOp::DIV` case that only does `in0 * _sfpu_reciprocal_<2>(in1)` without edge-case handling. The arch-specific `calculate_sfpu_binary_div` adds the 0/0, x/0, and x/x special cases.
+- **File**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/reader_interleaved_no_bcast.cpp`
+- **Key Logic**: Only reads tensor A (one input). Uses the same 6D loop and stride-based offset pattern but without any B-tensor handling.
 
 ## Implementation Notes
 
-1. **Non-SFPU DIV fallback**: When `is_sfpu` is false (e.g., for certain dtype combinations), DIV is decomposed into `process_rhs = RECIP` + `FpuBinaryOp::MUL`. This uses the FPU matrix multiply pipeline with reciprocal preprocessing, which may be faster for BFLOAT16 but less flexible.
+### DIV-Specific Behavior
+- **SFPU path**: `OpConfig` sets `binary_op = SfpuBinaryOp::DIV`, producing defines `BINARY_SFPU_INIT = "div_binary_tile_init();"` and `BINARY_SFPU_OP = "div_binary_tile"` for float types, or `div_int32_tile_init()/div_int32_tile` for INT32.
+- **FPU path**: `OpConfig` sets `process_rhs = UnaryOpType::RECIP` and `binary_op = FpuBinaryOp::MUL`. This means the RHS pre-activation macro is non-empty, causing CB c_4 (intermediate) to be created. Each RHS tile goes through RECIP before the MUL.
+- **Integer division**: When `a_dtype == INT32 && b_dtype == INT32`, the `is_integer_division` flag prevents the TYPECAST post-activation from being added (line 604 of program factory).
+- **UnpackToDestMode**: For SFPU DIV (non-POWER), all input CBs use `UnpackToDestFp32` mode, ensuring FP32 precision in the destination registers during SFPU computation.
+- **FP32 dest accumulation**: Enabled when output is UInt32/Int32/Float32, or when both inputs are Float32 or Int32.
 
-2. **INT32 division**: When both inputs are INT32, a separate SFPU path is used (`div_int32_tile` / `div_int32_tile_init`), defined in `api/compute/div_int32_sfpu.h`. This uses integer-specific SFPU operations rather than the floating-point reciprocal approach.
+### Kernel Selection Logic
+The program factory uses a two-tier kernel selection:
+1. `BinaryNgKernelConfig` determines the default kernel set based on `SubtileBroadcastType`.
+2. When `b` is a tensor (has_value), the reader is overridden to a `kernels_ng` reader (via `get_reader_kernel_name_and_defines`) and the writer is overridden to `WriterNoBcastNg`. The old reader only handles A; the ng reader handles both A and B.
+3. When `b` is absent (scalar), the original `WriterScalar` and `ComputeScalar` kernels are used.
 
-3. **Integer division typecast bypass**: Line 600-609 of the program factory shows that typecast post-processing is explicitly skipped for integer division (`is_integer_division`), since the operation natively produces INT32 output.
+### Broadcasting Support
+The stride-based approach enables broadcasting without special kernels. When a dimension has size 1, its stride is set to 0 (via the `(dim > 1)` multiplication), causing the reader to re-read the same tiles for that dimension. The `SubtileBroadcastType` enum handles sub-tile broadcasting (within a single tile dimension) via specialized reader/compute kernels with fill operations.
 
-4. **Broadcast optimization**: The `SubtileBroadcastType` enum controls how broadcasting is handled at the kernel level. For scalar broadcasts, the broadcast tile is loaded once and reused for all output tiles. For column broadcasts, the broadcast tile is reused for all tiles in a row (Wt tiles). This avoids redundant DRAM reads.
+### Sharding Support
+Native L1 sharding is only used when:
+- Both inputs have the same shape and memory config (no broadcast needed)
+- None of the buffers are in DRAM
+- The output is evenly sharded
+- Shard grids match between inputs and output
 
-5. **Edge-case precision**: The `v_elseif(in0 == in1) { result = vConst1; }` check ensures that `x/x` produces exactly 1.0, avoiding the slight imprecision that `x * reciprocal(x)` would introduce. Similarly, the `0/0 -> NaN` and `x/0 -> Inf` checks match IEEE 754 semantics.
-
-6. **BF16 rounding**: The `float32_to_bf16_rne` function implements software Round-to-Nearest-Even for BF16 conversion, ensuring correct tie-breaking behavior. This is only applied when `!is_fp32_dest_acc_en`, i.e., when the output is BF16.
+Otherwise, the operation falls back to the interleaved (tensor accessor) path even for sharded tensors.
 
 ## External Knowledge Sources
 
 ### DeepWiki Queries
-
-1. **Query**: "How does the binary_ng program factory work? What are the different subtypes (scalar, bcast, etc.) and how does it set up kernels, circular buffers, and core distribution?"
-   **Reason**: Initial architectural understanding of the binary_ng framework
-   **Key Findings**: Learned about SubtileBroadcastType enum, BinaryNgKernelConfig structure, kernel selection logic, and how sharding interacts with core distribution.
-
-2. **Query**: "What are the binary_ng compute kernels and how do they work? Specifically the eltwise_binary and eltwise_binary_sfpu kernels."
-   **Reason**: Understanding the compute kernel dispatch pattern and SFPU operation mapping
-   **Key Findings**: Learned that SFPU kernels use `BINARY_SFPU_OP` and `BINARY_SFPU_INIT` macros, that DIV maps to `SfpuBinaryOp::DIV`, and that the LLK layer provides `llk_math_eltwise_binary_sfpu_binop.h` with `calculate_sfpu_binary_div`.
+1. **Query**: "How does the binary_ng operation work in TTNN? What are the kernel files, the SubtileBroadcastType enum, the OpConfig class, and how does DIV specifically get implemented?"
+   **Reason**: Initial architectural understanding of the binary_ng framework and DIV-specific implementation paths.
+   **Key Findings**: Confirmed dual FPU/SFPU paths, identified kernel file locations in both `kernels/` and `kernels_ng/` directories, understood that DIV uses SFPU native div or FPU RECIP+MUL decomposition.
 
 ### Documentation References
+1. **Source**: `binary_ng_utils.cpp` (OpConfig constructor, lines 139-146)
+   **Reason**: Understanding how DIV is mapped to either SFPU or FPU operations.
+   **Key Information**: SFPU path uses `SfpuBinaryOp::DIV` directly; FPU path sets `process_rhs = RECIP` and uses `FpuBinaryOp::MUL`.
 
-1. **Source**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.cpp` (lines 139-145, 394-399)
-   **Reason**: Understanding how DIV is configured in OpConfig
-   **Key Information**: SFPU DIV maps directly to `SfpuBinaryOp::DIV`; non-SFPU DIV decomposes to `RECIP + MUL`. The init/func pair is `("div_binary_tile_init();", "div_binary_tile")` for float and `("div_int32_tile_init();", "div_int32_tile")` for INT32.
+2. **Source**: `binary_ng_utils.cpp` (get_sfpu_init_fn, lines 394-399)
+   **Reason**: Identifying the exact SFPU function calls for DIV.
+   **Key Information**: Float DIV uses `div_binary_tile_init()` / `div_binary_tile`; INT32 DIV uses `div_int32_tile_init()` / `div_int32_tile`.
 
-2. **Source**: `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_binary_sfpu_params.h`
-   **Reason**: Understanding how the SFPU function is dispatched across tile faces
-   **Key Information**: `_llk_math_eltwise_binary_sfpu_params_` iterates over 4 faces in RC mode, calling the SFPU function once per face (8 iterations each), advancing DEST pointer via `TTI_SETRWC` between faces.
+3. **Source**: `binary_ng_program_factory.cpp` (lines 600-602)
+   **Reason**: Understanding integer division special handling.
+   **Key Information**: `is_integer_division` flag prevents TYPECAST post-activation from being added when both inputs are INT32.
 
-3. **Source**: `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_binary.h`
-   **Reason**: Understanding the base LLK SFPU binary implementation and init
-   **Key Information**: `_sfpu_binary_init_` for DIV initializes the reciprocal LUT via `_init_sfpu_reciprocal_<false>()`. The generic `_calculate_sfpu_binary_` has a simpler DIV path without edge-case handling.
+## SFPU Kernel Implementation
+This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to.
+
+### SFPU Abstraction Layers
+
+| Layer | File Path |
+|-------|-----------|
+| **API Header** | `tt_metal/hw/inc/api/compute/eltwise_binary_sfpu.h` |
+| **LLK Dispatch** | `tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_binop.h` |
+| **Core SFPU Implementation** | `tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h` (metal-level wrapper) and `tt_metal/third_party/tt_llk/tt_llk_{wormhole_b0,blackhole}/common/inc/sfpu/ckernel_sfpu_binary.h` (tt_llk-level core logic with `_calculate_sfpu_binary_` and `_sfpu_binary_init_`) |
+| **Parameters Dispatch** | `tt_metal/third_party/tt_llk/tt_llk_{wormhole_b0,blackhole}/llk_lib/llk_math_eltwise_binary_sfpu_params.h` |
+
+### Call Chain
+
+1. The compute kernel calls `div_binary_tile(0, 1, 0)` (via the `BINARY_SFPU_OP` macro), defined in `eltwise_binary_sfpu.h`. This wraps the call in a `MATH(...)` guard so it only executes on the math RISC-V.
+2. `div_binary_tile` calls `llk_math_eltwise_binary_sfpu_binop_div<APPROX, BinaryOp::DIV, DST_ACCUM_MODE>(idst0, idst1, odst)` in `llk_math_eltwise_binary_sfpu_binop.h`.
+3. `llk_math_eltwise_binary_sfpu_binop_div` calls `_llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>` (in `llk_math_eltwise_binary_sfpu_params.h`), passing `calculate_sfpu_binary_div<APPROX, BinaryOp::DIV, 8, is_fp32_dest_acc_en>` as the callable. The params function handles face iteration (4 faces in RC mode, each advancing the DEST pointer by 16 rows via two `TTI_SETRWC` of 8), calling the SFPU function once per face.
+4. `calculate_sfpu_binary_div` (in `ckernel_sfpu_binary.h` at metal level) is the core SFPU function. It loops 8 iterations (one per row-group within a face), loads two inputs from DEST registers, computes `in0 * _sfpu_reciprocal_<2>(in1)`, handles special cases (0/0=NaN, x/0=signed-inf, x/x=1.0), optionally applies bf16 RNE rounding, and writes the result back to DEST.
+
+The init path is analogous: `div_binary_tile_init()` calls `llk_math_eltwise_binary_sfpu_binop_init<APPROX, BinaryOp::DIV>()`, which calls `_llk_math_eltwise_binary_sfpu_init_<SfpuType::unused>()` (configures addrmod + resets counters) followed by `sfpu_binary_init<APPROX, BinaryOp::DIV>()`, which calls `_sfpu_binary_init_<APPROX, BinaryOp::DIV>()`. For DIV, this calls `_init_sfpu_reciprocal_<false>()` to load the quadratic approximation coefficients (Wormhole) or set `vConstFloatPrgm0 = 2.0f` (Blackhole).
+
+### Annotated SFPU Kernel Source
+
+**Wormhole B0 and Blackhole metal-level wrapper** (identical on both architectures):
+
+```cpp
+// File: tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/ckernel_sfpu_binary.h
+
+sfpi_inline sfpi::vFloat float32_to_bf16_rne(sfpi::vFloat in) {
+    sfpi::vUInt bits = sfpi::reinterpret<sfpi::vUInt>(in);
+    sfpi::vUInt lsb = (bits >> 16) & 1; // extract bit 16 for tie-breaking
+    bits = bits + 0x7fffU + lsb; // RNE: add 0x7fff + lsb to round correctly at midpoint
+    bits = bits & 0xFFFF0000U; // truncate lower 16 bits
+    return sfpi::reinterpret<sfpi::vFloat>(bits);
+}
+
+template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS, bool is_fp32_dest_acc_en>
+inline void calculate_sfpu_binary_div(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // APPROXIMATION_MODE=APPROX (compile-time), BINOP=BinaryOp::DIV, ITERATIONS=8, is_fp32_dest_acc_en=DST_ACCUM_MODE
+    constexpr uint dst_tile_size_sfpi = 32; // 64 rows / SFP_DESTREG_STRIDE(2) = 32 SFPI-addressable rows per tile
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi]; // load numerator from DEST tile slot 0
+        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi]; // load divisor from DEST tile slot 1
+        sfpi::vFloat result = in0 * _sfpu_reciprocal_<2>(in1); // a/b = a * (1/b), 2 Newton-Raphson iterations
+
+        v_if(in1 == 0) { // division by zero handling
+            v_if(in0 == 0) { result = std::numeric_limits<float>::quiet_NaN(); } // 0/0 = NaN
+            v_else {
+                result = std::numeric_limits<float>::infinity();
+                result = sfpi::setsgn(result, in0); // sign(inf) = sign(numerator) via SFPSETSGN
+            }
+            v_endif;
+        }
+        v_elseif(in0 == in1) { result = sfpi::vConst1; } // x/x = 1.0 exactly
+        v_endif;
+
+        if constexpr (!is_fp32_dest_acc_en) {
+            result = float32_to_bf16_rne(result); // truncate to bf16 precision when dest is not fp32
+        }
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result; // write result to DEST tile slot 0
+        sfpi::dst_reg++; // advance DEST row pointer (via SFPU auto-increment)
+    }
+}
+```
+
+**Wormhole B0 reciprocal** (`_sfpu_reciprocal_<2>` -- the core of DIV):
+
+```cpp
+// File: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_recip.h
+
+template <int max_iter = 2>
+sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat in)
+{
+    // Implementation notes, see the original file for more details
+    sfpi::vFloat negative_x = sfpi::setman(sfpi::vConstNeg1, sfpi::reinterpret<sfpi::vInt>(in)); // SFPSETMAN: scale input to [-2,-1), preserving mantissa
+
+    // Quadratic initial estimate: y = k2 - k1*x + k0*x**2 (Sollya-optimized coefficients)
+    sfpi::vFloat y = sfpi::vConstFloatPrgm1 + sfpi::vConstFloatPrgm0 * negative_x; // k1=1.4545, k0=0.3232
+
+    // Scale factor: scale.Exp = 255-in.Exp via bitwise NOT (SFPNOT), handles 0->inf and inf->0 naturally
+    sfpi::vInt scale_bits = ~sfpi::reinterpret<sfpi::vUInt>(in);
+
+    y = sfpi::vConstFloatPrgm2 + y * negative_x; // k2=2.1212
+
+    sfpi::vFloat scale = sfpi::setman(sfpi::reinterpret<sfpi::vFloat>(scale_bits), 0); // SFPSETMAN: clear mantissa of scale
+
+    // Newton-Raphson iteration 1: t = 1 - x*y; y = y + y*t
+    sfpi::vFloat t = sfpi::vConst1 + negative_x * y;
+
+    scale *= 0.5f; // adjust scale exponent: 255-E -> 254-E (float32 bias correction)
+
+    y = y + y * t;
+
+    if constexpr (max_iter > 1)
+    {
+        // Newton-Raphson iteration 2
+        t = sfpi::vConst1 + negative_x * y;
+        y = y + y * t;
+    }
+
+    y = y * scale; // apply scaling factor to de-normalize reciprocal
+    y = sfpi::setsgn(y, in); // SFPSETSGN: set sign of result to match input sign
+
+    return y;
+}
+
+template <bool APPROXIMATION_MODE>
+inline void _init_sfpu_reciprocal_()
+{
+    // Sollya-optimized quadratic coefficients for 1/x over [1,2)
+    sfpi::vConstFloatPrgm0 = 0.3232325017452239990234375f;  // k0
+    sfpi::vConstFloatPrgm1 = 1.4545459747314453125f;        // k1
+    sfpi::vConstFloatPrgm2 = 2.121212482452392578125f;      // k2
+}
+```
+
+**Blackhole reciprocal** (`_sfpu_reciprocal_<2>` -- different strategy using hardware `approx_recip`):
+
+```cpp
+// File: tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_recip.h
+
+template <int max_iter = 2>
+sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat x)
+{
+    sfpi::vFloat y = sfpi::approx_recip(x); // SFPARECIP hardware instruction: ~7-bit initial approximation
+
+    if constexpr (max_iter > 0)
+    {
+        // Negated Newton-Raphson: t = x*y - 2.0 (negated so NaN from 0*inf has positive sign for easy detection)
+        sfpi::vFloat t = x * y - sfpi::vConstFloatPrgm0; // vConstFloatPrgm0 = 2.0f
+
+        if constexpr (max_iter > 1)
+        {
+            sfpi::vFloat y1 = y * -t - sfpi::vConst0; // y1 = y*(2-x*y), vConst0=0 used as addend
+            v_if (t < 0) // t<0 means normal case (NaN would be >=0); CC set by preceding SFPMAD
+            {
+                t = x * y1 - sfpi::vConstFloatPrgm0; // second NR iteration
+                y = y1 * -t - sfpi::vConst0;
+            }
+            v_endif;
+        }
+        else
+        {
+            v_if (t < 0)
+            {
+                y = y * -t - sfpi::vConst0;
+            }
+            v_endif;
+        }
+    }
+
+    return y;
+}
+
+template <bool APPROXIMATION_MODE>
+inline void _init_sfpu_reciprocal_()
+{
+    if constexpr (!APPROXIMATION_MODE)
+    {
+        sfpi::vConstFloatPrgm0 = 2.0f; // constant used in Newton-Raphson: t = x*y - 2.0
+    }
+}
+```
+
+**tt_llk-level binary init** (same on both architectures):
+
+```cpp
+// File: tt_metal/third_party/tt_llk/tt_llk_{wormhole_b0,blackhole}/common/inc/sfpu/ckernel_sfpu_binary.h
+
+template <bool APPROXIMATION_MODE, BinaryOp BINOP>
+inline void _sfpu_binary_init_()
+{
+    if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::POW)
+    {
+        _init_sfpu_reciprocal_<false>(); // always non-approximate for DIV
+    }
+    // ...
+}
+```
+
+### SFPU Instructions Used
+
+| Instruction / Intrinsic | Description |
+|--------------------------|-------------|
+| `sfpi::dst_reg[offset]` (load) | **SFPLOAD**: Loads a 32-bit value from a DEST register row into an SFPU local register (vFloat). Used to read numerator and divisor tiles. |
+| `sfpi::dst_reg[offset] = val` (store) | **SFPSTORE**: Writes a 32-bit value from an SFPU local register back to a DEST register row. Used to write the division result. |
+| `sfpi::dst_reg++` | **SFPINCRWC** (implicit): Increments the DEST register row counter by the stride amount (SFP_DESTREG_STRIDE=2), advancing to the next row-pair. |
+| `*` (vFloat multiply) | **SFPMAD** (multiply-add): Performs `a * b + c`. Used for `in0 * reciprocal(in1)`, Newton-Raphson steps (`y + y*t`), and scaling. When used as pure multiply, the addend is 0. |
+| `+` / `-` (vFloat add/sub) | **SFPMAD** / **SFPIADD**: Addition and subtraction are implemented via MAD with one multiplicand set to 1.0 or via integer add. Used in Newton-Raphson: `1.0 + negative_x * y`. |
+| `sfpi::setman(dst, src)` | **SFPSETMAN**: Replaces the mantissa field of `dst` with the mantissa from `src` (or an immediate). Used to normalize input to [1,2) range and to clear scale mantissa. |
+| `sfpi::setsgn(val, sign_src)` | **SFPSETSGN**: Sets the sign bit of `val` to match `sign_src`. Used to transfer the input sign to the reciprocal result and to set infinity's sign to match the numerator. |
+| `sfpi::setexp(val, exp)` | **SFPSETEXP**: Sets the exponent field of a float. Not directly used in DIV, but mentioned for context. |
+| `~` (vUInt bitwise NOT) | **SFPNOT**: Bitwise NOT of a register. Used to compute `255 - exponent` efficiently for the scale factor in Wormhole reciprocal. |
+| `sfpi::reinterpret<T>(val)` | **SFPMOV** (or no-op cast): Reinterprets the bit pattern between vFloat/vInt/vUInt without changing bits. |
+| `v_if` / `v_elseif` / `v_endif` | **SFPCOMPC** / **SFPENCC** / **SFPPUSHC** / **SFPPOPC**: Predicated execution using the SFPU condition code stack. Compares set CC lanes, and `v_if`/`v_endif` push/pop the CC to enable nested conditionals. Used for zero-division and x==y special cases. |
+| `==` / `<` (vFloat comparison) | **SFPCOMPC**: Compares two vFloat values lane-wise, setting condition codes. `in1 == 0` checks for division-by-zero; `in0 == in1` checks for identity division. |
+| `sfpi::vConst1` | Built-in constant register holding 1.0f. Used for the `x/x = 1.0` identity case. |
+| `sfpi::vConstNeg1` | Built-in constant register holding -1.0f. Used as the sign+exponent donor in Wormhole `setman`. |
+| `sfpi::vConstFloatPrgm0/1/2` | **SFPLOADI** (to program): Programmable constant registers loaded during init. Wormhole: polynomial coefficients (0.3232, 1.4545, 2.1212). Blackhole: 2.0f for Newton-Raphson. |
+| `sfpi::approx_recip(x)` | **SFPARECIP** (Blackhole only): Hardware approximate reciprocal instruction providing ~7-bit initial estimate. Not available on Wormhole. |
+| `>> 16`, `& mask`, `+ imm` | **SFPSHFT** / **SFPAND** / **SFPIADD**: Integer bitwise operations used in `float32_to_bf16_rne` for software Round-to-Nearest-Even when dest is not fp32. |
+
+### SFPU Register Usage
+
+| Register | Usage |
+|----------|-------|
+| **DEST[idst0 * 32 + row]** | Source for numerator (`in0`). Tile slot 0 (idst0=0) loaded by `copy_tile` from CB c_0. |
+| **DEST[idst1 * 32 + row]** | Source for divisor (`in1`). Tile slot 1 (idst1=1) loaded by `copy_tile` from CB c_1. |
+| **DEST[odst * 32 + row]** | Output destination for the division result. Same as slot 0 (odst=0), so the numerator is overwritten in-place. |
+| **LREG (vFloat locals)** | `in0`, `in1`, `result`, `negative_x`, `y`, `t`, `scale`, `scale_bits` -- SFPU local registers (LREGs 0-7). The reciprocal function is heavily register-intensive, using ~6 live vFloat/vInt values simultaneously. |
+| **vConstFloatPrgm0** | Wormhole: quadratic coefficient k0 = 0.3232. Blackhole: Newton-Raphson constant 2.0. |
+| **vConstFloatPrgm1** | Wormhole: quadratic coefficient k1 = 1.4545. Blackhole: unused by DIV. |
+| **vConstFloatPrgm2** | Wormhole: quadratic coefficient k2 = 2.1212. Blackhole: unused by DIV. |
+| **vConst1** | Hardwired 1.0f. Used in Newton-Raphson (`1.0 + neg_x * y`) and as the result for x/x. |
+| **vConstNeg1** | Hardwired -1.0f. Used as sign+exponent donor in Wormhole's `setman` normalization. |
+| **vConst0** | Hardwired 0.0f. Used in Blackhole as the zero addend in `y * -t - 0`. |
+
+### Address Mode Configuration
+
+The address mode is configured during `_llk_math_eltwise_binary_sfpu_init_<SfpuType::unused>()`, which calls `eltwise_binary_sfpu_configure_addrmod<SfpuType::unused>()`.
+
+For DIV (and all binary SFPU ops that are not mul_int32/max/min variants), only **ADDR_MOD_7** is configured:
+
+| Field | Value | Description |
+|-------|-------|-------------|
+| `srca.incr` | 0 | No auto-increment of SRC_A register address |
+| `srcb.incr` | 0 | No auto-increment of SRC_B register address |
+| `dest.incr` | 0 | No auto-increment of DEST register address |
+
+This configuration is identical on both **Wormhole B0** and **Blackhole**. The SFPU binary operations do not use hardware auto-increment for DEST addressing because the SFPU kernel manages DEST row advancement explicitly via `sfpi::dst_reg++` (which emits SFPINCRWC). The `ADDR_MOD_7` slot is chosen to avoid conflicts with A2D (unpack-to-dest) operations that use `ADDR_MOD_0` and `ADDR_MOD_2`.
+
+Between faces, the params function advances the DEST pointer by 16 rows (two `TTI_SETRWC` calls each incrementing by 8), ensuring the SFPU processes all four 16x16 faces of the 32x32 tile.
+
+Note: The `ADDR_MOD_6` slot (with `dest.incr = 2`) is only configured for `SfpuType::mul_int32`, `max`, `min`, and their int32/uint32 variants -- not for DIV.
+
+## External Knowledge Sources
+### DeepWiki Queries
+1. **Query**: "Where is div_binary_tile implemented? Trace from the compute_kernel_api header through LLK dispatch to the ckernel SFPU implementation."
+   **Reason**: Needed to identify the complete file chain for the DIV SFPU kernel across all abstraction layers.
+   **Key Findings**: Confirmed the 4-layer call chain: `eltwise_binary_sfpu.h` -> `llk_math_eltwise_binary_sfpu_binop.h` -> `llk_math_eltwise_binary_sfpu_params.h` -> `ckernel_sfpu_binary.h`. The dedicated `calculate_sfpu_binary_div` function exists at the metal level for both Wormhole and Blackhole.
+
+2. **Query**: "How is div_binary_tile implemented in the LLK layer? What SFPU ckernel function does it call?"
+   **Reason**: Needed to understand the LLK-level dispatch and the params function that manages face iteration.
+   **Key Findings**: The `_llk_math_eltwise_binary_sfpu_params_` function accepts the SFPU callable and handles RC/R/C vector modes with face iteration. For RC mode (default), it calls the SFPU function 4 times (once per face) with `TTI_SETRWC` advancing between faces. The ADDR_MOD_7 configuration avoids conflicts with A2D.
+
+3. **Query**: "What is approx_recip in SFPI? How does it work on Blackhole? What SFPU instruction does it map to?"
+   **Reason**: The Blackhole reciprocal implementation uses `sfpi::approx_recip` which is a hardware instruction not available on Wormhole.
+   **Key Findings**: `approx_recip` maps to the `SFPARECIP` hardware instruction on Blackhole, providing a ~7-bit initial approximation of 1/x. This eliminates the need for the quadratic polynomial initial estimate used on Wormhole, reducing the instruction count for the reciprocal seed.
+
+4. **Query**: "What do setman, setsgn, setexp do in SFPI? What SFPU instructions do they map to?"
+   **Reason**: These intrinsics are used extensively in the Wormhole reciprocal implementation and needed documentation.
+   **Key Findings**: `setman` maps to SFPSETMAN (replaces mantissa field), `setsgn` maps to SFPSETSGN (replaces sign bit), `setexp` maps to SFPSETEXP (replaces exponent field). `vConstFloatPrgm0/1/2` are programmable constant registers that can be loaded with arbitrary float values during kernel init.
+
+### Confluence References
+No Confluence references were needed for this analysis. The SFPU instructions used (SFPMAD, SFPSETMAN, SFPSETSGN, SFPNOT, SFPARECIP, SFPCOMPC, etc.) were sufficiently documented through DeepWiki and source code inspection.
+
+### Glean References
+No Glean references were needed for this analysis.

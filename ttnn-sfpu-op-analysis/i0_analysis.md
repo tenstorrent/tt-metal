@@ -1,237 +1,35 @@
-# I0 (Modified Bessel Function of the First Kind, Order 0) Implementation Analysis
+## SFPU Kernel Implementation
+This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to for the I0 (zeroth order modified Bessel function of the first kind) operation.
 
-## Overview
+### SFPU Abstraction Layers
 
-The I0 operation computes the element-wise modified Bessel function of the first kind, order 0, on each element of the input tensor. Mathematically, I0(x) is defined as the integral `(1/pi) * integral(0, pi, exp(x*cos(t)) dt)`. The implementation uses a degree-10 polynomial approximation in `x^2` (Horner's method) to evaluate I0.
+| Layer | File Path |
+|-------|-----------|
+| **API Header** | `tt_metal/hw/inc/api/compute/eltwise_unary/i0.h` |
+| **LLK Dispatch** | `tt_metal/hw/ckernels/{arch}/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h` (macro-based, no dedicated LLK file for I0) |
+| **Core SFPU Implementation** | `tt_metal/hw/ckernels/{arch}/metal/llk_api/llk_sfpu/ckernel_sfpu_i0.h` |
+| **Parameters Dispatch** | `llk_math_eltwise_unary_sfpu_params.h` (from tt_llk submodule, provides `_llk_math_eltwise_unary_sfpu_params_`) |
 
-**Program factory path**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp`
+### Call Chain
 
-This operation uses the shared `UnaryProgramFactory` -- the same program factory used by all standard unary SFPU operations. The I0-specific behavior is injected via preprocessor defines (`SFPU_OP_I0_INCLUDE`, `SFPU_OP_CHAIN_0`) that select the `i0_tile_init()` and `i0_tile(idst)` functions at compile time.
+1. The compute kernel calls `i0_tile(idst)` from the API header `eltwise_unary/i0.h`.
+2. `i0_tile` expands the macro `SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_i0, RC, APPROX, idst)`, which resolves to `_llk_math_eltwise_unary_sfpu_params_<APPROX>(ckernel::sfpu::calculate_i0<APPROX>, idst, (int)VectorMode::RC)`.
+3. `_llk_math_eltwise_unary_sfpu_params_` (from the tt_llk submodule) sets the destination write address via `_llk_math_eltwise_unary_sfpu_start_`, then iterates over all 4 faces of the tile (VectorMode::RC), calling `calculate_i0<true>()` for each face, and finishes with `_llk_math_eltwise_unary_sfpu_done_`.
+4. `calculate_i0<true>()` in `ckernel_sfpu_i0.h` executes 8 iterations (one per row pair within a face), reading from `dst_reg[0]`, computing the polynomial approximation, and writing back.
 
-## Work Unit Definition
+The init path follows: `i0_tile_init()` expands `SFPU_UNARY_KERNEL_INIT(i0, APPROX)` which calls `llk_math_eltwise_unary_sfpu_init<SfpuType::i0, true>()`, which in turn calls `_llk_math_eltwise_unary_sfpu_init_<SfpuType::i0>()` to configure ADDR_MOD_7 and prepare the SFPU pipeline.
 
-| Attribute | Value |
-|-----------|-------|
-| **Granularity** | tile (32x32 elements) |
-| **Unit size** | 1 tile |
-| **Total units** | `num_pages` = total number of tiles in the input tensor |
-| **Loop structure** | Outer loop over `per_core_block_cnt` blocks, inner loop over `per_core_block_dim` tiles (always 1 for I0) |
+### Annotated SFPU Kernel Source
 
-## Tensor Format and Layout
-
-| Property | Input Tensor | Output Tensor |
-|----------|--------------|---------------|
-| **Logical shape** | Arbitrary (any rank) | Same as input |
-| **Dimension convention** | N/A (arbitrary) | Same as input |
-| **Tensor layout** | TILE (32x32) | TILE (32x32) |
-| **Memory layout** | INTERLEAVED | INTERLEAVED |
-| **Buffer type** | DRAM (or L1) | DRAM (or L1) |
-| **Data type** | BFLOAT16 / FLOAT32 | BFLOAT16 / FLOAT32 |
-
-### Layout Transformations
-
-No layout transformations are performed. Input and output must both be in TILE layout. Data format conversion between input and output types is handled by the unpacker/packer hardware.
-
-## Data Flow Pattern
-
-| Stage | Kernel | Reads From | Writes To | CB Operations |
-|-------|--------|------------|-----------|---------------|
-| 1 | Reader | DRAM (interleaved) | CB c_0 | `cb_reserve_back(c_0, 1)`, `cb_push_back(c_0, 1)` |
-| 2 | Compute | CB c_0 | CB c_2 | `cb_wait_front(c_0, 1)`, `cb_pop_front(c_0, 1)`, `cb_reserve_back(c_2, per_core_block_dim)`, `cb_push_back(c_2, per_core_block_dim)` |
-| 3 | Writer | CB c_2 | DRAM (interleaved) | `cb_wait_front(c_2, 1)`, `cb_pop_front(c_2, 1)` |
-
-The reader fetches one tile at a time from DRAM into CB c_0. The compute kernel copies the tile from CB c_0 into the DEST register, applies the I0 SFPU operation, and packs the result into CB c_2. The writer drains one tile at a time from CB c_2 back to DRAM.
-
-## Circular Buffer Configuration
-
-| CB ID | Name | Purpose | Capacity | Block Size | Buffering | Producer | Consumer | Lifetime |
-|-------|------|---------|----------|------------|-----------|----------|----------|----------|
-| c_0 | src0 | Input staging | 2 tiles | 1 tile | Double | Reader | Compute | Program |
-| c_2 | output | Output staging | 2 tiles | 1 tile | Double | Compute | Writer | Program |
-
-Note: CB c_1 (tmp0) is NOT allocated for I0 -- it is only created for HARDSHRINK, CBRT, and LOGIT operations.
-
-## Pipeline Pattern Summary
-
-Both CB c_0 and CB c_2 have capacity = 2 tiles and block size = 1 tile, enabling **double-buffering**. This allows the reader to fill one tile slot while the compute kernel processes another, and similarly the compute kernel can fill one output slot while the writer drains another.
-
-## Index Calculations
-
-The reader and writer use `TensorAccessor` with interleaved addressing. The mapping is straightforward: each tile is identified by a linear page index. The reader starts at `start_id` (assigned per core) and reads `num_pages_per_core` consecutive tiles. The writer uses the same linear indexing scheme for output.
-
-## Memory Access Patterns
-
-### Read Pattern
-Sequential tile reads from DRAM. Each core reads a contiguous range of tile pages starting from `start_id`. One page is read per iteration using `noc_async_read_page`, followed by a barrier.
-
-### Write Pattern
-Sequential tile writes to DRAM. Each core writes a contiguous range of tile pages. One page is written per iteration using `noc_async_write_page`, with a final barrier after all writes.
-
-## Core Distribution Strategy
-
-| Attribute | Value |
-|-----------|-------|
-| **Grid topology** | 1D (linearized from 2D compute grid) |
-| **Grid dimensions** | `compute_with_storage_grid_size.x` x `compute_with_storage_grid_size.y` |
-| **Total cores** | `num_cores` (determined by `split_work_to_cores`) |
-| **Work per core** | `num_pages_per_core_group_1` or `num_pages_per_core_group_2` tiles |
-| **Load balancing** | Two-group split: group 1 gets `ceil(num_pages/num_cores)` tiles, group 2 gets `floor(num_pages/num_cores)` tiles |
-
-Cores are enumerated column-major: `core = {i / num_cores_y, i % num_cores_y}`. The `split_work_to_cores` utility divides the total tile count across available cores, creating two core groups when tiles do not divide evenly. Group 2 may have fewer tiles (or be empty).
-
-## Arguments
-
-### Compile-Time Arguments
-
-#### Reader Kernel
-
-| Index | Name | Type | Description |
-|-------|------|------|-------------|
-| 0+ | TensorAccessorArgs | uint32_t[] | Encoded tensor accessor parameters for source buffer (address mode, bank info) |
-
-#### Writer Kernel
-
-| Index | Name | Type | Description |
-|-------|------|------|-------------|
-| 0 | output_cb_index | uint32_t | CB index for output (c_2 = 2) |
-| 1+ | TensorAccessorArgs | uint32_t[] | Encoded tensor accessor parameters for destination buffer |
-
-#### Compute Kernel
-
-| Index | Name | Type | Description |
-|-------|------|------|-------------|
-| 0 | per_core_block_cnt | uint32_t | Number of tile blocks to process on this core |
-| 1 | per_core_block_dim | uint32_t | Number of tiles per block (always 1 for I0) |
-
-### Runtime Arguments
-
-#### Reader Kernel
-
-| Index | Name | Type | Description |
-|-------|------|------|-------------|
-| 0 | src_addr | uint32_t | Source buffer base address in DRAM |
-| 1 | num_pages | uint32_t | Number of tile pages this core reads |
-| 2 | start_id | uint32_t | Starting page index for this core |
-
-#### Writer Kernel
-
-| Index | Name | Type | Description |
-|-------|------|------|-------------|
-| 0 | dst_addr | uint32_t | Destination buffer base address in DRAM |
-| 1 | num_pages | uint32_t | Number of tile pages this core writes |
-| 2 | start_id | uint32_t | Starting page index for this core |
-
-#### Compute Kernel
-
-| Index | Name | Type | Description |
-|-------|------|------|-------------|
-| 0 | packed_scalar1 | uint32_t | Unused for I0 (always 0) |
-| 1 | packed_scalar2 | uint32_t | Unused for I0 (always 0) |
-
-## Kernel Implementations
-
-| Kernel | Core | NOC | Input | Output | Operations |
-|--------|------|-----|-------|--------|------------|
-| reader | BRISC (RISCV_0) | NOC0 | DRAM | CB c_0 | Read tiles via `noc_async_read_page` |
-| compute | TRISC (math RISC) | N/A | CB c_0 | CB c_2 | `copy_tile` + `i0_tile` SFPU op + `pack_tile` |
-| writer | NCRISC (RISCV_1) | NOC1 | CB c_2 | DRAM | Write tiles via `noc_async_write_page` |
-
-### Reader Kernel
-- **File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_interleaved_start_id.cpp`
-- **Key Logic**: Simple sequential page reader. Creates a `TensorAccessor` from compile-time args and iterates from `start_id` to `start_id + num_pages`, reading one page per iteration into CB c_0. Uses `noc_async_read_barrier()` per page.
-
-### Writer Kernel
-- **File**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/writer_unary_interleaved_start_id.cpp`
-- **Key Logic**: Simple sequential page writer. Waits for one page in CB c_2, reads the L1 pointer, issues an async write to DRAM, flushes, and pops. Final `noc_async_write_barrier()` after all pages.
-
-### Compute Kernel
-
-#### Compute Kernel File
-`ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/compute/eltwise_sfpu.cpp`
-
-#### Annotated Compute Kernel Source
 ```cpp
-// SPDX-FileCopyrightText: (c) 2023 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
+// File: tt_metal/hw/ckernels/{arch}/metal/llk_api/llk_sfpu/ckernel_sfpu_i0.h
+// NOTE: Wormhole and Blackhole implementations are identical.
 
-#include <cstdint>
-#include "api/compute/common.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/eltwise_unary/eltwise_unary.h"
-#include "api/compute/eltwise_unary/sfpu_split_includes.h"  // Conditionally includes i0.h when SFPU_OP_I0_INCLUDE is defined
-#include "api/compute/eltwise_unary/trigonometry.h"
-#include "api/compute/mul_int_sfpu.h"
-#include "api/compute/eltwise_unary/rpow.h"
-#include "api/compute/eltwise_unary/rdiv.h"
-#include "api/compute/eltwise_unary/fill.h"
-
-void kernel_main() {
-    uint32_t per_core_block_cnt = get_compile_time_arg_val(0);  // Number of tile blocks this core processes
-    uint32_t per_core_block_dim = get_compile_time_arg_val(1);  // Tiles per block (1 for I0)
-
-    init_sfpu(tt::CBIndex::c_0, tt::CBIndex::c_2);  // Initialize SFPU pipeline: configure unpacker for c_0 input, packer for c_2 output
-    for (uint32_t block_index = 0; block_index < per_core_block_cnt; block_index++) {
-        cb_reserve_back(tt::CBIndex::c_2, per_core_block_dim);  // Reserve output space for one block (1 tile)
-        for (uint32_t tile_index = 0; tile_index < per_core_block_dim; ++tile_index) {
-            tile_regs_acquire();  // Acquire exclusive access to DEST registers for math operations
-
-            // Pop tile after tile, copy to DST and pack
-            cb_wait_front(tt::CBIndex::c_0, 1);  // Wait for reader to produce 1 tile in input CB
-
-            copy_tile(tt::CBIndex::c_0, 0, 0);  // Unpack tile 0 from CB c_0 into DEST register 0
-
-// For I0, SFPU_OP_CHAIN_0 expands to: i0_tile_init(); i0_tile(0);
-// i0_tile_init() calls llk_math_eltwise_unary_sfpu_init<SfpuType::i0, APPROX>() to configure the SFPU pipeline
-// i0_tile(0) dispatches calculate_i0<APPROX>() on all 4 faces of the tile in DEST[0]
-#ifdef SFPU_OP_CHAIN_0
-            SFPU_OP_CHAIN_0
-#endif
-
-            tile_regs_commit();  // Signal that DEST registers are ready for pack stage
-
-            tile_regs_wait();  // Wait for pack stage to be ready to consume DEST
-
-            pack_tile(0, tt::CBIndex::c_2);  // Pack DEST[0] result into CB c_2
-
-            cb_pop_front(tt::CBIndex::c_0, 1);  // Free the consumed input tile from CB c_0
-
-            tile_regs_release();  // Release DEST registers for next iteration
-        }
-        cb_push_back(tt::CBIndex::c_2, per_core_block_dim);  // Publish the output block to writer
-    }
-}
-```
-
-### SFPU Kernel Implementation
-
-#### SFPU Kernel File
-- Wormhole: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_i0.h`
-- Blackhole: `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_i0.h`
-
-Both files are identical.
-
-#### Annotated SFPU Kernel Source
-```cpp
-// SPDX-FileCopyrightText: (c) 2023 Tenstorrent Inc.
-//
-// SPDX-License-Identifier: Apache-2.0
-
-#pragma once
-
-#include "ckernel.h"
-#include "ckernel_defs.h"
-
-using namespace sfpi;  // SFPI: the SFPU Programming Interface providing vFloat, dst_reg, etc.
+using namespace sfpi;
 
 namespace ckernel {
 namespace sfpu {
 
-// POLYVAL10: Evaluates a degree-10 polynomial using Horner's method.
-// Given coefficients c10..c0 and variable t4, computes:
-//   c0 + c1*t4 + c2*t4^2 + ... + c10*t4^10
-// Horner's form is numerically stable and minimizes multiplications:
-//   c0 + t4*(c1 + t4*(c2 + ... + t4*(c9 + c10*t4)...))
 #define POLYVAL10(coef10, coef9, coef8, coef7, coef6, coef5, coef4, coef3, coef2, coef1, coef0, t4)               \
     ((coef0 +                                                                                                     \
       (coef1 +                                                                                                    \
@@ -243,44 +41,31 @@ namespace sfpu {
           t4) *                                                                                                   \
      t4)
 
-// calculate_i0: Computes I0(x) for one face (8 rows) of a tile.
-// Template parameters:
-//   APPROXIMATION_MODE: not used in this implementation (no alternate path)
-//   ITERATIONS: number of rows to process per face (default 8 = 16 elements per row x 8 rows = 128 elements per face)
-// The SFPU processes elements in SIMD fashion: each vFloat holds one row of 16 elements.
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
-inline void calculate_i0() {
-#pragma GCC unroll 0  // Prevent compiler from unrolling -- saves instruction memory
+inline void calculate_i0() { // APPROXIMATION_MODE=true (resolved via APPROX define)
+#pragma GCC unroll 0         // Prevent compiler unrolling to reduce code size
 
-    for (int d = 0; d < ITERATIONS; d++) {  // Iterate over 8 rows within the current face
-        vFloat result = 0.0f;               // Initialize result register to 0
-        vFloat input = dst_reg[0];          // Load current row from DEST register 0 (16 elements SIMD)
-        vFloat x = input * input;           // Compute x^2 -- I0's Taylor series is in terms of (x/2)^2
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat result = 0.0f;
+        vFloat input = dst_reg[0];    // SFPLOAD from dest register at current offset
+        vFloat x = input * input;     // SFPMUL: compute x^2, basis for polynomial
 
-        // Evaluate the polynomial approximation of I0(x):
-        // I0(x) ~= 1 + P10(x^2) where P10 is a degree-10 polynomial in x^2
-        // The coefficients approximate the Taylor series: I0(x) = sum_{k=0}^{inf} ((x/2)^2)^k / (k!)^2
-        // Truncated and fitted to 10 terms for the SFPU:
-        //   coef0  = 0.25       ~= 1/(1!)^2 * (1/4)  [absorbed scaling]
-        //   coef1  = 0.015625   ~= 1/(2!)^2 * (1/16)
-        //   coef2  = 0.000434.. ~= 1/(3!)^2 * ...
-        //   ... and so on for higher-order terms
-        result = 1.0f + POLYVAL10(
-                            1.50E-22f,           // coef10: highest-order coefficient
-                            7.24E-20f,           // coef9
-                            2.90E-17f,           // coef8
-                            9.39E-15f,           // coef7
-                            2.40E-12f,           // coef6
-                            4.71E-10f,           // coef5
-                            6.78E-08f,           // coef4
-                            0.000006781684028f,  // coef3
-                            0.0004340277778f,    // coef2
-                            0.015625f,           // coef1
-                            0.25f,               // coef0
-                            x);                  // variable: x^2
+        result = 1.0f + POLYVAL10(    // Horner's method: 10th degree polynomial in x^2
+                            1.50E-22f,            // coef10 (x^20 term)
+                            7.24E-20f,            // coef9  (x^18 term)
+                            2.90E-17f,            // coef8  (x^16 term)
+                            9.39E-15f,            // coef7  (x^14 term)
+                            2.40E-12f,            // coef6  (x^12 term)
+                            4.71E-10f,            // coef5  (x^10 term)
+                            6.78E-08f,            // coef4  (x^8 term)
+                            0.000006781684028f,   // coef3  (x^6 term)
+                            0.0004340277778f,     // coef2  (x^4 term)
+                            0.015625f,            // coef1  (x^2 term) = 1/64
+                            0.25f,                // coef0  (x^0 term in poly, added to 1.0)
+                            x);
 
-        dst_reg[0] = result;  // Write result back to current row in DEST register 0
-        dst_reg++;            // Advance to the next row within the face (pointer increment)
+        dst_reg[0] = result;  // SFPSTORE result back to dest register
+        dst_reg++;            // TTI_INCRWC: advance dest pointer by SFP_DESTREG_STRIDE (2)
     }
 }
 
@@ -288,81 +73,61 @@ inline void calculate_i0() {
 }  // namespace ckernel
 ```
 
-#### SFPU Instructions Used
+### SFPU Instructions Used
 
-| Instruction/Intrinsic | Description |
-|----------------------|-------------|
-| `dst_reg[0]` (read) | Loads a SIMD row (16 elements as `vFloat`) from the DEST register file at the current row offset |
-| `dst_reg[0]` (write) | Stores a SIMD row back to the DEST register file at the current row offset |
-| `dst_reg++` | Advances the DEST register row pointer to the next row within the face |
-| `vFloat * vFloat` | SFPU multiply -- element-wise multiplication of two SIMD vectors |
-| `vFloat + vFloat` | SFPU add -- element-wise addition of two SIMD vectors |
-| Scalar-to-vFloat promotion | Implicit broadcast of float literal to all 16 SIMD lanes |
+| Instruction | Description |
+|-------------|-------------|
+| **SFPLOAD** (`dst_reg[0]` read) | Loads a 64-element vector from the destination register file at the current offset into an SFPU local register (LReg). Generated by the `vFloat input = dst_reg[0]` expression. |
+| **SFPMUL** (`*` operator on vFloat) | Performs element-wise floating-point multiplication of two vectors. Used for `input * input` (computing x^2) and for each Horner step in the `POLYVAL10` macro where `... * t4` appears. |
+| **SFPMAD** (multiply-add fusion) | The compiler may fuse sequences of `a * b + c` (from Horner's method steps like `(coef_n + coef_{n+1} * t4) * t4`) into SFPMAD (multiply-accumulate) instructions. Each Horner step is a candidate for MAD fusion. |
+| **SFPIADD / SFPADD** (addition with float immediates) | Used for the `1.0f + ...` addition and for adding polynomial coefficients. The compiler selects between immediate-add forms depending on operand types. |
+| **SFPSTORE** (`dst_reg[0] = result`) | Stores a 64-element vector from an SFPU local register back to the destination register file. Uses `SFPSTORE_ADDR_MODE_NOINC` (no auto-increment on store). |
+| **TTI_INCRWC** (`dst_reg++`) | Increments the destination register write pointer by `SFP_DESTREG_STRIDE` (2), advancing to the next row pair within the tile face. Maps to `__builtin_rvtt_ttincrwc`. |
+| **SFPLOADI** (float literal loads) | Loads immediate floating-point constants (the polynomial coefficients) into SFPU local registers. The compiler generates these for each coefficient in the POLYVAL10 expansion. |
 
-The I0 kernel uses only basic SFPU arithmetic (multiply, add) via the SFPI programming interface. It does not use LUT-based approximations, special transcendental instructions, or condition codes.
+### SFPU Register Usage
 
-#### SFPU Register Usage
+| Register | Usage |
+|----------|-------|
+| **dst_reg (DEST register file)** | The primary data source and sink. Each iteration reads one 64-element vector from `dst_reg[0]` (the current row pair), computes the I0 result, and writes it back to the same location. The pointer is then incremented by 2 (`dst_reg++`). Over 8 iterations, this processes all 16 rows of a tile face (8 iterations x 2 rows per DEST entry = 16 rows). |
+| **LReg (Local Registers, L0-L7)** | SFPU local registers used as temporaries for the polynomial evaluation. The compiler allocates LRegs for `input`, `x` (= input^2), intermediate Horner accumulations, and the final `result`. The I0 kernel requires multiple LRegs simultaneously due to the deep Horner chain. Typically L0-L3 are used for operands/results, with the compiler managing spills if needed. |
+| **vConstFloatPrgm0-3** | Not explicitly used in this kernel. The I0 implementation relies on inline float literals rather than pre-loaded programmable constants. |
 
-- **DEST register `dst_reg[0]`**: Used as both input source and output destination. Each iteration reads one row (16 elements), computes I0, and writes back.
-- **`dst_reg++`**: Row pointer auto-increment to walk through the 8 rows of a face.
-- **`vFloat` temporaries (`result`, `input`, `x`)**: Mapped to SFPU local registers (LREGs). The compiler allocates these to the 4 available SFPU local registers.
+### Address Mode Configuration
 
-#### SFPU Execution Flow
+The I0 operation uses the default address mode configuration for standard unary SFPU operations, set during `i0_tile_init()` via `_llk_math_eltwise_unary_sfpu_init_<SfpuType::i0>()` which calls `eltwise_unary_sfpu_configure_addrmod()`.
 
-1. The `_llk_math_eltwise_unary_sfpu_params_<APPROX>` dispatcher is invoked with `calculate_i0<APPROX>` as the function pointer, `dst_index=0`, and `vector_mode=RC`.
-2. The dispatcher sets the DEST write address to the target tile, configures address modes, and stalls until the SFPU is ready (`TTI_STALLWAIT`).
-3. In RC mode, the dispatcher calls `calculate_i0()` once per face, for all 4 faces of the 32x32 tile. Between faces, `TTI_SETRWC` instructions advance the DEST row counter by 16 rows (2 increments of 8).
-4. Within each `calculate_i0()` call (one face):
-   - The loop iterates 8 times (ITERATIONS=8), one per row of the 16x16 face.
-   - Each iteration: load row from DEST -> square it -> evaluate degree-10 polynomial via Horner's method -> add 1.0 -> store back to DEST -> advance row pointer.
-5. After all 4 faces are processed, `math::clear_dst_reg_addr()` resets the pointer and `TTI_STALLWAIT` ensures SFPU completion before the pack stage proceeds.
+**ADDR_MOD_7** (default for unary SFPU):
+```
+addr_mod_t {
+    .srca = {.incr = 0},
+    .srcb = {.incr = 0},
+    .dest = {.incr = 0},
+}.set(ADDR_MOD_7);
+```
 
-#### SFPU Configuration
-
-- **Math fidelity**: `HiFi4` (set in ComputeConfig, highest fidelity)
-- **Math approx mode**: `false` (I0 returns false from `get_op_approx_mode`; the `APPROXIMATION_MODE` template parameter is false)
-- **fp32_dest_acc_en**: Configurable per call (from `args.fp32_dest_acc_en`)
-- **unpack_to_dest_mode**: Default (or `UnpackToDestFp32` if `preserve_fp32_precision` is set)
-- **Preprocessor defines**: `SFPU_OP_I0_INCLUDE=1` causes `ckernel_sfpu_i0.h` to be included; `SFPU_OP_CHAIN_0` expands to `i0_tile_init(); i0_tile(0);`
-
-#### Hardware Compatibility Notes
-
-The Wormhole B0 and Blackhole implementations of `calculate_i0` are **identical** -- the same source file with the same polynomial coefficients and the same SFPI code. Since this kernel uses only basic SFPU arithmetic (multiply, add) without hardware-specific instructions, it is fully portable across both architectures.
-
-## Implementation Notes
-
-1. **Polynomial approximation quality**: The degree-10 polynomial in x^2 effectively gives a degree-20 approximation of I0(x). The coefficients closely follow the Taylor series pattern for I0, which converges as `sum_{k=0}^{inf} ((x/2)^2)^k / (k!)^2`. This provides good accuracy for moderate values of x but may lose precision for very large |x| values where I0 grows exponentially.
-
-2. **No approximation mode branching**: Unlike many SFPU operations (e.g., exp, log) that have both accurate and approximate implementations, `calculate_i0` has a single code path regardless of the `APPROXIMATION_MODE` template parameter. The parameter is accepted but unused.
-
-3. **No runtime parameters**: I0 does not use `packed_scalar1` or `packed_scalar2` -- they are both 0. The operation is purely element-wise with no configurable parameters.
-
-4. **Pure arithmetic implementation**: The I0 SFPU kernel achieves its computation entirely through multiply-add chains (Horner's method). It does not use LUTs, special function hardware, or transcendental instruction support. This makes it straightforward but potentially slower than operations that can leverage hardware LUT acceleration.
-
-5. **Double-buffering**: Both input and output CBs have 2-tile capacity with 1-tile block size, allowing overlap between reader-compute and compute-writer stages.
+All increments are zero because the SFPU kernel manages destination register advancement explicitly via `dst_reg++` (TTI_INCRWC) rather than relying on hardware auto-increment. This configuration is the same across Wormhole and Blackhole architectures. The `_llk_math_eltwise_unary_sfpu_params_` function handles face-to-face advancement using TTI_SETRWC instructions between face iterations.
 
 ## External Knowledge Sources
 
 ### DeepWiki Queries
 
-1. **Query**: "How is the unary program factory implemented for SFPU operations?"
-   **Reason**: Needed to understand the overall structure of `UnaryProgramFactory` before reading source code.
-   **Key Findings**: Confirmed the factory sets up reader/writer/compute kernels, uses `split_work_to_cores` for distribution, and configures CBs with double-buffering. The compute kernel path is determined by `get_compute_kernel_path()`.
+1. **Query**: "How does the I0 (modified Bessel function of first kind, order 0) SFPU kernel work? What is the implementation in ckernel_sfpu_i0.h?"
+   **Reason**: Initial understanding of the I0 SFPU kernel structure and polynomial approximation strategy.
+   **Key Findings**: I0 uses a 10th-degree polynomial (POLYVAL10 macro) evaluated via Horner's method on x^2 (the squared input). Processes 8 iterations per face with `APPROXIMATION_MODE=true`.
 
-2. **Query**: "How is the i0 (modified Bessel function) SFPU operation implemented in the LLK/ckernel layer?"
-   **Reason**: Needed to understand if there was a dedicated LLK-level implementation beyond the ckernel_sfpu_i0.h file.
-   **Key Findings**: DeepWiki confirmed I0 is not a dedicated SFPU hardware instruction -- it is implemented as a software polynomial approximation using basic SFPU arithmetic primitives.
+2. **Query**: "What does _llk_math_eltwise_unary_sfpu_params_ do? How does it set up address modes (ADDR_MOD) and call the SFPU function?"
+   **Reason**: Understanding the LLK dispatch layer that bridges the API call to the core SFPU kernel.
+   **Key Findings**: `_llk_math_eltwise_unary_sfpu_params_` sets up the dest write address, iterates over tile faces based on VectorMode (RC = all 4 faces), calls the SFPU function for each face, and cleans up. ADDR_MOD_7 with zero increments is the default configuration.
 
-### Documentation References
+3. **Query**: "How do dst_reg reads and writes work in SFPI? When code does dst_reg[0] = result and dst_reg++, what SFPU instructions are generated?"
+   **Reason**: Understanding the instruction-level mapping of SFPI C++ constructs to SFPU hardware instructions.
+   **Key Findings**: `dst_reg[0]` read generates SFPLOAD, `dst_reg[0] = result` generates SFPSTORE with NOINC mode, `dst_reg++` generates TTI_INCRWC incrementing by SFP_DESTREG_STRIDE=2. vFloat multiplication maps to SFPMUL, with multiply-add patterns potentially fusing into SFPMAD.
 
-1. **Source**: `tt_metal/hw/inc/api/compute/eltwise_unary/i0.h`
-   **Reason**: API-level wrapper that defines `i0_tile()` and `i0_tile_init()`.
-   **Key Information**: `i0_tile()` uses `SFPU_UNARY_NO_PARAM_KERNEL_FN(calculate_i0, RC, APPROX, idst)` -- dispatches to `calculate_i0` in RC vector mode with no extra parameters.
+### Confluence References
 
-2. **Source**: `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h`
-   **Reason**: Understanding how `_llk_math_eltwise_unary_sfpu_params_` dispatches the SFPU function across tile faces.
-   **Key Information**: In RC mode, the function is called 4 times (once per face), with `TTI_SETRWC` advancing the DEST pointer between faces. Each call processes 8 rows of 16 elements.
+No Confluence references were needed. The I0 kernel uses only basic SFPU instructions (LOAD, STORE, MUL, MAD, LOADI, INCRWC) which are well-documented in DeepWiki.
 
-3. **Source**: `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp`
-   **Reason**: Mapping from `UnaryOpType::I0` to kernel paths and defines.
-   **Key Information**: I0 maps to macro `SFPU_OP_I0_INCLUDE`, uses default compute kernel `eltwise_sfpu.cpp`, init/func pair is `i0_tile_init()` / `i0_tile(idst)`, and `get_op_approx_mode` returns false.
+### Glean References
+
+No Glean references were needed for this analysis.
