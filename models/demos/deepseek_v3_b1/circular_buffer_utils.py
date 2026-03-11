@@ -227,15 +227,18 @@ def build_cb_reconfig_tensor(cb_metadata, full_device_grid, mesh_device):
     """
     import torch
 
+    print("Get core ranges")
     all_cores = ttnn.corerange_to_cores(full_device_grid, row_wise=True)
     num_cores = len(all_cores)
 
     # Build (x, y) → index map for fast lookup
     core_to_idx = {(c.x, c.y): idx for idx, c in enumerate(all_cores)}
+    print("Core to index map built")
 
     # 264 words per core: 64 CBs * 4 words + 2 mask words + 6 padding
     WORDS_PER_CORE = 264
     config = torch.zeros((num_cores, WORDS_PER_CORE), dtype=torch.uint32)
+    print("Config tensor created")
 
     for cb_id, entries in cb_metadata.items():
         for addr, total_size, num_pages, page_size, core_ranges in entries:
@@ -254,14 +257,18 @@ def build_cb_reconfig_tensor(cb_metadata, full_device_grid, mesh_device):
                     config[core_idx, 256] |= 1 << cb_id
                 else:
                     config[core_idx, 257] |= 1 << (cb_id - 32)
+    print("Config tensor filled")
 
     num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
     mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if num_devices > 1 else None
     from_torch_kwargs = {"mesh_mapper": mesh_mapper} if mesh_mapper else {}
 
+    print("Building shard spec")
+
     shard_spec = ttnn.ShardSpec(full_device_grid, (1, WORDS_PER_CORE), ttnn.ShardOrientation.ROW_MAJOR)
     mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, shard_spec)
 
+    print("Building tensor from torch")
     return ttnn.from_torch(
         config,
         dtype=ttnn.uint32,

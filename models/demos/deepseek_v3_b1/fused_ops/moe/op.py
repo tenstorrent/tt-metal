@@ -4693,14 +4693,23 @@ class MoeOp:
 
     def _build_descriptors(self):
         """Build all shared (non-per-device) descriptors and store on self."""
+        print("Build CB Descriptors")
         self.cb_descriptors = self._build_cb_descriptors()
+        print("Reconfiguring MoE CBs: ", self.ctx.reconfig_moe_cbs)
         if self.ctx.reconfig_moe_cbs:
+            print("Building CB reconfig tensor")
             self._build_cb_reconfig_tensor()
+            print("Building dummy CB descriptors")
             self.dummy_cb_descs = self._build_dummy_cb_descs()
+        print("Building core descriptors")
         self.unified_core_descs, self.per_core_descs = self._build_core_descriptors()
+        print("Building semaphore descriptors")
         self.semaphore_descriptors = self._build_semaphore_descriptors()
+        print("Building IO tensors")
         self.io_tensors = self._build_io_tensors()
+        print("Building kernel defines")
         self.kernel_defines = self._build_kernel_defines()
+        print("Done building descriptors")
 
     def _setup_per_device_args(
         self,

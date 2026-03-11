@@ -73,7 +73,7 @@ bool SDMeshCommandQueue::write_shard_to_device(
     }
     // Wait for idle here to ensure that a previous program potentially using this address space
     // is complete.
-    wait_for_cores_idle();
+    // wait_for_cores_idle();
 
     auto* device_buffer = buffer.get_device_buffer(device_coord);
     auto region_value = region.value_or(BufferRegion(0, device_buffer->size()));

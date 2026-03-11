@@ -184,6 +184,7 @@ def test_persistent_decoder_15_stages(
                 entry_node_downstream=ttnn.MeshCoreCoord(stage_entry_device, moe_sender_core),
                 exit_node_upstream=ttnn.MeshCoreCoord(reduce_root_coord, aggregator_core),
             )
+            print(f"Stage {my_mesh_id} Entry Node {stage_entry_device}, Exit Node {reduce_root_coord}")
 
         logger.info(f"[rank={my_mesh_id}] pipeline block created")
 
@@ -229,14 +230,14 @@ def test_persistent_decoder_15_stages(
                 mesh_device,
                 mesh_device.shape[0],
                 mesh_device.shape[1],
-                sender_coord.row,
-                sender_coord.col,
+                sender_coord[0],
+                sender_coord[1],
                 position_id,
                 state_dict,
                 layer_idx,
                 num_routed_experts,
                 max_seq_len,
-                root_coord=pipeline_config[my_mesh_id].exit_node_coord,
+                reduce_root_coord=pipeline_config[my_mesh_id].exit_node_coord,
             )
             ttnn.synchronize_device(mesh_device)
 
@@ -249,43 +250,6 @@ def test_persistent_decoder_15_stages(
         # ── MoE stages: submit persistent kernel ──
         if my_mesh_id >= 1:
             logger.info(f"[rank={my_mesh_id}] submitting persistent MoE kernel")
-            # MoeOp.op(
-            #     r.ttnn_residual_mcast_src,
-            #     gate_mm_weights_tensor=r.ttnn_gate_mm_weights,
-            #     gate_bias_tensor=r.ttnn_gate_bias,
-            #     gate_indices_tensor=r.ttnn_gate_indices,
-            #     gate_output_scores_tensor=r.gate_output_scores_tensor,
-            #     gate_output_indices_tensor=r.gate_output_indices_tensor,
-            #     gate_proj_weights_tensor=r.gate_proj_weights,
-            #     up_proj_weights_tensor=r.up_proj_weights,
-            #     down_proj_weights_tensor=r.down_proj_weights,
-            #     final_output_tensor=r.final_output_tensor,
-            #     rmsnorm_gamma_tensor=r.ttnn_rmsnorm_gamma,
-            #     shared_gate_weights_overlapped=s.shared_gate_weights_overlapped,
-            #     shared_up_weights_overlapped=s.shared_up_weights_overlapped,
-            #     shared_down_weights_tensor=s.ttnn_down_weights,
-            #     shared_k_parallel=s.k_parallel,
-            #     shared_n_parallel=s.n_parallel,
-            #     use_hardcoded_expert_index=True,
-            #     sdpa_kv_cache_buffer=sdpa_kv_cache_buffer,
-            #     sdpa_out_interm_buffer=sdpa_out_interm_buffer,
-            #     num_iterations=1,
-            #     persistent_mode=True,
-            #     persistent_next_iter_semaphore=persistent_next_iter_semaphore,
-            #     reduce_intermediate_tensors=reduce_intermediate_tensors,
-            #     reduce_output_tensor=reduce_output_tensor,
-            #     reduce_semaphores=reduce_semaphores,
-            #     reduce_root_coord=reduce_root_coord,
-            #     bcast_input_tensor=bcast_input_tensor,
-            #     bcast_intermediate_tensor=bcast_intermediate_tensor,
-            #     bcast_semaphores=bcast_semaphores,
-            #     bcast_sender_coord=bcast_sender_coord,
-            #     socket=recv_socket,
-            #     semaphores=moe_semaphores,
-            #     worker_core_grid=moe_worker_core_grid,
-            #     is_torus=is_torus,
-            #     downstream_socket=downstream_socket,
-            # )
             is_torus = device_params.get("fabric_config") == ttnn.FabricConfig.FABRIC_2D_TORUS_Y
             moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.op(
                 # AttentionBlock parameters
