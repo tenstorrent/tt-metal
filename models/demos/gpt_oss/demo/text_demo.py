@@ -426,7 +426,7 @@ def test_gpt_oss_demo(
 
     # Set to False to optimize for execution time.
     # If True, will always try to load HF weights if path is set.
-    load_model = False
+    load_model = True
     if load_model:
         if model_path is None:
             logger.warning(
@@ -436,9 +436,10 @@ def test_gpt_oss_demo(
         else:
             state_dict = ModelArgs.load_state_dict(model_path, dummy_weights=False)
     else:
+        assert model_path is not None, "HF_MODEL environment variable must be set"
         dtype_str = {ttnn.bfloat16: "bf16", ttnn.bfloat8_b: "bfp8"}[ttnn.bfloat8_b]
         # Take best guess at model cache path
-        cache_path = model_path / f"tensor_cache_{dtype_str}_{mesh_device.shape}"
+        cache_path = os.path.join(model_path, f"tensor_cache_{dtype_str}_{mesh_device.shape}")
         if os.path.exists(cache_path):
             state_dict = {}
         else:
@@ -497,26 +498,6 @@ def test_gpt_oss_demo(
         raise ValueError(
             f"Invalid input prompts: {input_prompts}. Expected a list of prompts or a string path to a json file."
         )
-
-    if model_path is not None:
-        if "120b" in model_path and mesh_device.shape[0] == 1:
-            if max([len(p) for p in real_prompts]) > 64 * 1024:
-                print([len(p) for p in real_prompts])
-                pytest.skip(
-                    "120b model with mesh_shape (1, 8) and prefill > 32k is not supported. OOM error gh issue #38729"
-                )
-        if "120b" in model_path and mesh_device.shape[0] == 4:
-            if max([len(p) for p in real_prompts]) >= 64 * 1024:
-                print([len(p) for p in real_prompts])
-                pytest.skip(
-                    "120b model with mesh_shape (4, 8) and prefill >= 64k is not supported. OOM error gh issue #38728"
-                )
-        if "20b" in model_path and mesh_device.shape[0] == 4:
-            if max([len(p) for p in real_prompts]) > 64 * 1024:
-                print([len(p) for p in real_prompts])
-                pytest.skip(
-                    "20b model with mesh_shape (4, 8) and prefill > 32k is not supported. Determinstic hang gh issue #38751"
-                )
 
     # Prepare GPT-OSS with tt_transformers infrastructure
     profiler.start(f"generator_setup", iteration=batch_idx)
