@@ -163,7 +163,7 @@ class QwenImagePipeline:
             for i, submesh_device in enumerate(self._submesh_devices)
         ]
         self._step_inner_tracers = [
-            Tracer(self._step_inner, device=device, num_prep_runs=1, clone_prep_inputs=False)
+            Tracer(self._step_inner, device=device, num_prep_runs=0, clone_prep_inputs=False)
             for device in self._submesh_devices
         ]
         self._transformers_loaded = False
@@ -216,12 +216,23 @@ class QwenImagePipeline:
                     ccl_manager=self._ccl_managers[self.vae_submesh_idx],
                 )
                 self._vae_decoder_tracer = Tracer(
-                    self._vae_decoder.forward, device=self.vae_device, num_prep_runs=1, clone_prep_inputs=False
+                    self._vae_decoder.forward, device=self.vae_device, num_prep_runs=0, clone_prep_inputs=False
                 )
 
             # Load VAE weights based on configuration
             if not dynamic_load_vae:
                 self._vae_decoder.load_torch_state_dict(self._vae_state_dict)
+
+        self.allocate_persistent_buffers()
+
+    def allocate_persistent_buffers(self) -> None:
+        """Allocate persistent buffers by running a pipeline pass without tracing.
+
+        This is important so they do not get allocated after trace capture, which would lead to
+        them being overwritten during trace execution.
+        """
+        logger.info("Pipeline allocation run...")
+        self.run_single_prompt(prompt="", num_inference_steps=2, seed=0, traced=False)
 
     def _load_transformers(self, idx) -> None:
         """Load transformer weights to device. Called lazily for device encoder path."""
@@ -562,6 +573,8 @@ class QwenImagePipeline:
             with profiler("denoising", profiler_iteration) if profiler else nullcontext():
                 for i, t in enumerate(tqdm.tqdm(timesteps)):
                     with profiler(f"denoising_step_{i}", profiler_iteration) if profiler else nullcontext():
+                        # Allocation on device is fine, because timesteps are not used after
+                        # trace execution, and can be overwritten during trace execution.
                         tt_timestep_list = [
                             ttnn.full(
                                 [1, 1],

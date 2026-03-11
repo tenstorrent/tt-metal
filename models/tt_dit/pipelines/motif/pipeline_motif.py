@@ -454,6 +454,7 @@ class MotifPipeline:
                 tt_pooled_prompt_embeds1_list.append(tt_pooled_prompt_embeds1)
                 tt_pooled_prompt_embeds2_list.append(tt_pooled_prompt_embeds2)
                 tt_latents_step_list.append(tt_initial_latents)
+                del tt_initial_latents
 
             logger.info("denoising...")
 

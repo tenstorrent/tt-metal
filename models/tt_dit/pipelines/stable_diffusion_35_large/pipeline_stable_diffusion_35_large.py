@@ -176,7 +176,7 @@ class StableDiffusion3Pipeline:
             ttnn.synchronize_device(submesh_device)
 
         self._step_inner_tracers = [
-            Tracer(self._step_inner, device=device, num_prep_runs=1, clone_prep_inputs=False)
+            Tracer(self._step_inner, device=device, num_prep_runs=0, clone_prep_inputs=False)
             for device in self.submesh_devices
         ]
 
@@ -251,10 +251,10 @@ class StableDiffusion3Pipeline:
         self._text_encoder_2.load_torch_state_dict(text_encoder_2_state_dict)
 
         self._clip_tracer_1 = Tracer(
-            self._text_encoder_1.forward, device=encoder_device, num_prep_runs=1, clone_prep_inputs=False
+            self._text_encoder_1.forward, device=encoder_device, num_prep_runs=0, clone_prep_inputs=False
         )
         self._clip_tracer_2 = Tracer(
-            self._text_encoder_2.forward, device=encoder_device, num_prep_runs=1, clone_prep_inputs=False
+            self._text_encoder_2.forward, device=encoder_device, num_prep_runs=0, clone_prep_inputs=False
         )
 
         if enable_t5_text_encoder:
@@ -288,7 +288,7 @@ class StableDiffusion3Pipeline:
             # Load state dict into new encoder
             self._text_encoder_3.load_torch_state_dict(torch_text_encoder_3_state_dict)
             self._t5_tracer = Tracer(
-                self._text_encoder_3.forward, device=encoder_device, num_prep_runs=1, clone_prep_inputs=False
+                self._text_encoder_3.forward, device=encoder_device, num_prep_runs=0, clone_prep_inputs=False
             )
         else:
             self._text_encoder_3 = None
@@ -306,13 +306,22 @@ class StableDiffusion3Pipeline:
             ccl_manager=self.ccl_managers[vae_submesh_idx],
         )
         self._vae_decoder_tracer = Tracer(
-            self._vae_decoder.forward, device=self.vae_device, num_prep_runs=1, clone_prep_inputs=False
+            self._vae_decoder.forward, device=self.vae_device, num_prep_runs=0, clone_prep_inputs=False
         )
 
         if self.desired_encoder_submesh_shape != self.original_submesh_shape:
             # HACK: reshape submesh device 0 to 1D
             # If reshaping, vae device is same as encoder device
             self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
+
+    def allocate_persistent_buffers(self) -> None:
+        """Allocate persistent buffers by running a pipeline pass without tracing.
+
+        This is important so they do not get allocated after trace capture, which would lead to
+        them being overwritten during trace execution.
+        """
+        logger.info("Pipeline allocation run...")
+        self.run_single_prompt(prompt="", num_inference_steps=2, traced=False)
 
     def prepare(
         self,
@@ -333,6 +342,8 @@ class StableDiffusion3Pipeline:
         self._prepared_guidance_scale = guidance_scale
         self._prepared_max_t5_sequence_length = max_t5_sequence_length
         self._prepared_prompt_sequence_length = prompt_sequence_length
+
+        self.allocate_persistent_buffers()
 
     @staticmethod
     def create_pipeline(
@@ -552,6 +563,7 @@ class StableDiffusion3Pipeline:
                 tt_prompt_embeds_list.append(tt_prompt_embeds)
                 tt_pooled_prompt_embeds_list.append(tt_pooled_prompt_embeds)
                 tt_latents_step_list.append(tt_initial_latents)
+                del tt_initial_latents
 
             logger.info("denoising...")
 
@@ -562,6 +574,8 @@ class StableDiffusion3Pipeline:
 
                         tt_timestep_list = []
                         for submesh_device in self.submesh_devices:
+                            # Allocation on device is fine, because timesteps are not used after
+                            # trace execution, and can be overwritten during trace execution.
                             tt_timestep = ttnn.full(
                                 [1, 1, 1, 1],
                                 fill_value=t,
@@ -660,20 +674,6 @@ class StableDiffusion3Pipeline:
     ) -> list[ttnn.Tensor]:
         latents_out = []
         noise_pred_list = []
-
-        if traced and not self._step_inner_tracers[0].trace_captured:
-            # initialize VAE buffers for safe tracing
-            self._vae_decode(
-                latents[self.vae_submesh_idx].to(self.submesh_devices[self.vae_submesh_idx]),
-                self._prepared_width,
-                self._prepared_height,
-                traced=False,
-            )
-            if self.desired_encoder_submesh_shape != self.original_submesh_shape:
-                self.encoder_device.reshape(ttnn.MeshShape(*self.original_submesh_shape))
-
-            for submesh_device in self.submesh_devices:
-                ttnn.synchronize_device(submesh_device)
 
         for submesh_id in range(len(self.submesh_devices)):
             inner = self._step_inner_tracers[submesh_id] if traced else self._step_inner

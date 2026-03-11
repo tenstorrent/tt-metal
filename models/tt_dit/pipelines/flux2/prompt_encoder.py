@@ -67,7 +67,7 @@ class PromptEncoder:
             parallel_config=parallel_config,
             ccl_manager=ccl_manager,
         )
-        self._tracer = Tracer(self._encoder.forward, device=device, num_prep_runs=1, clone_prep_inputs=False)
+        self._tracer = Tracer(self._encoder.forward, device=device, num_prep_runs=0, clone_prep_inputs=False)
 
         def get_torch_state_dict() -> dict[str, torch.Tensor]:
             return Mistral3Encoder.convert_state(_load_torch_encoder(checkpoint_name).state_dict())

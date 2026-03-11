@@ -160,7 +160,7 @@ class Flux2Pipeline:
             ttnn.synchronize_device(submesh_device)
 
         self._step_inner_tracers = [
-            Tracer(self._step_inner, device=device, num_prep_runs=1, clone_prep_inputs=False)
+            Tracer(self._step_inner, device=device, num_prep_runs=0, clone_prep_inputs=False)
             for device in self._submesh_devices
         ]
 
@@ -194,7 +194,7 @@ class Flux2Pipeline:
                 )
                 self._vae_decoder.load_torch_state_dict(self._torch_vae.state_dict())
                 self._vae_decoder_tracer = Tracer(
-                    self._vae_decoder.forward, device=self.vae_device, num_prep_runs=1, clone_prep_inputs=False
+                    self._vae_decoder.forward, device=self.vae_device, num_prep_runs=0, clone_prep_inputs=False
                 )
             else:
                 self._vae_decoder = None
@@ -202,6 +202,17 @@ class Flux2Pipeline:
 
             if self.encoder_device is not None:
                 ttnn.synchronize_device(self.encoder_device)
+
+        self.allocate_persistent_buffers()
+
+    def allocate_persistent_buffers(self) -> None:
+        """Allocate persistent buffers by running a pipeline pass without tracing.
+
+        This is important so they do not get allocated after trace capture, which would lead to
+        them being overwritten during trace execution.
+        """
+        logger.info("Pipeline allocation run...")
+        self(prompts=[""], num_inference_steps=2, seed=0, traced=False)
 
     @contextmanager
     def encoder_reshape(self, device: ttnn.MeshDevice | None) -> Generator[None]:
@@ -371,6 +382,7 @@ class Flux2Pipeline:
 
                 tt_prompt_embeds_list.append(tt_prompt_embeds)
                 tt_latents_step_list.append(tt_initial_latents)
+                del tt_initial_latents
                 tt_guidance_list.append(tt_guidance)
                 tt_spatial_rope_cos_list.append(tt_spatial_rope_cos)
                 tt_spatial_rope_sin_list.append(tt_spatial_rope_sin)
@@ -385,6 +397,8 @@ class Flux2Pipeline:
 
                     tt_timestep_list = []
                     for submesh_device in self._submesh_devices:
+                        # Allocation on device is fine, because timesteps are not used after
+                        # trace execution, and can be overwritten during trace execution.
                         tt_timestep = ttnn.full(
                             [1, 1],
                             fill_value=t,
