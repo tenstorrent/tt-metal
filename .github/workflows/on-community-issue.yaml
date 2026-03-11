@@ -64,7 +64,7 @@ jobs:
           LABELS: community
       - name: Send Notification
         if: ${{ steps.is_organization_member.outputs.is_member == 'false' }}
-        uses: slackapi/slack-github-action@v1.26.0
+        uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a # v2.1.1
         with:
           payload: |
             {

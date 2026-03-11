@@ -76,7 +76,7 @@ jobs:
           fetch-tags: true # Need tags for `git describe`
 
       - name: 📦 Restore CPM source cache
-        uses: actions/cache@v4
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: .cpmcache
           key: cpm-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
@@ -85,12 +85,12 @@ jobs:
 
       # Python for driving the build; not the version the wheel targets
       - name: Set up Python 3.12
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
 
       - name: 🐍 Build wheel
-        uses: pypa/cibuildwheel@v2.23.2
+        uses: pypa/cibuildwheel@ee02a1537ce3071a004a6b08c41e72f0fdc42d9a # v3.4.0
         env:
           CIBW_BUILD: "cp${{ steps.format_python_version.outputs.python_version_nodot }}-manylinux_x86_64*"
           CIBW_SKIP: "*-musllinux_*"
@@ -120,7 +120,7 @@ jobs:
           echo "artifact_name=${ARTIFACT_NAME}" >> "$GITHUB_ENV"
 
       - name: ☁️ Upload wheel
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
           name: ${{ steps.set_artifact_name.outputs.artifact_name }}

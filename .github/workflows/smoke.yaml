@@ -169,7 +169,7 @@ jobs:
           fetch-depth: 1
 
       - name: Upload coverage to Codecov
-        uses: codecov/codecov-action@v5
+        uses: codecov/codecov-action@0565865e4d760b5b4e15f6b79a277e7a5b5e2a3e # v5.4.0
         if: ${{ !cancelled() && inputs.upload-coverage && (
           (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)
           || (github.event_name == 'push' && github.ref_name == 'main')

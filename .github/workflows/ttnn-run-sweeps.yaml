@@ -723,7 +723,7 @@ jobs:
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.10"
 
@@ -750,7 +750,7 @@ jobs:
             ttnn_ops_v2
 
       - name: Upload master JSON artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ttnn-operations-master-json
           path: |
@@ -816,7 +816,7 @@ jobs:
           github.event.inputs.use_database == 'true' ||
           github.event.schedule == '0 3 * * *' ||
           github.event.schedule == '0 2 * * *'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
         with:
           name: ttnn-operations-master-json
           path: docker-job/model_tracer/traced_operations/
@@ -856,7 +856,7 @@ jobs:
           SKIP_MODULES_FLAG="--skip-modules ccl.generality.all_broadcast,ccl.generality.all_gather,ccl.generality.all_reduce,ccl.generality.all_to_all_combine,ccl.generality.all_to_all_dispatch,ccl.generality.all_to_all,ccl.generality.point_to_point,ccl.generality.reduce_scatter"
           python3 tests/sweep_framework/sweeps_parameter_generator.py --tag ci-main $SKIP_MODULES_FLAG
       - name: Upload sweep vectors
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-vectors-${{ matrix.generate_mode }}
           path: /work/tests/sweep_framework/vectors_export/
@@ -921,7 +921,7 @@ jobs:
           SKIP_MODULES_FLAG="--skip-modules $NON_CCL_MODULES"
           python3 tests/sweep_framework/sweeps_parameter_generator.py --tag ci-main $SKIP_MODULES_FLAG
       - name: Upload sweep vectors
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-vectors-ccl_only
           path: /work/tests/sweep_framework/vectors_export/
@@ -1115,7 +1115,7 @@ jobs:
           "${CMD[@]}"
       - name: Upload sweep results
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-run-result
           path: /work/tests/sweep_framework/results_export/
@@ -1284,7 +1284,7 @@ jobs:
           echo "BATCH_SUFFIX=$(echo -n "$FINGERPRINT" | sha256sum | cut -d' ' -f1 | cut -c1-12)" >> $GITHUB_ENV
       - name: Upload sweep results
         if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-results-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
           path: /work/tests/sweep_framework/results_export/
@@ -1342,7 +1342,7 @@ jobs:
           echo "RUN_TYPE=$RUN_TYPE" >> $GITHUB_ENV
           python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
       - name: Upload runs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-run-result
           path: /work/tests/sweep_framework/results_export/oprun_*.json

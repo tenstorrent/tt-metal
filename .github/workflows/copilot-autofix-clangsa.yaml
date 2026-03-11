@@ -33,7 +33,7 @@ jobs:
           token: ${{ secrets.CLANGSA_RESULTS_PAT }}
 
       - name: Restore attempted hashes cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: attempted_hashes.txt
           key: copilot-autofix-clangsa-attempted-${{ github.run_id }}
@@ -106,7 +106,7 @@ jobs:
           echo "message=$MESSAGE" >> "$GITHUB_OUTPUT"
 
       - name: Save attempted hashes cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         if: always()
         with:
           path: attempted_hashes.txt

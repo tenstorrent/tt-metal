@@ -138,7 +138,7 @@ jobs:
 
       - name: Post comment on PR
         if: steps.pr.outputs.issue != ''
-        uses: mshick/add-pr-comment@v2
+        uses: mshick/add-pr-comment@b8f338c590a895d50bcbfa6c5859251edc8952fc # v2.8.2
         with:
           issue: ${{ steps.pr.outputs.issue }}
           message: |

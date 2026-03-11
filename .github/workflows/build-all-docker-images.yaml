@@ -173,14 +173,14 @@ jobs:
         with:
           submodules: recursive
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push CI Build image
         id: build-ci-build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
@@ -193,7 +193,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
         id: build-ci-test
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
@@ -206,7 +206,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
         id: build-dev
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
@@ -219,7 +219,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
         id: build-basic-dev
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
@@ -232,7 +232,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
         id: build-basic-ttnn-runtime
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
@@ -257,14 +257,14 @@ jobs:
         with:
           submodules: recursive
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push CI Build image
         id: build-ci-build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
@@ -277,7 +277,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
         id: build-ci-test
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
@@ -290,7 +290,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
         id: build-dev
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
@@ -303,7 +303,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
         id: build-basic-dev
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
@@ -316,7 +316,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
         id: build-basic-ttnn-runtime
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
@@ -341,14 +341,14 @@ jobs:
         with:
           submodules: recursive
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push ManyLinux image
         id: build-manylinux
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.manylinux

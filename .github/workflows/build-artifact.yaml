@@ -298,7 +298,7 @@ jobs:
           tracy: ${{ inputs.tracy }}
 
       - name: Upload build artifact for downstream jobs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ steps.download.outputs.build-artifact-name }}
           path: ${{ github.workspace }}/artifacts/ttm_any.tar.zst
@@ -307,7 +307,7 @@ jobs:
 
       - name: Upload wheel artifact
         if: ${{ steps.download.outputs.wheel-artifact-name != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ steps.download.outputs.wheel-artifact-name }}
           path: ${{ github.workspace }}/artifacts/*.whl
@@ -316,7 +316,7 @@ jobs:
 
       - name: Upload packages artifact
         if: ${{ steps.download.outputs.packages-artifact-name != '' }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ steps.download.outputs.packages-artifact-name }}
           path: ${{ github.workspace }}/artifacts/*.deb
@@ -450,7 +450,7 @@ jobs:
           git config --global --add safe.directory /work
 
       - name: 📦 Restore CPM source cache
-        uses: actions/cache@v4
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: .cpmcache
           key: cpm-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
@@ -531,7 +531,7 @@ jobs:
 
       - name: ☁️ Upload packages
         if: ${{ inputs.publish-package }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
           name: ${{ env.ARTIFACT_NAME }}
@@ -577,7 +577,7 @@ jobs:
 
       - name: ☁️ Upload tarball
         if: ${{ inputs.publish-artifact }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
           name: ${{ env.build_artifact_name }}

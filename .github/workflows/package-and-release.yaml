@@ -172,7 +172,7 @@ jobs:
       contents: read
     steps:
       - name: Download ALL wheels (separate folders)
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
         with:
           pattern: ttnn-dist-*
           path: artifacts
@@ -234,7 +234,7 @@ jobs:
       - name: Create changelog
         if: ${{ !inputs.dry-run }}
         id: create-changelog
-        uses: mikepenz/release-changelog-builder-action@v4
+        uses: mikepenz/release-changelog-builder-action@a34a8009a9588bb86b02a873cf592440e96a5da8 # v6.1.1
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
           fromTag: ${{ steps.get-previous-tag.outputs.previous-tag }}
@@ -249,7 +249,7 @@ jobs:
         run: cat CHANGELOG.txt
       - name: Upload changelog as artifact
         if: ${{ !inputs.dry-run }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
           name: changelog
@@ -264,7 +264,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Download changelog
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
         with:
           name: changelog
       - name: Create note about generating pipeline
@@ -281,7 +281,7 @@ jobs:
           cat CHANGELOG.txt >> RELEASE_NOTES.txt
       - name: Output release notes
         run: cat RELEASE_NOTES.txt
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: release-notes
           path: RELEASE_NOTES.txt
@@ -412,15 +412,15 @@ jobs:
       - name: Create VERSION
         run: echo ${{ needs.create-tag.outputs.version }} > VERSION
       - name: Download release notes
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
         with:
           name: release-notes
       - name: Download changelog
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
         with:
           name: changelog
       - name: Download Debian packages (all Ubuntu versions)
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
         with:
           pattern: packages-*
           path: debian-packages
@@ -610,7 +610,7 @@ jobs:
       - name: Trigger RC release workflow
         #This is only run if there are new commits on stable
         if: ${{ steps.check-new-commits.outputs.has-new-commits == 'true' }}
-        uses: benc-uk/workflow-dispatch@v1
+        uses: benc-uk/workflow-dispatch@7a027648b88c2413826b6ddd6c76114894dc5ec4 # v1.3.1
         with:
           workflow: package-and-release.yaml
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -638,7 +638,7 @@ jobs:
           echo "RC was built on tag: ${{ needs.create-tag.outputs.version }}"
           echo "Preparing to trigger prod release workflow on the same commit"
       - name: Trigger prod release workflow on same commit
-        uses: benc-uk/workflow-dispatch@v1
+        uses: benc-uk/workflow-dispatch@7a027648b88c2413826b6ddd6c76114894dc5ec4 # v1.3.1
         with:
           workflow: package-and-release.yaml
           token: ${{ secrets.GITHUB_TOKEN }}

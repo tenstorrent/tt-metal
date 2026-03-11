@@ -46,7 +46,7 @@ jobs:
           submodules: recursive
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
         with:
           name: ${{ inputs.wheel-artifact-name }}
           path: /work
@@ -66,7 +66,7 @@ jobs:
           mv docs/build/html gh_pages/${{ inputs.version }}
       - name: Upload docs artifact (skipped for dry run)
         if: ${{ !inputs.dry-run }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: gh_pages_${{ inputs.version }}
           path: /work/gh_pages/${{ inputs.version }}/
@@ -91,13 +91,13 @@ jobs:
         # This is needed by the pages-deploy action so
         # that the folder is initialized for .git
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+      - uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
         timeout-minutes: 10
         with:
           name: gh_pages_${{ inputs.version }}
           path: gh_pages/${{ inputs.version }}
       - name: Deploy to GitHub Pages
-        uses: JamesIves/github-pages-deploy-action@v4
+        uses: JamesIves/github-pages-deploy-action@d92aa235d04922e8f08b40ce78cc5442fcfbfa2f # v4.8.0
         id: deployment
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -111,7 +111,7 @@ jobs:
         # See more:
         # https://github.com/tenstorrent/tt-metal/issues/17623
         if: ${{ failure() }}
-        uses: geekyeggo/delete-artifact@v5
+        uses: geekyeggo/delete-artifact@f275313e70c08f6120db482d7a6b98377786765b # v5.1.0
         continue-on-error: true
         with:
           name: github-pages
