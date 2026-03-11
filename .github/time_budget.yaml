@@ -91,6 +91,10 @@ fabric:
     wh_galaxy: 100
     bh_galaxy: 60
 
+shield:
+  unit:
+    wh_llmbox: 15
+
 scaleout:
   e2e:
     wh_llmbox: 20
