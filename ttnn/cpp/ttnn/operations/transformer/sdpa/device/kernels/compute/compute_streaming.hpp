@@ -602,6 +602,20 @@ static __attribute__((noinline, noclone)) void apply_lightweight_mask_streaming(
 }
 
 /**
+ * Largest factor of n that is <= max_val.  Picks a QKT subblock width that
+ * evenly divides the active K-tile count on the last K-chunk, avoiding
+ * partial subblocks and enabling the split-drain path.
+ */
+constexpr uint32_t largest_factor_le(uint32_t n, uint32_t max_val) {
+    for (uint32_t f = max_val; f >= 2; --f) {
+        if (n % f == 0) {
+            return f;
+        }
+    }
+    return 1;
+}
+
+/**
  * One K-chunk iteration of the streaming SDPA algorithm (v2 — no row buffers).
  * Phase 1: Q@KT directly into cb_qkt_im with cb_push_back_hold_wr_ptr, in-place sub_exp.
  * Phase 2: Drain + QKT@V with SALAD corrections, streaming normalization on last K iter.
@@ -643,9 +657,13 @@ static void sdpa_inner_loop_step(
     const bool reduce_trigger = false,
     const SubblockDecomp kt_decomp = {
         Sk_chunk_t / qkt_subblock_w, Sk_chunk_t % qkt_subblock_w, (Sk_chunk_t % qkt_subblock_w) > 0}) {
-    const uint32_t kt_num_full_subblocks = kt_decomp.num_full;
-    const uint32_t kt_remainder = kt_decomp.remainder;
-    const bool has_partial_subblock = kt_decomp.has_partial;
+    (void)kt_decomp;
+    const uint32_t actual_sbw = (active_Sk < Sk_chunk_t && active_Sk % qkt_subblock_w != 0)
+                                    ? largest_factor_le(active_Sk, qkt_subblock_w)
+                                    : qkt_subblock_w;
+    const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
+    const uint32_t kt_remainder = active_Sk % actual_sbw;
+    const bool has_partial_subblock = (kt_remainder > 0);
     constexpr uint32_t in0_block_w = DHt;
     constexpr uint32_t q_num_subblocks = Sq_chunk_t / subblock_h;
     constexpr uint32_t q_subblock_num_tiles = subblock_h * in0_block_w;
@@ -681,7 +699,7 @@ static void sdpa_inner_loop_step(
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
     // cb_push_back_hold_wr_ptr makes each row visible to UNPACK without advancing wr_ptr.
 #ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, qkt_subblock_w)));
+    PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, actual_sbw)));
 #endif
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)");
@@ -693,9 +711,9 @@ static void sdpa_inner_loop_step(
         }
         kt_index_offset = 0;
 #ifdef ARCH_BLACKHOLE
-        mm_no_mop_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, subblock_h, in0_block_w);
+        mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, subblock_h, in0_block_w);
 #else
-        mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, subblock_h, in0_block_w);
+        mm_block_init_short(cb_q_in, cb_kt_in, true, actual_sbw, subblock_h, in0_block_w);
 #endif
         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
             if (q_subblock > 0) {
@@ -709,13 +727,13 @@ static void sdpa_inner_loop_step(
                     cur.sum,
                     KT_stride,
                     prev_q_subblock,
-                    kt_subblock * qkt_subblock_w,
+                    kt_subblock * actual_sbw,
                     subblock_h,
-                    qkt_subblock_w);
+                    actual_sbw);
 #ifdef ARCH_BLACKHOLE
-                mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, subblock_h, in0_block_w);
+                mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, subblock_h, in0_block_w);
 #else
-                mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, subblock_h, in0_block_w);
+                mm_block_init_short(cb_q_in, cb_kt_in, true, actual_sbw, subblock_h, in0_block_w);
 #endif
             }
             {
@@ -733,16 +751,16 @@ static void sdpa_inner_loop_step(
                     q_index_offset,
                     kt_index_offset,
                     q_subblock,
-                    kt_subblock * qkt_subblock_w,
-                    qkt_subblock_w,
+                    kt_subblock * actual_sbw,
+                    actual_sbw,
                     subblock_h,
                     in0_block_w,
                     0,
                     kt_trigger_reduce);
-                kt_index_offset += qkt_subblock_w;
+                kt_index_offset += actual_sbw;
             }
         }
-        // Partial last subblock: handles tile-level tail when active_Sk % qkt_subblock_w != 0.
+        // Partial last subblock: handles tile-level tail when active_Sk % actual_sbw != 0.
         if (has_partial_subblock) {
             {
 #ifdef ARCH_BLACKHOLE
@@ -764,7 +782,7 @@ static void sdpa_inner_loop_step(
                         cur.sum,
                         KT_stride,
                         prev_q_subblock,
-                        kt_num_full_subblocks * qkt_subblock_w,
+                        kt_num_full_subblocks * actual_sbw,
                         subblock_h,
                         kt_remainder);
                 }
@@ -788,7 +806,7 @@ static void sdpa_inner_loop_step(
                     q_index_offset,
                     kt_index_offset,
                     q_subblock,
-                    kt_num_full_subblocks * qkt_subblock_w,
+                    kt_num_full_subblocks * actual_sbw,
                     kt_remainder,
                     subblock_h,
                     in0_block_w,
@@ -845,7 +863,7 @@ static void sdpa_inner_loop_step(
                 reduce_trigger);
             cb_push_back(cur.max, subblock_h);
 #ifdef ARCH_BLACKHOLE
-            PACK((llk_pack_mop_config<false, false, false>(cur.max, qkt_subblock_w)));
+            PACK((llk_pack_mop_config<false, false, false>(cur.max, actual_sbw)));
 #endif
         }
 
@@ -873,10 +891,8 @@ static void sdpa_inner_loop_step(
         const uint32_t qktv_subblock_h = subblock_h;
         constexpr uint32_t qktv_subblock_w = (vDHt < 4) ? vDHt : 4;
         constexpr uint32_t qktv_in0_block_w = Sk_chunk_t;
-        // V matmul narrowed to sub_exp'd width. Tile-level when partial subblock is used,
-        // subblock-aligned otherwise (when partial was rounded up to avoid code size).
-        const uint32_t v_matmul_dim =
-            kt_num_full_subblocks * qkt_subblock_w + (has_partial_subblock ? kt_remainder : 0);
+        // V matmul narrowed to sub_exp'd width.
+        const uint32_t v_matmul_dim = kt_num_full_subblocks * actual_sbw + (has_partial_subblock ? kt_remainder : 0);
         const uint32_t qktv_q_num_subblocks = Sq_chunk_t / qktv_subblock_h;
         constexpr uint32_t qktv_v_num_subblocks = vDHt / qktv_subblock_w;
         constexpr uint32_t qktv_output_num_tiles = Sq_chunk_t * vDHt;
@@ -900,7 +916,7 @@ static void sdpa_inner_loop_step(
             // subblock_h>1 or partial subblock: non-split drain (all sub_exp first, then full V matmul).
             // Note: constexpr on subblock_h eliminates the dead branch; has_partial_subblock is runtime.
             if (subblock_h == 1 && !has_partial_subblock) {
-                const uint32_t matmul_inner = qktv_in0_block_w / kt_num_full_subblocks;
+                const uint32_t matmul_inner = active_Sk / kt_num_full_subblocks;
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
                     sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, true>(
                         cb_qkt_im,
@@ -908,9 +924,9 @@ static void sdpa_inner_loop_step(
                         cur.sum,
                         KT_stride,
                         q_num_subblocks - 1,
-                        kt_sub * qkt_subblock_w,
+                        kt_sub * actual_sbw,
                         subblock_h,
-                        qkt_subblock_w);
+                        actual_sbw);
 
                     if (kt_sub == 0) {
                         cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
@@ -964,9 +980,9 @@ static void sdpa_inner_loop_step(
                         cur.sum,
                         KT_stride,
                         q_num_subblocks - 1,
-                        kt_sub * qkt_subblock_w,
+                        kt_sub * actual_sbw,
                         subblock_h,
-                        qkt_subblock_w);
+                        actual_sbw);
                 }
                 if (has_partial_subblock) {
                     sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, true>(
@@ -975,7 +991,7 @@ static void sdpa_inner_loop_step(
                         cur.sum,
                         KT_stride,
                         q_num_subblocks - 1,
-                        kt_num_full_subblocks * qkt_subblock_w,
+                        kt_num_full_subblocks * actual_sbw,
                         subblock_h,
                         kt_remainder);
                 }
