@@ -137,6 +137,13 @@ void FabricFirmwareInitializer::post_teardown() {
     tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
 }
 
+void FabricFirmwareInitializer::add_devices(
+    const std::vector<Device*>& new_devices, const std::unordered_set<InitializerKey>& /*init_done*/) {
+    for (auto* dev : new_devices) {
+        devices_.push_back(dev);
+    }
+}
+
 bool FabricFirmwareInitializer::is_initialized() const { return initialized_; }
 
 void FabricFirmwareInitializer::compile_and_configure_fabric() {

@@ -597,6 +597,17 @@ void MetalContext::set_fabric_config(
     // config, not through this function exposed in the detail API.
     force_reinit_ = true;
 
+    if (device_manager_ && fabric_config != this->fabric_config_) {
+        auto active_ids = device_manager_->get_all_active_device_ids();
+        TT_FATAL(
+            active_ids.empty(),
+            "Cannot change fabric config from {} to {} while {} device(s) are active. "
+            "Close all devices before changing the fabric config.",
+            this->fabric_config_,
+            fabric_config,
+            active_ids.size());
+    }
+
     // Export channel trimming capture data before fabric config changes.
     // Must happen while fabric_config_ is still active and fabric context is alive.
     bool is_tearing_down_fabric = fabric_config == tt_fabric::FabricConfig::DISABLED &&

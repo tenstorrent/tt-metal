@@ -386,17 +386,27 @@ std::map<ChipId, IDevice*> CreateDevices(
         init_profiler,
         initialize_fabric_and_dispatch_fw);
 
-    const auto devices = MetalContext::instance().device_manager()->get_all_active_devices();
-    std::map<ChipId, IDevice*> ret_devices;
-    // Only include the mmio device in the active devices set returned to the caller if we are not running
-    // on a Galaxy cluster.
-    // On Galaxy, gateway (mmio devices) cannot run compute workloads.
+    auto& dm = MetalContext::instance().device_manager();
+    const auto& newly_activated = dm->get_newly_activated_devices();
 
-    for (IDevice* dev : devices) {
-        if (is_galaxy and dev->is_mmio_capable()) {
-            continue;
+    std::map<ChipId, IDevice*> ret_devices;
+    if (!newly_activated.empty()) {
+        // Incremental init: return only the newly activated devices so that
+        // each ScopedDevices owns exactly the devices it opened.
+        for (auto* dev : newly_activated) {
+            if (is_galaxy and dev->is_mmio_capable()) {
+                continue;
+            }
+            ret_devices.insert({dev->id(), dev});
         }
-        ret_devices.insert({dev->id(), dev});
+    } else {
+        // Fresh init: return all active devices (may include fabric-expanded set).
+        for (IDevice* dev : dm->get_all_active_devices()) {
+            if (is_galaxy and dev->is_mmio_capable()) {
+                continue;
+            }
+            ret_devices.insert({dev->id(), dev});
+        }
     }
 
     return ret_devices;

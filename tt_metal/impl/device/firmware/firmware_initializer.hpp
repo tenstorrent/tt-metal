@@ -51,6 +51,10 @@ public:
 
     virtual bool is_initialized() const = 0;
 
+    // Incrementally add new devices.
+    virtual void add_devices(
+        const std::vector<Device*>& new_devices, const std::unordered_set<InitializerKey>& init_done) = 0;
+
 protected:
     const Hal& hal_;
     Cluster& cluster_;

@@ -42,6 +42,8 @@ public:
     void configure() override;
     void teardown(std::unordered_set<InitializerKey>& init_done) override;
     bool is_initialized() const override;
+    void add_devices(
+        const std::vector<Device*>& new_devices, const std::unordered_set<InitializerKey>& init_done) override;
 
     void run_async_build_phase(const std::set<tt::ChipId>& device_ids);
     void run_launch_phase(const std::set<tt::ChipId>& device_ids);
