@@ -32,6 +32,14 @@ The input tensor must be at least 2D, and the output retains identical dimension
 Input dtype is bfloat16 with the last two dimensions aligned to tile size (32),
 but the implementation should be dtype-agnostic where possible.
 
+## Layout handling
+
+All tensors (input, gamma, beta) are in ROW_MAJOR_LAYOUT. The kernels must
+handle row-major data natively — do NOT convert to TILE_LAYOUT in the Python
+entry point or use ttnn.to_layout/ttnn.tilize as a workaround before calling
+the kernel. Any necessary tilize/untilize must happen in-kernel. The output
+must also be ROW_MAJOR_LAYOUT.
+
 Execute in FULLY AUTOMATED mode. Make reasonable assumptions autonomously and
 DO NOT prompt for user confirmation or clarification at any point.
 

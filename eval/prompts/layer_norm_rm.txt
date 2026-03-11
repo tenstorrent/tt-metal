@@ -30,6 +30,17 @@ The operation should validate inputs on the Python side and raise ValueError or
 RuntimeError for: non-bfloat16 input dtype, tile-layout input, gamma/beta shape
 width mismatch with input width.
 
+## Layout handling
+
+All tensors (input, gamma, beta) are in ROW_MAJOR_LAYOUT. The kernels must
+handle row-major data natively — do NOT convert to TILE_LAYOUT in the Python
+entry point or use ttnn.to_layout/ttnn.tilize as a workaround before calling
+the kernel. Any necessary tilize/untilize must happen in-kernel (e.g.,
+tilize_block in the reader, untilize_block in the writer). The output must
+also be ROW_MAJOR_LAYOUT.
+
+## Dtype and alignment
+
 Inputs should be bfloat16, with the final 2 dimensions being tile aligned to 32. Do not heavily rely on the bfloat16 datatype and instead implement "as if" you had to implement for other dtypes as well.
 
 Run in FULLY AUTOMATED mode. Introduce reasonable assumptions and DO NOT ask
