@@ -1600,7 +1600,10 @@ class TTNNGlm4MoeLiteAttention(TTNNModule):
         # attn_output: [1, B, H, qk_head_dim]
 
         # --- convert back to [B, S, H*D_v] for the output projection ---
-        attn_output = ttnn.permute(attn_output, (1, 0, 2, 3))  # [B, 1, H, qk_head_dim]
+        # attn_output = ttnn.permute(attn_output, (1, 0, 2, 3))  # [B, 1, H, qk_head_dim]
+        attn_output = ttnn.permute(attn_output, (1, 0, 2, 3))  # [B, 1, H_padded, qk_head_dim]
+        attn_output = attn_output[:, :, : self.num_heads, :]  # [B, 1, H, qk_head_dim]
+
         if self.qk_head_dim != self.v_head_dim:
             attn_output = attn_output[:, :, :, : self.v_head_dim]
         attn_output = ttnn.reshape(attn_output, (batch_size, seq_length, self.num_heads * self.v_head_dim))
