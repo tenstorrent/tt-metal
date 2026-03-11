@@ -152,7 +152,8 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
                 torch_result = torch_result.reshape(new_shape)
         else:
             torch_result = torch_op(torch_tensor, dim=dim, keepdim=keepdim)
-    except (IndexError, TypeError, RuntimeError):
+    except (IndexError, TypeError, RuntimeError) as e:
+        logger.info(f"torch {op} raised: {e}")
         torch_errored = True
 
     ttnn_errored = False
@@ -208,7 +209,8 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
     torch_errored = False
     try:
         torch_values, torch_indices = torch.topk(torch_tensor, k, dim=dim)
-    except (IndexError, TypeError, RuntimeError):
+    except (IndexError, TypeError, RuntimeError) as e:
+        logger.info(f"torch topk raised: {e}")
         torch_errored = True
 
     ttnn_errored = False
@@ -328,7 +330,8 @@ def test_argmax(device, tensor_shape, dim, keepdim, dtype, layout):
     torch_errored = False
     try:
         torch_result = torch.argmax(torch_tensor, dim=dim, keepdim=keepdim)
-    except (IndexError, TypeError, RuntimeError):
+    except (IndexError, TypeError, RuntimeError) as e:
+        logger.info(f"torch argmax raised: {e}")
         torch_errored = True
 
     ttnn_errored = False
@@ -440,7 +443,8 @@ def test_accumulation(device, tensor_shape, dim, dtype, layout, op):
     torch_errored = False
     try:
         torch_result = torch_op(torch_tensor, dim)
-    except (IndexError, TypeError, RuntimeError):
+    except (IndexError, TypeError, RuntimeError) as e:
+        logger.info(f"torch {op} raised: {e}")
         torch_errored = True
 
     ttnn_errored = False
@@ -546,7 +550,8 @@ def test_moe(device, tensor_shape, dtype, layout):
             dim=-1,
             keepdim=True,
         )
-    except (IndexError, TypeError, RuntimeError):
+    except (IndexError, TypeError, RuntimeError) as e:
+        logger.info(f"torch MOE reference raised: {e}")
         torch_errored = True
 
     ttnn_errored = False
@@ -609,10 +614,8 @@ def _torch_sampling_reference(values, indices, k, p, temp, seed):
     N, C, H, W = values.shape
     num_users = N * C * H
 
-    # Work in float32 for stable softmax and multinomial; values may be bfloat16.
-    values_f = values.float()
     # Flatten to (num_users, W) so each row is one user's logits.
-    values_flat = values_f.reshape(num_users, W)
+    values_flat = values.reshape(num_users, W)
     temp_flat = temp.view(num_users, 1).expand(num_users, W)
     probs_flat = torch.softmax(values_flat / temp_flat, dim=-1)
     indices_flat = indices.reshape(num_users, W)
