@@ -356,6 +356,12 @@ This phase always runs — no interactive checkpoint. It does not modify operati
 
 ---
 
+## Termination
+
+After Phase 6 (Self-Reflection) completes, the pipeline is **DONE**. Return immediately to the user with the final summary. Do NOT run golden tests, integration tests, or any additional validation beyond what the TDD stages already cover. The eval harness runs golden tests separately after the claude session exits.
+
+---
+
 ## Critical Rules
 
 These rules apply across all phases. Violating them causes subtle bugs.
