@@ -9,3 +9,5 @@
 {"event":"all_sources_read","details":"All source files and documentation read. Read: program_factory, writer kernel, compute kernels (2), untilize_helpers.hpp/inl, reader kernel, cb_utils.hpp, work_split_tilize.hpp, tensor_accessor.md, tensor_layouts.md. Now writing analysis.","ts":"2026-03-11T17:19:56+00:00"}
 {"event":"action","type":"research","details":"Completed DeepWiki queries: reduce API, broadcast patterns, mask_tile, tile_regs sync, matmul_tiles for reduction, split_work_to_cores","ts":"2026-03-11T17:20:59+00:00"}
 {"event":"complete","final_status":"SUCCESS","final_commit":"ed7dc81bd6","details":"Tilize analysis complete, focused on reader pattern, CB sizing, stick batching, and core distribution","ts":"2026-03-11T17:22:08+00:00"}
+{"event":"analysis_committed","details":"Committed untilize_analysis.md with output-stage focus. Commit 9c7733c0e9.","ts":"2026-03-11T17:22:57+00:00"}
+{"event":"action","type":"file_write","details":"Wrote comprehensive softmax_analysis.md to agent_logs directory","ts":"2026-03-11T17:25:45+00:00"}
