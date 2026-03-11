@@ -468,6 +468,7 @@ class Generator(WarmupForwardMixin):
             and len(set(prefill_seq_lens)) == 1
             and prefill_seq_lens[0] * batch_size < MAX_BATCHED_PREFILL_SEQ_LEN
             and self.data_parallel == 1
+            and not getattr(self.model_args[0], "disable_batched_prefill", False)
         )
 
         all_users = [0] if use_batched_prefill else empty_slots
@@ -539,7 +540,12 @@ class Generator(WarmupForwardMixin):
 
             # For batched prefill: pass full page_table (function handles slot placement)
             # For non-batched prefill: pass sliced page_table for current user (like original code)
-            page_table_for_user = page_table if use_batched_prefill else page_table[idx : idx + 1]
+            if use_batched_prefill:
+                page_table_for_user = page_table
+            elif page_table is not None:
+                page_table_for_user = page_table[idx : idx + 1]
+            else:
+                page_table_for_user = None
             page_table_user = (
                 self._get_prefill_user_page_table(
                     page_table_for_user,
@@ -2192,7 +2198,9 @@ class Generator(WarmupForwardMixin):
                 if page_table.shape[1] < num_blocks:
                     padding = torch.ones(page_table.shape[0], num_blocks - page_table.shape[1], dtype=torch.int32) * -1
                     page_table = torch.cat([page_table, padding], dim=1)
-            padded_page_table = torch.ones(32, page_table.shape[1], dtype=torch.int32) * -1
+            padded_page_table = (
+                torch.ones(self.model_args[0].max_batch_size, page_table.shape[1], dtype=torch.int32) * -1
+            )
             assert user_id is not None
             for i, user in enumerate(user_id):
                 padded_page_table[user, :] = page_table[i, :]
