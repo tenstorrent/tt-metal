@@ -599,8 +599,8 @@ void MetalContext::set_fabric_config(
 
     // Export channel trimming capture data before fabric config changes.
     // Must happen while fabric_config_ is still active and fabric context is alive.
-    bool is_tearing_down_fabric = fabric_config == tt_fabric::FabricConfig::DISABLED &&
-        this->fabric_config_ != tt_fabric::FabricConfig::DISABLED;
+    bool is_tearing_down_fabric =
+        fabric_config == tt_fabric::FabricConfig::DISABLED && this->fabric_config_ != tt_fabric::FabricConfig::DISABLED;
     if (is_tearing_down_fabric) {
         tt::tt_fabric::export_channel_trimming_capture();
     }
