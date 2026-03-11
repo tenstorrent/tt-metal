@@ -17,13 +17,19 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc
 from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
-from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights, OverlappedTensor
+from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.fused_ops.attention_block.op import AttentionBlock
 from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.flash_mla.op import FlashMLADecode
-from models.demos.deepseek_v3_b1.prepare_weights import create_gate_indices_tensor, prepare_moe_layer_weights
+from models.demos.deepseek_v3_b1.prepare_weights import (
+    create_gate_indices_tensor,
+    prepare_dense_layer_weights,
+    prepare_moe_layer_weights,
+)
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
+    DENSE_LAYER_IDX,
+    DENSE_SHARED_N,
     ROUTED_EXPERT_LAYER_IDX,
     RoutedExpert,
     SharedExpert,
@@ -51,14 +57,20 @@ def create_decoder_block_tensors(
     position_id,
     state_dict,
     layer_idx,
-    num_routed_experts,
     max_seq_len,
+    *,
+    is_moe: bool,
+    num_routed_experts: int = 0,
 ):
     """Create all tensors required by DecoderBlock.op() using a single BlitzDecodeWeights.
+
+    When is_moe=True, loads MoE layer weights and creates gate/routing tensors.
+    When is_moe=False, loads dense layer weights; gate/routing keys are absent from the dict.
+
     This avoids the L1 OOM caused by allocating overlapped attention weights twice
     (once for MLA, once for MoE's gate_mm/ffn_norm). A single BDW instance ensures
     the three fused weight groups share L1 without duplication.
-    Returns a dict with all attention + MoE + shared expert + reduce tensors.
+    Returns a dict with all attention + FFN + shared expert + reduce tensors.
     """
     torch.manual_seed(0)
     num_devices = mesh_rows * mesh_cols
@@ -155,18 +167,21 @@ def create_decoder_block_tensors(
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # All weights via prepare_moe_layer_weights (single BDW)
+    # All weights via a single BDW instance
     # ══════════════════════════════════════════════════════════════════════════
     bdw = BlitzDecodeWeights(submesh)
-    layer = prepare_moe_layer_weights(
-        bdw,
-        state_dict,
-        layer_idx,
-        num_routed_experts=num_routed_experts,
-        move_to_device=True,
-    )
+    if is_moe:
+        layer = prepare_moe_layer_weights(
+            bdw,
+            state_dict,
+            layer_idx,
+            num_routed_experts=num_routed_experts,
+            move_to_device=True,
+        )
+    else:
+        layer = prepare_dense_layer_weights(bdw, state_dict, layer_idx, move_to_device=True)
 
-    # ── MoE final output config (DRAM streaming matmul output grid) ──
+    # ── FFN final output config (DRAM streaming matmul output grid) ──
     gate_proj_noc = ttnn.NOC.NOC_0
     gate_proj_worker_cores = submesh.get_optimal_dram_bank_to_logical_worker_assignment(gate_proj_noc)
     gate_proj_core_ranges = ttnn.CoreRangeSet([ttnn.CoreRange(core, core) for core in gate_proj_worker_cores])
@@ -187,57 +202,54 @@ def create_decoder_block_tensors(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, final_output_shard_spec
     )
 
-    # ── MoE input core (same as gather core (12,9) — attention output IS the MoE input) ──
-    input_core = ttnn.CoreCoord(device_grid_size.x - 1, RoutedExpert.INPUT_CORE_Y)
-    input_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(input_core, input_core)])
+    # ── MoE-only: gate indices and output buffers ──
+    if is_moe:
+        input_core = ttnn.CoreCoord(device_grid_size.x - 1, RoutedExpert.INPUT_CORE_Y)
+        input_core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(input_core, input_core)])
 
-    # ── Gate indices (via prepare_weights utility) ──
-    ttnn_gate_indices = create_gate_indices_tensor(submesh, input_core_grid, mesh_mapper=mesh_mapper)
+        ttnn_gate_indices = create_gate_indices_tensor(submesh, input_core_grid, mesh_mapper=mesh_mapper)
 
-    # ── Gate output buffers ──
-    tile_1x16 = ttnn.Tile((1, 16))
-    gate_output_shard_spec = ttnn.ShardSpec(input_core_grid, (1, 16), ttnn.ShardOrientation.ROW_MAJOR)
-    gate_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gate_output_shard_spec
-    )
-    gate_output_scores_tensor = ttnn.from_torch(
-        torch.zeros((1, 16), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=gate_output_mem_config,
-        tile=tile_1x16,
-        mesh_mapper=mesh_mapper,
-    )
-    gate_output_indices_tensor = ttnn.from_torch(
-        torch.zeros((1, 16), dtype=torch.uint16),
-        dtype=ttnn.uint16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=gate_output_mem_config,
-        tile=tile_1x16,
-        mesh_mapper=mesh_mapper,
-    )
-
-    # ── Fresh gate output buffers for standalone MoeOp.op sanity check ──
-    moe_ref_gate_output_scores = ttnn.from_torch(
-        torch.zeros((1, 16), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=gate_output_mem_config,
-        tile=tile_1x16,
-        mesh_mapper=mesh_mapper,
-    )
-    moe_ref_gate_output_indices = ttnn.from_torch(
-        torch.zeros((1, 16), dtype=torch.uint16),
-        dtype=ttnn.uint16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=gate_output_mem_config,
-        tile=tile_1x16,
-        mesh_mapper=mesh_mapper,
-    )
+        tile_1x16 = ttnn.Tile((1, 16))
+        gate_output_shard_spec = ttnn.ShardSpec(input_core_grid, (1, 16), ttnn.ShardOrientation.ROW_MAJOR)
+        gate_output_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, gate_output_shard_spec
+        )
+        gate_output_scores_tensor = ttnn.from_torch(
+            torch.zeros((1, 16), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=gate_output_mem_config,
+            tile=tile_1x16,
+            mesh_mapper=mesh_mapper,
+        )
+        gate_output_indices_tensor = ttnn.from_torch(
+            torch.zeros((1, 16), dtype=torch.uint16),
+            dtype=ttnn.uint16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=gate_output_mem_config,
+            tile=tile_1x16,
+            mesh_mapper=mesh_mapper,
+        )
+        moe_ref_gate_output_scores = ttnn.from_torch(
+            torch.zeros((1, 16), dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=gate_output_mem_config,
+            tile=tile_1x16,
+            mesh_mapper=mesh_mapper,
+        )
+        moe_ref_gate_output_indices = ttnn.from_torch(
+            torch.zeros((1, 16), dtype=torch.uint16),
+            dtype=ttnn.uint16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=gate_output_mem_config,
+            tile=tile_1x16,
+            mesh_mapper=mesh_mapper,
+        )
 
     # ══════════════════════════════════════════════════════════════════════════
     # Attention input/intermediate/output mesh tensors
@@ -587,29 +599,26 @@ def create_decoder_block_tensors(
         mesh_mapper=reduce_mesh_mapper,
     )
 
-    # ── Fresh reduce tensors for standalone MoeOp.op sanity check ──
-    moe_ref_reduce_intermediate = ttnn.from_torch(
-        torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=intermediate_mem_config,
-        tile=tile_1x32,
-        mesh_mapper=reduce_mesh_mapper,
-    )
-    moe_ref_reduce_output = ttnn.from_torch(
-        torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=submesh,
-        memory_config=reduce_output_mem,
-        tile=tile_1x32,
-        mesh_mapper=reduce_mesh_mapper,
-    )
-
-    # ── Shared expert mcast grid ──
-    def _unwrap(t):
-        return t.fused_tensor if isinstance(t, OverlappedTensor) else t
+    # ── Standalone MoE ref reduce tensors (MoE only) ──
+    if is_moe:
+        moe_ref_reduce_intermediate = ttnn.from_torch(
+            torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=intermediate_mem_config,
+            tile=tile_1x32,
+            mesh_mapper=reduce_mesh_mapper,
+        )
+        moe_ref_reduce_output = ttnn.from_torch(
+            torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=submesh,
+            memory_config=reduce_output_mem,
+            tile=tile_1x32,
+            mesh_mapper=reduce_mesh_mapper,
+        )
 
     sender_core_from_residual = attn_output.memory_config().shard_spec.grid.bounding_box().end
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
@@ -641,31 +650,55 @@ def create_decoder_block_tensors(
     golden_total_qnope_heads = total_kv_heads
     golden_total_qrope_heads = total_kv_heads
 
-    # ── Golden model PyTorch tensors (MoE) ──
+    # ── Golden FFN tensors (MoE vs dense differ in key paths and weight layout) ──
     golden_moe_rmsnorm_gamma = (
         state_dict[_sd_key("post_attention_layernorm.weight")].reshape(1, K).to(torch.bfloat16).float()
     )
-    golden_moe_shared_gate = state_dict[_sd_key("mlp.shared_experts.gate_proj.weight")].T.contiguous()
-    golden_moe_shared_up = state_dict[_sd_key("mlp.shared_experts.up_proj.weight")].T.contiguous()
-    golden_moe_shared_down = state_dict[_sd_key("mlp.shared_experts.down_proj.weight")].T.contiguous()
-    golden_moe_routing_weights = state_dict[_sd_key("mlp.gate.weight")].T.contiguous()
-    golden_moe_bias = (
-        state_dict[_sd_key("mlp.gate.e_score_correction_bias")].reshape(1, 8, 32).contiguous().to(torch.bfloat16)
-    )
+    if is_moe:
+        golden_moe_shared_gate = state_dict[_sd_key("mlp.shared_experts.gate_proj.weight")].T.contiguous()
+        golden_moe_shared_up = state_dict[_sd_key("mlp.shared_experts.up_proj.weight")].T.contiguous()
+        golden_moe_shared_down = state_dict[_sd_key("mlp.shared_experts.down_proj.weight")].T.contiguous()
+        golden_moe_routing_weights = state_dict[_sd_key("mlp.gate.weight")].T.contiguous()
+        golden_moe_bias = (
+            state_dict[_sd_key("mlp.gate.e_score_correction_bias")].reshape(1, 8, 32).contiguous().to(torch.bfloat16)
+        )
+        golden_moe_gate_proj_dict = {}
+        golden_moe_up_proj_dict = {}
+        golden_moe_down_proj_dict = {}
+        for e in range(num_routed_experts):
+            w_g = state_dict[_sd_key(f"mlp.experts.{e}.gate_proj.weight")].T.contiguous()
+            golden_moe_gate_proj_dict[e] = w_g.reshape(1, 1, K, -1)
+            w_u = state_dict[_sd_key(f"mlp.experts.{e}.up_proj.weight")].T.contiguous()
+            golden_moe_up_proj_dict[e] = w_u.reshape(1, 1, K, -1)
+            w_d = state_dict[_sd_key(f"mlp.experts.{e}.down_proj.weight")].T.contiguous()
+            golden_moe_down_proj_dict[e] = w_d.reshape(1, 1, -1, K)
+    else:
+        # Dense MLP: slice first DENSE_SHARED_N as shared, next 8×GATE_PROJ_N as routed experts
+        gate_full = state_dict[_sd_key("mlp.gate_proj.weight")].T.contiguous()  # (K, 18432)
+        up_full = state_dict[_sd_key("mlp.up_proj.weight")].T.contiguous()
+        down_full = state_dict[_sd_key("mlp.down_proj.weight")].T.contiguous()  # (18432, K)
+        golden_moe_shared_gate = gate_full[:, :DENSE_SHARED_N].contiguous()
+        golden_moe_shared_up = up_full[:, :DENSE_SHARED_N].contiguous()
+        golden_moe_shared_down = down_full[:DENSE_SHARED_N, :].contiguous()
+        golden_moe_routing_weights = None
+        golden_moe_bias = None
+        golden_moe_gate_proj_dict = {}
+        golden_moe_up_proj_dict = {}
+        golden_moe_down_proj_dict = {}
+        for e in range(8):
+            start = DENSE_SHARED_N + e * RoutedExpert.GATE_PROJ_N
+            end = start + RoutedExpert.GATE_PROJ_N
+            golden_moe_gate_proj_dict[e] = gate_full[:, start:end].reshape(1, 1, K, -1)
+            golden_moe_up_proj_dict[e] = up_full[:, start:end].reshape(1, 1, K, -1)
+            golden_moe_down_proj_dict[e] = down_full[start:end, :].reshape(1, 1, -1, K)
 
-    golden_moe_gate_proj_dict = {}
-    golden_moe_up_proj_dict = {}
-    golden_moe_down_proj_dict = {}
-    for e in range(num_routed_experts):
-        w_g = state_dict[_sd_key(f"mlp.experts.{e}.gate_proj.weight")].T.contiguous()
-        golden_moe_gate_proj_dict[e] = w_g.reshape(1, 1, K, -1)
-        w_u = state_dict[_sd_key(f"mlp.experts.{e}.up_proj.weight")].T.contiguous()
-        golden_moe_up_proj_dict[e] = w_u.reshape(1, 1, K, -1)
-        w_d = state_dict[_sd_key(f"mlp.experts.{e}.down_proj.weight")].T.contiguous()
-        golden_moe_down_proj_dict[e] = w_d.reshape(1, 1, -1, K)
+    # ── Routed weight tensors differ between MoE (list) and dense (single tensor) ──
+    routed_gate = layer.routed_gate_proj[0] if is_moe else layer.routed_gate_proj
+    routed_up = layer.routed_up_proj[0] if is_moe else layer.routed_up_proj
+    routed_down = layer.routed_down_proj[0] if is_moe else layer.routed_down_proj
 
-    return {
-        # Attention weights (from prepare_moe_layer_weights via BDW)
+    result = {
+        # Attention weights (from prepare_*_layer_weights via BDW)
         "gamma_overlapped": layer.attn_norm,
         "matmul_weights_overlapped": layer.q_a_proj,
         "rmsnorm2_gamma_overlapped": layer.q_norm,
@@ -675,7 +708,6 @@ def create_decoder_block_tensors(
         "dkv_rmsnorm_gamma_overlapped": layer.kv_norm,
         "kv_b2_overlapped": layer.kv_b2_proj,
         "o_proj_overlapped": layer.o_proj,
-        "gate_mm_overlapped": layer.gate_mm,
         "ffn_norm_overlapped": layer.ffn_norm,
         # Attention activation/buffer tensors
         "input_tensor_mesh": input_tensor_mesh,
@@ -700,15 +732,11 @@ def create_decoder_block_tensors(
         "device_chunk_size": program_config.device_chunk_size,
         "ttnn_attention_block_output": attn_output,
         "ttnn_attn_ref_output": attn_ref_output,
-        # MoE tensors (attention_block_output IS the MoE residual input — overlapped with kv cache)
+        # FFN tensors (attn_output IS the FFN residual input — overlapped with kv cache)
         "ttnn_residual_mcast_src": attn_output,
-        "ttnn_gate_bias": layer.gate_bias,
-        "ttnn_gate_indices": ttnn_gate_indices,
-        "gate_output_scores_tensor": gate_output_scores_tensor,
-        "gate_output_indices_tensor": gate_output_indices_tensor,
-        "gate_proj_weights": layer.routed_gate_proj[0],
-        "up_proj_weights": layer.routed_up_proj[0],
-        "down_proj_weights": layer.routed_down_proj[0],
+        "gate_proj_weights": routed_gate,
+        "up_proj_weights": routed_up,
+        "down_proj_weights": routed_down,
         "final_output_mem_config": final_output_mem_config,
         "final_output_total_width": final_output_total_width,
         # Shared expert weights
@@ -721,14 +749,8 @@ def create_decoder_block_tensors(
         "reduce_intermediate_tensors": intermediate_tensors,
         "reduce_output_tensor": reduce_output_tensor,
         "reduce_root_coord": root_coord,
-        # Standalone MoE ref tensors
-        "moe_ref_gate_output_scores": moe_ref_gate_output_scores,
-        "moe_ref_gate_output_indices": moe_ref_gate_output_indices,
-        "moe_ref_reduce_intermediate": moe_ref_reduce_intermediate,
-        "moe_ref_reduce_output": moe_ref_reduce_output,
         "num_gate_proj_cores": num_gate_proj_cores,
         "per_core_down_proj_N": per_core_down_proj_N,
-        # MoE mcast grid (for shared expert)
         "mcast_grid": mcast_grid,
         # Golden model PyTorch tensors (attention / MLA)
         "golden_torch_input": torch_input,
@@ -750,7 +772,7 @@ def create_decoder_block_tensors(
         "golden_total_qrope_heads": golden_total_qrope_heads,
         "golden_kv_cache_bfp8_before_op": kv_cache_bfp8_before_op,
         "golden_sdpa_slice_size": SDPA_INPUT_NUM_CORES * HEADS_PER_ROW,
-        # Golden model PyTorch tensors (MoE)
+        # Golden FFN tensors
         "golden_moe_rmsnorm_gamma": golden_moe_rmsnorm_gamma,
         "golden_moe_shared_gate": golden_moe_shared_gate,
         "golden_moe_shared_up": golden_moe_shared_up,
@@ -761,6 +783,22 @@ def create_decoder_block_tensors(
         "golden_moe_up_proj_dict": golden_moe_up_proj_dict,
         "golden_moe_down_proj_dict": golden_moe_down_proj_dict,
     }
+    # MoE-only keys
+    if is_moe:
+        result.update(
+            {
+                "gate_mm_overlapped": layer.gate_mm,
+                "ttnn_gate_bias": layer.gate_bias,
+                "ttnn_gate_indices": ttnn_gate_indices,
+                "gate_output_scores_tensor": gate_output_scores_tensor,
+                "gate_output_indices_tensor": gate_output_indices_tensor,
+                "moe_ref_gate_output_scores": moe_ref_gate_output_scores,
+                "moe_ref_gate_output_indices": moe_ref_gate_output_indices,
+                "moe_ref_reduce_intermediate": moe_ref_reduce_intermediate,
+                "moe_ref_reduce_output": moe_ref_reduce_output,
+            }
+        )
+    return result
 
 
 @pytest.mark.parametrize(
@@ -874,8 +912,9 @@ def test_decoder(
         position_id,
         state_dict,
         layer_idx=ROUTED_EXPERT_LAYER_IDX,
-        num_routed_experts=num_routed_experts,
         max_seq_len=max_seq_len,
+        is_moe=True,
+        num_routed_experts=num_routed_experts,
     )
 
     num_cores = device_grid_size.x * device_grid_size.y
@@ -1331,5 +1370,249 @@ def test_decoder(
         assert device_passing, f"Pure MoE vs Decoder MoE PCC check failed: {device_pcc}"
 
     logger.info("✓ DecoderBlock mesh test passed!")
+
+    ttnn.synchronize_device(submesh)
+
+
+@pytest.mark.parametrize(
+    "sender_row, sender_col",
+    [
+        (1, 0),
+    ],
+)
+@pytest.mark.parametrize("epsilon", [1e-6])
+@pytest.mark.parametrize("use_fp32", [False])
+@pytest.mark.parametrize("bcast_cluster_axis", [0])
+@pytest.mark.parametrize("bcast_secondary_cluster_axis", [1])
+@pytest.mark.parametrize("reduce_cluster_axis", [1])
+@pytest.mark.parametrize("mesh_rows, mesh_cols", [(4, 2)])
+@pytest.mark.parametrize("num_iters", [(1)])
+@pytest.mark.parametrize("max_seq_len", [32 * 1024])
+@pytest.mark.parametrize(
+    "position_id",
+    [
+        0,
+        127,
+        pytest.param(511, marks=pytest.mark.skip_post_commit),
+        pytest.param(1023, marks=pytest.mark.skip_post_commit),
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
+            "fabric_router_config": create_fabric_router_config(15232),
+            "worker_l1_size": 1374544,
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+@pytest.mark.parametrize("num_internal_iterations", [1])
+@pytest.mark.requires_grid_size((13, 10))
+def test_decoder_mlp(
+    bh_2d_mesh_device,
+    mesh_rows,
+    mesh_cols,
+    sender_row,
+    sender_col,
+    epsilon,
+    use_fp32,
+    bcast_cluster_axis,
+    bcast_secondary_cluster_axis,
+    reduce_cluster_axis,
+    num_iters,
+    max_seq_len,
+    position_id,
+    noc_mode,
+    num_internal_iterations,
+    get_reference_model_state_dict,
+):
+    """Test TTNN decoder fused operation for a dense (MLP) layer with enable_routing=False."""
+    torch.manual_seed(0)
+    num_devices = mesh_rows * mesh_cols
+    logger.info(f"Number of devices: {num_devices}")
+    if bh_2d_mesh_device.shape[0] * bh_2d_mesh_device.shape[1] < num_devices:
+        pytest.skip("Test requires more devices than available")
+
+    submesh = bh_2d_mesh_device.create_submesh(ttnn.MeshShape((mesh_rows, mesh_cols)))
+    device_grid_size = submesh.compute_with_storage_grid_size()
+
+    logger.info("Preparing dense MLP model state dict...")
+    state_dict = get_reference_model_state_dict(
+        layer_idx=DENSE_LAYER_IDX,
+        is_moe=False,
+        seed=RoutedExpert.SEED,
+    )
+
+    logger.info("Creating dense decoder block tensors...")
+    d = create_decoder_block_tensors(
+        submesh,
+        mesh_rows,
+        mesh_cols,
+        sender_row,
+        sender_col,
+        position_id,
+        state_dict,
+        layer_idx=DENSE_LAYER_IDX,
+        max_seq_len=max_seq_len,
+        is_moe=False,
+    )
+
+    num_cores = device_grid_size.x * device_grid_size.y
+    available_cores = ttnn.num_cores_to_corerangeset(num_cores, device_grid_size, row_wise=True)
+    ttnn.synchronize_device(submesh)
+    reduce_semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
+    ttnn.synchronize_device(submesh)
+
+    attn_semaphores = AttentionBlock.create_semaphores(submesh)
+    moe_semaphores = MoeOp.create_semaphores(submesh)
+
+    logger.info(f"Running dense decoder operation with position_id={position_id}...")
+    for i in range(num_iters):
+        moe_final_output_tensor, attention_block_output_tensor = DecoderBlock.op(
+            # AttentionBlock parameters
+            d["input_tensor_mesh"],
+            d["gamma_overlapped"],
+            d["matmul_weights_overlapped"],
+            d["rmsnorm2_gamma_overlapped"],
+            d["matmul2_weights_overlapped"],
+            d["matmul3_weights_overlapped"],
+            d["ttnn_qrope_sin"],
+            d["ttnn_qrope_cos"],
+            d["ttnn_trans_mat"],
+            d["ttnn_krope_cos"],
+            d["ttnn_krope_sin"],
+            d["dkv_matmul_weights_overlapped"],
+            d["dkv_rmsnorm_gamma_overlapped"],
+            d["ttnn_kv_cache"],
+            d["ttnn_position_ids"],
+            d["scale"],
+            d["sdpa_kv_cache_buffer"],
+            d["sdpa_out_interm_buffer"],
+            d["sender_coord"],
+            # Post-SDPA parameters
+            d["kv_b2_overlapped"],
+            d["o_proj_overlapped"],
+            d["ttnn_sdpa_input_l"],
+            d["ttnn_sdpa_input_ms"],
+            d["ttnn_sdpa_output_l"],
+            d["ttnn_sdpa_intermediate_recv"],
+            d["ttnn_sdpa_forwarder_scratch"],
+            d["device_chunk_size"],
+            d["ttnn_attention_block_output"],
+            attention_block_semaphores=attn_semaphores,
+            # MoE parameters (no gate_mm / routing tensors for dense MLP)
+            shared_residual_mcast_src_tensor=d["ttnn_residual_mcast_src"],
+            gate_mm_weights_tensor=None,
+            gate_bias_tensor=None,
+            gate_indices_tensor=None,
+            gate_output_scores_tensor=None,
+            gate_output_indices_tensor=None,
+            gate_proj_weights_tensor=d["gate_proj_weights"],
+            up_proj_weights_tensor=d["up_proj_weights"],
+            down_proj_weights_tensor=d["down_proj_weights"],
+            moe_final_output_tensor=None,
+            rmsnorm_gamma_tensor=d["ffn_norm_overlapped"],
+            shared_gate_weights_overlapped=d["shared_gate_weights_overlapped"],
+            shared_up_weights_overlapped=d["shared_up_weights_overlapped"],
+            shared_down_weights_tensor=d["shared_down_weights_tensor"],
+            shared_k_parallel=d["shared_k_parallel"],
+            shared_n_parallel=d["shared_n_parallel"],
+            moe_semaphores=moe_semaphores,
+            reduce_intermediate_tensors=d["reduce_intermediate_tensors"],
+            reduce_output_tensor=d["reduce_output_tensor"],
+            reduce_semaphores=reduce_semaphores,
+            reduce_root_coord=ttnn.MeshCoordinate(d["reduce_root_coord"]),
+            # Shared parameters
+            enable_routing=False,
+            bcast_cluster_axis=bcast_cluster_axis,
+            bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
+            reduce_cluster_axis=reduce_cluster_axis,
+            sdpa_cluster_axis=0,
+            sdpa_scale_fp32=1.0,
+            num_links=1,
+            epsilon=epsilon,
+            fp32_dest_acc_en=use_fp32,
+            skip_ccl=False,
+            use_hardcoded_expert_index=False,
+            noc_mode=noc_mode,
+            num_iterations=num_internal_iterations,
+        )
+    ttnn.synchronize_device(submesh)
+
+    # ========================================================================
+    # Extract decoder MLP output from reduce root
+    # ========================================================================
+    root_coord_tuple = d["reduce_root_coord"]
+    root_device_idx = root_coord_tuple[0] * mesh_cols + root_coord_tuple[1]
+    root_device_tensor = ttnn.get_device_tensors(moe_final_output_tensor)[root_device_idx]
+    decoder_mlp_output = ttnn.to_torch(root_device_tensor)
+    decoder_mlp_output_valid = extract_routed_expert_output(
+        decoder_mlp_output.unsqueeze(0),
+        d["num_gate_proj_cores"],
+        RoutedExpert.FINAL_OUTPUT_WIDTH_PER_CORE,
+        d["per_core_down_proj_N"],
+    )
+
+    # ========================================================================
+    # Compute golden reference via DecoderBlock.golden (MLA → MLP full pipeline)
+    # ========================================================================
+    logger.info("Computing golden reference...")
+
+    QNOPE_HEAD_DIM = 128
+    QROPE_HEAD_DIM = 64
+    KNOPE_DIM = 512
+    KROPE_DIM = 64
+    HEADS_PER_ROW = 8
+
+    _full_q, _new_kv, _mla_output, _scores, _indices, moe_output = DecoderBlock.golden(
+        d["golden_torch_input"],
+        d["golden_torch_gamma"],
+        d["golden_torch_matmul_weights"],
+        d["golden_torch_rmsnorm2_gamma"],
+        d["golden_torch_matmul2_weights"],
+        d["golden_torch_matmul3_weights"],
+        d["golden_torch_sin"],
+        d["golden_torch_cos"],
+        d["golden_position_ids"],
+        d["golden_torch_dkv_matmul_weights"],
+        d["golden_torch_dkv_rmsnorm_gamma"],
+        d["golden_torch_kv_cache"],
+        d["golden_scale"],
+        d["golden_torch_kv_b2_proj_weights"],
+        d["golden_torch_o_proj_weights"],
+        epsilon=epsilon,
+        num_qnope_heads=d["golden_total_qnope_heads"],
+        num_qrope_heads=d["golden_total_qrope_heads"],
+        qnope_head_dim=QNOPE_HEAD_DIM,
+        qrope_head_dim=QROPE_HEAD_DIM,
+        heads_per_row=HEADS_PER_ROW,
+        nope_dim=KNOPE_DIM,
+        rope_dim=KROPE_DIM,
+        moe_shared_gate_weights=d["golden_moe_shared_gate"],
+        moe_shared_up_weights=d["golden_moe_shared_up"],
+        moe_shared_down_weights=d["golden_moe_shared_down"],
+        moe_gate_proj_weights_dict=d["golden_moe_gate_proj_dict"],
+        moe_up_proj_weights_dict=d["golden_moe_up_proj_dict"],
+        moe_down_proj_weights_dict=d["golden_moe_down_proj_dict"],
+        moe_rmsnorm_gamma=d["golden_moe_rmsnorm_gamma"],
+        moe_rmsnorm_epsilon=epsilon,
+        moe_enable_routing=False,
+        moe_num_devices=num_devices,
+        moe_reduce_root_device_idx=root_device_idx,
+    )
+
+    # ========================================================================
+    # Validate MLP output vs DecoderBlock golden
+    # ========================================================================
+    passing, pcc = comp_pcc(moe_output.flatten(), decoder_mlp_output_valid.float().flatten(), 0.975)
+    logger.info(f"MLP PCC (decoder vs golden): {pcc}")
+    logger.info(f"Golden MLP output: {moe_output.flatten()[:8]}")
+    logger.info(f"DecoderBlock MLP output: {decoder_mlp_output_valid.flatten()[:8]}")
+    assert passing, f"DecoderBlock MLP Output PCC check failed: {pcc}"
+
+    logger.info("✓ DecoderBlock MLP mesh test passed!")
 
     ttnn.synchronize_device(submesh)
