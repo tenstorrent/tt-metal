@@ -165,13 +165,14 @@ docker_run() {
     # non-root).  Slurm handles multi-node orchestration natively.
     docker_args+=( --entrypoint "" )
 
-    # Local venv activation: when the workspace contains a python_env built
-    # by create_venv.sh (--relocatable), activate it inside the container so
-    # the editable ttnn install and all dev deps are on sys.path.
+    # Local build detection: when the workspace contains a python_env from
+    # create_venv.sh, the project has been built locally.  Rather than
+    # activating the host venv (whose Python binary cannot find its stdlib
+    # inside the container), extend PYTHONPATH to replicate the three paths
+    # that the editable install's ttnn-custom.pth would add.
     #   LOCAL_VENV=1  force on
     #   LOCAL_VENV=0  force off
     #   unset         auto-detect from workspace
-    local venv_prefix=""
     local local_venv="${LOCAL_VENV:-auto}"
     if [[ "$local_venv" == "auto" ]]; then
         [[ -f "${WORKSPACE:-.}/python_env/bin/activate" ]] && local_venv=1 || local_venv=0
@@ -179,15 +180,15 @@ docker_run() {
 
     if [[ "$local_venv" == "1" ]]; then
         local cwd="${CONTAINER_WORKDIR:-/work}"
-        venv_prefix="source ${cwd}/python_env/bin/activate && "
+        docker_args+=( -e "PYTHONPATH=${cwd}:${cwd}/ttnn:${cwd}/tools" )
         docker_args+=( -e "LD_LIBRARY_PATH=${cwd}/build/lib" )
-        log_info "Local venv detected, will activate: ${cwd}/python_env"
+        log_info "Local build detected, extending PYTHONPATH for: ${cwd}"
     fi
 
     log_info "Running in container: $image"
     log_debug "docker run ${docker_args[*]} $image bash -c ..."
 
-    docker run "${docker_args[@]}" "$image" bash -c "set -euo pipefail; ${venv_prefix}$commands"
+    docker run "${docker_args[@]}" "$image" bash -c "set -euo pipefail; $commands"
     local rc=$?
 
     if [[ $rc -ne 0 ]]; then
