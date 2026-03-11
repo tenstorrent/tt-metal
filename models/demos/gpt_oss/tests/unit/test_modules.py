@@ -335,13 +335,13 @@ def run_fused_throughput_experts_component(
 
     routing_weights = torch.zeros(num_tokens, config.num_local_experts, dtype=torch.float32)
 
-    for _ in range(num_tokens):
+    for tok_idx in range(num_tokens):
         selected = torch.randperm(total_experts)[:num_experts_per_tok].sort().values
         indices_list.append(selected.to(torch.int64))
         scores = torch.rand(num_experts_per_tok, dtype=torch.float32) + 1e-5
         scores = scores / scores.sum()
         scores_list.append(scores)
-        routing_weights[..., selected] = scores
+        routing_weights[tok_idx, selected] = scores
     indices_torch = torch.stack(indices_list, dim=0).reshape(num_tokens, 1, 1, num_experts_per_tok)
     scores_torch = torch.stack(scores_list, dim=0).reshape(num_tokens, 1, 1, num_experts_per_tok)
 
