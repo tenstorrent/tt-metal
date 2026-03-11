@@ -6,6 +6,7 @@ import pytest
 
 import ttnn
 from models.perf.device_perf_utils import run_device_perf_detailed
+from models.common.utility_functions import is_llk_assert_enabled
 
 MARGIN = 0.015
 USE_PERF_TEST_MODE = True
@@ -134,6 +135,8 @@ def test_dram_group_norm_vae_welford_reciprocal_performance():
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
     expected_duration_ns = 1516464  # Measured: 1.52ms for GroupNorm VAE welford_reciprocal
+    if (is_llk_assert_enabled):
+        expected_duration_ns = 1665525  # Measured: 1.67ms for GroupNorm VAE welford_reciprocal
 
     # Log the performance result
     print(
@@ -314,6 +317,8 @@ def test_conv2d_auto_sliced_vae_performance():
     device_kernel_duration = results["DEVICE KERNEL"]["AVG"]
 
     expected_duration_ns = 3185244  # Measured: 3.19ms for Conv2D VAE auto sliced
+    if (is_llk_assert_enabled):
+        expected_duration_ns = 3403770  # Measured: 3.40ms for Conv2D VAE auto sliced
 
     # Log the performance result
     print(
