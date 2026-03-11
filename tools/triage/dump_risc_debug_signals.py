@@ -74,7 +74,6 @@ def collect_debug_bus_signals(
         risc_debug = noc_block.get_risc_debug(risc_name)
         if risc_debug.is_in_reset():
             continue
-
         try:
             with risc_debug.ensure_halted():
                 pass
@@ -145,9 +144,14 @@ def run(args, context: Context):
             device = r.device_description.device
             location = r.location
             block_type = run_checks.get_block_type(location)
-            if block_type not in all_debug_bus_data[f"Device {device.id}"]:
-                all_debug_bus_data[f"Device {device.id}"][block_type] = defaultdict(dict)
-            all_debug_bus_data[f"Device {device.id}"][block_type][f"location: {location.to_user_str()}"] = {
+            if f"Device {device.id}" not in all_debug_bus_data:
+                all_debug_bus_data[f"Device {device.id}"]["arch"] = str(device._arch)
+                all_debug_bus_data[f"Device {device.id}"]["block_types"] = defaultdict(dict)
+            if block_type not in all_debug_bus_data[f"Device {device.id}"]["block_types"]:
+                all_debug_bus_data[f"Device {device.id}"]["block_types"][block_type] = defaultdict(dict)
+            all_debug_bus_data[f"Device {device.id}"]["block_types"][block_type][
+                f"location: {location.to_user_str()}"
+            ] = {
                 "failed_riscs": r.result["failed_riscs"],
                 "debug_bus_signal_groups": r.result["debug_bus_signal_groups"],
             }
