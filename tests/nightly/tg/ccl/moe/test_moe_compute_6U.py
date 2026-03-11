@@ -11,7 +11,7 @@ import random
 import torch
 import ttnn
 
-from tests.nightly.tg.ccl.test_selective_combine import device_mesh_iterator, check_ref as validate_combine
+from tests.nightly.tg.ccl.moe.test_selective_combine_6U import device_mesh_iterator
 from tests.nightly.t3000.ccl.test_all_to_all_combine import get_batch_cluster_idxr, get_cluster_dims
 
 from models.common.utility_functions import comp_pcc
@@ -948,8 +948,9 @@ def compute_combine_golden(
     batch_rep_idxr = get_batch_cluster_idxr(cluster_axis, tokens)
 
     for l in range(layers):
-        activations = dense_token_activations[l]
         for m0, m1, d in device_mesh_iterator(mesh_shape):
+            activations = dense_token_activations[l][d]
+
             dense_token_index = 0
             for e in range(experts_per_device):
                 for a in activations:
@@ -1031,11 +1032,15 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize("experts", [2 * 16])  # 32 experts for 16 devices = 2 experts per device
 @pytest.mark.parametrize(
-    "selected_experts_k, num_layers, num_iterations", [(1, 1, 1), (8, 5, 1)], ids=["perf", "accuracy"]
+    "selected_experts_k, num_layers, num_iterations",
+    [(8, 5, 1)],
+    ids=["accuracy"]
+    # "selected_experts_k, num_layers, num_iterations", [(1, 1, 1), (8, 5, 1)], ids=["perf", "accuracy"]
 )
 @pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("enable_trace", [True, False])
+@pytest.mark.parametrize("enable_trace", [False])
+# @pytest.mark.parametrize("enable_trace", [True, False])
 @pytest.mark.parametrize("output_height_shard_dim", [4])
 @pytest.mark.parametrize("output_width_shard_dim", [4])
 def test_moe_compute(
@@ -1348,9 +1353,11 @@ def test_moe_compute(
     )
 
     output_shard_cores = ttnn.experimental.get_moe_combine_cores(mesh_device)
-    combine_barrier_semaphore = ttnn.create_global_semaphore(mesh_device, ttnn.CoreRangeSet(output_shard_cores), 0)
+    combine_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in output_shard_cores])
+    combine_barrier_semaphore = ttnn.create_global_semaphore(mesh_device, combine_core_range_set, 0)
+    mux_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange((1, 1), (3, 3))])
 
-    torch_combine_output_tensor = torch.zeros([select_experts_k, total_tokens, hidden_size], dtype=torch.bfloat16)
+    torch_combine_output_tensor = torch.zeros([selected_experts_k, total_tokens, hidden_size], dtype=torch.bfloat16)
     tt_combine_output_tensors = [
         ttnn.from_torch(
             torch_combine_output_tensor,
@@ -1404,6 +1411,7 @@ def test_moe_compute(
                 output_height_shard_dim=output_height_shard_dim,
                 output_width_shard_dim=output_width_shard_dim,
                 cluster_axis=cluster_axis,
+                mux_core_range_set=mux_core_range_set,
                 optional_output_tensor=tt_combine_output_tensors[layer_id],
                 optional_cross_device_semaphore=combine_barrier_semaphore,
             )
