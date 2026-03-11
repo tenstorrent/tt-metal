@@ -356,7 +356,8 @@ int main(int argc, char **argv) {
     CLI::App app{"NanoGPT Example"};
     argv = app.ensure_utf8(argv);
 
-    std::string training_config_name = "training_shakespeare_nanogpt.yaml";
+    std::string training_config_name =
+        std::filesystem::current_path().string() + "/configs/training_configs/training_shakespeare_nanogpt.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
