@@ -20,10 +20,10 @@ compute_cfg = ttnn.WormholeComputeKernelConfig(
 
 # Core grids — full 8x8 grid (64 cores), split left/right then top/bottom
 full_cores  = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 7))})  # 8x8 = 64 cores
-left_cores  = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))})  # 4x8 = 32 cores
-right_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 7))})  # 4x8 = 32 cores
-left_top    = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 7))})  # 2x8 = 16 cores
-left_bot    = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(2, 0), ttnn.CoreCoord(3, 7))})  # 2x8 = 16 cores
+left_cores  = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 7))})  # 4x8 = 32 cores (cols 0-3)
+right_cores = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 0), ttnn.CoreCoord(7, 7))})  # 4x8 = 32 cores (cols 4-7)
+left_top    = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 3))})  # 4x4 = 16 cores (left, rows 0-3)
+left_bot    = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 4), ttnn.CoreCoord(3, 7))})  # 4x4 = 16 cores (left, rows 4-7)
 
 # Each descriptor function returns an OpDescriptor — a thin wrapper
 # around ProgramDescriptor with input/output tensors.
@@ -78,7 +78,7 @@ The rest of this document provides implementation details for the various compon
 - [Glossary](#glossary)
   - [Node (`OpNode`)](#node-opnode) | [Root](#root) | [Leaf](#leaf) | [Internal Node](#internal-node) | [Segment](#segment) | [Core Group](#core-group) | [Barrier Scope](#barrier-scope) | [Arrive Set / Release Set](#arrive-set--release-set) | [How They Interact](#how-core-groups-barrier-scopes-and-arriverelease-sets-interact)
 - [Representing Fused Op Structure](#representing-fused-op-structure)
-  - [Composing with Sequential and Parallel](#composing-with-sequential-and-parallel) | [Conversion to OpNode Tree](#conversion-to-opnode-tree) | [Topology Rules](#topology-rules) | [Spatial Independence](#spatial-independence) | [Narrow→Wide Topology](#narrowwide-topology-and-no-op-phases) | [Core Groups](#core-groups) | [Fused Kernel Structure](#fused-kernel-structure)
+  - [Composing with Sequential and Parallel](#composing-with-sequential-and-parallel) | [Conversion to OpNode Tree](#conversion-to-opnode-tree) | [Topology Rules](#topology-rules) | [Spatial Independence](#spatial-independence) | [Core Groups](#core-groups) | [Fused Kernel Structure](#fused-kernel-structure) | [Narrow→Wide Topology and No-Op Phases](#narrowwide-topology-and-no-op-phases)
 - [Synchronization Protocol](#synchronization-protocol)
   - [Key Concepts](#key-concepts) | [MultiBarrierSpec](#multibarrierspec) | [Segment Cache](#segment-cache) | [Two-Level Barrier](#two-level-barrier) | [Cross-Core NOC Barrier](#cross-core-noc-barrier)
 - [CB Pool Allocator](#cb-pool-allocator)
@@ -95,6 +95,7 @@ The rest of this document provides implementation details for the various compon
 - [File Map](#file-map)
 
 
+## Overview
 
 Sequential fusion combines multiple operations into a single fused kernel that
 runs as one program dispatch. Instead of launching each op as a separate
@@ -253,7 +254,26 @@ argument arrays.
 ### Node (`OpNode`)
 
 An `OpNode` holds a single `OpDescriptor` and an optional list of children.
-The node's core range is derived from its op's `ProgramDescriptor` kernels. Every node in the tree -- root, internal, and leaf -- has exactly one op. `OpNode` encodes dependencies between ops. Parent nodes run to completion before child nodes. Sibling nodes (nodes at the same level) run in parallel on disjoint cores. Each root-to-leaf path through the tree produces one set of fused kernels (reader, writer, compute).
+The node's core range is derived from its op's `ProgramDescriptor` kernels.
+`OpNode` encodes dependencies between ops: parent nodes run to completion
+before child nodes, and sibling nodes run in parallel on disjoint cores. Each
+root-to-leaf path through the tree produces one set of fused kernels (reader,
+writer, compute).
+
+### Root
+
+The topmost node in the tree. In a `Sequential(a, b, c)` chain, `a` is the
+root. Every tree has exactly one root.
+
+### Leaf
+
+A node with no children. Leaf nodes are the final ops in each branch. Their
+output tensors become the `FusedOp`'s outputs.
+
+### Internal Node
+
+A node that has both a parent and children. Internal nodes run after their
+parent and before their children.
 
 ### Segment
 
@@ -447,7 +467,140 @@ coordinate sets (`Set[Tuple[int, int]]`), not rectangular bounding boxes.  A
 works identically to a contiguous grid.  The barrier coordinator unicasts the
 release signal to each core individually, skipping gaps.
 
-#### Narrow→Wide Topology and No-Op Phases
+### Core Groups
+
+`_compute_core_groups()` walks the tree and records each core's **phase
+sequence** — the root-to-leaf ops that core executes. Cores with identical
+phase sequences are grouped into a `CoreGroup`. Each group becomes one fused
+kernel binary.
+
+**Kernel variant keying.**  Some ops produce multiple kernels for the same
+RISC type on disjoint core subsets — e.g., a block-sharded LayerNorm has a
+multicast *sender* on row 0 and a *receiver* on row 1, both on riscv_0.
+`_kernel_variant_key(op, coord)` returns the tuple of kernel indices whose
+core ranges contain `coord`, distinguishing sender cores from receiver cores.
+The grouping key includes both the op identity *and* its variant key, so cores
+seeing different kernel subsets never land in the same group.
+
+In the deep branching example (assuming LN runs on a 4×4 grid, each branch
+on a 4×2 half):
+
+| Group | Cores | Phase Sequence |
+|-------|-------|---------------|
+| A | left 4×2 (8 cores) | `[LN, GeLU_A, RMS_A]` |
+| B | right 4×2 (8 cores) | `[LN, GeLU_B, RMS_B]` |
+
+Each group also records its **barrier scopes** — the `_all_descendant_coords()`
+at each phase transition.  This function unions the core coordinates of **all**
+descendant nodes (not just leaves).  The result determines which cores must
+synchronize at that transition — every core that continues past the current
+node participates.  For Group A:
+
+- Transition 0 (after LN): `_all_descendant_coords(LN)` = all 16 cores —
+  both branches must finish LN before either can proceed.
+- Transition 1 (after GeLU_A): `_all_descendant_coords(GeLU_A)` = left 8 cores —
+  only the left branch participates.
+
+For shrinking core ranges (e.g., stem(16) → mid(8) → leaf(4)), the barrier
+scope after the stem is 8+4=10 unique cores (all descendants), not just the
+4 leaf cores.  This ensures the barrier coordinator waits for all 10 cores
+that continue, and unicasts the release signal to all of them.
+
+These barrier scopes feed directly into the synchronization protocol's segment
+model (see next section).
+
+### Fused Kernel Structure
+
+Each op's kernels are originally created with whatever core range the op
+needs — LN's reader might cover a 4×4 grid, GeLU_A's reader might cover
+the left 4×2.  We call this the kernel's **original core range** — the
+core range that the op's factory assigned to the kernel when it built the
+`ProgramDescriptor`, before any fusion.  This is significant because an
+op doesn't always assign the same core range to all of its kernels.  For
+example, a block-sharded matmul might place a sender kernel on row 0 and
+a receiver kernel on row 1, both for the same RISC type.  The original
+core range distinguishes them.
+
+When building a group's fused binary, the builder **narrows** all kernels
+to the group's core range (the group's core subset), since that binary
+will only run on those cores.  An op that runs on a 4×4 grid might
+contribute kernels to two groups — a left 4×2 group and a right 4×2
+group — but each group's binary only contains the phases relevant to its
+cores.
+
+**Role keys, narrowing, and core-range filtering.**  The builder identifies
+each kernel by its **role key** — a `(risc_type, core_ranges)` pair.
+When building a group's fused binary, the builder passes the group's core
+range as a **`target_core_range`** parameter.  This has two effects:
+
+1. **Core-range filtering.**  Before a kernel is considered, the builder
+   checks whether its original core range overlaps the `target_core_range`.
+   Kernels with no overlap are discarded entirely.  This prevents, e.g., a
+   block-sharded LN's receiver kernel (row 1) from being merged into the
+   row-0 group's binary.
+
+2. **Role key narrowing.**  For kernels that pass the overlap check,
+   `_get_role_key()` substitutes `target_core_range` for the kernel's
+   original core range when computing the role key.  This means every
+   surviving kernel gets the *group's* range in its role key, not its own
+   original range — which is what causes kernels from different ops
+   (with different original ranges) to collapse into a single role.
+
+**Concrete example.**  Consider `Sequential(matmul, LN)` on a 2×2 grid.
+Matmul has one reader kernel on all 4 cores.  Block-sharded LN has *two*
+reader kernels for the same RISC type: a multicast sender on row 0 and a
+receiver on row 1.  Because the LN variant key differs between rows,
+`_compute_core_groups()` produces two groups:
+
+- **Group A** — row 0 (2 cores): phase sequence `[matmul, LN-sender]`
+- **Group B** — row 1 (2 cores): phase sequence `[matmul, LN-receiver]`
+
+Building Group A's fused reader binary (`target_core_range = row 0`):
+
+| Phase | Op | Reader kernel | Original range | Overlaps row 0? | Narrowed role key |
+|------:|----|----|----|----|-----|
+| 0 | matmul | (only one) | `(0,0)-(1,1)` 4 cores | yes | `("riscv_1", {row 0})` |
+| 1 | LN | sender | `(0,0)-(1,0)` 2 cores | yes | `("riscv_1", {row 0})` |
+| 1 | LN | receiver | `(0,1)-(1,1)` 2 cores | **no — filtered out** | — |
+
+The matmul reader (originally 4 cores) and the LN sender (originally 2
+cores) have different original ranges, but `target_core_range` substitution
+gives both the same role key `("riscv_1", {row 0})`.  The LN receiver
+never enters the picture — its original range doesn't overlap row 0, so
+core-range filtering removes it.  The fused reader binary for Group A
+therefore has two phases: matmul reader source, then LN sender source.
+Group B gets the mirror image: matmul reader, then LN receiver.
+
+Each group's fused kernel binary contains three RISC-specific source files:
+
+- **RISCV_1 (Reader/NCRISC)**: Reads data from DRAM/L1 into input CBs.
+  Coordinates all inter-phase barrier logic (CB reset, rebind, cross-core
+  sync).
+- **Compute (TRISC)**: Processes tiles from input CBs, writes to output CBs.
+- **RISCV_0 (Writer/BRISC)**: Writes output CB data to DRAM/L1.
+
+All three run concurrently on each core. Each contains all phases for the
+group, with barrier synchronization between phases:
+
+```c++
+// Example: fused reader kernel for a 2-phase group
+void kernel_main() {
+    barrier::init();
+
+    phase_0::run();           // first op
+
+    barrier::sync();          // local RISC sync + CB reset + rebind + cross-core barrier
+
+    phase_1::run();           // second op
+}
+```
+
+The builder merges all groups' `ProgramDescriptor`s internally via
+`merge_program_descriptors()` and returns a single self-contained `FusedOp`.
+Calling `fused.launch()` dispatches all groups as one program — there is no
+way to accidentally dispatch a subset.
+
+### Narrow→Wide Topology and No-Op Phases
 
 A child node can run on **more** cores than its parent. For example, an
 interleaved LayerNorm on 3 cores can feed into a matmul on 32 cores. This is
@@ -605,97 +758,6 @@ The arrive threshold uses `num_arrive_cores` (only cores with real work), while
 the release unicast goes to all `num_release_cores`.  Each barrier segment has
 both counts as named compile-time args (`seg{N}_num_arrive_cores`,
 `seg{N}_num_release_cores`).
-
-### Core Groups
-
-`_compute_core_groups()` walks the tree and records each core's **phase
-sequence** — the root-to-leaf ops that core executes. Cores with identical
-phase sequences are grouped into a `CoreGroup`. Each group becomes one fused
-kernel binary.
-
-**Kernel variant keying.**  Some ops produce multiple kernels for the same
-RISC type on disjoint core subsets — e.g., a block-sharded LayerNorm has a
-multicast *sender* on row 0 and a *receiver* on row 1, both on riscv_0.
-`_kernel_variant_key(op, coord)` returns the tuple of kernel indices whose
-core ranges contain `coord`, distinguishing sender cores from receiver cores.
-The grouping key includes both the op identity *and* its variant key, so cores
-seeing different kernel subsets never land in the same group.
-
-In the deep branching example (assuming LN runs on a 4×4 grid, each branch
-on a 4×2 half):
-
-| Group | Cores | Phase Sequence |
-|-------|-------|---------------|
-| A | left 4×2 (8 cores) | `[LN, GeLU_A, RMS_A]` |
-| B | right 4×2 (8 cores) | `[LN, GeLU_B, RMS_B]` |
-
-Each group also records its **barrier scopes** — the `_all_descendant_coords()`
-at each phase transition.  This function unions the core coordinates of **all**
-descendant nodes (not just leaves).  The result determines which cores must
-synchronize at that transition — every core that continues past the current
-node participates.  For Group A:
-
-- Transition 0 (after LN): `_all_descendant_coords(LN)` = all 16 cores —
-  both branches must finish LN before either can proceed.
-- Transition 1 (after GeLU_A): `_all_descendant_coords(GeLU_A)` = left 8 cores —
-  only the left branch participates.
-
-For shrinking core ranges (e.g., stem(16) → mid(8) → leaf(4)), the barrier
-scope after the stem is 8+4=10 unique cores (all descendants), not just the
-4 leaf cores.  This ensures the barrier coordinator waits for all 10 cores
-that continue, and unicasts the release signal to all of them.
-
-These barrier scopes feed directly into the synchronization protocol's segment
-model (see next section).
-
-### Fused Kernel Structure
-
-Each op's kernels are originally created with whatever core range the op
-needs — LN's reader might cover a 4×4 grid, GeLU_A's reader might cover
-the left 4×2.  We call this the kernel's **original core range**.  When
-building a group's fused binary, the builder narrows all kernels to the
-group's core range, since that binary will only run on those cores.
-
-**Role keys.**  The builder identifies each kernel by its **role key** —
-a `(risc_type, core_ranges)` pair.  LN's reader (originally 4×4) and
-GeLU_A's reader (originally 4×2 left) have different original ranges, but
-when narrowed to Group A's 4×2 left cores they collapse into a single role:
-both become "the reader for these 8 cores."
-
-**Core-range filtering.**  When an op has multiple kernels for the same RISC
-type (e.g., block-sharded sender on row 0 + receiver on row 1), only kernels
-whose original core range overlaps the group's cores are included.  This
-prevents a receiver kernel on row 1 from being merged into the row-0 group's
-binary.
-
-Each group's fused kernel binary contains three RISC-specific source files:
-
-- **RISCV_1 (Reader/NCRISC)**: Reads data from DRAM/L1 into input CBs.
-  Coordinates all inter-phase barrier logic (CB reset, rebind, cross-core
-  sync).
-- **Compute (TRISC)**: Processes tiles from input CBs, writes to output CBs.
-- **RISCV_0 (Writer/BRISC)**: Writes output CB data to DRAM/L1.
-
-All three run concurrently on each core. Each contains all phases for the
-group, with barrier synchronization between phases:
-
-```c++
-// Example: fused reader kernel for a 2-phase group
-void kernel_main() {
-    barrier::init();
-
-    phase_0::run();           // first op
-
-    barrier::sync();          // local RISC sync + CB reset + rebind + cross-core barrier
-
-    phase_1::run();           // second op
-}
-```
-
-The builder merges all groups' `ProgramDescriptor`s internally via
-`merge_program_descriptors()` and returns a single self-contained `FusedOp`.
-Calling `fused.launch()` dispatches all groups as one program — there is no
-way to accidentally dispatch a subset.
 
 
 ## Synchronization Protocol
@@ -2485,13 +2547,17 @@ On a cache hit, `_update_cached_descriptor` patches the cached
    append barrier suffix (constant), append rebind values (recomputed)
 2. Per fused kernel: rebuild common_runtime_args from source ops
 3. Per sharded CB: copy new buffer address from source op's CB
-4. Rebuild input/output tensor lists from fresh ops
+4. Per GlobalCB-backed CB: copy new GlobalCircularBuffer pointer from source op's CB
+5. Rebuild input/output tensor lists from fresh ops
 ```
 
 The barrier suffix (GlobalSemaphore L1 addresses) is **constant** across
 builds because `FusedOp.semaphores` keeps the semaphore objects alive.
 Sharded CB rebind values are recomputed from the new ops' CB buffer
-addresses.
+addresses.  GlobalCircularBuffer pointers are copied from the fresh source
+ops' CBs because each invocation may allocate new GlobalCBs at different L1
+addresses — the hash does not include the actual pointer, only whether one
+is present.
 
 When `generic_op` dispatches the cached `FusedOp`, it calls
 `override_runtime_arguments` on the underlying cached `Program`, which copies
@@ -2525,6 +2591,7 @@ _BUILD_CACHE[key] = _cache_build_result(fused, ops, kernel_phase_map)
 | `barrier_suffix` | Per fused kernel: fixed barrier RT arg values (semaphore addresses) |
 | `rebind_spec` | Per fused kernel: `(op_idx, cb_idx, total_size)` for sharded CB rebind args |
 | `sharded_cb_map` | `(merged_cb_idx, op_idx, orig_cb_idx)` for descriptor-level CB pointer updates |
+| `global_cb_map` | `(merged_cb_idx, op_idx, orig_cb_idx)` for GlobalCircularBuffer pointer updates |
 | `output_sources` | Which source ops produce the `FusedOp`'s output tensors |
 
 The cache works for all topologies — linear chains (`Sequential`), parallel
@@ -2578,3 +2645,4 @@ development or when switching between different device configurations.
 | `models/experimental/ops/descriptors/op_descriptor.py` | `OpDescriptor` namedtuple |
 | `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential.py` | Device tests (require hardware) |
 | `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential_infra.py` | Standalone infrastructure tests (no hardware) |
+| `tests/ttnn/unit_tests/operations/fused/parallel_sequential/test_parallel_sequential_global_cb.py` | GlobalCircularBuffer fusion tests (require hardware) |

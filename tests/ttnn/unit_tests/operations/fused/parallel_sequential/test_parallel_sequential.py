@@ -1455,8 +1455,8 @@ class TestDocExample:
         using the full 8x8 grid (64 cores) split left/right then top/bottom:
             op1: matmul [1,1,1024,256]x[1,1,256,256]        on (0,0)-(7,7)  64 cores
             +- op2: slice left half -> [1,1,1024,128]        on (0,0)-(3,7)  32 cores
-            |  +- op4: matmul [1,1,1024,128]x[1,1,128,128]  on (0,0)-(1,7)  16 cores
-            |  +- op5: layer_norm [1,1,1024,128]             on (2,0)-(3,7)  16 cores
+            |  +- op4: matmul [1,1,1024,128]x[1,1,128,128]  on (0,0)-(3,3)  16 cores
+            |  +- op5: layer_norm [1,1,1024,128]             on (0,4)-(3,7)  16 cores
             +- op3: slice right half -> [1,1,1024,128]       on (4,0)-(7,7)  32 cores
                +- op6: rms_norm [1,1,1024,128]               on (4,0)-(7,7)  32 cores
         """
@@ -1472,10 +1472,10 @@ class TestDocExample:
         )
 
         full = cores(0, 0, 7, 7)  # 8x8 = 64 cores
-        left = cores(0, 0, 3, 7)  # 4x8 = 32 cores
-        right = cores(4, 0, 7, 7)  # 4x8 = 32 cores
-        left_top = cores(0, 0, 1, 7)  # 2x8 = 16 cores
-        left_bot = cores(2, 0, 3, 7)  # 2x8 = 16 cores
+        left = cores(0, 0, 3, 7)  # 4x8 = 32 cores (cols 0-3)
+        right = cores(4, 0, 7, 7)  # 4x8 = 32 cores (cols 4-7)
+        left_top = cores(0, 0, 3, 3)  # 4x4 = 16 cores (left, rows 0-3)
+        left_bot = cores(0, 4, 3, 7)  # 4x4 = 16 cores (left, rows 4-7)
 
         torch_a = torch.randn(1, 1, 1024, 256, dtype=torch.bfloat16)
         torch_b1 = torch.randn(1, 1, 256, 256, dtype=torch.bfloat16)
