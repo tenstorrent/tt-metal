@@ -16,13 +16,14 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
 
 
 @pytest.mark.parametrize(
-    "max_prompts,repeat_batches,max_new_tokens,override_num_layers,enable_trace,artifact_name,profile_decode",
+    "max_prompts,repeat_batches,max_new_tokens,override_num_layers,enable_trace,enable_mtp,artifact_name,profile_decode",
     [
         pytest.param(
             56,
             2,
             128,
             5,
+            False,
             False,
             None,
             False,
@@ -35,9 +36,22 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             129,
             None,
             True,
+            False,
             "dual_demo_full_results",
             False,
             id="dual_full_demo",
+            marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
+        ),
+        pytest.param(
+            256,
+            1,
+            129,
+            None,
+            True,
+            True,
+            "dual_demo_full_results_mtp",
+            False,
+            id="dual_full_demo_mtp",
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
         ),
         pytest.param(
@@ -46,6 +60,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             129,
             None,
             True,
+            False,
             "dual_demo_stress_results",
             False,
             id="dual_stress_demo",
@@ -57,9 +72,22 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             129,
             None,
             True,
+            False,
             "quad_demo_full_results",
             False,
             id="quad_full_demo",
+            marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
+        ),
+        pytest.param(
+            512,
+            1,
+            129,
+            None,
+            True,
+            True,
+            "quad_demo_full_results_mtp",
+            False,
+            id="quad_full_demo_mtp",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
         ),
         pytest.param(
@@ -68,6 +96,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             129,
             None,
             True,
+            False,
             "quad_demo_stress_results",
             False,
             id="quad_stress_demo",
@@ -79,6 +108,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             13,
             5,
             True,
+            False,
             None,
             True,
             id="profile_decode",
@@ -92,6 +122,7 @@ def test_demo(
     max_new_tokens: int,
     override_num_layers: int,
     enable_trace: bool,
+    enable_mtp: bool,
     artifact_name: str,
     profile_decode: bool,
     force_recalculate_weight_config: bool,
@@ -102,8 +133,10 @@ def test_demo(
     Test variants:
     - tg_stress (TG): 56 prompts, 2 batches, 5 layers - stress test for CI
     - dual_full_demo (DUAL): 256 prompts, 1 batch - tests full prompt capacity
+    - dual_full_demo_mtp (DUAL): 256 prompts, 1 batch with MTP enabled
     - dual_stress_demo (DUAL): 56 prompts, 20 batches - tests stability under repeated execution
     - quad_full_demo (QUAD): 512 prompts, 1 batch - tests full prompt capacity
+    - quad_full_demo_mtp (QUAD): 512 prompts, 1 batch with MTP enabled
     - quad_stress_demo (QUAD): 56 prompts, 20 batches - tests stability under repeated execution
     - profile_decode: Profile decode for non-moe and moe layers
     """
@@ -123,6 +156,7 @@ def test_demo(
         repeat_batches=repeat_batches,
         profile_decode=profile_decode,
         force_recalculate=force_recalculate_weight_config,
+        enable_mtp=enable_mtp,
         signpost=True,
     )
     if override_num_layers is not None:
@@ -135,7 +169,7 @@ def test_demo(
     # Check output
     assert len(results["generations"][0]["tokens"]) == max_new_tokens
 
-    # Save results to JSON for artifact upload (QUAD tests only)
+    # Save results to JSON for artifact upload when requested by the CI parametrization.
     if artifact_name is not None:
         artifact_dir = Path("generated/artifacts")
         artifact_dir.mkdir(parents=True, exist_ok=True)
