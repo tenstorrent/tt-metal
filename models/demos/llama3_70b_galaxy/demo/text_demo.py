@@ -267,6 +267,79 @@ def create_tt_model(
             True,  # is_cur_pos_sharded
             True,  # is_page_table_sharded
         ),
+        (  # Batch-32 with top-k logprobs (top_logprobs=5 for all users, greedy decode)
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            128,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {
+                "temperature": 0.0,
+                "top_p": 0.08,
+                "log_probs": [True] * 32,
+                "num_logprobs": [5] * 32,
+            },  # sampling_params (greedy + top-5 logprobs)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            True,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
+        ),
+        (  # Batch-32 with top-k logprobs (top_logprobs=20, non-uniform sampling)
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            128,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {
+                "temperature": torch.linspace(0.0, 1.0, steps=32).tolist(),
+                "top_p": torch.linspace(0.08, 1.0, steps=32).tolist(),
+                "top_k": torch.arange(1, 33).tolist(),
+                "log_probs": [True] * 32,
+                "num_logprobs": [20] * 32,
+            },  # sampling_params (non-uniform + max top-20 logprobs)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            True,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
+        ),
+        (  # Batch-32 with mixed per-user logprobs (some users 0, some 5, some 20)
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            128,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 2048},  # page_params
+            {
+                "temperature": 0.0,
+                "top_p": 0.08,
+                "log_probs": [i % 2 == 0 for i in range(32)],  # enable for even users only
+                "num_logprobs": [10 if i % 2 == 0 else 0 for i in range(32)],  # 10 for enabled, 0 for disabled
+            },  # sampling_params (mixed per-user logprobs)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            False,  # prefill-only profile
+            80,  # num layers
+            True,  # print_outputs
+            True,  # is_cur_pos_sharded
+            True,  # is_page_table_sharded
+        ),
         (  # Batch-1 run (Throughput) - 1 user, small prompt
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             True,  # instruct mode
@@ -538,6 +611,9 @@ def create_tt_model(
         "batch-32",  # throughput
         "batch-32-non-uniform-sampling",  # throughput w/ non-uniform sampling
         "batch-32-log-probs",  # throughput w/ non-uniform sampling and log-probs calculation
+        "batch-32-top-logprobs-5-greedy",  # greedy decode + top-5 logprobs for all users
+        "batch-32-top-logprobs-20-non-uniform",  # non-uniform sampling + max top-20 logprobs
+        "batch-32-top-logprobs-mixed",  # mixed per-user logprobs (some enabled, some disabled)
         "batch-1",  # latency
         "evals-1",  # Single user, 32 repeated batches, smaller prompts (<4K)
         "evals-32",  # 32 users, 32 repeated batches, smaller prompts (<4K)
@@ -841,6 +917,7 @@ def test_demo_text(
         repetition_penalty = sampling_params.get("repetition_penalty", 1.0)
         seed = sampling_params.get("seed", 0)
         log_probs = sampling_params.get("log_probs", False)
+        num_logprobs = sampling_params.get("num_logprobs", 0)
         device_sampling_params = SamplingParams(
             temperature=temperature,
             top_k=top_k,
@@ -850,6 +927,7 @@ def test_demo_text(
             repetition_penalty=repetition_penalty,
             seed=seed,
             enable_log_probs=log_probs,
+            num_logprobs=num_logprobs,
         )
         if batch_idx == 0:
             logger.info("Starting prefill warmup...")
@@ -1026,6 +1104,28 @@ def test_demo_text(
                 tt_out_tok = generator.process_decode_output_host(tt_out_toks.pop(0))
 
                 tt_out_tok, tt_log_probs = tt_out_tok[0], tt_out_tok[1]
+
+                # If top-k logprobs were requested and returned as LogProbsResult,
+                # use transfer_logprobs_to_host to get structured per-user results.
+                if hasattr(tt_log_probs, "top_k_logprobs") and tt_log_probs is not None:
+                    lp_calculator = generator.model.sampling.tt_sampling.log_probs_calculator
+                    logprobs_results = lp_calculator.transfer_logprobs_to_host(
+                        tt_log_probs,
+                        tt_out_tok.squeeze(),
+                    )
+                    # Print top-k logprobs for first decode iteration only (to avoid spam)
+                    if iteration == 1 and print_outputs:
+                        for user_idx, lp_result in enumerate(logprobs_results):
+                            if lp_result is None:
+                                continue
+                            ret_tok = lp_result["returned_token"]
+                            top_lp = lp_result["top_logprobs"]
+                            logger.info(
+                                f"[User {user_idx}] sampled token={ret_tok['token_idx']} "
+                                f"logprob={ret_tok['logprob']:.4f} | "
+                                f"top-{len(top_lp['token_indices'])} logprobs: "
+                                f"{list(zip(top_lp['token_indices'][:5], [f'{lp:.4f}' for lp in top_lp['logprobs'][:5]]))}"
+                            )
 
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
 
