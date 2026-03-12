@@ -241,7 +241,7 @@ log_issue() {
         if [[ "${severity}" == "CRITICAL" ]] || [[ "${severity}" == "HIGH" ]]; then
             color="${RED}"
         fi
-        printf '%b[%s]%b %s: %s\n' "${color}" "${severity}" "${NC}" "${file_display}" "${message}"
+        printf '%b[%s]%b %s: (%s) %s\n' "${color}" "${severity}" "${NC}" "${file_display}" "${CURRENT_CHECK}" "${message}"
     fi
     ISSUES_FOUND=$((ISSUES_FOUND + 1))
 }
@@ -3046,7 +3046,7 @@ format_results() {
         if [[ "${severity}" == "CRITICAL" ]] || [[ "${severity}" == "HIGH" ]]; then
             color="${RED}"
         fi
-        printf '%b[%s]%b %s: %s\n' "${color}" "${severity}" "${NC}" "${file_display}" "${message}"
+        printf '%b[%s]%b %s: (%s) %s\n' "${color}" "${severity}" "${NC}" "${file_display}" "${check}" "${message}"
 
         case "${_seen_checks}" in
             *"|${check}|"*) ;;
