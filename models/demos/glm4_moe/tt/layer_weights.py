@@ -15,6 +15,83 @@ import ttnn
 
 from models.common.rmsnorm import RMSNorm
 from models.demos.glm4_moe.tt.config import Glm4MoeHParams
+from models.demos.deepseek_v3.utils.dequantize import dequantize_tensor
+
+
+def _env_fp8_dequant() -> bool:
+    """Return True if FP8 dequant is enabled. Default off; auto-enabled on first FP8 weight."""
+    return os.environ.get("GLM4_MOE_FP8_DEQUANT", "0").strip() == "1"
+
+
+_FP8_AUTO_DETECTED = False  # set True on first FP8 weight encounter
+
+
+def _maybe_dequant_fp8(
+    state: dict[str, torch.Tensor],
+    key: str,
+    weight: torch.Tensor,
+    block_size: tuple[int, int] = (128, 128),
+) -> torch.Tensor:
+    """If weight is FP8, dequantize using scale from state dict. Returns BF16.
+
+    Scale key convention (tried in order):
+    1. {key}_scale_inv  (DSv3 convention)
+    2. {key}_scale      (REAP/compressed_tensors convention — already the dequant multiplier)
+
+    For {key} like "model.layers.0.self_attn.q_proj.weight", we strip ".weight"
+    and look for the scale under the base key.
+
+    Per-row scales [R, 1] are broadcast directly (block_shape=[1, C]).
+    Block-wise scales [ceil(R/bh), ceil(C/bw)] use the given block_size.
+    """
+    global _FP8_AUTO_DETECTED
+
+    if weight.dtype != torch.float8_e4m3fn:
+        return weight
+
+    explicit = _env_fp8_dequant()
+    if not explicit and not _FP8_AUTO_DETECTED:
+        _FP8_AUTO_DETECTED = True
+        logger.info("FP8 weights auto-detected — enabling dequantization")
+
+    # Derive base key: strip trailing ".weight" if present
+    base_key = key.rsplit(".weight", 1)[0] if key.endswith(".weight") else key
+
+    # Try scale key conventions
+    inv_scale = None
+    for scale_suffix in (".weight_scale_inv", "_scale_inv"):
+        scale_key = base_key + scale_suffix
+        if scale_key in state:
+            inv_scale = state[scale_key].float()
+            break
+
+    if inv_scale is None:
+        # Try _scale (already the dequant multiplier, no inversion needed)
+        for scale_suffix in (".weight_scale", "_scale"):
+            scale_key = base_key + scale_suffix
+            if scale_key in state:
+                inv_scale = state[scale_key].float()
+                logger.info("  FP8 dequant: using scale from {} (no inversion needed)", scale_key)
+                break
+
+    if inv_scale is None:
+        raise ValueError(
+            f"FP8 weight at {key} but no scale found. Tried: "
+            f"{base_key}.weight_scale_inv, {base_key}_scale_inv, "
+            f"{base_key}.weight_scale, {base_key}_scale"
+        )
+
+    # Detect per-row vs block-wise by scale shape
+    rows, cols = weight.shape
+    if inv_scale.shape == (rows, 1) or inv_scale.shape == (rows,):
+        # Per-row scale: reshape to [R, 1], block_shape = [1, cols]
+        inv_scale = inv_scale.reshape(rows, 1)
+        effective_block_size = (1, cols)
+    else:
+        effective_block_size = block_size
+
+    result = dequantize_tensor(weight, inv_scale, effective_block_size)
+    return result.to(torch.bfloat16)
 
 
 def _is_mesh_device(device: Any) -> bool:
@@ -409,9 +486,12 @@ def convert_decoder_layer_weights(
 
     # ---- Fused QKV Weights (following tt_transformers/attention.py pattern) ----
     # Load Q [12288, 5120], K [1024, 5120], V [1024, 5120]
-    wq_full = state[f"model.layers.{layer_idx}.self_attn.q_proj.weight"]  # [12288, 5120]
-    wk_full = state[f"model.layers.{layer_idx}.self_attn.k_proj.weight"]  # [1024, 5120]
-    wv_full = state[f"model.layers.{layer_idx}.self_attn.v_proj.weight"]  # [1024, 5120]
+    _qk = f"model.layers.{layer_idx}.self_attn.q_proj.weight"
+    _kk = f"model.layers.{layer_idx}.self_attn.k_proj.weight"
+    _vk = f"model.layers.{layer_idx}.self_attn.v_proj.weight"
+    wq_full = _maybe_dequant_fp8(state, _qk, state[_qk])
+    wk_full = _maybe_dequant_fp8(state, _kk, state[_kk])
+    wv_full = _maybe_dequant_fp8(state, _vk, state[_vk])
 
     # Chunk by TP=8 along output dim (head dim), transpose, and fuse per device
     # Q: [12288, 5120] -> 8 chunks of [1536, 5120] -> transpose -> [5120, 1536]
@@ -483,9 +563,10 @@ def convert_decoder_layer_weights(
     # HF: [5120, 12288] -> TT: [1, 1, 12288, 5120], shard dim=2 (input) by TP
     # Each device gets [1, 1, 1536, 5120]
     wo_mapper = _tp_mesh_mapper(device, shard_dim=2) if tp_size > 1 else _replicate_mapper(device)
+    _ok = f"model.layers.{layer_idx}.self_attn.o_proj.weight"
     w_o = _linear_weight_tt(
         device=device,
-        torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.o_proj.weight"],
+        torch_weight_out_in=_maybe_dequant_fp8(state, _ok, state[_ok]),
         cache_file=c("w_o", tp_variant),
         dtype=attn_dtype,
         mesh_mapper=wo_mapper,
@@ -509,8 +590,10 @@ def convert_decoder_layer_weights(
 
     mlp_variant = tp_variant
 
-    _gate_w = state[f"{mlp_prefix}gate_proj.weight"]
-    _up_w = state[f"{mlp_prefix}up_proj.weight"]
+    _gate_k = f"{mlp_prefix}gate_proj.weight"
+    _up_k = f"{mlp_prefix}up_proj.weight"
+    _gate_w = _maybe_dequant_fp8(state, _gate_k, state[_gate_k])
+    _up_w = _maybe_dequant_fp8(state, _up_k, state[_up_k])
 
     if dense_layer:
         # Dense layers (0-2): keep separate gate/up for _dense_mlp_forward.
@@ -551,9 +634,10 @@ def convert_decoder_layer_weights(
         w_mlp_gate = w_mlp_gate_up  # placeholder (unused when w_gate_up is set)
         w_mlp_up = w_mlp_gate_up    # placeholder (unused when w_gate_up is set)
     logger.info("  [DEBUG L{}] mlp gate/up done (dense={})", layer_idx, dense_layer)
+    _down_k = f"{mlp_prefix}down_proj.weight"
     w_mlp_down = _linear_weight_tt(
         device=device,
-        torch_weight_out_in=state[f"{mlp_prefix}down_proj.weight"],
+        torch_weight_out_in=_maybe_dequant_fp8(state, _down_k, state[_down_k]),
         cache_file=c("w_mlp_down", mlp_variant),
         dtype=dense_dtype,
         mesh_mapper=mlp_down_mapper,
@@ -618,9 +702,12 @@ def convert_decoder_layer_weights(
         w3_list: list[torch.Tensor] = []
         w2_list: list[torch.Tensor] = []
         for expert_id in range(num_experts):
-            w1 = state[f"model.layers.{layer_idx}.mlp.experts.{expert_id}.gate_proj.weight"]
-            w3 = state[f"model.layers.{layer_idx}.mlp.experts.{expert_id}.up_proj.weight"]
-            w2 = state[f"model.layers.{layer_idx}.mlp.experts.{expert_id}.down_proj.weight"]
+            _w1k = f"model.layers.{layer_idx}.mlp.experts.{expert_id}.gate_proj.weight"
+            _w3k = f"model.layers.{layer_idx}.mlp.experts.{expert_id}.up_proj.weight"
+            _w2k = f"model.layers.{layer_idx}.mlp.experts.{expert_id}.down_proj.weight"
+            w1 = _maybe_dequant_fp8(state, _w1k, state[_w1k])
+            w3 = _maybe_dequant_fp8(state, _w3k, state[_w3k])
+            w2 = _maybe_dequant_fp8(state, _w2k, state[_w2k])
             if tuple(w1.shape) != (moe_intermediate, hidden):
                 raise ValueError(
                     f"Unexpected gate_proj shape for layer{layer_idx} expert{expert_id}: {tuple(w1.shape)}, "

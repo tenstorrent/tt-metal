@@ -31,6 +31,8 @@ import logging
 _REDUCE_IMPL = os.environ.get("GLM4_MOE_REDUCE_IMPL", "host").strip().lower()
 _REDUCE_IMPL_AXIS1 = os.environ.get("GLM4_MOE_REDUCE_IMPL_AXIS1", "").strip().lower()
 _REDUCE_LOG_ONCE = set()
+_QK_L1 = os.environ.get("GLM4_MOE_QK_L1", "1").strip() != "0"
+_ROPE_PAD = os.environ.get("GLM4_MOE_ROPE_PAD", "1").strip() != "0"
 
 logger = logging.getLogger(__name__)
 
@@ -479,7 +481,7 @@ class Glm4MoeAttention(LightweightModule):
             K_qkv, N_qkv, qkv_in, qkv_out, K_o, N_o, o_in, o_out,
         )
 
-    def _apply_partial_rope_decode(self, x, cos, sin, trans_mat):
+    def _apply_partial_rope_decode(self, x, cos, sin, trans_mat, sin_neg=None):
         """Apply partial rotary embedding (decode mode, NeoX-style).
 
         Only the first rotary_dim (64) dims get rotary encoding;
@@ -487,6 +489,9 @@ class Glm4MoeAttention(LightweightModule):
 
         Uses NeoX-style rotation: rotate_half(x) = cat(-x[..., d//2:], x[..., :d//2]).
         GLM-4.7 uses NeoX-style RoPE (confirmed from HuggingFace transformers glm4_moe).
+
+        When sin_neg is provided (pre-computed [-sin[:half], sin[half:]]), uses addcmul
+        fusion to eliminate neg op: 10 → 8 device ops per call.
         """
         # x: [1, batch, n_heads, head_dim] = [1, B, H, 128]  (DRAM interleaved after QK norm)
         batch = int(x.shape[1])
@@ -496,19 +501,29 @@ class Glm4MoeAttention(LightweightModule):
         x_rot = ttnn.slice(x, [0, 0, 0, 0], [1, batch, n_heads, self.rotary_dim])
         x_pass = ttnn.slice(x, [0, 0, 0, self.rotary_dim], [1, batch, n_heads, self.head_dim])
 
-        # NeoX-style rotate_half: [-x2, x1] where x1 = first half, x2 = second half
+        # NeoX-style rotate_half
         half = self.rotary_dim // 2
         x1 = ttnn.slice(x_rot, [0, 0, 0, 0], [1, batch, n_heads, half])
         x2 = ttnn.slice(x_rot, [0, 0, 0, half], [1, batch, n_heads, self.rotary_dim])
-        rotated = ttnn.concat([ttnn.neg(x2), x1], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # output = x_rot * cos + rotate_half(x_rot) * sin
-        # cos/sin: [1, batch, 1, rotary_dim] — broadcasts over n_heads dim
-        x_rot = ttnn.add(
-            ttnn.multiply(x_rot, cos),
-            ttnn.multiply(rotated, sin),
-        )
-        ttnn.deallocate(rotated)
+        if sin_neg is not None:
+            # Optimized path: sin_neg = [-sin[:half], sin[half:]] pre-computed on host.
+            # rearranged = [x2, x1] (no neg needed — absorbed into sin_neg).
+            # x_rot_out = x_rot * cos + rearranged * sin_neg
+            rearranged = ttnn.concat([x2, x1], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x_rot = ttnn.add(
+                ttnn.multiply(x_rot, cos),
+                ttnn.multiply(rearranged, sin_neg),
+            )
+            ttnn.deallocate(rearranged)
+        else:
+            # Original path: rotated = [-x2, x1], then x_rot*cos + rotated*sin
+            rotated = ttnn.concat([ttnn.neg(x2), x1], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            x_rot = ttnn.add(
+                ttnn.multiply(x_rot, cos),
+                ttnn.multiply(rotated, sin),
+            )
+            ttnn.deallocate(rotated)
 
         # Concat back: [rotary_dim | pass_dim] = full head_dim
         x = ttnn.concat([x_rot, x_pass], dim=-1, memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -662,14 +677,19 @@ class Glm4MoeAttention(LightweightModule):
 
         # 4. QK Norm (RMSNorm per head, dim=128)
         # RMSNorm requires interleaved input (HEIGHT_SHARDED not supported by layernorm op)
-        q = ttnn.to_memory_config(q, ttnn.DRAM_MEMORY_CONFIG)
-        k = ttnn.to_memory_config(k, ttnn.DRAM_MEMORY_CONFIG)
+        # GLM4_MOE_QK_L1=1 (default): keep Q/K in L1 interleaved instead of DRAM round-trip.
+        # Q=98KB, K=8KB — trivially fit L1. RMSNorm accepts L1 interleaved.
+        _qk_mc = ttnn.L1_MEMORY_CONFIG if _QK_L1 else ttnn.DRAM_MEMORY_CONFIG
+        q = ttnn.to_memory_config(q, _qk_mc)
+        k = ttnn.to_memory_config(k, _qk_mc)
         q = self.q_norm(q, mode="decode")
         k = self.k_norm(k, mode="decode")
 
         # 5. Partial RoPE (rotary_dim=64 of head_dim=128)
-        q = self._apply_partial_rope_decode(q, rot_mats[0], rot_mats[1], rot_mats[2])
-        k = self._apply_partial_rope_decode(k, rot_mats[0], rot_mats[1], rot_mats[2])
+        # sin_neg precomputed: saves 1 neg op per partial RoPE call (2/layer × 92 layers = 184 ops).
+        sin_neg = rot_mats[3] if len(rot_mats) > 3 else None
+        q = self._apply_partial_rope_decode(q, rot_mats[0], rot_mats[1], rot_mats[2], sin_neg=sin_neg)
+        k = self._apply_partial_rope_decode(k, rot_mats[0], rot_mats[1], rot_mats[2], sin_neg=sin_neg)
 
         # Convert back to HEIGHT_SHARDED for paged_update_cache and SDPA
         # (partial RoPE returns DRAM interleaved after concat)
@@ -879,18 +899,14 @@ class Glm4MoeAttention(LightweightModule):
         v_8b = ttnn.typecast(v, dtype=values.dtype)
         ttnn.deallocate(v)
 
-        # For TG with multi-user batch split across DP groups, select the correct
-        # column's tensors for KV cache fill. But for batch=1 (tg_batch_sliced=False),
-        # ALL 32 devices participate in decode and need the cache filled.
+        # BUGFIX: Always fill ALL devices' KV caches in prefill.
+        # _prefill_prepare_tensor_for_kv_cache selects only one DP column (8 devices),
+        # but batch=1 decode uses all 32 devices without DP sharding — the 24 unfilled
+        # devices produce garbage attention, corrupting the EP reduce sum.
         # K,V are identical across DP columns (same TP position data), so filling
-        # all devices directly is correct and avoids device-mapping issues.
-        tg_batch_sliced = self.TG and self.max_batch_size > self.batch_size_per_device_group
-        if self.TG and tg_batch_sliced:
-            k_fill = self._prefill_prepare_tensor_for_kv_cache(k_8b, user_id)
-            v_fill = self._prefill_prepare_tensor_for_kv_cache(v_8b, user_id)
-        else:
-            k_fill = k_8b
-            v_fill = v_8b
+        # all devices is correct and harmless for batch>1 (unused data is never read).
+        k_fill = k_8b
+        v_fill = v_8b
 
         fill_page_table = chunk_page_table if chunk_page_table is not None else page_table
         if fill_page_table is not None:

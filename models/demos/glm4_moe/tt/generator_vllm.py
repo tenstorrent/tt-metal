@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""vLLM entrypoint for GLM-4.7-REAP-218B on TT hardware.
+"""vLLM entrypoint for GLM-4.7-REAP-218B / GLM-4.7 Full on TT hardware.
 
 Implements the vLLM TT model interface expected by TTModelRunner:
 - initialize_vllm_model() classmethod for model loading
@@ -12,7 +12,7 @@ Implements the vLLM TT model interface expected by TTModelRunner:
 KV cache format: standard GQA with separate K and V tensors
   (num_blocks, n_local_kv_heads=1, block_size=64, head_dim=128), dtype BF8
 
-No MTP support (not applicable to REAP).
+MTP support via GLM4_MOE_MTP=1 (GLM-4.7 Full only, not REAP).
 """
 
 from __future__ import annotations
@@ -68,6 +68,7 @@ class Glm4MoeForCausalLM(nn.Module):
         self._kv_cache: Optional[list] = None
         self._kv_cache_shape: Optional[tuple] = None
         self._tt_runner: Optional[Glm4MoeTT] = None
+        self._last_draft_token_ids: Optional[torch.Tensor] = None
 
     @classmethod
     def initialize_vllm_model(
@@ -210,6 +211,31 @@ class Glm4MoeForCausalLM(nn.Module):
             kv_cache.append([tt_k, tt_v])
 
         self._kv_cache = kv_cache
+
+        # Allocate 1 extra KV cache layer for MTP (layer num_hidden_layers)
+        mtp_enabled = os.environ.get("GLM4_MOE_MTP", "").strip() == "1"
+        if mtp_enabled:
+            logger.info("Allocating MTP KV cache layer (layer {})", num_layers_to_alloc)
+            tt_k_mtp = ttnn.as_tensor(
+                cache_k,
+                device=self.mesh_device,
+                mesh_mapper=mesh_mapper,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=tt_dtype,
+                cache_file_name=None,
+            )
+            tt_v_mtp = ttnn.as_tensor(
+                cache_v,
+                device=self.mesh_device,
+                mesh_mapper=mesh_mapper,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                dtype=tt_dtype,
+                cache_file_name=None,
+            )
+            kv_cache.append([tt_k_mtp, tt_v_mtp])
+
         return kv_cache
 
     def _get_tp_size(self) -> int:
@@ -326,6 +352,12 @@ class Glm4MoeForCausalLM(nn.Module):
             enable_trace=enable_trace,
         )
 
+        # Extract MTP draft tokens from the runner
+        self._last_draft_token_ids = None
+        if hasattr(self._tt_runner, '_last_draft_token_ids'):
+            self._last_draft_token_ids = self._tt_runner._last_draft_token_ids
+            object.__setattr__(self._tt_runner, '_last_draft_token_ids', None)
+
         if read_from_device:
             tt_host = self.read_decode_output(tt_out, async_read=False)
             return self.process_decode_output_host(tt_host, is_tokens=(sampling_params is not None))
@@ -409,6 +441,21 @@ class Glm4MoeForCausalLM(nn.Module):
 
         next_ids_torch = _tt_to_torch_device0(tt_out).reshape(-1).to(dtype=torch.int32).cpu()
         return next_ids_torch
+
+    # -------------------------------------------------------------------
+    # MTP Speculative Decode
+    # -------------------------------------------------------------------
+
+    def get_spec_token_ids(self, num_reqs: int) -> list[list[int]] | None:
+        """Return MTP draft tokens from the last decode step, or None."""
+        draft = self._last_draft_token_ids
+        if draft is None:
+            return None
+        result = [[int(draft[b].item())] for b in range(min(int(draft.shape[0]), num_reqs))]
+        while len(result) < num_reqs:
+            result.append([])
+        self._last_draft_token_ids = None
+        return result
 
     # -------------------------------------------------------------------
     # Internal
