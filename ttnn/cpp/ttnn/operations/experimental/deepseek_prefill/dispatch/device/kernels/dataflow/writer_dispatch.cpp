@@ -379,6 +379,29 @@ void kernel_main() {
     cb_pop_front(cb_offsets_id, offsets_pages);
     cb_pop_front(cb_dispatch_table_id, dispatch_table_pages);
 
+    {
+        // Send init semaphore to all devices (fabric aand zeros completed)
+        const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
+        DPRINT_DISPATCH << "Sending init semaphore to configured targets..." << ENDL();
+        send_init_semaphore_to_configured_targets<
+            linearized_mesh_coord,
+            topology,
+            src_chip_id,
+            mesh_rows,
+            mesh_cols,
+            axis,
+            num_devices>(
+            fabric_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+
+        // Wait for all devices to complete fabric initialization
+        DPRINT_DISPATCH << "Waiting for all devices to complete fabric init..." << ENDL();
+        volatile tt_l1_ptr uint32_t* init_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
+        noc_semaphore_wait(init_sem_ptr, dispatch_devices - 1);
+        noc_semaphore_set(init_sem_ptr, 0);
+
+        DPRINT_DISPATCH << "Fabric and zero-init setup complete" << ENDL();
+    }
 #ifdef DEST_CHIP_ID
     // Close fabric connections to prevent resource conflicts with subsequent operations
     close_direction_connections(directions, fabric_connections);
