@@ -32,6 +32,7 @@ from models.tt_transformers.tt.load_checkpoints import convert_vision_meta_to_hf
 from models.tt_transformers.tt.load_checkpoints import (
     convert_hf_to_meta,
     convert_hf_to_meta_mllama,
+    convert_hf_to_meta_qwen3_5,
     convert_meta_to_hf,
     convert_vision_hf_to_meta,
     reverse_permute,
@@ -447,6 +448,7 @@ class ModelArgs:
         "Qwen2.5-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct",
         "Qwen2.5-VL-72B-Instruct": "models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct",
         "Qwen3-VL-32B-Instruct": "models/tt_transformers/model_params/Qwen3-VL-32B-Instruct",
+        "Qwen3.5-27B": "models/tt_transformers/model_params/Qwen3.5-27B",
     }
 
     MAX_QKV_MM_SEQ_LEN = 2048
@@ -2522,6 +2524,10 @@ class ModelArgs:
         self.sliding_window_pattern = (
             [lt == "sliding_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
         )
+        # linear_attention_pattern: True for Gated DeltaNet layers (Qwen3.5-style)
+        self.linear_attention_pattern = (
+            [lt == "linear_attention" for lt in layer_types] if layer_types is not None else [False] * self.n_layers
+        )
 
         self.full_model_n_layers = self.n_layers
         self.norm_eps = text_config.get("norm_eps", text_config.get("rms_norm_eps"))
@@ -2598,7 +2604,12 @@ class ModelArgs:
         self.sliding_window = text_config.get("sliding_window", None)
 
         # RoPE params
-        self.rope_theta = text_config.get("rope_theta")
+        # Qwen3.5 uses "rope_parameters" instead of "rope_scaling"; unify here
+        rope_params = text_config.get("rope_parameters", None)
+        if rope_params is not None:
+            self.rope_theta = rope_params.get("rope_theta", text_config.get("rope_theta"))
+        else:
+            self.rope_theta = text_config.get("rope_theta")
         self.rope_theta_local = text_config.get("rope_local_base_freq", None)
         self.use_sliding_window = text_config.get("use_sliding_window", None)
         if (
@@ -2608,6 +2619,17 @@ class ModelArgs:
         ):  # For interleaved attention
             self.rope_theta_local = self.rope_theta
 
+        # partial_rotary_factor: fraction of head_dim used for RoPE (e.g. 0.25 for Qwen3.5)
+        partial_rotary_factor = None
+        if rope_params is not None:
+            partial_rotary_factor = rope_params.get("partial_rotary_factor", None)
+        self.partial_rotary_factor = partial_rotary_factor
+        # rope_dim: number of head_dim dims rotated (head_dim if partial_rotary_factor is None)
+        if partial_rotary_factor is not None:
+            self.rope_dim = int(self.head_dim * partial_rotary_factor)
+        else:
+            self.rope_dim = self.head_dim
+
         rope_scaling_params = text_config.get("rope_scaling", None)
         self.original_max_context_len = text_config.get("original_max_position_embeddings", None)
         self.rope_scaling = (
@@ -2615,6 +2637,14 @@ class ModelArgs:
             if rope_scaling_params
             else None
         )
+
+        # Linear (GatedDeltaNet) attention layer parameters for Qwen3.5-style models
+        self.linear_num_key_heads = text_config.get("linear_num_key_heads", None)
+        self.linear_num_value_heads = text_config.get("linear_num_value_heads", None)
+        self.linear_key_head_dim = text_config.get("linear_key_head_dim", None)
+        self.linear_value_head_dim = text_config.get("linear_value_head_dim", None)
+        self.linear_conv_kernel_dim = text_config.get("linear_conv_kernel_dim", None)
+        self.attn_output_gate = text_config.get("attn_output_gate", False)
 
         self.query_pre_attn_scalar = text_config.get("query_pre_attn_scalar", None)
 
@@ -2718,19 +2748,53 @@ class ModelArgs:
 
         from transformers import AutoConfig
 
+        def _load_config(path, trust_remote_code, local_files_only=False):
+            """Load HF config, falling back to manual JSON loading for models not yet registered."""
+            try:
+                cfg = AutoConfig.from_pretrained(
+                    path,
+                    trust_remote_code=trust_remote_code,
+                    local_files_only=local_files_only,
+                )
+                return cfg, cfg.to_dict()
+            except (ValueError, KeyError) as e:
+                # Model type not registered (e.g. qwen3_5 in older transformers).
+                # Fall back to reading the config.json directly.
+                import json
+
+                cfg_file = os.path.join(path, "config.json")
+                if not os.path.exists(cfg_file):
+                    raise
+                logger.warning(f"AutoConfig.from_pretrained failed ({e}); loading config.json directly from {cfg_file}")
+                with open(cfg_file) as f:
+                    cfg_dict = json.load(f)
+
+                class _NestedConfig:
+                    """Thin attribute-access wrapper around a nested config dict."""
+
+                    def __init__(self, d):
+                        self._d = d
+                        for k, v in d.items():
+                            setattr(self, k, _NestedConfig(v) if isinstance(v, dict) else v)
+
+                    def to_dict(self):
+                        return self._d
+
+                    def __repr__(self):
+                        return f"_NestedConfig({self._d})"
+
+                cfg_obj = _NestedConfig(cfg_dict)
+                return cfg_obj, cfg_dict
+
         if self.dummy_weights:
             logger.info(f"Loading state param for dummy {self.model_name} from {self.LOCAL_HF_PARAMS[self.model_name]}")
-            self.hf_config = AutoConfig.from_pretrained(
-                self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
-            )
+            self.hf_config, config = _load_config(self.LOCAL_HF_PARAMS[self.model_name], self.trust_remote_code_hf)
         else:
-            self.hf_config = AutoConfig.from_pretrained(
+            self.hf_config, config = _load_config(
                 self.CKPT_DIR,
-                trust_remote_code=self.trust_remote_code_hf,
+                self.trust_remote_code_hf,
                 local_files_only=os.getenv("CI") == "true",
             )
-
-        config = self.hf_config.to_dict()
 
         if "text_config" in config or "vision_config" in config:
             merged_text_config = merge_text_config(config)
@@ -2869,14 +2933,79 @@ class ModelArgs:
         raise ValueError(f"Unknown model for config {type(self.hf_config)}")
 
     # TODO Update function for large models: For 1 layer tests we only want to load 1 checkpoint file, instead of all.
+    def _create_dummy_state_dict(self):
+        """Create a random state dict for models whose HF config type is not registered.
+
+        Generates tensors of the correct shape using information already parsed into
+        self (dim, n_heads, n_kv_heads, head_dim, n_layers, etc.).
+        """
+        import torch
+
+        def r(*shape):
+            return torch.zeros(*shape)
+
+        sd = {}
+        sd["tok_embeddings.weight"] = r(self.vocab_size, self.dim)
+        sd["norm.weight"] = r(self.dim)
+        sd["output.weight"] = r(self.vocab_size, self.dim)
+
+        # Linear attention dimension helpers
+        lin_n_v = getattr(self, "linear_num_value_heads", None)
+        lin_n_k = getattr(self, "linear_num_key_heads", None)
+        lin_k = getattr(self, "linear_key_head_dim", None)
+        lin_v = getattr(self, "linear_value_head_dim", None)
+        lin_conv_k = getattr(self, "linear_conv_kernel_dim", 4)
+        lin_attention_pattern = getattr(self, "linear_attention_pattern", [False] * self.n_layers)
+
+        for i in range(self.n_layers):
+            pfx = f"layers.{i}"
+            sd[f"{pfx}.attention_norm.weight"] = r(self.dim)
+            sd[f"{pfx}.ffn_norm.weight"] = r(self.dim)
+            sd[f"{pfx}.feed_forward.w1.weight"] = r(self.hidden_dim, self.dim)
+            sd[f"{pfx}.feed_forward.w2.weight"] = r(self.dim, self.hidden_dim)
+            sd[f"{pfx}.feed_forward.w3.weight"] = r(self.hidden_dim, self.dim)
+
+            if lin_attention_pattern[i] and lin_n_v is not None:
+                # GatedDeltaNet layer
+                conv_dim = lin_n_k * lin_k * 2 + lin_n_v * lin_v
+                val_dim = lin_n_v * lin_v
+                sd[f"{pfx}.attention.in_proj_qkv.weight"] = r(conv_dim, self.dim)
+                sd[f"{pfx}.attention.in_proj_z.weight"] = r(val_dim, self.dim)
+                sd[f"{pfx}.attention.in_proj_b.weight"] = r(lin_n_v, self.dim)
+                sd[f"{pfx}.attention.in_proj_a.weight"] = r(lin_n_v, self.dim)
+                sd[f"{pfx}.attention.conv1d.weight"] = r(conv_dim, 1, lin_conv_k)
+                sd[f"{pfx}.attention.out_proj.weight"] = r(self.dim, val_dim)
+                sd[f"{pfx}.attention.norm.weight"] = r(lin_v)
+                sd[f"{pfx}.attention.A_log"] = r(lin_n_v)
+                sd[f"{pfx}.attention.dt_bias"] = r(lin_n_v)
+            else:
+                # Standard / Qwen3.5 full_attention layer
+                q_dim = self.n_heads * self.head_dim
+                kv_dim = self.n_kv_heads * self.head_dim
+                sd[f"{pfx}.attention.wq.weight"] = r(q_dim, self.dim)
+                sd[f"{pfx}.attention.wk.weight"] = r(kv_dim, self.dim)
+                sd[f"{pfx}.attention.wv.weight"] = r(kv_dim, self.dim)
+                sd[f"{pfx}.attention.wo.weight"] = r(self.dim, q_dim)
+                # Qwen3.5 gated output
+                if getattr(self, "attn_output_gate", False):
+                    sd[f"{pfx}.attention.wq_gate.weight"] = r(q_dim, self.dim)
+                    sd[f"{pfx}.attention.q_norm.weight"] = r(self.head_dim)
+                    sd[f"{pfx}.attention.k_norm.weight"] = r(self.head_dim)
+        return sd
+
     def load_state_dict(self):
         # by default, the model is not a mixture-of-expert. This will be set to True if we find any `.experts.` in the keys
         if self.dummy_weights:
             from transformers import AutoConfig
 
-            config = AutoConfig.from_pretrained(
-                self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
-            )
+            try:
+                config = AutoConfig.from_pretrained(
+                    self.LOCAL_HF_PARAMS[self.model_name], trust_remote_code=self.trust_remote_code_hf
+                )
+            except (ValueError, KeyError):
+                # Model type not registered (e.g. qwen3_5) – return a random state dict
+                # derived from the known architecture parameters.
+                return self._create_dummy_state_dict()
             if hasattr(config, "text_config"):
                 config.text_config.num_layers = self.n_layers
                 config.text_config.num_hidden_layers = self.n_layers
@@ -2929,17 +3058,27 @@ class ModelArgs:
             state_dict = model.state_dict()
             self.is_mixture_of_experts = any([".experts." in k for k in state_dict.keys()])
 
+        is_qwen3_5 = "qwen3_5" in getattr(self, "model_name", "").lower() or (
+            hasattr(self, "hf_config")
+            and getattr(getattr(self.hf_config, "text_config", None), "model_type", "") == "qwen3_5_text"
+        )
+
         if self.is_multimodal:
             state_dict = standardize_hf_keys_multimodal(state_dict)
             if self.is_llama_vision():
                 state_dict = convert_hf_to_meta_mllama(state_dict, self.head_dim, self.hf_config)
+            elif is_qwen3_5:
+                state_dict = convert_hf_to_meta_qwen3_5(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
             else:
                 state_dict = convert_vision_hf_to_meta(state_dict, self.head_dim)
         else:
             self.fuse_qkv = any(["qkv" in layer_name for layer_name in state_dict.keys()])
             self.fuse_mlp = any(["gate_up" in layer_name for layer_name in state_dict.keys()])
             state_dict = standardize_hf_keys(state_dict)
-            state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+            if is_qwen3_5:
+                state_dict = convert_hf_to_meta_qwen3_5(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
+            else:
+                state_dict = convert_hf_to_meta(state_dict, self.head_dim, self.n_heads, self.n_kv_heads)
 
         keys_dict = list(state_dict.keys())[:]
         remv = [f"layers.{i}." for i in list(range(self.n_layers, self.full_model_n_layers))]

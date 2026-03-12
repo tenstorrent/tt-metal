@@ -166,6 +166,63 @@ def convert_vision_hf_to_meta(state_dict, head_dim):
     return state_dict
 
 
+def split_qwen3_5_attn_gate(state_dict, n_heads, head_dim):
+    """Split Q projection into Q and gate for Qwen3.5 full_attention layers.
+
+    Qwen3.5 full_attention uses q_proj of shape (n_heads * head_dim * 2, hidden_size)
+    where the second half is the output gate.  We split it before downstream code
+    (which infers n_heads from tensor.shape[0] // head_dim) so RoPE permutations
+    receive the correct head count.
+
+    DeltaNet layers do not have q_proj so they pass through unchanged.
+    """
+    new_state_dict = {}
+    q_size = n_heads * head_dim
+    for key, tensor in state_dict.items():
+        if "q_proj.weight" in key and tensor.shape[0] == q_size * 2:
+            new_state_dict[key] = tensor[:q_size]
+            gate_key = key.replace("q_proj.weight", "q_gate_proj.weight")
+            new_state_dict[gate_key] = tensor[q_size:]
+        else:
+            new_state_dict[key] = tensor
+    return new_state_dict
+
+
+def map_hf_to_meta_keys_qwen3_5(loaded_weights):
+    """Key mapping for Qwen3.5 models: extends standard mapping with DeltaNet and gate keys."""
+    replacements = [
+        ("^emb.weight", "weight"),
+        ("model.language_model.", ""),
+        ("model.", ""),
+        ("embed_tokens", "tok_embeddings"),
+        ("lm_head", "output"),
+        ("input_layernorm", "attention_norm"),
+        ("post_attention_layernorm", "ffn_norm"),
+        ("self_attn", "attention"),
+        ("mlp", "feed_forward"),
+        ("gate_proj", "w1"),
+        ("down_proj", "w2"),
+        ("up_proj", "w3"),
+        ("q_proj", "wq"),
+        ("k_proj", "wk"),
+        ("v_proj", "wv"),
+        ("o_proj", "wo"),
+        ("q_gate_proj", "wq_gate"),
+        ("q_norm", "q_norm"),
+        ("k_norm", "k_norm"),
+    ]
+    return replace_keys(loaded_weights, replacements)
+
+
+def convert_hf_to_meta_qwen3_5(state_dict, head_dim, n_heads, n_kv_heads):
+    """Checkpoint conversion for Qwen3.5 (hybrid DeltaNet + full attention)."""
+    state_dict = split_hf_keys(state_dict, n_heads, n_kv_heads)
+    state_dict = split_qwen3_5_attn_gate(state_dict, n_heads, head_dim)
+    state_dict = convert_hf_qkv_to_meta_format(state_dict, head_dim)
+    state_dict = map_hf_to_meta_keys_qwen3_5(state_dict)
+    return state_dict
+
+
 def convert_hf_qkv_to_meta_format_mllama(state_dict, head_dim):
     vision_state_dict, text_state_dict, other_state_dict = map_vision_hf_to_meta_keys_split_to_submodels(state_dict)
     cross_attn_text_state_dict = {k: v for k, v in text_state_dict.items() if "cross_attn" in k}
