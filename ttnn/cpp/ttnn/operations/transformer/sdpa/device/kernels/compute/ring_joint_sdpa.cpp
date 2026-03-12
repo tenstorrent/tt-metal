@@ -193,6 +193,7 @@ void kernel_main() {
                 DHt,  // vDHt = DHt for ring
                 scale_fp32,
                 qk_subblock_h,
+                qk_subblock_w,
                 cb_q_in,
                 cb_k_in,
                 cb_v_in,
