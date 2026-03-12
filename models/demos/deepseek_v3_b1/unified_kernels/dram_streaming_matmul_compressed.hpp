@@ -204,9 +204,10 @@ struct DRAMStreamingMatmulCompressed {
             //     cb_pop_front(cb_in1, subblock_k)
             //   Pack output
             //
-            // Format metadata: packed pairs in L1 at fmt_l1_addr.
-            // Layout: per_core_n * num_subblocks_k groups of (subblock_k/2) pairs.
-            // Each pair is [sz1:8 | sz0:8 | fmt1:8 | fmt0:8].
+            // Format metadata: per-tile info in L1 at fmt_l1_addr.
+            // Layout: per_core_n * num_subblocks_k groups of subblock_k tiles.
+            // Each tile is [relative_offset:24 | fmt:8].
+            // Relative offsets are within each subblock; the kernel adds addr_in1.
             // ================================================================
             constexpr uint32_t num_tiles_k = CTArgs::subblock_k * CTArgs::num_subblocks_k;
             constexpr bool split_acc = true;
@@ -214,7 +215,8 @@ struct DRAMStreamingMatmulCompressed {
 
             reconfig_data_format<false, true>(CTArgs::cb_in1, CTArgs::cb_in0);
             pack_reconfig_data_format<true>(CTArgs::cb_out);
-            custom_mm_block_init_short<false, split_acc, dense_packing>(CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
+            compressed::custom_mm_compressed_block_init_short<split_acc, dense_packing>(
+                CTArgs::cb_in0, CTArgs::cb_in1, CTArgs::cb_out);
 
             cb_wait_front(CTArgs::cb_in0, num_tiles_k);
 
@@ -229,11 +231,11 @@ struct DRAMStreamingMatmulCompressed {
                 in0_tile_size = get_local_cb_interface(in0_id).fifo_page_size;
             }));
 
-            // Packed pairs metadata pointer
+            // Per-tile metadata pointer
             const volatile uint32_t* fmt_base_ptr = reinterpret_cast<const volatile uint32_t*>(CTArgs::fmt_l1_addr);
-            constexpr uint32_t pairs_per_subblock = CTArgs::subblock_k / 2;
+            constexpr uint32_t tiles_per_subblock = CTArgs::subblock_k;
 
-            uint32_t fmt_pair_offset = 0;
+            uint32_t fmt_tile_offset = 0;
 
             for (uint32_t n = 0; n < CTArgs::per_core_n; n++) {
                 cb_reserve_back(CTArgs::cb_out, 1);
@@ -244,25 +246,25 @@ struct DRAMStreamingMatmulCompressed {
                 for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k; sb_k++) {
                     cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
 
-                    // Get in1 read address from CB
+                    // Get in1 read address from CB (changes per subblock due to triple-buffering)
                     uint32_t addr_in1 = 0;
                     UNPACK(({
                         uint32_t in1_id = get_operand_id(CTArgs::cb_in1);
                         addr_in1 = get_local_cb_interface(in1_id).fifo_rd_ptr - 1;
                     }));
 
-                    const volatile uint32_t* fmt_ptr = fmt_base_ptr + fmt_pair_offset;
+                    const volatile uint32_t* fmt_ptr = fmt_base_ptr + fmt_tile_offset;
                     uint32_t fmt_addr = reinterpret_cast<uint32_t>(fmt_ptr);
                     if (sb_k < CTArgs::num_subblocks_k - 1) {
-                        compressed::custom_mm_compressed_block_runtime<CTArgs::subblock_k, 1, false>(
+                        compressed::custom_mm_compressed_block_runtime<CTArgs::subblock_k, 1, false, true>(
                             fmt_addr, addr_in0_subblock, addr_in1, in0_face_r_dim, 0);
                     } else {
-                        compressed::custom_mm_compressed_block_runtime<CTArgs::subblock_k, 1, true>(
+                        compressed::custom_mm_compressed_block_runtime<CTArgs::subblock_k, 1, true, true>(
                             fmt_addr, addr_in0_subblock, addr_in1, in0_face_r_dim, 0);
                     }
 
                     addr_in0_subblock += CTArgs::subblock_k * in0_tile_size;
-                    fmt_pair_offset += pairs_per_subblock;
+                    fmt_tile_offset += tiles_per_subblock;
                     cb_pop_front(CTArgs::cb_in1, CTArgs::subblock_k);
                 }
 
