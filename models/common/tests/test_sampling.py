@@ -678,15 +678,10 @@ def test_top_k_logprobs_pcc_torch_vs_tt(shape, mesh_device):
 
         top_lps_torch = log_probs_torch[0, 0, user, top_indices].float()
 
-        # Two-tier check: PCC >= 0.97, fallback to max abs error < 0.15.
-        # When top logprobs cluster in a narrow range (low variance),
-        # PCC is unreliable even though absolute values match closely.
-        passing, pcc = comp_pcc(top_lps_torch.unsqueeze(0), top_lps_device.unsqueeze(0), pcc=0.97)
-        if not passing:
-            max_abs_err = (top_lps_torch - top_lps_device).abs().max().item()
-            assert max_abs_err < 0.15, (
-                f"User {user} top-{requested_logprobs} logprobs failed both "
-                f"PCC ({pcc}) and abs-error ({max_abs_err:.4f}) checks\n"
-                f"  device: {top_lps_device[:5].tolist()}...\n"
-                f"  torch:  {top_lps_torch[:5].tolist()}..."
-            )
+        # With 32 logprobs the dynamic range is wide enough for strict PCC >= 0.99
+        passing, pcc = comp_pcc(top_lps_torch.unsqueeze(0), top_lps_device.unsqueeze(0), pcc=0.99)
+        assert passing, (
+            f"User {user} top-{requested_logprobs} logprobs PCC failed: {pcc}\n"
+            f"  device: {top_lps_device[:5].tolist()}...\n"
+            f"  torch:  {top_lps_torch[:5].tolist()}..."
+        )
