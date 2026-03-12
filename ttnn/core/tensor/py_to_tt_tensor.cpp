@@ -78,7 +78,7 @@ Tensor create_tt_tensor_from_host_data(
         TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), MemoryConfig{});
 
         if (mesh_mapper != nullptr) {
-            const bool must_construct_on_host = device == nullptr || !fast_approx;
+            const bool must_construct_on_host = device == nullptr || !fast_approx || preserve_nan_values;
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
                 tensor_shape,
@@ -90,37 +90,24 @@ Tensor create_tt_tensor_from_host_data(
                 static_cast<T>(pad_value));
         }
 
-        TensorSpec tensor_spec(tensor_shape, dst_tensor_layout);
-        const bool exec_on_device = can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype);
-        const bool pydata_type_borrowable = src_dtype == convert_to_data_type<T>();
         const bool construct_on_device =
-            can_construct_on_device(device, tensor_shape, optional_tile, TensorSpec(tensor_shape, src_tensor_layout)) &&
-            fast_approx;
+            can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype) &&
+            can_construct_on_device(device, tensor_shape, optional_tile, TensorSpec(tensor_shape, src_tensor_layout));
 
-        // TODO: Remove preserve_nan_values argument after https://github.com/tenstorrent/tt-metal/issues/31406
-        if (preserve_nan_values) {
-            return Tensor::from_span(
-                tt::stl::make_const_span(host_buffer.view_as<T>()),
-                tensor_spec,
-                nullptr,
-                std::nullopt,
-                static_cast<T>(pad_value));
-        }
+        // Borrow the Python buffer directly when possible, otherwise copy via from_span.
+        // TODO: Remove preserve_nan_values check after https://github.com/tenstorrent/tt-metal/issues/31406
+        const bool can_borrow = src_dtype == convert_to_data_type<T>() && fast_approx && !preserve_nan_values &&
+                                (construct_on_device || (layout == Layout::ROW_MAJOR && src_dtype == dst_dtype &&
+                                                         !memory_config.is_sharded()));
 
-        if (exec_on_device && construct_on_device && pydata_type_borrowable) {
-            return Tensor::from_borrowed_data(
-                host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
-        }
-
-        if (layout == Layout::ROW_MAJOR && pydata_type_borrowable && src_dtype == dst_dtype &&
-            !memory_config.is_sharded()) {
+        if (can_borrow) {
             return Tensor::from_borrowed_data(
                 host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile.value_or(Tile()));
         }
 
         return Tensor::from_span(
             tt::stl::make_const_span(host_buffer.view_as<T>()),
-            tensor_spec,
+            TensorSpec(tensor_shape, dst_tensor_layout),
             nullptr,
             std::nullopt,
             static_cast<T>(pad_value));
