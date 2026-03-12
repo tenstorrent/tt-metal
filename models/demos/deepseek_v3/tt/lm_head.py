@@ -28,6 +28,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     even_int_div,
     find_largest_divisor,
     get_activation_sharding_core_counts_for_dram_matmul,
+    get_dequantized_tensor,
     get_dram_sharded_matmul_config,
     shard_and_save,
 )
@@ -80,7 +81,7 @@ class LMHead(AbstractModule):
 
         hidden_dim, vocab_size = cls._get_model_dims_from_cfg(hf_config)
 
-        weight_tensor = state_dict["weight"].permute(
+        weight_tensor = get_dequantized_tensor(state_dict, "weight").permute(
             1, 0
         )  # In torch the weights are in (out_features, in_features) format
         assert weight_tensor.shape == (hidden_dim, vocab_size)
@@ -256,6 +257,24 @@ class LMHead(AbstractModule):
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "ccl": ccl,
         }
+
+    @staticmethod
+    def _fwd_linear(x: ttnn.Tensor, cfg: dict, program_config: Any = None) -> ttnn.Tensor:
+        """Wrapper for lm_head linear projection.
+        Matches: forward_decode line 267, forward_prefill line 315-316
+
+        Args:
+            x: Input tensor
+            cfg: Config for linear operation (cfg["linear"])
+            program_config: Optional program config (required for prefill, None for decode)
+
+        Returns:
+            Output tensor after linear projection
+        """
+        if program_config is not None:  # prefill
+            return ttnn.linear(x, program_config=program_config, **cfg["linear"])
+        else:  # decode
+            return ttnn.linear(x, **cfg["linear"])
 
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:

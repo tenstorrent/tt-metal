@@ -33,37 +33,28 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
     ////////////////////////////////////////////////////////////////////////////
     Program program{};
 
-    bool output_sharded = is_sharded(output.buffer()->buffer_layout());
+    bool is_local_shards_only =
+        is_sharded(output.buffer()->buffer_layout()) and !output.memory_config().created_with_nd_shard_spec();
 
     uint32_t input_element_size_bytes = a.element_size();
-    uint32_t weights_element_size_bytes = weights.element_size();
-    uint32_t output_element_size_bytes = output.element_size();
 
-    // row major, page size is last dim
-    uint32_t input_page_size = a.padded_shape()[-1] * input_element_size_bytes;
-    uint32_t weight_page_size = weights.padded_shape()[-1] * weights_element_size_bytes;
-    uint32_t output_page_size = output.padded_shape()[-1] * output_element_size_bytes;
+    uint32_t aligned_input_page_size = static_cast<uint32_t>(a.buffer()->aligned_page_size());
+    uint32_t weight_page_size = static_cast<uint32_t>(weights.buffer()->page_size());
+    uint32_t output_page_size = static_cast<uint32_t>(out_buffer->page_size());
 
-    // weights shape is [1, 1, num_embeddings, num_dim]
-
-    uint32_t batch_size = a.padded_shape()[0];
-    uint32_t num_output_rows_per_batch = a.padded_shape()[-1];
-    uint32_t num_output_rows = num_output_rows_per_batch * batch_size;
+    uint32_t num_input_elems = static_cast<uint32_t>(a.padded_shape().volume());
+    uint32_t input_page_size = a.buffer()->page_size();
+    uint32_t num_input_elems_per_page = input_page_size / input_element_size_bytes;
     auto alignment = a.buffer()->alignment();
     uint32_t block_height = (alignment / input_element_size_bytes);
-    uint32_t num_blocks = num_output_rows;
-    uint32_t num_blocks_per_batch = num_output_rows_per_batch;
 
-    // setup problem and grid size
-
-    uint32_t problem_size = num_blocks;
-
+    // setup grid size
     auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
 
     uint32_t num_blocks_per_core_group_1, num_blocks_per_core_group_2;
     CoreRangeSet all_cores, core_group_1, core_group_2;
     bool row_major = false;
-    if (output_sharded) {
+    if (is_local_shards_only) {
         const auto& shard_spec = output.shard_spec().value();
         all_cores = shard_spec.grid;
         core_group_1 = all_cores;
@@ -78,7 +69,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
             core_group_2,
             num_blocks_per_core_group_1,
             num_blocks_per_core_group_2) =
-            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, problem_size);
+            tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_input_elems);
     }
     uint32_t g1_numcores = core_group_1.num_cores();
 
@@ -89,8 +80,9 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
 
     constexpr uint32_t out_cb_index = tt::CBIndex::c_0;
     uint32_t rounded_weight_page_size = tt::align(weight_page_size, alignment);
+    uint32_t output_stick_size = rounded_weight_page_size;
     uint32_t out_cb_size;
-    if (output_sharded) {
+    if (is_local_shards_only) {
         out_cb_size = output.buffer()->aligned_size_per_bank();
     } else {
         uint32_t buffering_size = (num_blocks_per_core_group_1 > 1 || num_blocks_per_core_group_2 > 1) ? 2 : 1;
@@ -99,7 +91,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
     tt::tt_metal::CircularBufferConfig cb_out_config =
         tt::tt_metal::CircularBufferConfig(out_cb_size, {{out_cb_index, weights_cb_data_format}})
             .set_page_size(out_cb_index, rounded_weight_page_size);
-    if (output_sharded) {
+    if (is_local_shards_only) {
         cb_out_config.set_globally_allocated_address(*out_buffer);
     }
     auto cb_out = tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
@@ -132,10 +124,11 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
         (std::uint32_t)out_cb_index,
         (std::uint32_t)src1_cb_index,
         (std::uint32_t)src2_cb_index,
-        (std::uint32_t)input_page_size,
+        (std::uint32_t)aligned_input_page_size,
         (std::uint32_t)weight_page_size,
         (std::uint32_t)block_height,
-        (std::uint32_t)block_height * input_element_size_bytes};
+        (std::uint32_t)block_height * input_element_size_bytes,
+        (std::uint32_t)input_page_size};
     tt::tt_metal::TensorAccessorArgs(*a.buffer()).append_to(embedding_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(*weights.buffer()).append_to(embedding_compile_time_args);
 
@@ -157,7 +150,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
 
     // Tilized writer
     tt::tt_metal::KernelHandle writer_kernel_id = 0;
-    if (!output_sharded) {
+    if (!is_local_shards_only) {
         std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)out_cb_index, (std::uint32_t)output_page_size};
         tt::tt_metal::TensorAccessorArgs(*output.buffer()).append_to(writer_compile_time_args);
 
@@ -183,7 +176,10 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
         reader_runtime_args.push_back(pad_token.value());
     }
     std::vector<uint32_t> writer_runtime_args = {
-        (std::uint32_t)output.buffer()->address(), (std::uint32_t)output_page_size, (std::uint32_t)0, (std::uint32_t)0};
+        (std::uint32_t)output.buffer()->address(),
+        (std::uint32_t)output_stick_size,
+        (std::uint32_t)0,
+        (std::uint32_t)0};
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         const CoreCoord& core = cores[i];
@@ -192,16 +188,16 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
 
         // Reader
         {
-            reader_runtime_args[2] = input_offset / num_blocks_per_batch;
+            reader_runtime_args[2] = input_offset / num_input_elems_per_page;
             reader_runtime_args[3] =
-                tt::round_down(input_offset % num_blocks_per_batch, block_height) * input_element_size_bytes;
+                tt::round_down(input_offset % num_input_elems_per_page, block_height) * input_element_size_bytes;
             reader_runtime_args[4] = local_num_blocks;
-            reader_runtime_args[5] = input_offset % num_blocks_per_batch % block_height;
+            reader_runtime_args[5] = (input_offset % num_input_elems_per_page) % block_height;
             tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, reader_runtime_args);
         }
 
         // Writer
-        if (!output_sharded) {
+        if (!is_local_shards_only) {
             writer_runtime_args[2] = local_num_blocks;
             writer_runtime_args[3] = input_offset;
             tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, writer_runtime_args);
@@ -216,7 +212,7 @@ EmbeddingsRMProgramFactory::cached_program_t EmbeddingsRMProgramFactory::create(
          .writer_kernel_id = writer_kernel_id,
          .cores = cores,
          .cb_out = cb_out,
-         .output_sharded = output_sharded}};
+         .is_local_shards_only = is_local_shards_only}};
 }
 
 void EmbeddingsRMProgramFactory::override_runtime_arguments(
@@ -230,14 +226,14 @@ void EmbeddingsRMProgramFactory::override_runtime_arguments(
     const auto& writer_kernel_id = shared_variables.writer_kernel_id;
     const auto& cores = shared_variables.cores;
     const auto& cb_out = shared_variables.cb_out;
-    const auto& output_sharded = shared_variables.output_sharded;
+    const auto& is_local_shards_only = shared_variables.is_local_shards_only;
 
     auto* output_buffer = tensor_return_value.buffer();
     auto output_buffer_address = output_buffer->address();
     auto input_buffer_address = tensor_args.input_tensor_arg.buffer()->address();
     auto weights_buffer_address = tensor_args.weight_arg.buffer()->address();
 
-    if (output_sharded) {
+    if (is_local_shards_only) {
         UpdateDynamicCircularBufferAddress(program, cb_out, *output_buffer);
     }
 
@@ -251,7 +247,7 @@ void EmbeddingsRMProgramFactory::override_runtime_arguments(
             runtime_args[1] = weights_buffer_address;
         }
 
-        if (!output_sharded) {
+        if (!is_local_shards_only) {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
             runtime_args[0] = output_buffer_address;
         }

@@ -181,7 +181,7 @@ struct FlashMLADecode {
     // ========================================================================
     // Op - templated on CTArgs (compile-time args) and IsActiveCore
     // ========================================================================
-    template <typename CTArgs, bool IsActiveCore, bool IsKVCacheUpdateCore>
+    template <typename CTArgs, bool IsActiveCore>
     class Op {
     public:
         void operator()(const RTArgs& args) {
@@ -191,6 +191,29 @@ struct FlashMLADecode {
         }
 
         void set_local_cur_pos(RTArgs& args, uint32_t local_cur_pos) { args.local_cur_pos = local_cur_pos; }
+
+        /**
+         * Push dummy tiles into the hand-off CBs (cb_out_o, cb_out_ms) so that
+         * downstream SDPA reduce does not hang when Flash MLA is skipped on this
+         * device (e.g. SP2/SP3 with no sequence data). Call on S1 cores only.
+         *
+         * TODO: Fuse the final SP reduce into Flash MLA and handle this internally,
+         * eliminating the need for callers to manage the dummy push.
+         */
+        static void push_dummy_sdpa_inputs() {
+#if defined(COMPILE_FOR_TRISC)
+            constexpr uint32_t cb_out_o = CTArgs::cb_out_o;
+            constexpr uint32_t cb_out_ms = CTArgs::cb_out_ms;
+            constexpr uint32_t Sq_chunk_t = get_named_compile_time_arg_val("PNHt");
+            constexpr uint32_t vDHt = get_named_compile_time_arg_val("vDHt");
+            constexpr uint32_t out_chunk_tiles = Sq_chunk_t * vDHt;
+
+            cb_reserve_back(cb_out_ms, 1);
+            cb_push_back(cb_out_ms, 1);
+            cb_reserve_back(cb_out_o, out_chunk_tiles);
+            cb_push_back(cb_out_o, out_chunk_tiles);
+#endif
+        }
 
     private:
         void impl([[maybe_unused]] const RTArgs& args) {
@@ -252,11 +275,7 @@ struct FlashMLADecode {
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.kv_cache_cur_pos_ready_semaphore_addr);
 
             // Wait for KV cache cur pos ready
-            if constexpr (IsKVCacheUpdateCore) {
-                noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value - 1);
-            } else {
-                noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
-            }
+            noc_semaphore_wait(kv_cache_cur_pos_ready_semaphore_ptr, args.kv_cache_cur_pos_ready_value);
             for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; k_chunk += args.num_cores_per_head) {
                 {
                     DeviceZoneScopedN("reader-k-read");
@@ -577,16 +596,14 @@ struct FlashMLADecode {
             static_assert(out_chunk_tiles % 2 == 0, "out_chunk_tiles must be even");
 
             const bool do_reduce = args.do_reduce == 1;
-            const bool do_output = args.do_output == 1;
-            const bool is_sender_after_reduce = args.is_sender_after_reduce == 1;
+            const bool do_output = args.do_output == 1;                            // set to 0 in fused
+            const bool is_sender_after_reduce = args.is_sender_after_reduce == 1;  // set to 1 in fused
 
             constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
             constexpr bool transpose_k = true;
             constexpr bool transpose_v = false;
 
-            MATH(ckernel::t6_semaphore_init(ckernel::semaphore::FPU_SFPU, 0, 1));
-            PACK(ckernel::t6_semaphore_init(SFPU_FPU, 0, 1));
             PACK((llk_math_sfpu_sdpa_reduce_row_init<false, DST_ACCUM_MODE, DataFormat::Float16_b>()));
             reconfig_data_format<false, true>(cb_k_in, cb_q_in);
             pack_reconfig_data_format<true>(cb_out_o);
@@ -634,6 +651,7 @@ struct FlashMLADecode {
                 sdpa_output_cb = cb_interm_out;
                 sdpa_ms_cb = cb_interm_ms;
             } else {
+                // Fused with sdpa reduce worker
                 sdpa_output_cb = cb_out_o;
                 sdpa_ms_cb = cb_out_ms;
             }

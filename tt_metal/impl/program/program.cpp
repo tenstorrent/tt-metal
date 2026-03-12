@@ -43,7 +43,6 @@
 #include "impl/buffers/circular_buffer.hpp"
 #include "circular_buffer_constants.h"
 #include "core_coord.hpp"
-#include "data_types.hpp"
 #include "common/stable_hash.hpp"
 #include "impl/context/metal_context.hpp"
 #include "jit_build/hlk_desc.hpp"
@@ -76,7 +75,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
 #include "kernels/kernel.hpp"
-#include "tt_stl/reflection.hpp"
+#include <tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
 #include <llrt/tt_cluster.hpp>
 #include "impl/allocator/allocator.hpp"
@@ -418,14 +417,13 @@ KernelGroup::KernelGroup(
     std::set<NOC_MODE> noc_modes;
     for (auto kernel_id : this->kernel_ids) {
         const auto kernel = program.get_kernel(kernel_id);
-        auto processor_class = kernel->get_kernel_processor_class();
         auto num_binaries = kernel->expected_num_binaries();
         for (uint32_t i = 0; i < num_binaries; i++) {
-            auto processor_type = kernel->get_kernel_processor_type(i);
-            auto processor_index = hal.get_processor_index(
-                hal.get_programmable_core_type(programmable_core_type_index), processor_class, processor_type);
-            kernel_config.watcher_kernel_ids()[processor_index] = kernel->get_watcher_kernel_id();
-            kernel_config.enables() |= 1u << processor_index;
+            std::vector<uint32_t> processor_indices = kernel->get_processor_indices_for_binary(i);
+            for (uint32_t processor_index : processor_indices) {
+                kernel_config.watcher_kernel_ids()[processor_index] = kernel->get_watcher_kernel_id();
+                kernel_config.enables() |= 1u << processor_index;
+            }
         }
 
         // Dynamic NOC assignment is only supported on certain core types
@@ -468,6 +466,20 @@ KernelGroup::KernelGroup(
                     }
                 },
                 kernel->config());
+        }
+
+        // Quasar: set per-processor num_sw_threads and kernel_thread_id for dmk/runtime access
+        if (auto* qk = dynamic_cast<experimental::quasar::QuasarDataMovementKernel*>(kernel.get())) {
+            auto config = std::get<experimental::quasar::QuasarDataMovementConfig>(qk->config());
+            const auto& dm_cores = qk->get_dm_processors();
+            for (uint32_t thread_idx = 0; thread_idx < dm_cores.size(); thread_idx++) {
+                uint32_t processor_index = hal.get_processor_index(
+                    hal.get_programmable_core_type(programmable_core_type_index),
+                    HalProcessorClassType::DM,
+                    qk->get_kernel_processor_type(static_cast<int>(thread_idx)));
+                kernel_config.num_sw_threads()[processor_index] = config.num_threads_per_cluster;
+                kernel_config.kernel_thread_id()[processor_index] = thread_idx;
+            }
         }
     }
     TT_FATAL(noc_modes.size() <= 1, "KernelGroup must have the same noc mode for all kernels");
@@ -843,7 +855,61 @@ std::vector<CoreRange> detail::ProgramImpl::circular_buffers_unique_coreranges()
             }
         }
     }
-    return core_ranges;
+
+    // Fast path: if no ranges overlap, return as-is.
+    bool has_overlap = false;
+    for (size_t i = 0; i < core_ranges.size() && !has_overlap; ++i) {
+        for (size_t j = i + 1; j < core_ranges.size(); ++j) {
+            if (core_ranges[i].intersects(core_ranges[j])) {
+                has_overlap = true;
+                break;
+            }
+        }
+    }
+    if (!has_overlap) {
+        return core_ranges;
+    }
+
+    // Make ranges non-overlapping so that each core is targeted by exactly one
+    // multicast during CB config dispatch.
+    //
+    // During dispatch, each CoreRange's payload is built from all CBs whose
+    // core_ranges intersect it. If a range intersects two CBs with the same
+    // buffer index but different configs (valid when their core_ranges don't
+    // overlap), the second CB overwrites the first in the payload and the
+    // multicast sends the wrong config to cores that need the other.
+    //
+    // Split every overlapping pair into three non-overlapping pieces (A\B, A∩B,
+    // B\A) and repeat until no overlaps remain. Each resulting piece's boundaries
+    // align with all original CB CoreRange edges, so it cannot straddle two
+    // different configs for the same buffer index.
+    std::vector<CoreRange> result = std::move(core_ranges);
+    size_t i = 0;
+    while (i < result.size()) {
+        // Find the first range that overlaps with result[i].
+        size_t j = i + 1;
+        for (; j < result.size(); ++j) {
+            if (result[i].intersects(result[j])) {
+                break;
+            }
+        }
+        if (j == result.size()) {
+            ++i;  // No overlap, advance.
+            continue;
+        }
+        // Split the overlapping pair into non-overlapping pieces: A\B, A∩B, B\A.
+        CoreRangeSet a_set(result[i]), b_set(result[j]);
+        result.erase(result.begin() + j);
+        result.erase(result.begin() + i);
+        auto a_only = a_set.subtract(b_set);
+        auto b_only = b_set.subtract(a_set);
+        auto common = a_set.intersection(b_set);
+        result.insert(result.end(), a_only.ranges().begin(), a_only.ranges().end());
+        result.insert(result.end(), b_only.ranges().begin(), b_only.ranges().end());
+        result.insert(result.end(), common.ranges().begin(), common.ranges().end());
+        i = 0;  // Restart — new pieces may overlap with earlier ranges.
+    }
+    return result;
 }
 
 void detail::ProgramImpl::invalidate_circular_buffer_allocation() {

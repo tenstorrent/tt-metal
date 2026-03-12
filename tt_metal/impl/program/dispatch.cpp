@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
 
 #include <mesh_workload.hpp>
@@ -374,16 +374,17 @@ uint32_t finalize_kernel_bins(
                 } else {
                     kernel_text_offset = binaries[i]->get_text_addr();
                 }
-                uint32_t processor_index = hal.get_processor_index(
-                    programmable_core_type, kernel->get_kernel_processor_class(), kernel->get_kernel_processor_type(i));
-                kg->kernel_text_offsets[processor_index] = kernel_text_offset;
-                kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
-                hal.set_iram_text_size(
-                    kg->launch_msg.view(),
-                    programmable_core_type,
-                    kernel->get_kernel_processor_class(),
-                    kernel->get_kernel_processor_type(i),
-                    binaries[i]->get_text_size());
+                std::vector<uint32_t> processor_indices = kernel->get_processor_indices_for_binary(static_cast<int>(i));
+                for (uint32_t processor_index : processor_indices) {
+                    kg->kernel_text_offsets[processor_index] = kernel_text_offset;
+                    kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
+                    hal.set_iram_text_size(
+                        kg->launch_msg.view(),
+                        programmable_core_type,
+                        kernel->get_kernel_processor_class(),
+                        kernel->get_kernel_processor_type(i),
+                        binaries[i]->get_text_size());
+                }
             }
         }
         max_offset = std::max(offset, max_offset);

@@ -4,22 +4,20 @@
 
 #pragma once
 
+#include <tt_stl/indestructible.hpp>
 #include <vector>
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
 #include <tt-metalium/allocator.hpp>
 #include "impl/device/firmware/firmware_initializer.hpp"
-#include "experimental/fabric/routing_table_generator.hpp"
-#include "llrt/hal/generated/dev_msgs.hpp"
+#include <umd/device/types/cluster_descriptor_types.hpp>
+#include <tt-metalium/experimental/context/metal_env.hpp>
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
+#include "context_types.hpp"
 
 namespace tt::tt_fabric {
 class ControlPlane;
 }  // namespace tt::tt_fabric
-
-namespace tt::tt_metal::distributed {
-class SystemMesh;
-}  // namespace tt::tt_metal::distributed
 
 namespace tt {
 class Cluster;
@@ -58,15 +56,36 @@ public:
     MetalContext& operator=(MetalContext&& other) noexcept = delete;
     MetalContext(const MetalContext&) = delete;
     MetalContext(MetalContext&& other) noexcept = delete;
-    static MetalContext& instance();
 
-    static void destroy_instance(bool check_device_count = true);
+    // Access the MetalContext for a given context id.
+    // The context can be created beforehand using MetalContext::create_instance(). Otherwise an exception is thrown.
+    // NOTE: To maintain legacy behavior, the default context id is automatically created if not already initialized
+    static MetalContext& instance(ContextId context_id = DEFAULT_CONTEXT_ID);
 
-    Cluster& get_cluster();
-    llrt::RunTimeOptions& rtoptions();
-    const Cluster& get_cluster() const;
-    const llrt::RunTimeOptions& rtoptions() const;
-    const Hal& hal() const;
+    // Create a MetalContext instance which will use the given MetalEnv to facilitate runtime.
+    static ContextId create_instance(MetalEnv& env_to_use);
+
+    // Destroy the MetalContext for a given context id.
+    static void destroy_instance(bool check_device_count = true, ContextId context_id = DEFAULT_CONTEXT_ID);
+
+    // Destroy all MetalContext instances.
+    static void destroy_all_instances(bool check_device_count = true);
+
+    // Check if a MetalContext for a given context id exists.
+    static bool instance_exists(ContextId context_id = DEFAULT_CONTEXT_ID);
+
+    [[deprecated("Use MetalEnv instead")]] Cluster& get_cluster();
+    [[deprecated("Use MetalEnv instead")]] llrt::RunTimeOptions& rtoptions();
+    [[deprecated("Use MetalEnv instead")]] const Cluster& get_cluster() const;
+    [[deprecated("Use MetalEnv instead")]] const llrt::RunTimeOptions& rtoptions() const;
+    [[deprecated("Use MetalEnv instead")]] const Hal& hal() const;
+
+    // Returns the MetalEnv instance assigned to this context.
+    [[deprecated(
+        "Use MetalEnv directly instead. This is a temporary workaround until all code is migrated to use "
+        "MetalEnv.")]] tt::tt_metal::MetalEnv&
+    get_env();
+
     dispatch_core_manager& get_dispatch_core_manager();
     DispatchQueryManager& get_dispatch_query_manager();
     const DispatchMemMap& dispatch_mem_map() const;  // DispatchMemMap for the core type we're dispatching on.
@@ -103,19 +122,20 @@ public:
         bool minimal = false);
     void teardown();
 
-    // Switch from mock mode to real hardware (requires all devices to be closed)
-    void reinitialize_for_real_hardware();
-
     // Set fast dispatch mode and automatically reinitialize dispatch managers
     // This ensures dispatch/compute core allocations stay in sync with the mode
     void set_fast_dispatch_mode(bool enable);
 
-    // Control plane accessors
+    // Delegates to MetalEnv assigned to this context
     void initialize_control_plane();
     tt::tt_fabric::ControlPlane& get_control_plane();
-
-    // System mesh accessor — lazily initialized, reset when control plane is reset.
     distributed::SystemMesh& get_system_mesh();
+
+    const distributed::multihost::DistributedContext& global_distributed_context();
+    const distributed::multihost::DistributedContext& full_world_distributed_context() const;
+    std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
+
+    // Fabric Settings
     void set_custom_fabric_topology(
         const std::string& mesh_graph_desc_file,
         const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping);
@@ -135,18 +155,11 @@ public:
     tt_fabric::FabricReliabilityMode get_fabric_reliability_mode() const;
     const tt_fabric::FabricRouterConfig& get_fabric_router_config() const;
 
-    const distributed::multihost::DistributedContext& global_distributed_context();
-    const distributed::multihost::DistributedContext& full_world_distributed_context() const;
-    std::shared_ptr<distributed::multihost::DistributedContext> get_distributed_context_ptr();
-
-    // Fabric tensix configuration
     void set_fabric_tensix_config(tt_fabric::FabricTensixConfig fabric_tensix_config);
     tt_fabric::FabricTensixConfig get_fabric_tensix_config() const;
 
-    // Fabric UDM mode configuration
     tt_fabric::FabricUDMMode get_fabric_udm_mode() const;
 
-    // Fabric manager mode configuration
     tt_fabric::FabricManagerMode get_fabric_manager() const;
 
     // This is used to track the current thread's command queue id stack
@@ -162,20 +175,24 @@ public:
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;
-    MetalContext();
+
+    // Construct MetalContext to use the given MetalEnv and assign it context id. The MetalEnv must not be
+    // destroyed while its associated MetalContext instance is alive.
+    MetalContext(ContextId context_id, tt::tt_metal::MetalEnv& metal_env);
     ~MetalContext();
 
-    void construct_control_plane(const std::filesystem::path& mesh_graph_desc_path);
-    void construct_control_plane();
+    // This will create a MetalContext instance and create a default MetalEnv owned by the context.
+    // Usually the MetalEnv is owned by the user, but in this case of legacy behaviour, the context will own it.
+    // Caller holds the g_instance mutex.
+    static ContextId create_default_instance_implicit_locked();
+
+    // Register handlers -- caller already holds the instance lock
+    static void register_handlers_locked();
 
     // Reinitialize dispatch managers when transitioning dispatch modes (SD<->FD)
     // This updates cached dispatch/compute core allocations to match current dispatch mode
     void reinitialize_dispatch_managers();
-    void initialize_control_plane_impl();  // Private implementation without mutex
-    void teardown_fabric_config();
-    void teardown_base_objects();
     void teardown_dispatch_state();
-    void initialize_base_objects();
 
     void init_context_descriptor(int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size);
     void init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker_l1_size);
@@ -197,12 +214,13 @@ private:
     std::mutex dispatch_timeout_detection_mutex_;
     bool dispatch_timeout_detection_processed_ = false;
 
-    // Mutex to protect reinitialization operations (switching between mock and real hardware)
-    std::mutex reinitialization_mutex_;
+    // The MetalEnv is normally owned by the user
+    // For the legacy code, we will initialize it in the MetalContext constructor and own the env
+    // This means MetalContext will delete the env in the MetalContext destructor.
+    tt::tt_metal::MetalEnv* env_;
+    bool env_owned_ = false;
+    ContextId context_id_;
 
-    llrt::RunTimeOptions rtoptions_;
-    std::unique_ptr<Cluster> cluster_;
-    std::unique_ptr<Hal> hal_;
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
     std::unique_ptr<inspector::Data> inspector_data_;
@@ -221,29 +239,11 @@ private:
     std::unordered_set<InitializerKey> risc_fw_init_done_;
 
     std::array<std::unique_ptr<DispatchMemMap>, static_cast<size_t>(CoreType::COUNT)> dispatch_mem_map_;
-    std::unique_ptr<tt::tt_fabric::ControlPlane> control_plane_;
-    std::unique_ptr<distributed::SystemMesh> system_mesh_;
-    tt_fabric::FabricConfig fabric_config_ = tt_fabric::FabricConfig::DISABLED;
-    tt_fabric::FabricTensixConfig fabric_tensix_config_ = tt_fabric::FabricTensixConfig::DISABLED;
-    tt_fabric::FabricUDMMode fabric_udm_mode_ = tt_fabric::FabricUDMMode::DISABLED;
-    tt_fabric::FabricRouterConfig fabric_router_config_ = tt_fabric::FabricRouterConfig{};
-    std::shared_ptr<distributed::multihost::DistributedContext> distributed_context_;
-    std::shared_ptr<distributed::multihost::DistributedContext> compute_only_distributed_context_;
 
     // We are using a thread_local to allow each thread to have its own command queue id stack.
     // This not only allows consumers to set active command queue for a thread
     // but to also easily push/pop ids to temporarily change the current cq id.
     static thread_local CommandQueueIdStack command_queue_id_stack_for_thread_;
-
-    // Strict system health mode requires (expects) all links/devices to be live. When enabled, it
-    // is expected that any downed devices/links will result in some sort of error condition being
-    // reported. When set to false, the control plane is free to instantiate fewer routing planes
-    // according to which links are available.
-    tt_fabric::FabricReliabilityMode fabric_reliability_mode_ = tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE;
-    uint8_t num_fabric_active_routing_planes_ = 0;
-    std::map<tt_fabric::FabricNodeId, ChipId> logical_mesh_chip_id_to_physical_chip_id_mapping_;
-    std::optional<std::string> custom_mesh_graph_desc_path_ = std::nullopt;
-    tt_fabric::FabricManagerMode fabric_manager_ = tt_fabric::FabricManagerMode::DEFAULT;
 };
 
 }  // namespace tt::tt_metal

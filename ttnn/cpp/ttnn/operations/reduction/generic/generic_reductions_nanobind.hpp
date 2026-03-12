@@ -12,6 +12,7 @@
 #include <nanobind/stl/variant.h>
 
 #include "ttnn-nanobind/bind_function.hpp"
+#include "ttnn-nanobind/small_vector_caster.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 
 namespace ttnn::operations::reduction::detail {

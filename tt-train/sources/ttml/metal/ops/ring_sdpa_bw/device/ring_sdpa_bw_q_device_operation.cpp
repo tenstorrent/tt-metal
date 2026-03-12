@@ -45,9 +45,9 @@ RingSDPABwQDeviceOperation::tensor_return_value_t RingSDPABwQDeviceOperation::cr
     return create_device_tensor(output_spec, tensor_args.query.device());
 }
 
-tt::stl::hash::hash_t RingSDPABwQDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RingSDPABwQDeviceOperation::compute_program_hash(
     const operation_attributes_t& attrs, const tensor_args_t& tensor_args) {
-    return tt::stl::hash::hash_objects(
+    return ttsl::hash::hash_objects(
         0,  // Q marker (different from KV)
         attrs.ring_size,
         attrs.ring_axis,

@@ -603,12 +603,16 @@ def format_mesh_placement(mesh_shape, placement_type, shard_dim):
     return placement_dict
 
 
-def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2"):
+def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2", model_filter=None):
     """Reconstruct ttnn_operations_master.json from the database.
 
     Args:
         output_path: Path to write the reconstructed JSON
         schema: Database schema to use ("ttnn_ops" for V1, "ttnn_ops_v2" for V2)
+        model_filter: List of model patterns to filter by (e.g., ["deepseek_v3"]).
+                      Only configurations linked to models whose source_file contains
+                      one of these patterns (case-insensitive) will be included.
+                      If None, all configurations are included.
 
     This recreates the original JSON structure:
     {
@@ -627,22 +631,53 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2"):
         }
     }
     """
-    print(f"Reconstructing JSON from database (schema: {schema})...")
+    filter_desc = f", model_filter={model_filter}" if model_filter else ""
+    print(f"Reconstructing JSON from database (schema: {schema}{filter_desc})...")
     conn = psycopg2.connect(NEON_URL)
     cur = conn.cursor()
 
-    # Get all operations
-    cur.execute(
-        f"""
-        SELECT ttnn_operation_id, operation_name
-        FROM {schema}.ttnn_operation
-        ORDER BY operation_name
-    """
-    )
+    if model_filter:
+        # Only fetch operations that have at least one config linked to a matching model
+        like_clauses = " OR ".join(["m.source_file ILIKE %s"] * len(model_filter))
+        like_params = [f"%{pattern}%" for pattern in model_filter]
+        cur.execute(
+            f"""
+            SELECT DISTINCT o.ttnn_operation_id, o.operation_name
+            FROM {schema}.ttnn_operation o
+            JOIN {schema}.ttnn_configuration c ON c.operation_id = o.ttnn_operation_id
+            JOIN {schema}.ttnn_configuration_model cm ON cm.configuration_id = c.ttnn_configuration_id
+            JOIN {schema}.ttnn_model m ON m.ttnn_model_id = cm.model_id
+            WHERE {like_clauses}
+            ORDER BY o.operation_name
+        """,
+            like_params,
+        )
+    else:
+        cur.execute(
+            f"""
+            SELECT ttnn_operation_id, operation_name
+            FROM {schema}.ttnn_operation
+            ORDER BY operation_name
+        """
+        )
     operations = cur.fetchall()
     print(f"Found {len(operations)} operations")
 
     result = {"operations": {}}
+
+    # Build model filter subquery once (reused per operation)
+    model_filter_clause = ""
+    model_filter_params = []
+    if model_filter:
+        like_clauses = " OR ".join(["m2.source_file ILIKE %s"] * len(model_filter))
+        model_filter_clause = f"""
+            AND EXISTS (
+                SELECT 1 FROM {schema}.ttnn_configuration_model cm2
+                JOIN {schema}.ttnn_model m2 ON m2.ttnn_model_id = cm2.model_id
+                WHERE cm2.configuration_id = c.ttnn_configuration_id
+                AND ({like_clauses})
+            )"""
+        model_filter_params = [f"%{pattern}%" for pattern in model_filter]
 
     for op_id, op_name in operations:
         # Get all configurations for this operation
@@ -669,9 +704,10 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2"):
                 LEFT JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
                 LEFT JOIN {schema}.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
                 WHERE c.operation_id = %s
+                {model_filter_clause}
                 ORDER BY c.ttnn_configuration_id
             """,
-                (op_id,),
+                [op_id] + model_filter_params,
             )
         else:
             # V1 schema has placement fields in mesh_config
@@ -695,9 +731,10 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2"):
                 LEFT JOIN {schema}.ttnn_hardware h ON h.ttnn_hardware_id = c.hardware_id
                 LEFT JOIN {schema}.ttnn_mesh_config mc ON mc.ttnn_mesh_config_id = c.mesh_config_id
                 WHERE c.operation_id = %s
+                {model_filter_clause}
                 ORDER BY c.ttnn_configuration_id
             """,
-                (op_id,),
+                [op_id] + model_filter_params,
             )
         configs = cur.fetchall()
 
@@ -723,7 +760,14 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2"):
                 distribution_shape,
             ) = config_row
 
-            # Get all sources linked to this config (with execution_count for V2)
+            # Get sources linked to this config (filtered by model_filter if set)
+            source_filter_clause = ""
+            source_filter_params = []
+            if model_filter:
+                like_clauses = " OR ".join(["m.source_file ILIKE %s"] * len(model_filter))
+                source_filter_clause = f" AND ({like_clauses})"
+                source_filter_params = [f"%{pattern}%" for pattern in model_filter]
+
             if schema == "ttnn_ops_v2":
                 cur.execute(
                     f"""
@@ -731,9 +775,10 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2"):
                     FROM {schema}.ttnn_configuration_model cm
                     JOIN {schema}.ttnn_model m ON m.ttnn_model_id = cm.model_id
                     WHERE cm.configuration_id = %s
+                    {source_filter_clause}
                     ORDER BY m.source_file, m.hf_model_identifier
                 """,
-                    (config_id,),
+                    [config_id] + source_filter_params,
                 )
                 source_rows = cur.fetchall()
             else:
@@ -743,9 +788,10 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2"):
                     FROM {schema}.ttnn_configuration_model cm
                     JOIN {schema}.ttnn_model m ON m.ttnn_model_id = cm.model_id
                     WHERE cm.configuration_id = %s
+                    {source_filter_clause}
                     ORDER BY m.source_file, m.hf_model_identifier
                 """,
-                    (config_id,),
+                    [config_id] + source_filter_params,
                 )
                 source_rows = cur.fetchall()
 
@@ -1261,7 +1307,19 @@ if __name__ == "__main__":
         elif cmd == "reconstruct":
             output = sys.argv[2] if len(sys.argv) > 2 else "ttnn_operations_reconstructed.json"
             schema = sys.argv[3] if len(sys.argv) > 3 else "ttnn_ops_v2"
-            reconstruct_from_db(output, schema)
+            model_filter = sys.argv[4].split(",") if len(sys.argv) > 4 else None
+            reconstruct_from_db(output, schema, model_filter)
+        elif cmd == "reconstruct-lead":
+            from tests.sweep_framework.framework.constants import LEAD_MODELS
+
+            output = (
+                sys.argv[2]
+                if len(sys.argv) > 2
+                else "model_tracer/traced_operations/ttnn_operations_master_v2_reconstructed.json"
+            )
+            schema = sys.argv[3] if len(sys.argv) > 3 else "ttnn_ops_v2"
+            print(f"Using lead model patterns: {LEAD_MODELS}")
+            reconstruct_from_db(output, schema, model_filter=LEAD_MODELS)
         elif cmd == "reconstruct-op":
             if len(sys.argv) < 3:
                 print("Usage: python load_ttnn_ops_data_v2.py reconstruct-op <operation_name> [output.json]")
@@ -1288,13 +1346,20 @@ if __name__ == "__main__":
         else:
             print(f"Unknown command: {cmd}")
             print("Usage:")
-            print("  python load_ttnn_ops_data_v2.py load                         # Load JSON to DB")
+            print("  python load_ttnn_ops_data_v2.py load                                        # Load JSON to DB")
             print(
-                "  python load_ttnn_ops_data_v2.py reconstruct [output] [schema] # Reconstruct JSON from DB (schema: ttnn_ops or ttnn_ops_v2)"
+                "  python load_ttnn_ops_data_v2.py reconstruct [output] [schema] [models]      # Reconstruct JSON from DB"
             )
-            print("  python load_ttnn_ops_data_v2.py reconstruct-op <name>        # Reconstruct single op")
-            print("  python load_ttnn_ops_data_v2.py verify [original] [reconstructed]  # Compare files")
-            print("  python load_ttnn_ops_data_v2.py duplicates [json] [op]       # Detect duplicates")
-            print("  python load_ttnn_ops_data_v2.py find-lines <op> <i1,i2>     # Find config line numbers")
+            print(
+                "  python load_ttnn_ops_data_v2.py reconstruct-lead [output] [schema]           # Reconstruct lead models only"
+            )
+            print(
+                "  python load_ttnn_ops_data_v2.py reconstruct-op <name>                       # Reconstruct single op"
+            )
+            print("  python load_ttnn_ops_data_v2.py verify [original] [reconstructed]            # Compare files")
+            print("  python load_ttnn_ops_data_v2.py duplicates [json] [op]                      # Detect duplicates")
+            print(
+                "  python load_ttnn_ops_data_v2.py find-lines <op> <i1,i2>                     # Find config line numbers"
+            )
     else:
         load_data()

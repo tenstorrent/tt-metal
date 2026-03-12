@@ -30,7 +30,6 @@
 
 #include "buffer_types.hpp"
 #include "circular_buffer_config.hpp"
-#include "data_types.hpp"
 #include "llrt/tt_cluster.hpp"
 #include <umd/device/cluster.hpp>
 #include <umd/device/cluster_descriptor.hpp>
@@ -820,11 +819,16 @@ bool ConfigureDeviceWithProgram(IDevice* device, Program& program, bool force_sl
 
     auto device_id = device->id();
 
-    program.impl().allocate_circular_buffers(device);
-    program.impl().validate_circular_buffer_core_ranges(device);
-    program.impl().validate_circular_buffer_region(device);
-    program.impl().allocate_dataflow_buffers(device);
-    program.impl().validate_dataflow_buffer_region(device);
+    // Individual device allocators don't track mesh buffer allocations, so use the
+    // MeshDevice for validation when available to correctly detect CB/L1 buffer overlaps.
+    auto mesh_device = device->get_mesh_device();
+    const IDevice* validation_device = mesh_device ? mesh_device.get() : device;
+
+    program.impl().allocate_circular_buffers(validation_device);
+    program.impl().validate_circular_buffer_core_ranges(validation_device);
+    program.impl().validate_circular_buffer_region(validation_device);
+    program.impl().allocate_dataflow_buffers(validation_device);
+    program.impl().validate_dataflow_buffer_region(validation_device);
 
     std::vector<std::vector<CoreCoord>> logical_cores_used_in_program = program.impl().logical_cores();
     const auto& hal = MetalContext::instance().hal();
@@ -1606,44 +1610,80 @@ void UpdateDynamicCircularBufferAddress(
 
 namespace quasar {
 
+std::set<DataMovementProcessor> GetDataMovementProcessorsInUseOnKernelGroup(
+    Program& program, const KernelGroup* kernel_group) {
+    if (kernel_group == nullptr) {
+        return {};
+    }
+    std::set<DataMovementProcessor> processors_in_use;
+    for (const KernelHandle kernel_id : kernel_group->kernel_ids) {
+        const std::shared_ptr<Kernel> kernel = program.impl().get_kernel(kernel_id);
+        if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
+            const std::shared_ptr<QuasarDataMovementKernel> dm_kernel =
+                std::dynamic_pointer_cast<QuasarDataMovementKernel>(kernel);
+            TT_ASSERT(dm_kernel != nullptr);
+            const std::vector<DataMovementProcessor> dm_processors = dm_kernel->get_dm_processors();
+            processors_in_use.insert(dm_processors.begin(), dm_processors.end());
+        }
+    }
+    return processors_in_use;
+}
+
+bool DoesKernelGroupHaveComputeKernel(Program& program, const KernelGroup* kernel_group) {
+    if (kernel_group == nullptr) {
+        return false;
+    }
+    for (const KernelHandle kernel_id : kernel_group->kernel_ids) {
+        const std::shared_ptr<Kernel> kernel = program.impl().get_kernel(kernel_id);
+        if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
+            return true;
+        }
+    }
+    return false;
+}
+
 template <typename ProcessorClassType>
 std::set<ProcessorClassType> GetProcessorsPerClusterQuasar(
     Program& program, const CoreRangeSet& core_ranges, uint32_t num_processors_per_cluster) {
-    TT_FATAL(core_ranges.num_cores() == 1, "Currently, kernels can only be created on a single cluster in Quasar.");
-
     std::set<ProcessorClassType> processors(
         enchantum::values<ProcessorClassType>.begin(), enchantum::values<ProcessorClassType>.end());
-    const auto& hal = MetalContext::instance().hal();
-    for (const auto& core_range : core_ranges.ranges()) {
+    std::vector<std::set<DataMovementProcessor>> dm_processors_in_use_per_kernel_group;
+
+    std::unordered_set<const KernelGroup*> kernel_groups;
+    for (const CoreRange& core_range : core_ranges.ranges()) {
         for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; x++) {
             for (auto y = core_range.start_coord.y; y <= core_range.end_coord.y; y++) {
                 const KernelGroup* kernel_group = program.impl().kernels_on_core(
-                    CoreCoord(x, y), hal.get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
-                if (kernel_group != nullptr) {
-                    for (const KernelHandle kernel_id : kernel_group->kernel_ids) {
-                        const auto kernel = program.impl().get_kernel(kernel_id);
-                        if constexpr (std::is_same_v<ProcessorClassType, DataMovementProcessor>) {
-                            if (kernel->get_kernel_processor_class() == HalProcessorClassType::DM) {
-                                const QuasarDataMovementConfig config =
-                                    std::get<QuasarDataMovementConfig>(kernel->config());
-                                const uint32_t num_processors_in_use = config.num_threads_per_cluster;
-                                const uint32_t start_processor_type = kernel->get_kernel_processor_type(0);
-                                for (uint32_t i = start_processor_type;
-                                     i < start_processor_type + num_processors_in_use;
-                                     i++) {
-                                    TT_ASSERT(processors.contains(static_cast<ProcessorClassType>(i)));
-                                    processors.erase(static_cast<ProcessorClassType>(i));
-                                }
-                            }
-                        } else if constexpr (std::is_same_v<ProcessorClassType, QuasarComputeProcessor>) {
-                            if (kernel->get_kernel_processor_class() == HalProcessorClassType::COMPUTE) {
-                                TT_THROW("In Quasar, each cluster can only have a single compute kernel.");
-                            }
-                        }
-                    }
-                }
+                    CoreCoord(x, y),
+                    MetalContext::instance().hal().get_programmable_core_type_index(HalProgrammableCoreType::TENSIX));
+                kernel_groups.insert(kernel_group);
             }
         }
+    }
+
+    // NOLINTNEXTLINE(bugprone-nondeterministic-pointer-iteration-order)
+    for (const KernelGroup* kernel_group : kernel_groups) {
+        if constexpr (std::is_same_v<ProcessorClassType, DataMovementProcessor>) {
+            const std::set<DataMovementProcessor> dm_processors_in_use_on_kernel_group =
+                GetDataMovementProcessorsInUseOnKernelGroup(program, kernel_group);
+            dm_processors_in_use_per_kernel_group.push_back(dm_processors_in_use_on_kernel_group);
+            for (const DataMovementProcessor dm_processor : dm_processors_in_use_on_kernel_group) {
+                processors.erase(dm_processor);
+            }
+        } else if constexpr (std::is_same_v<ProcessorClassType, QuasarComputeProcessor>) {
+            TT_FATAL(
+                !DoesKernelGroupHaveComputeKernel(program, kernel_group),
+                "In Quasar, each cluster can only have a single compute kernel.");
+        }
+    }
+
+    for (uint32_t i = 1; i < dm_processors_in_use_per_kernel_group.size(); i++) {
+        TT_FATAL(
+            dm_processors_in_use_per_kernel_group[i] == dm_processors_in_use_per_kernel_group[i - 1],
+            "All clusters in {} must have the same data movement processors already in use to reserve {} new data "
+            "movement processors per cluster.",
+            core_ranges,
+            num_processors_per_cluster);
     }
 
     while (processors.size() > num_processors_per_cluster) {
