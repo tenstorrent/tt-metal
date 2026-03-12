@@ -487,6 +487,8 @@ example_check_7() {
     cat <<'EOF'
 # BEFORE (token value visible in workflow logs):
   run: echo "Token: $GITHUB_TOKEN"
+  run: printf '%s\n' "$GITHUB_TOKEN"
+  run: python -c "import os; print(os.environ.get('GITHUB_TOKEN'))"
 # AFTER (use token directly without logging, or mask it):
   run: |
     echo "::add-mask::$GITHUB_TOKEN"
@@ -496,8 +498,8 @@ EOF
 
 check_7() {
     local file="$1"
-    if grep -qE 'echo.*\$\{?\{?(GITHUB_TOKEN|ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)' "$file" 2>/dev/null; then
-        log_issue "HIGH" "$file" "Potential token exposure in echo/print statement"
+    if grep -qE '(echo|printf).*\$\{?\{?(GITHUB_TOKEN|ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)|print\s*\(.*(GITHUB_TOKEN|ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)' "$file" 2>/dev/null; then
+        log_issue "HIGH" "$file" "Potential token exposure in echo/printf/print statement"
         return 1
     fi
     return 0

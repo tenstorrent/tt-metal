@@ -269,6 +269,28 @@ jobs:
         run: curl -H "Authorization: Bearer $GITHUB_TOKEN" https://api.github.com/repos
 EOF
 
+assert_detects "check 7 flags printf token exposure" "7" "token exposure" <<'EOF'
+name: test
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug
+        run: printf '%s\n' "$GITHUB_TOKEN"
+EOF
+
+assert_detects "check 7 flags Python print token exposure" "7" "token exposure" <<'EOF'
+name: test
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Debug
+        run: python -c "import os; print(os.environ.get('GITHUB_TOKEN', 'none'))"
+EOF
+
 # --- Check 8: Overly broad permissions ---
 
 assert_detects "check 8 flags write-all permissions" "8" "write-all" <<'EOF'
