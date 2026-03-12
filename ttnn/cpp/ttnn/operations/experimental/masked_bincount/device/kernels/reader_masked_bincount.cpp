@@ -9,7 +9,6 @@ void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t dst_addr = get_arg_val<uint32_t>(1);
     uint32_t h_start = get_arg_val<uint32_t>(2);
-    uint32_t is_collector = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
@@ -23,9 +22,6 @@ void kernel_main() {
     constexpr uint32_t done_sem_idx = get_compile_time_arg_val(9);
     constexpr uint32_t gather_sem_idx = get_compile_time_arg_val(10);
     constexpr uint32_t cb_gather_tmp = get_compile_time_arg_val(11);
-    constexpr uint32_t collector_noc_x = get_compile_time_arg_val(12);
-    constexpr uint32_t collector_noc_y = get_compile_time_arg_val(13);
-    constexpr uint32_t num_cores = get_compile_time_arg_val(14);
 
     constexpr uint32_t src_accessor_offset = 15;
     constexpr auto src_args = TensorAccessorArgs<src_accessor_offset>();
@@ -77,40 +73,42 @@ void kernel_main() {
     noc_semaphore_inc(done_sem_noc_addr, 1);
     noc_async_atomic_barrier();
 
-    // Phase 3: Gather — BRISC only
+    // Phase 3: Tree reduction — BRISC only
     if constexpr (is_initializer) {
         volatile tt_l1_ptr uint32_t* done_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_sem_addr);
         noc_semaphore_wait_min(done_sem_ptr, 2);
 
-        // Signal collector that this core's local histogram is ready
+        uint32_t num_receive = get_arg_val<uint32_t>(3);
+        uint32_t parent_noc_x = get_arg_val<uint32_t>(4);
+        uint32_t parent_noc_y = get_arg_val<uint32_t>(5);
+
         uint32_t gather_sem_addr = get_semaphore(gather_sem_idx);
-        uint64_t collector_gather_noc = get_noc_addr(collector_noc_x, collector_noc_y, gather_sem_addr);
-        noc_semaphore_inc(collector_gather_noc, 1);
-        noc_async_atomic_barrier();
+        volatile tt_l1_ptr uint32_t* gather_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gather_sem_addr);
 
-        if (is_collector) {
-            volatile tt_l1_ptr uint32_t* gather_sem_ptr =
-                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gather_sem_addr);
-            noc_semaphore_wait_min(gather_sem_ptr, num_cores);
+        uint32_t tmp_addr = get_write_ptr(cb_gather_tmp);
+        volatile tt_l1_ptr uint32_t* local_hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
 
-            uint32_t tmp_addr = get_write_ptr(cb_gather_tmp);
-            volatile tt_l1_ptr uint32_t* local_hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
+        for (uint32_t level = 0; level < num_receive; level++) {
+            noc_semaphore_wait_min(gather_sem_ptr, level + 1);
 
-            uint32_t num_remote = num_cores - 1;
-            for (uint32_t c = 0; c < num_remote; c++) {
-                uint32_t remote_noc_x = get_arg_val<uint32_t>(4 + c * 2);
-                uint32_t remote_noc_y = get_arg_val<uint32_t>(4 + c * 2 + 1);
+            uint32_t child_noc_x = get_arg_val<uint32_t>(6 + level * 2);
+            uint32_t child_noc_y = get_arg_val<uint32_t>(6 + level * 2 + 1);
 
-                uint64_t remote_hist_noc = get_noc_addr(remote_noc_x, remote_noc_y, out_addr);
-                noc_async_read(remote_hist_noc, tmp_addr, output_page_size);
-                noc_async_read_barrier();
+            uint64_t child_hist_noc = get_noc_addr(child_noc_x, child_noc_y, out_addr);
+            noc_async_read(child_hist_noc, tmp_addr, output_page_size);
+            noc_async_read_barrier();
 
-                volatile tt_l1_ptr uint32_t* remote_hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tmp_addr);
-                for (uint32_t i = 0; i < n_routed_experts; i++) {
-                    local_hist[i] += remote_hist[i];
-                }
+            volatile tt_l1_ptr uint32_t* remote_hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tmp_addr);
+            for (uint32_t i = 0; i < n_routed_experts; i++) {
+                local_hist[i] += remote_hist[i];
             }
+        }
 
+        if (parent_noc_x != 0xFFFFFFFF) {
+            uint64_t parent_gather_noc = get_noc_addr(parent_noc_x, parent_noc_y, gather_sem_addr);
+            noc_semaphore_inc(parent_gather_noc, 1);
+            noc_async_atomic_barrier();
+        } else {
             uint64_t dst_noc_addr = dst_accessor.get_noc_addr(0);
             noc_async_write(out_addr, dst_noc_addr, output_page_size);
             noc_async_write_barrier();
