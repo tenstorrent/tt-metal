@@ -1,5 +1,8 @@
 # Context: Ring Joint SDPA Codebase
 
+> **Related**: This document supports Phase 1 (✅ COMPLETED) and Phase 2 implementation.
+> See `zigzag_profile_vision.md` for the full roadmap.
+
 This document captures all the context gathered while analyzing the ring_joint_sdpa implementation for creating a single-device profiling op.
 
 ---

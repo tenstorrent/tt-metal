@@ -35,17 +35,19 @@ Create a **single-device profiling op** (`ring_joint_sdpa_profile`) that:
 
 ## Journey / Implementation Phases
 
-### Phase 1: Correctness Test (Current Step)
-**Goal**: Verify the profiling op produces correct results
+### Phase 1: Test Infrastructure ✅ COMPLETED
+**Goal**: Build test infrastructure and PyTorch reference for validating the profiling op
 
-- Write minimal test: `ring_size=2`, `ring_index=0`, causal+balanced, no joint tensors
-- Implement helper functions for chunk ordering and data preparation
-- Create PyTorch reference that computes expected output
-- Validate profiling op output matches reference
+- ✅ Write minimal test: `ring_size=2`, `ring_index=0`, causal+balanced, no joint tensors
+- ✅ Implement helper functions for chunk ordering and data preparation
+- ✅ Create PyTorch reference that computes expected output
+- ✅ Unit tests for all helper functions (26 tests passing)
 
-**Success Criteria**: Test passes with PCC > 0.99
+**Deliverable**: `tests/ttnn/unit_tests/operations/sdpa/test_ring_joint_sdpa_profile.py`
 
-### Phase 2: Full Op Implementation
+**Status**: Completed 2026-03-12. All 26 tests pass. Ready for Phase 2 (op implementation).
+
+### Phase 2: Full Op Implementation (Next Step)
 **Goal**: Implement the profiling op with all kernel changes
 
 - Create new device operation files
@@ -157,6 +159,6 @@ The profiling op bridges `ring_joint_sdpa` and single-device profiling capabilit
 
 ## File References
 
-- **Plan**: `local.md` - Detailed implementation plan
-- **Context**: `context.md` - Codebase details and kernel analysis
-- **Test location**: `tests/ttnn/unit_tests/operations/sdpa/test_ring_joint_sdpa_profile.py` (to be created)
+- **Phase 1 Plan**: `zigzag_profile_phase1_plan.md` - Test infrastructure plan (COMPLETED)
+- **Context**: `zigzag_profile_codebase_context.md` - Codebase details and kernel analysis
+- **Test file**: `tests/ttnn/unit_tests/operations/sdpa/test_ring_joint_sdpa_profile.py`

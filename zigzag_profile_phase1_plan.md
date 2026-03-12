@@ -1,4 +1,12 @@
-# Single-Device Profiling Op for Ring Joint SDPA
+# Phase 1: Test Infrastructure for Ring Joint SDPA Profiling
+
+> **Status**: ✅ COMPLETED (2026-03-12)
+>
+> **Deliverable**: `tests/ttnn/unit_tests/operations/sdpa/test_ring_joint_sdpa_profile.py`
+>
+> **Results**: 26 tests passing (helper functions, data preparation, PyTorch reference)
+
+---
 
 ## Goal
 
