@@ -161,6 +161,18 @@ class TtResnetBlock2D(LightweightModule):
         hidden_states = ttnn.silu(hidden_states, output_tensor=hidden_states)
 
         hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
+
+        # reshard to 8x10
+        # this is done to avoid unique+common args reshard_reader_diff_width error
+        sharded_mem_config_ = ttnn.create_sharded_memory_config_(
+            shape=hidden_states.shape,
+            core_grid=ttnn.CoreGrid(y=8, x=10),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config_)
+        # conv2d has reshard_if_not_optimal=True so it will sometimes reshard again but it is cheap
+
         [hidden_states, [H, W], [tt_conv1_weights, tt_conv1_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
             weight_tensor=self.tt_conv1_weights,
@@ -227,6 +239,17 @@ class TtResnetBlock2D(LightweightModule):
         )
 
         ttnn.silu(hidden_states, output_tensor=hidden_states)
+
+        # reshard to 8x10
+        # this is done to avoid unique+common args reshard_reader_diff_width error
+        sharded_mem_config_ = ttnn.create_sharded_memory_config_(
+            shape=hidden_states.shape,
+            core_grid=ttnn.CoreGrid(y=8, x=10),
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        hidden_states = ttnn.to_memory_config(hidden_states, sharded_mem_config_)
+        # conv2d has reshard_if_not_optimal=True so it will sometimes reshard again but it is cheap
 
         [hidden_states, [H, W], [tt_conv2_weights, tt_conv2_bias]] = ttnn.conv2d(
             input_tensor=hidden_states,
