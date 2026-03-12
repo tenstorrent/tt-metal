@@ -48,7 +48,6 @@ Usage (DP + TP):
 """
 
 from typing import Optional
-import numpy as np
 import torch
 from tqdm.auto import tqdm
 import ttnn
@@ -58,7 +57,6 @@ from ttml.modules import AbstractModuleBase, ModuleList, Parameter
 from model_qwen3 import Qwen3Config, Qwen3RMSNorm, ConcatLastDim, linear
 from utils.memory import memory_snapshot
 from utils.checkpoint import (  # noqa: F401 — re-exported for callers
-    CheckpointFunction,
     checkpoint,
     checkpoint_scattered,
 )
@@ -70,7 +68,6 @@ from utils.param_utils import (
 from utils.tensor_utils import (
     get_device,
     get_tp_size,
-    tile_pad as _tile_pad,
     make_empty_on_device as _make_empty_on_device,
     make_weight as _make_weight,
     make_ones as _make_ones,

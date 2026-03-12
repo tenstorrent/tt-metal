@@ -573,7 +573,6 @@ def main():
 
     distributed = tp_size > 1 or dp_size > 1
     use_distributed_model = tp_size > 1
-    total_devices = dp_size * tp_size
 
     # ------------------------------------------------------------------
     # 1. Load HuggingFace model (pretrained)

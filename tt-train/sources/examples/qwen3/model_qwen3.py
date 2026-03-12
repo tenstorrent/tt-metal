@@ -20,12 +20,9 @@ import ttnn
 import ttml
 from ttml.modules import AbstractModuleBase, ModuleList, Parameter
 
-from utils.checkpoint import (  # noqa: F401 — re-exported for callers
-    CheckpointFunction,
-    checkpoint,
-)
+from utils.checkpoint import checkpoint
+
 from utils.tensor_utils import (
-    get_device as _get_device,
     torch_to_ttml as _torch_to_ttml,
     tile_pad as _tile_pad,
     make_empty_on_device as _make_empty_on_device,
@@ -36,12 +33,11 @@ from utils.tensor_utils import (
 from utils.param_utils import (  # noqa: F401 — re-exported for callers
     unpermute_proj_rows,
     unpermute_norm_weights,
-    repermute_proj_rows,
     repermute_norm_weights,
     build_weight_mapping_single,
 )
 
-from utils.memory import MemoryUsageTracker, memory_snapshot
+from utils.memory import memory_snapshot
 
 
 # =====================================================================
