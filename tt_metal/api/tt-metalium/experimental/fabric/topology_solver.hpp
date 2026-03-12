@@ -356,6 +356,22 @@ public:
         const;
 
     /**
+     * @brief Set same-group constraint (for UNSET host rank binding)
+     *
+     * Ensures that targets in the same target group can only map to globals in one global group.
+     * The solver picks the assignment; no pre-assignment. Apply required constraints (e.g. rank
+     * must map to specific host) after this for explicit bindings.
+     *
+     * @param target_groups Vector of sets; each set is target nodes (e.g. fabric nodes per rank)
+     * @param global_groups Vector of sets; each set is global nodes (e.g. ASICs per host)
+     */
+    void set_same_rank_groups_constraint(
+        const std::vector<std::set<TargetNode>>& target_groups, const std::vector<std::set<GlobalNode>>& global_groups);
+
+    const std::vector<std::set<TargetNode>>& get_same_rank_target_groups() const { return same_rank_target_groups_; }
+    const std::vector<std::set<GlobalNode>>& get_same_rank_global_groups() const { return same_rank_global_groups_; }
+
+    /**
      * @brief Get forbidden (target, global) pairs that are invalid even when no required constraints exist
      *
      * Used when add_forbidden_constraint is called for a target with no valid_mappings_ entry.
@@ -387,6 +403,10 @@ private:
     // Cardinality constraints: vector of (mapping_pairs, min_count) tuples
     // Each constraint requires that at least min_count of the mapping_pairs must be satisfied
     std::vector<std::pair<std::set<std::pair<TargetNode, GlobalNode>>, size_t>> cardinality_constraints_;
+
+    // Same-group constraint: targets in a target group map to at most one global group
+    std::vector<std::set<TargetNode>> same_rank_target_groups_;
+    std::vector<std::set<GlobalNode>> same_rank_global_groups_;
 
     // Track which global nodes are exclusively reserved by many-to-many constraints
     // Maps global node -> set of target nodes that are allowed to map to it via many-to-many constraints
@@ -577,6 +597,11 @@ struct ConstraintIndexData {
     // Each constraint requires that at least min_count of the (target_idx, global_idx) pairs must be satisfied
     std::vector<std::pair<std::set<std::pair<size_t, size_t>>, size_t>> cardinality_constraints;
 
+    // Same-group: target_idx/global_idx -> group_id (-1 or SIZE_MAX if not in any group)
+    std::vector<int> global_to_same_rank_group;
+    std::vector<std::set<size_t>> same_rank_groups;
+    std::vector<size_t> target_to_group;
+
     /**
      * @brief Construct ConstraintIndexData from MappingConstraints and GraphIndexData
      *
@@ -622,6 +647,16 @@ struct ConstraintIndexData {
 
     // Helper: check if mapping is valid
     bool is_valid_mapping(size_t target_idx, size_t global_idx) const;
+
+    /**
+     * @brief Check if assigning (target_idx, global_idx) satisfies same-rank groups constraint
+     *
+     * Ensures no target-group boundary splitting: all other targets in target_idx's group
+     * that are already assigned must map to globals in the same global group as global_idx.
+     * Multiple target groups may share a global group.
+     */
+    bool check_same_rank_constraint(
+        size_t target_idx, size_t global_idx, const std::vector<int>& mapping, const std::vector<bool>& used) const;
 
     // Helper: get candidates for target node
     // Returns restricted candidates if available, otherwise returns empty vector (meaning all are valid)
