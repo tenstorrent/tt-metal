@@ -474,7 +474,7 @@ class LogProbsCalculator:
 
     def get_host_results(
         self,
-        log_probs_result: LogProbsResult,
+        log_probs_result: LogProbsResult | None,
         sampled_token_ids: torch.Tensor,
         mesh_device,
         num_logprobs_per_user: list[int] | None = None,

@@ -857,3 +857,137 @@ def test_set_log_probs_mode_validation(shape, mesh_device):
     calc.set_log_probs_mode(True, num_logprobs=0)
     assert calc.enable_log_probs is True
     assert not calc.top_k_logprobs_needed
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        [1, 1, 32, 8 * 18992],  # Qwen3 on T3K with 8 TP shards
+    ],
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        ({"fabric_config": ttnn.FabricConfig.FABRIC_1D}),
+    ],
+    indirect=["device_params"],
+    ids=["fabric_linear"],
+)
+def test_top_k_logprobs_pcc_host_vs_device_20_logprobs(shape, mesh_device):
+    """Compare host (PyTorch) vs device logprobs for a full batch with 20 top logprobs.
+
+    For every user in the batch this test:
+    1. Computes the full log-softmax on host (PyTorch float32 – ground truth).
+    2. Runs calculate_top_k_log_probs on device (bfloat16).
+    3. Transfers the device top-k logprobs to host via get_host_results.
+    4. For each user, looks up the PyTorch logprobs at the same token indices
+       that the device returned and checks PCC >= 0.99.
+
+    This covers the full end-to-end path: global stats computation, top-k
+    logprob formula, host transfer, sorting, and per-user trimming to 20.
+    """
+    seed = 9999
+    torch.manual_seed(seed)
+    batch_size = shape[2]
+    num_devices = 8
+    top_k = 32
+    requested_logprobs = MAX_TOP_LOGPROBS  # 20
+
+    log_probs_calculator = LogProbsCalculator(mesh_device, batch_size=batch_size)
+
+    # Generate random logits and shuffle per batch item for realistic distribution
+    torch_tensor = torch.randn(shape)
+    for i in range(batch_size):
+        torch_tensor[:, :, i, :] = torch_tensor[:, :, i, torch.randperm(shape[-1])]
+
+    # Ground truth: full log-softmax from PyTorch (float32)
+    log_probs_torch = F.log_softmax(torch_tensor.float(), dim=-1)
+
+    # Simulate gathered top-k (mirrors TTSampling all-gather)
+    gathered_values, gathered_indices = _simulate_gathered_topk(torch_tensor, num_devices, top_k)
+
+    # Sampled token indices (argmax)
+    argmax_tensor = torch.argmax(torch_tensor, dim=-1, keepdim=True)
+    sampled_indices = argmax_tensor.reshape(1, 1, argmax_tensor.shape[-1], argmax_tensor.shape[-2])
+
+    # Push tensors to device
+    logits_tensor = ttnn.from_torch(
+        torch_tensor,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=-1),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    topk_values_tt = ttnn.from_torch(
+        gathered_values,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    topk_indices_tt = ttnn.from_torch(
+        gathered_indices.to(torch.int32),
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+    sampled_indices_tt = ttnn.from_torch(
+        sampled_indices,
+        device=mesh_device,
+        dtype=ttnn.int32,
+        layout=ttnn.TILE_LAYOUT,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    # All users request 20 logprobs
+    enable_log_probs = [True] * batch_size
+    num_logprobs_list = [requested_logprobs] * batch_size
+    log_probs_calculator.set_log_probs_mode(enable_log_probs, num_logprobs=num_logprobs_list)
+
+    # Run device computation
+    result = log_probs_calculator.calculate_top_k_log_probs(
+        logits_tensor, topk_values_tt, topk_indices_tt, sampled_indices_tt
+    )
+    assert result is not None, "Expected LogProbsResult"
+
+    # Get structured host results (sorted, trimmed to 20 per user)
+    sampled_ids = argmax_tensor.squeeze()
+    host_results = log_probs_calculator.get_host_results(result, sampled_ids, mesh_device)
+    assert len(host_results) == batch_size
+
+    # Compare each user's top-20 device logprobs against PyTorch reference
+    for user in range(batch_size):
+        r = host_results[user]
+        assert r is not None, f"User {user} result is None"
+
+        # -- Sampled token logprob --
+        device_sampled_lp = r["returned_token"]["logprob"]
+        token_idx = r["returned_token"]["token_idx"]
+        torch_sampled_lp = log_probs_torch[0, 0, user, token_idx].item()
+        # Allow small tolerance for bfloat16 vs float32
+        assert abs(device_sampled_lp - torch_sampled_lp) < 0.05, (
+            f"User {user} sampled token logprob mismatch: device={device_sampled_lp:.6f}, "
+            f"torch={torch_sampled_lp:.6f}"
+        )
+
+        # -- Top-20 logprobs PCC --
+        top_indices = r["top_logprobs"]["token_indices"]
+        top_lps_device = torch.tensor(r["top_logprobs"]["logprobs"], dtype=torch.float32)
+        assert (
+            len(top_indices) == requested_logprobs
+        ), f"User {user}: expected {requested_logprobs} top logprobs, got {len(top_indices)}"
+
+        # Look up the PyTorch logprobs for the exact same token indices
+        top_lps_torch = log_probs_torch[0, 0, user, top_indices].float()
+
+        passing, pcc = comp_pcc(top_lps_torch.unsqueeze(0), top_lps_device.unsqueeze(0), pcc=0.99)
+        assert passing, (
+            f"User {user} top-{requested_logprobs} logprobs PCC failed: {pcc}\n"
+            f"  device: {top_lps_device[:5].tolist()}...\n"
+            f"  torch:  {top_lps_torch[:5].tolist()}..."
+        )
