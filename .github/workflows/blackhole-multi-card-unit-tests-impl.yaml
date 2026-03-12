@@ -60,16 +60,16 @@ jobs:
             test-type: fast-viommu
           - name: cpp fast unit tests (eth, single erisc)
             cmd: |
-              python3 .github/scripts/run_with_backtrace_timeout.py ./build/test/tt_metal/unit_tests_eth
-              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_eth
+              ./build/test/tt_metal/unit_tests_eth
+              TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_eth
               python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests '--gtest_filter=Fabric1D*Fixture.*'
-              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_eth
-              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=DPrintMeshFixture.ActiveEthTestPrint
-              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TensixTestWatcherPause
-              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TestWatcherAssert
-              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth
-              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramFixture.ActiveEthTestPrograms
-              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace
+              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_eth
+              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=DPrintMeshFixture.ActiveEthTestPrint
+              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TensixTestWatcherPause
+              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TestWatcherAssert
+              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth
+              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramFixture.ActiveEthTestPrograms
+              TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace
             timeout: 15
             test-type: fast
           - name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
