@@ -40,8 +40,8 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
             ready = true;
             for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
                 dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
-                ASSERT(llk_intf_get_capacity(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) >= num_entries);
-                if (llk_intf_get_free_space(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) < num_entries) {
+                ASSERT(overlay::llk_intf_get_capacity(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) >= num_entries);
+                if (overlay::llk_intf_get_free_space(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) < num_entries) {
                     ready = false;
                     break;
                 }
@@ -49,8 +49,8 @@ inline void DataflowBuffer::reserve_back_impl(uint16_t num_entries) {
         }
     } else {
         uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
-        ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
-        while (llk_intf_get_free_space(tensix_id, tc_id) < num_entries);
+        ASSERT(overlay::llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
+        while (overlay::llk_intf_get_free_space(tensix_id, tc_id) < num_entries);
     }
 #endif
 }
@@ -66,8 +66,8 @@ inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
         // DM-DM BLOCKED: post to all N TCs; wr_ptr tracked on slot 0
         for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
             dfb::PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
-            ASSERT(llk_intf_get_capacity(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) >= num_entries);
-            llk_intf_inc_posted(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc), num_entries);
+            ASSERT(overlay::llk_intf_get_capacity(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc)) >= num_entries);
+            overlay::llk_intf_inc_posted(dfb::get_tensix_id(ptc), dfb::get_counter_id(ptc), num_entries);
         }
         local_dfb_interface_.tc_slots[0].wr_ptr += (num_entries * local_dfb_interface_.stride_size);
         if (local_dfb_interface_.tc_slots[0].wr_ptr >= local_dfb_interface_.tc_slots[0].limit) {
@@ -76,8 +76,8 @@ inline void DataflowBuffer::push_back_impl(uint16_t num_entries) {
         // tc_idx deliberately not advanced
     } else {
         uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
-        ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
-        llk_intf_inc_posted(tensix_id, tc_id, num_entries);
+        ASSERT(overlay::llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
+        overlay::llk_intf_inc_posted(tensix_id, tc_id, num_entries);
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr += (num_entries * local_dfb_interface_.stride_size);
         if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr >= local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
             local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].wr_ptr = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
@@ -99,8 +99,8 @@ inline void DataflowBuffer::wait_front_impl(uint16_t num_entries) {
     llk_wait_tiles(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
-    ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
-    while (llk_intf_get_occupancy(tensix_id, tc_id) < num_entries);
+    ASSERT(overlay::llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
+    while (overlay::llk_intf_get_occupancy(tensix_id, tc_id) < num_entries);
 #endif
 }
 
@@ -115,8 +115,8 @@ inline void DataflowBuffer::pop_front_impl(uint16_t num_entries) {
     llk_pop_tiles(logical_dfb_id_, num_entries);
 #elif !defined(COMPILE_FOR_TRISC)
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
-    ASSERT(llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
-    llk_intf_inc_acked(tensix_id, tc_id, num_entries);
+    ASSERT(overlay::llk_intf_get_capacity(tensix_id, tc_id) >= num_entries);
+    overlay::llk_intf_inc_acked(tensix_id, tc_id, num_entries);
     local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr += (num_entries * local_dfb_interface_.stride_size);
     if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr >= local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
@@ -149,7 +149,7 @@ inline void DataflowBuffer::finish_impl() {
 #elif !defined(COMPILE_FOR_TRISC)
             uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
             all_acked &=
-                (fast_llk_intf_read_acked(tensix_id, tc_id) == fast_llk_intf_read_posted(tensix_id, tc_id));
+                (overlay::overlay::fast_llk_intf_read_acked(tensix_id, tc_id) == overlay::overlay::fast_llk_intf_read_posted(tensix_id, tc_id));
 #endif
         }
     }
@@ -183,10 +183,10 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
     auto read_actual_slot0 = [&]() -> uint16_t {
         if constexpr (is_producer) {
             return static_cast<uint16_t>(
-                fast_llk_intf_read_posted(dfb::get_tensix_id(ptc0), dfb::get_counter_id(ptc0)));
+                overlay::fast_llk_intf_read_posted(dfb::get_tensix_id(ptc0), dfb::get_counter_id(ptc0)));
         } else {
             return static_cast<uint16_t>(
-                fast_llk_intf_read_acked(dfb::get_tensix_id(ptc0), dfb::get_counter_id(ptc0)));
+                overlay::fast_llk_intf_read_acked(dfb::get_tensix_id(ptc0), dfb::get_counter_id(ptc0)));
         }
     };
 
@@ -238,14 +238,14 @@ inline void DataflowBuffer::handle_final_credits(uint16_t transactions_issued, u
             uint8_t tc_id     = dfb::get_counter_id(ptc);
             uint16_t expected = transactions_issued / N + (i < (transactions_issued % N) ? 1u : 0u);
             if constexpr (is_producer) {
-                uint16_t actual = static_cast<uint16_t>(fast_llk_intf_read_posted(tensix_id, tc_id));
+                uint16_t actual = static_cast<uint16_t>(overlay::fast_llk_intf_read_posted(tensix_id, tc_id));
                 if (actual < expected) {
-                    fast_llk_intf_inc_posted(tensix_id, tc_id, expected - actual);
+                    overlay::fast_llk_intf_inc_posted(tensix_id, tc_id, expected - actual);
                 }
             } else {
-                uint16_t actual = static_cast<uint16_t>(fast_llk_intf_read_acked(tensix_id, tc_id));
+                uint16_t actual = static_cast<uint16_t>(overlay::fast_llk_intf_read_acked(tensix_id, tc_id));
                 if (actual < expected) {
-                    fast_llk_intf_inc_acked(tensix_id, tc_id, expected - actual);
+                    overlay::fast_llk_intf_inc_acked(tensix_id, tc_id, expected - actual);
                 }
             }
         }
@@ -273,8 +273,8 @@ inline uint32_t DataflowBuffer::prepare_implicit_read() {
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
-    while (fast_llk_intf_read_posted(tensix_id, tc_id) < (ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
-    while (fast_llk_intf_get_free_space(tensix_id, tc_id) < 1);
+    while (overlay::fast_llk_intf_read_posted(tensix_id, tc_id) < (ptxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
+    while (overlay::fast_llk_intf_get_free_space(tensix_id, tc_id) < 1);
     return local_dfb_interface_.txn_ids[ptxn_id_index_];
 }
 
@@ -302,8 +302,8 @@ inline uint32_t DataflowBuffer::prepare_implicit_write() {
     dfb::PackedTileCounter packed_tc = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].packed_tile_counter;
     uint8_t tensix_id = dfb::get_tensix_id(packed_tc);
     uint8_t tc_id = dfb::get_counter_id(packed_tc);
-    while (fast_llk_intf_read_acked(tensix_id, tc_id) < (ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
-    while (fast_llk_intf_get_occupancy(tensix_id, tc_id) < 1);
+    while (overlay::fast_llk_intf_read_acked(tensix_id, tc_id) < (ctxn_id_loop_cnt_ * local_dfb_interface_.num_entries_per_txn_id_per_tc));
+    while (overlay::fast_llk_intf_get_occupancy(tensix_id, tc_id) < 1);
     return local_dfb_interface_.txn_ids[ctxn_id_index_];
 }
 

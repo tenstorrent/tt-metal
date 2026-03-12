@@ -4,7 +4,7 @@
 
 #include "fds_functions.hpp"
 
-namespace FdsDispatch {
+namespace overlay::FdsDispatch {
 // Configure filter length: how many cycles a done signal from a NEO must be stable (through the deglitcher)
 void fds_config_filter_length(uint32_t threshold) {
     FDS_INTF_WRITE(TT_FDS_DISPATCH_FILTER_COUNT_THRESHOLD_REG_ADDR, threshold);
@@ -49,9 +49,9 @@ void fds_clear_neo_status(uint32_t neo_inst) {
 void fds_poll(uint32_t group_id, uint32_t count_threshold) {
     while (FDS_INTF_READ(TT_FDS_DISPATCH_GROUPID_COUNT_0__REG_ADDR + (group_id * sizeof(uint32_t))) < count_threshold);
 }
-}  // namespace FdsDispatch
+}  // namespace overlay::FdsDispatch
 
-namespace FdsNeo {
+namespace overlay::FdsNeo {
 // Configure filter length: how many cycles a go signal from a Dispatch must be stable (through the deglitcher)
 void fds_config_filter_length(uint32_t threshold) {
     FDS_INTF_WRITE(TT_FDS_TENSIXNEO_FILTER_COUNT_THRESHOLD_REG_OFFSET, threshold);
@@ -101,4 +101,4 @@ void fds_clear_de_status(uint32_t dispatch_inst) {
 
 // Configure interrupts for groupIDs: set bit for the groupIDs to generate interrupts
 void fds_config_interrupt_en(uint32_t mask) { FDS_INTF_WRITE(TT_FDS_TENSIXNEO_INTERRUPT_ENABLE_REG_OFFSET, mask); }
-}  // namespace FdsNeo
+}  // namespace overlay::FdsNeo

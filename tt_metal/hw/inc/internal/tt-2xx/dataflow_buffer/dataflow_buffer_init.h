@@ -296,8 +296,8 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     //         << " tc_id: " << static_cast<uint32_t>(tc_id) << ENDL();
                     // DEVICE_PRINT("dfb {} initializing tc tensix_id: {} tc_id: {}\n", logical_dfb_id, tensix_id,
                     // tc_id);
-                    llk_intf_reset(tensix_id, tc_id);
-                    llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);
+                    overlay::llk_intf_reset(tensix_id, tc_id);
+                    overlay::llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);
 #endif
                 }
                 // Single writer per per_risc entry; no atomic needed

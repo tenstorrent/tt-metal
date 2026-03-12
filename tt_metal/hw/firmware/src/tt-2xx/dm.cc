@@ -101,7 +101,7 @@ void deassert_trisc() {
     deassert_trisc_reset();
 }
 
-thread_local LocalDFBInterface g_dfb_interface[dfb::NUM_DFBS] __attribute__((used));
+thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS] __attribute__((used));
 RemapperAPI g_remapper_configurator __attribute__((used));
 volatile TxnDFBDescriptor g_txn_dfb_descriptor[32] __attribute__((used));
 

@@ -1172,7 +1172,7 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
     uint32_t neo_tc_buffer_capacity_offset = hal.get_neo_tile_counters_buffer_capacity_offset();
 
     auto read_tiles_to_consume = [&](uint32_t client_id, uint32_t tc_id) -> std::pair<uint32_t, uint32_t> {
-        uint32_t neo_id = client_id % NEO_0;
+        uint32_t neo_id = client_id % overlay::NEO_0;
         uint32_t neo_tc_base = neo_tc_base_addr + (neo_id * neo_tc_stride) + (tc_id * neo_tc_size);
         auto capacity_data = reader_.env.get_cluster().read_core(
             reader_.device_id, virtual_coord_, neo_tc_base + neo_tc_buffer_capacity_offset, sizeof(uint32_t));
@@ -1192,8 +1192,8 @@ void WatcherDeviceReader::Core::DumpTileCountersWithRemapper() const {
         auto clientR_data =
             reader_.env.get_cluster().read_core(reader_.device_id, virtual_coord_, clientR_addr, sizeof(uint32_t));
 
-        tClientL_Config_Reg_u clientL;
-        tClientR_Config_Reg_u clientR;
+        overlay::tClientL_Config_Reg_u clientL;
+        overlay::tClientR_Config_Reg_u clientR;
         clientL.val = clientL_data[0];
         clientR.val = clientR_data[0];
 
