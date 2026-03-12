@@ -30,6 +30,7 @@ from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.utils.conv3d import aligned_channels, count_convs
 from models.tt_dit.utils.substate import pop_substate
 
+from .conv3d_configs import register_lingbot_va_conv3d_configs
 from .residual_up_block import WanResidualUpBlock
 
 
@@ -51,6 +52,8 @@ class WanResidualDecoder3d(Module):
         ccl_manager: CCLManager,
     ) -> None:
         super().__init__()
+
+        register_lingbot_va_conv3d_configs()
 
         self.dim = dim
         self.z_dim = z_dim
