@@ -1218,18 +1218,13 @@ class TTNNExperts(TTNNModule):
         combined_output = ttnn.reshape(
             combined_output, shape=(self.num_experts_per_tok, 1, batch_size_per_device * seq_len, self.hidden_size)
         )
-        print("combined_output.shape : ", combined_output.shape)
         combined_output = ttnn.to_layout(combined_output, ttnn.TILE_LAYOUT)
 
         # 9. Apply expert weights
-        print("topk_experts_weights.shape : ", topk_experts_weights.shape)
         topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
         topk_experts_weights_rm = ttnn.unsqueeze(topk_experts_weights_rm, 0)
-        print("topk_experts_weights_rm unsqz 1.shape : ", topk_experts_weights_rm.shape)
         topk_experts_weights_rm = ttnn.unsqueeze(topk_experts_weights_rm, 0)
-        print("topk_experts_weights_rm unsqz 2.shape : ", topk_experts_weights_rm.shape)
         # topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, repeat_dims=(self.hidden_size, 1, 1, 1))
-        print("topk_experts_weights_rm repeat.shape : ", topk_experts_weights_rm.shape)
         topk_experts_weights_rm = ttnn.reshape(
             topk_experts_weights_rm,
             shape=(
@@ -1239,18 +1234,14 @@ class TTNNExperts(TTNNModule):
                 topk_experts_weights_rm.shape[4],
             ),
         )
-        print("topk_experts_weights_rm reshape.shape : ", topk_experts_weights_rm.shape)
         topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
-        print("topk_experts_weights_rm permute.shape : ", topk_experts_weights_rm.shape)
         topk_experts_weights_tile = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
-        print("topk_experts_weights_tile.shape : ", topk_experts_weights_tile.shape)
         ttnn.deallocate(topk_experts_weights_rm)
 
         weighted_output = ttnn.mul(
             combined_output,
             topk_experts_weights_tile,
         )
-        print("weighted_output.shape : ", weighted_output.shape)
 
         # 10. Sum over experts dimension
         final_output = ttnn.sum(weighted_output, dim=0, keepdim=True)
@@ -1464,68 +1455,28 @@ class TTNNDeepseekV2MoE(TTNNModule):
         )
         topk_idx = topk_idx[:, :, :6]
         topk_weight = topk_weight[:, :, :6]
-        print("topk_idx.shape : ", topk_idx.shape)
-        print("topk_weight.shape : ", topk_weight.shape)
-        # hidden_states_4d = ttnn.experimental.reduce_scatter_minimal_async(
-        #     hidden_states_4d,
-        #     persistent_output_buffers=None,
-        #     dim=3,
-        #     multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
-        #     barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-        #     num_links=1,
-        #     cluster_axis=1,
-        #     topology=ttnn.Topology.Ring,
-        #     chunks_per_sync=10,
-        #     num_workers_per_link=2,
-        #     num_buffers_per_channel=2,
-        # )
 
-        # hidden_states_4d = ttnn.experimental.all_gather_async(
-        #     hidden_states_4d,
-        #     dim=3,
-        #     cluster_axis=1,
-        #     topology=ttnn.Topology.Ring,
-        #     multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-        #     num_links=1
-        # )
-        # composer = ttnn.concat_mesh_to_tensor_composer(self.device, dim=-1)
-        # hidden_states_4d = ttnn.aggregate_tensor(hidden_states_4d, composer)
         routed_output = self.experts(hidden_states_4d, topk_idx, topk_weight)
-        print("routed_output before slice : ", routed_output.shape)
         routed_output = routed_output[:, :, :, :1280]
-        print("routed_output : ", routed_output.shape)
 
-        import numpy as np
-
-        np.savetxt(
-            "models/experimental/tt_symbiote/tests/deepseek_ocr_vision_model/dump_file/tensor_ttnn.txt",
-            routed_output.to_torch.to(torch.float32).cpu().numpy().reshape(-1, routed_output.to_torch.shape[-1]),
-            fmt="%d",
-        )
-        from tests.ttnn.utils_for_testing import check_with_pcc
-
-        routed_output_og = torch.load("models/experimental/tt_symbiote/tests/input_test_moe/dump/routed_output.pt")
-        passed, msg = check_with_pcc(routed_output.to_torch.squeeze(0), routed_output_og)
-        print("********** PCC: ", msg, passed)
         if hasattr(routed_output, "to_ttnn"):
             routed_output = routed_output.to_ttnn
+
         if self.shared_experts is not None:
             shared_out = self.shared_experts(hidden_states_4d)
+
             if hasattr(shared_out, "to_ttnn"):
                 shared_out = shared_out.to_ttnn
 
             routed_output = ttnn.to_device(routed_output, self.device)
-            shared_out = ttnn.experimental.all_gather_async(
-                shared_out,
+            routed_output = ttnn.experimental.all_gather_async(
+                routed_output,
                 dim=3,
                 cluster_axis=1,
                 topology=ttnn.Topology.Ring,
                 multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
                 num_links=1,
             )
-
-            print("routed_output.shape : ", routed_output.shape)
-            print("shared_out.shape : ", shared_out.shape)
 
             routed_output = ttnn.add(routed_output, shared_out)
         return ttnn.reshape(routed_output, orig_shape)

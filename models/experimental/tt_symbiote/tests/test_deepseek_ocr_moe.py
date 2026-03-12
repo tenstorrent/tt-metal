@@ -125,7 +125,6 @@ def test_deepseek_ocr_moe_full(mesh_device, ocr_moe_layer):
     config = torch_moe.config
     inputs = torch.randn((batch_size, seq_len, config.hidden_size), dtype=torch.bfloat16)
     inputs = torch.load("models/experimental/tt_symbiote/tests/input_test_moe/hidden_states.pt")
-    print("inputs.shape : ", inputs.shape)
 
     with torch.no_grad():
         reference_output = torch_moe(inputs)
@@ -138,6 +137,9 @@ def test_deepseek_ocr_moe_full(mesh_device, ocr_moe_layer):
     # inputs = TorchTTNNTensor(inputs)
     inputs = ttnn.from_torch(inputs, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=mesh_device)
     tt_output = ttnn_moe(inputs)
+    tt_output = tt_output[:, :, :1280]
+
+    print("tt_output.shape : ", tt_output.shape)
 
     assert not getattr(
         ttnn_moe, "_used_fallback", False
