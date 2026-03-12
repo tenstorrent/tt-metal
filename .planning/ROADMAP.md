@@ -68,7 +68,7 @@ Plans:
 
 Plans:
 - [ ] 04-01-PLAN.md — Create tx_kernel_common.h shared header and refactor all 8 FABRIC_2D kernels
-- [ ] 04-02-PLAN.md — Move make_tx_pattern/verify_payload_words to test_common.hpp, de-duplicate 16 TEST_F bodies
+- [x] 04-02-PLAN.md — Move make_tx_pattern/verify_payload_words to test_common.hpp, de-duplicate 16 TEST_F bodies
 - [ ] 04-03-PLAN.md — Build + silicon test validation (hardware gate)
 
 ## Progress
@@ -78,4 +78,4 @@ Plans:
 | 1. fabric-auto-packetization | v1.0 | 8/8 | Complete | 2026-03-11 |
 | 2. silicon-data-transfer-validation | v1.1 | 3/3 | Complete | 2026-03-11 |
 | 3. api-detail-namespace | v1.2 | 3/3 | Complete | 2026-03-12 |
-| 4. test-infrastructure-cleanup | v1.2 | 0/3 | Not started | - |
+| 4. test-infrastructure-cleanup | v1.2 | 2/3 | In Progress | - |
