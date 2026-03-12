@@ -197,9 +197,23 @@ def create_tensor_on_mesh(
             mesh_shape_raw = _ast.literal_eval(mesh_shape_raw)
         mesh_shape_tuple = tuple(mesh_shape_raw) if isinstance(mesh_shape_raw, (list, tuple)) else (1, 1)
 
+        # Check if the actual device mesh can support the traced mesh shape.
+        # If not (e.g., traced on Galaxy 4x8 but running on N150 1x1), fall back to replicate.
+        try:
+            actual_mesh = mesh_device.shape()
+            actual_rows, actual_cols = actual_mesh[0], actual_mesh[1]
+        except Exception:
+            actual_rows, actual_cols = 1, 1
+        traced_rows = mesh_shape_tuple[0]
+        traced_cols = mesh_shape_tuple[1] if len(mesh_shape_tuple) > 1 else 1
+        mesh_compatible = actual_rows >= traced_rows and actual_cols >= traced_cols
+
         entries = re.findall(r"Placement(?:Shard\(-?\d+\)|Replicate)", placement_str)
 
-        if len(entries) >= 2:
+        if not mesh_compatible or not entries or "PlacementShard" not in placement_str:
+            # Device mesh too small or no shard placement - replicate
+            mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+        elif len(entries) >= 2:
             dims = []
             for entry in entries[:2]:
                 shard_match = re.search(r"PlacementShard\((-?\d+)\)", entry)
