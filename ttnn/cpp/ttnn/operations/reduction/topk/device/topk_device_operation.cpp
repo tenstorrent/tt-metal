@@ -108,10 +108,8 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
 
     // Select program factory based on feasibility analysis
     if (multicore_supported) {
-        std::cout << "Using multi-core program factory" << std::endl;
         return TopKMultiCoreProgramFactory{};
     }
-    std::cout << "Using single-core program factory" << std::endl;
     return TopKSingleCoreProgramFactory{};
 }
 
