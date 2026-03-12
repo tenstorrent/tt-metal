@@ -51,7 +51,8 @@ UntilizeSingleCoreProgramFactory::cached_program_t UntilizeSingleCoreProgramFact
     uint32_t num_blocks_across_height = a.physical_volume() / a.padded_shape()[-1] / tile_height;
     uint32_t num_columns_of_blocks = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+        output.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
         uint32_t output_shard_width;
         if (output.shard_spec().has_value()) {
             output_shard_width = output.shard_spec().value().shape[1];

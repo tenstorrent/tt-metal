@@ -184,6 +184,7 @@ jobs:
         platform: [
           "N300-viommu",
           "in-service-dedicated-merge-gate", # run t3k tests on CIv1 for now in order to have dedicated machine
+          "p150b-viommu-prio",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -207,6 +208,7 @@ jobs:
         platform: [
           "N300-viommu",
           "in-service-dedicated-merge-gate", # run t3k tests on CIv1 for now in order to have dedicated machine
+          "p150b-viommu-prio",
         ]
     uses: ./.github/workflows/smoke.yaml
     with:
@@ -253,6 +255,7 @@ jobs:
       matrix:
         platform: [
           "N150-viommu",
+          "p150b-viommu-prio",
         ]
     uses: ./.github/workflows/basic.yaml
     with:
@@ -275,6 +278,7 @@ jobs:
       matrix:
         platform: [
           "N150-viommu",
+          "p150b-viommu-prio",
         ]
     uses: ./.github/workflows/basic.yaml
     with:
@@ -387,8 +391,8 @@ jobs:
       fail-fast: false
       matrix:
         platform: [
-          "N150",
-          "P150b",
+          "N150-viommu",
+          "P150b-viommu-prio",
         ]
     uses: ./.github/workflows/triage.yaml
     with:

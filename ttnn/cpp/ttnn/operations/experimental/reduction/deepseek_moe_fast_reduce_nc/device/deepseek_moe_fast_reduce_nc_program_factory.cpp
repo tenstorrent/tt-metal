@@ -209,7 +209,7 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
     ////////////////////////////////////////////////////////////////////////////
     // Each core is assigned an output work unit in a row wise round robin
     // fashion. For a given core, the first index is i, and all subsequent
-    // indicies are increments of num_cores_to_be_used. The total number of
+    // indices are increments of num_cores_to_be_used. The total number of
     // units is num_tiles_per_group times num_cores_to_be_used.
     // For example, with 130 output tiles to be processed on an 8x8 grid
     // - the increment is 64
@@ -221,7 +221,7 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
     // - etc
     // The first tile that needs to be reduced has the same as the output tile.
     // That is the starting point for the reader, which then processes all
-    // subsequent tiles to be reduced. The increment for the input indicies is
+    // subsequent tiles to be reduced. The increment for the input indices is
     // the size of the inner dimensions in tiles (inner_num_tiles). The number
     // of tiles to process is the size of the reduce dimension in tiles
     // (reduction_num_tiles).
@@ -284,7 +284,7 @@ void DeepseekMoEFastReduceNCProgramFactory::override_runtime_arguments(
 
         auto& writer_kernel_args = writer_kernel_args_by_core[core.x][core.y];
         const uint32_t output_tensor_start_idx = 4;
-        for (unsigned j = 0; j < output_tensors.size() - 1; ++j) {
+        for (unsigned j = 0; j < output_tensors.size(); ++j) {
             writer_kernel_args[output_tensor_start_idx + j] = output_tensors.at(j).buffer()->address();
         }
     }

@@ -47,10 +47,12 @@ void assert_subblock_compute_config_compatible(bool dst_full_sync_en, bool fp32_
     }
 }
 
-std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat> get_cb_data_formats(
+std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat>
+get_cb_data_formats(
     const Tensor& output,
     const std::optional<const Tensor>& gamma,
     const std::optional<const Tensor>& beta,
+    const std::optional<const Tensor>& stats,
     bool fp32_dest_acc_en) {
     tt::DataFormat out_data_format = tt::tt_metal::datatype_to_dataformat_converter(output.dtype());
     tt::DataFormat cb_data_format = fp32_dest_acc_en ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
@@ -60,8 +62,17 @@ std::tuple<tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::DataFormat, tt::D
     tt::DataFormat beta_cb_data_format = beta.has_value()
                                              ? tt::tt_metal::datatype_to_dataformat_converter(beta.value().dtype())
                                              : tt::DataFormat::Float16_b;
+    tt::DataFormat stats_cb_data_format = stats.has_value()
+                                              ? tt::tt_metal::datatype_to_dataformat_converter(stats.value().dtype())
+                                              : tt::DataFormat::Float16_b;
     tt::DataFormat reciprocal_cb_data_format = tt::DataFormat::Float32;
-    return {out_data_format, cb_data_format, gamma_cb_data_format, beta_cb_data_format, reciprocal_cb_data_format};
+    return {
+        out_data_format,
+        cb_data_format,
+        gamma_cb_data_format,
+        beta_cb_data_format,
+        stats_cb_data_format,
+        reciprocal_cb_data_format};
 }
 
 namespace {
@@ -99,8 +110,9 @@ uint32_t get_num_blocks(bool mcast_1d, bool row_wise, CoreCoord grid_size, const
 
 GridParams GridParams::compute(const Tensor& input, uint32_t block_ht, CoreCoord compute_with_storage_grid_size) {
     auto spec = input.shard_spec().value();
+    const uint32_t tile_height = input.tensor_spec().tile().get_height();
     uint32_t M = input.physical_volume() / input.padded_shape()[-1];
-    uint32_t block_h = block_ht * TILE_HEIGHT;
+    uint32_t block_h = block_ht * tile_height;
     bool mcast = M == block_h;
     bool rw = spec.orientation == ShardOrientation::ROW_MAJOR;
     auto bbox = spec.grid.bounding_box();
@@ -549,7 +561,7 @@ CBSizeParams::Sizes CBSizeParams::compute() const {
     sizes.ex2pe_CB_size = num_rows_per_all_to_all_worker * single_tile_size;
 
     if (is_post_all_gather) {
-        sizes.stats_cb_size = post_all_gather_stats_block_tiles * single_tile_size;
+        sizes.stats_cb_size = post_all_gather_stats_block_tiles * stats_single_tile_size;
         sizes.stats_reduced_cb_size = pre_all_gather_stats_block_tiles * single_tile_size;
     }
 
@@ -735,8 +747,8 @@ CompileTimeArgs CompileTimeArgs::build(const CompileTimeArgsContext& ctx) {
 
     // Welford-specific compute args
     if (ctx.use_welford) {
-        constexpr uint32_t tile_width = tt::constants::TILE_WIDTH;
-        uint32_t last_tile_W = ctx.K - ((ctx.K - tile_width) / tile_width) * tile_width;
+        const uint32_t tile_width = ctx.tile_width;
+        uint32_t last_tile_W = ctx.K - (((ctx.K - tile_width) / tile_width) * tile_width);
         auto eps_u32 = std::bit_cast<uint32_t>(ctx.eps);
 
         args.compute_all_to_all.push_back(tile_width);
@@ -1069,8 +1081,8 @@ void add_cb_descriptors(
         stats_cb_desc.core_ranges = core_ranges.sender_cores;
         stats_cb_desc.format_descriptors.push_back(CBFormatDescriptor{
             .buffer_index = tt::CBIndex::c_7,
-            .data_format = cb_config.cb_data_format,
-            .page_size = cb_config.single_tile_size});
+            .data_format = cb_config.stats_cb_data_format,
+            .page_size = cb_config.stats_single_tile_size});
         stats_cb_desc.buffer = cb_config.stats_buffer;
         program_descriptor.cbs.push_back(std::move(stats_cb_desc));
 

@@ -32,7 +32,9 @@
 #include <tt-metalium/mesh_trace_id.hpp>
 #include <tt_stl/small_vector.hpp>
 #include <tt-metalium/sub_device_types.hpp>
+// UMD: re-exports tt::ARCH (used in MeshDevice::arch return type).
 #include <umd/device/types/arch.hpp>
+// UMD: re-exports CoreType (used in MeshDevice::virtual_core_from_logical_core parameter).
 #include <umd/device/types/core_coordinates.hpp>
 
 namespace tt::tt_metal {
