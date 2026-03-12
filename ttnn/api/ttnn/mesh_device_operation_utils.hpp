@@ -9,7 +9,6 @@
 #include <unordered_map>
 
 #include <tt-metalium/distributed.hpp>
-#include <tt-metalium/experimental/inspector.hpp>
 #include <tt-metalium/program_cache.hpp>
 #include <tt_stl/overloaded.hpp>
 #include <tt_stl/reflection.hpp>
@@ -79,15 +78,6 @@ std::vector<ttnn::MeshCoordinate> extract_tensor_coordinates(
     tt::stl::reflection::visit_object_of_type<Tensor>(
         [&tensors](const Tensor& t) { tensors.push_back(std::cref(t)); }, tensor_args);
     return ttnn::device_operation::detail::extract_tensor_coordinates_impl(tensors, mesh_device);
-}
-
-// Sets runtime ID for all programs in `workload`.
-inline void set_runtime_id(tt::tt_metal::distributed::MeshWorkload& workload) {
-    auto op_id = ttnn::CoreIDs::instance().fetch_and_increment_device_operation_id();
-    tt::tt_metal::experimental::inspector::EmitMeshWorkloadRuntimeId(workload, op_id);
-    for (auto& [_, program] : workload.get_programs()) {
-        program.set_runtime_id(op_id);
-    }
 }
 
 // Tracks all programs in `workload` and returns true if any program was hooked.
