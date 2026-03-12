@@ -289,29 +289,35 @@ void multicast_test(
     const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
     uint32_t test_id,
     CoreCoord sender_core = {0, 0}) {
-    // Test different multicast rectangle sizes
-    std::vector<std::vector<CoreCoord>> multicast_configs = {
-        {{1, 1}},                                         // Single core
-        {{1, 1}, {1, 2}},                                 // 1x2 rectangle
-        {{1, 1}, {2, 1}, {1, 2}, {2, 2}},                 // 2x2 rectangle
-        {{1, 1}, {2, 1}, {3, 1}, {1, 2}, {2, 2}, {3, 2}}  // 3x2 rectangle
-    };
+    IDevice* device = mesh_device->impl().get_device(0);
 
-    for (size_t config_idx = 0; config_idx < multicast_configs.size(); config_idx++) {
-        for (bool same_dest : {true, false}) {
-            DirectWriteConfig test_config = {
-                .test_id = test_id,
-                .sender_core_coord = sender_core,
-                .receiver_core_coords = multicast_configs[config_idx],
-                .num_writes = 16,
-                .same_destination = same_dest,
-                .use_stateful_approach = false,
-                .same_value = false,
-                .use_multicast = true,
-                .num_subordinates = static_cast<uint32_t>(multicast_configs[config_idx].size())};
+    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    uint32_t max_x = compute_with_storage_grid_size.x;
+    uint32_t max_y = compute_with_storage_grid_size.y;
 
-            EXPECT_TRUE(run_dm(mesh_device, test_config));
+    std::vector<CoreCoord> max_rect;
+    for (uint32_t y = 1; y < max_y; y++) {
+        for (uint32_t x = 1; x < max_x; x++) {
+            CoreCoord coord{x, y};
+            if (coord != sender_core) {
+                max_rect.push_back(coord);
+            }
         }
+    }
+
+    for (bool same_dest : {true, false}) {
+        DirectWriteConfig test_config = {
+            .test_id = test_id,
+            .sender_core_coord = sender_core,
+            .receiver_core_coords = max_rect,
+            .num_writes = 16,
+            .same_destination = same_dest,
+            .use_stateful_approach = false,
+            .same_value = false,
+            .use_multicast = true,
+            .num_subordinates = static_cast<uint32_t>(max_rect.size())};
+
+        EXPECT_TRUE(run_dm(mesh_device, test_config));
     }
 }
 
