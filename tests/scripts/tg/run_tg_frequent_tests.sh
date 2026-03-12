@@ -39,12 +39,10 @@ run_tg_tests() {
 
   elif [[ "$1" == "unit" ]]; then
     echo "LOG_METAL: running unit/distributed run_tg_frequent_tests"
-    ## Force IRAM enabled because these tests mixes fabric and non-fabric ccl tests. The IRAM setting must be consistent
-    ## due to the erisc kernel wrapper being affected, and that kernel being persistent through the workload.
-    ## The jit build also has different behaviour for IRAM enabled/disabled so we enable it globally.
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest tests/ttnn/distributed/test_data_parallel_example_TG.py --timeout=900 ; fail+=$?
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest tests/ttnn/distributed/test_multidevice_TG.py --timeout=900 ; fail+=$?
-    TT_METAL_ENABLE_ERISC_IRAM=1 pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
+    ## ERISC IRAM is always on for WH; these tests mix fabric and non-fabric CCL and rely on consistent jit/build behavior.
+    pytest tests/ttnn/distributed/test_data_parallel_example_TG.py --timeout=900 ; fail+=$?
+    pytest tests/ttnn/distributed/test_multidevice_TG.py --timeout=900 ; fail+=$?
+    pytest tests/ttnn/unit_tests/base_functionality/test_multi_device_trace_TG.py --timeout=900 ; fail+=$?
 
   elif [[ "$1" == "sd35" ]]; then
     echo "LOG_METAL: running stable diffusion 3.5 Large run_tg_frequent_tests"

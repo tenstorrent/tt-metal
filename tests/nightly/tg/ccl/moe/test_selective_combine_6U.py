@@ -6,6 +6,7 @@
 from loguru import logger
 import math
 import os
+import random
 
 import pytest
 import torch
@@ -24,6 +25,8 @@ def is_mesh_graph_descriptor_set(expected_path):
     """Check if TT_MESH_GRAPH_DESC_PATH is set to the expected path."""
     return os.environ.get("TT_MESH_GRAPH_DESC_PATH") == expected_path
 
+
+random.seed(42)
 
 from tests.nightly.t3000.ccl.test_all_to_all_combine import (
     get_batch_cluster_idxr,
@@ -607,6 +610,10 @@ def _run_test(
 
     def _run_op(num_iters):
         for _ in range(num_iters):
+            if not trace_mode:
+                delays = [[random.randint(0, 10) * 1000 for _ in range(mesh_shape[1])] for _ in range(mesh_shape[0])]
+                ttnn.apply_device_delay(mesh_device, delays)
+
             tt_out = ttnn.experimental.selective_reduce_combine(
                 tt_dense_contribs,
                 tt_dense_metadata,
@@ -627,6 +634,10 @@ def _run_test(
                 output_tensor=tt_output_tensor,
                 optional_cross_device_semaphore=barrier_semaphore,
             )
+            # subsequent op can catch correctness errors that may get covered up by a delay prior to validation
+            if not trace_mode:
+                tt_out = ttnn.to_layout(tt_out, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
         return tt_out
 
     if trace_mode:
