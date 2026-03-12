@@ -4,14 +4,14 @@ milestone: v1.2
 milestone_name: API & Test Cleanup
 current_plan: None yet
 status: planning
-stopped_at: Phase 3 context gathered
-last_updated: "2026-03-12T01:06:15.568Z"
+stopped_at: "Completed 03-02-PLAN.md: linear/detail/api.h created, linear/api.h updated with detail:: calls"
+last_updated: "2026-03-12T01:39:58.868Z"
 last_activity: 2026-03-11 -- v1.2 roadmap created; ready to begin Phase 3
 progress:
   total_phases: 4
   completed_phases: 0
-  total_plans: 0
-  completed_plans: 0
+  total_plans: 3
+  completed_plans: 1
   percent: 18
 ---
 
@@ -45,10 +45,11 @@ See: .planning/PROJECT.md (updated 2026-03-11)
 - [v1.2]: extract runner utilities before kernel consolidation -- lower-risk, establishes patterns
 - See .planning/milestones/v1.1-ROADMAP.md for v1.1 decisions
 - See .planning/milestones/v1.0-ROADMAP.md for v1.0 decisions
+- [Phase 03-api-detail-namespace]: detail/api.h include placed after route helpers in linear/api.h to satisfy non-template name lookup requirements
 
 ## Blockers
 - SparseMulticast (issue #36581): GTEST_SKIP'd, out of scope for v1.2
 
 ## Last Session
 - **Timestamp:** 2026-03-11
-- **Stopped At:** Phase 3 context gathered
+- **Stopped At:** Completed 03-02-PLAN.md: linear/detail/api.h created, linear/api.h updated with detail:: calls
