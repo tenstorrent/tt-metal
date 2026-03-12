@@ -535,6 +535,9 @@ def test_forward_pass_smoke(
 ):
     """Single-layer decode smoke test (~30-40s). Catches topology, weight-loading, and basic
     forward-pass issues before the full 5-layer suite runs."""
+    from copy import deepcopy
+
+    hf_config_short = deepcopy(hf_config_short)
     hf_config_short.num_hidden_layers = 1
 
     run_test_forward_pass_dpmodel(
