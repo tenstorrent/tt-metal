@@ -4,7 +4,7 @@
 
 - ✅ **v1.0 Fabric Auto-Packetization** - Phases 1 (shipped 2026-03-11)
 - ✅ **v1.1 Silicon Validation** - Phase 2 (shipped 2026-03-11)
-- 🚧 **v1.2 API & Test Cleanup** - Phases 3-4 (in progress)
+- ✅ **v1.2 API & Test Cleanup** - Phases 3-4 (shipped 2026-03-12)
 
 ## Phases
 
@@ -34,7 +34,7 @@ Plans:
 
 </details>
 
-### 🚧 v1.2 API & Test Cleanup (In Progress)
+### ✅ v1.2 API & Test Cleanup (Shipped 2026-03-12)
 
 **Milestone Goal:** Reduce code bloat in API headers and test suite by moving internal APIs to detail namespace and consolidating duplicated test infrastructure.
 
@@ -69,7 +69,7 @@ Plans:
 Plans:
 - [x] 04-01-PLAN.md — Create tx_kernel_common.h shared header and refactor all 8 FABRIC_2D kernels
 - [x] 04-02-PLAN.md — Move make_tx_pattern/verify_payload_words to test_common.hpp, de-duplicate 16 TEST_F bodies
-- [ ] 04-03-PLAN.md — Build + silicon test validation (hardware gate)
+- [x] 04-03-PLAN.md — Build + silicon test validation (hardware gate)
 
 ## Progress
 
@@ -78,4 +78,4 @@ Plans:
 | 1. fabric-auto-packetization | v1.0 | 8/8 | Complete | 2026-03-11 |
 | 2. silicon-data-transfer-validation | v1.1 | 3/3 | Complete | 2026-03-11 |
 | 3. api-detail-namespace | v1.2 | 3/3 | Complete | 2026-03-12 |
-| 4. test-infrastructure-cleanup | v1.2 | 2/3 | In Progress | - |
+| 4. test-infrastructure-cleanup | v1.2 | 3/3 | Complete | 2026-03-12 |
