@@ -96,23 +96,9 @@ void run_single_dfb_program(
     DFBPorCType producer_type,
     DFBPorCType consumer_type) {
 
-    if (dfb_config.num_producers > 1 and producer_type == DFBPorCType::TENSIX) {
-        GTEST_SKIP() << "Skipping DFB test until api to init kernels on multiple tensix is available";
-    }
-    if (dfb_config.num_consumers > 1 and consumer_type == DFBPorCType::TENSIX) {
-        GTEST_SKIP() << "Skipping DFB test until api to init kernels on multiple tensix is available";
-    }
-
     TT_FATAL(
         !(producer_type == DFBPorCType::TENSIX && consumer_type == DFBPorCType::TENSIX),
         "Both producer and consumer cannot be Tensix. At least one must be a DM kernel for NOC transfers.");
-
-    if (dfb_config.num_producers > 1 and producer_type == DFBPorCType::TENSIX) {
-        GTEST_SKIP() << "Skipping DFB test until api to init kernels on multiple tensix is available";
-    }
-    if (dfb_config.num_consumers > 1 and consumer_type == DFBPorCType::TENSIX) {
-        GTEST_SKIP() << "Skipping DFB test until api to init kernels on multiple tensix is available";
-    }
 
     Program program = CreateProgram();
 
@@ -145,7 +131,7 @@ void run_single_dfb_program(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_producer.cpp",
             logical_core,
-            experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 1, .compile_args = producer_cta});
+            experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = dfb_config.num_producers, .compile_args = producer_cta});
     }
 
     uint32_t num_entries_per_consumer = dfb_config.cap == ::experimental::AccessPattern::STRIDED
@@ -170,7 +156,7 @@ void run_single_dfb_program(
             program,
             "tests/tt_metal/tt_metal/test_kernels/compute/dfb_t6_consumer.cpp",
             logical_core,
-            experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 1, .compile_args = consumer_cta});
+            experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = dfb_config.num_consumers, .compile_args = consumer_cta});
     }
 
     auto logical_dfb_id = experimental::dfb::CreateDataflowBuffer(program, logical_core, dfb_config);
@@ -623,6 +609,8 @@ TEST_F(MeshDeviceFixture, TensixDMTest1xDFB4Sx2S) {
         .enable_implicit_sync = false};
     run_single_dfb_program(this->devices_.at(0), config, DFBPorCType::TENSIX, DFBPorCType::DM);
 }
+
+// Blocked
 
 TEST_F(MeshDeviceFixture, DMTest1xDFB1Sx4B) {
     if (devices_.at(0)->arch() != ARCH::QUASAR) {
