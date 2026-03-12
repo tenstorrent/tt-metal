@@ -9,6 +9,7 @@ void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t dst_addr = get_arg_val<uint32_t>(1);
     uint32_t h_start = get_arg_val<uint32_t>(2);
+    uint32_t is_collector = get_arg_val<uint32_t>(3);
 
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(1);
@@ -20,8 +21,13 @@ void kernel_main() {
     constexpr bool is_initializer = (bool)get_compile_time_arg_val(7);
     constexpr uint32_t init_sem_idx = get_compile_time_arg_val(8);
     constexpr uint32_t done_sem_idx = get_compile_time_arg_val(9);
+    constexpr uint32_t gather_sem_idx = get_compile_time_arg_val(10);
+    constexpr uint32_t cb_gather_tmp = get_compile_time_arg_val(11);
+    constexpr uint32_t collector_noc_x = get_compile_time_arg_val(12);
+    constexpr uint32_t collector_noc_y = get_compile_time_arg_val(13);
+    constexpr uint32_t num_cores = get_compile_time_arg_val(14);
 
-    constexpr uint32_t src_accessor_offset = 10;
+    constexpr uint32_t src_accessor_offset = 15;
     constexpr auto src_args = TensorAccessorArgs<src_accessor_offset>();
     const auto src_accessor = TensorAccessor(src_args, src_addr, input_page_size);
 
@@ -32,30 +38,27 @@ void kernel_main() {
     uint32_t in_base_addr = get_write_ptr(cb_id_in);
     uint32_t out_addr = get_write_ptr(cb_id_out);
 
-    // Both processors read their half of pages in parallel
+    // Phase 1: Read this core's shard pages
     for (uint32_t h = 0; h < h_count; h++) {
         noc_async_read_page(h_start + h, src_accessor, in_base_addr + h * input_page_size);
     }
 
+    // Phase 2: Local histogram counting (BRISC/NCRISC cooperate on same core)
     uint32_t init_sem_addr = get_semaphore(init_sem_idx);
     volatile tt_l1_ptr uint32_t* init_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_sem_addr);
 
     if constexpr (is_initializer) {
-        // Zero the histogram while reads are in flight
         volatile tt_l1_ptr uint32_t* counts = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
         for (uint32_t i = 0; i < n_routed_experts; i++) {
             counts[i] = 0;
         }
         noc_async_read_barrier();
-        // Signal that histogram is initialized
         noc_semaphore_set(init_sem_ptr, 1);
     } else {
         noc_async_read_barrier();
-        // Wait for histogram to be initialized
         noc_semaphore_wait(init_sem_ptr, 1);
     }
 
-    // Both processors atomically increment histogram bins
     for (uint32_t h = 0; h < h_count; h++) {
         volatile tt_l1_ptr uint16_t* row =
             reinterpret_cast<volatile tt_l1_ptr uint16_t*>(in_base_addr + h * input_page_size);
@@ -69,20 +72,48 @@ void kernel_main() {
     }
     noc_async_atomic_barrier();
 
-    // Signal completion via done semaphore
     uint32_t done_sem_addr = get_semaphore(done_sem_idx);
     uint64_t done_sem_noc_addr = get_noc_addr(done_sem_addr);
     noc_semaphore_inc(done_sem_noc_addr, 1);
     noc_async_atomic_barrier();
 
+    // Phase 3: Gather — BRISC only
     if constexpr (is_initializer) {
-        // Wait for both processors to finish
         volatile tt_l1_ptr uint32_t* done_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(done_sem_addr);
         noc_semaphore_wait_min(done_sem_ptr, 2);
 
-        // Write result to DRAM
-        uint64_t dst_noc_addr = dst_accessor.get_noc_addr(0);
-        noc_async_write(out_addr, dst_noc_addr, output_page_size);
-        noc_async_write_barrier();
+        // Signal collector that this core's local histogram is ready
+        uint32_t gather_sem_addr = get_semaphore(gather_sem_idx);
+        uint64_t collector_gather_noc = get_noc_addr(collector_noc_x, collector_noc_y, gather_sem_addr);
+        noc_semaphore_inc(collector_gather_noc, 1);
+        noc_async_atomic_barrier();
+
+        if (is_collector) {
+            volatile tt_l1_ptr uint32_t* gather_sem_ptr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(gather_sem_addr);
+            noc_semaphore_wait_min(gather_sem_ptr, num_cores);
+
+            uint32_t tmp_addr = get_write_ptr(cb_gather_tmp);
+            volatile tt_l1_ptr uint32_t* local_hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(out_addr);
+
+            uint32_t num_remote = num_cores - 1;
+            for (uint32_t c = 0; c < num_remote; c++) {
+                uint32_t remote_noc_x = get_arg_val<uint32_t>(4 + c * 2);
+                uint32_t remote_noc_y = get_arg_val<uint32_t>(4 + c * 2 + 1);
+
+                uint64_t remote_hist_noc = get_noc_addr(remote_noc_x, remote_noc_y, out_addr);
+                noc_async_read(remote_hist_noc, tmp_addr, output_page_size);
+                noc_async_read_barrier();
+
+                volatile tt_l1_ptr uint32_t* remote_hist = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(tmp_addr);
+                for (uint32_t i = 0; i < n_routed_experts; i++) {
+                    local_hist[i] += remote_hist[i];
+                }
+            }
+
+            uint64_t dst_noc_addr = dst_accessor.get_noc_addr(0);
+            noc_async_write(out_addr, dst_noc_addr, output_page_size);
+            noc_async_write_barrier();
+        }
     }
 }
