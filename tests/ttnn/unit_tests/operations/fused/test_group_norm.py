@@ -451,9 +451,13 @@ def generate_sdxl_test_inputs():
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 @pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
 @pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
-def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=False):
+@pytest.mark.parametrize("inplace", [True, False])
+def test_sdxl_base_group_norm(device, input_shape, use_welford, inplace, perf_test_mode=False):
     num_groups = 32  #  always 32 for SDXL Base
     N, C, H, W = input_shape
+    layout = ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT
+    if layout == ttnn.TILE_LAYOUT and inplace:
+        pytest.skip("Tile layout requires non-inplace tensors.")
     torch.manual_seed(0)
     if device.core_grid.y == 7:
         pytest.skip()
@@ -477,7 +481,7 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=F
     tt_input_tensor = ttnn.from_torch(
         tt_input_tensor,
         dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT,
+        layout=layout,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         device=device,
     )
@@ -503,7 +507,7 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=F
         input_mask=input_mask_tensor,
         memory_config=sharded_mem_config,
         core_grid=grid_size,
-        inplace=tt_input_tensor.layout != ttnn.TILE_LAYOUT,
+        inplace=inplace,
         use_welford=use_welford,
     )
     ttnn.synchronize_device(device)

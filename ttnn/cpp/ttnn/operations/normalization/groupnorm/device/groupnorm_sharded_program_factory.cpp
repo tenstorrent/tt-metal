@@ -723,12 +723,14 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     } else {
         tt::tt_metal::CircularBufferConfig in0_cb_config =
             tt::tt_metal::CircularBufferConfig(in0_CB_size, {{in0_cb_index, in_data_format}})
-                .set_page_size(in0_cb_index, in_single_tile_size)
+                .set_page_size(in0_cb_index, in0_cb_page_size)
                 .set_globally_allocated_address(*a.buffer());
 
+        uint32_t out_cb_total_size = reader_repack_output ? output.buffer()->aligned_size_per_bank() : out_CB_size;
+        uint32_t out_cb_page_size = reader_repack_output ? output.buffer()->page_size() : out_single_tile_size;
         tt::tt_metal::CircularBufferConfig output_cb_config =
-            tt::tt_metal::CircularBufferConfig(out_CB_size, {{output_cb_index, out_data_format}})
-                .set_page_size(output_cb_index, out_single_tile_size)
+            tt::tt_metal::CircularBufferConfig(out_cb_total_size, {{output_cb_index, out_data_format}})
+                .set_page_size(output_cb_index, out_cb_page_size)
                 .set_globally_allocated_address(*output.buffer());
 
         cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_cb_config);
