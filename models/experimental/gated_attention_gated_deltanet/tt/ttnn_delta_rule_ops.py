@@ -18,6 +18,10 @@ Tensor layout convention (FLA style):
 import math
 import ttnn
 
+# Tile size used by TTNN matmul (wormhole)
+_TILE_H = 32
+_TILE_W = 32
+
 
 def _create_eye_matrix_ttnn(size, device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG):
     """Create identity matrix directly on device using TTNN operations.
@@ -230,6 +234,82 @@ def _get_matmul_program_config(m, k, n, grid_size=None, in0_block_w=None):
         return None
 
 
+def _recurrent_outer_product_program_config(device, K, V):
+    """
+    Build MatmulMultiCoreReuseProgramConfig for the outer-product matmul:
+
+        k_col [B*H, K, 1] @ d_row [B*H, 1, V]  ->  [B*H, K, V]
+
+    TTNN constraints (from matmul_device_operation.cpp MatmulMultiCoreReuseProgramConfig):
+      - N == per_core_N  (N is total N in tiles; no split along N)
+      - M % per_core_M == 0 when per_core_M <= M; else total_M % per_core_M == 0
+      - in0_block_w divides K (inner dim in tiles)
+    Tensor dims (per batch): M_tiles = ceil(K/32), K_inner = 1, N_tiles = ceil(V/32).
+    """
+    grid = device.compute_with_storage_grid_size()
+    if hasattr(grid, "x"):
+        grid_x, grid_y = int(grid.x), int(grid.y)
+    else:
+        grid_x, grid_y = int(grid[0]), int(grid[1])
+
+    M_tiles = (K + _TILE_H - 1) // _TILE_H
+    N_tiles = (V + _TILE_W - 1) // _TILE_W
+    K_tiles_inner = max(1, (1 + _TILE_W - 1) // _TILE_W)  # 1
+
+    # N == per_core_N (mandatory)
+    per_core_N = N_tiles
+    # in0_block_w: inner dim in tiles
+    in0_block_w = K_tiles_inner
+
+    # per_core_M must divide M_tiles
+    per_core_M = M_tiles
+    while per_core_M > 1 and (M_tiles % per_core_M != 0 or (grid_x * grid_y) < (M_tiles // per_core_M)):
+        per_core_M -= 1
+    if per_core_M < 1:
+        per_core_M = 1
+
+    # out_subblock must divide per_core; profiler suggests out_subblock_h * out_subblock_w >= 2
+    out_subblock_h = min(2, per_core_M) if per_core_M >= 2 else 1
+    out_subblock_w = min(2, per_core_N) if per_core_N >= 2 else 1
+
+    return ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+    )
+
+
+def _recurrent_read_query_program_config(device, K, V):
+    """
+    Build MatmulMultiCoreReuseProgramConfig for read/query matmuls:
+
+        row [B*H, 1, K] @ h [B*H, K, V]  ->  [B*H, 1, V]
+
+    M_tiles=1, K_tiles=ceil(K/32), N_tiles=ceil(V/32). Constraint N == per_core_N.
+    """
+    grid = device.compute_with_storage_grid_size()
+    N_tiles = (V + _TILE_W - 1) // _TILE_W
+    K_tiles = (K + _TILE_W - 1) // _TILE_W
+
+    per_core_N = N_tiles
+    per_core_M = 1
+    in0_block_w = K_tiles
+    out_subblock_h = 1
+    out_subblock_w = min(2, per_core_N) if per_core_N >= 2 else 1
+
+    return ttnn.MatmulMultiCoreReuseProgramConfig(
+        compute_with_storage_grid_size=grid,
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+    )
+
+
 def l2_norm_ttnn(x, dim=-1, eps=1e-6):
     """L2 normalization along a given dimension."""
     x_sq = ttnn.multiply(x, x, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -240,57 +320,151 @@ def l2_norm_ttnn(x, dim=-1, eps=1e-6):
     return ttnn.multiply(x, inv_norm, memory_config=ttnn.L1_MEMORY_CONFIG)
 
 
+def fused_decay_and_write_ttnn(
+    h,
+    k_t,
+    delta,
+    decay_t,
+    beta_t,
+    device=None,
+):
+    """
+    Logical fusion for the recurrent delta rule state update:
+
+        h = decay * h + beta_t * (k_t ⊗ delta)
+
+    Implemented using existing TTNN ops so call sites are stable.
+    Can be replaced by a true fused kernel later.
+    """
+    B = h.shape[0]
+    H = h.shape[1]
+    K = h.shape[2]
+    V = h.shape[3]
+
+    # decay: [B, H] -> [B, H, 1, 1]
+    # decay_t is already exp(g_t); keep recurrent path in BF16.
+    decay = ttnn.typecast(decay_t, ttnn.bfloat16)
+    decay = ttnn.reshape(decay, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # beta: [B, H] -> [B, H, 1, 1]
+    beta_expanded = ttnn.reshape(beta_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # k_t: [B, H, K] -> [B, H, K, 1]
+    k_col = ttnn.reshape(k_t, [B, H, K, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # delta: [B, H, V] -> [B, H, 1, V]
+    d_row = ttnn.reshape(delta, [B, H, 1, V], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    k_col = ttnn.to_layout(k_col, ttnn.TILE_LAYOUT)
+    d_row = ttnn.to_layout(d_row, ttnn.TILE_LAYOUT)
+    k_col = ttnn.to_memory_config(k_col, ttnn.L1_MEMORY_CONFIG)
+    d_row = ttnn.to_memory_config(d_row, ttnn.L1_MEMORY_CONFIG)
+
+    matmul_compute_cfg = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=False,
+    )
+
+    outer = ttnn.matmul(
+        k_col,
+        d_row,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        compute_kernel_config=matmul_compute_cfg,
+        program_config=None,
+    )
+
+    # apply beta
+    outer = ttnn.multiply(
+        outer,
+        beta_expanded,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+
+    # fused-style update: decay * h + outer
+    h = ttnn.multiply(h, decay)
+    h = ttnn.add(h, outer)
+
+    return h
+
+
 def recurrent_delta_rule_step_ttnn(
     q_t,
     k_t,
     v_t,
     beta_t,
-    g_t,
+    decay_t,
     h,
+    seq_len=None,
+    device=None,
 ):
     """
-    Single recurrent step of the gated delta rule using TTNN ops.
+    Recurrent delta rule step using TTNN ops, with a logically fused
+    state update implemented via `fused_decay_and_write_ttnn`.
 
-    Uses ttnn.matmul for K-dimension reductions to leverage hardware
-    float32 accumulation, improving numerical precision.
-
-    Args:
-        q_t: [B, H, K] query for this timestep
-        k_t: [B, H, K] key for this timestep
-        v_t: [B, H, V] value for this timestep
-        beta_t: [B, H] write strength
-        g_t: [B, H] log-space decay
-        h: [B, H, K, V] recurrent state
-
-    Returns:
-        o_t: [B, H, V] output
-        h: [B, H, K, V] updated state
+    This keeps the call site ready for a future single-kernel
+    implementation without changing model code.
     """
     B = q_t.shape[0]
     H = q_t.shape[1]
     K = q_t.shape[2]
     V = v_t.shape[2]
 
-    decay = ttnn.exp(g_t, memory_config=ttnn.L1_MEMORY_CONFIG)
-    decay = ttnn.reshape(decay, [B, H, 1, 1])
-    h = ttnn.multiply(h, decay, memory_config=ttnn.L1_MEMORY_CONFIG)
+    h = ttnn.to_layout(h, ttnn.TILE_LAYOUT)
+    h = ttnn.to_memory_config(h, ttnn.L1_MEMORY_CONFIG)
 
-    k_row = ttnn.reshape(k_t, [B, H, 1, K])
-    v_read = ttnn.matmul(k_row, h, memory_config=ttnn.L1_MEMORY_CONFIG)
-    v_read = ttnn.reshape(v_read, [B, H, V])
+    read_query_compute_cfg = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
 
+    read_query_prog_cfg = None
+    if device is not None:
+        try:
+            read_query_prog_cfg = _recurrent_read_query_program_config(device, K, V)
+        except Exception:
+            pass
+
+    k_row = ttnn.reshape(k_t, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG)
+    k_row = ttnn.to_layout(k_row, ttnn.TILE_LAYOUT)
+    k_row = ttnn.to_memory_config(k_row, ttnn.L1_MEMORY_CONFIG)
+    v_read = ttnn.matmul(
+        k_row,
+        h,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        program_config=read_query_prog_cfg,
+        compute_kernel_config=read_query_compute_cfg,
+    )
+    v_read = ttnn.reshape(v_read, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    # 2. Compute delta (pre-beta): delta = v_t - v_read
     delta = ttnn.subtract(v_t, v_read, memory_config=ttnn.L1_MEMORY_CONFIG)
-    beta_expanded = ttnn.reshape(beta_t, [B, H, 1])
-    delta = ttnn.multiply(delta, beta_expanded, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    k_col = ttnn.reshape(k_t, [B, H, K, 1])
-    d_row = ttnn.reshape(delta, [B, H, 1, V])
-    outer = ttnn.matmul(k_col, d_row, memory_config=ttnn.L1_MEMORY_CONFIG)
-    h = ttnn.add(h, outer, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # 3. Fused-style decay + write to state (decay_t already = exp(g_t))
+    h = fused_decay_and_write_ttnn(
+        h=h,
+        k_t=k_t,
+        delta=delta,
+        decay_t=decay_t,
+        beta_t=beta_t,
+        device=device,
+    )
 
-    q_row = ttnn.reshape(q_t, [B, H, 1, K])
-    o_t = ttnn.matmul(q_row, h, memory_config=ttnn.L1_MEMORY_CONFIG)
-    o_t = ttnn.reshape(o_t, [B, H, V])
+    q_row = ttnn.reshape(q_t, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG)
+    q_row = ttnn.to_layout(q_row, ttnn.TILE_LAYOUT)
+    q_row = ttnn.to_memory_config(q_row, ttnn.L1_MEMORY_CONFIG)
+    o_t = ttnn.matmul(
+        q_row,
+        h,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        program_config=read_query_prog_cfg,
+        compute_kernel_config=read_query_compute_cfg,
+    )
+    use_l1 = seq_len is not None and seq_len <= 64
+    o_t = ttnn.reshape(o_t, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG if use_l1 else None)
 
     return o_t, h
 
@@ -342,24 +516,28 @@ def recurrent_gated_delta_rule_ttnn(
     if scale is None:
         scale = K**-0.5
 
-    q = ttnn.multiply(q, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
+    q = ttnn.multiply(q, scale)
 
-    q = ttnn.transpose(q, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
-    k = ttnn.transpose(k, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
-    v = ttnn.transpose(v, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
-    beta = ttnn.transpose(beta, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
-    g = ttnn.transpose(g, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
+    # Transpose to [B, H, T, D] for head-first processing
+    q = ttnn.transpose(q, 1, 2)
+    k = ttnn.transpose(k, 1, 2)
+    v = ttnn.transpose(v, 1, 2)
+    beta = ttnn.transpose(beta, 1, 2)  # [B, H, T]
+    g = ttnn.transpose(g, 1, 2)  # [B, H, T]
 
-    q = ttnn.typecast(q, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
-    k = ttnn.typecast(k, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
-    v = ttnn.typecast(v, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
-    beta = ttnn.typecast(beta, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
-    g = ttnn.typecast(g, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+    q = ttnn.typecast(q, ttnn.bfloat16)
+    k = ttnn.typecast(k, ttnn.bfloat16)
+    v = ttnn.typecast(v, ttnn.bfloat16)
+    beta = ttnn.typecast(beta, ttnn.bfloat16)
+    g = ttnn.typecast(g, ttnn.bfloat16)
+
+    # Precompute exp(g) once and slice per timestep in the loop.
+    g_exp = ttnn.exp(g)
 
     if initial_state is not None:
-        h = ttnn.typecast(initial_state, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+        h = ttnn.typecast(initial_state, ttnn.bfloat16)
     else:
-        h = ttnn.zeros([B, H, K, V], device=device, dtype=ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
+        h = ttnn.zeros([B, H, K, V], device=device, dtype=ttnn.bfloat16)
 
     outputs = []
     for i in range(T):
@@ -367,15 +545,15 @@ def recurrent_gated_delta_rule_ttnn(
         k_t = k[:, :, i]  # [B, H, K]
         v_t = v[:, :, i]  # [B, H, V]
         beta_t = beta[:, :, i]  # [B, H]
-        g_t = g[:, :, i]  # [B, H]
+        decay_t = g_exp[:, :, i]  # [B, H]
 
-        o_t, h = recurrent_delta_rule_step_ttnn(q_t, k_t, v_t, beta_t, g_t, h)
+        o_t, h = recurrent_delta_rule_step_ttnn(q_t, k_t, v_t, beta_t, decay_t, h, seq_len=T, device=device)
         outputs.append(o_t)
 
-    outputs_4d = [ttnn.reshape(o, [B, H, 1, V]) for o in outputs]
-    o = ttnn.concat(outputs_4d, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
-    o = ttnn.transpose(o, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
-    o = ttnn.typecast(o, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
+    outputs_4d = [ttnn.reshape(o, [B, H, 1, V], memory_config=ttnn.L1_MEMORY_CONFIG) for o in outputs]
+    o = ttnn.concat(outputs_4d, dim=2)
+    o = ttnn.transpose(o, 1, 2)
+    o = ttnn.typecast(o, ttnn.bfloat16)
 
     return o, h
 
