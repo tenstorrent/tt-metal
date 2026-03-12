@@ -198,6 +198,27 @@ qwen3/
     └── tensor_utils.py          # Tensor creation, padding, mesh gather helpers
 ```
 
+## Hardware / Descriptor Notes
+
+This example was developed and tested on a **Wormhole (WH) LoudBox** (T3K).
+
+Device initialisation lives in `utils/device_setup.py` and is shared by all
+three entry-point scripts (`generate.py`, `gradients.py`, `train.py`).
+It contains a hardcoded lookup table (`_MGD_TABLE`) that maps mesh shapes to
+mesh-graph descriptor files and fabric configs:
+
+- `(2, 4)` → `t3k_mesh_graph_descriptor.textproto`, `FABRIC_2D`
+- `(1, 8)` → `t3k_1x8_mesh_graph_descriptor.textproto`, `FABRIC_2D_TORUS_XY`
+
+Any shape not in the table falls back to `FABRIC_2D` with auto-discovery.
+To run on a different machine or topology you will likely need to update
+`_MGD_TABLE` (or set `TT_MESH_GRAPH_DESC_PATH` manually).
+
+The Python-side table was introduced to avoid the hardcoded fallback to
+`t3k_mesh_graph_descriptor` that the C++ path
+(`ttml/ttnn_fixed/distributed/tt_metal.cpp`) uses for 8-device setups, that
+hangs on LoudBox.
+
 ## Nice-to-Have TODOs
 
 - **Slow generation** — decode-step attention masks and KV cache updates
