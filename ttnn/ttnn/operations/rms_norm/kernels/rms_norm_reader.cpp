@@ -39,6 +39,10 @@ void kernel_main() {
 
     const auto input_accessor = TensorAccessor(input_accessor_args, src_addr, stick_or_tile_size);
 
+    // Gamma accessor — always instantiated (PD appends [0] placeholder when gamma absent)
+    [[maybe_unused]] constexpr auto gamma_accessor_args =
+        TensorAccessorArgs<input_accessor_args.next_compile_time_args_offset()>();
+
     // ---- Generate reduce scaler tile in c_2 (1/W as bfloat16) ----
     constexpr float scaler_float = 1.0f / static_cast<float>(Wt * 32);
     dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler>(scaler_float);
@@ -59,9 +63,6 @@ void kernel_main() {
     // every row of every tile in c_7 has the gamma values. This is needed because
     // ROW broadcast reads per-row data from each B tile face, not just row 0.
     if constexpr (has_gamma) {
-        // Gamma accessor args follow input accessor args (only present when has_gamma=1)
-        // Use gamma_stick_size as page size since gamma is always RM (W * element_size)
-        constexpr auto gamma_accessor_args = TensorAccessorArgs<input_accessor_args.next_compile_time_args_offset()>();
         const auto gamma_accessor = TensorAccessor(gamma_accessor_args, gamma_addr, gamma_stick_size);
 
         cb_reserve_back(cb_input_rm, Wt);

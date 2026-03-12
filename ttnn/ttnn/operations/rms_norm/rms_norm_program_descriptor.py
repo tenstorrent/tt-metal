@@ -319,9 +319,9 @@ def create_program_descriptor(
         stick_size,  # 6: gamma_stick_size (W * element_size, for gamma RM accessor page size)
     ]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
-    # Gamma TensorAccessor args follow input accessor args (kernel uses next_compile_time_args_offset)
-    if has_gamma:
-        reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
+    # Gamma TensorAccessor args — always appended ([0] placeholder when absent)
+    # This ensures TensorAccessorArgs offsets are stable regardless of has_gamma
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args() if has_gamma else [0])
 
     # -- Writer kernel --
     output_W = output_tensor.shape[-1]
