@@ -921,13 +921,7 @@ def test_demo_text(
         if isinstance(toks, tuple):
             toks = toks[0]
 
-        # When PCC check is enabled, sampling is disabled and toks contains logits
-        if pcc_check:
-            toks_flat = toks.reshape(-1, toks.shape[-1])
-            first_user_tok = toks_flat[0].argmax(dim=-1).item()
-            prefilled_token = torch.full((batch_size, 1), first_user_tok, dtype=torch.long)
-        else:
-            prefilled_token = toks.view(-1, 1)
+        prefilled_token = toks.view(-1, 1)
         profiler.end(f"inference_prefill", iteration=batch_idx)
         logger.info(f"Prefill finished")
 
