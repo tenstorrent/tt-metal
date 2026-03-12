@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import statistics
 import time
 from pathlib import Path
 
@@ -15,6 +16,31 @@ import ttnn
 from models.demos.glm4_moe_lite.tt.layer0_tt import _alloc_contiguous_page_table, _round_up
 from models.demos.glm4_moe_lite.tt.model_tt import Glm4MoeLiteDenseOnlyTT
 from models.demos.glm4_moe_lite.tt.weights import find_missing_shards, resolve_best_effort_snapshot_dir
+
+
+def _sampling_result_to_token(result, mesh_device) -> int:
+    """Extract token ID from trace-sampling result, handling mesh-distributed tensors."""
+    if isinstance(result, tuple):
+        values_tt, indices_tt = result
+    else:
+        indices_tt = result
+        values_tt = None
+
+    is_mesh = mesh_device.__class__.__name__ == "MeshDevice"
+    if is_mesh:
+        if values_tt is not None:
+            val_shards = ttnn.get_device_tensors(values_tt)
+            idx_shards = ttnn.get_device_tensors(indices_tt)
+            best_val, best_idx = float("-inf"), 0
+            for v_tt, i_tt in zip(val_shards, idx_shards):
+                v = float(ttnn.to_torch(v_tt.cpu()).flatten()[0].item())
+                if v > best_val:
+                    best_val = v
+                    best_idx = int(ttnn.to_torch(i_tt.cpu()).flatten()[0].item())
+            return best_idx
+        device_tensors = ttnn.get_device_tensors(indices_tt)
+        return int(ttnn.to_torch(device_tensors[0].cpu()).flatten()[0].item())
+    return int(ttnn.to_torch(indices_tt.cpu()).flatten()[0].item())
 
 
 def _set_default_fabric_config(num_devices: int) -> None:
@@ -92,6 +118,18 @@ def main() -> int:
         default="both",
         help="Which phase to profile: prefill (real flash_mla_prefill), decode, or both.",
     )
+    ap.add_argument(
+        "--enable-trace",
+        action="store_true",
+        default=False,
+        help="Enable traced decode execution (captures device command trace on first call, replays on subsequent calls).",
+    )
+    ap.add_argument(
+        "--trace-mode",
+        choices=["logits", "sampling"],
+        default="logits",
+        help="Trace mode: 'logits' returns logits to host (same as eager), 'sampling' does on-device greedy top-1.",
+    )
     args = ap.parse_args()
 
     model_id = str(args.model_id)
@@ -142,6 +180,7 @@ def main() -> int:
         open_kwargs["physical_device_ids"] = device_ids
     mesh_device = ttnn.open_mesh_device(**open_kwargs)
     try:
+        print("[DEBUG] Creating model...", flush=True)
         runner = Glm4MoeLiteDenseOnlyTT.create(
             device=mesh_device,
             snapshot_dir=snap,
@@ -149,6 +188,7 @@ def main() -> int:
             max_seq_len=int(blocks_per_seq * block_size),
         )
 
+        print(f"[DEBUG] Model created. num_layers_to_run={runner.num_layers_to_run}", flush=True)
         kvpe_dim = int(runner.hparams.kv_lora_rank + runner.hparams.qk_rope_head_dim)
         kv_cache = [
             _alloc_paged_kvpe_cache_from_cpu(
@@ -183,45 +223,119 @@ def main() -> int:
                 ttnn.close_mesh_device(mesh_device)
                 return 0
         else:
+            print(f"[DEBUG] Starting iterative warm-up decode for {prompt_len} prompt tokens...", flush=True)
             t0 = time.perf_counter()
             logits = None
+            use_trace = args.enable_trace
+            use_sampling = use_trace and args.trace_mode == "sampling"
             for t in range(prompt_len):
+                print(f"[DEBUG] Warm-up decode token {t}/{prompt_len}...", flush=True)
                 tok_in = prompt_ids[:, t : t + 1].contiguous()
                 pos = torch.tensor([t], dtype=torch.int32)
-                logits = runner.decode(tokens=tok_in, start_pos=pos, page_table=page_table, kv_cache=kv_cache)
-            assert logits is not None
+                if use_sampling:
+                    result = runner.decode(
+                        tokens=tok_in,
+                        start_pos=pos,
+                        page_table=page_table,
+                        kv_cache=kv_cache,
+                        enable_trace=True,
+                        sampling_params=True,
+                    )
+                    logits = None
+                    last_sampling_result = result
+                else:
+                    logits = runner.decode(
+                        tokens=tok_in,
+                        start_pos=pos,
+                        page_table=page_table,
+                        kv_cache=kv_cache,
+                        enable_trace=use_trace,
+                    )
+                print(f"[DEBUG] Warm-up decode token {t} complete", flush=True)
+            if use_sampling:
+                assert last_sampling_result is not None
+            else:
+                assert logits is not None
             prefill_s = time.perf_counter() - t0
 
         # -- Decode phase --
+        use_trace = args.enable_trace
+        use_sampling = use_trace and args.trace_mode == "sampling"
+        mode_label = "eager"
+        if use_trace:
+            mode_label = f"trace-{args.trace_mode}"
+
         generated: list[int] = []
-        token_in = int(torch.argmax(logits.reshape(-1)).item())
+        if use_sampling and phase == "decode":
+            token_in = _sampling_result_to_token(last_sampling_result, mesh_device)
+        else:
+            token_in = int(torch.argmax(logits.reshape(-1)).item())
         generated.append(token_in)
 
+        step_times: list[float] = []
         t_decode0 = time.perf_counter()
         for step in range(max_new_tokens - 1):
             pos = torch.tensor([prompt_len + step], dtype=torch.int32)
             tok_in = torch.tensor([[token_in]], dtype=torch.int32)
-            logits = runner.decode(tokens=tok_in, start_pos=pos, page_table=page_table, kv_cache=kv_cache)
-            token_in = int(torch.argmax(logits.reshape(-1)).item())
+            t_step = time.perf_counter()
+
+            if use_sampling:
+                result = runner.decode(
+                    tokens=tok_in,
+                    start_pos=pos,
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    enable_trace=True,
+                    sampling_params=True,
+                )
+                token_in = _sampling_result_to_token(result, mesh_device)
+            else:
+                logits = runner.decode(
+                    tokens=tok_in,
+                    start_pos=pos,
+                    page_table=page_table,
+                    kv_cache=kv_cache,
+                    enable_trace=use_trace,
+                )
+                token_in = int(torch.argmax(logits.reshape(-1)).item())
+
+            step_ms = (time.perf_counter() - t_step) * 1000
+            step_times.append(step_ms)
             generated.append(token_in)
         decode_s = time.perf_counter() - t_decode0
 
         full_ids = torch.cat([prompt_ids, torch.tensor([generated], dtype=torch.int32)], dim=1)
         text = tok.decode(full_ids[0].tolist(), skip_special_tokens=True)
-        print("")
-        print("=== TT greedy decode (direct) ===", flush=True)
+        print("", flush=True)
+        print(f"=== TT greedy decode ({mode_label}) ===", flush=True)
         print(
             f"mesh_shape=(1,{mesh_cols}) device_ids={device_ids if device_ids is not None else 'auto'} "
             f"kv_cache_dtype={args.kv_cache_dtype} dispatch=ETH phase={phase}",
             flush=True,
         )
         print(f"prompt_len={prompt_len} new_tokens={len(generated)} blocks_per_seq={blocks_per_seq}", flush=True)
+        num_gen = max(1, len(generated) - 1)
         if decode_s > 0:
             print(
-                f"prefill_s={prefill_s:.3f} decode_tok_s={decode_s/ max(1,len(generated)-1):.4f} tok_s={(len(generated)-1)/decode_s:.2f}",
+                f"prefill_s={prefill_s:.3f} decode_tok_s={decode_s / num_gen:.4f} tok_s={num_gen / decode_s:.2f}",
                 flush=True,
             )
-        print("")
+        if step_times:
+            print(f"\n--- Per-token decode latency (ms) ---", flush=True)
+            if len(step_times) >= 2:
+                first_ms = step_times[0]
+                rest = step_times[1:]
+                print(
+                    f"  first token:  {first_ms:>10.1f} ms  {'(includes trace capture)' if use_trace else ''}",
+                    flush=True,
+                )
+                print(
+                    f"  subsequent:   mean={statistics.mean(rest):>8.1f}  min={min(rest):>8.1f}  max={max(rest):>8.1f}",
+                    flush=True,
+                )
+            else:
+                print(f"  single token: {step_times[0]:>10.1f} ms", flush=True)
+        print("", flush=True)
         print(text, flush=True)
 
         # Cleanup.
