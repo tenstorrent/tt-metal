@@ -369,6 +369,7 @@ void DevicePrintImpl::print_buffer_data(
     auto virtual_core = MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
         device_id, logical_core.coord, logical_core.type);
     auto programmable_core_type = llrt::get_core_type(device_id, virtual_core);
+    uint32_t risc_count = MetalContext::instance().hal().get_num_risc_processors(programmable_core_type);
     uint32_t programmable_core_type_idx =
         MetalContext::instance().hal().get_programmable_core_type_index(programmable_core_type);
     DevicePrintParser::FormatMessageBuffer format_message_buffer;
@@ -380,6 +381,20 @@ void DevicePrintImpl::print_buffer_data(
 
         // Check if we are loading new kernel
         if (header->is_kernel && header->message_payload == DevicePrintHeader::max_message_payload_size) {
+            if (header->risc_id >= risc_count) {
+                log_error(
+                    tt::LogMetal,
+                    "Data corruption detected in device print buffer while loading new kernel: invalid risc id {}, "
+                    "risc count for core is {}. Parsed message: is_kernel={}, risc_id={}, message_payload={}, "
+                    "info_id={}. Ignoring rest of the buffer.",
+                    header->risc_id,
+                    risc_count,
+                    header->is_kernel,
+                    header->risc_id,
+                    header->message_payload,
+                    header->info_id);
+                return;
+            }
             RiscKey risc_key = {device_id, logical_core, header->risc_id};
             RiscData& risc_data = risc_data_[risc_key];
             if (risc_data.last_loaded_kernel_id == static_cast<int>(header->info_id)) {
@@ -410,6 +425,21 @@ void DevicePrintImpl::print_buffer_data(
             // This is a wrap around message, we should just ignore it and mark that we processed buffer.
             break;
         } else {
+            if (header->risc_id >= risc_count) {
+                log_error(
+                    tt::LogMetal,
+                    "Data corruption detected in device print buffer while processing message: invalid risc id {}, "
+                    "risc count for core is {}. Parsed message: is_kernel={}, risc_id={}, message_payload={}, "
+                    "info_id={}. Ignoring rest of the buffer.",
+                    header->risc_id,
+                    risc_count,
+                    header->is_kernel,
+                    header->risc_id,
+                    header->message_payload,
+                    header->info_id);
+                return;
+            }
+
             // This is a normal print message, we should parse it and print it out.
             RiscKey risc_key = {device_id, logical_core, header->risc_id};
             RiscData& risc_data = risc_data_[risc_key];
@@ -441,8 +471,22 @@ void DevicePrintImpl::print_buffer_data(
             // Check if we found elf file for this print message.
             if (elf_parser != nullptr) {
                 // Format message
-                auto payload_bytes =
-                    std::as_bytes(std::span(data).subspan(word_index)).subspan(0, header->message_payload);
+                auto buffer_remaining_bytes = std::as_bytes(std::span(data).subspan(word_index));
+                if (buffer_remaining_bytes.size() < header->message_payload) {
+                    log_error(
+                        tt::LogMetal,
+                        "Data corruption detected in device print buffer while processing message: message payload "
+                        "size {} exceeds remaining buffer size {}. Parsed message: is_kernel={}, risc_id={}, "
+                        "message_payload={}, info_id={}. Ignoring rest of the buffer.",
+                        header->message_payload,
+                        buffer_remaining_bytes.size(),
+                        header->is_kernel,
+                        header->risc_id,
+                        header->message_payload,
+                        header->info_id);
+                    return;
+                }
+                auto payload_bytes = buffer_remaining_bytes.subspan(0, header->message_payload);
                 auto formatted_message =
                     elf_parser->format_message(header->info_id, payload_bytes, format_message_buffer);
                 if (!formatted_message.empty()) {
