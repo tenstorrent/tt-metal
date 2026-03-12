@@ -351,11 +351,12 @@ def _fused_kv_branch_forward(
         mesh_mapper=ttnn.ReplicateTensorToMesh(x.device()) if is_mesh else None,
     )
 
-    # 3. Call fused op — returns (nope_sharded, rope_sharded) on their respective cores
-    #    nope_result is already RMSNorm'd by the kernel.
+    # 3. Reshard weight from DRAM to L1 for this layer, call fused op, then free L1 copy.
+    w_kv_a_l1 = ttnn.to_memory_config(fused_kv["w_kv_a"], fused_kv["w_kv_a_l1_config"])
+
     nope_result, rope_result = GLMKVCacheBranch.op(
         input_tensor=x_sharded,
-        dkv_matmul_weights_tensor=fused_kv["w_kv_a"],
+        dkv_matmul_weights_tensor=w_kv_a_l1,
         gamma_tensor=fused_kv["gamma"],
         cos_tensor=cos_sharded,
         sin_tensor=sin_sharded,
@@ -365,18 +366,26 @@ def _fused_kv_branch_forward(
         epsilon=fused_kv["epsilon"],
     )
 
+    ttnn.deallocate(w_kv_a_l1, force=True)
+
     # 4. Read sharded results back to host, then concat.
     # WORKAROUND: sharded_to_interleaved crashes on TILE_1x32 tensors (FPE: divides
     # shard_height by TILE_HEIGHT=32, giving 0 for height=1). Use host round-trip instead.
     # Output must be [1,1,B,kvpe_dim] ROW_MAJOR in DRAM — matching the non-fused path.
+    print("[FUSED_KV_DBG] Syncing device after fused kernel...", flush=True)
+    ttnn.synchronize_device(x.device())
+    print("[FUSED_KV_DBG] Device sync done. Reading nope_result from device...", flush=True)
     nope_torch = _to_torch_single(nope_result).reshape(1, -1)  # [1, kv_lora_rank]
+    print(f"[FUSED_KV_DBG] nope_torch shape={nope_torch.shape}", flush=True)
     rope_torch = _to_torch_single(rope_result).reshape(1, -1)  # [1, qk_rope_head_dim]
+    print(f"[FUSED_KV_DBG] rope_torch shape={rope_torch.shape}", flush=True)
 
     kvpe_torch = torch.cat([nope_torch, rope_torch], dim=-1)
+    print(f"[FUSED_KV_DBG] kvpe_torch shape={kvpe_torch.shape}, creating DRAM tensor...", flush=True)
     kvpe_new = ttnn.from_torch(
         kvpe_torch.reshape(1, 1, 1, -1),  # [1,1,1,576]
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR,
+        layout=ttnn.TILE_LAYOUT,
         device=x.device(),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(x.device()) if is_mesh else None,
@@ -387,6 +396,7 @@ def _fused_kv_branch_forward(
     ttnn.deallocate(cos_sharded, force=False)
     ttnn.deallocate(sin_sharded, force=False)
 
+    print("[FUSED_KV_DBG] _fused_kv_branch_forward completed", flush=True)
     return kvpe_new
 
 
