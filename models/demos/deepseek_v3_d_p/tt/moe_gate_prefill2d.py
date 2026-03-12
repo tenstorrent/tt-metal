@@ -141,20 +141,20 @@ class MoEGatePrefill:
 
         ttnn_top_k_experts_indices = self.reshard_expert_indices(ttnn_top_k_experts_indices)
         expert_histograms = ttnn.masked_bincount(ttnn_top_k_experts_indices, self.n_routed_experts)
-        expert_histograms = ttnn.to_layout(expert_histograms, ttnn.TILE_LAYOUT)
+        # expert_histograms = ttnn.to_layout(expert_histograms, ttnn.TILE_LAYOUT)
 
         # device_hist = ttnn.get_device_tensors(expert_histograms)[0]
         # device_hist2 = ttnn.get_device_tensors(expert_histograms2)[0]
         # device_hist_torch = ttnn.to_torch(device_hist)
         # device_hist_torch2 = ttnn.to_torch(device_hist2)
-        dispatch_offsets = self.cumulative_sum_across_columns(expert_histograms)
+        # dispatch_offsets = self.cumulative_sum_across_columns(expert_histograms)
+        dispatch_offsets = ttnn.offset_cumsum(
+            expert_histograms,
+            cluster_axis=self.ccl_config["DISPATCH_AXIS"],
+            num_links=self.ccl_config["NUM_LINKS"],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
         signpost(header="moe_gate_calculate_dispatch_offsets")
-        # dispatch_offsets = ttnn.offset_cumsum(
-        #     expert_histograms,
-        #     cluster_axis=self.ccl_config["DISPATCH_AXIS"],
-        #     num_links=self.ccl_config["NUM_LINKS"],
-        #     memory_config=ttnn.L1_MEMORY_CONFIG,
-        # )
 
         return (ttnn_scores, ttnn_top_k_experts_indices, logits, dispatch_offsets)
 
