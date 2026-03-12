@@ -52,8 +52,15 @@ def determine_slice_strategy(
 
 
 def determine_conv2d_config(
-    batch_size: int, ouput_length: int, in_channels: int, kernel_size: int
+    batch_size: int, ouput_length: int, in_channels: int, kernel_size: int, out_channels: int
 ) -> ttnn.Conv2dConfig:
+    TILE_WIDTH = 32
+    if out_channels % TILE_WIDTH == 0:
+        output_layout = ttnn.TILE_LAYOUT
+    elif (TILE_WIDTH - out_channels % TILE_WIDTH) / out_channels < 1.2:
+        output_layout = ttnn.TILE_LAYOUT
+    else:
+        output_layout = ttnn.ROW_MAJOR_LAYOUT
     if (ouput_length, in_channels, kernel_size) in dims_to_act_block_h_override:
         act_block_h_override = dims_to_act_block_h_override[(ouput_length, in_channels, kernel_size)]
         return ttnn.Conv2dConfig(
@@ -63,6 +70,7 @@ def determine_conv2d_config(
             enable_weights_double_buffer=False,
             config_tensors_in_dram=True,
             act_block_h_override=act_block_h_override,
+            output_layout=output_layout,
         )
     else:
         return ttnn.Conv2dConfig(
@@ -177,7 +185,9 @@ class ConvTranspose1d:
             + 1
         )
         slice_config = determine_slice_strategy(batch_size, output_length, self.in_channels, self.kernel_size)
-        conv_config = determine_conv2d_config(batch_size, output_length, self.in_channels, self.kernel_size)
+        conv_config = determine_conv2d_config(
+            batch_size, output_length, self.in_channels, self.kernel_size, self.out_channels
+        )
         output, [self.weight_tensor, self.bias_tensor] = ttnn.conv_transpose2d(
             input_tensor=normalized_input,
             weight_tensor=self.weight_tensor,
@@ -204,6 +214,5 @@ class ConvTranspose1d:
             dram_slice_config=slice_config,
         )
         output_shape = output.shape
-        output = ttnn.to_layout(output, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(output, (batch_size, output_shape[2], output_shape[3]))
         return x

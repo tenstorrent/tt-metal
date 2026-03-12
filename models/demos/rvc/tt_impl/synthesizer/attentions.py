@@ -92,7 +92,7 @@ class MultiHeadAttention:
         q = self._project_qkv(self.linear_q(x), transpose_k=False)
         k = self._project_qkv(self.linear_k(c), transpose_k=True)
         v = self._project_qkv(self.linear_v(c), transpose_k=False)
-        q_scaled = q * (1.0 / math.sqrt(self.k_channels))
+        q_scaled = ttnn.mul(q, 1.0 / math.sqrt(self.k_channels), output_tensor=q)
         scores = ttnn.matmul(q_scaled, k)
         _, _, target_length, source_length = scores.shape
         if self.window_size is not None:
@@ -104,15 +104,15 @@ class MultiHeadAttention:
             key_relative_embeddings = self._get_relative_embeddings(self.emb_rel_k, source_length)
             rel_logits = ttnn.matmul(q_scaled, key_relative_embeddings, transpose_b=True)
             scores_local = self._relative_position_to_absolute_position(rel_logits)
-            scores = scores + scores_local
+            scores = ttnn.add(scores, scores_local, output_tensor=scores)
 
-        p_attn = ttnn.softmax(scores, dim=-1)
+        p_attn = ttnn.softmax_in_place(scores, dim=-1)
         output = ttnn.matmul(p_attn, v)
         if self.window_size is not None:
             assert self.emb_rel_v is not None
             relative_weights = self._absolute_position_to_relative_position(p_attn)
             value_relative_embeddings = self._get_relative_embeddings(self.emb_rel_v, source_length)
-            output = output + ttnn.matmul(relative_weights, value_relative_embeddings)
+            output = ttnn.add(output, ttnn.matmul(relative_weights, value_relative_embeddings), output_tensor=output)
 
         output = ttnn.transformer.concatenate_heads(output)
 
@@ -120,10 +120,8 @@ class MultiHeadAttention:
         return out_tt
 
     def _project_qkv(self, x: ttnn.Tensor, *, transpose_k: bool) -> ttnn.Tensor:
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         batch_size, length, channels = x.shape
         x = ttnn.reshape(x, (batch_size, length, self.n_heads, self.k_channels))
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
 
         if transpose_k:
             x_p = ttnn.permute(x, (0, 2, 3, 1))
@@ -138,7 +136,7 @@ class MultiHeadAttention:
         slice_start_position = max((self.window_size + 1) - length, 0)
         slice_end_position = slice_start_position + 2 * length - 1
 
-        embeddings = ttnn.to_layout(relative_embeddings, ttnn.ROW_MAJOR_LAYOUT)
+        embeddings = relative_embeddings
         if pad_length > 0:
             embeddings = ttnn.pad(
                 embeddings,
@@ -154,16 +152,19 @@ class MultiHeadAttention:
 
     def _relative_position_to_absolute_position(self, x: ttnn.Tensor) -> ttnn.Tensor:
         batch, heads, length, _ = x.shape
-        idx_row = ttnn.unsqueeze(ttnn.arange(start=0, end=length, dtype=ttnn.int32, device=self.device), dim=1)
-        idx_col = ttnn.unsqueeze(ttnn.arange(start=0, end=length, dtype=ttnn.int32, device=self.device), dim=0)
+        idx_row = ttnn.unsqueeze(
+            ttnn.arange(start=0, end=length, dtype=ttnn.int32, device=self.device, layout=ttnn.TILE_LAYOUT), dim=1
+        )
+        idx_col = ttnn.unsqueeze(
+            ttnn.arange(start=0, end=length, dtype=ttnn.int32, device=self.device, layout=ttnn.TILE_LAYOUT), dim=0
+        )
         rel_idx = idx_col - idx_row + (length - 1)
         rel_idx = ttnn.expand(ttnn.reshape(rel_idx, shape=(1, 1, length, length)), (batch, heads, length, length))
-        rel_idx = ttnn.typecast(ttnn.to_layout(rel_idx, ttnn.TILE_LAYOUT), ttnn.uint32)
+        rel_idx = ttnn.typecast(rel_idx, ttnn.uint32)
         x_final = ttnn.gather(x, dim=3, index=rel_idx)
         return x_final
 
     def _absolute_position_to_relative_position(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         batch, heads, length, _ = x.shape
         idx_row = ttnn.unsqueeze(ttnn.arange(start=0, end=length, dtype=ttnn.int32, device=self.device), dim=1)
         idx_col = ttnn.unsqueeze(ttnn.arange(start=0, end=length, dtype=ttnn.int32, device=self.device), dim=0)

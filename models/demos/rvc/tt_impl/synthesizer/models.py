@@ -58,15 +58,13 @@ def _interpolate_1d(
 
 
 def _flip_last_dim(x: ttnn.Tensor) -> ttnn.Tensor:
-    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     channels = x.shape[-1]
     slices = []
     for i in range(channels):
         s = ttnn.slice(x, (0, 0, channels - 1 - i), (x.shape[0], x.shape[1], channels - i))
-        s = ttnn.to_layout(s, ttnn.TILE_LAYOUT)
         slices.append(s)
     y = ttnn.concat(slices, dim=-1)
-    return ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
+    return y
 
 
 class Embedding:
@@ -138,9 +136,9 @@ class Encoder:
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
         for i in range(self.n_layers):
             y = self.attn_layers[i](x, x)
-            x = self.norm_layers_1[i](x + y)
+            x = self.norm_layers_1[i](ttnn.add(x, y, output_tensor=x))
             y = self.ffn_layers[i](x)
-            x = self.norm_layers_2[i](x + y)
+            x = self.norm_layers_2[i](ttnn.add(x, y, output_tensor=x))
         return x
 
 
@@ -191,11 +189,10 @@ class TextEncoder:
     def __call__(self, phone: ttnn.Tensor, pitch: ttnn.Tensor | None) -> tuple[ttnn.Tensor, ttnn.Tensor]:
         x0 = self.emb_phone(phone)
         if self.use_f0 and pitch is not None and self.emb_pitch is not None:
-            x0 = x0 + self.emb_pitch(pitch)
-        x1 = x0 * math.sqrt(self.hidden_channels)
-        x1 = ttnn.to_layout(x1, ttnn.TILE_LAYOUT)
-        x2 = ttnn.leaky_relu(x1, negative_slope=0.1)
-        x = self.encoder(x2)
+            x0 = ttnn.add(x0, self.emb_pitch(pitch), output_tensor=x0)
+        x1 = ttnn.multiply(x0, math.sqrt(self.hidden_channels), output_tensor=x0)
+        x1 = ttnn.leaky_relu(x1, negative_slope=0.1, output_tensor=x1)
+        x = self.encoder(x1)
         stats = self.proj_linear(x)
         m = ttnn.slice(stats, (0, 0, 0), (stats.shape[0], stats.shape[1], self.out_channels))
         logs = ttnn.slice(
@@ -323,19 +320,17 @@ class Generator:
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         x = self.conv_pre(x)
         if g is not None and self.cond_linear is not None:
-            x = x + self.cond_linear(g)
+            x = ttnn.add(x, self.cond_linear(g), output_tensor=x)
 
         for i in range(self.num_upsamples):
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-            x = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE)
+            x = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE, output_tensor=x)
             x = self.ups[i](x)
             xs = self.resblocks[i * self.num_kernels](x)
             for j in range(1, self.num_kernels):
-                xs = xs + self.resblocks[i * self.num_kernels + j](x)
-            x = xs * (1.0 / self.num_kernels)
+                xs = ttnn.add(xs, self.resblocks[i * self.num_kernels + j](x), output_tensor=xs)
+            x = ttnn.multiply(xs, 1.0 / self.num_kernels, output_tensor=xs)
 
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE)
+        x = ttnn.leaky_relu(x, negative_slope=LRELU_SLOPE, output_tensor=x)
         x = self.conv_post(x)
         return x
 
@@ -372,17 +367,20 @@ class SineGen:
         f0_harm = f0_up * harmonics
 
         # Accumulate phase and add random initial offset per harmonic.
-        phase = ttnn.cumsum(f0_harm / self.sampling_rate, dim=1)
+        phase = ttnn.cumsum(f0_harm / self.sampling_rate, dim=1, out=f0_harm)
         rand_ini = ttnn.rand((f0_up.shape[0], self.harmonic_num + 1), dtype=ttnn.bfloat16, device=self.device)
-        phase = phase + rand_ini
-        sine_waves = ttnn.sin(2 * math.pi * phase) * self.sine_amp
+        phase = ttnn.add(phase, rand_ini, output_tensor=phase)
+        phase = ttnn.multiply(phase, 2 * math.pi, output_tensor=phase)
+        sine_waves = ttnn.multiply(ttnn.sin(phase, output_tensor=phase), self.sine_amp, output_tensor=phase)
 
         # Mix with noise based on voiced/unvoiced.
         noise_amp = uv * self.noise_std + ttnn.rsub(uv, 1) * self.sine_amp / 3
-        sine_waves = sine_waves + noise_amp * ttnn_randn_fallback(
-            tuple(sine_waves.shape), dtype=ttnn.bfloat16, device=self.device
+        noise_amp = ttnn.multiply(
+            noise_amp,
+            ttnn_randn_fallback(tuple(sine_waves.shape), dtype=ttnn.bfloat16, device=self.device),
+            output_tensor=noise_amp,
         )
-        return sine_waves
+        return ttnn.add(sine_waves, noise_amp, output_tensor=sine_waves)
 
 
 class SourceModuleHnNSF:
@@ -512,25 +510,24 @@ class GeneratorNSF:
 
     def __call__(self, x: ttnn.Tensor, f0: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         har_source_tt = self.m_source(f0, self.upp)
-        x0 = self.conv_pre(x)
+        har_source_tt = ttnn.to_layout(har_source_tt, ttnn.ROW_MAJOR_LAYOUT)
+        x = self.conv_pre(x)
         if g is not None:
-            x = x0 + self.cond_linear(g)
-        else:
-            x = x0
+            x = ttnn.add(x, self.cond_linear(g), output_tensor=x)
         for i, (ups, noise_convs) in enumerate(zip(self.ups, self.noise_convs, strict=True)):
             x0 = x
-            x0 = ttnn.to_layout(x0, ttnn.TILE_LAYOUT)
-            x1 = ttnn.leaky_relu(x0, negative_slope=self.lrelu_slope)
-            x = ups(x1)
+            x0 = ttnn.leaky_relu(x0, negative_slope=self.lrelu_slope, output_tensor=x0)
+            x = ups(x0)
+            # the layout conversion happens inside noise_convs because doign it here causes oom for some reason
+            # TODO: investigate the reasoning behind this
             x_source = noise_convs(har_source_tt)
-            x = x + x_source
+            x = ttnn.add(x, x_source, output_tensor=x)
             xs = self.resblocks[i * self.num_kernels](x)
             for j in range(i * self.num_kernels + 1, (i + 1) * self.num_kernels):
-                xs = xs + self.resblocks[j](x)
-            x = xs * (1.0 / self.num_kernels)
+                xs = ttnn.add(xs, self.resblocks[j](x), output_tensor=xs)
+            x = ttnn.multiply(xs, 1.0 / self.num_kernels, output_tensor=xs)
 
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        x = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope)
+        x = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope, output_tensor=x)
         x = self.conv_post(x)
         return x
 
