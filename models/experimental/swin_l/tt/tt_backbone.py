@@ -42,9 +42,11 @@ class TtSwinLBackbone:
         mlp_ratio=4.0,
         attn_masks=None,
         out_indices=(0, 1, 2, 3),
+        trace_mode: bool = False,
     ):
         self.device = device
         self.parameters = parameters
+        self.trace_mode = trace_mode
         self.embed_dim = embed_dim
         self.depths = depths
         self.num_heads = num_heads
@@ -165,7 +167,8 @@ class TtSwinLBackbone:
             for block in self.stages[s]:
                 output = block(output)
 
-            ttnn.synchronize_device(self.device)
+            if not self.trace_mode:
+                ttnn.synchronize_device(self.device)
 
             if s in self.out_indices:
                 normed = ttnn.layer_norm(

@@ -51,27 +51,37 @@ def _get_ckpt_path():
     return str(ckpt_dir / "dino_5scale_swin_l.pth")
 
 
+def _get_l1_input_memory_config(host_input):
+    """Builds height-sharded L1 memory config for pipeline input (matches Swin test)."""
+    height, width = host_input.shape[-2], host_input.shape[-1]
+    core_grid = ttnn.CoreGrid(x=8, y=1)
+    if height % core_grid.num_cores != 0:
+        core_grid = ttnn.CoreGrid(x=4, y=1)
+    return ttnn.create_sharded_memory_config(
+        shape=(height // core_grid.num_cores, width),
+        core_grid=core_grid,
+        strategy=ttnn.ShardStrategy.HEIGHT,
+        orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        use_height_and_width_as_shard_shape=True,
+    )
+
+
 def _setup_sharded_input(device):
+    """Setup input in Swin-compatible layout (1, 1, batch*3*H, padded_W) for reshape-only preprocessing."""
     inputs_mesh_mapper, _, _ = get_mesh_mappers(device)
     batch, height, width, channels = 1, DINO_INPUT_H, DINO_INPUT_W, 3
-    hw = batch * height * width
-    core_grid = ttnn.CoreGrid(x=8, y=4)
-    num_cores = core_grid.num_cores
-    rows_per_core = (hw + num_cores - 1) // num_cores
-    height_dim_aligned = rows_per_core * num_cores
-    pad_c = max(0, PAD_CHANNELS - channels)
-    torch_input = torch.randn(1, height, width, channels, dtype=torch.bfloat16)
-    if pad_c:
-        torch_input = torch.nn.functional.pad(torch_input, (0, pad_c), value=0)
-    flat = torch_input.reshape(1, hw, PAD_CHANNELS)
-    padded = torch.nn.functional.pad(flat, (0, 0, 0, height_dim_aligned - hw), value=0)
+    padded_width = ((width + 31) // 32) * 32
+    torch_input = torch.randn(batch, channels, height, padded_width, dtype=torch.bfloat16)
     tt_inputs_host = ttnn.from_torch(
-        padded.reshape(1, 1, height_dim_aligned, PAD_CHANNELS), dtype=ttnn.bfloat16, mesh_mapper=inputs_mesh_mapper
+        torch_input.reshape(1, 1, batch * channels * height, padded_width),
+        dtype=ttnn.bfloat16,
+        mesh_mapper=inputs_mesh_mapper,
     )
     dram_config = get_memory_config_for_persistent_dram_tensor(
         tt_inputs_host.shape, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, device.dram_grid_size()
     )
-    return tt_inputs_host, dram_config, dram_config, (batch, height, width, channels), hw
+    l1_config = _get_l1_input_memory_config(tt_inputs_host)
+    return tt_inputs_host, dram_config, l1_config, (batch, height, width, channels), batch * height * width
 
 
 def _build_model_and_inputs(device):
@@ -122,6 +132,7 @@ def _build_model_and_inputs(device):
         backbone_num_heads=tuple(SWIN_L_NUM_HEADS),
         window_size=SWIN_L_WINDOW_SIZE,
         in_channels=(192, 384, 768, 1536),
+        trace_mode=True,
     )
     tt_inputs_host, dram_config, l1_config, input_dims, hw = _setup_sharded_input(device)
     return tt_model, tt_inputs_host, dram_config, l1_config, input_dims, hw
@@ -130,17 +141,18 @@ def _build_model_and_inputs(device):
 def _run_pipeline(device, tt_model, tt_inputs_host, dram_config, l1_config, input_dims, hw, num_iters):
     batch, height, width, channels = input_dims
     dram_cfg = ttnn.DRAM_MEMORY_CONFIG
+    padded_width = ((width + 31) // 32) * 32
 
     def model_wrapper(device_input):
-        host = ttnn.to_torch(ttnn.from_device(device_input))
-        host = host[:, :, :hw, :channels].reshape(batch, height, width, channels).permute(0, 3, 1, 2)
-        nchw = ttnn.from_torch(
-            host.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=dram_cfg,
-        )
+        # Swin-compatible: reshape only (no slice) for trace capture. Matches test_e2e_perf_swin_l.
+        reshaped = ttnn.reshape(device_input, (batch, channels, height, padded_width))
+        nchw = ttnn.to_memory_config(reshaped, dram_cfg)
+        if reshaped is not nchw:
+            ttnn.deallocate(reshaped)
+        if padded_width != width:
+            nchw_sliced = ttnn.slice(nchw, [0, 0, 0, 0], [batch, channels, height, width], memory_config=dram_cfg)
+            ttnn.deallocate(nchw)
+            nchw = nchw_sliced
         backbone_feats_tt = tt_model.backbone(nchw)
         neck_feats_tt = tt_model.neck(backbone_feats_tt)
         for bf in backbone_feats_tt:
@@ -150,7 +162,7 @@ def _run_pipeline(device, tt_model, tt_inputs_host, dram_config, l1_config, inpu
             ttnn.deallocate(nf)
         feat_tt = pre_trans["feat_flatten"]
         feat_pos_tt = pre_trans["feat_pos"]
-        memory_tt = tt_model.encoder(
+        enc_kw = dict(
             feat=feat_tt,
             feat_pos=feat_pos_tt,
             feat_mask=None,
@@ -158,10 +170,15 @@ def _run_pipeline(device, tt_model, tt_inputs_host, dram_config, l1_config, inpu
             level_start_index=pre_trans["level_start_index"],
             valid_ratios=pre_trans["valid_ratios"],
         )
+        if "valid_ratios_tt" in pre_trans:
+            enc_kw["valid_ratios_tt"] = pre_trans["valid_ratios_tt"]
+        if "spatial_shapes_tt" in pre_trans:
+            enc_kw["spatial_shapes_tt"] = pre_trans["spatial_shapes_tt"]
+        memory_tt = tt_model.encoder(**enc_kw)
         ttnn.deallocate(feat_tt)
         ttnn.deallocate(feat_pos_tt)
         pre_dec = tt_model.pre_decoder_ttnn(memory_tt, pre_trans["spatial_shapes"])
-        hidden_states, references = tt_model.decoder(
+        dec_kw = dict(
             query=pre_dec["query"],
             value=memory_tt,
             key_padding_mask=None,
@@ -171,26 +188,21 @@ def _run_pipeline(device, tt_model, tt_inputs_host, dram_config, l1_config, inpu
             level_start_index=pre_trans["level_start_index"],
             valid_ratios=pre_trans["valid_ratios"],
         )
-        all_cls, all_coords = tt_model.forward_heads(hidden_states, references)
-        cls_tt = ttnn.from_torch(
-            all_cls.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=dram_cfg,
-        )
-        coords_tt = ttnn.from_torch(
-            all_coords.to(torch.bfloat16),
-            dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            device=device,
-            memory_config=dram_cfg,
-        )
+        if "valid_ratios_tt" in pre_trans:
+            dec_kw["valid_ratios_tt"] = pre_trans["valid_ratios_tt"]
+        if "spatial_shapes_tt" in pre_trans:
+            dec_kw["spatial_shapes_tt"] = pre_trans["spatial_shapes_tt"]
+        hidden_states, references = tt_model.decoder(**dec_kw)
+        all_cls, all_coords = tt_model.forward_heads(hidden_states, references, return_device_tensors=True)
+        cls_tt = ttnn.to_memory_config(all_cls, dram_cfg)
+        coords_tt = ttnn.to_memory_config(all_coords, dram_cfg)
+        # Do NOT deallocate all_cls/all_coords: trace capture records deallocate ops.
+        # Replay would free output buffers, causing "Buffer must be allocated on device".
         return (cls_tt, coords_tt)
 
     pipeline = create_pipeline_from_config(
         config=PipelineConfig(
-            use_trace=False,
+            use_trace=True,
             num_command_queues=2,
             all_transfers_on_separate_command_queue=False,
         ),
@@ -204,7 +216,9 @@ def _run_pipeline(device, tt_model, tt_inputs_host, dram_config, l1_config, inpu
     pipeline.compile(tt_inputs_host)
     profiler.end("compile")
     host_inputs = [tt_inputs_host] * num_iters
-    pipeline.preallocate_output_tensors_on_host(num_iters)
+    # Skip preallocate: after trace capture, device allocations are marked unsafe.
+    # The non-preallocated path uses cpu() which allocates host memory only.
+    # pipeline.preallocate_output_tensors_on_host(num_iters)
     profiler.start("run_model_pipeline_2cqs")
     pipeline.enqueue(host_inputs).pop_all()
     profiler.end("run_model_pipeline_2cqs")
@@ -216,7 +230,7 @@ def _run_pipeline(device, tt_model, tt_inputs_host, dram_config, l1_config, inpu
 @pytest.mark.timeout(900)
 @pytest.mark.parametrize(
     "device_params",
-    [{"l1_small_size": 32768, "trace_region_size": 50000000, "num_command_queues": 2}],
+    [{"l1_small_size": 32768, "trace_region_size": 350000000, "num_command_queues": 2}],
     indirect=True,
 )
 @pytest.mark.parametrize("batch_size_per_device", (1,))
