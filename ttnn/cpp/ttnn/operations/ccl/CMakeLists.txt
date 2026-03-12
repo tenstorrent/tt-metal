@@ -18,7 +18,9 @@ file(
     kernel_common/*
     kernels/*
     all_to_all_combine/device/kernels/*
+    all_to_all_combine_backward/device/kernels/*
     all_to_all_dispatch/device/kernels/*
+    all_to_all_dispatch_backward/device/kernels/*
     reduce_to_root/device/kernels/*
 )
 target_sources(
@@ -94,10 +96,18 @@ target_sources(
             all_to_all_combine/all_to_all_combine.hpp
             all_to_all_combine/all_to_all_combine_nanobind.hpp
             all_to_all_combine/device/all_to_all_combine_device_operation.hpp
+            # all_to_all_combine_backward/
+            all_to_all_combine_backward/all_to_all_combine_backward.hpp
+            all_to_all_combine_backward/all_to_all_combine_backward_nanobind.hpp
+            all_to_all_combine_backward/device/all_to_all_combine_backward_device_operation.hpp
             # all_to_all_dispatch/
             all_to_all_dispatch/all_to_all_dispatch.hpp
             all_to_all_dispatch/all_to_all_dispatch_nanobind.hpp
             all_to_all_dispatch/device/all_to_all_dispatch_device_operation.hpp
+            # all_to_all_dispatch_backward/
+            all_to_all_dispatch_backward/all_to_all_dispatch_backward.hpp
+            all_to_all_dispatch_backward/all_to_all_dispatch_backward_nanobind.hpp
+            all_to_all_dispatch_backward/device/all_to_all_dispatch_backward_device_operation.hpp
             # broadcast/
             broadcast/broadcast.hpp
             broadcast/broadcast_nanobind.hpp
@@ -140,9 +150,15 @@ target_sources(
         all_to_all_combine/all_to_all_combine.cpp
         all_to_all_combine/device/all_to_all_combine_device_operation.cpp
         all_to_all_combine/device/all_to_all_combine_program_factory.cpp
+        all_to_all_combine_backward/all_to_all_combine_backward.cpp
+        all_to_all_combine_backward/device/all_to_all_combine_backward_device_operation.cpp
+        all_to_all_combine_backward/device/all_to_all_combine_backward_program_factory.cpp
         all_to_all_dispatch/all_to_all_dispatch.cpp
         all_to_all_dispatch/device/all_to_all_dispatch_device_operation.cpp
         all_to_all_dispatch/device/all_to_all_dispatch_program_factory.cpp
+        all_to_all_dispatch_backward/all_to_all_dispatch_backward.cpp
+        all_to_all_dispatch_backward/device/all_to_all_dispatch_backward_device_operation.cpp
+        all_to_all_dispatch_backward/device/all_to_all_dispatch_backward_program_factory.cpp
         reduce_to_root/reduce_to_root.cpp
         reduce_to_root/device/reduce_to_root_op.cpp
         reduce_to_root/device/reduce_to_root_program.cpp

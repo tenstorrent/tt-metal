@@ -489,7 +489,9 @@ CCL
    ttnn.all_gather
    ttnn.all_reduce
    ttnn.all_to_all_combine
+   ttnn.all_to_all_combine_backward
    ttnn.all_to_all_dispatch
+   ttnn.all_to_all_dispatch_backward
    ttnn.broadcast
    ttnn.mesh_partition
    ttnn.point_to_point
