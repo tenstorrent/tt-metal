@@ -214,7 +214,7 @@ void kernel_main() {
                 // DPRINT_COMBINE << "    Token" << dst_token_idx << " is local to this chip." << ENDL();
                 // Local write - direct NOC write to DRAM
                 noc_async_write_page(output_page_idx, output_addr_gen, buffer_cb_addr);
-                noc_async_write_barrier();
+                noc_async_writes_flushed();
             } else {
                 // Remote write via fabric
                 // DPRINT_COMBINE << "    Token" << dst_token_idx << " is remote to this chip. Destination chip: "
@@ -235,13 +235,43 @@ void kernel_main() {
                         output_page_idx,
                         (int)aligned_output_page_size,
                         l1_alignment);
+                } else {
+                    // Not implemented
+                    DPRINT << "Error: 2D topology fabric not implemented." << ENDL();
+                    return;
                 }
 #endif
             }
 
+            noc_async_full_barrier();
+
             cb_pop_front(cb_dispatched_buffer_id, 1);
             cb_pop_front(cb_dispatched_metadata_id, 1);
         }
+    }
+
+    {
+        // Send init semaphore to all devices (fabric aand zeros completed)
+        const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
+        DPRINT_COMBINE << "Sending init semaphore to configured targets..." << ENDL();
+        send_init_semaphore_to_configured_targets<
+            linearized_mesh_coord,
+            topology,
+            src_chip_id,
+            mesh_rows,
+            mesh_cols,
+            axis,
+            num_devices>(
+            fabric_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+
+        // Wait for all devices to complete fabric initialization
+        DPRINT_COMBINE << "Waiting for all devices to complete fabric init..." << ENDL();
+        volatile tt_l1_ptr uint32_t* init_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
+        noc_semaphore_wait(init_sem_ptr, dispatch_devices - 1);
+        noc_semaphore_set(init_sem_ptr, 0);
+
+        DPRINT_COMBINE << "Fabric and zero-init setup complete" << ENDL();
     }
 
 #ifdef DEST_CHIP_ID

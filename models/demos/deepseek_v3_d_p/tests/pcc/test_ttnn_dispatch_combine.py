@@ -50,7 +50,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (2, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=14 * 1024 + 128),
             },
             1,
             ttnn.Topology.Linear,
@@ -61,7 +61,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=14 * 1024 + 128),
             },
             1,
             ttnn.Topology.Linear,
@@ -72,7 +72,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=14 * 1024 + 128),
             },
             1,
             ttnn.Topology.Ring,
@@ -83,7 +83,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=14 * 1024 + 128),
             },
             1,
             ttnn.Topology.Linear,
@@ -94,7 +94,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (8, 1),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=14 * 1024 + 128),
             },
             1,
             ttnn.Topology.Ring,
@@ -105,7 +105,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (4, 2),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=14 * 1024 + 128),
             },
             1,
             ttnn.Topology.Linear,
@@ -116,7 +116,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
             (2, 4),
             {
                 "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-                "fabric_router_config": create_fabric_router_config(max_payload_size=7 * 1024),
+                "fabric_router_config": create_fabric_router_config(max_payload_size=14 * 1024 + 128),
             },
             1,
             ttnn.Topology.Linear,
@@ -126,7 +126,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
     ],
     indirect=["mesh_device", "device_params"],
 )
-@pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+# @pytest.mark.parametrize("use_predictable_data", [True, False], ids=["predictable", "random"])
+@pytest.mark.parametrize("use_predictable_data", [False], ids=["random"])
+@pytest.mark.parametrize("seed", list(range(1000)), ids=[f"seed_{s}" for s in range(1000)])
 def test_ttnn_dispatch_combine(
     mesh_device,
     seq_len_per_chip,
@@ -137,6 +139,7 @@ def test_ttnn_dispatch_combine(
     num_links,
     topology,
     use_predictable_data,
+    seed,
 ):
     """Test end-to-end TTNN dispatch→combine round-trip with host reduction."""
 
@@ -183,7 +186,7 @@ def test_ttnn_dispatch_combine(
             num_routed_experts=num_routed_experts,
             num_experts_per_tok=num_experts_per_tok,
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
-            seed=42,
+            seed=seed,
             num_dispatch_groups=num_dispatch_groups,
         )
         logger.info("Using RANDOM test data")

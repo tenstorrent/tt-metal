@@ -295,7 +295,8 @@ void kernel_main() {
             if (expert_chip == linearized_mesh_coord) {
                 noc_async_write_page(page_idx, output_addr_gen, input_token_read_addr);
                 noc_async_writes_flushed();  // is it formally needed?
-
+                noc_async_full_barrier();    // ensure the data page is visible in memory before the metadata is written
+                                             // and read by the combiner
                 uint32_t metadata_cb_addr = get_write_ptr(cb_metadata_temp_id);
                 volatile tt_l1_ptr int32_t* metadata = reinterpret_cast<volatile tt_l1_ptr int32_t*>(metadata_cb_addr);
 
@@ -312,22 +313,20 @@ void kernel_main() {
 
             } else {
                 if constexpr (is_1d_topology<topology>()) {
-                    if (true) {
-                        fabric_send_chip_unicast_noc_unicast_1d<
-                            linearized_mesh_coord,
-                            topology,
-                            mesh_rows,
-                            mesh_cols,
-                            fabric_max_packet_size>(
-                            output_addr_gen,
-                            fabric_connections,
-                            unicast_packet_header,
-                            expert_chip,  // linearized_dest_mesh_coord
-                            input_token_read_addr,
-                            page_idx,
-                            (int)aligned_output_page_size,  // bfloat16 = 2 bytes
-                            l1_alignment);
-                    }
+                    fabric_send_chip_unicast_noc_unicast_1d<
+                        linearized_mesh_coord,
+                        topology,
+                        mesh_rows,
+                        mesh_cols,
+                        fabric_max_packet_size>(
+                        output_addr_gen,
+                        fabric_connections,
+                        unicast_packet_header,
+                        expert_chip,  // linearized_dest_mesh_coord
+                        input_token_read_addr,
+                        page_idx,
+                        (int)aligned_output_page_size,  // bfloat16 = 2 bytes
+                        l1_alignment);
 
                     uint32_t metadata_cb_addr = get_write_ptr(cb_metadata_temp_id);
                     volatile tt_l1_ptr int32_t* metadata =
@@ -340,22 +339,20 @@ void kernel_main() {
                     metadata[3] = routed_expert;
                     metadata[4] = static_cast<int16_t>(weights[k]);
 
-                    if (true) {
-                        fabric_send_chip_unicast_noc_unicast_1d<
-                            linearized_mesh_coord,
-                            topology,
-                            mesh_rows,
-                            mesh_cols,
-                            fabric_max_packet_size>(
-                            metadata_addr_gen,
-                            fabric_connections,
-                            metadata_packet_header,
-                            expert_chip,  // linearized_dest_mesh_coord
-                            metadata_cb_addr,
-                            page_idx,
-                            (int)aligned_metadata_page_size,  // int32 = 4 bytes
-                            l1_alignment);
-                    }
+                    fabric_send_chip_unicast_noc_unicast_1d<
+                        linearized_mesh_coord,
+                        topology,
+                        mesh_rows,
+                        mesh_cols,
+                        fabric_max_packet_size>(
+                        metadata_addr_gen,
+                        fabric_connections,
+                        metadata_packet_header,
+                        expert_chip,  // linearized_dest_mesh_coord
+                        metadata_cb_addr,
+                        page_idx,
+                        (int)aligned_metadata_page_size,  // int32 = 4 bytes
+                        l1_alignment);
                 } else {
                     // Not implemented
                     DPRINT << "Error: 2D topology fabric not implemented." << ENDL();
@@ -365,7 +362,7 @@ void kernel_main() {
 
             offset++;
         }
-        noc_async_write_barrier();  // not needed if there were no local dispatches
+        noc_async_full_barrier();  // not needed if there were no local dispatches
 
         cb_pop_front(cb_indices_id, 1);
         cb_pop_front(cb_weights_id, 1);
@@ -378,6 +375,30 @@ void kernel_main() {
     // Pop the offsets and dispatch table CBs that were read at the beginning
     cb_pop_front(cb_offsets_id, offsets_pages);
     cb_pop_front(cb_dispatch_table_id, dispatch_table_pages);
+
+    {
+        // Send init semaphore to all devices (fabric aand zeros completed)
+        const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
+        DPRINT_DISPATCH << "Sending init semaphore to configured targets..." << ENDL();
+        send_init_semaphore_to_configured_targets<
+            linearized_mesh_coord,
+            topology,
+            src_chip_id,
+            mesh_rows,
+            mesh_cols,
+            axis,
+            num_devices>(
+            fabric_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+
+        // Wait for all devices to complete fabric initialization
+        DPRINT_DISPATCH << "Waiting for all devices to complete fabric init..." << ENDL();
+        volatile tt_l1_ptr uint32_t* init_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
+        noc_semaphore_wait(init_sem_ptr, dispatch_devices - 1);
+        noc_semaphore_set(init_sem_ptr, 0);
+
+        DPRINT_DISPATCH << "Fabric and zero-init setup complete" << ENDL();
+    }
 
 #ifdef DEST_CHIP_ID
     // Close fabric connections to prevent resource conflicts with subsequent operations

@@ -147,8 +147,8 @@ def validate_combine_output(
     indices: torch.Tensor,
     num_dispatch_groups: int,
     num_routed_experts: int,
-    atol: float = 1e-2,
-    rtol: float = 1e-2,
+    atol: float = 1e-4,
+    rtol: float = 1e-4,
     verbose: bool = False,
     expert_dispatch_table: torch.Tensor = None,
     expert_token_counts: torch.Tensor = None,
@@ -198,14 +198,16 @@ def validate_combine_output(
                     max_diff = torch.max(torch.abs(torch_data.float() - ttnn_data.float())).item()
                     mismatches.append((dispatch_group_idx, chip_id, token_id, topk_idx, max_diff))
 
-                    if verbose and len(mismatches) <= 5:
+                    if verbose and len(mismatches) <= 10:
                         logger.error(
                             f"❌ Combine mismatch [{len(mismatches)}]: "
-                            f"dispatch_group={dispatch_group_idx}, chip={chip_id}, token={token_id}, topk={topk_idx}, "
+                            f"{expert_id=} {dispatch_group_idx=} {chip_id=} {token_id=} {topk_idx=}, "
                             f"max_diff={max_diff:.6f}"
                         )
                         logger.error(f"   torch_data[:5] = {torch_data[:5].tolist()}")
                         logger.error(f"   ttnn_data[:5]  = {ttnn_data[:5].tolist()}")
+                        logger.error(f"   torch_data[-5:] = {torch_data[-5:].tolist()}")
+                        logger.error(f"   ttnn_data[-5:]  = {ttnn_data[-5:].tolist()}")
                         # Check if data is all zeros (indicates data didn't arrive)
                         if torch.all(ttnn_data == 0):
                             logger.error(f"   ⚠️  TTNN data is ALL ZEROS - data may not have arrived!")
