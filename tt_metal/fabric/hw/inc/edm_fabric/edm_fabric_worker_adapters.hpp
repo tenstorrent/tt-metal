@@ -24,6 +24,14 @@
 
 namespace tt::tt_fabric {
 
+template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS>
+struct WorkerToFabricEdmSenderImpl;
+
+namespace fabric_tests::detail {
+    template <bool I, uint8_t E>
+    void setup_credit_update_noc_state(const WorkerToFabricEdmSenderImpl<I, E>&, uint8_t);
+}
+
 /*
  * The WorkerToFabricEdmSenderImpl acts as an adapter between the worker and the EDM, it hides details
  * of the communication between worker and EDM to provide flexibility for the implementation to change
@@ -580,9 +588,9 @@ struct WorkerToFabricEdmSenderBase {
         this->advance_buffer_slot_write_index();
     }
 
-    template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS>
+    template <bool I, uint8_t E>
     friend void fabric_tests::detail::setup_credit_update_noc_state(
-        const WorkerToFabricEdmSenderImpl<I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, EDM_NUM_BUFFER_SLOTS>&, uint8_t);
+        const WorkerToFabricEdmSenderImpl<I, E>&, uint8_t);
 
 private:
 
@@ -625,9 +633,9 @@ namespace fabric_tests::detail {
     // Definition of setup_credit_update_noc_state
     // Call this once before using update_edm_buffer_free_slots<true>
     // Specialized to fabric tests
-    template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS>
+    template <bool I, uint8_t E>
     FORCE_INLINE void setup_credit_update_noc_state(
-        const WorkerToFabricEdmSenderImpl<I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, EDM_NUM_BUFFER_SLOTS>& adapter,
+        const WorkerToFabricEdmSenderImpl<I, E>& adapter,
         uint8_t noc) {
         auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
         const uint64_t noc_sem_addr =
