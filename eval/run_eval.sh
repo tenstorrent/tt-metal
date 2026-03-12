@@ -316,7 +316,6 @@ run_single() {
         (
             echo "[${prompt_name}:${run_id}] Building metal..."
             if ! ./build_metal.sh --enable-ccache > "${log_dir}/build.log" 2>&1; then
-                echo "BUILD_FAIL" > "${log_dir}/result.txt"
                 touch "$infra_failed"
                 exit 1
             fi
@@ -328,7 +327,6 @@ run_single() {
         (
             echo "[${prompt_name}:${run_id}] Creating python env..."
             if ! ./create_venv.sh --force > "${log_dir}/venv.log" 2>&1; then
-                echo "VENV_FAIL" > "${log_dir}/result.txt"
                 touch "$infra_failed"
                 exit 1
             fi
@@ -420,9 +418,7 @@ WRAPPER
     fi
 
     local result
-    if [[ -f "${log_dir}/result.txt" ]] && grep -q "_FAIL" "${log_dir}/result.txt"; then
-        result="$(cat "${log_dir}/result.txt")"
-    elif [[ $claude_exit -eq 0 ]]; then
+    if [[ $claude_exit -eq 0 ]]; then
         result="PASS${golden_suffix:- (no golden tests)}"
     else
         result="FAIL (exit $claude_exit)${golden_suffix}"

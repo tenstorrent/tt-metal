@@ -32,17 +32,22 @@ def parse_contract(contract_path: Path) -> dict:
         contract["module"] = import_match.group(1)
         contract["function"] = import_match.group(2)
 
-    # Extract function signature — look for def line in code block
-    sig_match = re.search(r"def (\w+)\((.*?)\)", text, re.DOTALL)
+    # Extract function signature — match from def to the closing ") ->" or "):"
+    # Use greedy match to avoid stopping at parens inside comments like (1, 1, 1, W)
+    sig_match = re.search(r"def (\w+)\((.*)\)\s*(?:->|:)", text, re.DOTALL)
     if sig_match:
         contract["signature_raw"] = sig_match.group(0)
         params_raw = sig_match.group(2)
 
-        # Parse parameter names and defaults
+        # Parse parameter names, defaults, and keyword-only status
         params = []
+        seen_keyword_only_marker = False
         for line in params_raw.split("\n"):
             line = line.strip().rstrip(",")
-            if not line or line.startswith("#") or line == "*" or line.startswith("*,"):
+            if not line or line.startswith("#"):
+                continue
+            if line == "*" or line.startswith("*,"):
+                seen_keyword_only_marker = True
                 continue
 
             param_match = re.match(r"(\*?\*?\w+)(?:\s*:\s*[\w.\[\]]+)?\s*(?:=\s*(.+))?", line)
@@ -51,7 +56,7 @@ def parse_contract(contract_path: Path) -> dict:
                 default = param_match.group(2)
                 if default:
                     default = default.split("#")[0].strip().rstrip(",")
-                params.append({"name": name, "default": default})
+                params.append({"name": name, "default": default, "keyword_only": seen_keyword_only_marker})
 
         contract["params"] = params
 
@@ -133,22 +138,17 @@ def validate_operation(contract: dict, contract_path: Path) -> list:
             elif expected_default:
                 issues.append(f"Parameter '{name}' has no default but contract expects default={expected_default}")
 
-    # Check keyword-only parameters
-    raw_sig = contract.get("signature_raw", "")
-    contract_text = contract_path.read_text()
-    has_keyword_only_marker = "*,\n" in contract_text or "*, " in raw_sig
+    # Check keyword-only parameters — only enforce for params after the *,
+    for exp_param in expected_params:
+        name = exp_param["name"]
+        if name not in actual_names:
+            continue
 
-    if has_keyword_only_marker:
-        for exp_param in expected_params:
-            name = exp_param["name"]
-            if name not in actual_names:
-                continue
-
-            actual_param = sig.parameters[name]
-            if exp_param.get("default") is not None and actual_param.kind != inspect.Parameter.KEYWORD_ONLY:
-                issues.append(
-                    f"Parameter '{name}' should be keyword-only (use *, {name}=...) " f"but is {actual_param.kind.name}"
-                )
+        actual_param = sig.parameters[name]
+        if exp_param.get("keyword_only") and actual_param.kind != inspect.Parameter.KEYWORD_ONLY:
+            issues.append(
+                f"Parameter '{name}' should be keyword-only (use *, {name}=...) " f"but is {actual_param.kind.name}"
+            )
 
     return issues
 
