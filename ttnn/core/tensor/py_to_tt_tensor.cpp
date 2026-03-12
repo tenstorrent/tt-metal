@@ -78,10 +78,6 @@ Tensor create_tt_tensor_from_host_data(
         TensorLayout src_tensor_layout(src_dtype, PageConfig(ttnn::Layout::ROW_MAJOR), MemoryConfig{});
 
         if (mesh_mapper != nullptr) {
-            // Distributed tensors must be created via the factory function: the per-shard
-            // TensorSpec is built after chunking, so constructing a TensorSpec from the full
-            // (pre-shard) shape + sharded memory config would trigger a validation error
-            // (e.g. "Number of shards along height 32 must not exceed number of cores 16").
             const bool must_construct_on_host = device == nullptr || !fast_approx;
             return ttnn::distributed::create_distributed_tensor(
                 host_buffer.view_as<T>(),
