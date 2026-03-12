@@ -328,9 +328,7 @@ class ModuleDict(AbstractModuleBase):
 
     def __init__(
         self,
-        modules: Optional[
-            Union[dict[str, CppModuleBase], Iterable[tuple[str, CppModuleBase]]]
-        ] = None,
+        modules: Optional[Union[dict[str, CppModuleBase], Iterable[tuple[str, CppModuleBase]]]] = None,
     ) -> None:
         """Initialize ModuleDict.
 

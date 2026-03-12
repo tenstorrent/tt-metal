@@ -116,9 +116,7 @@ class ModelConfig:
     runner_type: ttml.models.RunnerType = ttml.models.RunnerType.Default
     weight_tying: ttml.models.WeightTyingType = ttml.models.WeightTyingType.Disabled
     positional_embedding_type: Literal["trainable", "fixed"] = "trainable"
-    experimental: ModelExperimentalConfig = field(
-        default_factory=ModelExperimentalConfig
-    )
+    experimental: ModelExperimentalConfig = field(default_factory=ModelExperimentalConfig)
     # Llama-specific fields (universal naming YAML conventions)
     num_groups: int = 3  # GQA: num_key_value_heads
     theta: float = 500000.0  # RoPE theta parameter
@@ -269,9 +267,7 @@ def create_dataset_from_text(
     return InMemoryTokenDataset(tokens, sequence_length), tokenizer
 
 
-def collate_fn(
-    samples: list, sequence_length: int
-) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
+def collate_fn(samples: list, sequence_length: int) -> Tuple[ttml.autograd.Tensor, ttml.autograd.Tensor]:
     """Collate function.
 
     Args:
@@ -285,12 +281,8 @@ def collate_fn(
         data.extend(seq)
         targets.extend(target)
 
-    data_np = np.array(data, dtype=np.uint32).reshape(
-        actual_batch_size, 1, 1, sequence_length
-    )
-    targets_np = np.array(targets, dtype=np.uint32).reshape(
-        actual_batch_size, sequence_length
-    )
+    data_np = np.array(data, dtype=np.uint32).reshape(actual_batch_size, 1, 1, sequence_length)
+    targets_np = np.array(targets, dtype=np.uint32).reshape(actual_batch_size, sequence_length)
 
     # Create tensors directly from NumPy with correct shape (single host-to-device transfer)
     data_tensor = ttml.autograd.Tensor.from_numpy(data_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32)
@@ -1264,9 +1256,7 @@ def main():
             model = create_model_from_config(model_config)
 
             # Count parameters
-            total_params = sum(
-                math.prod(p.shape()) for p in model.parameters().values()
-            )
+            total_params = sum(math.prod(p.shape()) for p in model.parameters().values())
             print(
                 f"   - Model: {model_config.num_blocks} layers, {model_config.embedding_dim} embd, {model_config.num_heads} heads"
             )
