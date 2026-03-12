@@ -43,7 +43,7 @@ def ocr_model():
 
 @pytest.mark.parametrize("topk_method", ["greedy", "group_limited_greedy", "noaux_tc"])
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
-def test_deepseek_ocr_moe(device, ocr_model, topk_method):
+def test_deepseek_ocr_moe_gate(device, ocr_model, topk_method):
     """Torch gate vs TTNN gate for each topk method; compare indices and weights (PCC)."""
     torch.manual_seed(42)
     torch.set_grad_enabled(False)

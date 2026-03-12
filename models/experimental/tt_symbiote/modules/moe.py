@@ -1366,32 +1366,6 @@ class TTNNMoE(TTNNModule):
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear
 
 
-def _stack_deepseek_v2_experts(experts_module_list, config):
-    """
-    Build a single object with gate_up_proj and down_proj from a ModuleList of
-    DeepseekV2MLP-style experts (each with gate_proj, up_proj, down_proj).
-    Compatible with TTNNExperts.from_torch() so V2 MoE can reuse the V3 expert stack.
-    """
-    experts = list(experts_module_list)
-    gate_up_list = []
-    down_list = []
-    for expert in experts:
-        if expert is None:
-            continue
-        gate_w = expert.gate_proj.weight
-        up_w = expert.up_proj.weight
-        down_w = expert.down_proj.weight
-        gate_up_list.append(torch.cat([gate_w, up_w], dim=0))
-        down_list.append(down_w.T)
-    gate_up_proj = torch.stack(gate_up_list, dim=0)
-    down_proj = torch.stack(down_list, dim=0)
-    out = type("DeepseekV2ExpertsStack", (), {})()
-    out.config = config
-    out.gate_up_proj = gate_up_proj
-    out.down_proj = down_proj
-    return out
-
-
 class TTNNDeepseekV2MoE(TTNNModule):
     """
     TTNN symbiote for DeepSeek V2 MoE (e.g. DeepSeek-OCR).
@@ -1418,7 +1392,7 @@ class TTNNDeepseekV2MoE(TTNNModule):
 
         module.gate = TTNNDeepseekOCRMoEGate.from_torch(torch_moe.gate)
 
-        stacked_experts = _stack_deepseek_v2_experts(torch_moe.experts, torch_moe.config)
+        stacked_experts = cls._stack_deepseek_v2_experts(torch_moe.experts, torch_moe.config)
         module.experts = TTNNExperts.from_torch(stacked_experts)
 
         if getattr(torch_moe, "shared_experts", None) is not None:
@@ -1427,6 +1401,31 @@ class TTNNDeepseekV2MoE(TTNNModule):
             module.shared_experts = None
 
         return module
+
+    def _stack_deepseek_v2_experts(experts_module_list, config):
+        """
+        Build a single object with gate_up_proj and down_proj from a ModuleList of
+        DeepseekV2MLP-style experts (each with gate_proj, up_proj, down_proj).
+        Compatible with TTNNExperts.from_torch() so V2 MoE can reuse the V3 expert stack.
+        """
+        experts = list(experts_module_list)
+        gate_up_list = []
+        down_list = []
+        for expert in experts:
+            if expert is None:
+                continue
+            gate_w = expert.gate_proj.weight
+            up_w = expert.up_proj.weight
+            down_w = expert.down_proj.weight
+            gate_up_list.append(torch.cat([gate_w, up_w], dim=0))
+            down_list.append(down_w.T)
+        gate_up_proj = torch.stack(gate_up_list, dim=0)
+        down_proj = torch.stack(down_list, dim=0)
+        out = type("DeepseekV2ExpertsStack", (), {})()
+        out.config = config
+        out.gate_up_proj = gate_up_proj
+        out.down_proj = down_proj
+        return out
 
     def preprocess_weights_impl(self):
         if hasattr(self.gate, "init_parameters"):
@@ -1447,12 +1446,14 @@ class TTNNDeepseekV2MoE(TTNNModule):
             hidden_states_4d = hidden_states
             batch, _, seq, hidden = hidden_states_4d.shape
             orig_shape = [batch, seq, hidden]
+
+        print("hidden_states_4d input to gate: ", hidden_states_4d.shape)
+
         topk_idx, topk_weight, _ = self.gate(hidden_states)
 
-        torch.save(topk_idx.to_torch, "models/experimental/tt_symbiote/tests/input_test_moe/dump/topk_idx_ttnn.pt")
-        torch.save(
-            topk_weight.to_torch, "models/experimental/tt_symbiote/tests/input_test_moe/dump/topk_weight_ttnn.pt"
-        )
+        print("topk_idx.shape : ", topk_idx.shape)
+        print("topk_weight.shape : ", topk_weight.shape)
+
         topk_idx = topk_idx[:, :, :6]
         topk_weight = topk_weight[:, :, :6]
 
@@ -1486,41 +1487,40 @@ class TTNNDeepseekV2MoE(TTNNModule):
         device = getattr(self, "device", None)
         if device is None:
             self._used_fallback = True
-            inp = _to_torch_for_fallback(hidden_states)
+            inp = self._to_torch_for_fallback(hidden_states)
             with torch.no_grad():
                 return self._fallback_torch_layer(inp)
         try:
             return self._forward_ttnn(hidden_states)
         except Exception:
             self._used_fallback = True
-            inp = _to_torch_for_fallback(hidden_states)
+            inp = self._to_torch_for_fallback(hidden_states)
             with torch.no_grad():
                 return self._fallback_torch_layer(inp)
 
+    def _to_torch_for_fallback(tensor):
+        """Convert symbiote/ttnn input to torch for fallback; ttnn.to_torch copies from device if needed."""
+        if isinstance(tensor, torch.Tensor):
+            from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 
-def _to_torch_for_fallback(tensor):
-    """Convert symbiote/ttnn input to torch for fallback; ttnn.to_torch copies from device if needed."""
-    if isinstance(tensor, torch.Tensor):
-        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
-
-        if not isinstance(tensor, TorchTTNNTensor):
-            return tensor
-        if getattr(tensor, "ttnn_tensor", None) is not None:
+            if not isinstance(tensor, TorchTTNNTensor):
+                return tensor
+            if getattr(tensor, "ttnn_tensor", None) is not None:
+                return ttnn.to_torch(tensor.ttnn_tensor)
+            return getattr(tensor, "to_torch", tensor.elem if getattr(tensor, "elem", None) is not None else tensor)
+        if hasattr(tensor, "ttnn_tensor") and tensor.ttnn_tensor is not None:
             return ttnn.to_torch(tensor.ttnn_tensor)
-        return getattr(tensor, "to_torch", tensor.elem if getattr(tensor, "elem", None) is not None else tensor)
-    if hasattr(tensor, "ttnn_tensor") and tensor.ttnn_tensor is not None:
-        return ttnn.to_torch(tensor.ttnn_tensor)
-    try:
-        if getattr(ttnn, "is_tensor_storage_on_device", None) and ttnn.is_tensor_storage_on_device(tensor):
-            return ttnn.to_torch(tensor)
-    except Exception:
-        pass
-    if hasattr(tensor, "to_torch"):
-        out = tensor.to_torch
-        if callable(out):
-            return out()
-        return out
-    return tensor
+        try:
+            if getattr(ttnn, "is_tensor_storage_on_device", None) and ttnn.is_tensor_storage_on_device(tensor):
+                return ttnn.to_torch(tensor)
+        except Exception:
+            pass
+        if hasattr(tensor, "to_torch"):
+            out = tensor.to_torch
+            if callable(out):
+                return out()
+            return out
+        return tensor
 
 
 class TTNNDeepseekOCRMoEGate(TTNNModule):
@@ -1557,13 +1557,6 @@ class TTNNDeepseekOCRMoEGate(TTNNModule):
         """
         Load weights from PyTorch to Host memory (Tile Layout).
         """
-        # 1. Gate Weight: Transpose for TTNN Matmul [Hidden, Experts]
-        # weight_t = self._fallback_torch_layer.weight.T.contiguous()
-        # self.weight = ttnn.from_torch(
-        #     weight_t,
-        #     dtype=ttnn.bfloat16,
-        #     layout=ttnn.TILE_LAYOUT
-        # )
         self.linear = TTNNLinear.from_parameters(weight=self._fallback_torch_layer.weight, bias=None)
         self.linear.preprocess_weights()
         # Buffers for group_limited_greedy and noaux_tc
@@ -1689,6 +1682,19 @@ class TTNNDeepseekOCRMoEGate(TTNNModule):
         Output: (topk_weight, topk_idx) same as HF gate.
         """
         logits = self.linear(hidden_states).to_ttnn
+        logits = ttnn.experimental.reduce_scatter_minimal_async(
+            logits,
+            persistent_output_buffers=None,
+            dim=2,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            cluster_axis=1,
+            topology=ttnn.Topology.Ring,
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
 
         if self.scoring_func == "softmax":
             scores = ttnn.softmax(logits, dim=-1)
@@ -1698,7 +1704,10 @@ class TTNNDeepseekOCRMoEGate(TTNNModule):
             raise NotImplementedError(f"insupportable scoring function for MoE gating: {self.scoring_func}")
 
         if self.topk_method == "greedy":
-            topk_weight, topk_idx = ttnn.topk(scores, k=self.top_k, dim=-1, sorted=False)
+            topk_weight, topk_idx = ttnn.topk(scores, k=self.top_k, largest=True, dim=-1, sorted=False)
+            topk_weight = ttnn.gather(scores, dim=2, index=topk_idx)
+            print("topk_weight.shape : ", topk_weight.shape)
+            print("topk_idx.shape : ", topk_idx.shape)
         elif self.topk_method == "group_limited_greedy":
             topk_idx, topk_weight = self._forward_group_limited_greedy(scores)
         elif self.topk_method == "noaux_tc":
