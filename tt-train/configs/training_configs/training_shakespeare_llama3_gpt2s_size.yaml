@@ -11,7 +11,7 @@ training_config:
   use_moreh_adamw: true
   use_kahan_summation: false
   use_clip_grad_norm: false
-  model_config: "model_configs/llama3_gpt2s_size.yaml"
+  model_config: "configs/model_configs/llama3_gpt2s_size.yaml"
 
 device_config:
   enable_ddp: false
