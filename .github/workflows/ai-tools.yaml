@@ -6,10 +6,5 @@ on:
 jobs:
   call-ai-assistant:
     if: ${{ false }} # Disabled intentionally; keep workflow for log retention.
-    permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-      id-token: write
+    permissions: {}
     uses: tenstorrent/tt-metal/.github/workflows/ai_tools_impl.yaml@b2606f6feca7d750fbc8a4c1e8ec7e13b826991c
-    secrets: inherit
