@@ -10,7 +10,9 @@ Explicitly traverses the known torchvision Faster-RCNN model hierarchy:
   - backbone.body (ResNet-50 with FrozenBatchNorm2d)
   - backbone.fpn (Feature Pyramid Network)
   - rpn.head (Region Proposal Network head)
-  - roi_heads (box_head + box_predictor)
+
+Note: ROI box_head and box_predictor FC layers run on CPU through the
+original PyTorch module, so they are NOT preprocessed here.
 """
 
 import torch
@@ -43,17 +45,6 @@ def convert_weight_bias_to_ttnn(weight, bias, mesh_mapper=None):
     weight_ttnn = ttnn.from_torch(weight, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
     bias_reshaped = torch.reshape(bias, (1, 1, 1, -1))
     bias_ttnn = ttnn.from_torch(bias_reshaped, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
-    return weight_ttnn, bias_ttnn
-
-
-def convert_linear_weight_bias_to_ttnn(weight, bias, mesh_mapper=None):
-    """Convert linear layer weights to TTNN format (transposed for matmul)."""
-    weight_t = weight.T.contiguous()
-    weight_ttnn = ttnn.from_torch(weight_t, dtype=ttnn.float32, mesh_mapper=mesh_mapper)
-    if bias is not None:
-        bias_ttnn = ttnn.from_torch(bias.reshape(1, -1), dtype=ttnn.float32, mesh_mapper=mesh_mapper)
-    else:
-        bias_ttnn = None
     return weight_ttnn, bias_ttnn
 
 
@@ -160,40 +151,20 @@ def preprocess_rpn(rpn, mesh_mapper=None):
     return parameters
 
 
-def preprocess_roi_heads(roi_heads, device, mesh_mapper=None):
-    """Extract ROI head FC layer weights and move to device."""
-    parameters = {}
-
-    box_head = roi_heads.box_head
-    for name, module in box_head.named_modules():
-        if isinstance(module, nn.Linear):
-            w, b = convert_linear_weight_bias_to_ttnn(module.weight.data, module.bias.data, mesh_mapper)
-            w = ttnn.to_device(w, device)
-            b = ttnn.to_device(b, device)
-            parameters[f"roi_heads.box_head.{name}.weight"] = w
-            parameters[f"roi_heads.box_head.{name}.bias"] = b
-
-    box_predictor = roi_heads.box_predictor
-    for attr_name in ["cls_score", "bbox_pred"]:
-        linear = getattr(box_predictor, attr_name)
-        w, b = convert_linear_weight_bias_to_ttnn(linear.weight.data, linear.bias.data, mesh_mapper)
-        w = ttnn.to_device(w, device)
-        b = ttnn.to_device(b, device)
-        parameters[f"roi_heads.box_predictor.{attr_name}.weight"] = w
-        parameters[f"roi_heads.box_predictor.{attr_name}.bias"] = b
-
-    return parameters
-
-
 def create_faster_rcnn_model_parameters(torch_model, device):
-    """Create all TTNN model parameters from a torchvision Faster-RCNN model."""
+    """Create all TTNN model parameters from a torchvision Faster-RCNN model.
+
+    Only preprocesses weights for layers that actually run on the TT device:
+    backbone (ResNet-50), FPN, and RPN head convolutions.
+    ROI box_head and box_predictor FC layers run entirely on CPU through the
+    original PyTorch module, so their weights are NOT converted to TTNN tensors.
+    """
     _, weights_mesh_mapper, _ = get_mesh_mappers(device)
 
     parameters = {}
     parameters.update(preprocess_resnet50_backbone(torch_model.backbone.body, weights_mesh_mapper))
     parameters.update(preprocess_fpn(torch_model.backbone.fpn, weights_mesh_mapper))
     parameters.update(preprocess_rpn(torch_model.rpn, weights_mesh_mapper))
-    parameters.update(preprocess_roi_heads(torch_model.roi_heads, device, weights_mesh_mapper))
 
     return parameters
 

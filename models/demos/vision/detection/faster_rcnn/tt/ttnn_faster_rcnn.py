@@ -229,11 +229,16 @@ class TtFasterRCNN:
             )
         return result
 
-    def __call__(self, images_tensor):
+    def __call__(self, images_tensor, original_image_sizes=None):
         """Run full Faster-RCNN inference.
 
         Args:
             images_tensor: NCHW PyTorch tensor (unnormalized, [0, 1] range)
+            original_image_sizes: Optional list of (H, W) tuples for each image
+                in the batch. When provided, detection boxes are rescaled to
+                these dimensions so they can be drawn directly on the original
+                (pre-resize) images. When *None*, boxes are returned in the
+                configured inference resolution (input_height x input_width).
 
         Returns:
             List of dicts with 'boxes', 'labels', 'scores' per image
@@ -275,8 +280,9 @@ class TtFasterRCNN:
 
             detections = self._run_roi_heads(features_torch, proposals, image_sizes)
 
-            original_sizes = [(self.input_height, self.input_width)] * self.batch_size
-            detections = self.torch_transform.postprocess(detections, image_sizes, original_sizes)
+            if original_image_sizes is None:
+                original_image_sizes = [(self.input_height, self.input_width)] * self.batch_size
+            detections = self.torch_transform.postprocess(detections, image_sizes, original_image_sizes)
 
             for key in fpn_features:
                 ttnn.deallocate(fpn_features[key])

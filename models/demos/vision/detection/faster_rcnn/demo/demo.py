@@ -163,8 +163,10 @@ def run_faster_rcnn_inference(
         logger.info(f"Processing: {img_path}")
         torch_input, original_image = load_and_preprocess_image(img_path, (input_height, input_width))
 
+        original_hw = [(original_image.height, original_image.width)]
+
         profiler.start(f"inference_{os.path.basename(img_path)}")
-        detections = ttnn_model(torch_input)
+        detections = ttnn_model(torch_input, original_image_sizes=original_hw)
         ttnn.synchronize_device(device)
         profiler.end(f"inference_{os.path.basename(img_path)}")
 
