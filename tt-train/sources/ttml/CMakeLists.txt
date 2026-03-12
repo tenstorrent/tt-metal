@@ -92,7 +92,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/memory_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/config_path.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/utils/data_path.cpp
 )
 
 # Manually select only specific files from metal ops
@@ -205,8 +204,8 @@ endforeach()
 # Define FLATBUFFERS_LARGE_SIZE to use uint64_t for size calculations (must be defined before any flatbuffers headers)
 target_compile_definitions(ttml PUBLIC FLATBUFFERS_LARGE_SIZE)
 
-# Define TTML_ROOT and TTML_DATA_ROOT for path resolution
-# These are used by ttml::utils::get_tt_train_root() and get_data_root() as fallbacks
+# Define TTML_ROOT for config path resolution
+# This is used by ttml::utils::get_tt_train_root() as a fallback
 # when TT_TRAIN_ROOT/TT_METAL_HOME environment variables are not set
 target_compile_definitions(
     ttml

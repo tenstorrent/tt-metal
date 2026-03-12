@@ -9,7 +9,6 @@
 #include "models/distributed/llama.hpp"
 #include "models/gpt2.hpp"
 #include "models/llama.hpp"
-#include "utils/data_path.hpp"
 
 // namespace name can't start with a digit
 namespace three_tier_arch {
@@ -35,7 +34,7 @@ struct TrainingConfig {
     std::string data_path;
     std::string tokenizer_type = "char";
     std::string scheduler_type = "identity";
-    std::string tokenizer_path = ttml::utils::resolve_tokenizer_path(gpt2_tokenizer_file_name);
+    std::string tokenizer_path = std::string(DATA_FOLDER) + gpt2_tokenizer_file_name;
     bool use_clip_grad_norm = false;
     float clip_grad_norm_max_norm = 1.0F;
     std::variant<ttml::models::gpt2::TransformerConfig, ttml::models::llama::LlamaConfig> transformer_config;

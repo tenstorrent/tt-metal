@@ -34,7 +34,6 @@
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "utils.hpp"
 #include "utils/config_path.hpp"
-#include "utils/data_path.hpp"
 #include "utils/memory_utils.hpp"
 
 namespace {
@@ -189,7 +188,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.gradient_accumulation_steps =
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
     config.model_config = training_config["model_config"].as<std::string>("");
-    config.data_path = training_config["data_path"].as<std::string>("shakespeare.txt");
+    config.data_path = training_config["data_path"].as<std::string>(std::string(DATA_FOLDER) + "/shakespeare.txt");
     config.scheduler_type = training_config["scheduler_type"].as<std::string>(config.scheduler_type);
     config.use_clip_grad_norm = training_config["use_clip_grad_norm"].as<bool>(config.use_clip_grad_norm);
     config.clip_grad_norm_max_norm =
@@ -481,13 +480,11 @@ int main(int argc, char **argv) {
     std::variant<std::string, YAML::Node> text_or_tokens;
 
     try {
-        // Resolve data path (can be relative to data root or absolute)
-        auto resolved_data_path = ttml::utils::resolve_data_path(training_config.data_path);
         // check file extension:
         if (training_config.data_path.ends_with(".txt")) {
-            text_or_tokens = read_file_to_str(resolved_data_path.string());
+            text_or_tokens = read_file_to_str(training_config.data_path);
         } else {
-            auto yaml_data = YAML::LoadFile(resolved_data_path.string());
+            auto yaml_data = YAML::LoadFile(training_config.data_path);
             yaml_data["sequence_length"] = sequence_length;
             text_or_tokens = yaml_data;
         }
