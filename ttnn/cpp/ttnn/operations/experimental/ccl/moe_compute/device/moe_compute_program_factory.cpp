@@ -325,6 +325,7 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // Create semaphores for ring synchronization between cores
     // Each core will have a semaphore that its predecessor will signal
+    // reuse the same semaphore location for signaling combine cores that per expert data is available
     const uint32_t ring_semaphore_id = tt::tt_metal::CreateSemaphore(program, matmul_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------

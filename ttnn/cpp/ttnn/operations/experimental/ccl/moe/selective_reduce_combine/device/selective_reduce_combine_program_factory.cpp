@@ -490,12 +490,13 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     auto core_map_iter = mux_neigbor_core_maps.cbegin();
     auto data_parallel_size_iter = data_parallel_sizes_bytes.cbegin();
     for (const auto& sender_core : sender_cores) {
+        const bool is_init_sync_core = sender_core == sender_cores.at(0);
         std::vector<uint32_t> reader_runtime_args = {
             dense_token_maps_tensor.buffer()->address(),    // dense_token_maps_addr
             dense_token_counts_tensor.buffer()->address(),  // dense_token_counts_addr
             token_activations_tensor.buffer()->address(),   // token_activations_addr
             token_parallel_idx,                             // token_parallel_core_id
-            sender_core == sender_cores[0]                  // sync_core
+            is_init_sync_core                               // sync_core
         };
 
         const auto source_token_segment_size_bytes = *(data_parallel_size_iter++);
@@ -504,7 +505,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
             source_token_segment_size_bytes,    // source_token_segment_size_bytes
             dest_token_segment_offset_bytes,    // dest_token_segment_size_bytes
             init_semaphore.address(),           // init_semaphore_addr
-            cross_device_semaphore.address()    // global_semaphore_addr
+            cross_device_semaphore.address(),   // global_semaphore_addr
+            is_init_sync_core                   // is_init_sync_core
         };
 
         const bool is_termination_master = (sender_core == *termination_master_core_iter);
