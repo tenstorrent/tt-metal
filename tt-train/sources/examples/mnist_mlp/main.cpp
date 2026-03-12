@@ -25,7 +25,6 @@
 #include "serialization/serializable.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "utils.hpp"
-#include "utils/config_path.hpp"
 
 using ttml::autograd::TensorPtr;
 
@@ -57,9 +56,7 @@ struct TrainingConfig {
 TrainingConfig parse_config(const YAML::Node &yaml_config) {
     TrainingConfig config;
     auto training_config = yaml_config["training_config"];
-    auto model_config_path =
-        ttml::utils::resolve_config_path(training_config["model_config"].as<std::string>()).string();
-    auto model_config = YAML::LoadFile(model_config_path)["mlp_config"];
+    auto model_config = YAML::LoadFile(training_config["model_config"].as<std::string>())["mlp_config"];
 
     config.batch_size = training_config["batch_size"].as<uint32_t>();
     config.logging_interval = training_config["logging_interval"].as<int>();
@@ -152,17 +149,15 @@ int main(int argc, char **argv) {
     CLI::App app{"Mnist Example"};
     argv = app.ensure_utf8(argv);
 
-    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_mnist_mlp.yaml";
+    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_configs/mnist.yaml";
     bool is_eval = false;
     bool enable_tp = false;
-    app.add_option("-c,--config", config_name, "Training config name (resolved from configs/training_configs/)")
-        ->default_val(config_name);
+    app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     app.add_option("-e,--eval", is_eval, "Evaluate")->default_val(is_eval);
     app.add_option("-p, --enable_tp", enable_tp, "Enable tensor parallelism")->default_val(enable_tp);
 
     CLI11_PARSE(app, argc, argv);
-    auto resolved_config = ttml::utils::resolve_training_config(config_name);
-    auto yaml_config = YAML::LoadFile(resolved_config.string());
+    auto yaml_config = YAML::LoadFile(config_name);
     TrainingConfig config = parse_config(yaml_config);
 
     initialize_device(enable_tp);

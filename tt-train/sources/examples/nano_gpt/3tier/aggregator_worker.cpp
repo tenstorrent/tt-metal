@@ -15,7 +15,6 @@
 #include "tokenizers/char_tokenizer.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 #include "ttnn_fixed/distributed/ttnn_ops.hpp"
-#include "utils/config_path.hpp"
 
 using SortedParameters = std::map<std::string, ttml::autograd::TensorPtr>;
 using Rank = ttml::core::distributed::Rank;
@@ -80,13 +79,11 @@ int main(int argc, char **argv) {
     fmt::print("Size {}, Rank {}: Initializing MPI context\n", *distributed_ctx->size(), *distributed_ctx->rank());
     argv = app.ensure_utf8(argv);
 
-    std::string config_name = "training_shakespeare_nanogpt_3tier.yaml";
-    app.add_option("-c,--config", config_name, "Training config name (resolved from configs/training_configs/)")
-        ->default_val(config_name);
+    std::string config_name = std::string(CONFIGS_FOLDER) + "/training_shakespeare_nanogpt_3tier.yaml";
+    app.add_option("-c,--config", config_name, "Yaml Config name")->default_val(config_name);
     CLI11_PARSE(app, argc, argv);
 
-    auto resolved_config = ttml::utils::resolve_training_config(config_name);
-    auto yaml_config = YAML::LoadFile(resolved_config.string());
+    auto yaml_config = YAML::LoadFile(config_name);
     three_tier_arch::TrainingConfig config = three_tier_arch::parse_config(yaml_config);
     three_tier_arch::DeviceConfig device_config = three_tier_arch::parse_device_config(yaml_config);
 

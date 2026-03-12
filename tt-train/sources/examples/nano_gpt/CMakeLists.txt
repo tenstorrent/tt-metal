@@ -30,9 +30,24 @@ target_link_libraries(nano_gpt_aggregator PRIVATE ttml)
 add_executable(nano_gpt_optimizer ${OPTIMIZER_SOURCES})
 target_link_libraries(nano_gpt_optimizer PRIVATE ttml)
 
-target_compile_definitions(nano_gpt PRIVATE DATA_FOLDER="${CMAKE_SOURCE_DIR}/data")
-target_compile_definitions(nano_gpt_aggregator PRIVATE DATA_FOLDER="${CMAKE_SOURCE_DIR}/data")
-target_compile_definitions(nano_gpt_optimizer PRIVATE DATA_FOLDER="${CMAKE_SOURCE_DIR}/data")
+target_compile_definitions(
+    nano_gpt
+    PRIVATE
+        DATA_FOLDER="${CMAKE_SOURCE_DIR}/data"
+        CONFIGS_FOLDER="${CMAKE_SOURCE_DIR}/tt-train/configs"
+)
+target_compile_definitions(
+    nano_gpt_aggregator
+    PRIVATE
+        DATA_FOLDER="${CMAKE_SOURCE_DIR}/data"
+        CONFIGS_FOLDER="${CMAKE_SOURCE_DIR}/tt-train/configs"
+)
+target_compile_definitions(
+    nano_gpt_optimizer
+    PRIVATE
+        DATA_FOLDER="${CMAKE_SOURCE_DIR}/data"
+        CONFIGS_FOLDER="${CMAKE_SOURCE_DIR}/tt-train/configs"
+)
 
 # Define the target file location
 set(SHAKESPEARE_URL "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt")

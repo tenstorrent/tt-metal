@@ -10,7 +10,6 @@
 #include "datasets/utils.hpp"
 #include "models/gpt2.hpp"
 #include "tokenizers/char_tokenizer.hpp"
-#include "utils/config_path.hpp"
 
 // namespace name can't start with a digit
 namespace three_tier_arch {
@@ -45,8 +44,7 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
             "Missing required field: model_config\n Please specify the path to the model configuration YAML file.");
     }
 
-    auto model_config_path = ttml::utils::resolve_config_path(yaml_config["model_config"].as<std::string>()).string();
-    auto model_yaml = YAML::LoadFile(model_config_path)["transformer_config"];
+    auto model_yaml = YAML::LoadFile(yaml_config["model_config"].as<std::string>())["transformer_config"];
     std::string model_type = model_yaml["model_type"].as<std::string>();
 
     if (model_type == "gpt2") {

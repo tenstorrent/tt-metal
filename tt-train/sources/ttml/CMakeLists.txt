@@ -91,7 +91,6 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/matmuls.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ttnn_fixed/trivial_ttnn_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/utils/memory_utils.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/utils/config_path.cpp
 )
 
 # Manually select only specific files from metal ops
