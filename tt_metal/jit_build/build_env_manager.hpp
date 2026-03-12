@@ -39,13 +39,21 @@ struct BuildEnvInfo {
 // Singleton class to generate and hold build environments, build keys, and build states.
 class BuildEnvManager {
 public:
+    explicit BuildEnvManager(const Hal& hal);
+    ~BuildEnvManager() = default;
     BuildEnvManager(const BuildEnvManager&) = delete;
     BuildEnvManager& operator=(const BuildEnvManager&) = delete;
+    BuildEnvManager(BuildEnvManager&&) = delete;
+    BuildEnvManager& operator=(BuildEnvManager&&) = delete;
     static BuildEnvManager& get_instance();
 
     // Add a new build environment for the corresponding device id and num_hw_cqs. Also generates the build key and
-    // build states.
+    // build states.  This requires a live device to be available at device_id.
     void add_build_env(ChipId device_id, uint8_t num_hw_cqs);
+
+    // Add a new build environment for the corresponding device id and device configuration. Also generates the build
+    // key and build states.
+    void add_build_env(ChipId device_id, const JitDeviceConfig& dev_config, const llrt::RunTimeOptions& rtoptions);
 
     // Getter functions for build envs/keys/states
     const DeviceBuildEnv& get_device_build_env(ChipId device_id);
@@ -57,7 +65,7 @@ public:
         ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id);
     JitBuildStateSubset get_kernel_build_states(ChipId device_id, uint32_t programmable_core, uint32_t processor_class);
 
-    void build_firmware(ChipId device_id);
+    void build_firmware(ChipId device_id, bool ignore_precompiled = false);
 
     // Get the path to a firmware binary for loading/linking. Uses pre-compiled path if available.
     std::string get_firmware_binary_path(
@@ -72,8 +80,8 @@ public:
     std::vector<BuildEnvInfo> get_all_build_envs_info();
 
 private:
-    explicit BuildEnvManager(const Hal& hal);
-    ~BuildEnvManager() = default;
+    void add_build_env_locked(
+        ChipId device_id, const JitDeviceConfig& dev_config, const llrt::RunTimeOptions& rtoptions);
 
     std::unordered_map<ChipId, DeviceBuildEnv> device_id_to_build_env_;
 
