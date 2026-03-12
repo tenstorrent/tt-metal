@@ -140,6 +140,7 @@ def test_accuracy_sdxl_img2img(
         "imthanhlv/instructpix2pix-clip-filtered-10k",
         split=f"train[:{num_prompts}]",
     )
+    clip_models = load_clip_models()
 
     images = test_demo(
         validate_fabric_compatibility,
@@ -166,7 +167,6 @@ def test_accuracy_sdxl_img2img(
         sigmas,
     )
 
-    clip_models = load_clip_models()
     scores = []
     for i in range(num_prompts):
         score = compute_directional_similarity(
