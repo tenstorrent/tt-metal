@@ -20,17 +20,7 @@
 //   6: sparse_mask          (u32) - bitmask of destination hops (bit N = device N hops away)
 //   ... fabric connection args (built by append_fabric_connection_rt_args on host)
 
-#include <cstdint>
-#include "api/dataflow/dataflow_api.h"
-#include "fabric/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
-#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tt_metal/fabric/hw/inc/noc_addr.h"
-#include "tt_metal/fabric/hw/inc/linear/api.h"
-
-using namespace tt::tt_fabric;
-using namespace tt::tt_fabric::linear::experimental;
+#include "tx_kernel_common.h"
 
 void kernel_main() {
     size_t idx = 0;

@@ -21,50 +21,13 @@
 //   8: scatter_offset       (u32) - offset for second scatter destination (addr1 = dst_base_addr + scatter_offset)
 //   ... fabric connection args (built by append_fabric_connection_rt_args on host)
 
-#include <cstdint>
-#include "api/dataflow/dataflow_api.h"
-#include "fabric/fabric_edm_packet_header.hpp"
-#include "tt_metal/fabric/hw/inc/edm_fabric/edm_fabric_worker_adapters.hpp"
-#include "tt_metal/fabric/hw/inc/packet_header_pool.h"
-#include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
-#include "tt_metal/fabric/hw/inc/noc_addr.h"
-#ifdef FABRIC_2D
-#include "tt_metal/fabric/hw/inc/mesh/api.h"
-#endif
-#include "tt_metal/fabric/hw/inc/linear/api.h"
-
-using namespace tt::tt_fabric;
-#ifdef FABRIC_2D
-using namespace tt::tt_fabric::mesh::experimental;
-#else
-using namespace tt::tt_fabric::linear::experimental;
-#endif
+#include "tx_kernel_common.h"
 
 void kernel_main() {
     size_t idx = 0;
-    const uint32_t src_l1_addr     = get_arg_val<uint32_t>(idx++);
-    const uint32_t total_size      = get_arg_val<uint32_t>(idx++);
-    const uint32_t dst_base_addr   = get_arg_val<uint32_t>(idx++);
-
-#ifdef FABRIC_2D
-    const uint16_t dst_mesh_id     = static_cast<uint16_t>(get_arg_val<uint32_t>(idx++));
-    const uint8_t  dst_dev_id      = static_cast<uint8_t>(get_arg_val<uint32_t>(idx++));
-#endif
-
-    const uint32_t rx_noc_x        = get_arg_val<uint32_t>(idx++);
-    const uint32_t rx_noc_y        = get_arg_val<uint32_t>(idx++);
-    const uint32_t sem_l1_addr     = get_arg_val<uint32_t>(idx++);
-
-#ifndef FABRIC_2D
-    const uint8_t num_hops         = static_cast<uint8_t>(get_arg_val<uint32_t>(idx++));
-#endif
-
+    TX_KERNEL_PARSE_UNICAST_ARGS(idx)
     const uint32_t scatter_offset  = get_arg_val<uint32_t>(idx++);
-
-    auto sender = WorkerToFabricEdmSender::build_from_args<ProgrammableCoreType::TENSIX>(idx);
-    volatile tt_l1_ptr PACKET_HEADER_TYPE* packet_header = PacketHeaderPool::allocate_header();
-
-    sender.open<true>();
+    TX_KERNEL_SETUP(idx)
 
     // Scatter: first half to dst_base_addr, second half to dst_base_addr + scatter_offset
     const uint64_t dst_noc_addr0 = safe_get_noc_addr(rx_noc_x, rx_noc_y, dst_base_addr, 0);
@@ -111,5 +74,5 @@ void kernel_main() {
         num_hops);
 #endif
 
-    sender.close();
+    TX_KERNEL_TEARDOWN()
 }
