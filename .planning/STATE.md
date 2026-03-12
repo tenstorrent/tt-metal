@@ -45,11 +45,13 @@ See: .planning/PROJECT.md (updated 2026-03-11)
 - [v1.2]: extract runner utilities before kernel consolidation -- lower-risk, establishes patterns
 - See .planning/milestones/v1.1-ROADMAP.md for v1.1 decisions
 - See .planning/milestones/v1.0-ROADMAP.md for v1.0 decisions
+- [03-01]: MeshMcastRange must be defined before detail/api.h include; closed and reopened namespace to achieve correct ordering
+- [03-01]: No using namespace detail in public header; all detail:: calls are explicit per user requirement
 - [Phase 03-api-detail-namespace]: detail/api.h include placed after route helpers in linear/api.h to satisfy non-template name lookup requirements
 
 ## Blockers
 - SparseMulticast (issue #36581): GTEST_SKIP'd, out of scope for v1.2
 
 ## Last Session
-- **Timestamp:** 2026-03-11
-- **Stopped At:** Completed 03-02-PLAN.md: linear/detail/api.h created, linear/api.h updated with detail:: calls
+- **Timestamp:** 2026-03-12
+- **Stopped At:** Completed 03-01-PLAN.md: mesh/detail/api.h created with 16 _single_packet definitions in detail:: namespace

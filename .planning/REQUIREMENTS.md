@@ -9,9 +9,9 @@ Requirements for API & Test Cleanup milestone. Each maps to roadmap phases.
 
 ### API Cleanup
 
-- [ ] **API-01**: Move `_single_packet` function definitions from `mesh/api.h` to `mesh/detail/api.h` in `detail` namespace
-- [ ] **API-02**: Move `_single_packet` function definitions from `linear/api.h` to `linear/detail/api.h` in `detail` namespace
-- [ ] **API-03**: Public auto-packetizing wrappers call through to `detail::` single-packet implementations
+- [x] **API-01**: Move `_single_packet` function definitions from `mesh/api.h` to `mesh/detail/api.h` in `detail` namespace
+- [x] **API-02**: Move `_single_packet` function definitions from `linear/api.h` to `linear/detail/api.h` in `detail` namespace
+- [x] **API-03**: Public auto-packetizing wrappers call through to `detail::` single-packet implementations
 - [ ] **API-04**: All existing compile-only and silicon tests pass after API restructure
 
 ### Test Runner Consolidation
@@ -49,9 +49,9 @@ None -- this is a cleanup milestone.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| API-01 | Phase 3 | Pending |
-| API-02 | Phase 3 | Pending |
-| API-03 | Phase 3 | Pending |
+| API-01 | Phase 3 | Complete |
+| API-02 | Phase 3 | Complete |
+| API-03 | Phase 3 | Complete |
 | API-04 | Phase 3 | Pending |
 | TEST-01 | Phase 4 | Pending |
 | TEST-02 | Phase 4 | Pending |

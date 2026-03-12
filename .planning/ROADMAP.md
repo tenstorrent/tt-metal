@@ -45,7 +45,7 @@
 **Plans:** 1/3 plans executed
 
 Plans:
-- [ ] 03-01-PLAN.md -- Extract mesh _single_packet definitions to mesh/detail/api.h
+- [x] 03-01-PLAN.md -- Extract mesh _single_packet definitions to mesh/detail/api.h
 - [ ] 03-02-PLAN.md -- Extract linear _single_packet definitions to linear/detail/api.h
 - [ ] 03-03-PLAN.md -- Full rebuild and retest validation
 
@@ -86,7 +86,7 @@ Plans:
 |-------|-----------|----------------|--------|-----------|
 | 1. fabric-auto-packetization | v1.0 | 8/8 | Complete | 2026-03-11 |
 | 2. silicon-data-transfer-validation | v1.1 | 3/3 | Complete | 2026-03-11 |
-| 3. api-detail-namespace | 1/3 | In Progress|  | - |
+| 3. api-detail-namespace | v1.2 | 1/3 | In Progress | - |
 | 4. test-runner-consolidation | v1.2 | 0/? | Not started | - |
 | 5. device-kernel-consolidation | v1.2 | 0/? | Not started | - |
 | 6. test-case-deduplication | v1.2 | 0/? | Not started | - |
