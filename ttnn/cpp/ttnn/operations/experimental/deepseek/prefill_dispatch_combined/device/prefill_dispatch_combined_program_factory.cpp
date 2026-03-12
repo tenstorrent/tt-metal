@@ -129,27 +129,20 @@ PrefillDispatchCombinedDeviceOperation::PrefillDispatchCombinedProgramFactory::c
     auto worker_core_range_set = operation_attributes.worker_core_range_set;
     auto subdevice_cores = corerange_to_cores(worker_core_range_set);
     uint32_t effective_num_links = num_links >= 2 ? 2u : 1u;
-    uint32_t num_cores = (num_links > 0) ? effective_num_links * 2 : 1;
     TT_FATAL(
-        subdevice_cores.size() >= num_cores,
-        "Not enough cores {} for {} cores ({} links)",
+        subdevice_cores.size() >= effective_num_links,
+        "Not enough cores {} for {} links",
         subdevice_cores.size(),
-        num_cores,
         effective_num_links);
 
     auto logical_volume = input_tensor.logical_shape().volume();
     auto hidden_size = input_tensor.logical_shape()[-1];
     auto tokens_per_device = logical_volume / hidden_size;
 
+    uint32_t num_cores = effective_num_links;
     auto sender_core_grid = tt::tt_metal::num_cores_to_corerangeset_in_subcoregrids(
         subdevice_cores.at(0), num_cores, worker_core_range_set, true);
     std::vector<CoreCoord> sender_cores = corerange_to_cores(sender_core_grid);
-
-    std::vector<CoreCoord> sender_cores_physical;
-    for (const auto& core : sender_cores) {
-        sender_cores_physical.push_back(mesh_device->worker_core_from_logical_core(core));
-    }
-    uint32_t num_secondary_cores = (num_cores > 1) ? (num_cores - 1) : 0;
 
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
     uint32_t metadata_bytes = operation_attributes.metadata_len * sizeof(int32_t);
@@ -211,54 +204,6 @@ PrefillDispatchCombinedDeviceOperation::PrefillDispatchCombinedProgramFactory::c
 
     const auto [neighbors, directions] =
         ccl::common::get_neighbors(mesh_view, mesh_coordinate, topology, operation_attributes.axis);
-
-    // Active direction indices in the order get_neighbors adds them
-    // (matches the writer's dir=0..3 iteration order)
-    std::vector<uint32_t> active_dir_indices;
-    {
-        uint32_t axis_val = operation_attributes.axis.value_or(0);
-        if (axis_val == 1) {
-            if (directions[0]) {
-                active_dir_indices.push_back(0);  // East
-            }
-            if (directions[1]) {
-                active_dir_indices.push_back(1);  // West
-            }
-        } else {
-            if (directions[2]) {
-                active_dir_indices.push_back(2);  // North
-            }
-            if (directions[3]) {
-                active_dir_indices.push_back(3);  // South
-            }
-        }
-    }
-
-    constexpr uint32_t DIR_INVALID = 0xFFFFFFFF;
-
-    auto get_core_direction = [&](uint32_t cidx) -> uint32_t {
-        if (num_links == 0) {
-            return DIR_INVALID;
-        }
-        uint32_t dir_slot = cidx % 2;
-        return (dir_slot < active_dir_indices.size()) ? active_dir_indices[dir_slot] : DIR_INVALID;
-    };
-    auto get_core_link = [&](uint32_t cidx) -> uint32_t { return cidx / 2; };
-
-    // Multicast bounding box for secondary cores (cores 1..N-1)
-    uint32_t mcast_x_start = 0, mcast_y_start = 0, mcast_x_end = 0, mcast_y_end = 0;
-    if (num_secondary_cores > 0) {
-        mcast_x_start = sender_cores_physical[1].x;
-        mcast_y_start = sender_cores_physical[1].y;
-        mcast_x_end = sender_cores_physical[1].x;
-        mcast_y_end = sender_cores_physical[1].y;
-        for (uint32_t i = 2; i < num_cores; i++) {
-            mcast_x_start = std::min(mcast_x_start, (uint32_t)sender_cores_physical[i].x);
-            mcast_y_start = std::min(mcast_y_start, (uint32_t)sender_cores_physical[i].y);
-            mcast_x_end = std::max(mcast_x_end, (uint32_t)sender_cores_physical[i].x);
-            mcast_y_end = std::max(mcast_y_end, (uint32_t)sender_cores_physical[i].y);
-        }
-    }
 
     // Packet header CB for fabric sends
     if (operation_attributes.num_links > 0) {
@@ -406,31 +351,24 @@ PrefillDispatchCombinedDeviceOperation::PrefillDispatchCombinedProgramFactory::c
             .compile_args = compile_time_args,
             .defines = writer_defines});
 
-    // Runtime args (shared layout between reader and writer)
+    // Runtime args
     std::vector<uint32_t> reader_runtime_args = {
-        input_tensor.buffer()->address(),            // 0
-        indices_tensor.buffer()->address(),          // 1
-        weights_tensor.buffer()->address(),          // 2
-        offsets_tensor.buffer()->address(),          // 3
-        combined_output_tensor.buffer()->address(),  // 4
-        experts_counter_tensor.buffer()->address(),  // 5
-        (uint32_t)cross_device_semaphore.address(),  // 6
-        (uint32_t)init_semaphore.address(),          // 7
-        0,                                           // token_start_idx                     // 8
-        0,                                           // token_end_idx                       // 9
-        0,                                           // dispatch_core_idx                   // 10
-        0,                                           // num_dispatch_cores                  // 11
-        0,                                           // assigned_direction                  // 12
-        0,                                           // assigned_link                       // 13
-        batch_ready_sem_id,                          // 14
-        batch_consumed_sem_id,                       // 15
-        num_secondary_cores,                         // 16
-        0,                                           // primary_noc_x                       // 17
-        0,                                           // primary_noc_y                       // 18
-        mcast_x_start,                               // 19
-        mcast_y_start,                               // 20
-        mcast_x_end,                                 // 21
-        mcast_y_end,                                 // 22
+        input_tensor.buffer()->address(),
+        indices_tensor.buffer()->address(),
+        weights_tensor.buffer()->address(),
+        offsets_tensor.buffer()->address(),
+        combined_output_tensor.buffer()->address(),
+        experts_counter_tensor.buffer()->address(),
+        (uint32_t)cross_device_semaphore.address(),
+        (uint32_t)init_semaphore.address(),
+        0,  // token_start_idx
+        0,  // token_end_idx
+        0,  // dispatch_core_idx
+        0,  // num_dispatch_cores
+        0,  // peer_noc_x (L1 shared read)
+        0,  // peer_noc_y (L1 shared read)
+        batch_ready_sem_id,
+        batch_consumed_sem_id,
     };
 
     uint32_t core_idx = 0;
@@ -447,69 +385,29 @@ PrefillDispatchCombinedDeviceOperation::PrefillDispatchCombinedProgramFactory::c
         writer_runtime_args[10] = core_idx;
         writer_runtime_args[11] = num_cores;
 
-        uint32_t core_direction = get_core_direction(core_idx);
-        uint32_t core_link = get_core_link(core_idx);
-        reader_runtime_args[12] = core_direction;
-        reader_runtime_args[13] = core_link;
-        writer_runtime_args[12] = core_direction;
-        writer_runtime_args[13] = core_link;
-
-        reader_runtime_args[17] = sender_cores_physical[0].x;
-        reader_runtime_args[18] = sender_cores_physical[0].y;
-        writer_runtime_args[17] = sender_cores_physical[0].x;
-        writer_runtime_args[18] = sender_cores_physical[0].y;
+        // Peer NOC coordinates for L1 shared read (core 0 <-> core 1)
+        if (num_cores > 1) {
+            uint32_t peer_idx = (core_idx == 0) ? 1 : 0;
+            auto peer_physical = mesh_device->worker_core_from_logical_core(sender_cores[peer_idx]);
+            reader_runtime_args[12] = peer_physical.x;
+            reader_runtime_args[13] = peer_physical.y;
+            writer_runtime_args[12] = peer_physical.x;
+            writer_runtime_args[13] = peer_physical.y;
+        }
 
         if (operation_attributes.num_links > 0) {
-            if (core_idx == 0) {
-                // Core 0: connections for ALL neighbors (used for init sync);
-                // appended in direction order to match writer's build_from_args loop
-                for (uint32_t dir = 0; dir < 4; dir++) {
-                    if (!directions[dir]) {
-                        continue;
-                    }
-                    size_t neighbor_idx = 0;
-                    for (size_t j = 0; j < active_dir_indices.size(); j++) {
-                        if (active_dir_indices[j] == dir) {
-                            neighbor_idx = j;
-                            break;
-                        }
-                    }
-                    if (neighbor_idx < neighbors.size()) {
-                        const auto& nc = neighbors[neighbor_idx];
-                        if (!(nc[0] == mesh_coordinate[0] && nc[1] == mesh_coordinate[1])) {
-                            tt::tt_fabric::append_fabric_connection_rt_args(
-                                src_fabric_node_id,
-                                mesh_device->get_fabric_node_id(nc),
-                                core_link,
-                                program,
-                                sender_core,
-                                writer_runtime_args);
-                        }
-                    }
+            uint32_t core_link = core_idx % num_links;
+            for (const auto& neighbor_coordinate : neighbors) {
+                if (neighbor_coordinate[0] == mesh_coordinate[0] && neighbor_coordinate[1] == mesh_coordinate[1]) {
+                    continue;
                 }
-            } else {
-                // Cores 1+: connection for assigned direction's neighbor only
-                if (core_direction != DIR_INVALID) {
-                    size_t neighbor_idx = 0;
-                    for (size_t j = 0; j < active_dir_indices.size(); j++) {
-                        if (active_dir_indices[j] == core_direction) {
-                            neighbor_idx = j;
-                            break;
-                        }
-                    }
-                    if (neighbor_idx < neighbors.size()) {
-                        const auto& nc = neighbors[neighbor_idx];
-                        if (!(nc[0] == mesh_coordinate[0] && nc[1] == mesh_coordinate[1])) {
-                            tt::tt_fabric::append_fabric_connection_rt_args(
-                                src_fabric_node_id,
-                                mesh_device->get_fabric_node_id(nc),
-                                core_link,
-                                program,
-                                sender_core,
-                                writer_runtime_args);
-                        }
-                    }
-                }
+                tt::tt_fabric::append_fabric_connection_rt_args(
+                    src_fabric_node_id,
+                    mesh_device->get_fabric_node_id(neighbor_coordinate),
+                    core_link,
+                    program,
+                    sender_core,
+                    writer_runtime_args);
             }
         }
 

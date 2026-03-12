@@ -101,49 +101,42 @@ void kernel_main() {
 
     // ===== Runtime Args =====
     uint32_t rt_args = 0;
-    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args++);            // 0
-    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args++);          // 1
-    uint32_t weights_tensor_address = get_arg_val<uint32_t>(rt_args++);          // 2
-    uint32_t offsets_tensor_address = get_arg_val<uint32_t>(rt_args++);          // 3
-    uint32_t combined_output_address = get_arg_val<uint32_t>(rt_args++);         // 4
-    uint32_t counter_tensor_address = get_arg_val<uint32_t>(rt_args++);          // 5
-    uint32_t cross_device_semaphore_address = get_arg_val<uint32_t>(rt_args++);  // 6
-    uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args++);          // 7
-    uint32_t token_start_idx = get_arg_val<uint32_t>(rt_args++);                 // 8
-    uint32_t token_end_idx = get_arg_val<uint32_t>(rt_args++);                   // 9
-    uint32_t dispatch_core_idx = get_arg_val<uint32_t>(rt_args++);               // 10
-    uint32_t num_dispatch_cores = get_arg_val<uint32_t>(rt_args++);              // 11
-    uint32_t assigned_direction = get_arg_val<uint32_t>(rt_args++);              // 12
-    uint32_t assigned_link = get_arg_val<uint32_t>(rt_args++);                   // 13
-    uint32_t batch_ready_sem_id = get_arg_val<uint32_t>(rt_args++);              // 14
-    uint32_t batch_consumed_sem_id = get_arg_val<uint32_t>(rt_args++);           // 15
-    uint32_t num_secondary_cores = get_arg_val<uint32_t>(rt_args++);             // 16
-    uint32_t primary_noc_x = get_arg_val<uint32_t>(rt_args++);                   // 17
-    uint32_t primary_noc_y = get_arg_val<uint32_t>(rt_args++);                   // 18
-    uint32_t mcast_noc_x_start = get_arg_val<uint32_t>(rt_args++);               // 19
-    uint32_t mcast_noc_y_start = get_arg_val<uint32_t>(rt_args++);               // 20
-    uint32_t mcast_noc_x_end = get_arg_val<uint32_t>(rt_args++);                 // 21
-    uint32_t mcast_noc_y_end = get_arg_val<uint32_t>(rt_args++);                 // 22
+    uint32_t input_tensor_address = get_arg_val<uint32_t>(rt_args++);
+    uint32_t indices_tensor_address = get_arg_val<uint32_t>(rt_args++);
+    uint32_t weights_tensor_address = get_arg_val<uint32_t>(rt_args++);
+    uint32_t offsets_tensor_address = get_arg_val<uint32_t>(rt_args++);
+    uint32_t combined_output_address = get_arg_val<uint32_t>(rt_args++);
+    uint32_t counter_tensor_address = get_arg_val<uint32_t>(rt_args++);
+    uint32_t cross_device_semaphore_address = get_arg_val<uint32_t>(rt_args++);
+    uint32_t init_semaphore_address = get_arg_val<uint32_t>(rt_args++);
+    uint32_t token_start_idx = get_arg_val<uint32_t>(rt_args++);
+    uint32_t token_end_idx = get_arg_val<uint32_t>(rt_args++);
+    uint32_t dispatch_core_idx = get_arg_val<uint32_t>(rt_args++);
+    uint32_t num_dispatch_cores = get_arg_val<uint32_t>(rt_args++);
+    uint32_t peer_noc_x = get_arg_val<uint32_t>(rt_args++);
+    uint32_t peer_noc_y = get_arg_val<uint32_t>(rt_args++);
+    uint32_t batch_ready_sem_id = get_arg_val<uint32_t>(rt_args++);
+    uint32_t batch_consumed_sem_id = get_arg_val<uint32_t>(rt_args++);
+    uint32_t core_mask = num_dispatch_cores - 1;
 
-    constexpr uint32_t DIR_INVALID = 0xFFFFFFFF;
+    bool has_peer = (num_dispatch_cores > 1);
     bool is_primary = (dispatch_core_idx == 0);
-    bool has_secondaries = (num_secondary_cores > 0);
-    bool is_local_only = (assigned_direction == DIR_INVALID);
-    uint32_t effective_num_links = (num_dispatch_cores > 1) ? (num_dispatch_cores / 2) : 1;
 
     uint32_t sem_ready_l1_addr = get_semaphore(batch_ready_sem_id);
     uint32_t sem_consumed_l1_addr = get_semaphore(batch_consumed_sem_id);
     volatile tt_l1_ptr uint32_t* sem_ready_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_ready_l1_addr);
     volatile tt_l1_ptr uint32_t* sem_consumed_ptr =
         reinterpret_cast<volatile tt_l1_ptr uint32_t*>(sem_consumed_l1_addr);
-    uint64_t primary_sem_consumed_noc_addr = get_noc_addr(primary_noc_x, primary_noc_y, sem_consumed_l1_addr);
+    uint64_t peer_sem_ready_noc_addr = get_noc_addr(peer_noc_x, peer_noc_y, sem_ready_l1_addr);
+    uint64_t peer_sem_consumed_noc_addr = get_noc_addr(peer_noc_x, peer_noc_y, sem_consumed_l1_addr);
     uint32_t ready_count = 0;
     uint32_t consumed_count = 0;
 
     DPRINT_DISPATCH << "Reader combined kernel: tokens=[" << token_start_idx << "," << token_end_idx << ")"
                     << " dispatch_core=" << dispatch_core_idx << "/" << num_dispatch_cores
-                    << " is_primary=" << (uint32_t)is_primary << " assigned_dir=" << assigned_direction
-                    << " assigned_link=" << assigned_link << " num_secondary=" << num_secondary_cores << ENDL();
+                    << " is_primary=" << (uint32_t)is_primary << " has_peer=" << (uint32_t)has_peer
+                    << " padded_metadata_bytes=" << padded_metadata_bytes
+                    << " combined_cb_page_size=" << combined_cb_page_size << ENDL();
 
     // Read offsets tensor into local scratch (reader-only, no push to writer)
     int32_t* offsets;
@@ -188,7 +181,7 @@ void kernel_main() {
         (token_start_idx + read_batch_size < token_end_idx) ? token_start_idx + read_batch_size : token_end_idx;
     uint32_t first_batch_count = first_batch_end - token_start_idx;
     if (first_batch_count > 0) {
-        if (is_primary) {
+        if (is_primary || !has_peer) {
             DeviceZoneScopedN("dispatch-combined-read-dram");
             for (uint32_t t = 0; t < first_batch_count; t++) {
                 noc_async_read_page(
@@ -201,34 +194,34 @@ void kernel_main() {
                     token_start_idx + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
             }
             noc_async_read_barrier();
-            if (has_secondaries) {
-                uint64_t mcast_scratch = get_noc_multicast_addr(
-                    mcast_noc_x_start, mcast_noc_y_start, mcast_noc_x_end, mcast_noc_y_end, scratch_base);
-                noc_async_write_multicast(
-                    scratch_base, mcast_scratch, first_batch_count * combined_cb_page_size, num_secondary_cores);
-                uint64_t mcast_indices = get_noc_multicast_addr(
-                    mcast_noc_x_start, mcast_noc_y_start, mcast_noc_x_end, mcast_noc_y_end, indices_base);
-                noc_async_write_multicast(
-                    indices_base, mcast_indices, first_batch_count * aligned_indices_page_size, num_secondary_cores);
-                uint64_t mcast_weights = get_noc_multicast_addr(
-                    mcast_noc_x_start, mcast_noc_y_start, mcast_noc_x_end, mcast_noc_y_end, weights_base);
-                noc_async_write_multicast(
-                    weights_base, mcast_weights, first_batch_count * aligned_weights_page_size, num_secondary_cores);
-                noc_async_write_barrier();
+            if (has_peer) {
                 ready_count++;
-                uint64_t mcast_sem_ready = get_noc_multicast_addr(
-                    mcast_noc_x_start, mcast_noc_y_start, mcast_noc_x_end, mcast_noc_y_end, sem_ready_l1_addr);
-                noc_semaphore_inc_multicast(mcast_sem_ready, 1, num_secondary_cores);
+                noc_semaphore_inc(peer_sem_ready_noc_addr, 1);
             }
         } else {
-            DeviceZoneScopedN("dispatch-combined-wait-mcast");
+            DeviceZoneScopedN("dispatch-combined-read-peer-l1");
             ready_count++;
             noc_semaphore_wait(sem_ready_ptr, ready_count);
-            noc_semaphore_inc(primary_sem_consumed_noc_addr, 1);
+            for (uint32_t t = 0; t < first_batch_count; t++) {
+                noc_async_read(
+                    get_noc_addr(
+                        peer_noc_x, peer_noc_y, scratch_base + t * combined_cb_page_size + padded_metadata_bytes),
+                    scratch_base + t * combined_cb_page_size + padded_metadata_bytes,
+                    aligned_input_page_size);
+                noc_async_read(
+                    get_noc_addr(peer_noc_x, peer_noc_y, indices_base + t * aligned_indices_page_size),
+                    indices_base + t * aligned_indices_page_size,
+                    aligned_indices_page_size);
+                noc_async_read(
+                    get_noc_addr(peer_noc_x, peer_noc_y, weights_base + t * aligned_weights_page_size),
+                    weights_base + t * aligned_weights_page_size,
+                    aligned_weights_page_size);
+            }
+            noc_async_read_barrier();
+            consumed_count++;
+            noc_semaphore_inc(peer_sem_consumed_noc_addr, 1);
         }
     }
-
-    uint32_t local_send_counter = 0;
 
     {
         DeviceZoneScopedN("dispatch-combined-reader-token-loop");
@@ -250,84 +243,73 @@ void kernel_main() {
 
                 for (uint32_t k = 0; k < num_experts_per_tok; ++k) {
                     auto routed_expert = indices[k];
+                    if (((uint32_t)routed_expert & core_mask) != dispatch_core_idx) {
+                        continue;
+                    }
                     auto expert_chip = routed_expert / experts_per_chip;
                     auto expert_index_within_chip = routed_expert % experts_per_chip;
+
+                    DPRINT_DISPATCH << "  Expert [" << k << "]=" << routed_expert << " (chip=" << expert_chip << ")"
+                                    << ENDL();
+
                     auto& offset = offsets[routed_expert];
                     auto page_idx = expert_index_within_chip * max_dispatched_tokens_per_expert + offset;
 
+                    {
+                        DeviceZoneScopedN("dispatch-combined-write-metadata");
+                        volatile tt_l1_ptr int32_t* metadata =
+                            reinterpret_cast<volatile tt_l1_ptr int32_t*>(scratch_addr);
+                        metadata[0] = linearized_mesh_coord;
+                        metadata[1] = token_idx;
+                        metadata[2] = k;
+                        metadata[3] = routed_expert;
+                        metadata[4] = weights[k];
+                    }
+
                     if (expert_chip == linearized_mesh_coord) {
-                        bool my_turn = (local_send_counter % num_dispatch_cores == dispatch_core_idx);
-                        local_send_counter++;
-                        if (my_turn) {
-                            debug_local_count++;
-                            DPRINT_DISPATCH << "    Local dispatch expert=" << routed_expert << ENDL();
-                            {
-                                DeviceZoneScopedN("dispatch-combined-write-metadata");
-                                volatile tt_l1_ptr int32_t* metadata =
-                                    reinterpret_cast<volatile tt_l1_ptr int32_t*>(scratch_addr);
-                                metadata[0] = linearized_mesh_coord;
-                                metadata[1] = token_idx;
-                                metadata[2] = k;
-                                metadata[3] = routed_expert;
-                                metadata[4] = weights[k];
-                            }
-                            {
-                                DeviceZoneScopedN("dispatch-combined-local");
-                                noc_async_write_page(page_idx, combined_addr_gen, scratch_addr);
-                                noc_async_writes_flushed();
-                                batch_did_local_write = true;
-                            }
+                        debug_local_count++;
+                        DPRINT_DISPATCH << "    Local dispatch" << ENDL();
+                        {
+                            DeviceZoneScopedN("dispatch-combined-local");
+                            noc_async_write_page(page_idx, combined_addr_gen, scratch_addr);
+                            noc_async_writes_flushed();
+                            batch_did_local_write = true;
                         }
                     } else {
+                        DPRINT_DISPATCH << "    Remote dispatch to chip " << expert_chip << ENDL();
                         if constexpr (is_1d_topology<topology>()) {
                             uint32_t route =
                                 get_route<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
                             uint32_t distance =
                                 manhattan_distance<topology, mesh_rows, mesh_cols>(linearized_mesh_coord, expert_chip);
-                            uint32_t link = fabric_send_counter % effective_num_links;
+                            if (distance == 1) {
+                                debug_1hop_count++;
+                            } else {
+                                debug_2hop_count++;
+                            }
+                            uint32_t link = fabric_send_counter % num_links;
                             fabric_send_counter++;
 
-                            bool my_turn = (route == assigned_direction && link == assigned_link);
+                            {
+                                DeviceZoneScopedN("dispatch-combined-push-route-info");
+                                cb_reserve_back(cb_route_info_id, 1);
+                                uint32_t route_info_addr = get_write_ptr(cb_route_info_id);
+                                volatile tt_l1_ptr uint32_t* route_info =
+                                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(route_info_addr);
+                                route_info[0] = route;
+                                route_info[1] = distance;
+                                route_info[2] = page_idx;
+                                route_info[3] = link;
+                                cb_push_back(cb_route_info_id, 1);
+                            }
 
-                            if (my_turn) {
-                                if (distance == 1) {
-                                    debug_1hop_count++;
-                                } else {
-                                    debug_2hop_count++;
-                                }
-                                DPRINT_DISPATCH << "    Remote dispatch expert=" << routed_expert << " route=" << route
-                                                << " dist=" << distance << ENDL();
-                                {
-                                    DeviceZoneScopedN("dispatch-combined-write-metadata");
-                                    volatile tt_l1_ptr int32_t* metadata =
-                                        reinterpret_cast<volatile tt_l1_ptr int32_t*>(scratch_addr);
-                                    metadata[0] = linearized_mesh_coord;
-                                    metadata[1] = token_idx;
-                                    metadata[2] = k;
-                                    metadata[3] = routed_expert;
-                                    metadata[4] = weights[k];
-                                }
-                                {
-                                    DeviceZoneScopedN("dispatch-combined-push-route-info");
-                                    cb_reserve_back(cb_route_info_id, 1);
-                                    uint32_t route_info_addr = get_write_ptr(cb_route_info_id);
-                                    volatile tt_l1_ptr uint32_t* route_info =
-                                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(route_info_addr);
-                                    route_info[0] = route;
-                                    route_info[1] = distance;
-                                    route_info[2] = page_idx;
-                                    route_info[3] = 0;
-                                    cb_push_back(cb_route_info_id, 1);
-                                }
-                                {
-                                    DeviceZoneScopedN("dispatch-combined-push-combined");
-                                    cb_reserve_back(cb_combined_id, 1);
-                                    uint32_t combined_write_addr = get_write_ptr(cb_combined_id);
-                                    noc_async_read(
-                                        get_noc_addr(scratch_addr), combined_write_addr, combined_cb_page_size);
-                                    noc_async_read_barrier();
-                                    cb_push_back(cb_combined_id, 1);
-                                }
+                            {
+                                DeviceZoneScopedN("dispatch-combined-push-combined");
+                                cb_reserve_back(cb_combined_id, 1);
+                                uint32_t combined_write_addr = get_write_ptr(cb_combined_id);
+                                noc_async_read(get_noc_addr(scratch_addr), combined_write_addr, combined_cb_page_size);
+                                noc_async_read_barrier();
+                                cb_push_back(cb_combined_id, 1);
                             }
                         }
                     }
@@ -340,16 +322,15 @@ void kernel_main() {
             // overlaps with write channel (local dispatch completion)
             uint32_t next_batch_start = batch_start + read_batch_size;
             bool has_next_batch = (next_batch_start < token_end_idx);
-            uint32_t next_batch_count = 0;
             if (has_next_batch) {
                 uint32_t next_batch_end = (next_batch_start + read_batch_size < token_end_idx)
                                               ? next_batch_start + read_batch_size
                                               : token_end_idx;
-                next_batch_count = next_batch_end - next_batch_start;
+                uint32_t next_batch_count = next_batch_end - next_batch_start;
 
-                if (is_primary) {
-                    if (has_secondaries) {
-                        consumed_count += num_secondary_cores;
+                if (is_primary || !has_peer) {
+                    if (has_peer) {
+                        consumed_count++;
                         noc_semaphore_wait(sem_consumed_ptr, consumed_count);
                     }
                     DeviceZoneScopedN("dispatch-combined-read-dram");
@@ -364,9 +345,26 @@ void kernel_main() {
                             next_batch_start + t, weights_addr_gen, weights_base + t * aligned_weights_page_size);
                     }
                 } else {
-                    DeviceZoneScopedN("dispatch-combined-wait-mcast");
+                    DeviceZoneScopedN("dispatch-combined-read-peer-l1");
                     ready_count++;
                     noc_semaphore_wait(sem_ready_ptr, ready_count);
+                    for (uint32_t t = 0; t < next_batch_count; t++) {
+                        noc_async_read(
+                            get_noc_addr(
+                                peer_noc_x,
+                                peer_noc_y,
+                                scratch_base + t * combined_cb_page_size + padded_metadata_bytes),
+                            scratch_base + t * combined_cb_page_size + padded_metadata_bytes,
+                            aligned_input_page_size);
+                        noc_async_read(
+                            get_noc_addr(peer_noc_x, peer_noc_y, indices_base + t * aligned_indices_page_size),
+                            indices_base + t * aligned_indices_page_size,
+                            aligned_indices_page_size);
+                        noc_async_read(
+                            get_noc_addr(peer_noc_x, peer_noc_y, weights_base + t * aligned_weights_page_size),
+                            weights_base + t * aligned_weights_page_size,
+                            aligned_weights_page_size);
+                    }
                 }
             }
 
@@ -376,35 +374,15 @@ void kernel_main() {
             }
 
             if (has_next_batch) {
-                if (is_primary) {
-                    noc_async_read_barrier();
-                    if (has_secondaries) {
-                        uint64_t mcast_scratch = get_noc_multicast_addr(
-                            mcast_noc_x_start, mcast_noc_y_start, mcast_noc_x_end, mcast_noc_y_end, scratch_base);
-                        noc_async_write_multicast(
-                            scratch_base, mcast_scratch, next_batch_count * combined_cb_page_size, num_secondary_cores);
-                        uint64_t mcast_indices = get_noc_multicast_addr(
-                            mcast_noc_x_start, mcast_noc_y_start, mcast_noc_x_end, mcast_noc_y_end, indices_base);
-                        noc_async_write_multicast(
-                            indices_base,
-                            mcast_indices,
-                            next_batch_count * aligned_indices_page_size,
-                            num_secondary_cores);
-                        uint64_t mcast_weights = get_noc_multicast_addr(
-                            mcast_noc_x_start, mcast_noc_y_start, mcast_noc_x_end, mcast_noc_y_end, weights_base);
-                        noc_async_write_multicast(
-                            weights_base,
-                            mcast_weights,
-                            next_batch_count * aligned_weights_page_size,
-                            num_secondary_cores);
-                        noc_async_write_barrier();
+                noc_async_read_barrier();
+                if (has_peer) {
+                    if (is_primary) {
                         ready_count++;
-                        uint64_t mcast_sem_ready = get_noc_multicast_addr(
-                            mcast_noc_x_start, mcast_noc_y_start, mcast_noc_x_end, mcast_noc_y_end, sem_ready_l1_addr);
-                        noc_semaphore_inc_multicast(mcast_sem_ready, 1, num_secondary_cores);
+                        noc_semaphore_inc(peer_sem_ready_noc_addr, 1);
+                    } else {
+                        consumed_count++;
+                        noc_semaphore_inc(peer_sem_consumed_noc_addr, 1);
                     }
-                } else {
-                    noc_semaphore_inc(primary_sem_consumed_noc_addr, 1);
                 }
             }
         }
