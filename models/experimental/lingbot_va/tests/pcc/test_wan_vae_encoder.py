@@ -18,8 +18,8 @@ PCC_THRESHOLD = 0.99
 BATCH_SIZE = 1
 # Small video for fast CPU encode; H,W divisible by 32 and by patch_size if used
 VIDEO_T = 1
-VIDEO_H = 32
-VIDEO_W = 32
+VIDEO_H = 256
+VIDEO_W = 320
 
 
 def patchify(x, patch_size):
