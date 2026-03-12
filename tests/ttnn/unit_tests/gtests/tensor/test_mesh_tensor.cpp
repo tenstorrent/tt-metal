@@ -125,18 +125,15 @@ TEST_F(MeshTensorTest, Lifecycle) {
 
     EXPECT_TRUE(input_tensor.is_allocated());
 
-    const auto* device_storage = &input_tensor.device_storage();
-
-    ASSERT_NE(device_storage, nullptr);
-    EXPECT_NO_THROW({ device_storage->get_mesh_buffer(); });
+    EXPECT_NO_THROW({ input_tensor.mesh_buffer(); });
 
     // Buffer address is the same across all device buffers.
     const auto& view = mesh_device_->get_view();
-    const auto buffer_address = device_storage->get_mesh_buffer().address();
+    const auto buffer_address = input_tensor.mesh_buffer().address();
 
     for (auto* device : view.get_devices()) {
         auto coordinate = view.find_device(device->id());
-        auto* buffer = device_storage->get_mesh_buffer().get_device_buffer(coordinate);
+        auto* buffer = input_tensor.mesh_buffer().get_device_buffer(coordinate);
 
         ASSERT_NE(buffer, nullptr);
         EXPECT_TRUE(buffer->is_allocated());
@@ -145,6 +142,7 @@ TEST_F(MeshTensorTest, Lifecycle) {
 
     input_tensor.deallocate();
     EXPECT_FALSE(input_tensor.is_allocated());
+    EXPECT_THROW({ input_tensor.mesh_buffer(); }, std::runtime_error);
 }
 
 TEST_F(MeshTensorTest, ToDeviceMemoryConfigOverride) {
