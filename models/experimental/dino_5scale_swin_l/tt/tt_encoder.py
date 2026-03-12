@@ -93,6 +93,7 @@ def compute_sampling_locations_and_attention_weights(
 
 
 def split_value_into_levels(value_tt, value_spatial_shapes, num_heads, head_dim):
+    """Split value tensor into per-level tensors for multi-scale deformable attention."""
     bs = value_tt.shape[0]
     split_sizes = [int(H) * int(W) for H, W in value_spatial_shapes]
     value_level_list = ttnn.split(value_tt, split_sizes, dim=1)
@@ -116,6 +117,7 @@ def multi_scale_deformable_attn_ttnn(
     num_heads,
     head_dim,
 ):
+    """Multi-scale deformable attention: grid_sample + weighted sum over levels and points."""
     bs = sampling_locations_tt.shape[0]
     chunk_Q = sampling_locations_tt.shape[1]
     num_levels = sampling_locations_tt.shape[3]
@@ -249,8 +251,8 @@ class TtMSDeformAttn:
             mask = ttnn.reshape(key_padding_mask, (bs, num_keys, 1))
             value = ttnn.where(mask, ttnn.multiply(value, 0, memory_config=ttnn.DRAM_MEMORY_CONFIG), value)
 
-        if self.trace_mode and spatial_shapes_tt is not None and isinstance(reference_points, ttnn.Tensor):
-            logger.info("  MSDeformAttn: device-only path (trace_mode, per-chunk)...")
+        if spatial_shapes_tt is not None and isinstance(reference_points, ttnn.Tensor):
+            logger.info("  MSDeformAttn: device-only path (per-chunk)...")
             value_l_tts = split_value_into_levels(value, spatial_shapes, self.num_heads, self.head_dim)
 
             output_chunks_device = []
@@ -314,7 +316,7 @@ class TtMSDeformAttn:
             output = ttnn.add(output, identity)
             for c in output_chunks_device:
                 ttnn.deallocate(c)
-            logger.info("  MSDeformAttn: done (trace_mode).")
+            logger.info("  MSDeformAttn: done (device-only).")
             return output
 
         logger.info("  MSDeformAttn: computing sampling locations and attention weights on host...")
@@ -552,7 +554,7 @@ class TtDINOEncoder:
         Generate 2D reference points for encoder self-attention (pure TTNN on device).
 
         Returns: [B, sum(H_i*W_i), num_levels, 2] as ttnn.Tensor on device.
-        When valid_ratios_tt is provided (trace_mode), use it instead of from_torch.
+        When valid_ratios_tt is provided, use it instead of from_torch.
         """
         if hasattr(spatial_shapes, "tolist"):
             hw_list = spatial_shapes.tolist()
@@ -633,12 +635,14 @@ class TtDINOEncoder:
             spatial_shapes: torch.Tensor [num_levels, 2]
             level_start_index: torch.Tensor [num_levels]
             valid_ratios: torch.Tensor [B, num_levels, 2]
+            valid_ratios_tt: optional ttnn [B, num_levels, 2] (avoids from_torch when provided)
+            spatial_shapes_tt: optional ttnn [num_levels, 2] (for MSDeformAttn device-only path when provided)
 
         Returns:
             memory: [B, N, 256] encoder output (ttnn tensor)
         """
         logger.info("Computing encoder reference points...")
-        if self.trace_mode and self._ref_points_cache is not None:
+        if self._ref_points_cache is not None:
             B = feat.shape[0]
             reference_points = ttnn.repeat(self._ref_points_cache, (B, 1, 1, 1)) if B > 1 else self._ref_points_cache
         else:
@@ -662,8 +666,6 @@ class TtDINOEncoder:
             if spatial_shapes_tt is not None:
                 layer_kw["spatial_shapes_tt"] = spatial_shapes_tt
             query = layer(**layer_kw)
-            if not self.trace_mode:
-                ttnn.synchronize_device(self.device)
             if self.profile_per_layer:
                 ttnn.ReadDeviceProfiler(self.device)
             logger.info(f"Encoder layer {i} done.")

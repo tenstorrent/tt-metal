@@ -13,7 +13,7 @@ Usage:
 """
 
 import math
-from typing import Dict, List, Optional, Tuple, Any
+from typing import Any, Dict, List, Optional, Tuple
 
 import torch
 import ttnn
@@ -53,6 +53,9 @@ def sine_positional_encoding_ttnn(
     memory_config=ttnn.DRAM_MEMORY_CONFIG,
     dim_t_cache=None,
 ):
+    """
+    Sinusoidal positional encoding on device.
+    """
     x_embed = ttnn.arange(1, W + 1, 1, dtype=dtype, device=device, memory_config=memory_config)
     x_embed = ttnn.reshape(x_embed, (1, 1, W))
     x_embed = ttnn.multiply(ttnn.divide(x_embed, W + eps), scale)
@@ -93,6 +96,7 @@ def sine_positional_encoding_ttnn(
 
 
 def _linspace_ttnn(start, end, steps, device, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG):
+    """Linspace on device: [start, ..., end] with steps elements."""
     if steps <= 1:
         return ttnn.full((1,), start, dtype=dtype, device=device, memory_config=memory_config)
     idx = ttnn.arange(0, steps, dtype=dtype, device=device, memory_config=memory_config)
@@ -107,6 +111,7 @@ def gen_encoder_output_proposals_ttnn(
     B: int,
     memory_config=ttnn.DRAM_MEMORY_CONFIG,
 ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    """Generate encoder output proposals on device. Returns (log_proposals, valid_mask)."""
     hw_list = spatial_shapes.tolist() if hasattr(spatial_shapes, "tolist") else list(spatial_shapes)
     proposals_list = []
     for lvl, hw in enumerate(hw_list):
@@ -166,6 +171,7 @@ def gen_encoder_output_proposals(
     memory_torch: torch.Tensor,
     spatial_shapes: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
+    """Generate encoder output proposals on host (used when device path not available)."""
     bs = memory_torch.shape[0]
     proposals = []
     for lvl, (H, W) in enumerate(spatial_shapes.tolist()):
@@ -611,7 +617,7 @@ class TtDINO:
         Args:
             hidden_states: list of 6 ttnn [B, num_queries, 256] (normed decoder outputs)
             references: list of 7 [B, num_queries, 4]: references[0] torch, references[1:] ttnn
-            return_device_tensors: if True, return device tensors (no host read). Use for trace capture.
+            return_device_tensors: if True, return device tensors (no host read).
 
         Returns:
             all_cls: [num_layers, B, num_queries, num_classes] float32 or ttnn.Tensor
@@ -699,9 +705,10 @@ class TtDINO:
             "level_start_index": pre_trans["level_start_index"],
             "valid_ratios": pre_trans["valid_ratios"],
         }
-        if self.trace_mode:
-            enc_kw["valid_ratios_tt"] = pre_trans.get("valid_ratios_tt")
-            enc_kw["spatial_shapes_tt"] = pre_trans.get("spatial_shapes_tt")
+        if pre_trans.get("valid_ratios_tt") is not None:
+            enc_kw["valid_ratios_tt"] = pre_trans["valid_ratios_tt"]
+        if pre_trans.get("spatial_shapes_tt") is not None:
+            enc_kw["spatial_shapes_tt"] = pre_trans["spatial_shapes_tt"]
         memory_tt = self.encoder(**enc_kw)
         ttnn.deallocate(pre_trans["feat_flatten"])
         ttnn.deallocate(pre_trans["feat_pos"])
@@ -719,9 +726,9 @@ class TtDINO:
             level_start_index=pre_trans["level_start_index"],
             valid_ratios=pre_trans["valid_ratios"],
         )
-        if self.trace_mode and "valid_ratios_tt" in pre_trans:
+        if pre_trans.get("valid_ratios_tt") is not None:
             dec_kw["valid_ratios_tt"] = pre_trans["valid_ratios_tt"]
-        if self.trace_mode and "spatial_shapes_tt" in pre_trans:
+        if pre_trans.get("spatial_shapes_tt") is not None:
             dec_kw["spatial_shapes_tt"] = pre_trans["spatial_shapes_tt"]
         hidden_states, references = self.decoder(**dec_kw)
 
@@ -811,9 +818,10 @@ class TtDINO:
             "level_start_index": pre_trans["level_start_index"],
             "valid_ratios": pre_trans["valid_ratios"],
         }
-        if self.trace_mode:
-            enc_kw["valid_ratios_tt"] = pre_trans.get("valid_ratios_tt")
-            enc_kw["spatial_shapes_tt"] = pre_trans.get("spatial_shapes_tt")
+        if pre_trans.get("valid_ratios_tt") is not None:
+            enc_kw["valid_ratios_tt"] = pre_trans["valid_ratios_tt"]
+        if pre_trans.get("spatial_shapes_tt") is not None:
+            enc_kw["spatial_shapes_tt"] = pre_trans["spatial_shapes_tt"]
         memory_tt = self.encoder(**enc_kw)
         ttnn.deallocate(feat_tt)
         ttnn.deallocate(feat_pos_tt)
@@ -839,9 +847,9 @@ class TtDINO:
             level_start_index=pre_trans["level_start_index"],
             valid_ratios=pre_trans["valid_ratios"],
         )
-        if self.trace_mode and "valid_ratios_tt" in pre_trans:
+        if pre_trans.get("valid_ratios_tt") is not None:
             dec_kw["valid_ratios_tt"] = pre_trans["valid_ratios_tt"]
-        if self.trace_mode and "spatial_shapes_tt" in pre_trans:
+        if pre_trans.get("spatial_shapes_tt") is not None:
             dec_kw["spatial_shapes_tt"] = pre_trans["spatial_shapes_tt"]
         hidden_states, references = self.decoder(**dec_kw)
 

@@ -15,6 +15,7 @@ DINO-specific:
 """
 
 import math
+
 import torch
 import ttnn
 from loguru import logger
@@ -27,7 +28,7 @@ def coordinate_to_encoding_ttnn(coord_tensor, num_feats=128, temperature=10000, 
     TTNN version of coordinate_to_encoding.
     coord_tensor: [B, num_queries, 4]  (cx, cy, w, h)
     Returns: [B, num_queries, num_feats * 2 * coord_dim]
-    dim_t: optional precomputed [num_feats] tensor (avoids ttnn.arange during trace capture).
+    dim_t: optional precomputed [num_feats] tensor (avoids ttnn.arange when provided).
     """
     scale = 2 * math.pi
 
@@ -390,12 +391,11 @@ class TtDINODecoder:
         self.embed_dims = embed_dims
         self.trace_mode = trace_mode
 
-        self._dim_t_cache = None
-        if trace_mode:
-            num_feats = embed_dims // 2
-            self._dim_t_cache = ttnn.arange(0, num_feats, 1, dtype=ttnn.float32, device=device)
-            self._dim_t_cache = ttnn.to_layout(self._dim_t_cache, layout=ttnn.TILE_LAYOUT)
-            self._dim_t_cache = ttnn.to_memory_config(self._dim_t_cache, ttnn.L1_MEMORY_CONFIG)
+        # Precompute dim_t for coordinate_to_encoding_ttnn (avoids ttnn.arange per layer per forward).
+        num_feats = embed_dims // 2
+        self._dim_t_cache = ttnn.arange(0, num_feats, 1, dtype=ttnn.float32, device=device)
+        self._dim_t_cache = ttnn.to_layout(self._dim_t_cache, layout=ttnn.TILE_LAYOUT)
+        self._dim_t_cache = ttnn.to_memory_config(self._dim_t_cache, ttnn.L1_MEMORY_CONFIG)
 
         self.layers = [
             TtDINODecoderLayer(
@@ -441,8 +441,8 @@ class TtDINODecoder:
             spatial_shapes: torch.Tensor [num_levels, 2]
             level_start_index: torch.Tensor [num_levels]
             valid_ratios: torch.Tensor [B, num_levels, 2]
-            valid_ratios_tt: optional ttnn [B, num_levels, 2] (trace_mode; avoids from_torch)
-            spatial_shapes_tt: optional ttnn [num_levels, 2] (trace_mode; for decoder MSDeformAttn)
+            valid_ratios_tt: optional ttnn [B, num_levels, 2] (avoids from_torch when provided)
+            spatial_shapes_tt: optional ttnn [num_levels, 2] (for decoder MSDeformAttn when provided)
 
         Returns:
             intermediate: list of [B, num_queries, 256] (one per layer, after norm)
@@ -489,12 +489,11 @@ class TtDINODecoder:
                 ),
                 2,
             )
-            dim_t = self._dim_t_cache if self.trace_mode else None
             query_sine_embed = coordinate_to_encoding_ttnn(
                 ref_lvl0,
                 num_feats=self.embed_dims // 2,
                 temperature=10000,
-                dim_t=dim_t,
+                dim_t=self._dim_t_cache,
             )
             query_pos = self.ref_point_head(query_sine_embed)
 
