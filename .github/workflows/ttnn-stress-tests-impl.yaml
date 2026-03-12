@@ -62,7 +62,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
 
       - name: Ensure BH Eth links online
-        if: ${{ contains(inputs.runner-label, 'BH-') }}
+        if: contains(inputs.runner-label, 'BH-')
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
         with:

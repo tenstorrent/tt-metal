@@ -133,7 +133,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Prepare custom weights cache directory
-        if: ${{ inputs.recreate_weights_cache == 'Yes' }}
+        if: inputs.recreate_weights_cache == 'Yes'
         env:
           INPUT_CACHE_DIR: ${{ inputs.new_cache_dir }}
         run: |
@@ -166,24 +166,24 @@ jobs:
           chmod -R a+rwX "${NEW_DIR}"
           set_github_env "DEEPSEEK_V3_CACHE" "${NEW_DIR}"
       - name: Run DeepSeek unit tests
-        if: ${{ matrix.test-group.test-type == 'unit' }}
+        if: matrix.test-group.test-type == 'unit'
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
       - name: Validate weight cache
-        if: ${{ matrix.test-group.test-type == 'module' || matrix.test-group.test-type == 'final-op-unit' }}
+        if: matrix.test-group.test-type == 'module' || matrix.test-group.test-type == 'final-op-unit'
         timeout-minutes: 10
         run: |
           python3 models/demos/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/tests_cache" || true
       - name: Run DeepSeek module tests
-        if: ${{ matrix.test-group.test-type == 'module' }}
+        if: matrix.test-group.test-type == 'module'
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests --timeout 600  --durations=0
       - name: Run DeepSeek op unit tests (Device Performance)
-        if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
+        if: matrix.test-group.test-type == 'final-op-unit'
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -212,7 +212,7 @@ jobs:
           echo "All device perf tests completed!"
           echo "=============================================="
       - name: Run DeepSeek long seq len module tests
-        if: ${{ matrix.test-group.test-type == 'long-seq-module' }}
+        if: matrix.test-group.test-type == 'long-seq-module'
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -222,7 +222,7 @@ jobs:
           DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=1024 pytest models/demos/deepseek_v3/tests/test_model.py -k "mode_decode" --timeout 1250 --durations=0
           DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=32768 pytest models/demos/deepseek_v3/tests/test_model.py -k "mode_prefill" --timeout 1250 --durations=0
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
+        if: failure()
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
@@ -248,7 +248,7 @@ jobs:
       #     path: /work
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         with:
           prefix: "test_reports_"
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main

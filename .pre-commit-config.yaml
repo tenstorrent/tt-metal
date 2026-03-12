@@ -102,5 +102,5 @@ repos:
       name: Check GitHub Actions for security anti-patterns
       entry: bash .github/scripts/security/check-actions-security-parallel.sh --strict
       language: system
-      pass_filenames: true
+      pass_filenames: false
       files: ^\.github/.*\.(yaml|yml)$

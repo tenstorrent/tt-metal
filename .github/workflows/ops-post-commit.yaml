@@ -178,7 +178,7 @@ jobs:
           echo "Showing ops perf report... will fail if not found"
           cat $DEVICE_PERF_REPORT_FILENAME
       - name: Merge and check test reports
-        if: ${{ github.event.pull_request.head.repo.fork == false }}
+        if: github.event.pull_request.head.repo.fork == false
         timeout-minutes: 5
         env:
           TRACY_NO_INVARIANT_CHECK: 1

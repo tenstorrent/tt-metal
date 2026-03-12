@@ -93,7 +93,7 @@ jobs:
 
   # build-dispatch is for direct workflow_dispatch calls only
   build-dispatch:
-    if: ${{ inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != '' }}
+    if: inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != ''
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -112,7 +112,7 @@ jobs:
   # build job runs the matrix - either when called from merge-gate with pre-built tags,
   # or when called via workflow_call without the platform dropdown
   build:
-    if: ${{ inputs.ubuntu-2204-ci-build-tag != '' || inputs.platform == '' }}
+    if: inputs.ubuntu-2204-ci-build-tag != '' || inputs.platform == ''
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write

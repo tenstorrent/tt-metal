@@ -168,28 +168,28 @@ jobs:
         run: |
           case "$TRIGGER_TYPE" in
             "manual")
-              echo "run-unit=$T3000_UNIT_ENABLED" >> $GITHUB_OUTPUT
-              echo "run-demo=$T3000_DEMO_ENABLED" >> $GITHUB_OUTPUT
-              echo "run-perf=$T3000_PERF_ENABLED" >> $GITHUB_OUTPUT
-              echo "run-integration=$T3000_INTEGRATION_ENABLED" >> $GITHUB_OUTPUT
-              echo "run-e2e=$T3000_E2E" >> $GITHUB_OUTPUT
-              echo "run-profiler=$T3000_PROFILER" >> $GITHUB_OUTPUT
+              printf '%s\n' "run-unit=${T3000_UNIT_ENABLED}" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-demo=${T3000_DEMO_ENABLED}" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-perf=${T3000_PERF_ENABLED}" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-integration=${T3000_INTEGRATION_ENABLED}" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-e2e=${T3000_E2E}" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-profiler=${T3000_PROFILER}" >> "${GITHUB_OUTPUT}"
               ;;
             "models-mandatory")
-              echo "run-unit=true" >> $GITHUB_OUTPUT
-              echo "run-demo=false" >> $GITHUB_OUTPUT
-              echo "run-perf=false" >> $GITHUB_OUTPUT
-              echo "run-integration=false" >> $GITHUB_OUTPUT
-              echo "run-e2e=false" >> $GITHUB_OUTPUT
-              echo "run-profiler=false" >> $GITHUB_OUTPUT
+              printf '%s\n' "run-unit=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-demo=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-perf=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-integration=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-e2e=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-profiler=false" >> "${GITHUB_OUTPUT}"
               ;;
             "models-extended")
-              echo "run-unit=true" >> $GITHUB_OUTPUT
-              echo "run-demo=true" >> $GITHUB_OUTPUT
-              echo "run-perf=true" >> $GITHUB_OUTPUT
-              echo "run-integration=false" >> $GITHUB_OUTPUT
-              echo "run-e2e=false" >> $GITHUB_OUTPUT
-              echo "run-profiler=false" >> $GITHUB_OUTPUT
+              printf '%s\n' "run-unit=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-demo=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-perf=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-integration=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-e2e=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-profiler=false" >> "${GITHUB_OUTPUT}"
               ;;
           esac
   build-artifact:

@@ -60,15 +60,18 @@ jobs:
           ignore-commits: ${{ inputs.ignore-commits }}
 
       - name: Create tag
-        if: ${{ !inputs.dry-run }}
+        if: inputs.dry-run != true
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          TAG_VERSION: ${{ steps.calculate-version.outputs.final_version }}
+          COMMIT_SHA: ${{ github.sha }}
         with:
           github-token: ${{ secrets.TT_METAL_RELEASE_TOKEN }}
           script: |
-            const owner = "${{ github.repository_owner }}";
-            const repo = "${{ github.repository }}".split('/')[1];
-            const version = "${{ steps.calculate-version.outputs.final_version }}";
-            const sha = "${{ github.sha }}";
+            const owner = context.repo.owner;
+            const repo = context.repo.repo;
+            const version = process.env.TAG_VERSION;
+            const sha = process.env.COMMIT_SHA;
 
             console.log(`Checking for existing tag ${version} in ${owner}/${repo} at sha ${sha}...`);
 

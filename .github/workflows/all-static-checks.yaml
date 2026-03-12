@@ -23,8 +23,8 @@ jobs:
     name: Run Pre-commit Hooks
     runs-on: ubuntu-latest
     permissions:
-      contents: write
-      pull-requests: write
+      contents: write  # NOLINT(24) - required by pre-commit auto-fix
+      pull-requests: write  # NOLINT(24) - inherited by callers for PR comments
     steps:
       - name: Checkout code
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

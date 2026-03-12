@@ -1009,7 +1009,7 @@ jobs:
     needs:
       - ttnn-generate-sweeps
       - build-artifact
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Lead Models)' }}
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Lead Models)'
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -1160,7 +1160,7 @@ jobs:
 
           "${CMD[@]}"
       - name: Upload sweep results
-        if: ${{ always() }}
+        if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-run-result
@@ -1350,7 +1350,7 @@ jobs:
           fi
           echo "BATCH_SUFFIX=$(echo -n "$FINGERPRINT" | sha256sum | cut -d' ' -f1 | cut -c1-12)" >> $GITHUB_ENV
       - name: Upload sweep results
-        if: ${{ always() }}
+        if: always()
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-results-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
@@ -1361,7 +1361,7 @@ jobs:
     needs:
       - build-artifact
       - ttnn-run-sweeps-parallel
-    if: ${{ !cancelled() && needs.ttnn-run-sweeps-parallel.result != 'skipped' && needs.ttnn-run-sweeps-parallel.result != 'cancelled' }}
+    if: "!cancelled() && needs.ttnn-run-sweeps-parallel.result != 'skipped' && needs.ttnn-run-sweeps-parallel.result != 'cancelled'"
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -1435,7 +1435,7 @@ jobs:
     needs:
       - ttnn-homogenize-run-result
       - ttnn-run-single-sweep
-    if: ${{ !cancelled() && (needs.ttnn-homogenize-run-result.result != 'skipped' || needs.ttnn-run-single-sweep.result != 'skipped') && (needs.ttnn-homogenize-run-result.result != 'cancelled' || needs.ttnn-run-single-sweep.result != 'cancelled') && (github.event_name == 'schedule' || github.event.inputs.upload_results) }}
+    if: "!cancelled() && (needs.ttnn-homogenize-run-result.result != 'skipped' || needs.ttnn-run-single-sweep.result != 'skipped') && (needs.ttnn-homogenize-run-result.result != 'cancelled' || needs.ttnn-run-single-sweep.result != 'cancelled') && (github.event_name == 'schedule' || github.event.inputs.upload_results)"
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository (actions only)

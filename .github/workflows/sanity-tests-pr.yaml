@@ -7,17 +7,16 @@ on:
 
 permissions:
   actions: read
-  contents: write
-  pull-requests: write
-  pages: write
-  id-token: write
-  packages: write
-  checks: write
+  contents: write  # NOLINT(24) - inherited by sanity-tests for artifact handling
+  pages: write  # NOLINT(24) - inherited by sanity-tests for deployment
+  id-token: write  # NOLINT(24) - inherited by sanity-tests for OIDC
+  packages: write  # NOLINT(24) - inherited by sanity-tests for GHCR push
+  checks: write  # NOLINT(24) - inherited by sanity-tests for check results
 
 run-name: Sanity tests${{ (github.event_name == 'workflow_dispatch' && inputs.with-retries) && ' (with retries)' || ''}}
 jobs:
   trigger-post-commit:
-    if: ${{ github.event.pull_request.head.repo.fork == true }}
+    if: github.event.pull_request.head.repo.fork == true
     uses: ./.github/workflows/sanity-tests.yaml
     secrets:
       REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}

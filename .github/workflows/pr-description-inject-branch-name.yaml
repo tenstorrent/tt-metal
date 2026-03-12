@@ -7,7 +7,7 @@ on:
       - reopened
 
 permissions:
-  pull-requests: write
+  pull-requests: write  # NOLINT(24) - required for pulls.update API
 
 jobs:
   update-description:

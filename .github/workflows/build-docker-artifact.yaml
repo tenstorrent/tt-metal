@@ -115,7 +115,7 @@ jobs:
           else
             PYTHON_VERSION="3.10"
           fi
-          echo "version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "version=${PYTHON_VERSION}" >> "${GITHUB_OUTPUT}"
           echo "Determined Python version: $PYTHON_VERSION for version=$VERSION"
 
       - name: Set environment variables
@@ -125,12 +125,12 @@ jobs:
           ARCH: ${{ inputs.architecture || 'amd64' }}
         run: |
 
-          echo "CI_BUILD_IMAGE_NAME=${DISTRO}-${VERSION}-ci-build-${ARCH}" >> $GITHUB_ENV
-          echo "CI_TEST_IMAGE_NAME=${DISTRO}-${VERSION}-ci-test-${ARCH}" >> $GITHUB_ENV
-          echo "DEV_IMAGE_NAME=${DISTRO}-${VERSION}-dev-${ARCH}" >> $GITHUB_ENV
-          echo "BASIC_DEV_IMAGE_NAME=${DISTRO}-${VERSION}-basic-dev-${ARCH}" >> $GITHUB_ENV
-          echo "BASIC_TTNN_RUNTIME_IMAGE_NAME=${DISTRO}-${VERSION}-basic-ttnn-runtime-${ARCH}" >> $GITHUB_ENV
-          echo "MANYLINUX_IMAGE_NAME=manylinux-${ARCH}" >> $GITHUB_ENV
+          printf '%s\n' "CI_BUILD_IMAGE_NAME=${DISTRO}-${VERSION}-ci-build-${ARCH}" >> "${GITHUB_ENV}"
+          printf '%s\n' "CI_TEST_IMAGE_NAME=${DISTRO}-${VERSION}-ci-test-${ARCH}" >> "${GITHUB_ENV}"
+          printf '%s\n' "DEV_IMAGE_NAME=${DISTRO}-${VERSION}-dev-${ARCH}" >> "${GITHUB_ENV}"
+          printf '%s\n' "BASIC_DEV_IMAGE_NAME=${DISTRO}-${VERSION}-basic-dev-${ARCH}" >> "${GITHUB_ENV}"
+          printf '%s\n' "BASIC_TTNN_RUNTIME_IMAGE_NAME=${DISTRO}-${VERSION}-basic-ttnn-runtime-${ARCH}" >> "${GITHUB_ENV}"
+          printf '%s\n' "MANYLINUX_IMAGE_NAME=manylinux-${ARCH}" >> "${GITHUB_ENV}"
 
       - name: Compute tags
         id: tags
@@ -146,18 +146,18 @@ jobs:
           EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
 
           HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
-          echo "ci-build-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${CI_BUILD_IMAGE_NAME}:${HASH}" >> $GITHUB_OUTPUT
-          echo "ci-test-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${CI_TEST_IMAGE_NAME}:${HASH}" >> $GITHUB_OUTPUT
-          echo "dev-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${DEV_IMAGE_NAME}:${HASH}" >> $GITHUB_OUTPUT
+          printf '%s\n' "ci-build-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${CI_BUILD_IMAGE_NAME}:${HASH}" >> "${GITHUB_OUTPUT}"
+          printf '%s\n' "ci-test-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${CI_TEST_IMAGE_NAME}:${HASH}" >> "${GITHUB_OUTPUT}"
+          printf '%s\n' "dev-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${DEV_IMAGE_NAME}:${HASH}" >> "${GITHUB_OUTPUT}"
 
           BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-dev-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${BASIC_DEV_IMAGE_NAME}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
+          printf '%s\n' "basic-dev-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${BASIC_DEV_IMAGE_NAME}:${BASIC_DEV_HASH}" >> "${GITHUB_OUTPUT}"
 
           BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-ttnn-runtime-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${BASIC_TTNN_RUNTIME_IMAGE_NAME}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
+          printf '%s\n' "basic-ttnn-runtime-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${BASIC_TTNN_RUNTIME_IMAGE_NAME}:${BASIC_TTNN_RUNTIME_HASH}" >> "${GITHUB_OUTPUT}"
 
           MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $EXTRA_FILES)
-          echo "manylinux-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${MANYLINUX_IMAGE_NAME}:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
+          printf '%s\n' "manylinux-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${MANYLINUX_IMAGE_NAME}:${MANYLINUX_HASH}" >> "${GITHUB_OUTPUT}"
 
       # Assume if dev-tag exists, the others will exist too
       - name: Query images exist
@@ -170,37 +170,37 @@ jobs:
         run: |
           if docker manifest inspect "$DEV_TAG" > /dev/null 2>&1; then
             echo "$DEV_TAG exists"
-            echo "ci-build-exists=true" >> $GITHUB_OUTPUT
-            echo "ci-test-exists=true" >> $GITHUB_OUTPUT
-            echo "dev-exists=true" >> $GITHUB_OUTPUT
+            printf '%s\n' "ci-build-exists=true" >> "${GITHUB_OUTPUT}"
+            printf '%s\n' "ci-test-exists=true" >> "${GITHUB_OUTPUT}"
+            printf '%s\n' "dev-exists=true" >> "${GITHUB_OUTPUT}"
           else
             echo "$DEV_TAG does not exist"
-            echo "ci-build-exists=false" >> $GITHUB_OUTPUT
-            echo "ci-test-exists=false" >> $GITHUB_OUTPUT
-            echo "dev-exists=false" >> $GITHUB_OUTPUT
+            printf '%s\n' "ci-build-exists=false" >> "${GITHUB_OUTPUT}"
+            printf '%s\n' "ci-test-exists=false" >> "${GITHUB_OUTPUT}"
+            printf '%s\n' "dev-exists=false" >> "${GITHUB_OUTPUT}"
           fi
 
           if docker manifest inspect "$BASIC_DEV_TAG" > /dev/null 2>&1; then
             echo "$BASIC_DEV_TAG exists"
-            echo "basic-dev-exists=true" >> $GITHUB_OUTPUT
+            printf '%s\n' "basic-dev-exists=true" >> "${GITHUB_OUTPUT}"
           else
             echo "$BASIC_DEV_TAG does not exist"
-            echo "basic-dev-exists=false" >> $GITHUB_OUTPUT
+            printf '%s\n' "basic-dev-exists=false" >> "${GITHUB_OUTPUT}"
           fi
           if docker manifest inspect "$BASIC_TTNN_RUNTIME_TAG" > /dev/null 2>&1; then
             echo "$BASIC_TTNN_RUNTIME_TAG exists"
-            echo "basic-ttnn-runtime-exists=true" >> $GITHUB_OUTPUT
+            printf '%s\n' "basic-ttnn-runtime-exists=true" >> "${GITHUB_OUTPUT}"
           else
             echo "$BASIC_TTNN_RUNTIME_TAG does not exist"
-            echo "basic-ttnn-runtime-exists=false" >> $GITHUB_OUTPUT
+            printf '%s\n' "basic-ttnn-runtime-exists=false" >> "${GITHUB_OUTPUT}"
           fi
 
           if docker manifest inspect "$MANYLINUX_TAG" > /dev/null 2>&1; then
             echo "$MANYLINUX_TAG exists"
-            echo "manylinux-exists=true" >> $GITHUB_OUTPUT
+            printf '%s\n' "manylinux-exists=true" >> "${GITHUB_OUTPUT}"
           else
             echo "$MANYLINUX_TAG does not exist"
-            echo "manylinux-exists=false" >> $GITHUB_OUTPUT
+            printf '%s\n' "manylinux-exists=false" >> "${GITHUB_OUTPUT}"
           fi
 
   # Build Ubuntu images

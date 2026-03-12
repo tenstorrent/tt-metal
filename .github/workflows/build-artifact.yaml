@@ -268,7 +268,7 @@ jobs:
 
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
-    if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
+    if: always() && !failure() && !cancelled() && inputs.ci-build-docker-image == ''
     uses: ./.github/workflows/build-docker-artifact.yaml
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
@@ -276,7 +276,7 @@ jobs:
       ref: ${{ inputs.ref }}
 
   download-artifacts:
-    if: ${{ inputs.use-artifacts-from-run != '' }}
+    if: inputs.use-artifacts-from-run != ''
     runs-on: ubuntu-latest
     outputs:
       build_artifact_name: ${{ steps.download.outputs.build-artifact-name }}
@@ -308,7 +308,7 @@ jobs:
           retention-days: 1
 
       - name: Upload wheel artifact
-        if: ${{ steps.download.outputs.wheel-artifact-name != '' }}
+        if: steps.download.outputs.wheel-artifact-name != ''
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ steps.download.outputs.wheel-artifact-name }}
@@ -317,7 +317,7 @@ jobs:
           retention-days: 1
 
       - name: Upload packages artifact
-        if: ${{ steps.download.outputs.packages-artifact-name != '' }}
+        if: steps.download.outputs.packages-artifact-name != ''
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ steps.download.outputs.packages-artifact-name }}
@@ -327,7 +327,7 @@ jobs:
 
   build-artifact:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
-    if: ${{ always() && !failure() && !cancelled() && inputs.use-artifacts-from-run == '' }}
+    if: always() && !failure() && !cancelled() && inputs.use-artifacts-from-run == ''
     name: >-
       🛠️ Build ${{ inputs.build-type }}
       ${{ needs.parse-platform.outputs.distro }}
@@ -374,7 +374,7 @@ jobs:
       - name: Check Redis credentials
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
         env:
           REDIS_USER: ${{ vars.REDIS_USER }}
           REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
@@ -523,7 +523,7 @@ jobs:
           cmake --build build --target install
 
       - name: 🛠️ Profile
-        if: ${{ inputs.profile }}
+        if: inputs.profile
         run: |
           echo "maxNameLength = 300" > ClangBuildAnalyzer.ini
           ClangBuildAnalyzer --all build capture.bin
@@ -548,7 +548,7 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: ☁️ Upload packages
-        if: ${{ inputs.publish-package }}
+        if: inputs.publish-package
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
@@ -560,7 +560,7 @@ jobs:
           if-no-files-found: error
 
       - name: "Tar files"
-        if: ${{ inputs.publish-artifact }}
+        if: inputs.publish-artifact
         env:
           INPUT_SKIP_TT_TRAIN: ${{ inputs.skip-tt-train }}
         run: |
@@ -600,7 +600,7 @@ jobs:
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
       - name: ☁️ Upload tarball
-        if: ${{ inputs.publish-artifact }}
+        if: inputs.publish-artifact
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
@@ -635,7 +635,7 @@ jobs:
 
   build-wheel:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
-    if: ${{ always() && !failure() && !cancelled() && inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
+    if: always() && !failure() && !cancelled() && inputs.build-wheel && inputs.use-artifacts-from-run == ''
     needs: [parse-platform, build-docker-image, determine-python-version]
     secrets:
       REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}

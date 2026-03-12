@@ -37,7 +37,7 @@ jobs:
 
       - name: Calculate start date (default to 3 days ago)
         id: calc-date
-        if: ${{ !inputs.start_date }}
+        if: "!inputs.start_date"
         shell: bash
         run: |
           # Calculate date 3 days ago and format as "January 1, 2026"
@@ -71,18 +71,18 @@ jobs:
           workflow_file: ".github/workflows/grouping-ci-failures.yaml"
 
       - name: Install infra dependencies
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         run: pip install -r infra/requirements-infra.txt
 
       - name: Create job failure cluster JSON
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: python3 .github/scripts/data_analysis/create_job_failure_cluster_json.py
 
       - name: Check if incremental JSON is empty
         id: check-json
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         shell: bash
         run: |
           if [ -f "incremental_error_report.json" ]; then
@@ -101,7 +101,7 @@ jobs:
           fi
 
       - name: Upload job failure cluster data
-        if: ${{ !cancelled() && steps.check-json.outputs.is_empty == 'false' }}
+        if: "!cancelled() && steps.check-json.outputs.is_empty == 'false'"
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}

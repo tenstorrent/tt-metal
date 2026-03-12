@@ -14,18 +14,21 @@ jobs:
   call-ai-assistant:
     # Do not run on Forks, they won't have the req'd secrets.
     if: >
-      github.event_name == 'issues' ||
       (github.event_name == 'issue_comment' &&
+        (github.event.comment.author_association == 'MEMBER' ||
+         github.event.comment.author_association == 'OWNER' ||
+         github.event.comment.author_association == 'COLLABORATOR') &&
         (!github.event.issue.pull_request ||
          github.event.issue.pull_request.head.repo.full_name == github.repository)) ||
+      (github.event_name == 'issues') ||
       (github.event_name != 'issue_comment' && github.event_name != 'issues' &&
         (!github.event.pull_request ||
          github.event.pull_request.head.repo.full_name == github.repository))
     permissions:
-      contents: write
-      pull-requests: write
-      issues: write
-      id-token: write
+      contents: write  # NOLINT(24) - required by ai_tools_impl for code suggestions
+      pull-requests: write  # NOLINT(24) - required by ai_tools_impl for PR comments
+      issues: write  # NOLINT(24) - required by ai_tools_impl for issue comments
+      id-token: write  # NOLINT(24) - required by ai_tools_impl for OIDC
     # SECURITY: Pinned to commit SHA of ay/tools_job branch.
     # To update: git ls-remote origin ay/tools_job | cut -f1
     uses: tenstorrent/tt-metal/.github/workflows/ai_tools_impl.yaml@b2606f6feca7d750fbc8a4c1e8ec7e13b826991c # ay/tools_job

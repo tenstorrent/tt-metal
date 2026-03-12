@@ -122,7 +122,7 @@ runs:
         sudo ls -l "$DIRECTORY"
         awk '{print FILENAME ":" $0}' "$DIRECTORY"/* || true
     - name: Copy TT-Run data to workers
-      if: ${{ inputs.copyToWorkers == 'true' }}
+      if: inputs.copyToWorkers == 'true'
       shell: bash
       env:
         DIRECTORY: ${{ inputs.directory }}

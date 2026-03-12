@@ -81,8 +81,8 @@ jobs:
 
       - name: Prepare fresh branch
         run: |
-          git push origin --delete "${{ env.BRANCH_NAME }}" 2>/dev/null || true
-          git branch -D "${{ env.BRANCH_NAME }}" 2>/dev/null || true
+          git push origin --delete "${BRANCH_NAME}" 2>/dev/null || true
+          git branch -D "${BRANCH_NAME}" 2>/dev/null || true
 
           # Update parent repo to latest
           git fetch origin main
@@ -113,7 +113,7 @@ jobs:
           else
             echo "has-changes=true" >> $GITHUB_OUTPUT
             echo "✅ Changes detected: $OLD_SHA -> $NEW_SHA"
-            cd - && git submodule update --remote ${{ env.SUBMODULE_PATH }}
+            cd - && git submodule update --remote "${SUBMODULE_PATH}"
           fi
 
       - name: Analyze changes
@@ -124,7 +124,7 @@ jobs:
           UPDATE_NEW_SHA: ${{ steps.update.outputs.new-sha }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
-          cd ${{ env.SUBMODULE_PATH }}
+          cd "${SUBMODULE_PATH}"
           OLD_SHA="${UPDATE_OLD_SHA}"
           NEW_SHA="${UPDATE_NEW_SHA}"
 
@@ -316,7 +316,7 @@ jobs:
             local run_id=$1
             local retries=0
 
-            while [ $retries -lt ${{ env.MAX_RETRIES }} ]; do
+            while [ $retries -lt "${MAX_RETRIES}" ]; do
               # Wait for completion with timeout
               local elapsed=0
               local timeout_seconds=$((TIMEOUT_MINUTES * 60))
@@ -351,8 +351,8 @@ jobs:
 
               # Retry failed run
               retries=$((retries + 1))
-              if [ $retries -lt ${{ env.MAX_RETRIES }} ]; then
-                echo "Retrying $DISPLAY_NAME (attempt $((retries + 1))/${{ env.MAX_RETRIES }})"
+              if [ $retries -lt "${MAX_RETRIES}" ]; then
+                echo "Retrying $DISPLAY_NAME (attempt $((retries + 1))/${MAX_RETRIES})"
                 if gh run rerun "$run_id" --failed --repo "$REPO"; then
                   echo "✅ Retry triggered successfully for run ID: $run_id"
                   # Wait a bit for the rerun to start, then continue monitoring the same run_id
@@ -383,7 +383,7 @@ jobs:
           # Trigger workflow with appropriate inputs
           echo "Triggering $WORKFLOW..."
           if [ "$WORKFLOW" = "tt-metal-l2-nightly.yaml" ]; then
-            gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "$REPO" \
+            gh workflow run "$WORKFLOW" --ref "${BRANCH_NAME}" --repo "$REPO" \
             -f architecture="$ARCH_PARAM" \
             -f run_cpp_tests=true \
             -f run_metal_iommu_tests=true \
@@ -394,10 +394,10 @@ jobs:
             -f run_models_unit_tests=true \
             -f run_tt_cnn_unit_tests=true
           elif [ "$WORKFLOW" = "perf-device-models.yaml" ]; then
-            gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "$REPO" \
+            gh workflow run "$WORKFLOW" --ref "${BRANCH_NAME}" --repo "$REPO" \
             -f architecture="$ARCH_PARAM"
           else
-            gh workflow run "$WORKFLOW" --ref "${{ env.BRANCH_NAME }}" --repo "$REPO"
+            gh workflow run "$WORKFLOW" --ref "${BRANCH_NAME}" --repo "$REPO"
           fi
 
           # Wait for the new run to appear and ensure it's created after trigger time
@@ -406,7 +406,7 @@ jobs:
             sleep 10
 
             # Get runs created after trigger time
-            RUNS_DATA=$(gh run list --workflow "$WORKFLOW" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json databaseId,createdAt,status --repo "$REPO")
+            RUNS_DATA=$(gh run list --workflow "$WORKFLOW" --branch "${BRANCH_NAME}" --limit 5 --json databaseId,createdAt,status --repo "$REPO")
 
             # Find the newest run created after our trigger timestamp
             NEW_RUN_ID=$(echo "$RUNS_DATA" | jq -r --argjson trigger_time "$TRIGGER_TIME" '
@@ -459,7 +459,7 @@ jobs:
           GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
         run: |
           # Find PR and get decisions
-          PR_NUMBER=$(gh pr list --head "${{ env.BRANCH_NAME }}" --json number --jq '.[0].number // empty')
+          PR_NUMBER=$(gh pr list --head "${BRANCH_NAME}" --json number --jq '.[0].number // empty')
           [ -z "$PR_NUMBER" ] && { echo "❌ No LLK PR found"; exit 1; }
 
           echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
@@ -480,7 +480,7 @@ jobs:
             local runs=$(
               gh run list \
                 --workflow "$workflow" \
-                --branch "${{ env.BRANCH_NAME }}" \
+                --branch "${BRANCH_NAME}" \
                 --limit 5 \
                 --json conclusion,url,status,attempt \
                 --jq 'map(select(.status == "completed")) | .[0] | select(. != null)'
@@ -488,7 +488,7 @@ jobs:
 
             # If no completed runs are found, exit early
             if [ -z "$runs" ]; then
-              echo "❌ Error: No completed runs found for workflow '$workflow' on branch '${{ env.BRANCH_NAME }}'" >&2
+              echo "❌ Error: No completed runs found for workflow '$workflow' on branch '${BRANCH_NAME}'" >&2
               return 1
             fi
 
@@ -607,9 +607,9 @@ jobs:
           if [ "$SHOULD_RUN_WH" = "true" ] || [ "$RECHECK_TESTS" = "true" ]; then
             # Get Wormhole workflow results (filter by PR creation time if not recheck)
             if [ "$RECHECK_TESTS" = "true" ]; then
-              WH_RUNS=$(gh run list --workflow "sanity-tests.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "$REPO")
+              WH_RUNS=$(gh run list --workflow "sanity-tests.yaml" --branch "${BRANCH_NAME}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "$REPO")
             else
-              WH_RUNS=$(gh run list --workflow "sanity-tests.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "$REPO")
+              WH_RUNS=$(gh run list --workflow "sanity-tests.yaml" --branch "${BRANCH_NAME}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "$REPO")
             fi
 
             if [ "$WH_RUNS" != "empty" ]; then
@@ -621,9 +621,9 @@ jobs:
           if [ "$SHOULD_RUN_BH" = "true" ] || [ "$RECHECK_TESTS" = "true" ]; then
             # Get Blackhole workflow results (filter by PR creation time if not recheck)
             if [ "$RECHECK_TESTS" = "true" ]; then
-              BH_RUNS=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "$REPO")
+              BH_RUNS=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${BRANCH_NAME}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "$REPO")
             else
-              BH_RUNS=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "$REPO")
+              BH_RUNS=$(gh run list --workflow "blackhole-post-commit.yaml" --branch "${BRANCH_NAME}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "$REPO")
             fi
 
             if [ "$BH_RUNS" != "empty" ]; then
@@ -635,9 +635,9 @@ jobs:
           if [ "$SHOULD_RUN_WH" = "true" ] || [ "$SHOULD_RUN_BH" = "true" ] || [ "$RECHECK_TESTS" = "true" ]; then
             # Get TT-Metal L2 Nightly APC workflow results (filter by PR creation time if not recheck)
             if [ "$RECHECK_TESTS" = "true" ]; then
-              L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "$REPO")
+              L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${BRANCH_NAME}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "$REPO")
             else
-              L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "$REPO")
+              L2_RUNS=$(gh run list --workflow "tt-metal-l2-nightly.yaml" --branch "${BRANCH_NAME}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "$REPO")
             fi
 
             if [ "$L2_RUNS" != "empty" ]; then
@@ -647,9 +647,9 @@ jobs:
 
             # Get Device Perf Regressions workflow results (filter by PR creation time if not recheck)
             if [ "$RECHECK_TESTS" = "true" ]; then
-              PERF_RUNS=$(gh run list --workflow "perf-device-models.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "$REPO")
+              PERF_RUNS=$(gh run list --workflow "perf-device-models.yaml" --branch "${BRANCH_NAME}" --limit 5 --json conclusion,url,status --jq 'map(select(.status == "completed")) | .[0] // empty' --repo "$REPO")
             else
-              PERF_RUNS=$(gh run list --workflow "perf-device-models.yaml" --branch "${{ env.BRANCH_NAME }}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "$REPO")
+              PERF_RUNS=$(gh run list --workflow "perf-device-models.yaml" --branch "${BRANCH_NAME}" --limit 5 --json conclusion,url,status,createdAt --jq "map(select(.status == \"completed\" and .createdAt >= \"$PR_CREATED_AT\")) | .[0] // empty" --repo "$REPO")
             fi
 
             if [ "$PERF_RUNS" != "empty" ]; then

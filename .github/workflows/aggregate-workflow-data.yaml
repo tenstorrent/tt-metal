@@ -188,12 +188,14 @@ jobs:
         run: |
           echo "Selected previous run id: $PREV_RUN_ID"
       - name: List artifacts for selected previous run (debug)
-        if: ${{ steps.prev.outputs.run_id != '' }}
+        if: steps.prev.outputs.run_id != ''
         uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8.0.0
+        env:
+          PREV_RUN_ID: ${{ steps.prev.outputs.run_id }}
         with:
           script: |
             const { owner, repo } = context.repo;
-            const run_id = Number('${{ steps.prev.outputs.run_id }}');
+            const run_id = Number(process.env.PREV_RUN_ID);
             const arts = await github.rest.actions.listWorkflowRunArtifacts({ owner, repo, run_id, per_page: 100 });
             core.info(`Artifacts for run ${run_id}:`);
             for (const a of arts.data.artifacts) {

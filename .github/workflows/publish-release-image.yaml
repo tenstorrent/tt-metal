@@ -86,7 +86,7 @@ jobs:
           TAG_NAME=$REPO_IMAGE_NAME:${VERSION}
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
       - name: Build and push (skipped for dry run)
-        if: ${{ !inputs.dry-run }}
+        if: inputs.dry-run != true
         id: build-push
         uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
@@ -103,7 +103,7 @@ jobs:
           outputs: |
             type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Get image digest
-        if: ${{ !inputs.dry-run }}
+        if: inputs.dry-run != true
         id: get-digest
         env:
           DIGEST: ${{ steps.build-push.outputs.digest }}
@@ -115,7 +115,7 @@ jobs:
           echo "IMAGE_DIGEST=$IMAGE_ID" >> $GITHUB_OUTPUT
 
   smoke-test-docker-image:
-    if: ${{ !inputs.dry-run }}
+    if: inputs.dry-run != true
     needs: create-docker-release-image
     strategy:
       matrix:
@@ -171,7 +171,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   tag-docker-image-as-latest:
-    if: ${{ !inputs.dry-run }}
+    if: inputs.dry-run != true
     needs: [smoke-test-docker-image, create-docker-release-image]
     runs-on: ubuntu-latest
     steps:

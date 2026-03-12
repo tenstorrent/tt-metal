@@ -67,7 +67,7 @@ jobs:
           mkdir gh_pages
           mv docs/build/html gh_pages/${VERSION}
       - name: Upload docs artifact (skipped for dry run)
-        if: ${{ !inputs.dry-run }}
+        if: "!inputs.dry-run"
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: gh_pages_${{ inputs.version }}
@@ -76,7 +76,7 @@ jobs:
 
   deploy-docs:
     needs: build-docs
-    if: ${{ !inputs.dry-run && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
+    if: "!inputs.dry-run && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v'))"
     runs-on: ubuntu-latest
     concurrency:
       # Note that people may spam the post-commit pipeline on their branch, and
@@ -112,13 +112,13 @@ jobs:
         # and the next attempt (!) run will cause an error.
         # See more:
         # https://github.com/tenstorrent/tt-metal/issues/17623
-        if: ${{ failure() }}
+        if: failure()
         uses: geekyeggo/delete-artifact@f275313e70c08f6120db482d7a6b98377786765b # v5.1.0
         continue-on-error: true
         with:
           name: github-pages
       - name: Check the docs deployment is up
-        if: ${{ github.ref == 'refs/heads/main' }}
+        if: github.ref == 'refs/heads/main'
         # TODO: Enhance this by looping over all the published versions in docs/published_versions.json
         run: |
           set -eu # basic shell hygiene

@@ -61,7 +61,7 @@ jobs:
       - name: Check Redis credentials
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
         env:
           REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
           REDIS_USER: ${{ vars.REDIS_USER }}

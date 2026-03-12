@@ -74,7 +74,7 @@ jobs:
         env:
           IGNORE_COMMITS: ${{ env.DEFAULT_IGNORE_COMMITS }}
         run: |
-          echo "ignore-commits=$IGNORE_COMMITS" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "ignore-commits=${IGNORE_COMMITS}" >> "${GITHUB_OUTPUT}"
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
@@ -87,10 +87,10 @@ jobs:
         run: |
           if [[ "$EVENT_NAME" == "schedule" ]]; then
             echo "Cron job detected, setting default release-type to 'dev'"
-            echo "RELEASE_TYPE=dev" >> "$GITHUB_ENV"
+            printf '%s\n' "RELEASE_TYPE=dev" >> "${GITHUB_ENV}"
             echo "Using release-type: dev"
           else
-            echo "RELEASE_TYPE=$RELEASE_TYPE_INPUT" >> "$GITHUB_ENV"
+            printf '%s\n' "RELEASE_TYPE=${RELEASE_TYPE_INPUT}" >> "${GITHUB_ENV}"
             echo "Using release-type: $RELEASE_TYPE_INPUT"
           fi
       - name: Get is-release-candidate and tag-type
@@ -103,14 +103,14 @@ jobs:
             fi
             echo "Processing release-type: $RELEASE_TYPE"
             if [[ "$RELEASE_TYPE" == "prod" ]]; then
-              echo "is-release-candidate=false" >> "$GITHUB_OUTPUT"
-              echo "tag-type=" >> "$GITHUB_OUTPUT"
+              printf '%s\n' "is-release-candidate=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "tag-type=" >> "${GITHUB_OUTPUT}"
             elif [[ "$RELEASE_TYPE" == "rc" ]]; then
-              echo "is-release-candidate=true" >> "$GITHUB_OUTPUT"
-              echo "tag-type=rc" >> "$GITHUB_OUTPUT"
+              printf '%s\n' "is-release-candidate=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "tag-type=rc" >> "${GITHUB_OUTPUT}"
             else
-              echo "is-release-candidate=true" >> "$GITHUB_OUTPUT"
-              echo "tag-type=dev" >> "$GITHUB_OUTPUT"
+              printf '%s\n' "is-release-candidate=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "tag-type=dev" >> "${GITHUB_OUTPUT}"
             fi
           else
             echo "ERROR: RELEASE_TYPE is empty or null - this should not happen!"
@@ -176,7 +176,7 @@ jobs:
   publish-to-pypi:
     needs: [build-test-publish, create-tag]
     runs-on: ubuntu-latest
-    if: ${{ github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
+    if: github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run
     environment:
       name: pypi
       url: https://pypi.org/project/ttnn/
@@ -204,7 +204,7 @@ jobs:
           ls -l dist
 
       - name: Publish to PyPI (Trusted Publishing)
-        if: ${{ !inputs.dry-run }}
+        if: "!inputs.dry-run"
         uses: pypa/gh-action-pypi-publish@ed0c539abdc6b55ad89f3ea7b8e96860a5ddef80 # v1.13.0
 
   create-changelog:
@@ -245,9 +245,9 @@ jobs:
           fi
 
           echo "Previous tag: $previous_tag"
-          echo "previous-tag=$previous_tag" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "previous-tag=${previous_tag}" >> "${GITHUB_OUTPUT}"
       - name: Create changelog
-        if: ${{ !inputs.dry-run }}
+        if: "!inputs.dry-run"
         id: create-changelog
         uses: mikepenz/release-changelog-builder-action@a34a8009a9588bb86b02a873cf592440e96a5da8 # v6.1.1
         with:
@@ -257,13 +257,13 @@ jobs:
           failOnError: true
           outputFile: CHANGELOG.txt
       - name: Create empty changelog for dry run
-        if: ${{ inputs.dry-run }}
+        if: inputs.dry-run
         run: echo "Changelog generation skipped for dry run" > CHANGELOG.txt
       - name: Output changelog
-        if: ${{ !inputs.dry-run }}
+        if: "!inputs.dry-run"
         run: cat CHANGELOG.txt
       - name: Upload changelog as artifact
-        if: ${{ !inputs.dry-run }}
+        if: "!inputs.dry-run"
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
@@ -271,7 +271,7 @@ jobs:
           path: CHANGELOG.txt
 
   create-release-notes:
-    if: ${{ !inputs.dry-run }}
+    if: "!inputs.dry-run"
     needs: create-changelog
     permissions: read-all
     runs-on: ubuntu-latest
@@ -307,7 +307,7 @@ jobs:
   check-existing-release:
     needs: [create-tag, create-release-notes, build-test-publish]
     runs-on: ubuntu-latest
-    if: ${{ !cancelled() }}
+    if: "!cancelled()"
     concurrency: create_upload_draft_release
     outputs:
       should-skip-release: ${{ steps.check-release-conditions.outputs.should-skip-release }}
@@ -350,13 +350,13 @@ jobs:
 
           if [[ "$create_tag_success" != "true" ]] || [[ "$create_notes_success" != "true" ]]; then
             echo "✗ Required jobs (create-tag, create-release-notes) did not succeed. Skipping release creation."
-            echo "should-skip-release=true" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "should-skip-release=true" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
           if [[ "$should_create_for_ref" != "true" ]]; then
             echo "✗ Git ref conditions not met. Skipping release creation."
-            echo "should-skip-release=true" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "should-skip-release=true" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
@@ -401,14 +401,14 @@ jobs:
 
             if [ "$all_assets_exist" = "true" ]; then
               echo "All required assets exist. Skipping release creation."
-              echo "should-skip-release=true" >> "$GITHUB_OUTPUT"
+              printf '%s\n' "should-skip-release=true" >> "${GITHUB_OUTPUT}"
             else
               echo "Some assets are missing. Proceeding with release creation."
-              echo "should-skip-release=false" >> "$GITHUB_OUTPUT"
+              printf '%s\n' "should-skip-release=false" >> "${GITHUB_OUTPUT}"
             fi
           else
             echo "Release $TAG_NAME does not exist. Proceeding with release creation."
-            echo "should-skip-release=false" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "should-skip-release=false" >> "${GITHUB_OUTPUT}"
           fi
 
   # Candidate for breaking up
@@ -417,11 +417,11 @@ jobs:
     # May accidentally create two releases without restricting to 1 job
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: ${{ !cancelled() &&
+    if: >-
+      !cancelled() &&
       needs.check-existing-release.result == 'success' &&
       needs.check-existing-release.outputs.should-skip-release != 'true' &&
       github.run_attempt == '1'
-      }}
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -450,7 +450,7 @@ jobs:
           path: debian-packages
           merge-multiple: true
       - name: Verify files for release (dry-run)
-        if: ${{ inputs.dry-run }}
+        if: inputs.dry-run
         run: |
           echo "=== Verifying files that would be included in the release ==="
           echo ""
@@ -483,7 +483,7 @@ jobs:
           echo "=== All files that would be uploaded to release ==="
           ls -lh "${required_files[@]}" debian-packages/*.deb 2>/dev/null || echo "Some files are missing!"
       - name: Create draft release with assets (skipped for dry run)
-        if: ${{ (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) && !inputs.dry-run }}
+        if: (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) && !inputs.dry-run
         uses: softprops/action-gh-release@4634c16e79c963813287e889244c50009e7f0981
         with:
           tag_name: ${{ needs.create-tag.outputs.version }}
@@ -505,7 +505,7 @@ jobs:
     needs: [create-and-upload-draft-release, create-tag]
     concurrency: create_upload_draft_release
     runs-on: ubuntu-latest
-    if: ${{ !cancelled() && needs.create-and-upload-draft-release.result == 'success' && !inputs.dry-run && github.run_attempt == '1' }}
+    if: "!cancelled() && needs.create-and-upload-draft-release.result == 'success' && !inputs.dry-run && github.run_attempt == '1'"
     steps:
       - name: Checkout
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -534,7 +534,7 @@ jobs:
   check-stable-for-new-commits:
     runs-on: ubuntu-latest
     #Only run on schedule or main branch pushes
-    if: ${{ github.event_name == 'schedule' || github.ref == 'refs/heads/main' }}
+    if: github.event_name == 'schedule' || github.ref == 'refs/heads/main'
     steps:
       - name: Checkout stable branch
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -596,7 +596,7 @@ jobs:
           fi
 
           echo "Selected version for comparison: $latestReleaseVersion"
-          echo "latest-release-version=$latestReleaseVersion" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "latest-release-version=${latestReleaseVersion}" >> "${GITHUB_OUTPUT}"
       - name: Check for new commits since latest release
         id: check-new-commits
         env:
@@ -611,7 +611,7 @@ jobs:
           if [ -z "$latestReleaseCommit" ]; then
             echo "Could not find commit for latest release tag: $latestReleaseVersion"
             echo "Assuming there are new commits to be safe"
-            echo "has-new-commits=true" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "has-new-commits=true" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
 
@@ -627,14 +627,14 @@ jobs:
 
           if [ "$newCommitsCount" -gt 0 ]; then
             echo "Found $newCommitsCount new commits since latest release"
-            echo "has-new-commits=true" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "has-new-commits=true" >> "${GITHUB_OUTPUT}"
           else
             echo "No new commits found since latest release"
-            echo "has-new-commits=false" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "has-new-commits=false" >> "${GITHUB_OUTPUT}"
           fi
       - name: Trigger RC release workflow
         #This is only run if there are new commits on stable
-        if: ${{ steps.check-new-commits.outputs.has-new-commits == 'true' }}
+        if: steps.check-new-commits.outputs.has-new-commits == 'true'
         uses: benc-uk/workflow-dispatch@7a027648b88c2413826b6ddd6c76114894dc5ec4 # v1.3.1
         with:
           workflow: package-and-release.yaml
@@ -647,7 +647,7 @@ jobs:
               "tests-yaml-gist-url": "${{ inputs.tests-yaml-gist-url || '' }}"
             }
       - name: Log no action needed
-        if: ${{ steps.check-new-commits.outputs.has-new-commits == 'false' }}
+        if: steps.check-new-commits.outputs.has-new-commits == 'false'
         run: |
           echo "No new commits found since latest release. No RC release needed."
 
@@ -655,7 +655,7 @@ jobs:
     needs: [build-test-publish, release-precheck, create-tag]
     runs-on: ubuntu-latest
     # Only trigger if we are on an RC and the RC build-test-publish succeeded
-    if: ${{ needs.release-precheck.outputs.tag-type == 'rc' && success() }}
+    if: needs.release-precheck.outputs.tag-type == 'rc' && success()
     steps:
       - name: Wait for RC workflow completion
         env:

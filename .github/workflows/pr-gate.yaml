@@ -84,10 +84,10 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
-  pull-requests: write
-  checks: write
-  packages: write
+  contents: write  # NOLINT(24) - required for clang-tidy auto-resolve
+  pull-requests: write  # NOLINT(24) - required for clang-tidy PR comments
+  checks: write  # NOLINT(24) - required for posting check results
+  packages: write  # NOLINT(24) - required for GHCR push
 
 jobs:
   # NOTE: Platform parsing is handled by build-docker-artifact.yaml and build-artifact.yaml internally.
@@ -107,7 +107,7 @@ jobs:
     needs: build-docker-images
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
-      packages: write
+      packages: write  # NOLINT(24) - required for GHCR push
     secrets:
       REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
@@ -478,7 +478,7 @@ jobs:
           # # to be addressed.
           # [[ -s clang-tidy-result/fixes.yml ]] && exit 42
       - name: Run clang-tidy-pr-comments action
-        if: ${{ !cancelled() && github.event.pull_request.head.repo.fork == false }}
+        if: "!cancelled() && github.event.pull_request.head.repo.fork == false"
         # v1.8.0
         uses: platisd/clang-tidy-pr-comments@28cfb84edafa771c044bde7e4a2a3fae57463818
         with:

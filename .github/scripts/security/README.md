@@ -965,6 +965,31 @@ A standalone linting script that scans GitHub Actions workflows and composite ac
 | 24 | Write-capable permissions on untrusted triggers | MEDIUM | Explicit write scopes granted to `pull_request`, `pull_request_target`, `issue_comment`, and similar events |
 | 25 | Mutable container image references | MEDIUM | `docker://` or `image:` references not pinned to immutable `@sha256` digests |
 
+### Suppressing Findings with NOLINT
+
+Individual findings can be suppressed by adding a `# NOLINT` comment on the flagged line. Three forms are supported:
+
+| Syntax | Effect |
+|--------|--------|
+| `# NOLINT` | Suppresses **all** checks on this line |
+| `# NOLINT(24)` | Suppresses only check 24 |
+| `# NOLINT(24,8)` | Suppresses checks 24 and 8 |
+
+**Example:**
+
+```yaml
+permissions:
+  contents: write   # NOLINT(24) - required for auto-merge bot
+  pull-requests: write  # NOLINT(24)
+```
+
+**Behavior notes:**
+
+- The NOLINT comment must appear on the same line the linter flags (not a preceding line).
+- If a finding reports multiple lines (e.g., `file.yaml:26,27`) and only some have NOLINT, the finding still fires but only shows the non-suppressed lines.
+- If every reported line for a finding has a matching NOLINT, the finding is fully suppressed.
+- Aggregate checks (5, 6, 33) report "Multiple files" with no line numbers and cannot be suppressed with NOLINT.
+
 ### Reporting Security Issues
 
 If you discover a security vulnerability in this library or its usage in workflows, please report it to the security team following your organization's responsible disclosure process.

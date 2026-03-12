@@ -222,7 +222,7 @@ jobs:
       bh-runner-p300: ${{ matrix.test-config.bh-runner-p300 || false }}
       bh-runner-qb-ge: ${{ matrix.test-config.bh-runner-qb-ge || false }}
   fabric-perf-tests:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-wh-t3k-perf-tests != false || github.event_name == 'push' }}
+    if: github.event_name == 'workflow_dispatch' && inputs.run-wh-t3k-perf-tests != false || github.event_name == 'push'
     needs: build-artifact
     secrets:
       SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}

@@ -47,10 +47,10 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
-  pull-requests: write
-  checks: write
-  packages: write
+  contents: write  # NOLINT(24) - inherited by all-static-checks for pre-commit
+  pull-requests: write  # NOLINT(24) - inherited by all-static-checks for PR comments
+  checks: write  # NOLINT(24) - required for posting check results
+  packages: write  # NOLINT(24) - required for GHCR push in build jobs
 
 jobs:
   static-checks:
@@ -85,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [code-analysis]
     permissions:
-      actions: write
+      actions: write  # NOLINT(24) - required for cancelling failed workflows
     steps:
       - uses: action-pack/cancel@bb57491c99942855e9da36ffbe86a686b2bd35a3
 

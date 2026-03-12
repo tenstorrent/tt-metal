@@ -136,7 +136,7 @@ jobs:
       - name: Check Redis credentials
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
         env:
           REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
           REDIS_USER: ${{ vars.REDIS_USER }}
@@ -164,7 +164,7 @@ jobs:
         timeout-minutes: 10
 
       - name: 🔧 Setup GitHub CLI and jq
-        if: ${{ inputs.download-artifacts == true }}
+        if: inputs.download-artifacts == true
         run: |
           echo "Checking GitHub CLI, jq, and zstd installation..."
 
@@ -204,7 +204,7 @@ jobs:
           echo "Repository: $(gh repo view --repo tenstorrent/tt-metal --json nameWithOwner --jq .nameWithOwner 2>/dev/null || echo 'Failed to get repo info')"
         shell: bash
       - name: Download Gist Script
-        if: ${{ contains(inputs.test-script, 'gist.github.com') || contains(inputs.test-script, 'gist.githubusercontent.com') }}
+        if: contains(inputs.test-script, 'gist.github.com') || contains(inputs.test-script, 'gist.githubusercontent.com')
         shell: bash
         env:
           GIST_URL: ${{ inputs.test-script }}
@@ -391,7 +391,7 @@ jobs:
           fi
 
       - name: Upload ND results CSV
-        if: ${{ hashFiles('docker-job/bisect_nd_results.csv') != '' }}
+        if: hashFiles('docker-job/bisect_nd_results.csv') != ''
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: bisect-nd-results

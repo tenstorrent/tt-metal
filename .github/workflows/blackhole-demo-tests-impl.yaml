@@ -49,7 +49,7 @@ jobs:
           set -e
           echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
           python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
+            "$TESTS_YAML_PATH" \
             ./.github/time_budget.yaml \
             "demo"
       - name: Build unified test matrix based on enabled SKUs
@@ -58,7 +58,7 @@ jobs:
           INPUT_ENABLED_SKUS: ${{ inputs.enabled-skus }}
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
+            "$TESTS_YAML_PATH" \
             "$INPUT_ENABLED_SKUS" \
             ./.github/sku_config.yaml
       - name: Filter test matrix by model
@@ -122,23 +122,20 @@ jobs:
       - uses:
           tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
           # Skip this on single-card systems
-        if: ${{ matrix.test-group.sku != 'bh_p150' && matrix.test-group.sku != 'bh_p150_perf'
-          }}
+        if: matrix.test-group.sku != 'bh_p150' && matrix.test-group.sku != 'bh_p150_perf'
         timeout-minutes: 10
         with:
           runner-label: ${{ matrix.test-group.sku == 'bh_deskbox' && 'BH-DeskBox' ||
             '' }}
       - name: Download Llama model weights from LFC
-        if: ${{ inputs.weights-cache-mode == 'lfc' && contains(matrix.test-group.name,
-          'llama') }}
+        if: inputs.weights-cache-mode == 'lfc' && contains(matrix.test-group.name, 'llama')
         timeout-minutes: 15
         run: |
           set -e
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
       - name: Download Flux.1-dev model weights from LFC
-        if: ${{ inputs.weights-cache-mode == 'lfc' && contains(matrix.test-group.name,
-          'Flux.1-dev') }}
+        if: inputs.weights-cache-mode == 'lfc' && contains(matrix.test-group.name, 'Flux.1-dev')
         timeout-minutes: 15
         run: |
           set -e
@@ -161,7 +158,7 @@ jobs:
           bash /tmp/test_cmd.sh
       - name: Save environment data
         id: save-environment-data
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         timeout-minutes: 15
         env:
           ARCH_NAME: ${{ matrix.test-group.arch }}
@@ -174,8 +171,7 @@ jobs:
             echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
           fi
       - name: Upload benchmark data
-        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success'
-          && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        if: "!cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true'"
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -185,11 +181,11 @@ jobs:
           path: /work
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         with:
           prefix: test_reports_
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
+        if: failure()
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}

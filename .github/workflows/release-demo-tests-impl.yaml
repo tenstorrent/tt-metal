@@ -57,7 +57,7 @@ jobs:
         run: |
           pip3 install PyYAML
       - name: Validate tests YAML URL (security check)
-        if: ${{ inputs.tests-yaml-gist-url != '' }}
+        if: inputs.tests-yaml-gist-url != ''
         env:
           TESTS_YAML_GIST_URL: ${{ inputs.tests-yaml-gist-url }}
         run: |
@@ -73,20 +73,20 @@ jobs:
 
           echo "URL validation passed: $URL"
       - name: Download tests YAML from gist (if provided)
-        if: ${{ inputs.tests-yaml-gist-url != '' }}
+        if: inputs.tests-yaml-gist-url != ''
         env:
           TESTS_YAML_GIST_URL: ${{ inputs.tests-yaml-gist-url }}
         run: |
           echo "Downloading tests YAML from gist: $TESTS_YAML_GIST_URL"
-          curl -fsSL "$TESTS_YAML_GIST_URL" -o "${{ env.TESTS_YAML_PATH }}"
+          curl -fsSL "$TESTS_YAML_GIST_URL" -o "$TESTS_YAML_PATH"
           echo "Downloaded tests YAML:"
-          head -n 20 "${{ env.TESTS_YAML_PATH }}"
+          head -n 20 "$TESTS_YAML_PATH"
       - name: Verify test timeouts against budget
         run: |
           set -e
           echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
           python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
+            "$TESTS_YAML_PATH" \
             ./.github/time_budget.yaml \
             "demo"
       - name: Build unified test matrix based on enabled SKUs
@@ -95,7 +95,7 @@ jobs:
           ENABLED_SKUS: ${{ inputs.enabled-skus }}
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
+            "$TESTS_YAML_PATH" \
             "$ENABLED_SKUS" \
             ./.github/sku_config.yaml
       - name: Apply model filter
@@ -184,22 +184,21 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
-        if:
-          ${{ contains(join(matrix.test-group.runs_on, ' '), 'pipeline-perf') || contains(join(matrix.test-group.runs_on,
-          ' '), 'bare-metal') }}
+        if: contains(join(matrix.test-group.runs_on, ' '), 'pipeline-perf') || contains(join(matrix.test-group.runs_on,
+          ' '), 'bare-metal')
         uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: performance
       - name: Download model weights from LFC
-        if: ${{ contains(join(matrix.test-group.runs_on, ' '), 'yyz2-lfc') && contains(matrix.test-group.name,
-          'llama') }}
+        if: contains(join(matrix.test-group.runs_on, ' '), 'yyz2-lfc') && contains(matrix.test-group.name,
+          'llama')
         timeout-minutes: 15
         run: |
           set -e
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
       - name: Ensure BH links online
-        if: ${{ contains(matrix.test-group.sku, 'bh_') }}
+        if: contains(matrix.test-group.sku, 'bh_')
         uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
         with:
@@ -228,12 +227,12 @@ jobs:
           chmod +x /tmp/test_cmd.sh
           bash /tmp/test_cmd.sh
       - name: Print tt-smi data on failure
-        if: ${{ failure() && contains(matrix.test-group.sku, 'bh_') }}
+        if: failure() && contains(matrix.test-group.sku, 'bh_')
         run: |
           tt-smi -s
       - name: Save environment data
         id: save-environment-data
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         shell: bash
         env:
           TEST_SKU: ${{ matrix.test-group.sku }}
@@ -246,8 +245,8 @@ jobs:
             echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
           fi
       - name: Upload benchmark data
-        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success'
-          && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        if: "!cancelled() && steps.save-environment-data.conclusion == 'success'
+          && steps.save-environment-data.outputs.has_benchmark_data == 'true'"
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -256,22 +255,21 @@ jobs:
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
+        if: failure()
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         with:
           path: generated/test_reports/
           prefix: test_reports_
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
       - name: Disable Performance mode
-        if: ${{ (contains(join(matrix.test-group.runs_on, ' '), 'pipeline-perf') ||
+        if: (contains(join(matrix.test-group.runs_on, ' '), 'pipeline-perf') ||
           contains(join(matrix.test-group.runs_on, ' '), 'bare-metal')) && always()
-          }}
         uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: ondemand

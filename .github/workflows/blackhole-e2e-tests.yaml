@@ -141,7 +141,7 @@ jobs:
           echo "Matrix output: $matrix_output"
           echo "matrix=$matrix_output" >> $GITHUB_OUTPUT
   blackhole-multi-card-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_bh_multi_card_unit_tests }}
+    if: github.event_name == 'schedule' || inputs.run_bh_multi_card_unit_tests
     needs: [build-artifact, blackhole-multi-card-tests-matrix]
     secrets:
       SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -161,7 +161,7 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       fast-only: false
   blackhole-grid-override-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_grid_override_tests }}
+    if: github.event_name == 'schedule' || inputs.run_grid_override_tests
     needs: build-artifact
     secrets:
       SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -177,7 +177,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       runner-label: P150b
   blackhole-ttnn-stress-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_bh_ttnn_stress_tests }}
+    if: github.event_name == 'schedule' || inputs.run_bh_ttnn_stress_tests
     needs: build-artifact
     secrets:
       SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}

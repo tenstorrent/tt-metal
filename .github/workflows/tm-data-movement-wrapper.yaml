@@ -140,7 +140,7 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       gtest_filter: "*-*NIGHTLY_*"
   data-movement-perf-tests:
-    if: ${{ github.event_name == 'workflow_dispatch' && inputs.run-perf-tests != false || (github.event_name == 'workflow_call' || github.event_name == 'push') }}
+    if: github.event_name == 'workflow_dispatch' && inputs.run-perf-tests != false || (github.event_name == 'workflow_call' || github.event_name == 'push')
     uses: ./.github/workflows/tm-data-movement-perf-impl.yaml
     needs: build-artifact
     with:

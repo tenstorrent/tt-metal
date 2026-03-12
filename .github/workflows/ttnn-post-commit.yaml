@@ -67,11 +67,11 @@ jobs:
         run: |
           pip3 install PyYAML
       - name: Verify test timeouts against budget
-        if: ${{ inputs.timeout-minutes-override == 0 }}
+        if: inputs.timeout-minutes-override == 0
         run: |
           set -e
           python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
+            "${TESTS_YAML_PATH}" \
             ./.github/time_budget.yaml \
             "sanity"
       - name: Build test matrix based on enabled SKUs
@@ -80,7 +80,7 @@ jobs:
           ENABLED_SKUS: ${{ inputs.enabled-skus }}
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
+            "${TESTS_YAML_PATH}" \
             "$ENABLED_SKUS" \
             ./.github/sku_config.yaml
       - name: Filter matrix by merge_gate
@@ -148,7 +148,7 @@ jobs:
             vars.REDIS_CCACHE_IS_READONLY }}
           auto-triage: ${{ !inputs.enable-watcher }}
       - name: Set ttnn fast runtime if exists in config
-        if: ${{ matrix.test-group.fast_runtime_mode_off }}
+        if: matrix.test-group.fast_runtime_mode_off
         run: |
           echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
       - name: ${{ matrix.test-group.name }} tests
@@ -166,19 +166,19 @@ jobs:
           chmod +x /tmp/test_cmd.sh
           bash /tmp/test_cmd.sh
       - name: 📊 CCache Report
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         run: |
           echo "::group::CCache Statistics"
           ccache --show-stats || echo "ccache stats not available"
           echo "::endgroup::"
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
+        if: failure()
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         with:
           prefix: test_reports_
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main

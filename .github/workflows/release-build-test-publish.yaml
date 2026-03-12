@@ -122,7 +122,7 @@ jobs:
 
   release-demo-tests:
     needs: [build-artifact-tracy, determine-test-skus]
-    if: ${{ inputs.tag-version != '' }}
+    if: inputs.tag-version != ''
     secrets:
       HUGGINGFACE_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
       SFTP_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
@@ -159,7 +159,7 @@ jobs:
       - build-artifact-release
       - parse-platform
     uses: ./.github/workflows/publish-release-image.yaml
-    if: ${{ github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run }}
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run
     with:
       platform: ${{ needs.parse-platform.outputs.distro }}-${{ needs.parse-platform.outputs.version }}
       version: ${{ inputs.tag-version }}
@@ -171,7 +171,7 @@ jobs:
   # Only run docs release once per run on the main platform
   docs-release:
     needs: [build-artifact-release, parse-platform]
-    if: ${{ inputs.platform == inputs.main-platform && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run) }}
+    if: inputs.platform == inputs.main-platform && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v') || inputs.dry-run)
     uses: ./.github/workflows/docs-latest-public.yaml
     with:
       version: ${{ inputs.tag-version }}
@@ -185,7 +185,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write # Required for AWS OIDC
-    if: ${{ github.ref == 'refs/heads/main' }}
+    if: github.ref == 'refs/heads/main'
     steps:
       - name: Set up Python
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
@@ -209,7 +209,7 @@ jobs:
           path: ./wheels
 
       - name: Publish wheels to internal PyPI
-        if: ${{ github.ref == 'refs/heads/main' && !inputs.dry-run }}
+        if: github.ref == 'refs/heads/main' && inputs.dry-run != true
         env:
           PYPI_BUCKET: ${{ secrets.PYPI_BUCKET }}
         run: |

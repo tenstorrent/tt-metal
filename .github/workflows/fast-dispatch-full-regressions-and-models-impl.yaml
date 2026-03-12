@@ -145,7 +145,7 @@ jobs:
 
   nightly-wh-models:
     needs: create-test-matrix
-    if: ${{ needs.create-test-matrix.outputs.stable_count != '0' }}
+    if: needs.create-test-matrix.outputs.stable_count != '0'
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -206,14 +206,14 @@ jobs:
               $PYTEST_CMD tests/nightly/single_card/$TEST_CONFIG_MODEL
             fi
       - name: Prepare Tracy reports
-        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        if: "!cancelled() && inputs.enable-ops-recording"
         uses: ./.github/actions/prepare-tracy-reports
         with:
           profiler-dir: ${{ github.workspace }}/generated/profiler
           model-name: ${{ matrix.test-config.model }}
           card: ${{ matrix.card }}
       - name: Upload Tracy reports
-        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        if: "!cancelled() && inputs.enable-ops-recording"
         uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         with:
@@ -221,13 +221,13 @@ jobs:
           prefix: "tracy_ops_${{ matrix.test-config.model }}_${{ matrix.card }}_"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         with:
           path: generated/test_reports/
           prefix: "test_reports_"
   nightly-wh-unstable-models:
     needs: create-test-matrix
-    if: ${{ needs.create-test-matrix.outputs.unstable_count != '0' }}
+    if: needs.create-test-matrix.outputs.unstable_count != '0'
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -276,13 +276,13 @@ jobs:
           run_args: $TEST_CONFIG_CMD
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         with:
           path: generated/test_reports/
           prefix: "test_reports_"
   nightly-wh-models-civ2:
     needs: create-test-matrix
-    if: ${{ needs.create-test-matrix.outputs.stable_ci_v2_count != '0' }}
+    if: needs.create-test-matrix.outputs.stable_ci_v2_count != '0'
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -332,14 +332,14 @@ jobs:
             $PYTEST_CMD tests/nightly/single_card/$TEST_CONFIG_MODEL
           fi
       - name: Prepare Tracy reports
-        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        if: "!cancelled() && inputs.enable-ops-recording"
         uses: ./docker-job/.github/actions/prepare-tracy-reports
         with:
           profiler-dir: /work/generated/profiler
           model-name: ${{ matrix.test-config.model }}
           card: ${{ matrix.card }}
       - name: Upload Tracy reports
-        if: ${{ !cancelled() && inputs.enable-ops-recording }}
+        if: "!cancelled() && inputs.enable-ops-recording"
         uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
         with:
@@ -347,13 +347,13 @@ jobs:
           prefix: "tracy_ops_${{ matrix.test-config.model }}_${{ matrix.card }}_"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         with:
           prefix: "test_reports_"
 
   aggregate-ops-recording:
     needs: [nightly-wh-models, nightly-wh-models-civ2]
-    if: ${{ !cancelled() && inputs.enable-ops-recording }}
+    if: "!cancelled() && inputs.enable-ops-recording"
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository

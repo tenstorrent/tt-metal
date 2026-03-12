@@ -22,7 +22,7 @@ runs:
     - name: Construct allocation manifest (explicit)
       shell: bash
       id: explicit
-      if: ${{ inputs.explicit != '' }}
+      if: inputs.explicit != ''
       env:
         ALLOCATION_NAME: ${{ inputs.allocationName }}
         EXPLICIT_NODES: ${{ inputs.explicit }}
@@ -45,7 +45,7 @@ runs:
     - name: Construct allocation manifest (spec)
       shell: bash
       id: spec
-      if: ${{ inputs.spec != '' }}
+      if: inputs.spec != ''
       env:
         ALLOCATION_NAME: ${{ inputs.allocationName }}
         SPEC_INPUT: ${{ inputs.spec }}

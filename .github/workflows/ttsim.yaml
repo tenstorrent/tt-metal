@@ -35,7 +35,7 @@ on:
         default: false
 jobs:
   ttsim-integration:
-    if: ${{ inputs.run-ttsim-integration-tests }}
+    if: inputs.run-ttsim-integration-tests
     runs-on: tt-ubuntu-2204-small-stable
     timeout-minutes: ${{ inputs.job-timeout }}
     name: TTSim Integration - ${{ matrix.arch }}
@@ -93,7 +93,7 @@ jobs:
         run: |
           asset_suffix="${MATRIX_BUILD_SUFFIX}"
           asset_suffix="${asset_suffix#release_}"
-          echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "asset_name=libttsim_${asset_suffix}.so" >> "${GITHUB_OUTPUT}"
       - name: Download ttsim binary
         uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:
@@ -148,7 +148,7 @@ jobs:
   # Define TTSim-compatible TTNN tests from shared config
   # ---------------------------------------------------------------------------
   define-ttsim-ttnn-tests:
-    if: ${{ inputs.run-ttsim-integration-tests }}
+    if: inputs.run-ttsim-integration-tests
     runs-on: ubuntu-latest
     env:
       TTNN_TESTS_YAML: tests/pipeline_reorg/ttnn-tests.yaml
@@ -168,7 +168,7 @@ jobs:
         run: |
           set -euo pipefail
           pip3 install -q PyYAML
-          python3 - "${{ env.TTNN_TESTS_YAML }}" "$GITHUB_OUTPUT" << 'PY'
+          python3 - "${TTNN_TESTS_YAML}" "$GITHUB_OUTPUT" << 'PY'
           import json, sys, yaml
           path, out_path = sys.argv[1], sys.argv[2]
           with open(path) as f:
@@ -190,7 +190,7 @@ jobs:
   # ---------------------------------------------------------------------------
   ttnn-pytests:
     needs: define-ttsim-ttnn-tests
-    if: ${{ inputs.run-ttsim-integration-tests }}
+    if: inputs.run-ttsim-integration-tests
     runs-on: ubuntu-latest
     env:
       TTSIM_SKIP_LIST_YAML: tests/pipeline_reorg/ttsim-skip-list.yaml
@@ -248,7 +248,7 @@ jobs:
         run: |
           asset_suffix="${MATRIX_ARCH_BUILD_SUFFIX}"
           asset_suffix="${asset_suffix#release_}"
-          echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "asset_name=libttsim_${asset_suffix}.so" >> "${GITHUB_OUTPUT}"
       - name: Download ttsim binary
         uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:
@@ -278,7 +278,7 @@ jobs:
           SKIP_ARGS=$(yq -r ".${ARCH}[]" "$TTSIM_SKIP_LIST_YAML" | sed 's/^/--deselect=/' | tr '\n' ' ' | sed 's/[[:space:]]*$//')
           echo "[info] Loaded skip list for arch: $ARCH from $TTSIM_SKIP_LIST_YAML"
           echo "[info] Skip args count: $(echo $SKIP_ARGS | wc -w)"
-          echo "skip_args=${SKIP_ARGS}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "skip_args=${SKIP_ARGS}" >> "${GITHUB_OUTPUT}"
       - name: Run TTNN Pytests - ${{ matrix.test-group.name }}
         env:
           TEST_CMD: ${{ matrix.test-group.cmd }}
@@ -296,7 +296,7 @@ jobs:
           exit 1
 
   ttsim-cpp-unit-tests:
-    if: ${{ inputs.run-metal-cpp-unit-tests }}
+    if: inputs.run-metal-cpp-unit-tests
     runs-on: tt-ubuntu-2204-small-stable
     timeout-minutes: ${{ inputs.job-timeout }}
     name: TTSim C++ tests - ${{ matrix.arch }}
@@ -342,7 +342,7 @@ jobs:
         run: |
           asset_suffix="${MATRIX_BUILD_SUFFIX}"
           asset_suffix="${asset_suffix#release_}"
-          echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "asset_name=libttsim_${asset_suffix}.so" >> "${GITHUB_OUTPUT}"
       - name: Download ttsim binary
         uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:
@@ -385,7 +385,7 @@ jobs:
             ./build/test/tt_metal/unit_tests_eth --gtest_filter="BlackholeSingleCardFixture.IdleEthKernelOnBothIdleEriscs"
           fi
   ttsim-galaxy-cpp-unit-tests:
-    if: ${{ inputs.run-metal-cpp-unit-tests }}
+    if: inputs.run-metal-cpp-unit-tests
     runs-on: tt-ubuntu-2204-large-stable
     timeout-minutes: ${{ inputs.job-timeout }}
     name: TTSim Galaxy C++ tests - ${{ matrix.arch }}
@@ -434,7 +434,7 @@ jobs:
         run: |
           asset_suffix="${MATRIX_BUILD_SUFFIX}"
           asset_suffix="${asset_suffix#release_}"
-          echo "asset_name=libttsim_${asset_suffix}.so" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "asset_name=libttsim_${asset_suffix}.so" >> "${GITHUB_OUTPUT}"
       - name: Download ttsim binary
         uses: robinraju/release-downloader@daf26c55d821e836577a15f77d86ddc078948b05 # v1.12
         with:

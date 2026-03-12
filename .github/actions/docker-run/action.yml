@@ -43,14 +43,18 @@ runs:
   using: composite
   steps:
     - name: Set docker image tag
-      if: ${{ inputs.docker_image }}
+      if: inputs.docker_image != ''
       shell: bash
       env:
         DOCKER_IMAGE: ${{ inputs.docker_image }}
       run: |
-        echo "TT_METAL_DOCKER_IMAGE_TAG=$DOCKER_IMAGE" >> $GITHUB_ENV
+        if [[ ! "${DOCKER_IMAGE}" =~ ^[a-zA-Z0-9._:/@-]+$ ]]; then
+          echo "::error::Invalid docker image reference: ${DOCKER_IMAGE}"
+          exit 1
+        fi
+        printf '%s\n' "TT_METAL_DOCKER_IMAGE_TAG=${DOCKER_IMAGE}" >> "${GITHUB_ENV}"
     - name: Determine docker image tag
-      if: ${{ ! inputs.docker_image }}
+      if: inputs.docker_image == ''
       uses: ./.github/actions/generate-docker-tag
       with:
         image: ${{ inputs.docker_os_arch || 'docker-image-unresolved!'}}
@@ -59,15 +63,15 @@ runs:
       env:
         FORWARD_CIV2_PROXY_ENV_VARS: ${{ inputs.forward_civ2_proxy_env_vars }}
       run: |
-        echo "RUNNER_UID=$(id -u)" >> $GITHUB_ENV
-        echo "RUNNER_GID=$(id -g)" >> $GITHUB_ENV
+        printf '%s\n' "RUNNER_UID=$(id -u)" >> "${GITHUB_ENV}"
+        printf '%s\n' "RUNNER_GID=$(id -g)" >> "${GITHUB_ENV}"
         if [ "$FORWARD_CIV2_PROXY_ENV_VARS" == "true" ]; then
-          echo "CIV2_HTTP_PROXY=$HTTP_PROXY" >> $GITHUB_ENV
-          echo "CIV2_http_proxy=$http_proxy" >> $GITHUB_ENV
-          echo "CIV2_HTTPS_PROXY=$HTTPS_PROXY" >> $GITHUB_ENV
-          echo "CIV2_https_proxy=$https_proxy" >> $GITHUB_ENV
-          echo "CIV2_NO_PROXY=$NO_PROXY" >> $GITHUB_ENV
-          echo "CIV2_no_proxy=$no_proxy" >> $GITHUB_ENV
+          printf '%s\n' "CIV2_HTTP_PROXY=${HTTP_PROXY}" >> "${GITHUB_ENV}"
+          printf '%s\n' "CIV2_http_proxy=${http_proxy}" >> "${GITHUB_ENV}"
+          printf '%s\n' "CIV2_HTTPS_PROXY=${HTTPS_PROXY}" >> "${GITHUB_ENV}"
+          printf '%s\n' "CIV2_https_proxy=${https_proxy}" >> "${GITHUB_ENV}"
+          printf '%s\n' "CIV2_NO_PROXY=${NO_PROXY}" >> "${GITHUB_ENV}"
+          printf '%s\n' "CIV2_no_proxy=${no_proxy}" >> "${GITHUB_ENV}"
         fi
     - name: Docker login
       uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
@@ -78,7 +82,7 @@ runs:
     - name: Pull docker image
       shell: bash
       run: |
-        docker pull ${{ env.TT_METAL_DOCKER_IMAGE_TAG }}
+        docker pull "${TT_METAL_DOCKER_IMAGE_TAG}"
     - uses: tenstorrent/docker-run-action@v6
       with:
         shell: bash

@@ -67,8 +67,8 @@ runs:
             nodeSelector:
               allocation.tenstorrent.com/allocated-by: ${ALLOCATION_NAME}
             image:
-              repository: ${{ env.WORKER_REPOSITORY }}
-              tag: ${{ env.WORKER_TAG }}
+              repository: ${WORKER_REPOSITORY}
+              tag: ${WORKER_TAG}
             deviceMountTypes:
               hostPath: true
               devicePlugin: false
@@ -85,7 +85,7 @@ runs:
       shell: bash
       run: |
         echo "Creating environment..."
-        echo "${{ env.ENVIRONMENT_MANIFEST }}" | kubectl -nttop apply -f -
+        echo "${ENVIRONMENT_MANIFEST}" | kubectl -nttop apply -f -
 
     - name: Wait for environment
       shell: bash

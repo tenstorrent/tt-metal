@@ -54,61 +54,85 @@ runs:
         INPUT_DEFAULT_VERSION: ${{ inputs.default-version }}
         INPUT_ENABLE_LTO: ${{ inputs.enable-lto }}
       run: |
-        # Helper function to output enable-lto value
-        # If user provided explicit override (true/false), use it; otherwise use platform default
+        # Reject values containing embedded newlines.  GITHUB_OUTPUT uses
+        # newlines as record delimiters (key=value\n), so a newline *inside*
+        # a value would inject a second, attacker-controlled output variable.
+        # The trailing \n added by printf '%s\n' below is the required
+        # record terminator — that one is intentional and safe.
+        for var_name in INPUT_PLATFORM INPUT_DISTRO INPUT_VERSION INPUT_DEFAULT_DISTRO INPUT_DEFAULT_VERSION INPUT_ENABLE_LTO; do
+          val="${!var_name}"
+          if [[ "${val}" == *$'\n'* ]] || [[ "${val}" == *$'\r'* ]]; then
+            echo "::error::Input ${var_name} contains newline characters"
+            exit 1
+          fi
+        done
+
         output_enable_lto() {
           local platform_default="$1"
           if [ "$INPUT_ENABLE_LTO" = "true" ] || [ "$INPUT_ENABLE_LTO" = "false" ]; then
-            echo "enable-lto=$INPUT_ENABLE_LTO" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "enable-lto=${INPUT_ENABLE_LTO}" >> "$GITHUB_OUTPUT"
           else
-            echo "enable-lto=$platform_default" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "enable-lto=${platform_default}" >> "$GITHUB_OUTPUT"
           fi
         }
 
-        # Parse platform dropdown if provided, otherwise use direct inputs or defaults
         if [ -n "$INPUT_PLATFORM" ]; then
           case "$INPUT_PLATFORM" in
             "Ubuntu 22.04")
-              echo "distro=ubuntu" >> "$GITHUB_OUTPUT"
-              echo "version=22.04" >> "$GITHUB_OUTPUT"
-              echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+              printf '%s\n' "distro=ubuntu" >> "$GITHUB_OUTPUT"
+              printf '%s\n' "version=22.04" >> "$GITHUB_OUTPUT"
+              printf '%s\n' "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
               output_enable_lto "false"
               ;;
             "Ubuntu 24.04")
-              echo "distro=ubuntu" >> "$GITHUB_OUTPUT"
-              echo "version=24.04" >> "$GITHUB_OUTPUT"
-              echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+              printf '%s\n' "distro=ubuntu" >> "$GITHUB_OUTPUT"
+              printf '%s\n' "version=24.04" >> "$GITHUB_OUTPUT"
+              printf '%s\n' "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
               output_enable_lto "false"
               ;;
             *)
-              # Unknown platform, use legacy fallback
-              echo "distro=$INPUT_DEFAULT_DISTRO" >> "$GITHUB_OUTPUT"
-              echo "version=$INPUT_DEFAULT_VERSION" >> "$GITHUB_OUTPUT"
-              echo "toolchain=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+              if [[ ! "${INPUT_DEFAULT_DISTRO}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+                echo "::error::Invalid default-distro: ${INPUT_DEFAULT_DISTRO}"
+                exit 1
+              fi
+              if [[ ! "${INPUT_DEFAULT_VERSION}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+                echo "::error::Invalid default-version: ${INPUT_DEFAULT_VERSION}"
+                exit 1
+              fi
+              printf '%s\n' "distro=${INPUT_DEFAULT_DISTRO}" >> "$GITHUB_OUTPUT"
+              printf '%s\n' "version=${INPUT_DEFAULT_VERSION}" >> "$GITHUB_OUTPUT"
+              printf '%s\n' "toolchain=cmake/x86_64-linux-clang-17-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
               output_enable_lto "false"
               ;;
           esac
         else
-          # No platform dropdown, use direct inputs or defaults
           DISTRO="$INPUT_DISTRO"
           VERSION="$INPUT_VERSION"
           [ -z "$DISTRO" ] && DISTRO="$INPUT_DEFAULT_DISTRO"
           [ -z "$VERSION" ] && VERSION="$INPUT_DEFAULT_VERSION"
 
-          echo "distro=$DISTRO" >> "$GITHUB_OUTPUT"
-          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          if [[ ! "${DISTRO}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+            echo "::error::Invalid distro: ${DISTRO}"
+            exit 1
+          fi
+          if [[ ! "${VERSION}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+            echo "::error::Invalid version: ${VERSION}"
+            exit 1
+          fi
 
-          # Determine toolchain based on distro
+          printf '%s\n' "distro=${DISTRO}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "version=${VERSION}" >> "$GITHUB_OUTPUT"
+
           if [ "$DISTRO" = "ubuntu" ]; then
             if [ "$VERSION" = "24.04" ] || [ "$VERSION" = "22.04" ]; then
-              echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+              printf '%s\n' "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
               output_enable_lto "false"
             else
-              echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+              printf '%s\n' "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
               output_enable_lto "false"
             fi
           else
-            echo "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "toolchain=cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake" >> "$GITHUB_OUTPUT"
             output_enable_lto "false"
           fi
         fi

@@ -32,8 +32,8 @@ on:
 
 permissions:
   contents: read
-  pull-requests: write
-  issues: write
+  pull-requests: write  # NOLINT(24) - required for posting CODEOWNERS analysis comments
+  issues: write  # NOLINT(24) - required for adding reactions to comments
 
 jobs:
   parse-comment:
@@ -63,6 +63,18 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           CODEOWNERS_GROUP_ANALYSIS_PAT: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
         run: |
+          # Validate inputs from github.event to prevent newline injection
+          for var_name in PR_NUMBER COMMENT_AUTHOR COMMENT_ID; do
+            val="${!var_name}"
+            if [[ "${val}" == *$'\n'* ]] || [[ "${val}" == *$'\r'* ]]; then
+              echo "::error::${var_name} contains newlines"
+              exit 1
+            fi
+          done
+          if ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
+            echo "::error::PR_NUMBER is not numeric: ${PR_NUMBER}"
+            exit 1
+          fi
 
           printf '%s\n' "Comment body: $COMMENT_BODY"
           printf '%s\n' "PR number: $PR_NUMBER"
@@ -89,8 +101,8 @@ jobs:
             # HTTP 204 = member, HTTP 404 = not a member or private membership, HTTP 302 = public member
             if [ "$MEMBERSHIP_HTTP_CODE" = "204" ] || [ "$MEMBERSHIP_HTTP_CODE" = "302" ]; then
               echo "✅ User $COMMENT_AUTHOR is a member of tenstorrent organization"
-              echo "should-run=true" >> $GITHUB_OUTPUT
-              echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
+              printf '%s\n' "should-run=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "pr-number=${PR_NUMBER}" >> "${GITHUB_OUTPUT}"
 
               # Get PR branch information
               PR_API="https://api.github.com/repos/$GITHUB_REPOSITORY/pulls/$PR_NUMBER"
@@ -99,16 +111,16 @@ jobs:
                              "$PR_API")
 
               BRANCH=$(echo "$PR_DATA" | jq -r '.head.ref')
-              echo "branch=$BRANCH" >> $GITHUB_OUTPUT
+              printf '%s\n' "branch=${BRANCH}" >> "${GITHUB_OUTPUT}"
               echo "Found branch: $BRANCH"
 
               # Parse command options
               if printf '%s\n' "$COMMENT_BODY" | grep -E "^/codeowners?\s+bypass(\s|$)" > /dev/null; then
-                echo "create-new-comment=false" >> $GITHUB_OUTPUT
-                echo "ping-pending-owners=false" >> $GITHUB_OUTPUT
-                echo "send-slack-notification=false" >> $GITHUB_OUTPUT
-                echo "is-direct-ping=false" >> $GITHUB_OUTPUT
-                echo "is-bypass-command=true" >> $GITHUB_OUTPUT
+                printf '%s\n' "create-new-comment=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "ping-pending-owners=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "send-slack-notification=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "is-direct-ping=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "is-bypass-command=true" >> "${GITHUB_OUTPUT}"
                 echo "Command: bypass approval"
 
                 # Check if user is member of metalium-developers-infra team
@@ -120,41 +132,41 @@ jobs:
                 # Verify the API call was successful and returned valid JSON
                 if ! echo "$INFRA_MEMBERS_DATA" | jq -e '.[0]' > /dev/null 2>&1; then
                   echo "❌ Failed to fetch team members, denying access"
-                  echo "bypass-authorized=false" >> $GITHUB_OUTPUT
+                  printf '%s\n' "bypass-authorized=false" >> "${GITHUB_OUTPUT}"
                 else
                   # Use jq to perform exact username matching
                   IS_MEMBER=$(echo "$INFRA_MEMBERS_DATA" | jq -r --arg user "$COMMENT_AUTHOR" '[.[].login] | contains([$user])')
                   if [ "$IS_MEMBER" = "true" ]; then
                     echo "✅ User $COMMENT_AUTHOR is authorized (metalium-developers-infra member)"
-                    echo "bypass-authorized=true" >> $GITHUB_OUTPUT
+                    printf '%s\n' "bypass-authorized=true" >> "${GITHUB_OUTPUT}"
                   else
                     echo "❌ User $COMMENT_AUTHOR is NOT authorized (not in metalium-developers-infra)"
-                    echo "bypass-authorized=false" >> $GITHUB_OUTPUT
+                    printf '%s\n' "bypass-authorized=false" >> "${GITHUB_OUTPUT}"
                   fi
                 fi
               elif printf '%s\n' "$COMMENT_BODY" | grep -E "^/codeowners?\s+new(\s|$)" > /dev/null; then
-                echo "create-new-comment=true" >> $GITHUB_OUTPUT
-                echo "ping-pending-owners=false" >> $GITHUB_OUTPUT
-                echo "send-slack-notification=false" >> $GITHUB_OUTPUT
-                echo "is-direct-ping=false" >> $GITHUB_OUTPUT
-                echo "is-bypass-command=false" >> $GITHUB_OUTPUT
-                echo "bypass-authorized=false" >> $GITHUB_OUTPUT
+                printf '%s\n' "create-new-comment=true" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "ping-pending-owners=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "send-slack-notification=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "is-direct-ping=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "is-bypass-command=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "bypass-authorized=false" >> "${GITHUB_OUTPUT}"
                 echo "Command: new comment"
               elif printf '%s\n' "$COMMENT_BODY" | grep -E "^/codeowners?\s+ping(\s|$)" > /dev/null; then
-                echo "create-new-comment=false" >> $GITHUB_OUTPUT
-                echo "ping-pending-owners=true" >> $GITHUB_OUTPUT
-                echo "send-slack-notification=true" >> $GITHUB_OUTPUT
-                echo "is-direct-ping=false" >> $GITHUB_OUTPUT
-                echo "is-bypass-command=false" >> $GITHUB_OUTPUT
-                echo "bypass-authorized=false" >> $GITHUB_OUTPUT
+                printf '%s\n' "create-new-comment=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "ping-pending-owners=true" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "send-slack-notification=true" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "is-direct-ping=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "is-bypass-command=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "bypass-authorized=false" >> "${GITHUB_OUTPUT}"
                 echo "Command: ping owners"
               elif printf '%s\n' "$COMMENT_BODY" | grep -E "^/ping\s+" > /dev/null; then
-                echo "create-new-comment=false" >> $GITHUB_OUTPUT
-                echo "ping-pending-owners=false" >> $GITHUB_OUTPUT
-                echo "send-slack-notification=true" >> $GITHUB_OUTPUT
-                echo "is-direct-ping=true" >> $GITHUB_OUTPUT
-                echo "is-bypass-command=false" >> $GITHUB_OUTPUT
-                echo "bypass-authorized=false" >> $GITHUB_OUTPUT
+                printf '%s\n' "create-new-comment=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "ping-pending-owners=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "send-slack-notification=true" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "is-direct-ping=true" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "is-bypass-command=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "bypass-authorized=false" >> "${GITHUB_OUTPUT}"
                 echo "Command: direct ping"
 
                 # Extract GitHub usernames and optional author notes from /ping command
@@ -184,12 +196,12 @@ jobs:
                 fi
               else
                 # Default: update existing comment
-                echo "create-new-comment=false" >> $GITHUB_OUTPUT
-                echo "ping-pending-owners=false" >> $GITHUB_OUTPUT
-                echo "send-slack-notification=false" >> $GITHUB_OUTPUT
-                echo "is-direct-ping=false" >> $GITHUB_OUTPUT
-                echo "is-bypass-command=false" >> $GITHUB_OUTPUT
-                echo "bypass-authorized=false" >> $GITHUB_OUTPUT
+                printf '%s\n' "create-new-comment=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "ping-pending-owners=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "send-slack-notification=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "is-direct-ping=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "is-bypass-command=false" >> "${GITHUB_OUTPUT}"
+                printf '%s\n' "bypass-authorized=false" >> "${GITHUB_OUTPUT}"
                 echo "Command: update existing comment"
               fi
 
@@ -209,8 +221,8 @@ jobs:
                   fi
                 fi
               fi
-              echo "author-notes=$AUTHOR_NOTES" >> $GITHUB_OUTPUT
-              echo "comment-author=$COMMENT_AUTHOR" >> $GITHUB_OUTPUT
+              printf '%s\n' "author-notes=${AUTHOR_NOTES}" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "comment-author=${COMMENT_AUTHOR}" >> "${GITHUB_OUTPUT}"
 
               # Add success reaction
               curl -s -X POST \
@@ -222,7 +234,7 @@ jobs:
 
             else
               echo "❌ User $COMMENT_AUTHOR is not a member of tenstorrent organization (HTTP $MEMBERSHIP_HTTP_CODE)"
-              echo "should-run=false" >> $GITHUB_OUTPUT
+              printf '%s\n' "should-run=false" >> "${GITHUB_OUTPUT}"
 
               # Add unauthorized reaction
               curl -s -X POST \
@@ -249,7 +261,7 @@ jobs:
               rm -f "$TEMP_JSON_FILE"
             fi
           else
-            echo "should-run=false" >> $GITHUB_OUTPUT
+            printf '%s\n' "should-run=false" >> "${GITHUB_OUTPUT}"
             echo "Comment does not contain trigger commands"
           fi
 
@@ -292,20 +304,20 @@ jobs:
 
             if [ -n "$PR_NUMBER" ] && [ "$PR_NUMBER" != "null" ]; then
               echo "Found PR #$PR_NUMBER for branch $BRANCH"
-              echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
-              echo "pr-exists=true" >> $GITHUB_OUTPUT
+              printf '%s\n' "pr-number=${PR_NUMBER}" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "pr-exists=true" >> "${GITHUB_OUTPUT}"
             else
               echo "No open PR found for branch $BRANCH"
-              echo "pr-number=" >> $GITHUB_OUTPUT
-              echo "pr-exists=false" >> $GITHUB_OUTPUT
+              printf '%s\n' "pr-number=" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "pr-exists=false" >> "${GITHUB_OUTPUT}"
             fi
           else
             # Comment trigger - PR info is already available
             PR_NUMBER="$NEEDS_PARSE_COMMENT_PR_NUMBER"
             BRANCH="$NEEDS_PARSE_COMMENT_BRANCH"
             echo "Comment trigger - Using PR #$PR_NUMBER for branch $BRANCH"
-            echo "pr-number=$PR_NUMBER" >> $GITHUB_OUTPUT
-            echo "pr-exists=true" >> $GITHUB_OUTPUT
+            printf '%s\n' "pr-number=${PR_NUMBER}" >> "${GITHUB_OUTPUT}"
+            printf '%s\n' "pr-exists=true" >> "${GITHUB_OUTPUT}"
           fi
 
   bypass-approval:
@@ -528,7 +540,7 @@ jobs:
             APPROVED_REVIEWERS=""
           fi
 
-          echo "approved-reviewers=$APPROVED_REVIEWERS" >> $GITHUB_OUTPUT
+          printf '%s\n' "approved-reviewers=${APPROVED_REVIEWERS}" >> "${GITHUB_OUTPUT}"
 
   analyze-codeowners:
     needs: [find-pr, get-reviews, parse-comment]
@@ -2397,9 +2409,9 @@ jobs:
           echo "DEBUG: Final SELECTED_SLACK_GROUPS='$SELECTED_SLACK_GROUPS'"
           echo "DEBUG: NO_OWNERS_AVAILABLE='$NO_OWNERS_AVAILABLE'"
 
-          echo "selected-owners=$SELECTED_OWNERS" >> $GITHUB_OUTPUT
-          echo "selected-slack-groups=$SELECTED_SLACK_GROUPS" >> $GITHUB_OUTPUT
-          echo "no-owners-available=$NO_OWNERS_AVAILABLE" >> $GITHUB_OUTPUT
+          printf '%s\n' "selected-owners=${SELECTED_OWNERS}" >> "${GITHUB_OUTPUT}"
+          printf '%s\n' "selected-slack-groups=${SELECTED_SLACK_GROUPS}" >> "${GITHUB_OUTPUT}"
+          printf '%s\n' "no-owners-available=${NO_OWNERS_AVAILABLE}" >> "${GITHUB_OUTPUT}"
 
       - name: Send notifications
         if: needs.parse-comment.outputs.is-direct-ping != 'true'

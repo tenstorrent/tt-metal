@@ -114,12 +114,12 @@ jobs:
           /usr/bin/${PRODUCT}-validation-smoke --gtest_filter="MeshDispatchFixture.TensixFailOnDuplicateKernelCreationDataflow" || true
 
       - name: Clear coverage from warmup
-        if: ${{ inputs.upload-coverage }}
+        if: inputs.upload-coverage
         run: |
           rm -f /work/coverage/*.profraw || true
 
       - name: Set up env vars for watcher
-        if: ${{ inputs.enable-watcher == true }}
+        if: inputs.enable-watcher == true
         run: |
           echo "Enabling TT Metal Watcher"
           echo "TT_METAL_WATCHER=2" >> $GITHUB_ENV
@@ -139,7 +139,7 @@ jobs:
           /usr/bin/${PRODUCT}-validation-smoke
 
       - name: Merge LLVM coverage
-        if: ${{ inputs.upload-coverage }}
+        if: inputs.upload-coverage
         run: |
           shopt -s nullglob || true
           files=(/work/coverage/*.profraw)
@@ -150,7 +150,7 @@ jobs:
           fi
 
       - name: Export LCOV (llvm-cov)
-        if: ${{ inputs.upload-coverage }}
+        if: inputs.upload-coverage
         env:
           PRODUCT: ${{ inputs.product }}
         run: |
@@ -172,17 +172,17 @@ jobs:
 
       - name: Checkout repository for Codecov mapping
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-        if: ${{ inputs.upload-coverage }}
+        if: inputs.upload-coverage
         with:
           submodules: recursive
           fetch-depth: 1
 
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@0565865e4d760b5b4e15f6b79a277e7a5b5e2a3e # v5.4.0
-        if: ${{ !cancelled() && inputs.upload-coverage && (
+        if: "!cancelled() && inputs.upload-coverage && (
           (github.event_name == 'pull_request' && github.event.pull_request.head.repo.fork == false)
           || (github.event_name == 'push' && github.ref_name == 'main')
-          ) }}
+          )"
         env:
           CODECOV_TOKEN: ${{ secrets.CODECOV_TOKEN }}
         with:
@@ -193,7 +193,7 @@ jobs:
           verbose: true
 
       - name: workaround
-        if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
+        if: "!cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)"
         run: |
           # The test-reporting action runs git ls-files with no way to opt-out.
           # Give it a dummy repo so it doesn't fail.
@@ -201,7 +201,7 @@ jobs:
       - name: Test Report
         # Because of https://github.com/tenstorrent/tt-metal/issues/19413, only run for our repo
         # for now. No forks!
-        if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false) }}
+        if: "!cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false)"
         uses: phoenix-actions/test-reporting@f957cd93fc2d848d556fa0d03c57bc79127b6b5e # v15
         with:
           name: ${{ inputs.product }} ${{ inputs.runner }} smoke tests (${{ github.workflow }}, attempt ${{ github.run_attempt }})
@@ -210,7 +210,7 @@ jobs:
           working-directory: /work
 
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         timeout-minutes: 10
         with:
           path: /work/test-reports/

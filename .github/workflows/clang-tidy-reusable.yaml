@@ -68,7 +68,7 @@ jobs:
       - name: Check Redis credentials
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
         env:
           REDIS_USER: ${{ vars.REDIS_USER }}
           REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
@@ -107,7 +107,7 @@ jobs:
         run: git config --global --add safe.directory /work
 
       - name: Check out baseline
-        if: ${{ inputs.do-full-scan != 'true' }}
+        if: inputs.do-full-scan != 'true'
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.merge-base }}
@@ -129,20 +129,20 @@ jobs:
             -DCMAKE_C_CLANG_TIDY="$CLANG_TIDY_CMD"
 
       - name: Prepare baseline ccache summary
-        if: ${{ inputs.do-full-scan != 'true' }}
+        if: inputs.do-full-scan != 'true'
         run: |
           # Zero out the stats so we can see how we did this build
           # NOTE: may be inaccurate if we have >1 build runner on the same machine, using the same local cache
           ccache -z
 
       - name: 🛠️ Baseline Build
-        if: ${{ inputs.do-full-scan != 'true' }}
+        if: inputs.do-full-scan != 'true'
         timeout-minutes: 60
         run: |
           cmake --build --preset clang-tidy
 
       - name: Publish Ccache summary
-        if: ${{ inputs.do-full-scan != 'true' }}
+        if: inputs.do-full-scan != 'true'
         run: |
           echo '## CCache Summary' >> $GITHUB_STEP_SUMMARY
           echo '```' >> $GITHUB_STEP_SUMMARY
@@ -164,7 +164,7 @@ jobs:
           ccache -z
 
       - name: Build prerequisite targets (without analysis)
-        if: ${{ inputs.prereq-targets != '' }}
+        if: inputs.prereq-targets != ''
         timeout-minutes: 30
         env:
           PREREQ_TARGETS: ${{ inputs.prereq-targets }}

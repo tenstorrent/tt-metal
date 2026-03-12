@@ -156,7 +156,7 @@ jobs:
 
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
-    if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
+    if: always() && !failure() && !cancelled() && inputs.ci-build-docker-image == ''
     uses: ./.github/workflows/build-docker-artifact.yaml
     permissions:
       packages: write
@@ -169,9 +169,9 @@ jobs:
     name: 🤖 Clang Tidy (Full)
     needs: [build-docker-image, determine-scan-type]
     if: >-
-      ${{ always() && !failure() && !cancelled() &&
-          needs.determine-scan-type.outputs.do-scan == 'true' &&
-          needs.determine-scan-type.outputs.do-full-scan == 'true' }}
+      always() && !failure() && !cancelled() &&
+      needs.determine-scan-type.outputs.do-scan == 'true' &&
+      needs.determine-scan-type.outputs.do-full-scan == 'true'
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets:
       REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
@@ -192,9 +192,9 @@ jobs:
     name: 🤖 Clang Tidy (Metalium)
     needs: [build-docker-image, determine-scan-type]
     if: >-
-      ${{ always() && !failure() && !cancelled() &&
-          needs.determine-scan-type.outputs.do-scan == 'true' &&
-          needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+      always() && !failure() && !cancelled() &&
+      needs.determine-scan-type.outputs.do-scan == 'true' &&
+      needs.determine-scan-type.outputs.do-full-scan != 'true'
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets:
       REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
@@ -214,9 +214,9 @@ jobs:
     name: 🤖 Clang Tidy (TTNN)
     needs: [build-docker-image, determine-scan-type]
     if: >-
-      ${{ always() && !failure() && !cancelled() &&
-          needs.determine-scan-type.outputs.do-scan == 'true' &&
-          needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+      always() && !failure() && !cancelled() &&
+      needs.determine-scan-type.outputs.do-scan == 'true' &&
+      needs.determine-scan-type.outputs.do-full-scan != 'true'
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets:
       REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
@@ -236,9 +236,9 @@ jobs:
     name: 🤖 Clang Tidy (catchall)
     needs: [build-docker-image, determine-scan-type]
     if: >-
-      ${{ always() && !failure() && !cancelled() &&
-          needs.determine-scan-type.outputs.do-scan == 'true' &&
-          needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+      always() && !failure() && !cancelled() &&
+      needs.determine-scan-type.outputs.do-scan == 'true' &&
+      needs.determine-scan-type.outputs.do-full-scan != 'true'
     uses: ./.github/workflows/clang-tidy-reusable.yaml
     secrets:
       REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
@@ -258,8 +258,8 @@ jobs:
     name: 🔬 Clang Static Analyzer
     needs: [build-docker-image]
     if: >-
-      ${{ always() && !failure() && !cancelled() &&
-          (inputs.enable-static-analysis == true || github.event_name == 'schedule') }}
+      always() && !failure() && !cancelled() &&
+      (inputs.enable-static-analysis == true || github.event_name == 'schedule')
     timeout-minutes: 300
     runs-on: tt-ubuntu-2204-xlarge-stable
     container:
@@ -392,8 +392,8 @@ jobs:
     needs: [clang-static-analyzer]
     # Only publish on full scans (skip when debug-file-filter is used)
     if: >-
-      ${{ always() && needs.clang-static-analyzer.result == 'success' &&
-          inputs.debug-file-filter == '' }}
+      always() && needs.clang-static-analyzer.result == 'success' &&
+      inputs.debug-file-filter == ''
     runs-on: ubuntu-latest
     steps:
       - name: Download CodeChecker HTML report

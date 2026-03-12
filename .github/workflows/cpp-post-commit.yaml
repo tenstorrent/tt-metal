@@ -191,8 +191,7 @@ jobs:
       - name:
           ${{ matrix.test-group.name }} tests
           #GH Issue 16167
-        if: ${{ !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools')
-          }}
+        if: !(inputs.runner-label == 'BH' && matrix.test-group.name == 'tools')
         timeout-minutes: ${{ inputs.nightly-run && 45 || inputs.timeout }}
         env:
           GTEST_FILTER_INPUT: ${{ inputs.gtest_filter }}
@@ -209,15 +208,15 @@ jobs:
           chmod +x /tmp/test_cmd.sh
           bash /tmp/test_cmd.sh
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
+        if: failure()
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U06CXU895AP # Michael Chiou
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         with:
           prefix: test_reports_
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
-        if: ${{ failure() }}
+        if: failure()

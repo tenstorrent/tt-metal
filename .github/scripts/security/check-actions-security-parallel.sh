@@ -71,11 +71,11 @@ RESULTS_FILE=$(mktemp)
 RESULTS_DIR=$(mktemp -d)
 trap 'rm -f "${RESULTS_FILE}"; rm -rf "${RESULTS_DIR}"' EXIT
 
-# Default to finding all files if none provided
+# Default to finding all files if none provided (use relative paths for cleaner output)
 if [[ ${#FILES[@]} -eq 0 ]]; then
     while IFS= LC_ALL=C read -r -d '' f; do
         FILES+=("${f}")
-    done < <(find "${GITHUB_DIR}/workflows" "${GITHUB_DIR}/actions" \
+    done < <(cd "${REPO_ROOT}" && find .github/workflows .github/actions \
         \( -name "*.yml" -o -name "*.yaml" \) -print0 2>/dev/null || true)
 fi
 
@@ -155,4 +155,8 @@ if [[ "${STRICT_MODE}" == "true" ]]; then
     format_args+=("--strict")
 fi
 
-exec "${MAIN_SCRIPT}" "${format_args[@]}"
+# Run in a subshell and capture exit code; avoid exec so the EXIT trap
+# cleanup of temp files happens AFTER formatting completes.
+rc=0
+"${MAIN_SCRIPT}" "${format_args[@]}" || rc=$?
+exit "${rc}"

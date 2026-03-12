@@ -93,12 +93,12 @@ jobs:
     # Check if triggered by `workflow_run` with specific conclusion states,
     # or if it's triggered by `workflow_call` or `workflow_dispatch`
     if: >-
-      ${{ (github.event_name == 'workflow_run' &&
+      (github.event_name == 'workflow_run' &&
            (github.event.workflow_run.conclusion == 'success' ||
             github.event.workflow_run.conclusion == 'failure' ||
             github.event.workflow_run.conclusion == 'cancelled')) ||
           github.event_name == 'workflow_call' ||
-          github.event_name == 'workflow_dispatch' }}
+          github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
@@ -200,14 +200,14 @@ jobs:
         run: ls -hal
       - name: Upload cicd data
         uses: ./.github/actions/upload-data-via-sftp
-        if: ${{ github.event_name == 'workflow_run' || inputs.upload_data }}
+        if: github.event_name == 'workflow_run' || inputs.upload_data
         with:
           ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/cicd_data_batchfile.txt
           username: ${{ secrets.SFTP_CICD_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_CICD_WRITER_HOSTNAME }}
       - name: Upload workflow run data, even on failure
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
@@ -219,7 +219,7 @@ jobs:
               workflow.json
               workflow_jobs.json
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
+        if: failure()
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U0883RN6CRE # William Ly
@@ -227,12 +227,12 @@ jobs:
     # Check if triggered by `workflow_run` with specific conclusion states,
     # or if it's triggered by `workflow_call` or `workflow_dispatch`
     if: >-
-      ${{ (github.event_name == 'workflow_run' &&
+      (github.event_name == 'workflow_run' &&
            (github.event.workflow_run.conclusion == 'success' ||
             github.event.workflow_run.conclusion == 'failure' ||
             github.event.workflow_run.conclusion == 'cancelled')) ||
           github.event_name == 'workflow_call' ||
-          github.event_name == 'workflow_dispatch' }}
+          github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
