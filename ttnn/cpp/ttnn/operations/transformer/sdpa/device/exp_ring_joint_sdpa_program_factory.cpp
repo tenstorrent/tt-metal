@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_program_factory.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_subblock_utils.hpp"
 
 #include <algorithm>
@@ -15,6 +15,7 @@
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
+#include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
 
@@ -22,11 +23,11 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
-RingJointSDPAProgramFactory::cached_mesh_workload_t RingJointSDPAProgramFactory::create_mesh_workload(
-    const RingJointSDPAParams& args,
+ExpRingJointSDPAProgramFactory::cached_mesh_workload_t ExpRingJointSDPAProgramFactory::create_mesh_workload(
+    const ExpRingJointSDPAParams& args,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
-    const RingJointSDPAInputs& tensor_args,
-    RingJointSDPAResult& output_tensors) {
+    const ExpRingJointSDPAInputs& tensor_args,
+    ExpRingJointSDPAResult& output_tensors) {
     tt::tt_metal::distributed::MeshWorkload mesh_workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_vars;
 
@@ -39,11 +40,11 @@ RingJointSDPAProgramFactory::cached_mesh_workload_t RingJointSDPAProgramFactory:
     return cached_mesh_workload_t{std::move(mesh_workload), std::move(shared_vars)};
 }
 
-RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::create_at(
-    const RingJointSDPAParams& args,
+ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory::create_at(
+    const ExpRingJointSDPAParams& args,
     const ttnn::MeshCoordinate& coord,
-    const RingJointSDPAInputs& tensor_args,
-    RingJointSDPAResult& output_tensors) {
+    const ExpRingJointSDPAInputs& tensor_args,
+    ExpRingJointSDPAResult& output_tensors) {
     /*
     The QKV inputs are fractured on the sequence dimension across ring_size.
     The sequence length comes in padded such that it is divisible by `TILE_HEIGHT * ring_size`.
@@ -100,9 +101,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
     const auto& gathered_input_tensor_v = tensor_args.gathered_v;
 
-    auto& output_tensor = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX];
-    auto& joint_output_tensor = output_tensors[RING_JOINT_SDPA_JOINT_OUTPUT_IDX];
-    auto& stats_output_tensor = output_tensors[RING_JOINT_SDPA_STATS_OUTPUT_IDX];
+    auto& output_tensor = output_tensors[EXP_RING_JOINT_SDPA_OUTPUT_IDX];
+    auto& joint_output_tensor = output_tensors[EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX];
+    auto& stats_output_tensor = output_tensors[EXP_RING_JOINT_SDPA_STATS_OUTPUT_IDX];
 
     std::size_t q_chunk_size = args.get_q_chunk_size();
     std::size_t k_chunk_size = args.get_k_chunk_size();
@@ -111,21 +112,21 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     auto* mesh_device = input_tensor_q.device();
     uint32_t device_index = ccl::get_linearized_index_from_physical_coord(
-        input_tensor_q, coord, args.all_gather_operation_attributes.cluster_axis);
+        input_tensor_q, coord, args.cluster_axis);
 
     std::optional<MeshCoordinate> forward_coord = ccl::get_physical_neighbor_from_physical_coord(
         input_tensor_q,
         coord,
         1,
-        args.all_gather_operation_attributes.topology,
-        args.all_gather_operation_attributes.cluster_axis);
+        args.topology,
+        args.cluster_axis);
 
     std::optional<MeshCoordinate> backward_coord = ccl::get_physical_neighbor_from_physical_coord(
         input_tensor_q,
         coord,
         -1,
-        args.all_gather_operation_attributes.topology,
-        args.all_gather_operation_attributes.cluster_axis);
+        args.topology,
+        args.cluster_axis);
 
     auto scale = args.scale;
     if (not scale.has_value()) {
@@ -135,25 +136,23 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     std::optional<ttnn::prim::RingSDPAFusedOpSignaler> sdpa_fused_op_signaler = ttnn::prim::RingSDPAFusedOpSignaler();
 
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] = ccl::get_forward_backward_configuration(
-        args.all_gather_operation_attributes.ring_size, device_index, args.all_gather_operation_attributes.topology);
-    if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring && device_index % 2 == 0) {
+        args.ring_size, device_index, args.topology);
+    if (args.topology == ttnn::ccl::Topology::Ring && device_index % 2 == 0) {
         std::swap(num_targets_forward, num_targets_backward);
     }
 
     uint32_t forward_writes_expected, backward_writes_expected;
-    if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Linear) {
+    if (args.topology == ttnn::ccl::Topology::Linear) {
         forward_writes_expected = num_targets_backward;
         backward_writes_expected = num_targets_forward;
     } else {
-        TT_FATAL(
-            args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring,
-            "Topology must be Linear or Ring");
+        TT_FATAL(args.topology == ttnn::ccl::Topology::Ring, "Topology must be Linear or Ring");
         forward_writes_expected = num_targets_forward;
         backward_writes_expected = num_targets_backward;
     }
     // Minimally use matmul fused op signaler
     sdpa_fused_op_signaler->init_all_gather(
-        args.all_gather_operation_attributes.ring_size,
+        args.ring_size,
         device_index,
         forward_writes_expected,
         backward_writes_expected);
@@ -381,7 +380,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
-        args.all_gather_operation_attributes.ring_size,
+        args.ring_size,
         qk_out_subblock_h};
 
     TensorAccessorArgs(input_tensor_q.buffer()).append_to(reader_compile_time_args);
@@ -427,7 +426,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_q_chunks,
         packed_identity_scalar,
         scale_union.u,
-        args.all_gather_operation_attributes.ring_size,
+        args.ring_size,
         global_n_partial_col,
         joint_l_partial_col,
         (std::uint32_t)use_streaming_compute,
@@ -466,7 +465,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         num_local_k_chunks,
         num_joint_k_chunks,
         num_q_chunks,
-        args.all_gather_operation_attributes.ring_size,
+        args.ring_size,
         qk_in0_block_w,
         qk_out_subblock_w,
         qk_out_subblock_h,
@@ -711,7 +710,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     log_info(
         tt::LogOp,
-        "[RingJointSDPA] grid={}x{}={} cores, B={}, NH={}, num_q_chunks={}({} local+{} joint), "
+        "[ExpRingJointSDPA] grid={}x{}={} cores, B={}, NH={}, num_q_chunks={}({} local+{} joint), "
         "base_chunks_per_core={} (+{} extras)",
         grid_size.x,
         grid_size.y,
@@ -866,7 +865,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         }
         log_info(
             tt::LogOp,
-            "[RingJointSDPA] {} chains ({})",
+            "[ExpRingJointSDPA] {} chains ({})",
             num_chains,
             hist_str.empty() ? "none" : hist_str);
     }
@@ -1073,7 +1072,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     log_info(
         tt::LogOp,
-        "[RingJointSDPA] mcast: {} ({}/{} chains)",
+        "[ExpRingJointSDPA] mcast: {} ({}/{} chains)",
         mcast_chains > 0 ? "ENABLED" : "DISABLED",
         mcast_chains,
         mcast_chains > 0 ? mcast_chains : static_cast<uint32_t>(
@@ -1085,19 +1084,19 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     // Create kernels (deferred until after chain construction for mcast_enabled flag)
     auto reader_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_reader.cpp",
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_reader.cpp",
         core_grid,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
 
     auto writer_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_writer.cpp",
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_writer.cpp",
         core_grid,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
 
     auto compute_kernels_id = CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/ring_joint_sdpa.cpp",
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/compute/exp_ring_joint_sdpa.cpp",
         core_grid,
         tt::tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
@@ -1195,6 +1194,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
     }
 
+    // ---- Inline CCL (all-gather) kernel creation ----
     std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> all_gather_fused_op_signaler =
         ttnn::experimental::ccl::AllGatherFusedOpSignaler();
 
@@ -1203,51 +1203,449 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         sdpa_fused_op_signaler->fused_op_receiver_signal_semaphores,
         sdpa_fused_op_signaler->fused_op_signaler_mode);
 
-    std::vector<Tensor> all_gather_input_tensors = {
-        input_tensor_k,
-        input_tensor_v,
-    };
-    std::vector<Tensor> all_gather_output_tensors = {
-        gathered_input_tensor_k,
-        gathered_input_tensor_v,
-    };
-    auto all_gather_shared_variables = ring_attention_all_gather_async_multi_core_with_workers_helper(
-        program,  // Must pass ring_joint_sdpa's program
-        all_gather_input_tensors,
-        coord,
-        forward_coord,
-        backward_coord,
-        all_gather_output_tensors,
-        args.all_gather_operation_attributes.dim,
-        args.all_gather_operation_attributes.num_links,
-        args.all_gather_operation_attributes.ring_size,
-        device_index,
-        args.all_gather_operation_attributes.topology,
-        args.all_gather_operation_attributes.semaphore,
-        args.all_gather_operation_attributes.sub_device_id,
-        all_gather_fused_op_signaler,
+    const bool fuse_op = true;
+
+    // Build input/output tensor lists for the all-gather
+    std::vector<Tensor> all_gather_input_tensors = {input_tensor_k, input_tensor_v};
+    std::vector<Tensor> all_gather_output_tensors = {gathered_input_tensor_k, gathered_input_tensor_v};
+    const uint32_t ccl_num_inputs = all_gather_input_tensors.size();
+
+    const auto& op_config = ttnn::ccl::CCLOpConfig(all_gather_input_tensors, all_gather_output_tensors, args.topology);
+
+    // Choose CCL worker cores: 2 senders (forward/backward) per link
+    const auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
+        args.num_links,
+        2 /*num_senders_per_link*/,
+        mesh_device,
+        args.sub_device_id,
         args.ccl_core_grid_offset,
-        args.all_gather_operation_attributes.core_allocation_strategy);
+        std::nullopt,
+        args.core_allocation_strategy);
+
+    // Odd-indexed cores → forward; even-indexed → backward
+    std::set<CoreRange> sender_forward_core_ranges;
+    std::set<CoreRange> sender_backward_core_ranges;
+    for (int i = 0; i < static_cast<int>(sender_worker_cores.size()); i++) {
+        if (i % 2 == 1) {
+            sender_forward_core_ranges.insert(CoreRange(sender_worker_cores[i]));
+        } else {
+            sender_backward_core_ranges.insert(CoreRange(sender_worker_cores[i]));
+        }
+    }
+
+    // L1 scratch CBs
+    const size_t packet_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    const uint32_t l1_scratch_cb_page_size_bytes = op_config.get_page_size();
+    const uint32_t max_scatter_write_pages = 2;
+    const uint32_t num_pages_per_packet =
+        std::min(static_cast<uint32_t>(packet_size_bytes / l1_scratch_cb_page_size_bytes), max_scatter_write_pages);
+    const uint32_t cb_num_pages = 3 * num_pages_per_packet;  // triple buffering
+    const tt::DataFormat ccl_df = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_k.dtype());
+
+    uint32_t sender_forward_cb_index = tt::CB::c_in0;
+    tt::tt_metal::CreateCircularBuffer(
+        program,
+        sender_forward_core_ranges,
+        tt::tt_metal::CircularBufferConfig(
+            cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_forward_cb_index, ccl_df}})
+            .set_page_size(sender_forward_cb_index, l1_scratch_cb_page_size_bytes));
+
+    uint32_t sender_backward_cb_index = tt::CB::c_in2;
+    tt::tt_metal::CreateCircularBuffer(
+        program,
+        sender_backward_core_ranges,
+        tt::tt_metal::CircularBufferConfig(
+            cb_num_pages * l1_scratch_cb_page_size_bytes, {{sender_backward_cb_index, ccl_df}})
+            .set_page_size(sender_backward_cb_index, l1_scratch_cb_page_size_bytes));
+
+    const auto reserved_packet_header_forward_CB_index = tt::CB::c_in1;
+    static constexpr auto num_packet_headers_storable = 8;
+    const auto packet_header_size_bytes = tt::tt_fabric::get_tt_fabric_packet_header_size_bytes();
+    tt::tt_metal::CreateCircularBuffer(
+        program,
+        sender_forward_core_ranges,
+        tt::tt_metal::CircularBufferConfig(
+            num_packet_headers_storable * packet_header_size_bytes * 2,
+            {{reserved_packet_header_forward_CB_index, tt::DataFormat::RawUInt32}})
+            .set_page_size(reserved_packet_header_forward_CB_index, packet_header_size_bytes));
+
+    const auto reserved_packet_header_backward_CB_index = tt::CB::c_in1;
+    tt::tt_metal::CreateCircularBuffer(
+        program,
+        sender_backward_core_ranges,
+        tt::tt_metal::CircularBufferConfig(
+            num_packet_headers_storable * packet_header_size_bytes * 2,
+            {{reserved_packet_header_backward_CB_index, tt::DataFormat::RawUInt32}})
+            .set_page_size(reserved_packet_header_backward_CB_index, packet_header_size_bytes));
+
+    // Tensor info
+    const auto ccl_input_tensor_num_pages = all_gather_input_tensors[0].buffer()->num_pages();
+    const auto ccl_input_tensor_shape = all_gather_input_tensors[0].padded_shape();
+    const auto ccl_output_tensor_shape = all_gather_output_tensors[0].padded_shape();
+    const uint32_t tiles_to_write_per_packet = 1;
+
+    // Fused-op signalers
+    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_forward =
+        all_gather_fused_op_signaler.value();
+    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_backward =
+        all_gather_fused_op_signaler.value();
+    std::optional<ttnn::experimental::ccl::AllGatherFusedOpSignaler> fused_op_signaler_sender_workers =
+        all_gather_fused_op_signaler.value();
+
+    // Init fused op on all sets of CCL worker cores
+    {
+        auto sender_workers_forward = corerange_to_cores(sender_forward_core_ranges, std::nullopt, true);
+        auto sender_workers_backward = corerange_to_cores(sender_backward_core_ranges, std::nullopt, true);
+        fused_op_signaler_forward->init_all_gather(
+            program, mesh_device, sender_forward_core_ranges, sender_workers_forward);
+        fused_op_signaler_backward->init_all_gather(
+            program, mesh_device, sender_backward_core_ranges, sender_workers_backward);
+        fused_op_signaler_sender_workers->init_all_gather(
+            program, mesh_device, sender_forward_core_ranges, sender_workers_forward);
+    }
+
+    // Forward reader kernel
+    auto sender_reader_forward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
+    sender_reader_forward_kernel_config.compile_args = {
+        device_index,
+        sender_forward_cb_index,
+        num_pages_per_packet,
+        op_config.get_page_size(),
+        num_targets_forward,
+        num_targets_backward,
+        static_cast<uint32_t>(args.topology),
+        tiles_to_write_per_packet,
+        ccl_num_inputs,
+        1,          // direction (forward)
+        fuse_op,
+    };
+    for (uint32_t i = 0; i < ccl_num_inputs; i++) {
+        sender_reader_forward_kernel_config.compile_args.push_back(op_config.get_page_size());
+    }
+    for (uint32_t i = 0; i < ccl_num_inputs; i++) {
+        tt::tt_metal::TensorAccessorArgs(all_gather_input_tensors[i].buffer())
+            .append_to(sender_reader_forward_kernel_config.compile_args);
+    }
+    for (uint32_t i = 0; i < ccl_num_inputs; i++) {
+        tt::tt_metal::TensorAccessorArgs(all_gather_output_tensors[i].buffer())
+            .append_to(sender_reader_forward_kernel_config.compile_args);
+    }
+    auto ccl_reader_forward_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"
+        "ring_attention_all_gather_reader.cpp",
+        sender_forward_core_ranges,
+        sender_reader_forward_kernel_config);
+
+    // Forward writer kernel
+    auto sender_writer_forward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+    sender_writer_forward_kernel_config.compile_args = {
+        device_index,
+        reserved_packet_header_forward_CB_index,
+        num_packet_headers_storable,
+        sender_forward_cb_index,
+        num_pages_per_packet,
+        op_config.get_page_size(),
+        num_targets_forward,
+        num_targets_backward,
+        dynamic_alternate,
+        fuse_op,
+        static_cast<uint32_t>(args.topology),
+        tiles_to_write_per_packet,
+        ccl_num_inputs,
+        1,          // direction (forward)
+    };
+    for (uint32_t i = 0; i < ccl_num_inputs; i++) {
+        sender_writer_forward_kernel_config.compile_args.push_back(op_config.get_page_size());
+    }
+    for (uint32_t i = 0; i < ccl_num_inputs; i++) {
+        tt::tt_metal::TensorAccessorArgs(all_gather_output_tensors[i].buffer())
+            .append_to(sender_writer_forward_kernel_config.compile_args);
+    }
+    auto ccl_writer_forward_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"
+        "ring_attention_all_gather_writer.cpp",
+        sender_forward_core_ranges,
+        sender_writer_forward_kernel_config);
+
+    // Backward reader kernel
+    auto sender_reader_backward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
+    sender_reader_backward_kernel_config.compile_args = {
+        device_index,
+        sender_backward_cb_index,
+        num_pages_per_packet,
+        op_config.get_page_size(),
+        num_targets_forward,
+        num_targets_backward,
+        static_cast<uint32_t>(args.topology),
+        tiles_to_write_per_packet,
+        ccl_num_inputs,
+        0,          // direction (backward)
+        fuse_op,
+    };
+    for (uint32_t i = 0; i < ccl_num_inputs; i++) {
+        sender_reader_backward_kernel_config.compile_args.push_back(op_config.get_page_size());
+    }
+    for (uint32_t i = 0; i < ccl_num_inputs; i++) {
+        tt::tt_metal::TensorAccessorArgs(all_gather_input_tensors[i].buffer())
+            .append_to(sender_reader_backward_kernel_config.compile_args);
+    }
+    for (uint32_t i = 0; i < ccl_num_inputs; i++) {
+        tt::tt_metal::TensorAccessorArgs(all_gather_output_tensors[i].buffer())
+            .append_to(sender_reader_backward_kernel_config.compile_args);
+    }
+    auto ccl_reader_backward_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"
+        "ring_attention_all_gather_reader.cpp",
+        sender_backward_core_ranges,
+        sender_reader_backward_kernel_config);
+
+    // Backward writer kernel
+    auto sender_writer_backward_kernel_config = tt::tt_metal::ReaderDataMovementConfig{};
+    sender_writer_backward_kernel_config.compile_args = {
+        device_index,
+        reserved_packet_header_backward_CB_index,
+        num_packet_headers_storable,
+        sender_backward_cb_index,
+        num_pages_per_packet,
+        op_config.get_page_size(),
+        num_targets_forward,
+        num_targets_backward,
+        dynamic_alternate,
+        fuse_op,
+        static_cast<uint32_t>(args.topology),
+        tiles_to_write_per_packet,
+        ccl_num_inputs,
+        0,          // direction (backward)
+    };
+    for (uint32_t i = 0; i < ccl_num_inputs; i++) {
+        sender_writer_backward_kernel_config.compile_args.push_back(op_config.get_page_size());
+    }
+    for (uint32_t i = 0; i < ccl_num_inputs; i++) {
+        tt::tt_metal::TensorAccessorArgs(all_gather_output_tensors[i].buffer())
+            .append_to(sender_writer_backward_kernel_config.compile_args);
+    }
+    auto ccl_writer_backward_kernel_id = tt::tt_metal::CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"
+        "ring_attention_all_gather_writer.cpp",
+        sender_backward_core_ranges,
+        sender_writer_backward_kernel_config);
+
+    // CCL kernel runtime args
+    const uint32_t batch_head_size = ccl_input_tensor_shape[0] * ccl_input_tensor_shape[1];
+    const uint32_t single_batch_head_num_pages = ccl_input_tensor_num_pages / batch_head_size;
+
+    TT_ASSERT(!(ccl_input_tensor_shape[3] % tt::constants::TILE_WIDTH));
+    TT_ASSERT(!(ccl_output_tensor_shape[3] % tt::constants::TILE_WIDTH));
+    const uint32_t ccl_input_tensor_Wt = ccl_input_tensor_shape[3] / tt::constants::TILE_WIDTH;
+    const uint32_t ccl_input_tensor_Ht = ccl_input_tensor_shape[2] / tt::constants::TILE_WIDTH;
+    const uint32_t ccl_output_tensor_Wt = ccl_output_tensor_shape[3] / tt::constants::TILE_WIDTH;
+    const uint32_t ccl_output_tensor_Ht = ccl_output_tensor_shape[2] / tt::constants::TILE_WIDTH;
+
+    uint32_t ccl_reader_sender_rt_offset = 0;
+    uint32_t ccl_writer_sender_rt_offset = 0;
+
+    for (uint32_t link = 0; link < args.num_links; link++) {
+        const uint32_t base_pages_per_worker = single_batch_head_num_pages / args.num_links;
+        const uint32_t remainder = single_batch_head_num_pages % args.num_links;
+        const uint32_t input_tile_id_start = (link * base_pages_per_worker) + std::min(link, remainder);
+        const uint32_t input_tile_id_end = ((link + 1) * base_pages_per_worker) + std::min(link + 1, remainder);
+
+        std::vector<uint32_t> reader_forward_rt_args = {
+            ccl_input_tensor_Wt,
+            ccl_input_tensor_Ht,
+            ccl_output_tensor_Wt,
+            ccl_output_tensor_Ht,
+            static_cast<uint32_t>(args.dim),
+            batch_head_size,
+            input_tile_id_start,
+            input_tile_id_end,
+            static_cast<uint32_t>(args.ring_size),
+            args.semaphore.at(1).address(),
+        };
+        ccl_reader_sender_rt_offset = reader_forward_rt_args.size();
+        for (uint32_t input_idx = 0; input_idx < ccl_num_inputs; input_idx++) {
+            reader_forward_rt_args.push_back(all_gather_input_tensors[input_idx].buffer()->address());
+        }
+        for (uint32_t input_idx = 0; input_idx < ccl_num_inputs; input_idx++) {
+            reader_forward_rt_args.push_back(all_gather_output_tensors[input_idx].buffer()->address());
+        }
+        fused_op_signaler_forward->push_all_gather_fused_op_rt_args(reader_forward_rt_args, args.num_links, link, 1);
+        tt::tt_metal::SetRuntimeArgs(
+            program, ccl_reader_forward_kernel_id, {sender_worker_cores[(link * 2) + 1]}, reader_forward_rt_args);
+
+        std::vector<uint32_t> reader_backward_rt_args = {
+            ccl_input_tensor_Wt,
+            ccl_input_tensor_Ht,
+            ccl_output_tensor_Wt,
+            ccl_output_tensor_Ht,
+            static_cast<uint32_t>(args.dim),
+            batch_head_size,
+            input_tile_id_start,
+            input_tile_id_end,
+            static_cast<uint32_t>(args.ring_size),
+            args.semaphore.at(0).address(),
+        };
+        for (uint32_t input_idx = 0; input_idx < ccl_num_inputs; input_idx++) {
+            reader_backward_rt_args.push_back(all_gather_input_tensors[input_idx].buffer()->address());
+        }
+        for (uint32_t input_idx = 0; input_idx < ccl_num_inputs; input_idx++) {
+            reader_backward_rt_args.push_back(all_gather_output_tensors[input_idx].buffer()->address());
+        }
+        fused_op_signaler_backward->push_all_gather_fused_op_rt_args(reader_backward_rt_args, args.num_links, link, 0);
+        tt::tt_metal::SetRuntimeArgs(
+            program, ccl_reader_backward_kernel_id, {sender_worker_cores[link * 2]}, reader_backward_rt_args);
+
+        const CoreCoord sender_forward_worker_core =
+            mesh_device->worker_core_from_logical_core(sender_worker_cores[(link * 2) + 1]);
+        const CoreCoord sender_backward_worker_core =
+            mesh_device->worker_core_from_logical_core(sender_worker_cores[link * 2]);
+
+        std::vector<uint32_t> writer_forward_rt_args = {
+            ccl_input_tensor_Wt,
+            ccl_input_tensor_Ht,
+            ccl_output_tensor_Wt,
+            ccl_output_tensor_Ht,
+            static_cast<uint32_t>(args.dim),
+            batch_head_size,
+            input_tile_id_start,
+            input_tile_id_end,
+            sender_forward_worker_core.x,
+            sender_forward_worker_core.y,
+            static_cast<uint32_t>(args.ring_size),
+            args.semaphore.at(1).address(),
+        };
+        ccl_writer_sender_rt_offset = writer_forward_rt_args.size();
+        for (uint32_t input_idx = 0; input_idx < ccl_num_inputs; input_idx++) {
+            writer_forward_rt_args.push_back(all_gather_output_tensors[input_idx].buffer()->address());
+        }
+        writer_forward_rt_args.push_back(false);
+        writer_forward_rt_args.push_back(backward_coord.has_value());
+        if (backward_coord.has_value()) {
+            const auto target_fabric_node_id = mesh_device->get_fabric_node_id(coord);
+            const auto backward_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                target_fabric_node_id, backward_fabric_node_id, link, program,
+                sender_worker_cores[(link * 2) + 1], writer_forward_rt_args);
+        }
+        fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
+            writer_forward_rt_args, args.num_links, link, 1);
+        tt::tt_metal::SetRuntimeArgs(
+            program, ccl_writer_forward_kernel_id, sender_worker_cores[(link * 2) + 1], writer_forward_rt_args);
+
+        std::vector<uint32_t> writer_backward_rt_args = {
+            ccl_input_tensor_Wt,
+            ccl_input_tensor_Ht,
+            ccl_output_tensor_Wt,
+            ccl_output_tensor_Ht,
+            static_cast<uint32_t>(args.dim),
+            batch_head_size,
+            input_tile_id_start,
+            input_tile_id_end,
+            sender_backward_worker_core.x,
+            sender_backward_worker_core.y,
+            static_cast<uint32_t>(args.ring_size),
+            args.semaphore.at(0).address(),
+        };
+        for (uint32_t input_idx = 0; input_idx < ccl_num_inputs; input_idx++) {
+            writer_backward_rt_args.push_back(all_gather_output_tensors[input_idx].buffer()->address());
+        }
+        writer_backward_rt_args.push_back(forward_coord.has_value());
+        if (forward_coord.has_value()) {
+            const auto target_fabric_node_id = mesh_device->get_fabric_node_id(coord);
+            const auto forward_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                target_fabric_node_id, forward_fabric_node_id, link, program,
+                sender_worker_cores[link * 2], writer_backward_rt_args);
+        }
+        writer_backward_rt_args.push_back(false);
+        fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_backward_rt_args, 1, 0, 0);
+        tt::tt_metal::SetRuntimeArgs(
+            program, ccl_writer_backward_kernel_id, sender_worker_cores[link * 2], writer_backward_rt_args);
+    }
 
     return cached_program_t{
         std::move(program),
-        {num_cores, grid_size, reader_kernels_id, writer_kernels_id, compute_kernels_id, all_gather_shared_variables}};
+        {.num_cores = num_cores,
+         .grid_size = grid_size,
+         .reader_kernels_id = reader_kernels_id,
+         .writer_kernels_id = writer_kernels_id,
+         .compute_kernels_id = compute_kernels_id,
+         .ccl_reader_forward_kernel_id = ccl_reader_forward_kernel_id,
+         .ccl_writer_forward_kernel_id = ccl_writer_forward_kernel_id,
+         .ccl_reader_backward_kernel_id = ccl_reader_backward_kernel_id,
+         .ccl_writer_backward_kernel_id = ccl_writer_backward_kernel_id,
+         .ccl_worker_cores = sender_worker_cores,
+         .ccl_num_inputs = ccl_num_inputs,
+         .ccl_reader_sender_rt_offset = ccl_reader_sender_rt_offset,
+         .ccl_writer_sender_rt_offset = ccl_writer_sender_rt_offset,
+         .ccl_num_links = args.num_links}};
 }
 
-void RingJointSDPAProgramFactory::override_runtime_arguments(
+void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const RingJointSDPAParams& args,
-    const RingJointSDPAInputs& tensor_args,
-    RingJointSDPAResult& output_tensors) {
+    const ExpRingJointSDPAParams& args,
+    const ExpRingJointSDPAInputs& tensor_args,
+    ExpRingJointSDPAResult& output_tensors) {
     for (auto& [coordinate_range, program] : cached_workload.workload.get_programs()) {
         auto& shared_vars = cached_workload.shared_variables.at(coordinate_range);
 
-        ring_attention_all_gather_async_multicore_with_workers_override_runtime_arguments(
-            shared_vars.all_gather_shared_variables,
-            program,
-            {tensor_args.input_k, tensor_args.input_v},       /*input_tensors*/
-            {tensor_args.gathered_k, tensor_args.gathered_v}, /*output_tensors*/
-            args.all_gather_operation_attributes.semaphore);
+        // Inline CCL (all-gather) runtime argument overrides
+        const std::vector<Tensor> ccl_input_tensors = {tensor_args.input_k, tensor_args.input_v};
+        const std::vector<Tensor> ccl_output_tensors = {tensor_args.gathered_k, tensor_args.gathered_v};
+        const auto& semaphore = args.semaphore;
+        const auto& ccl_sender_worker_cores = shared_vars.ccl_worker_cores;
+        const auto& ccl_num_inputs = shared_vars.ccl_num_inputs;
+        const auto& reader_sender_rt_offset = shared_vars.ccl_reader_sender_rt_offset;
+        const auto& writer_sender_rt_offset = shared_vars.ccl_writer_sender_rt_offset;
+        const auto& ccl_num_links = shared_vars.ccl_num_links;
+
+        auto& worker_reader_sender_forward_runtime_args_by_core =
+            GetRuntimeArgs(program, shared_vars.ccl_reader_forward_kernel_id);
+        auto& worker_writer_sender_forward_runtime_args_by_core =
+            GetRuntimeArgs(program, shared_vars.ccl_writer_forward_kernel_id);
+        auto& worker_reader_sender_backward_runtime_args_by_core =
+            GetRuntimeArgs(program, shared_vars.ccl_reader_backward_kernel_id);
+        auto& worker_writer_sender_backward_runtime_args_by_core =
+            GetRuntimeArgs(program, shared_vars.ccl_writer_backward_kernel_id);
+
+        for (int link = 0; link < static_cast<int>(ccl_num_links); link++) {
+            auto& worker_reader_sender_forward_runtime_args =
+                worker_reader_sender_forward_runtime_args_by_core[ccl_sender_worker_cores[1 + (link * 2)].x]
+                                                                 [ccl_sender_worker_cores[1 + (link * 2)].y];
+            auto& worker_reader_sender_backward_runtime_args =
+                worker_reader_sender_backward_runtime_args_by_core[ccl_sender_worker_cores[0 + (link * 2)].x]
+                                                                  [ccl_sender_worker_cores[0 + (link * 2)].y];
+            auto& worker_writer_sender_forward_runtime_args =
+                worker_writer_sender_forward_runtime_args_by_core[ccl_sender_worker_cores[1 + (link * 2)].x]
+                                                                 [ccl_sender_worker_cores[1 + (link * 2)].y];
+            auto& worker_writer_sender_backward_runtime_args =
+                worker_writer_sender_backward_runtime_args_by_core[ccl_sender_worker_cores[0 + (link * 2)].x]
+                                                                  [ccl_sender_worker_cores[0 + (link * 2)].y];
+
+            worker_reader_sender_forward_runtime_args[9] = semaphore.at(1).address();
+            worker_reader_sender_backward_runtime_args[9] = semaphore.at(0).address();
+            worker_writer_sender_forward_runtime_args[11] = semaphore.at(1).address();
+            worker_writer_sender_backward_runtime_args[11] = semaphore.at(0).address();
+
+            for (uint32_t input_idx = 0; input_idx < ccl_num_inputs; input_idx++) {
+                worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + input_idx] =
+                    ccl_input_tensors[input_idx].buffer()->address();
+                worker_reader_sender_forward_runtime_args[reader_sender_rt_offset + ccl_num_inputs + input_idx] =
+                    ccl_output_tensors[input_idx].buffer()->address();
+                worker_reader_sender_backward_runtime_args[reader_sender_rt_offset + input_idx] =
+                    ccl_input_tensors[input_idx].buffer()->address();
+                worker_reader_sender_backward_runtime_args[reader_sender_rt_offset + ccl_num_inputs + input_idx] =
+                    ccl_output_tensors[input_idx].buffer()->address();
+                worker_writer_sender_forward_runtime_args[writer_sender_rt_offset + input_idx] =
+                    ccl_output_tensors[input_idx].buffer()->address();
+                worker_writer_sender_backward_runtime_args[writer_sender_rt_offset + input_idx] =
+                    ccl_output_tensors[input_idx].buffer()->address();
+            }
+        }
 
         // Get addresses for regular tensors
         auto* q_buffer = tensor_args.input_q.buffer();
@@ -1260,9 +1658,9 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
         auto* joint_v_buffer = tensor_args.joint_v.buffer();
 
         // Get addresses for output tensors
-        auto* out_buffer = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX].buffer();
-        auto* joint_out_buffer = output_tensors[RING_JOINT_SDPA_JOINT_OUTPUT_IDX].buffer();
-        auto* stats_buffer = output_tensors[RING_JOINT_SDPA_STATS_OUTPUT_IDX].buffer();
+        auto* out_buffer = output_tensors[EXP_RING_JOINT_SDPA_OUTPUT_IDX].buffer();
+        auto* joint_out_buffer = output_tensors[EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX].buffer();
+        auto* stats_buffer = output_tensors[EXP_RING_JOINT_SDPA_STATS_OUTPUT_IDX].buffer();
 
         uint32_t q_addr = q_buffer->address();
         uint32_t k_addr = k_buffer->address();

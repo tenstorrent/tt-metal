@@ -9,6 +9,7 @@
 #include "ttnn/operations/transformer/sdpa/device/sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/exp_ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
@@ -199,6 +200,58 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
         output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
         output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttention::invoke(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const ttnn::Tensor& joint_tensor_q,
+    const ttnn::Tensor& joint_tensor_k,
+    const ttnn::Tensor& joint_tensor_v,
+    ttnn::Tensor& persistent_output_buffer_k,
+    ttnn::Tensor& persistent_output_buffer_v,
+    const std::string& joint_strategy,
+    std::size_t logical_n,
+    SDPAProgramConfig program_config,
+    const int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const uint32_t num_links,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    const CoreCoord ccl_core_grid_offset,
+    std::optional<float> scale,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
+    auto output_tensors = ttnn::prim::exp_ring_joint_scaled_dot_product_attention(
+        input_tensor_q,
+        input_tensor_k,  // AllGather input
+        input_tensor_v,  // AllGather input
+        joint_tensor_q,
+        joint_tensor_k,
+        joint_tensor_v,
+        persistent_output_buffer_k,  // AllGather output / RingAttention input
+        persistent_output_buffer_v,  // AllGather output / RingAttention input
+        joint_strategy,
+        logical_n,
+        std::move(program_config),
+        dim,
+        multi_device_global_semaphore,
+        num_links,
+        cluster_axis,
+        mesh_device,
+        topology,
+        ccl_core_grid_offset,
+        subdevice_id,
+        scale,
+        compute_kernel_config,
+        core_allocation_strategy);
+    return {
+        output_tensors[prim::EXP_RING_JOINT_SDPA_OUTPUT_IDX],
+        output_tensors[prim::EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
+        output_tensors[prim::EXP_RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
 }
 
 ttnn::Tensor ExecuteFlashMLAPrefill::invoke(

@@ -326,10 +326,13 @@ def run_ring_joint_sdpa(
     skip_check,
     pcc_threshold,
     max_mse=None,
+    sdpa_grid_override=None,
+    ccl_offset_override=None,
+    use_column_major_ccl=False,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
-    sdpa_compute_grid = (full_compute_grid.x, full_compute_grid.y - 1)
-    ccl_core_grid_offset = (0, full_compute_grid.y - 1)
+    sdpa_compute_grid = sdpa_grid_override if sdpa_grid_override is not None else (full_compute_grid.x, full_compute_grid.y - 1)
+    ccl_core_grid_offset = ccl_offset_override if ccl_offset_override is not None else (0, full_compute_grid.y - 1)
 
     # Basic CCL setup
     ccl_sub_device_crs = ttnn.CoreRangeSet(
@@ -466,7 +469,7 @@ def run_ring_joint_sdpa(
 
     def run_iters(tt_out_list, tt_joint_out_list):
         for i in range(n_iters):
-            tt_out, tt_joint_out, tt_lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
+            tt_out, tt_joint_out, tt_lse = ttnn.transformer.exp_ring_joint_scaled_dot_product_attention(
                 tt_Q,
                 tt_K,
                 tt_V,
@@ -487,6 +490,7 @@ def run_ring_joint_sdpa(
                 topology=all_gather_topology,
                 subdevice_id=worker_sub_device_id,
                 ccl_core_grid_offset=ccl_core_grid_offset,
+                **({"use_column_major_ccl": True} if use_column_major_ccl else {}),
             )
             tt_out_list.append(tt_out)
             tt_joint_out_list.append(tt_joint_out)
@@ -1226,4 +1230,64 @@ def test_ring_joint_sdpa_dit_bh_glx(
         dtype,
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params, all_gather_topology",
+    [
+        (
+            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            ttnn.Topology.Ring,
+        ),
+    ],
+    indirect=["device_params"],
+    ids=["ring"],
+)
+@pytest.mark.parametrize("mesh_device, num_links", [mesh_device_map["bh_glx"]], ids=["8x4"], indirect=["mesh_device"])
+def test_ring_joint_sdpa_dit_bh_glx_custom(
+    mesh_device,
+    num_links,
+    all_gather_topology,
+    reset_seeds,
+):
+    dtype = ttnn.bfloat16
+    b, nh, base_seq_len, joint_seq_len, d = (1, 40, 18944, 0, 128)
+    rp_axis, rp_factor, up_axis, up_factor = parallel_config_map["bh_glx"]["wan_14b_720p"]  # (0, 8, 1, 4)
+    q_chunk_size = 224
+    k_chunk_size = 512
+    n_iters = 5
+    trace_enabled = False
+    skip_check = False
+    pcc_threshold = 0.9993
+    max_mse = 8e-5
+
+    if nh % up_factor != 0:
+        nh = math.ceil(nh / up_factor) * up_factor
+    submesh = create_ring_joint_sdpa_submesh(mesh_device, rp_axis, rp_factor, up_axis, up_factor)
+    padded_seq_len = get_padded_vision_seq_len(base_seq_len, list(mesh_device.shape)[rp_axis])
+
+    run_ring_joint_sdpa(
+        submesh,
+        b,
+        nh,
+        base_seq_len,
+        padded_seq_len,
+        joint_seq_len,
+        d,
+        q_chunk_size,
+        k_chunk_size,
+        dtype,
+        n_iters,
+        trace_enabled,
+        num_links,
+        rp_axis,
+        up_axis,
+        all_gather_topology,
+        skip_check,
+        pcc_threshold,
+        max_mse=max_mse,
+        sdpa_grid_override=(11, 10),
+        ccl_offset_override=(11, 0),
+        use_column_major_ccl=True,
     )
