@@ -982,8 +982,8 @@ def test_demo_text(
                 is_enable_trace = iteration != 0  # First iteration is compile time and checks PCC
             else:
                 is_enable_trace = enable_trace if not pcc_check else False
-            # Run decode forward
 
+            # Run decode forward
             try:
                 # Save logits only for PCC check when tracing is disabled
                 tt_out_logits_saved = torch.zeros(vocab_size) if (pcc_check and not is_enable_trace) else None
