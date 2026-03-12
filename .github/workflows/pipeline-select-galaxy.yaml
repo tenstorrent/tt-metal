@@ -135,6 +135,11 @@ jobs:
       run-demo: ${{ steps.logic.outputs.run-demo }}
       run-model-perf: ${{ steps.logic.outputs.run-model-perf }}
     steps:
+      - name: Checkout security scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/scripts/security
+          sparse-checkout-cone-mode: true
       - name: Determine test execution
         id: logic
         # Skip all but galaxy-quick if trigger-type is not manual
@@ -146,6 +151,14 @@ jobs:
           INPUT_GALAXY_DEMO: ${{ inputs.galaxy-demo }}
           INPUT_GALAXY_PERF: ${{ inputs.galaxy-perf }}
         run: |
+          source .github/scripts/security/input-validation.sh
+          validate_no_newlines \
+              "INPUT_TRIGGER_TYPE" "$INPUT_TRIGGER_TYPE" \
+              "INPUT_GALAXY_QUICK" "$INPUT_GALAXY_QUICK" \
+              "INPUT_GALAXY_UNIT" "$INPUT_GALAXY_UNIT" \
+              "INPUT_GALAXY_INTEGRATION" "$INPUT_GALAXY_INTEGRATION" \
+              "INPUT_GALAXY_DEMO" "$INPUT_GALAXY_DEMO" \
+              "INPUT_GALAXY_PERF" "$INPUT_GALAXY_PERF"
           case "$INPUT_TRIGGER_TYPE" in
             "manual")
               printf '%s\n' "run-quick=${INPUT_GALAXY_QUICK}" >> "${GITHUB_OUTPUT}"

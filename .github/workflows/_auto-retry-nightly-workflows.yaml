@@ -37,7 +37,7 @@ jobs:
           TEST_WORKFLOW_RUN_ID: ${{ inputs.test_workflow_run_id }}
           TEST_WORKFLOW_RUN_ATTEMPT: ${{ inputs.test_workflow_run_attempt }}
           EVENT_NAME: ${{ github.event_name }}
-          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }} # NOLINT(22) - only used to query run metadata and re-run failed jobs via API, no artifact download
           WORKFLOW_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
         run: |
           event_name="$EVENT_NAME"

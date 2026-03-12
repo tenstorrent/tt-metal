@@ -149,7 +149,7 @@ jobs:
     uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.generate-card-matrix.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.generate-card-matrix.outputs.matrix) }} # NOLINT(26) - matrix is built from hardcoded values in a prior job
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

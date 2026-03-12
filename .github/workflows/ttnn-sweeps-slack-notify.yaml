@@ -27,7 +27,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           INPUT_RUN_ID: ${{ github.event.inputs.run_id }}
-          WF_RUN_ID: ${{ github.event.workflow_run.id }}
+          WF_RUN_ID: ${{ github.event.workflow_run.id }} # NOLINT(22) - only used to determine notification context, no artifact download
           WF_RUN_NUMBER: ${{ github.event.workflow_run.run_number }}
           WF_RUN_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
           WF_RUN_NAME: ${{ github.event.workflow_run.name }}

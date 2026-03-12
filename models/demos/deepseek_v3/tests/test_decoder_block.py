@@ -21,9 +21,7 @@ from models.demos.deepseek_v3.tt.model.row_batched_model import get_fabric_confi
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
-    add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
-    dequantize_state_dict,
     get_model_config,
     get_rope_tensors,
     get_test_weight_config,
@@ -47,14 +45,9 @@ def generate_reference_io(
     reference_model = DeepseekV3DecoderLayer(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
     if module_path is not None:
         state_dict = sub_state_dict(state_dict, module_path + ".")
-        reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
+        reference_model.load_state_dict(state_dict)
     else:
-        # This needs to be disabled as deterministic way to quantize weights is not supported
-        torch.use_deterministic_algorithms(False)
-        state_dict = add_inv_scale_to_state_dict(
-            reference_model.state_dict(),
-            block_shape=hf_config.quantization_config["weight_block_size"],
-        )
+        state_dict = reference_model.state_dict()
 
     torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
     position_ids = None

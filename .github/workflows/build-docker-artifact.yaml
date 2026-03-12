@@ -124,7 +124,8 @@ jobs:
           VERSION: ${{ steps.platform.outputs.version }}
           ARCH: ${{ inputs.architecture || 'amd64' }}
         run: |
-
+          source .github/scripts/security/input-validation.sh
+          validate_no_newlines "DISTRO" "$DISTRO" "VERSION" "$VERSION" "ARCH" "$ARCH"
           printf '%s\n' "CI_BUILD_IMAGE_NAME=${DISTRO}-${VERSION}-ci-build-${ARCH}" >> "${GITHUB_ENV}"
           printf '%s\n' "CI_TEST_IMAGE_NAME=${DISTRO}-${VERSION}-ci-test-${ARCH}" >> "${GITHUB_ENV}"
           printf '%s\n' "DEV_IMAGE_NAME=${DISTRO}-${VERSION}-dev-${ARCH}" >> "${GITHUB_ENV}"

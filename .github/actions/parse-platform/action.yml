@@ -54,18 +54,14 @@ runs:
         INPUT_DEFAULT_VERSION: ${{ inputs.default-version }}
         INPUT_ENABLE_LTO: ${{ inputs.enable-lto }}
       run: |
-        # Reject values containing embedded newlines.  GITHUB_OUTPUT uses
-        # newlines as record delimiters (key=value\n), so a newline *inside*
-        # a value would inject a second, attacker-controlled output variable.
-        # The trailing \n added by printf '%s\n' below is the required
-        # record terminator — that one is intentional and safe.
-        for var_name in INPUT_PLATFORM INPUT_DISTRO INPUT_VERSION INPUT_DEFAULT_DISTRO INPUT_DEFAULT_VERSION INPUT_ENABLE_LTO; do
-          val="${!var_name}"
-          if [[ "${val}" == *$'\n'* ]] || [[ "${val}" == *$'\r'* ]]; then
-            echo "::error::Input ${var_name} contains newline characters"
-            exit 1
-          fi
-        done
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        validate_no_newlines \
+            "INPUT_PLATFORM" "$INPUT_PLATFORM" \
+            "INPUT_DISTRO" "$INPUT_DISTRO" \
+            "INPUT_VERSION" "$INPUT_VERSION" \
+            "INPUT_DEFAULT_DISTRO" "$INPUT_DEFAULT_DISTRO" \
+            "INPUT_DEFAULT_VERSION" "$INPUT_DEFAULT_VERSION" \
+            "INPUT_ENABLE_LTO" "$INPUT_ENABLE_LTO"
 
         output_enable_lto() {
           local platform_default="$1"

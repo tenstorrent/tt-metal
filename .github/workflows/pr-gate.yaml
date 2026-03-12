@@ -80,7 +80,7 @@ concurrency:
     ${{ (github.ref_protected && github.run_id)
         || github.event.pull_request.number
         || github.ref }}-
-    ${{ inputs.build-type || 'default' }}
+    ${{ inputs.build-type || 'default' }} # NOLINT(34) - choice input with fixed options, collaborator-only
   cancel-in-progress: true
 
 permissions:

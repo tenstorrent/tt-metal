@@ -71,6 +71,11 @@ jobs:
       run-ttnn-models-frequent: ${{ steps.logic.outputs.run-ttnn-models-frequent }}
       run-cpp-unit: ${{ steps.logic.outputs.run-cpp-unit }}
     steps:
+      - name: Checkout security scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/scripts/security
+          sparse-checkout-cone-mode: true
       - name: Determine test execution
         id: logic
         env:
@@ -81,6 +86,14 @@ jobs:
           INPUT_SINGLE_CARD_TTNN_MODELS_FREQUENT: ${{ inputs.single-card-ttnn-models-frequent }}
           INPUT_CPP_UNIT: ${{ inputs.cpp-unit }}
         run: |
+          source .github/scripts/security/input-validation.sh
+          validate_no_newlines \
+              "INPUT_TRIGGER_TYPE" "$INPUT_TRIGGER_TYPE" \
+              "INPUT_SINGLE_CARD_DEMO" "$INPUT_SINGLE_CARD_DEMO" \
+              "INPUT_SINGLE_CARD_PERF_MODELS" "$INPUT_SINGLE_CARD_PERF_MODELS" \
+              "INPUT_SINGLE_CARD_PERF_DEVICE_MODELS" "$INPUT_SINGLE_CARD_PERF_DEVICE_MODELS" \
+              "INPUT_SINGLE_CARD_TTNN_MODELS_FREQUENT" "$INPUT_SINGLE_CARD_TTNN_MODELS_FREQUENT" \
+              "INPUT_CPP_UNIT" "$INPUT_CPP_UNIT"
           case "$INPUT_TRIGGER_TYPE" in
             "manual")
               printf '%s\n' "run-demo=$([[ "$INPUT_SINGLE_CARD_DEMO" != "disabled" ]] && echo "true" || echo "false")" >> "${GITHUB_OUTPUT}"

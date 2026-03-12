@@ -152,7 +152,7 @@ jobs:
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.blackhole-multi-card-tests-matrix.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.blackhole-multi-card-tests-matrix.outputs.matrix) }} # NOLINT(26) - matrix is built from hardcoded values in a prior job
     with:
       arch: blackhole
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

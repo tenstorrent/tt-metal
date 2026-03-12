@@ -85,6 +85,8 @@ jobs:
           RELEASE_TYPE_INPUT: ${{ inputs.release-type }}
           EVENT_NAME: ${{ github.event_name }}
         run: |
+          source .github/scripts/security/input-validation.sh
+          validate_no_newlines "RELEASE_TYPE_INPUT" "$RELEASE_TYPE_INPUT" "EVENT_NAME" "$EVENT_NAME"
           if [[ "$EVENT_NAME" == "schedule" ]]; then
             echo "Cron job detected, setting default release-type to 'dev'"
             printf '%s\n' "RELEASE_TYPE=dev" >> "${GITHUB_ENV}"

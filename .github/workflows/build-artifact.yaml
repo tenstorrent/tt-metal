@@ -564,7 +564,7 @@ jobs:
         env:
           INPUT_SKIP_TT_TRAIN: ${{ inputs.skip-tt-train }}
         run: |
-          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples build/test build/tools runtime"
+          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples build/test build/tools runtime tt_metal/pre-compiled"
           if [[ "$INPUT_SKIP_TT_TRAIN" != "true" ]]; then
             ARTIFACT_PATHS="$ARTIFACT_PATHS build/tt-train data"
           fi

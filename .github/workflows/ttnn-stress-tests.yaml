@@ -69,7 +69,7 @@ jobs:
     with:
       arch: ${{ inputs.arch || 'wormhole_b0' }}
       runner-label: ${{ inputs.runner-label || 'N150' }}
-      timeout: ${{ (github.event_name == 'schedule' && 120) || fromJSON(inputs.timeout) }}
+      timeout: ${{ (github.event_name == 'schedule' && 120) || fromJSON(inputs.timeout) }} # NOLINT(26) - inputs.timeout is a numeric workflow_dispatch input, collaborator-only
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

@@ -250,7 +250,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      timeout: ${{ (github.event_name == 'schedule' && 150) || fromJSON(inputs.timeout) }}
+      timeout: ${{ (github.event_name == 'schedule' && 150) || fromJSON(inputs.timeout) }} # NOLINT(26) - inputs.timeout is a numeric workflow_dispatch input, collaborator-only
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -286,7 +286,7 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      timeout: ${{ (github.event_name == 'schedule' && 150) || fromJSON(inputs.timeout) }}
+      timeout: ${{ (github.event_name == 'schedule' && 150) || fromJSON(inputs.timeout) }} # NOLINT(26) - inputs.timeout is a numeric workflow_dispatch input, collaborator-only
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}

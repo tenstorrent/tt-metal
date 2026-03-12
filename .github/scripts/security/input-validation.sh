@@ -1286,3 +1286,19 @@ validate_array() {
 
     return 0
 }
+
+# Rejects values containing embedded newlines or carriage returns.
+# GITHUB_OUTPUT / GITHUB_ENV use newlines as record delimiters, so an
+# embedded newline would inject a second attacker-controlled entry.
+# Accepts (name, value) pairs: validate_no_newlines "VAR1" "$VAR1" "VAR2" "$VAR2"
+validate_no_newlines() {
+    while [[ $# -ge 2 ]]; do
+        local name="$1" val="$2"
+        shift 2
+        if [[ "${val}" == *$'\n'* ]] || [[ "${val}" == *$'\r'* ]]; then
+            validation_error "${name} contains newline characters"
+            return 1
+        fi
+    done
+    return 0
+}

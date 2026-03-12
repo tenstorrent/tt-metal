@@ -73,7 +73,7 @@ jobs:
   test-dispatch:
     needs: build-artifact
     timeout-minutes: 120
-    runs-on: ${{ fromJSON(inputs.runner-label) }}
+    runs-on: ${{ fromJSON(inputs.runner-label) }} # NOLINT(26) - workflow_dispatch input with fixed default, collaborator-only
     container:
       image: ${{ contains(inputs.runner-label, 'tt-ubuntu-2204') && 'harbor.ci.tenstorrent.net/'
         || '' }}${{ needs.build-artifact.outputs.dev-docker-image || 'docker-image-unresolved'

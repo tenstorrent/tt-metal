@@ -155,6 +155,11 @@ jobs:
       run-e2e: ${{ steps.logic.outputs.run-e2e }}
       run-profiler: ${{ steps.logic.outputs.run-profiler }}
     steps:
+      - name: Checkout security scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/scripts/security
+          sparse-checkout-cone-mode: true
       - name: Determine test execution
         id: logic
         env:
@@ -166,6 +171,15 @@ jobs:
           T3000_E2E: ${{ inputs.t3000-e2e }}
           T3000_PROFILER: ${{ inputs.t3000-profiler }}
         run: |
+          source .github/scripts/security/input-validation.sh
+          validate_no_newlines \
+              "TRIGGER_TYPE" "$TRIGGER_TYPE" \
+              "T3000_UNIT_ENABLED" "$T3000_UNIT_ENABLED" \
+              "T3000_DEMO_ENABLED" "$T3000_DEMO_ENABLED" \
+              "T3000_PERF_ENABLED" "$T3000_PERF_ENABLED" \
+              "T3000_INTEGRATION_ENABLED" "$T3000_INTEGRATION_ENABLED" \
+              "T3000_E2E" "$T3000_E2E" \
+              "T3000_PROFILER" "$T3000_PROFILER"
           case "$TRIGGER_TYPE" in
             "manual")
               printf '%s\n' "run-unit=${T3000_UNIT_ENABLED}" >> "${GITHUB_OUTPUT}"

@@ -53,6 +53,11 @@ jobs:
       is-bypass-command: ${{ steps.parse.outputs.is-bypass-command }}
       bypass-authorized: ${{ steps.parse.outputs.bypass-authorized }}
     steps:
+      - name: Checkout security scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/scripts/security
+          sparse-checkout-cone-mode: true
       - name: Parse comment and get PR info
         id: parse
         env:
@@ -63,14 +68,8 @@ jobs:
           GITHUB_REPOSITORY: ${{ github.repository }}
           CODEOWNERS_GROUP_ANALYSIS_PAT: ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}
         run: |
-          # Validate inputs from github.event to prevent newline injection
-          for var_name in PR_NUMBER COMMENT_AUTHOR COMMENT_ID; do
-            val="${!var_name}"
-            if [[ "${val}" == *$'\n'* ]] || [[ "${val}" == *$'\r'* ]]; then
-              echo "::error::${var_name} contains newlines"
-              exit 1
-            fi
-          done
+          source .github/scripts/security/input-validation.sh
+          validate_no_newlines "PR_NUMBER" "$PR_NUMBER" "COMMENT_AUTHOR" "$COMMENT_AUTHOR" "COMMENT_ID" "$COMMENT_ID"
           if ! [[ "${PR_NUMBER}" =~ ^[0-9]+$ ]]; then
             echo "::error::PR_NUMBER is not numeric: ${PR_NUMBER}"
             exit 1

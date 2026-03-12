@@ -8,6 +8,11 @@ jobs:
     permissions:
       issues: write  # NOLINT(24) - required for gh issue edit --add-label
     steps:
+      - name: Checkout security scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/scripts/security
+          sparse-checkout-cone-mode: true
       - name: Set username and number based on event type
         id: set-variables
         env:
@@ -22,13 +27,7 @@ jobs:
           REPO: ${{ github.repository }}
           SHA: ${{ github.sha }}
         run: |
-          validate_no_newlines() {
-            local name="$1" val="$2"
-            if [[ "${val}" == *$'\n'* ]] || [[ "${val}" == *$'\r'* ]]; then
-              echo "::error::${name} contains newlines"
-              exit 1
-            fi
-          }
+          source .github/scripts/security/input-validation.sh
           if [ "$EVENT_NAME" = "issues" ]; then
             validate_no_newlines "ISSUE_LOGIN" "${ISSUE_LOGIN}"
             validate_no_newlines "ISSUE_NUMBER" "${ISSUE_NUMBER}"
