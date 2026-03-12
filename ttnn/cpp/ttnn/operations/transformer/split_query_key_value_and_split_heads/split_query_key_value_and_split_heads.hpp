@@ -16,7 +16,8 @@ struct SplitQueryKeyValueAndSplitHeadsOperation {
         uint32_t num_heads,
         std::optional<uint32_t> num_kv_heads,
         bool transpose_key,
-        const std::optional<MemoryConfig>& memory_config);
+        const std::optional<MemoryConfig>& memory_config,
+        bool use_falcon7b_backend = false);
 };
 
 }  // namespace operations::transformer
