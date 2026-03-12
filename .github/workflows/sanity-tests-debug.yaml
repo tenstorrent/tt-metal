@@ -1,6 +1,6 @@
-name: "apc nightly debug run"
+name: "Sanity tests nightly debug run"
 
-run-name: "apc nightly debug run${{ github.event.schedule == '0 1 * * *' && ' with watcher' || (inputs.enable-watcher && ' with watcher' || '') }}"
+run-name: "Sanity tests nightly debug run${{ github.event.schedule == '0 1 * * *' && ' with watcher' || (inputs.enable-watcher && ' with watcher' || '') }}"
 
 on:
   schedule:
@@ -86,12 +86,12 @@ jobs:
       build-umd-tests: true
       enable-lto: ${{ inputs.enable-lto || false }}
 
-  # Ubuntu 22.04 test jobs - both APC and Blackhole share artifacts
+  # Ubuntu 22.04 test jobs - both Sanity and Blackhole share artifacts
   wormhole-nightly-debug-ubuntu-22:
-    name: apc nightly debug run (Ubuntu 22.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
+    name: Sanity tests nightly debug run (Ubuntu 22.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: [determine-watcher, build-artifacts-ubuntu-22]
     if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests) }}
-    uses: ./.github/workflows/all-post-commit-workflows.yaml
+    uses: ./.github/workflows/sanity-tests.yaml
     secrets: inherit
     with:
       build-type: RelWithDebInfo
@@ -121,12 +121,12 @@ jobs:
       build-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifacts-ubuntu-22.outputs.wheel-artifact-name }}
 
-  # Ubuntu 24.04 test jobs - both APC and Blackhole share artifacts
+  # Ubuntu 24.04 test jobs - both Sanity and Blackhole share artifacts
   wormhole-nightly-debug-ubuntu-24:
-    name: apc nightly debug run (Ubuntu 24.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
+    name: Sanity tests nightly debug run (Ubuntu 24.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: [determine-watcher, build-artifacts-ubuntu-24]
     if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests) }}
-    uses: ./.github/workflows/all-post-commit-workflows.yaml
+    uses: ./.github/workflows/sanity-tests.yaml
     secrets: inherit
     with:
       build-type: RelWithDebInfo
