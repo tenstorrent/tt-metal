@@ -30,6 +30,7 @@
 #include "internal/debug/watcher_common.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 
 // clang-format on
@@ -364,6 +365,7 @@ int main() {
 
     risc_init();
     device_setup();
+    DEVICE_PRINT_INITIALIZE_LOCK();
 
     // Set ncrisc's resume address to 0 so we know when ncrisc has overwritten it
     mailboxes->ncrisc_halt.resume_addr = 0;
@@ -561,6 +563,7 @@ int main() {
 
             uint32_t go_message_index = mailboxes->go_message_index;
             mailboxes->go_messages[go_message_index].signal = RUN_MSG_DONE;
+            DEVICE_PRINT_KERNEL_FINISHED();
 
             // Notify dispatcher core that tensix has completed running kernels, if the launch_msg was populated
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {
