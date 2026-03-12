@@ -66,7 +66,7 @@ class MultiheadSelfAttention:
 
         qkv_proj = ttnn.concat([query_proj, key_proj, value_proj], dim=-1)
         query_heads, key_heads, value_heads = ttnn.transformer.split_query_key_value_and_split_heads(
-            ttnn.to_layout(qkv_proj, ttnn.TILE_LAYOUT),
+            qkv_proj,
             num_heads=self.num_heads,
             transpose_key=False,
         )
@@ -148,13 +148,13 @@ class TransformerSentenceEncoderLayer:
             w = ttnn.from_torch(
                 parameters[w_key].reshape(1, 1, -1),
                 dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
             b = ttnn.from_torch(
                 parameters[b_key].reshape(1, 1, -1),
                 dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
             setattr(self, attr_w, w)
@@ -163,9 +163,6 @@ class TransformerSentenceEncoderLayer:
     def _layer_norm(self, x: ttnn.Tensor, weight: ttnn.Tensor | None, bias: ttnn.Tensor | None) -> ttnn.Tensor:
         if weight is None or bias is None:
             raise ValueError("Layer norm parameters are not loaded.")
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        weight = ttnn.to_layout(weight, ttnn.TILE_LAYOUT)
-        bias = ttnn.to_layout(bias, ttnn.TILE_LAYOUT)
         return ttnn.layer_norm(x, weight=weight, bias=bias, epsilon=1e-5)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -174,17 +171,17 @@ class TransformerSentenceEncoderLayer:
         if self.layer_norm_first:
             x = self._layer_norm(x, self.self_attn_layer_norm_weight, self.self_attn_layer_norm_bias)
             attn_out = self.self_attn(query=x)
-            x = residual + attn_out
+            x = ttnn.add(residual, attn_out, output_tensor=x)
 
             residual = x
             x = self._layer_norm(x, self.final_layer_norm_weight, self.final_layer_norm_bias)
             x = self.fc1(x)
             x = self.fc2(x)
-            x = residual + x
+            x = ttnn.add(residual, x, output_tensor=x)
         else:
             x = self.self_attn(query=x)
 
-            x = residual + x
+            x = ttnn.add(residual, x, output_tensor=x)
 
             x = self._layer_norm(x, self.self_attn_layer_norm_weight, self.self_attn_layer_norm_bias)
 
@@ -192,7 +189,7 @@ class TransformerSentenceEncoderLayer:
             x = self.fc1(x)
 
             x = self.fc2(x)
-            x = residual + x
+            x = ttnn.add(residual, x, output_tensor=x)
             x = self._layer_norm(x, self.final_layer_norm_weight, self.final_layer_norm_bias)
 
         return x
@@ -262,13 +259,13 @@ class ConvFeatureExtractionModel:
                 ln_w = ttnn.from_torch(
                     parameters[w_key].reshape(1, 1, -1),
                     dtype=ttnn.bfloat16,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    layout=ttnn.TILE_LAYOUT,
                     device=self.device,
                 )
                 ln_b = ttnn.from_torch(
                     parameters[b_key].reshape(1, 1, -1),
                     dtype=ttnn.bfloat16,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    layout=ttnn.TILE_LAYOUT,
                     device=self.device,
                 )
                 self.ln_weights[i] = ln_w
@@ -285,7 +282,6 @@ class ConvFeatureExtractionModel:
         current_length = x.shape[1]
 
         for i, conv in enumerate(self.conv_layers):
-            x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
             x = conv(x)
             out_channels, kernel_size, stride = self.conv_layers_cfg[i]
             current_length = ((current_length - kernel_size) // stride) + 1
@@ -295,11 +291,10 @@ class ConvFeatureExtractionModel:
                 ln_b = self.ln_biases[i]
                 if ln_w is None or ln_b is None:
                     raise ValueError("LayerNorm parameters are not loaded.")
-                x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
                 x = ttnn.layer_norm(
                     x,
-                    weight=ttnn.to_layout(ln_w, ttnn.TILE_LAYOUT),
-                    bias=ttnn.to_layout(ln_b, ttnn.TILE_LAYOUT),
+                    weight=ln_w,
+                    bias=ln_b,
                     epsilon=1e-5,
                 )
 
@@ -307,12 +302,9 @@ class ConvFeatureExtractionModel:
                 group_norm = self.group_norms[i]
                 if group_norm is None:
                     raise ValueError("GroupNorm parameters are not loaded.")
-                # x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
                 x = group_norm.gp_slice(x)
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-            x = ttnn.gelu(x)
+            x = ttnn.gelu(x, output_tensor=x)
         # Match Torch output shape: B x C x T
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         return x
 
     def deallocate(self) -> None:
@@ -460,17 +452,16 @@ class ConvolutionModule:
         )
 
     def _apply_activation(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
         if self.activation_fn == "relu":
-            return ttnn.relu(x)
+            return ttnn.relu(x, output_tensor=x)
         if self.activation_fn == "gelu":
-            return ttnn.gelu(x)
+            return ttnn.gelu(x, output_tensor=x)
         if self.activation_fn == "tanh":
-            return ttnn.tanh(x)
+            return ttnn.tanh(x, output_tensor=x)
         if self.activation_fn == "linear":
             return x
         if self.activation_fn == "swish":
-            return ttnn.silu(x)
+            return ttnn.silu(x, output_tensor=x)
         raise RuntimeError(f"Unsupported activation_fn in TT ConvolutionModule: {self.activation_fn}")
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -485,7 +476,7 @@ class ConvolutionModule:
         # GLU on channel dim
         xa = ttnn.slice(x, (0, 0, 0), (x.shape[0], x.shape[1], self.channels))
         xb = ttnn.slice(x, (0, 0, self.channels), (x.shape[0], x.shape[1], 2 * self.channels))
-        x = xa * ttnn.sigmoid(xb)
+        x = xa * ttnn.sigmoid(xb, output_tensor=xb)
 
         # depthwise conv
         x = self.depthwise_conv(x)
@@ -549,7 +540,7 @@ class TransformerEncoder:
             layer.load_parameters(parameters=parameters, prefix=f"{prefix}layers.{i}.")
 
     def __call__(self, x: ttnn.Tensor, tgt_layer: int) -> ttnn.Tensor:
-        x = x + self.pos_conv(x)
+        x = ttnn.add(x, self.pos_conv(x))
 
         if not self.layer_norm_first:
             x = self.layer_norm(x)

@@ -200,12 +200,10 @@ class GroupNorm1D:
             is_height_sharded=is_height_sharded,
             is_row_major=True,
         )
-        # assert x.layout == ttnn.ROW_MAJOR_LAYOUT, "Input tensor must be in ROW_MAJOR_LAYOUT"
         x0 = ttnn.reshape(x, (N, 1, L, C))
         x1 = ttnn.to_memory_config(x0, sharded_mem_config)
         # if x1.buffer_address() != x0.buffer_address():
         #     ttnn.deallocate(x0)
-
         x2 = ttnn.group_norm(
             x1,
             input_mask=self.input_mask_tensor_dict[1 if is_height_sharded else grid_size.x],
@@ -218,18 +216,21 @@ class GroupNorm1D:
             memory_config=sharded_mem_config,
             inplace=False,
         )
-        x3 = ttnn.sharded_to_interleaved(x2, ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(x1)
+        # x3 = ttnn.sharded_to_interleaved(x2, ttnn.L1_MEMORY_CONFIG)
+        x3 = x2
         # ttnn.deallocate(x2)
         x4 = ttnn.reshape(x3, (N, L, C))
-        x4_torch = ttnn.to_torch(x4)[:N, :original_length, : self.num_channels]
+        x4_torch = ttnn.to_torch(x4)
         x4 = ttnn.from_torch(
             x4_torch,
             dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=self.device,
         )
-        # if L != original_length:
-        #     x4 = ttnn.slice(x4, (0, 0, 0), (N, original_length, C))
+
+        if L != original_length:
+            x4 = ttnn.slice(x4, (0, 0, 0), (N, original_length, C))
         return x4
 
     def gp_slice(self, x: ttnn.Tensor) -> ttnn.Tensor:
@@ -240,10 +241,11 @@ class GroupNorm1D:
         res_cat = []
         for i in range(0, L, length_block):
             x_block = ttnn.slice(x, (0, i, 0), (N, min(i + length_block, L), C))
+            x_result = self.__call__(x_block)
+            res_cat.append(x_result)
 
-            res_cat.append(self.__call__(x_block))
-
-        return ttnn.concat(res_cat, dim=1)
+        out = ttnn.concat(res_cat, dim=1)
+        return out
 
     def deallocate(self):
         ttnn.deallocate(self.weight)

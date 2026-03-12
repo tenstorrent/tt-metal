@@ -261,7 +261,7 @@ class Pipeline:
             tt_feats = ttnn.from_torch(
                 feats,
                 dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                layout=ttnn.TILE_LAYOUT,
                 device=self.tt_device,
             )
             tt_speaker_id = ttnn.from_torch(

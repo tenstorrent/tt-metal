@@ -31,26 +31,18 @@ class LayerNorm:
         self.gamma = ttnn.from_torch(
             parameters[gamma_key].reshape(1, 1, self.channels),
             dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=self.device,
         )
         self.beta = ttnn.from_torch(
             parameters[beta_key].reshape(1, 1, self.channels),
             dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=self.device,
         )
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-        if x.shape[-1] != self.channels and x.shape[1] == self.channels:
-            x = ttnn.permute(x, (0, 2, 1))
-        if self.gamma is None or self.beta is None:
-            raise ValueError("LayerNorm parameters are not loaded.")
-        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        gamma = ttnn.to_layout(self.gamma, ttnn.TILE_LAYOUT)
-        beta = ttnn.to_layout(self.beta, ttnn.TILE_LAYOUT)
-        return ttnn.layer_norm(x, weight=gamma, bias=beta, epsilon=self.eps)
+        return ttnn.layer_norm(x, weight=self.gamma, bias=self.beta, epsilon=self.eps)
 
 
 class WN:
@@ -132,14 +124,16 @@ class WN:
             else:
                 g_l = ttnn.zeros_like(x_in)
 
-            in_act = x_in + g_l
+            in_act = ttnn.add(x_in, g_l, output_tensor=x_in)
             t_act = ttnn.slice(in_act, (0, 0, 0), (in_act.shape[0], in_act.shape[1], self.hidden_channels))
             s_act = ttnn.slice(
                 in_act,
                 (0, 0, self.hidden_channels),
                 (in_act.shape[0], in_act.shape[1], 2 * self.hidden_channels),
             )
-            acts = ttnn.tanh(t_act) * ttnn.sigmoid(s_act)
+            acts = ttnn.multiply(
+                ttnn.sigmoid(s_act, output_tensor=s_act), ttnn.tanh(t_act, output_tensor=t_act), output_tensor=s_act
+            )
 
             res_skip_acts = res_skip_layer(acts)
             if i < self.n_layers - 1:
@@ -153,12 +147,10 @@ class WN:
                     (0, 0, self.hidden_channels),
                     (res_skip_acts.shape[0], res_skip_acts.shape[1], 2 * self.hidden_channels),
                 )
-                x = x + res_acts
-                # output = output + skip_acts
-                output = ttnn.add(output, skip_acts)  # , output_tensor=output)
+                x = ttnn.add(x, res_acts, output_tensor=x)
+                output = ttnn.add(output, skip_acts, output_tensor=output)
             else:
-                # output = output + res_skip_acts
-                output = ttnn.add(output, res_skip_acts)  # , output_tensor=output)
+                output = ttnn.add(output, res_skip_acts, output_tensor=output)
 
         return output
 
@@ -208,12 +200,13 @@ class ResBlock1:
             conv.load_parameters(parameters, key=f"convs2.{i}", prefix=prefix)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        # needed since x is modified in-place in the loop, and we want to keep the original x for the residual connection
+        x = ttnn.clone(x)
         for c1, c2 in zip(self.convs1, self.convs2, strict=True):
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
             xt0 = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope)
             xt1 = c1(xt0)
             xt2 = c2(xt1)
-            x = xt2 + x
+            x = ttnn.add(xt2, x, output_tensor=x)
         return x
 
 
@@ -247,11 +240,12 @@ class ResBlock2:
             conv.load_parameters(parameters, key=f"convs.{i}", prefix=prefix)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        # needed since x is modified in-place in the loop, and we want to keep the original x for the residual connection
+        x = ttnn.clone(x)
         for conv in self.convs:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
             xt = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope)
             xt = conv(xt)
-            x = xt + x
+            x = ttnn.add(xt, x, output_tensor=x)
         return x
 
 
@@ -313,7 +307,5 @@ class ResidualCouplingLayer:
         h = self.enc(h, g=g)
         stats = self.post_linear(h)
         x1 = x1 - stats
-        x0 = ttnn.to_layout(x0, ttnn.TILE_LAYOUT)
-        x1 = ttnn.to_layout(x1, ttnn.TILE_LAYOUT)
         x_out = ttnn.concat([x0, x1], dim=-1)
-        return ttnn.to_layout(x_out, ttnn.ROW_MAJOR_LAYOUT)
+        return x_out

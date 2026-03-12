@@ -91,7 +91,7 @@ class Conv1dConfiguration:
     activation_dtype: ttnn.DataType = ttnn.bfloat16
     weights_dtype: ttnn.DataType = ttnn.bfloat16
     dtype: ttnn.DataType = ttnn.bfloat16
-    # # output_layout: ttnn.Layout = ttnn.TILE_LAYOUT
+    output_layout: ttnn.Layout = ttnn.TILE_LAYOUT
     # slice_strategy: Optional[SliceStrategy] = None
     # math_fidelity: ttnn.MathFidelity = ttnn.MathFidelity.LoFi
     # fp32_dest_acc_en: bool = False
@@ -208,7 +208,7 @@ def get_conv_configs(
         ttnn.Conv2dConfig(
             weights_dtype=conv1d_config.weights_dtype,
             # shard_layout=ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-            # output_layout=conv1d_config.output_layout,
+            output_layout=conv1d_config.output_layout,
             # deallocate_activation=conv1d_config.deallocate_activation,
             # reallocate_halo_output=conv1d_config.reallocate_halo_output,
             # enable_act_double_buffer=conv1d_config.enable_act_double_buffer,
@@ -265,6 +265,15 @@ class Conv1d:
             stride=stride,
             dilation=dilation,
         )
+
+        TILE_WIDTH = 32
+        if out_channels % TILE_WIDTH == 0:
+            output_layout = ttnn.TILE_LAYOUT
+        elif (TILE_WIDTH - out_channels % TILE_WIDTH) / out_channels < 1.2:
+            output_layout = ttnn.TILE_LAYOUT
+        else:
+            output_layout = ttnn.ROW_MAJOR_LAYOUT
+
         configuration = Conv1dConfiguration(
             in_channels=in_channels,
             out_channels=out_channels,
@@ -275,6 +284,7 @@ class Conv1d:
             groups=groups,
             activation=_normalize_conv2d_activation(activation),
             dtype=dtype or ttnn.bfloat16,
+            output_layout=output_layout,
         )
 
         self.device = device
@@ -340,7 +350,6 @@ class Conv1d:
             slice_config=slice_config,
         )
         output_shape = conv_result.shape
-        conv_result = ttnn.to_layout(conv_result, ttnn.ROW_MAJOR_LAYOUT)
         x = ttnn.reshape(conv_result, (batch_size, output_shape[2], output_shape[3]))
         # self._check_against_torch(input_tensor, x)
         return x
