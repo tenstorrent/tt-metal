@@ -86,6 +86,30 @@ def _collect_self_reflection(op_dir: Path) -> str | None:
     return None
 
 
+def _collect_tdd_state(op_dir: Path) -> str | None:
+    """Read .tdd_state.json if it exists."""
+    path = op_dir / ".tdd_state.json"
+    if path.is_file():
+        return _read_source(path)
+    return None
+
+
+def _collect_breadcrumbs(op_dir: Path) -> list:
+    """Collect agent breadcrumb JSONL files from agent_logs/."""
+    results = []
+    log_dir = op_dir / "agent_logs"
+    if not log_dir.is_dir():
+        return results
+
+    for path in sorted(log_dir.glob("*_breadcrumbs.jsonl")):
+        content = _read_source(path)
+        if content:
+            # Derive agent name from filename: "ttnn-kernel-writer-tdd_breadcrumbs.jsonl" -> "ttnn-kernel-writer-tdd"
+            agent_name = path.stem.replace("_breadcrumbs", "")
+            results.append({"agent_name": agent_name, "content": content})
+    return results
+
+
 def ingest_run(
     db_path: Path,
     prompt_name: str,
@@ -167,6 +191,14 @@ def ingest_run(
             reflection = _collect_self_reflection(op_dir)
             if reflection:
                 db.insert_artifact(conn, run_id, "self_reflection", reflection)
+
+            tdd_state = _collect_tdd_state(op_dir)
+            if tdd_state:
+                db.insert_tdd_state(conn, run_id, tdd_state)
+
+            breadcrumbs = _collect_breadcrumbs(op_dir)
+            if breadcrumbs:
+                db.insert_kw_breadcrumbs(conn, run_id, breadcrumbs)
 
     conn.commit()
     conn.close()

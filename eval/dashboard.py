@@ -80,6 +80,8 @@ def generate_html(conn) -> str:
             "kernels": db.get_kernels(conn, run["id"]),
             "host_code": db.get_host_code(conn, run["id"]),
             "artifacts": db.get_artifacts(conn, run["id"]),
+            "tdd_state": db.get_tdd_state(conn, run["id"]),
+            "kw_breadcrumbs": db.get_kw_breadcrumbs(conn, run["id"]),
         }
 
     parts = [
@@ -339,12 +341,177 @@ def _html_code_tabs(parts: list, group_id: str, files: list, lang: str):
         parts.append("</div>")
 
 
+TDD_STATUS_COLORS = {
+    "passed": "#16a34a",
+    "in_progress": "#2563eb",
+    "pending": "#9ca3af",
+    "failed_permanent": "#dc2626",
+}
+
+
+def _html_tdd_state(raw_json: str) -> str:
+    """Render the .tdd_state.json as a readable stage table."""
+    try:
+        state = json.loads(raw_json)
+    except (json.JSONDecodeError, TypeError):
+        return f'<div class="artifact-content">{html.escape(raw_json)}</div>'
+
+    parts = []
+
+    # Summary line
+    op_name = html.escape(state.get("op_name", "unknown"))
+    layout = html.escape(str(state.get("layout", "--")))
+    cur_idx = state.get("current_stage_index", 0)
+    stages = state.get("stages", [])
+    total = len(stages)
+    passed = sum(1 for s in stages if s.get("status") == "passed")
+
+    parts.append(
+        f'<div style="margin-bottom:12px;font-size:0.9rem">'
+        f"<strong>{op_name}</strong> &mdash; layout: <code>{layout}</code> &mdash; "
+        f"{passed}/{total} stages passed"
+        f"</div>"
+    )
+
+    if not stages:
+        parts.append('<div class="no-data">No TDD stages registered.</div>')
+        return "\n".join(parts)
+
+    # Stage table
+    parts.append('<table class="tests">')
+    parts.append(
+        "<thead><tr><th>#</th><th>Stage</th><th>Status</th>"
+        "<th>Attempts</th><th>Free Retries</th><th>Failures</th></tr></thead>"
+    )
+    parts.append("<tbody>")
+    for i, s in enumerate(stages):
+        name = html.escape(s.get("name", f"stage_{i}"))
+        status = s.get("status", "pending")
+        status_color = TDD_STATUS_COLORS.get(status, "#6b7280")
+        status_html = (
+            f'<span style="background:{status_color};color:white;padding:1px 6px;'
+            f'border-radius:3px;font-size:0.85em">{status.upper()}</span>'
+        )
+        attempts = s.get("attempts", 0)
+        max_att = s.get("max_attempts", 6)
+        free_ret = s.get("free_retries", 0)
+
+        # Failure summary
+        failures = s.get("failure_history", [])
+        if failures:
+            cats = {}
+            for f in failures:
+                c = f.get("classification", "unknown")
+                cats[c] = cats.get(c, 0) + 1
+            fail_parts = [f"{c}({n})" for c, n in sorted(cats.items(), key=lambda x: -x[1])]
+            fail_html = html.escape(", ".join(fail_parts))
+        else:
+            fail_html = '<span style="color:#9ca3af">--</span>'
+
+        parts.append(
+            f"<tr><td>{i}</td><td><strong>{name}</strong></td><td>{status_html}</td>"
+            f"<td>{attempts}/{max_att}</td><td>{free_ret}</td><td>{fail_html}</td></tr>"
+        )
+    parts.append("</tbody></table>")
+
+    return "\n".join(parts)
+
+
+def _html_breadcrumbs(parts: list, group_id: str, breadcrumbs: list):
+    """Render breadcrumb JSONL files as tabbed, formatted event logs."""
+    if len(breadcrumbs) > 1:
+        # Multi-agent: use sub-tabs
+        parts.append('<div class="kernel-tabs">')
+        for i, b in enumerate(breadcrumbs):
+            active = " active" if i == 0 else ""
+            agent = html.escape(b["agent_name"])
+            parts.append(
+                f'  <button class="kernel-tab{active}" ' f"onclick=\"showKernel('{group_id}',{i})\">{agent}</button>"
+            )
+        parts.append("</div>")
+        for i, b in enumerate(breadcrumbs):
+            active = " active" if i == 0 else ""
+            parts.append(f'<div class="kernel-panel{active}" id="{group_id}-{i}">')
+            parts.append(_render_breadcrumb_events(b["content"]))
+            parts.append("</div>")
+    elif len(breadcrumbs) == 1:
+        parts.append(_render_breadcrumb_events(breadcrumbs[0]["content"]))
+
+
+def _render_breadcrumb_events(content: str) -> str:
+    """Parse JSONL breadcrumbs into a readable event table."""
+    events = []
+    for line in content.strip().splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        try:
+            events.append(json.loads(line))
+        except json.JSONDecodeError:
+            continue
+
+    if not events:
+        return '<div class="no-data">No breadcrumb events.</div>'
+
+    EVENT_COLORS = {
+        "start": "#2563eb",
+        "complete": "#16a34a",
+        "test_run": "#7c3aed",
+        "stage_pass": "#16a34a",
+        "commit": "#ca8a04",
+        "action": "#64748b",
+        "design_decision": "#ea580c",
+        "reference_read": "#6b7280",
+    }
+
+    parts = ['<table class="tests">']
+    parts.append("<thead><tr><th>Time</th><th>Event</th><th>Details</th></tr></thead>")
+    parts.append("<tbody>")
+    for ev in events:
+        ts = html.escape(ev.get("ts", "--")[-8:])  # show HH:MM:SS
+        event_type = ev.get("event", "?")
+        color = EVENT_COLORS.get(event_type, "#6b7280")
+        event_html = (
+            f'<span style="background:{color};color:white;padding:1px 6px;'
+            f'border-radius:3px;font-size:0.85em">{html.escape(event_type)}</span>'
+        )
+
+        # Build details from various fields
+        detail_parts = []
+        if ev.get("agent"):
+            detail_parts.append(f'agent={ev["agent"]}')
+        if ev.get("stage"):
+            detail_parts.append(f'stage={ev["stage"]}')
+        if ev.get("attempt"):
+            detail_parts.append(f'attempt={ev["attempt"]}')
+        if ev.get("result"):
+            detail_parts.append(f'result={ev["result"]}')
+        if ev.get("final_status"):
+            detail_parts.append(f'final={ev["final_status"]}')
+        if ev.get("details"):
+            detail_parts.append(str(ev["details"]))
+        if ev.get("fix"):
+            detail_parts.append(f'fix: {ev["fix"]}')
+        if ev.get("choice"):
+            detail_parts.append(f'choice: {ev["choice"]}')
+        if ev.get("rationale"):
+            detail_parts.append(f'rationale: {ev["rationale"]}')
+
+        detail_str = html.escape(" | ".join(detail_parts)) if detail_parts else "--"
+        parts.append(f"<tr><td>{ts}</td><td>{event_html}</td><td>{detail_str}</td></tr>")
+    parts.append("</tbody></table>")
+
+    return "\n".join(parts)
+
+
 def _html_run_detail(rid: int, details: dict) -> str:
     tests = details.get("tests", [])
     criteria = details.get("criteria", [])
     kernels = details.get("kernels", [])
     host_code = details.get("host_code", [])
     artifacts = details.get("artifacts", [])
+    tdd_state_raw = details.get("tdd_state")
+    kw_breadcrumbs = details.get("kw_breadcrumbs", [])
 
     parts = ['<div class="detail-content">']
 
@@ -366,6 +533,8 @@ def _html_run_detail(rid: int, details: dict) -> str:
     has_kernels = len(kernels) > 0
     has_host_code = len(host_code) > 0
     has_artifacts = len(artifacts) > 0
+    has_tdd_state = tdd_state_raw is not None
+    has_breadcrumbs = len(kw_breadcrumbs) > 0
     tab_id = f"run{rid}"
 
     parts.append('<div class="section-tabs">')
@@ -381,6 +550,15 @@ def _html_run_detail(rid: int, details: dict) -> str:
         parts.append(
             f"  <button class=\"section-tab\" onclick=\"showSection('{tab_id}','host')\">"
             f"Host-Side ({len(host_code)})</button>"
+        )
+    if has_tdd_state:
+        parts.append(
+            f"  <button class=\"section-tab\" onclick=\"showSection('{tab_id}','tddstate')\">TDD State</button>"
+        )
+    if has_breadcrumbs:
+        parts.append(
+            f"  <button class=\"section-tab\" onclick=\"showSection('{tab_id}','breadcrumbs')\">"
+            f"KW Breadcrumbs ({len(kw_breadcrumbs)})</button>"
         )
     if has_artifacts:
         parts.append(
@@ -439,6 +617,18 @@ def _html_run_detail(rid: int, details: dict) -> str:
     if has_host_code:
         parts.append(f'<div class="section-panel" id="{tab_id}-host">')
         _html_code_tabs(parts, f"h{rid}", host_code, "python")
+        parts.append("</div>")
+
+    # --- TDD State panel ---
+    if has_tdd_state:
+        parts.append(f'<div class="section-panel" id="{tab_id}-tddstate">')
+        parts.append(_html_tdd_state(tdd_state_raw))
+        parts.append("</div>")
+
+    # --- KW Breadcrumbs panel ---
+    if has_breadcrumbs:
+        parts.append(f'<div class="section-panel" id="{tab_id}-breadcrumbs">')
+        _html_breadcrumbs(parts, f"bc{rid}", kw_breadcrumbs)
         parts.append("</div>")
 
     # --- Artifacts panel (self-reflection) ---

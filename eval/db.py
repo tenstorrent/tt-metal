@@ -74,6 +74,19 @@ CREATE TABLE IF NOT EXISTS artifacts (
     name TEXT NOT NULL,
     content TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS tdd_state (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES runs(id),
+    content TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS kw_breadcrumbs (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id INTEGER NOT NULL REFERENCES runs(id),
+    agent_name TEXT NOT NULL,
+    content TEXT NOT NULL
+);
 """
 
 
@@ -277,4 +290,32 @@ def insert_artifact(conn, run_id: int, name: str, content: str):
 def get_artifacts(conn, run_id: int) -> list:
     """Get all artifacts for a run."""
     rows = conn.execute("SELECT * FROM artifacts WHERE run_id = ? ORDER BY name", (run_id,)).fetchall()
+    return [dict(r) for r in rows]
+
+
+def insert_tdd_state(conn, run_id: int, content: str):
+    """Insert the .tdd_state.json content for a run. Caller must commit."""
+    conn.execute(
+        "INSERT INTO tdd_state (run_id, content) VALUES (?, ?)",
+        (run_id, content),
+    )
+
+
+def get_tdd_state(conn, run_id: int) -> Optional[str]:
+    """Get .tdd_state.json content for a run, or None."""
+    row = conn.execute("SELECT content FROM tdd_state WHERE run_id = ?", (run_id,)).fetchone()
+    return row["content"] if row else None
+
+
+def insert_kw_breadcrumbs(conn, run_id: int, breadcrumbs: list):
+    """Insert breadcrumb files. Each item: {"agent_name": str, "content": str}. Caller must commit."""
+    conn.executemany(
+        "INSERT INTO kw_breadcrumbs (run_id, agent_name, content) VALUES (?, ?, ?)",
+        [(run_id, b["agent_name"], b["content"]) for b in breadcrumbs],
+    )
+
+
+def get_kw_breadcrumbs(conn, run_id: int) -> list:
+    """Get all breadcrumb files for a run."""
+    rows = conn.execute("SELECT * FROM kw_breadcrumbs WHERE run_id = ? ORDER BY agent_name", (run_id,)).fetchall()
     return [dict(r) for r in rows]
