@@ -28,7 +28,6 @@ from models.experimental.dino_5scale_swin_l.tt.tt_decoder import (
     inverse_sigmoid_ttnn,
 )
 
-# Tile alignment for ttnn.concat (TILE layout requires aligned dims)
 TILE_ALIGN = 32
 
 
@@ -40,37 +39,6 @@ def _tile_aligned_hw(H: int, W: int) -> int:
         padded = ((hw + H - 1) // H) * H
         padded = (padded + TILE_ALIGN - 1) // TILE_ALIGN * TILE_ALIGN
     return padded
-
-
-def sine_positional_encoding(
-    H: int,
-    W: int,
-    num_feats: int = 128,
-    temperature: float = 20,
-    normalize: bool = True,
-    scale: float = 2.0 * math.pi,
-    eps: float = 1e-6,
-) -> torch.Tensor:
-    """
-    Compute 2D sine positional encoding for a single feature map.
-    Matches mmdet SinePositionalEncoding with mask=None.
-
-    Returns: [1, 256, H, W] torch float32 tensor.
-    """
-    x_embed = torch.arange(1, W + 1, dtype=torch.float32).view(1, 1, -1).repeat(1, H, 1)
-    y_embed = torch.arange(1, H + 1, dtype=torch.float32).view(1, -1, 1).repeat(1, 1, W)
-
-    if normalize:
-        y_embed = (y_embed) / (y_embed[:, -1:, :] + eps) * scale
-        x_embed = (x_embed) / (x_embed[:, :, -1:] + eps) * scale
-    dim_t = torch.arange(num_feats, dtype=torch.float32)
-    dim_t = temperature ** (2 * (dim_t // 2) / num_feats)
-    pos_x = x_embed[:, :, :, None] / dim_t
-    pos_y = y_embed[:, :, :, None] / dim_t
-    pos_x = torch.stack((pos_x[:, :, :, 0::2].sin(), pos_x[:, :, :, 1::2].cos()), dim=4).view(1, H, W, -1)
-    pos_y = torch.stack((pos_y[:, :, :, 0::2].sin(), pos_y[:, :, :, 1::2].cos()), dim=4).view(1, H, W, -1)
-    pos = torch.cat((pos_y, pos_x), dim=3).permute(0, 3, 1, 2)
-    return pos
 
 
 def sine_positional_encoding_ttnn(
@@ -330,8 +298,6 @@ class TtDINO:
 
         self._dram_cfg = ttnn.DRAM_MEMORY_CONFIG
 
-        # Precompute PE and trace metadata in __init__ (before trace capture) to avoid
-        # ttnn.arange/ttnn.full during traced forward (those trigger host-to-device writes).
         self._pe_cache: List[ttnn.Tensor] = []
         self._valid_ratios_tt = None
         self._spatial_shapes_tt = None
@@ -362,7 +328,6 @@ class TtDINO:
             for r in rows:
                 ttnn.deallocate(r)
 
-            # Precompute encoder output proposals (avoids ttnn.arange/ttnn.full in pre_decoder)
             hw_list = [[DINO_NECK_LEVEL_SHAPES[l][2], DINO_NECK_LEVEL_SHAPES[l][3]] for l in range(num_levels)]
             spatial_shapes = torch.tensor(hw_list, dtype=torch.long)
             N = sum(DINO_NECK_LEVEL_SHAPES[l][2] * DINO_NECK_LEVEL_SHAPES[l][3] for l in range(num_levels))
@@ -406,7 +371,6 @@ class TtDINO:
             padded_hw_list.append(padded_hw)
             hw_list.append(hw)
 
-            # Flatten on device: (B, C, H, W) -> (B, H*W, C)
             feat_tt = ttnn.to_layout(feat_tt, ttnn.ROW_MAJOR_LAYOUT)
             feat_tt = ttnn.permute(feat_tt, (0, 2, 3, 1))
             feat_flat_tt = ttnn.reshape(feat_tt, (B, hw, C))
@@ -421,7 +385,6 @@ class TtDINO:
             feat_flat_tt = ttnn.to_layout(feat_flat_tt, ttnn.TILE_LAYOUT)
             feat_padded_list.append(feat_flat_tt)
 
-            # PE on device: [1, H*W, 256] + level_embed, then pad and expand to B
             if self.trace_mode and self._pe_cache:
                 pos_tt = self._pe_cache[lvl]
             else:
@@ -447,18 +410,14 @@ class TtDINO:
             pos_tt = ttnn.to_layout(pos_tt, ttnn.TILE_LAYOUT)
             pos_padded_list.append(pos_tt)
 
-        # Concat on device (all levels are tile-aligned)
         feat_flatten_padded = ttnn.concat(feat_padded_list, dim=1)
         feat_pos_padded = ttnn.concat(pos_padded_list, dim=1)
-        for t in feat_padded_list:
-            ttnn.deallocate(t)
-        for t in pos_padded_list:
+        for t in feat_padded_list + pos_padded_list:
             ttnn.deallocate(t)
 
         N = sum(hw_list)
         N_padded = sum(padded_hw_list)
         spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
-        # Slice out valid [B, N, C] so encoder/pre_decoder see unpadded sequence
         padded_starts = [0] + list(torch.tensor(padded_hw_list, dtype=torch.long).cumsum(0)[:-1].tolist())
         if N_padded > N:
             feat_segments = []
@@ -472,9 +431,7 @@ class TtDINO:
             feat_pos_tt = ttnn.concat(pos_segments, dim=1)
             ttnn.deallocate(feat_flatten_padded)
             ttnn.deallocate(feat_pos_padded)
-            for t in feat_segments:
-                ttnn.deallocate(t)
-            for t in pos_segments:
+            for t in feat_segments + pos_segments:
                 ttnn.deallocate(t)
         else:
             feat_flatten_tt = feat_flatten_padded
@@ -488,7 +445,6 @@ class TtDINO:
         )
         valid_ratios = torch.ones(B, len(mlvl_feats_tt), 2, dtype=torch.float32)
 
-        # For trace_mode: use precomputed cached tensors (created in __init__ before trace)
         valid_ratios_tt = None
         spatial_shapes_tt = None
         if self.trace_mode and self._valid_ratios_tt is not None and self._spatial_shapes_tt is not None:
@@ -509,175 +465,6 @@ class TtDINO:
             out["spatial_shapes_tt"] = spatial_shapes_tt
         return out
 
-    def pre_transformer(
-        self,
-        mlvl_feats: List[torch.Tensor],
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Process multi-scale feature maps before encoder.
-
-        Generates sine positional encodings, adds level embeddings, flattens
-        features, and computes spatial metadata.
-
-        Args:
-            mlvl_feats: list of 5 NCHW torch tensors from neck [B, 256, H_i, W_i]
-
-        Returns dict with:
-            feat_flatten: torch [B, N, 256]
-            feat_pos: torch [B, N, 256] (positional encoding + level embed)
-            spatial_shapes: torch [num_levels, 2]
-            level_start_index: torch [num_levels]
-            valid_ratios: torch [B, num_levels, 2]
-        """
-        logger.info("Pre-transformer: generating positional encodings...")
-
-        # Level embed to torch for host computation
-        level_embed_torch = ttnn.to_torch(self.level_embed).float()  # [num_levels, 256]
-
-        feat_flatten_list = []
-        lvl_pos_embed_list = []
-        spatial_shapes_list = []
-
-        for lvl, feat in enumerate(mlvl_feats):
-            B, C, H, W = feat.shape
-            spatial_shapes_list.append([H, W])
-
-            feat_flat = feat.flatten(2).permute(0, 2, 1)  # [B, H*W, C]
-            feat_flatten_list.append(feat_flat)
-
-            pos_embed = sine_positional_encoding(
-                H,
-                W,
-                num_feats=self.embed_dims // 2,
-                temperature=self.pe_temperature,
-            )
-            pos_flat = pos_embed.flatten(2).permute(0, 2, 1)  # [1, H*W, 256]
-            lvl_pos_embed = pos_flat + level_embed_torch[lvl].view(1, 1, -1)
-            lvl_pos_embed_list.append(lvl_pos_embed.expand(B, -1, -1))
-
-        feat_flatten = torch.cat(feat_flatten_list, dim=1)
-        feat_pos = torch.cat(lvl_pos_embed_list, dim=1)
-        spatial_shapes = torch.tensor(spatial_shapes_list, dtype=torch.long)
-        level_start_index = torch.cat(
-            [
-                spatial_shapes.new_zeros((1,)),
-                spatial_shapes.prod(1).cumsum(0)[:-1],
-            ]
-        )
-        valid_ratios = feat_flatten.new_ones(B, len(mlvl_feats), 2)
-
-        logger.info(f"Pre-transformer: feat_flatten {feat_flatten.shape}, " f"spatial_shapes {spatial_shapes.tolist()}")
-
-        return {
-            "feat_flatten": feat_flatten,
-            "feat_pos": feat_pos,
-            "spatial_shapes": spatial_shapes,
-            "level_start_index": level_start_index,
-            "valid_ratios": valid_ratios,
-        }
-
-    def pre_decoder(
-        self,
-        memory_tt: ttnn.Tensor,
-        spatial_shapes: torch.Tensor,
-    ) -> Dict[str, torch.Tensor]:
-        """
-        Query selection: generate proposals from encoder memory, select top-K.
-
-        Entire pipeline runs on HOST in float32 to match the PyTorch reference
-        exactly. This is critical because the top-K operation (selecting 900 from
-        ~89K proposals) is extremely sensitive to small score differences — even
-        bfloat16 rounding in the cls_branch linear can cause different queries.
-
-        Pipeline (all host, float32):
-          1. gen_encoder_output_proposals → proposal boxes
-          2. memory_trans_fc + memory_trans_norm → transformed memory
-          3. cls_branches[6] → classification scores → top-K selection
-          4. reg_branches[6] + proposals → reference points
-          5. query_embedding → initial query content
-        """
-        logger.info("Pre-decoder: generating encoder output proposals (host float32)...")
-        memory_torch = ttnn.to_torch(memory_tt).float()
-        N = spatial_shapes.prod(1).sum().item()
-        memory_torch = memory_torch[:, :N, :]
-        bs = memory_torch.shape[0]
-
-        output_proposals, output_proposals_valid = gen_encoder_output_proposals(
-            memory_torch,
-            spatial_shapes,
-        )
-
-        output_memory = memory_torch.masked_fill(~output_proposals_valid, 0.0)
-
-        # memory_trans_fc + memory_trans_norm — host float32
-        logger.info("Pre-decoder: memory_trans_fc + norm (host float32)...")
-        output_memory = torch.nn.functional.linear(
-            output_memory,
-            self.memory_trans_fc_w_torch,
-            self.memory_trans_fc_b_torch,
-        )
-        output_memory = torch.nn.functional.layer_norm(
-            output_memory,
-            [self.embed_dims],
-            weight=self.memory_trans_norm_w_torch,
-            bias=self.memory_trans_norm_b_torch,
-        )
-
-        # cls_branches[6] — host float32: [B, N, 256] → [B, N, 80]
-        logger.info("Pre-decoder: cls_branches[6] scoring (host float32)...")
-        enc_cls = torch.nn.functional.linear(
-            output_memory,
-            self.cls_enc_w_torch,
-            self.cls_enc_b_torch,
-        )
-
-        # reg_branches[6] — host float32: [B, N, 256] → [B, N, 4]
-        logger.info("Pre-decoder: reg_branches[6] proposals (host float32)...")
-        reg_out = output_memory
-        for i, (w, b) in enumerate(self.reg_enc_layers_torch):
-            reg_out = torch.nn.functional.linear(reg_out, w, b)
-            if i < len(self.reg_enc_layers_torch) - 1:
-                reg_out = torch.nn.functional.relu(reg_out)
-
-        enc_coords_unact = reg_out + output_proposals
-
-        # top-K selection — host float32
-        logger.info("Pre-decoder: top-K selection (K=%d, host float32)...", self.num_queries)
-        topk_indices = torch.topk(
-            enc_cls.max(-1)[0],
-            k=self.num_queries,
-            dim=1,
-        )[1]
-
-        topk_coords_unact = torch.gather(
-            enc_coords_unact,
-            1,
-            topk_indices.unsqueeze(-1).repeat(1, 1, 4),
-        )
-        topk_coords_unact = topk_coords_unact.detach()
-        reference_points = topk_coords_unact.sigmoid()
-
-        query = self.query_embedding_torch[:, None, :].repeat(1, bs, 1).transpose(0, 1)
-        query_tt = ttnn.from_torch(
-            query.to(torch.bfloat16),
-            device=self.device,
-            layout=ttnn.TILE_LAYOUT,
-        )
-
-        logger.info(f"Pre-decoder: selected {self.num_queries} queries, " f"reference_points {reference_points.shape}")
-
-        return {
-            "query": query_tt,
-            "reference_points": reference_points,
-            "topk_score": torch.gather(
-                enc_cls,
-                1,
-                topk_indices.unsqueeze(-1).repeat(1, 1, self.num_classes),
-            ),
-            "topk_coords": reference_points,
-            "topk_indices": topk_indices,
-        }
-
     def pre_decoder_ttnn(
         self,
         memory_tt: ttnn.Tensor,
@@ -692,7 +479,6 @@ class TtDINO:
         )
 
         if self.trace_mode:
-            # Use precomputed proposals (avoids ttnn.arange/ttnn.full during trace)
             output_proposals = self._output_proposals_cache
             output_proposals_valid = self._output_proposals_valid_cache
             if B > 1:
@@ -759,7 +545,6 @@ class TtDINO:
         ttnn.deallocate(reg_out)
 
         if self.trace_mode:
-            # Device-only topk and gather
             enc_cls_sliced = ttnn.slice(enc_cls, [0, 0, 0], [B, N, self.num_classes], memory_config=self._dram_cfg)
             coarse_cls_max = ttnn.max(enc_cls_sliced, dim=-1, memory_config=self._dram_cfg)
             ttnn.deallocate(enc_cls_sliced)
@@ -779,7 +564,7 @@ class TtDINO:
             ttnn.deallocate(topk_indices_expanded)
             reference_points_tt = ttnn.sigmoid(topk_coords_unact)
             ttnn.deallocate(topk_coords_unact)
-            topk_indices = None  # Not needed for trace; decoder uses reference_points
+            topk_indices = None
         else:
             enc_cls_t = ttnn.to_torch(enc_cls).float()[:, :N, :]
             ttnn.deallocate(enc_cls)
@@ -840,7 +625,6 @@ class TtDINO:
             hidden_state = hidden_states[layer_id]
             reference = references[layer_id]
 
-            # Classification: Linear(256, num_classes) on device
             cls_w = self.cls_branches[layer_id]["weight"]
             cls_b = self.cls_branches[layer_id]["bias"]
             cls_out_tt = ttnn.linear(
@@ -850,10 +634,7 @@ class TtDINO:
             )
             all_cls_tt.append(cls_out_tt)
 
-            # Regression: reg_branch on device
             reg_out_tt = self.reg_branches_head[layer_id](hidden_state)
-            # Reference to device, inverse_sigmoid on device, then add + sigmoid on device
-            # references[0] is torch (initial); references[1:] are ttnn from decoder
             if isinstance(reference, torch.Tensor):
                 ref_tt = ttnn.from_torch(
                     reference.to(torch.bfloat16),
@@ -872,17 +653,12 @@ class TtDINO:
             all_coords_tt.append(coords_tt)
             logger.info(f"  Head layer {layer_id}: cls and coords on device")
 
-        # Stack on device: [num_layers, B, num_queries, C]
         stacked_cls_tt = ttnn.stack(all_cls_tt, dim=0)
         stacked_coords_tt = ttnn.stack(all_coords_tt, dim=0)
-        for t in all_cls_tt:
-            ttnn.deallocate(t)
-        for t in all_coords_tt:
+        for t in all_cls_tt + all_coords_tt:
             ttnn.deallocate(t)
 
         if return_device_tensors:
-            # Return device tensors without host read (for trace capture).
-            # Return stacked tensors directly; do not deallocate (caller uses them).
             logger.info(f"Detection heads done: cls {stacked_cls_tt.shape}, coords {stacked_coords_tt.shape}")
             return stacked_cls_tt, stacked_coords_tt
 
@@ -913,19 +689,6 @@ class TtDINO:
             all_bbox_preds: [num_layers, B, num_queries, 4]
         """
         pre_trans = self.pre_transformer_tt(mlvl_feats_tt)
-
-        # feat_tt = ttnn.from_torch(
-        #     pre_trans["feat_flatten"],
-        #     device=self.device,
-        #     layout=ttnn.TILE_LAYOUT,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # )
-        # feat_pos_tt = ttnn.from_torch(
-        #     pre_trans["feat_pos"],
-        #     device=self.device,
-        #     layout=ttnn.TILE_LAYOUT,
-        #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        # )
 
         logger.info("Running encoder...")
         enc_kw = {
@@ -1013,7 +776,6 @@ class TtDINO:
 
         backbone_feats_torch = None
         if return_intermediates:
-            # Backbone returns NHWC [B,H,W,C]; reference uses NCHW [B,C,H,W]. Permute for PCC.
             backbone_feats_torch = [
                 ttnn.to_torch(ttnn.from_device(bf)).float().permute(0, 3, 1, 2) for bf in backbone_feats_tt
             ]
@@ -1032,7 +794,7 @@ class TtDINO:
         for bf in backbone_feats_tt:
             ttnn.deallocate(bf)
 
-        # --- Pre-transformer (TT-optimized: flatten + PE on device) → Encoder → ... ---
+        # --- Pre-transformer---
         pre_trans = self.pre_transformer_tt(neck_feats_tt)
         for nf in neck_feats_tt:
             ttnn.deallocate(nf)
