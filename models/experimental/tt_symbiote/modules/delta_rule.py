@@ -7,7 +7,7 @@ from typing import Optional, Tuple
 import torch
 import ttnn
 
-from ..core.module import TTNNModule
+from models.experimental.tt_symbiote.core.module import TTNNModule
 
 
 def _get_tensor_shape(tensor, use_padded=False):
