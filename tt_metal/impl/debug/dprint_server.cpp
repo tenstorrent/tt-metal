@@ -550,8 +550,6 @@ bool DevicePrintImpl::poll_one_core(
 
         // Update rpos, so that device knows it can use rest of the buffer
         rpos = 0;
-        MetalContext::instance().get_cluster().write_core(
-            device_id, virtual_core, std::vector<uint32_t>{rpos}, buffer_address + 4);
     }
     if (rpos < wpos) {
         // Read until wpos
@@ -563,9 +561,9 @@ bool DevicePrintImpl::poll_one_core(
 
         // Update rpos, so that device knows it can use rest of the buffer
         rpos = wpos;
-        MetalContext::instance().get_cluster().write_core(
-            device_id, virtual_core, std::vector<uint32_t>{rpos}, buffer_address + 4);
     }
+    MetalContext::instance().get_cluster().write_core(
+        device_id, virtual_core, std::vector<uint32_t>{rpos}, buffer_address + 4);
     return true;
 }
 
