@@ -53,20 +53,18 @@ def test_residual_coupling_layer(device):
     tt_x = ttnn.from_torch(
         torch_x.to(torch.bfloat16).permute(0, 2, 1),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
     tt_g = ttnn.from_torch(
         torch_g.to(torch.bfloat16).permute(0, 2, 1),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
 
     tt_output = tt_layer(tt_x, g=tt_g)
     tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32)
-    print(f"torch_output shape: {torch_output.shape}")
-    print(f"tt_output shape (before reshape): {tt_output_torch.shape}")
     tt_output_torch = tt_output_torch.permute(0, 2, 1)
 
     assert_with_pcc(torch_output, tt_output_torch, pcc=0.98)
