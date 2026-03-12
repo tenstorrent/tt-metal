@@ -13,12 +13,8 @@ class MetalEnvAccessor {
 public:
     explicit MetalEnvAccessor(MetalEnv& env) noexcept : env_(env) {}
 
-    llrt::RunTimeOptions& get_rtoptions() { return env_.impl().get_rtoptions(); }
-    tt::Cluster& get_cluster() { return env_.impl().get_cluster(); }
-    const Hal& get_hal() const { return env_.impl().get_hal(); }
-    void acquire() { env_.impl().acquire(); }
-    void release() { env_.impl().release(); }
-    bool check_use_count_zero() const { return env_.impl().check_use_count_zero(); }
+    MetalEnvImpl& impl() { return env_.impl(); }
+    const MetalEnvImpl& impl() const { return env_.impl(); }
 
 private:
     MetalEnv& env_;
