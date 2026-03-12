@@ -54,10 +54,8 @@ struct DataflowBufferImpl {
     // Shared config fields (written to dfb_initializer_t)
     uint32_t entry_size = 0;
     uint32_t stride_in_entries = 0;
-    std::array<uint8_t, 4> txn_ids = {0};
-    uint8_t num_entries_per_txn_id = 0;
-    uint8_t num_entries_per_txn_id_per_tc = 0;
-    uint8_t num_txn_ids = 0;
+    ::experimental::dfb_txn_id_descriptor_t producer_txn_descriptor = {};
+    ::experimental::dfb_txn_id_descriptor_t consumer_txn_descriptor = {};
 
     // Flag to track if TC/remapper allocation has been finalized
     bool configs_finalized = false;
@@ -87,6 +85,16 @@ public:
 
 private:
     std::unordered_map<CoreCoord, uint8_t> next_index_;
+};
+
+// Allocates hardware transaction IDs. Valid range: [0, 15] (63?)
+class TxnIdAllocator {
+public:
+    std::vector<uint8_t> allocate(uint8_t count);
+    void reset() { next_id_ = 0; }
+
+private:
+    uint8_t next_id_ = 0;
 };
 
 // Allocates Remapper clientTypes for BLOCKED consumer mode.
