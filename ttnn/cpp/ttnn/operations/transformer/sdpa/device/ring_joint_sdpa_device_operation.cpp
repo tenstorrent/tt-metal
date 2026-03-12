@@ -301,12 +301,21 @@ RingJointSDPAResultSpec RingJointSDPADeviceOperation::compute_output_specs(
     // head dim as v head dim
     out_shape[3] = tensor_args.input_v.logical_shape()[3];
 
-    std::optional<TensorSpec> joint_output_spec = std::nullopt;
-    if (tensor_args.joint_q.has_value()) {
-        joint_output_spec = TensorSpec(
-            tensor_args.joint_q.value().logical_shape(),
-            TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config));
-    }
+    // Always create joint_output_spec - empty when no joint tensors provided
+    TensorSpec joint_output_spec = [&]() {
+        if (tensor_args.joint_q.has_value()) {
+            return TensorSpec(
+                tensor_args.joint_q.value().logical_shape(),
+                TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config));
+        } else {
+            // Create empty tensor spec using out_shape but with seq_len = 0 when no joint input provided
+            auto empty_joint_shape = out_shape;
+            empty_joint_shape[2] = 0;  // Set sequence length to 0
+            return TensorSpec(
+                empty_joint_shape,
+                TensorLayout(DataType::BFLOAT16, PageConfig(Layout::TILE), args.output_memory_config));
+        }
+    }();
 
     return {
         .output = TensorSpec(
@@ -320,9 +329,12 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     auto output_specs = compute_output_specs(args, tensor_args);
 
-    std::optional<Tensor> joint_output = std::nullopt;
-    if (output_specs.joint_output.has_value() && tensor_args.joint_q.has_value()) {
-        joint_output = create_device_tensor(output_specs.joint_output.value(), tensor_args.joint_q.value().device());
+    // Always create joint_output tensor - empty when no joint tensors provided
+    Tensor joint_output;
+    if (tensor_args.joint_q.has_value()) {
+        joint_output = create_device_tensor(output_specs.joint_output, tensor_args.joint_q.value().device());
+    } else {
+        joint_output = create_device_tensor(output_specs.joint_output, tensor_args.input_q.device());
     }
 
     return {
@@ -351,7 +363,7 @@ tt::stl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
 
     return tt::tt_metal::operation::hash_operation<RingJointSDPADeviceOperation>(
         input_tensors,
-        args.joint_strategy.value_or(""),
+        args.joint_strategy,
         args.scale,
         args.is_causal,
         args.is_balanced,

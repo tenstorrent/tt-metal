@@ -275,11 +275,13 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("compute_kernel_config").noconvert() = nb::none()});
 
     const auto* ring_joint_doc = R"doc(
-        RingJointAttention operation that efficiently performs non-causal attention over two
-        sets of query, key, and value tensors, where the first set is sharded across devices in the sequence dimension.
+        RingJointAttention operation supports both:
+
+        - efficient non-causal attention over two sets of query, key, and value tensors, where the first set is sharded across devices in the sequence dimension.
         Internally, these are concatenated in the sequence dimension (joint_strategy = "rear"),
         then attention is computed once. The output is split ("sliced") into two parts: one for the original Q/K/V chunk,
         and one for the joint Q/K/V chunk.
+        - funtional causal attention over a single set of query, key and value tensors with the option of handling zig-zag load balancing across devices.
 
         This op handles optional padding via an attention mask to omit padded tokens from
         both the "original" and "joint" sequences.

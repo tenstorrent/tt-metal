@@ -199,11 +199,8 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
         joint_tensor_k,
         joint_tensor_v,
         joint_strategy);
-    // For backward compatibility, return actual tensor (even if empty when no joint input)
-    auto joint_output = output_tensors.joint_output.has_value()
-                            ? output_tensors.joint_output.value()
-                            : ttnn::Tensor{};  // Empty tensor when no joint input provided
-    return {output_tensors.output, joint_output, output_tensors.lse_output};
+    // joint_output is always present now (may be empty when no joint input provided)
+    return {output_tensors.output, output_tensors.joint_output, output_tensors.lse_output};
 }
 
 ttnn::Tensor ExecuteFlashMLAPrefill::invoke(

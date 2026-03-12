@@ -1677,8 +1677,6 @@ void sdpa_inner_loop(
                 q_high_idx = Skt;
             }
         } else if (sdpa_type == RING) {
-            const uint32_t nb = q_iter / (NH * q_num_chunks);
-            const uint32_t nq = (q_iter % (NH * q_num_chunks)) / q_num_chunks;
             const uint32_t q_chunk = q_iter % q_num_chunks;
 
             if (is_causal) {

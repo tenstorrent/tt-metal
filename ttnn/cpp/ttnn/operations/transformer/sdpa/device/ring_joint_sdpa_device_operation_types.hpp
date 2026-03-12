@@ -98,13 +98,13 @@ struct RingJointSDPAInputs {
 
 struct RingJointSDPAResult {
     Tensor output;
-    std::optional<Tensor> joint_output;  // Optional when no joint input provided
+    Tensor joint_output;  // Always present - empty tensor when no joint input provided
     Tensor lse_output;
 };
 
 struct RingJointSDPAResultSpec {
     TensorSpec output;
-    std::optional<TensorSpec> joint_output;  // Optional when no joint input provided
+    TensorSpec joint_output;  // Always present - empty spec when no joint input provided
     TensorSpec lse_output;
 };
 

@@ -108,9 +108,6 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     auto& output_tensor = output_tensors.output;
     auto& lse_output_tensor = output_tensors.lse_output;
 
-    // Check if joint output tensor exists
-    const bool has_joint_output = output_tensors.joint_output.has_value();
-
     std::size_t q_chunk_size = args.get_q_chunk_size();
     std::size_t k_chunk_size = args.get_k_chunk_size();
 
@@ -462,8 +459,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.is_balanced};
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(has_joint_output ? output_tensors.joint_output.value().buffer() : nullptr)
-        .append_to(writer_compile_time_args);
+    TensorAccessorArgs(output_tensors.joint_output.buffer()).append_to(writer_compile_time_args);
     TensorAccessorArgs(lse_output_tensor.buffer()).append_to(writer_compile_time_args);
 
     // Early format check: when all data formats are identical, reconfig calls can be skipped.
@@ -705,7 +701,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     uint32_t joint_k_addr = use_joint_tensors ? tensor_args.joint_k.value().buffer()->address() : 0;
     uint32_t joint_v_addr = use_joint_tensors ? tensor_args.joint_v.value().buffer()->address() : 0;
     uint32_t out_addr = output_tensor.buffer()->address();
-    uint32_t joint_out_addr = has_joint_output ? output_tensors.joint_output.value().buffer()->address() : 0;
+    uint32_t joint_out_addr = output_tensors.joint_output.buffer()->address();
     uint32_t lse_addr = lse_output_tensor.buffer()->address();
 
     /**
@@ -1014,7 +1010,7 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
         // Check if joint tensors are provided
         const bool use_joint_tensors =
             tensor_args.joint_q.has_value() && tensor_args.joint_k.has_value() && tensor_args.joint_v.has_value();
-        const bool has_joint_output = output_tensors.joint_output.has_value();
+        // joint_output always exists now
 
         // Get joint buffer pointers conditionally
         auto* joint_q_buffer = use_joint_tensors ? tensor_args.joint_q.value().buffer() : nullptr;
@@ -1023,7 +1019,7 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
 
         // Get addresses for output tensors
         auto* out_buffer = output_tensors.output.buffer();
-        auto* joint_out_buffer = has_joint_output ? output_tensors.joint_output.value().buffer() : nullptr;
+        auto* joint_out_buffer = output_tensors.joint_output.buffer();
         auto* lse_buffer = output_tensors.lse_output.buffer();
 
         uint32_t q_addr = q_buffer->address();
@@ -1035,7 +1031,7 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
         uint32_t joint_k_addr = use_joint_tensors ? joint_k_buffer->address() : 0;
         uint32_t joint_v_addr = use_joint_tensors ? joint_v_buffer->address() : 0;
         uint32_t out_addr = out_buffer->address();
-        uint32_t joint_out_addr = has_joint_output ? joint_out_buffer->address() : 0;
+        uint32_t joint_out_addr = joint_out_buffer->address();
         uint32_t lse_addr = lse_buffer->address();
 
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
