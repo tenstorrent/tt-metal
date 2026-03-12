@@ -241,7 +241,9 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 }
 
 ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    state_configure<Operand::SRCA, Operand::PACK>(icb, ocb, call_line);
+    // fast_tilize configures both UNP0 (srcA) and UNP1 (srcB) at the LLK level,
+    // so the sentinel must track all three operands (srcA, srcB, pack).
+    state_configure(icb, icb, ocb, call_line);
 #ifdef ARCH_BLACKHOLE
     // Blackhole fallback
     tilize_init(icb, full_dim, ocb, call_line);
