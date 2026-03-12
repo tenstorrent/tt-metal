@@ -209,17 +209,11 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
 @pytest.mark.parametrize(
     "DecoderBlockClass, module_path, reference_layer_idx, test_closure",
     [
+        # Dense (layer 0) variants first — ~30s each, gives fast signal
         pytest.param(
             DecoderBlock2D,
             None,
             0,
-            run_test_forward_pass_decoder2d,
-            marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
-        ),
-        pytest.param(
-            MoEDecoderBlock2D,
-            None,
-            3,
             run_test_forward_pass_decoder2d,
             marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
         ),
@@ -227,6 +221,14 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
             DecoderBlock2D,
             "model.layers.0",
             0,
+            run_test_forward_pass_decoder2d,
+            marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
+        ),
+        # MoE (layer 3) variants last — ~200s each
+        pytest.param(
+            MoEDecoderBlock2D,
+            None,
+            3,
             run_test_forward_pass_decoder2d,
             marks=pytest.mark.requires_device(["TG", "DUAL", "QUAD"]),
         ),

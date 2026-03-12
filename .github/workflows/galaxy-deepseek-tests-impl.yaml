@@ -172,7 +172,29 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
-          pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests --timeout 600  --durations=0
+          # Fast, high-signal tests first (~5 min) — get early failure feedback
+          pytest \
+            models/demos/deepseek_v3/tests/test_rms_norm.py \
+            models/demos/deepseek_v3/tests/test_moe_gate.py \
+            models/demos/deepseek_v3/tests/test_lm_head.py \
+            models/demos/deepseek_v3/tests/test_lm_head1d.py \
+            models/demos/deepseek_v3/tests/test_embedding.py \
+            models/demos/deepseek_v3/tests/test_mlp.py \
+            models/demos/deepseek_v3/tests/test_mla.py \
+            --timeout 600 --durations=0
+          # Heavy integration tests + any remaining files
+          # The following tests can be temporarily ignored if needed; keep this list for reference:
+          # --ignore=models/demos/deepseek_v3/tests/test_rms_norm.py  # To be recommented in an alternate PR that ignores these tests
+          # --ignore=models/demos/deepseek_v3/tests/test_moe_gate.py
+          # --ignore=models/demos/deepseek_v3/tests/test_lm_head.py
+          # --ignore=models/demos/deepseek_v3/tests/test_lm_head1d.py
+          # --ignore=models/demos/deepseek_v3/tests/test_embedding.py
+          # --ignore=models/demos/deepseek_v3/tests/test_mlp.py
+          # --ignore=models/demos/deepseek_v3/tests/test_mla.py
+          pytest models/demos/deepseek_v3/tests \
+            --ignore=models/demos/deepseek_v3/tests/unit \
+            --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests \
+            --timeout 600 --durations=0
       - name: Run DeepSeek op unit tests (Device Performance)
         if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
