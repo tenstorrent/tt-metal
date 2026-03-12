@@ -2,8 +2,6 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import ttml
-
 import time
 import torch
 import ttnn

@@ -24,8 +24,6 @@ from ttml.common.data import prepare_data
 from trainer import train
 
 import socket
-import time
-import torch
 import ttnn
 from loguru import logger
 import numpy as np
