@@ -27,10 +27,6 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     const auto& input_tensors = tensor_args.input_tensors;
     const bool is_sharded = input_tensors[0].is_sharded();
 
-    if (const auto& first_nd_shard_spec = input_tensors[0].nd_shard_spec(); first_nd_shard_spec.has_value()) {
-        return ConcatProgramFactory{};
-    }
-
     if (!is_sharded) {
         return ConcatProgramFactory{};
     }
@@ -39,6 +35,11 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
     const bool output_is_sharded = args.output_mem_config.is_sharded();
 
     if (output_is_sharded) {
+        // ND sharded
+        if (args.output_mem_config.memory_layout() == TensorMemoryLayout::ND_SHARDED) {
+            return ConcatProgramFactory{};
+        }
+
         // Sharded-to-sharded (s2s) cases
         if (input_tensors.size() == 2) {
             // Optimized 2-tensor case
@@ -73,7 +74,7 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
     bool shard_first = input_tensors[0].is_sharded();
     bool warn_about_alignment = false;
     const auto& first_nd_shard_spec = first_input.nd_shard_spec();  // can be nullopt
-    const bool nd_sharded = first_nd_shard_spec.has_value();
+    const bool nd_sharded = args.output_mem_config.memory_layout() == TensorMemoryLayout::ND_SHARDED;
 
     for (size_t i = 0; i < input_tensors.size(); ++i) {
         const Tensor& in_ref = input_tensors[i];

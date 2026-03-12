@@ -39,7 +39,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
     Buffer* const dst_buffer = output.buffer();
     TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     const auto& output_nd_shard_spec = output.nd_shard_spec();  // can be nullopt if no nd sharding
-    const bool nd_sharded = output_nd_shard_spec.has_value();
+    const bool nd_sharded = output.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED;
 
     const uint32_t num_dims = output.padded_shape().rank();
     const uint32_t num_input_tensors = static_cast<uint32_t>(input_tensors.size());
