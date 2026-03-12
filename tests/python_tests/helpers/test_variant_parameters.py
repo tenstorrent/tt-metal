@@ -776,3 +776,11 @@ class NUM_ROWS_TO_PACK(RuntimeParameter):
 
     def convert_to_struct_fields(self) -> tuple[str, str]:
         return "std::uint32_t NUM_ROWS_TO_PACK;", "I"
+
+
+@dataclass
+class TILE_DST_CT_OFFSET(TemplateParameter):
+    offset: int = 0
+
+    def convert_to_cpp(self) -> str:
+        return f"constexpr std::uint32_t TILE_DST_CT_OFFSET = {self.offset};"

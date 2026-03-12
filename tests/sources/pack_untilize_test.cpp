@@ -103,10 +103,10 @@ void run_kernel(const volatile struct RuntimeParams* params)
             for (std::uint32_t tile_index_within_block = 0; tile_index_within_block < BLOCK_CT_DIM; ++tile_index_within_block) // Loop over tiles in the block
             {
                 LLK_ASSERT(
-                    (tile_index_within_block < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
-                    "Block tile index exceeds maximum destination tiles");
+                    (tile_index_within_block + TILE_DST_CT_OFFSET < get_dest_max_tiles<dest_sync, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
+                    "Block tile index + TILE_DST_CT_OFFSET exceeds maximum destination tiles");
                 _llk_math_eltwise_unary_datacopy_<DataCopyType::A2D, dest_sync, is_fp32_dest_acc_en, BroadcastType::NONE, unpack_to_dest>(
-                    tile_index_within_block, formats.math, formats.math);
+                    tile_index_within_block + TILE_DST_CT_OFFSET, formats.math, formats.math);
             }
             _llk_math_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
@@ -154,7 +154,13 @@ void run_kernel(const volatile struct RuntimeParams* params)
             std::uint32_t pack_addr_16B = base_addr_16B + rt * row_stride_16B + block_num * block_stride_16B;
 
             _llk_packer_wait_for_math_done_();
-            _llk_pack_untilize_<BLOCK_CT_DIM, FULL_CT_DIM>(pack_addr_16B, formats.pack_dst, FACE_R_DIM, params->num_faces, 0 /* tile_dst_rt_offset */);
+#ifdef ARCH_BLACKHOLE
+            _llk_pack_untilize_<BLOCK_CT_DIM, FULL_CT_DIM, false, TILE_DST_CT_OFFSET>(
+                pack_addr_16B, formats.pack_dst, FACE_R_DIM, params->num_faces, 0 /* tile_dst_rt_offset */);
+#else
+            _llk_pack_untilize_<BLOCK_CT_DIM, FULL_CT_DIM, false, false, TILE_C_DIM, TILE_DST_CT_OFFSET>(
+                pack_addr_16B, formats.pack_dst, FACE_R_DIM, params->num_faces, 0 /* tile_dst_rt_offset */);
+#endif
             _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
     }
