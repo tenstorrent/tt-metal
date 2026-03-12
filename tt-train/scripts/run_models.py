@@ -10,7 +10,6 @@ This script implies tt-metal has already been built with mostly default options.
 import argparse
 import os
 import subprocess
-import sys
 import time
 from pathlib import Path
 
