@@ -490,10 +490,9 @@ def _prepare_fused_kv_branch_weights(
     nope_output_fused = ttnn.from_torch(
         torch.zeros((1, kv_lora_rank), dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=nope_output_mem_config,
-        tile=TILE_1x32,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
     )
 
@@ -507,10 +506,9 @@ def _prepare_fused_kv_branch_weights(
     rope_output_fused = ttnn.from_torch(
         torch.zeros((1, qk_rope_head_dim), dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=rope_output_mem_config,
-        tile=TILE_1x32,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
     )
 

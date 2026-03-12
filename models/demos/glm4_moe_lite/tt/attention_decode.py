@@ -80,11 +80,7 @@ def kv_cache_update(
     t0 = time.perf_counter() if profile is not None else 0.0
 
     if fused_kv_branch_fn is not None and batch == 1:
-        print("[KV_UPD_DBG] Running q_a = attn_linear(x, w_q_a)...", flush=True)
         q_a = attn_linear(x, w.w_q_a, device=device, cfg=cfg, force_no_tp=cfg.attn_dp)
-        print("[KV_UPD_DBG] q_a enqueued. Syncing device...", flush=True)
-        ttnn.synchronize_device(device)
-        print("[KV_UPD_DBG] q_a sync done. Running fused_kv_branch_fn...", flush=True)
         kvpe_new = fused_kv_branch_fn(
             device=device,
             x=x,
@@ -92,7 +88,6 @@ def kv_cache_update(
             cos_batch=cos_batch,
             sin_batch=sin_batch,
         )
-        print("[KV_UPD_DBG] fused_kv_branch_fn done.", flush=True)
     else:
         kv = None
         qkv = None
@@ -150,7 +145,6 @@ def kv_cache_update(
         if qkv is not None:
             ttnn.deallocate(qkv, force=False)
 
-    print("[KV_UPD_DBG] Running shard_kvpe_fn...", flush=True)
     kvpe_new_sharded = shard_kvpe_fn(
         device=device,
         kvpe_new=kvpe_new,
@@ -158,7 +152,6 @@ def kv_cache_update(
         kvpe_dim=kvpe_dim,
         skip_defensive_clones=cfg.skip_defensive_clones,
     )
-    print("[KV_UPD_DBG] shard_kvpe_fn done.", flush=True)
 
     mesh_coords = None
     if device.__class__.__name__ == "MeshDevice":
@@ -172,7 +165,6 @@ def kv_cache_update(
     if mesh_coords is not None:
         _puc_kwargs["mesh_coords"] = mesh_coords
 
-    print("[KV_UPD_DBG] Running paged_update_cache...", flush=True)
     if positions_main_tt is not None and positions_draft_tt is not None:
         ttnn.experimental.paged_update_cache(
             kvpe_cache, kvpe_new_sharded, update_idxs_tensor=positions_main_tt, **_puc_kwargs
@@ -184,8 +176,6 @@ def kv_cache_update(
         ttnn.experimental.paged_update_cache(
             kvpe_cache, kvpe_new_sharded, update_idxs_tensor=tt_positions, **_puc_kwargs
         )
-    print("[KV_UPD_DBG] paged_update_cache done.", flush=True)
-
     if cfg.sync_after_kv_update:
         ttnn.synchronize_device(device)
     ttnn.deallocate(kvpe_new_sharded, force=False)
