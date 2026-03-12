@@ -216,9 +216,9 @@ void kernel_main() {
     DPRINT_DISPATCH << "DEBUG: After send_init_semaphore_to_configured_targets" << ENDL();
 
     // Wait for all devices to complete fabric initialization
-    // noc_semaphore_wait((uint32_t*)init_semaphore_address, num_devices - 1);
-    noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
-    noc_semaphore_set((uint32_t*)init_semaphore_address, 0);  // clear if needed for later use
+    volatile tt_l1_ptr uint32_t* init_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
+    noc_semaphore_wait(init_sem_ptr, dispatch_devices - 1);
+    noc_semaphore_set(init_sem_ptr, 0);  // clear if needed for later use
 
     DPRINT_DISPATCH << "Fabric setup complete" << ENDL();
 #endif

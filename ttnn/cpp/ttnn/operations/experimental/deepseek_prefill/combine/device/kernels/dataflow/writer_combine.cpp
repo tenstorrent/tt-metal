@@ -152,8 +152,10 @@ void kernel_main() {
 
     // Wait for local reader to complete zero-init (or signal if INIT_ZEROS=0)
     DPRINT_COMBINE << "Waiting for local reader zero-init..." << ENDL();
-    noc_semaphore_wait((uint32_t*)zero_init_semaphore_address, 1);
-    noc_semaphore_set((uint32_t*)zero_init_semaphore_address, 0);
+    volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
+    noc_semaphore_wait(zero_init_sem_ptr, 1);
+    noc_semaphore_set(zero_init_sem_ptr, 0);
     DPRINT_COMBINE << "Local reader zero-init done" << ENDL();
 
     // Send init semaphore to all devices (fabric aand zeros completed)
@@ -170,8 +172,9 @@ void kernel_main() {
 
     // Wait for all devices to complete fabric initialization
     DPRINT_COMBINE << "Waiting for all devices to complete fabric init..." << ENDL();
-    noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
-    noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
+    volatile tt_l1_ptr uint32_t* init_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
+    noc_semaphore_wait(init_sem_ptr, dispatch_devices - 1);
+    noc_semaphore_set(init_sem_ptr, 0);
 
     DPRINT_COMBINE << "Fabric and zero-init setup complete" << ENDL();
 #endif
