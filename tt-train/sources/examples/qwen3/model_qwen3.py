@@ -24,7 +24,6 @@ from utils.checkpoint import checkpoint
 
 from utils.tensor_utils import (
     torch_to_ttml as _torch_to_ttml,
-    tile_pad as _tile_pad,
     make_empty_on_device as _make_empty_on_device,
     make_weight as _make_weight,
     make_ones as _make_ones,

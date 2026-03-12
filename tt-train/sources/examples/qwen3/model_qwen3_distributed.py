@@ -68,7 +68,6 @@ from utils.param_utils import (
 from utils.tensor_utils import (
     get_device,
     get_tp_size,
-    make_empty_on_device as _make_empty_on_device,
     make_weight as _make_weight,
     make_ones as _make_ones,
     make_zeros as _make_zeros,

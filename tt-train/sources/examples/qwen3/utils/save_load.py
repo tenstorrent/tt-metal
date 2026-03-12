@@ -220,7 +220,6 @@ def extract_hf_state_dict(
         mapping, fwd_transforms = build_weight_mapping_single(
             config, root_prefix, tie_word_embeddings
         )
-        shard_types = {}
 
     inv_transforms = _build_inv_transforms(fwd_transforms)
     hf_state_dict: Dict[str, torch.Tensor] = {}
@@ -855,39 +854,7 @@ def load_optimizer_state(
     second_moment_map = opt_state["second_moment"]
 
     # Build ttml_name → moment_ptr lookups for fast access
-    fm_lookup = {name: ptr for name, ptr in first_moment_map.items()}
     sm_lookup = {name: ptr for name, ptr in second_moment_map.items()}
-
-    def _restore_base_moments(moment_lookup, prefix):
-        loaded = 0
-        for hf_name, ttml_name in mapping.items():
-            saved_key = f"{prefix}/{hf_name}"
-            if saved_key not in saved:
-                continue
-            actual_name = _resolve_ttml_name(ttml_name, ttml_params)
-            if actual_name is None or actual_name not in moment_lookup:
-                continue
-            ttml_shape = list(moment_lookup[actual_name].shape())
-            weight = saved[saved_key].float()
-            shard_type = shard_types.get(hf_name)
-            w_np = _hf_to_ttml_np(
-                weight, hf_name, fwd_transforms, ttml_shape, shard_type, tp_size
-            )
-            if distributed and shard_type is not None:
-                dim = 2 if shard_type == "col_w" else 3
-                mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
-                    device, dim, shard_dim
-                )
-                new_t = ttml.autograd.Tensor.from_numpy(
-                    w_np, ttnn.Layout.TILE, ttnn.bfloat16, mapper
-                )
-            else:
-                new_t = ttml.autograd.Tensor.from_numpy(
-                    w_np, ttnn.Layout.TILE, ttnn.bfloat16
-                )
-            moment_lookup[actual_name].set_value(new_t.get_value())
-            loaded += 1
-        print(f"  {prefix}: {loaded} moments restored")
 
     def _restore_lora_moments(moment_lookup, prefix):
         loaded = 0
