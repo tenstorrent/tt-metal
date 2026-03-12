@@ -34,6 +34,8 @@ static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<M
         // TODO: Should this throw error?
         return input_tensor;
     }
+
+    // TODO(#38697): Migrate to Tensor::deallocate(true)
     input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
 
     if (mem_config) {
@@ -113,6 +115,8 @@ static inline Tensor move_sharded(const Tensor& input_tensor, const std::optiona
         return {input_tensor};
     }
     auto shard_spec = input_tensor.shard_spec().value();
+
+    // TODO(#38697): Migrate to Tensor::deallocate(true)
     input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
 
     auto output_tensor_spec = input_tensor.tensor_spec();
