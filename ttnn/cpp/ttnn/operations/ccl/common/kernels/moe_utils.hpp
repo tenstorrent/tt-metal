@@ -424,6 +424,7 @@ inline void fabric_send_noc_unicast(
         offset += curr_packet_size;
         size_bytes -= curr_packet_size;
     }
+    noc_async_writes_flushed();
 }
 
 /*
