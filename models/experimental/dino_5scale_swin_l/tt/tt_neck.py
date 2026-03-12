@@ -131,15 +131,13 @@ class TtDINONeck:
                         device=device,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
-                    zeros_tt = ttnn.zeros(
-                        (n_rows, aligned_inner - inner_dim),
-                        dtype=ttnn.DataType.FLOAT32,
-                        layout=ttnn.ROW_MAJOR_LAYOUT,
-                        device=device,
+                    # Trace-safe: use pad instead of zeros + concat
+                    recip_tt = ttnn.pad(
+                        recip_tt,
+                        padding=[(0, 0), (0, aligned_inner - inner_dim)],
+                        value=0.0,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
-                    recip_tt = ttnn.concat([recip_tt, zeros_tt], dim=1)
-                    ttnn.deallocate(zeros_tt)
                 else:
                     recip_tt = ttnn.from_torch(
                         torch_recip,
