@@ -12,16 +12,16 @@ namespace ttnn::experimental::prim {
 
 struct NeighborPadAsyncSharedVariables {
     // H fabric (1 consolidated reader kernel, 1 consolidated writer kernel)
-    tt::tt_metal::KernelHandle h_reader_kernel_id;
-    tt::tt_metal::KernelHandle h_writer_kernel_id;
+    tt::tt_metal::KernelHandle h_reader_kernel_id = 0;
+    tt::tt_metal::KernelHandle h_writer_kernel_id = 0;
 
     // Local copy (1 consolidated reader kernel, 1 consolidated writer kernel)
-    tt::tt_metal::KernelHandle local_reader_kernel_id;
-    tt::tt_metal::KernelHandle local_writer_kernel_id;
+    tt::tt_metal::KernelHandle local_reader_kernel_id = 0;
+    tt::tt_metal::KernelHandle local_writer_kernel_id = 0;
 
     // W fabric (1 consolidated reader kernel, 1 consolidated writer kernel)
-    tt::tt_metal::KernelHandle w_reader_kernel_id;
-    tt::tt_metal::KernelHandle w_writer_kernel_id;
+    tt::tt_metal::KernelHandle w_reader_kernel_id = 0;
+    tt::tt_metal::KernelHandle w_writer_kernel_id = 0;
 
     bool has_local_copy = false;
     bool has_w_fabric = false;
