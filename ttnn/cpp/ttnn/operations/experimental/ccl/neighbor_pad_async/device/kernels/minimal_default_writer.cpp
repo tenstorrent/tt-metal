@@ -20,6 +20,24 @@
 using address_t = uint32_t;
 using namespace tt::tt_fabric::linear::experimental;
 
+// Runtime-arg versions of route info readers, local to this kernel.
+// Used because consolidated kernels have per-core routing via runtime args.
+inline ccl_routing_utils::line_unicast_route_info_t get_line_unicast_route_info_from_rt_args(uint32_t& arg_idx) {
+    return {
+        .dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
+        .dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++))};
+}
+
+inline ccl_routing_utils::line_multicast_route_info_t get_line_multicast_route_info_from_rt_args(uint32_t& arg_idx) {
+    return {
+        .dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
+        .dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
+        .e_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
+        .w_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
+        .n_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
+        .s_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++))};
+}
+
 // Compile-time args (uniform across all cores sharing this kernel)
 constexpr uint32_t cb_output_id = get_compile_time_arg_val(0);
 constexpr bool is_padding_zeros = get_compile_time_arg_val(1);
@@ -75,8 +93,8 @@ void kernel_main() {
     const bool is_first_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool is_last_chip = get_arg_val<uint32_t>(arg_idx++);
     const bool direction = get_arg_val<uint32_t>(arg_idx++);
-    auto unicast_route_info = ccl_routing_utils::get_line_unicast_route_info_from_rt_args(arg_idx);
-    auto barrier_multicast_route_info = ccl_routing_utils::get_line_multicast_route_info_from_rt_args(arg_idx);
+    auto unicast_route_info = get_line_unicast_route_info_from_rt_args(arg_idx);
+    auto barrier_multicast_route_info = get_line_multicast_route_info_from_rt_args(arg_idx);
 
     size_t arg_for_fab = arg_idx;
     auto fabric_connection = FabricConnectionManager::build_from_args(arg_for_fab);

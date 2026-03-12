@@ -55,24 +55,6 @@ constexpr line_multicast_route_info_t get_line_multicast_route_info_from_args() 
     };
 }
 
-// Runtime-arg versions: read route info from runtime args instead of compile-time args.
-// Used when kernels are consolidated across cores with different routing configurations.
-inline line_unicast_route_info_t get_line_unicast_route_info_from_rt_args(uint32_t& arg_idx) {
-    return {
-        .dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
-        .dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++))};
-}
-
-inline line_multicast_route_info_t get_line_multicast_route_info_from_rt_args(uint32_t& arg_idx) {
-    return {
-        .dst_mesh_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
-        .dst_chip_id = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
-        .e_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
-        .w_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
-        .n_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++)),
-        .s_num_hops = static_cast<uint16_t>(get_arg_val<uint32_t>(arg_idx++))};
-}
-
 // dst_chip_id is the hop count for 1D routing, and the chip ID for 2D routing
 // dst_mesh_id is the mesh ID of the destination chip (ignored for 1D routing)
 template <typename packet_header_t>
