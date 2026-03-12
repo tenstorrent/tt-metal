@@ -15,6 +15,8 @@ from datetime import datetime, timezone
 from html import escape
 from textwrap import dedent
 
+from triage import utils
+
 REPORT_DIR = "generated/test_reports"
 
 
@@ -69,10 +71,6 @@ def write_hang_junit_xml(triage_summary: str) -> None:
         report_path = os.path.join(REPORT_DIR, f"hang_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xml")
         with open(report_path, "w") as f:
             f.write(xml_content)
-        from triage import utils
-
         utils.INFO(f"Hang report written to {report_path}")
     except Exception as e:
-        from triage import utils
-
         utils.WARN(f"Failed to write hang JUnit XML report: {e}")
