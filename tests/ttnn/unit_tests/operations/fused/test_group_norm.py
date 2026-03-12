@@ -448,14 +448,8 @@ def generate_sdxl_test_inputs():
     return inputs
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
-@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
-@pytest.mark.parametrize("inplace", [True, False])
-def test_sdxl_base_group_norm(device, input_shape, use_welford, inplace, perf_test_mode=False):
+def run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, perf_test_mode=False):
     num_groups = 32  #  always 32 for SDXL Base
-    N, C, H, W = input_shape
-    layout = ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT
     if layout == ttnn.TILE_LAYOUT and inplace:
         pytest.skip("Tile layout requires non-inplace tensors.")
     torch.manual_seed(0)
@@ -469,7 +463,7 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford, inplace, perf_te
         grid_size = ttnn.CoreGrid(y=8, x=8)
 
     # Generate torch tensor
-    torch_input_tensor = torch.rand(input_shape, dtype=torch.bfloat16)
+    torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
 
     if not perf_test_mode:
         # Execute torch group_norm
@@ -517,6 +511,33 @@ def test_sdxl_base_group_norm(device, input_shape, use_welford, inplace, perf_te
         tt_output_tensor = ttnn.to_torch(tt_output_tensor)
 
         assert_with_pcc(torch_output_tensor, tt_output_tensor, 0.9996)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
+@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+# Paramemeters need to stay consistent with usage in
+# models/demos/stable_diffusion_xl_base/tests/test_sdxl_op_unit_test_perf.py::test_block_sharded_group_norm_sdxl_performance
+def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=False):
+    # Only one test case has C == 512, which has TILE_LAYOUT and inplace False
+    # ALL other inputs have ROW_MAJOR_LAYOUT and inplace True
+    N, C, H, W = input_shape
+    layout = ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT
+    inplace = C != 512
+    run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, perf_test_mode)
+
+
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
+@pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
+@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
+# Oppositive of previous test in terms of inplace, for full coverage purposes.
+def test_sdxl_group_norm_reverse_inplace(device, input_shape, use_welford, perf_test_mode=False):
+    # Only one test case has C == 512, which has TILE_LAYOUT and inplace True
+    # ALL other inputs have ROW_MAJOR_LAYOUT and inplace False
+    N, C, H, W = input_shape
+    layout = ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT
+    inplace = C == 512
+    run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, perf_test_mode)
 
 
 def generate_sdxl_test_inputs_neg_mask():
