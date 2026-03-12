@@ -22,19 +22,6 @@ def _ntuple(x, n):
     return tuple(repeat(x, n))
 
 
-_registered_blocking_configs: dict[tuple, tuple] = {}
-
-
-def register_conv3d_blocking(configs: dict[tuple, tuple]) -> None:
-    """Register additional conv3d blocking configs from model-specific code.
-
-    Args:
-        configs: Mapping of (in_channels, out_channels, kernel_size) to
-            (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block).
-    """
-    _registered_blocking_configs.update(configs)
-
-
 def get_conv3d_config(in_channels, out_channels, kernel_size, grid_size):
     config_to_blocking = {
         # (in_channels, out_channels, kernel_size) -> (C_in_block, C_out_block, T_out_block, H_out_block, W_out_block)
@@ -50,12 +37,11 @@ def get_conv3d_config(in_channels, out_channels, kernel_size, grid_size):
         (384, 768, (3, 3, 3)): (128, 128, 1, 16, 2),
     }
 
-    key = (in_channels, out_channels, kernel_size)
-    blocking = config_to_blocking.get(key) or _registered_blocking_configs.get(key)
+    blocking = config_to_blocking.get((in_channels, out_channels, kernel_size), None)
     if blocking is None:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = in_channels, 32, 1, 1, 1
         logger.warning(
-            f"No blocking found for {key}. Using default blocking: {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}"
+            f"No blocking found for {(in_channels, out_channels, kernel_size)}. Using default blocking: {C_in_block}, {C_out_block}, {T_out_block}, {H_out_block}, {W_out_block}"
         )
     else:
         C_in_block, C_out_block, T_out_block, H_out_block, W_out_block = blocking
