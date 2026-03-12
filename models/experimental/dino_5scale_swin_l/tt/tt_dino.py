@@ -330,37 +330,36 @@ class TtDINO:
 
         self._dram_cfg = ttnn.DRAM_MEMORY_CONFIG
 
-        # Precompute PE and trace metadata in __init__ (before trace capture) to avoid
-        # ttnn.arange/ttnn.full during traced forward (those trigger host-to-device writes).
+        # Precompute spatial_shapes_tt and valid_ratios_tt for device-only MSDeformAttn path (encoder/decoder).
+        # Precompute PE and trace metadata in __init__ (trace_mode) to avoid ttnn.arange/ttnn.full during trace.
         self._pe_cache: List[ttnn.Tensor] = []
-        self._valid_ratios_tt = None
-        self._spatial_shapes_tt = None
-        if trace_mode:
-            from models.experimental.dino_5scale_swin_l.tt.tt_neck import DINO_NECK_LEVEL_SHAPES
+        from models.experimental.dino_5scale_swin_l.tt.tt_neck import DINO_NECK_LEVEL_SHAPES
 
+        self._valid_ratios_tt = ttnn.full(
+            (1, num_levels, 2), 1.0, dtype=ttnn.bfloat16, device=device, memory_config=self._dram_cfg
+        )
+        rows = []
+        for lvl in range(num_levels):
+            _, _, H, W = DINO_NECK_LEVEL_SHAPES[lvl]
+            row = ttnn.stack(
+                [
+                    ttnn.full((1,), float(H), dtype=ttnn.bfloat16, device=device, memory_config=self._dram_cfg),
+                    ttnn.full((1,), float(W), dtype=ttnn.bfloat16, device=device, memory_config=self._dram_cfg),
+                ],
+                dim=-1,
+            )
+            rows.append(row)
+        self._spatial_shapes_tt = ttnn.concat(rows, dim=0)
+        for r in rows:
+            ttnn.deallocate(r)
+
+        if trace_mode:
             for lvl in range(num_levels):
                 _, _, H, W = DINO_NECK_LEVEL_SHAPES[lvl]
                 pe = sine_positional_encoding_ttnn(
                     device, H, W, num_feats=embed_dims // 2, temperature=pe_temperature, memory_config=self._dram_cfg
                 )
                 self._pe_cache.append(pe)
-            self._valid_ratios_tt = ttnn.full(
-                (1, num_levels, 2), 1.0, dtype=ttnn.bfloat16, device=device, memory_config=self._dram_cfg
-            )
-            rows = []
-            for lvl in range(num_levels):
-                _, _, H, W = DINO_NECK_LEVEL_SHAPES[lvl]
-                row = ttnn.stack(
-                    [
-                        ttnn.full((1,), float(H), dtype=ttnn.bfloat16, device=device, memory_config=self._dram_cfg),
-                        ttnn.full((1,), float(W), dtype=ttnn.bfloat16, device=device, memory_config=self._dram_cfg),
-                    ],
-                    dim=-1,
-                )
-                rows.append(row)
-            self._spatial_shapes_tt = ttnn.concat(rows, dim=0)
-            for r in rows:
-                ttnn.deallocate(r)
 
             # Precompute encoder output proposals (avoids ttnn.arange/ttnn.full in pre_decoder)
             hw_list = [[DINO_NECK_LEVEL_SHAPES[l][2], DINO_NECK_LEVEL_SHAPES[l][3]] for l in range(num_levels)]
@@ -488,12 +487,9 @@ class TtDINO:
         )
         valid_ratios = torch.ones(B, len(mlvl_feats_tt), 2, dtype=torch.float32)
 
-        # For trace_mode: use precomputed cached tensors (created in __init__ before trace)
-        valid_ratios_tt = None
-        spatial_shapes_tt = None
-        if self.trace_mode and self._valid_ratios_tt is not None and self._spatial_shapes_tt is not None:
-            valid_ratios_tt = ttnn.repeat(self._valid_ratios_tt, (B, 1, 1)) if B > 1 else self._valid_ratios_tt
-            spatial_shapes_tt = self._spatial_shapes_tt
+        # Use precomputed tensors for device-only MSDeformAttn path (avoids to_torch/from_torch)
+        valid_ratios_tt = ttnn.repeat(self._valid_ratios_tt, (B, 1, 1)) if B > 1 else self._valid_ratios_tt
+        spatial_shapes_tt = self._spatial_shapes_tt
 
         logger.info(f"Pre-transformer (TT): feat_flatten [B={B}, N={N}], " f"spatial_shapes {spatial_shapes.tolist()}")
         out = {
@@ -691,8 +687,7 @@ class TtDINO:
             else memory_tt
         )
 
-        if self.trace_mode:
-            # Use precomputed proposals (avoids ttnn.arange/ttnn.full during trace)
+        if self.trace_mode and self._output_proposals_cache is not None:
             output_proposals = self._output_proposals_cache
             output_proposals_valid = self._output_proposals_valid_cache
             if B > 1:
@@ -758,45 +753,29 @@ class TtDINO:
             ttnn.deallocate(output_proposals)
         ttnn.deallocate(reg_out)
 
-        if self.trace_mode:
-            # Device-only topk and gather
-            enc_cls_sliced = ttnn.slice(enc_cls, [0, 0, 0], [B, N, self.num_classes], memory_config=self._dram_cfg)
-            coarse_cls_max = ttnn.max(enc_cls_sliced, dim=-1, memory_config=self._dram_cfg)
-            ttnn.deallocate(enc_cls_sliced)
-            ttnn.deallocate(enc_cls)
-            ttnn.deallocate(output_memory)
-            topk_values, topk_indices_tt = ttnn.topk(
-                coarse_cls_max, k=self.num_queries, dim=1, largest=True, sorted=True
-            )
-            ttnn.deallocate(topk_values)
-            ttnn.deallocate(coarse_cls_max)
-            enc_coords_sliced = ttnn.slice(enc_coords_unact, [0, 0, 0], [B, N, 4], memory_config=self._dram_cfg)
-            topk_indices_expanded = ttnn.reshape(topk_indices_tt, (B, self.num_queries, 1))
-            topk_indices_expanded = ttnn.repeat(topk_indices_expanded, (1, 1, 4))
-            topk_coords_unact = ttnn.gather(enc_coords_sliced, dim=1, index=topk_indices_expanded)
-            ttnn.deallocate(enc_coords_sliced)
-            ttnn.deallocate(enc_coords_unact)
-            ttnn.deallocate(topk_indices_expanded)
-            reference_points_tt = ttnn.sigmoid(topk_coords_unact)
-            ttnn.deallocate(topk_coords_unact)
-            topk_indices = None  # Not needed for trace; decoder uses reference_points
-        else:
-            enc_cls_t = ttnn.to_torch(enc_cls).float()[:, :N, :]
-            ttnn.deallocate(enc_cls)
-            output_memory_t = ttnn.to_torch(output_memory).float()[:, :N, :]
-            ttnn.deallocate(output_memory)
-            coarse_cls = torch.nn.functional.linear(output_memory_t, self.cls_enc_w_torch, self.cls_enc_b_torch)
-            topk_indices = torch.topk(coarse_cls.max(-1)[0], k=self.num_queries, dim=1)[1]
-            enc_coords_t = ttnn.to_torch(enc_coords_unact).float()[:, :N, :]
-            ttnn.deallocate(enc_coords_unact)
-            topk_coords_unact = torch.gather(enc_coords_t, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 4))
-            reference_points = topk_coords_unact.sigmoid()
-            reference_points_tt = ttnn.from_torch(
-                reference_points.to(torch.bfloat16),
-                device=self.device,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=self._dram_cfg,
-            )
+        # Unified device path: topk + gather (same for trace and non-trace; trace_mode only affects topk_indices return)
+        enc_cls_sliced = ttnn.slice(enc_cls, [0, 0, 0], [B, N, self.num_classes], memory_config=self._dram_cfg)
+        max_result = ttnn.max(enc_cls_sliced, dim=-1, memory_config=self._dram_cfg)
+        coarse_cls_max = max_result[0] if isinstance(max_result, (tuple, list)) else max_result
+        ttnn.deallocate(enc_cls_sliced)
+        ttnn.deallocate(enc_cls)
+        ttnn.deallocate(output_memory)
+        topk_values, topk_indices_tt = ttnn.topk(coarse_cls_max, k=self.num_queries, dim=1, largest=True, sorted=True)
+        ttnn.deallocate(topk_values)
+        ttnn.deallocate(coarse_cls_max)
+        enc_coords_sliced = ttnn.slice(enc_coords_unact, [0, 0, 0], [B, N, 4], memory_config=self._dram_cfg)
+        topk_indices_u32 = ttnn.typecast(topk_indices_tt, dtype=ttnn.uint32)
+        topk_indices_expanded = ttnn.reshape(topk_indices_u32, (B, self.num_queries, 1))
+        topk_indices_expanded = ttnn.repeat(topk_indices_expanded, (1, 1, 4))
+        topk_coords_unact = ttnn.gather(enc_coords_sliced, dim=1, index=topk_indices_expanded)
+        ttnn.deallocate(enc_coords_sliced)
+        ttnn.deallocate(enc_coords_unact)
+        ttnn.deallocate(topk_indices_expanded)
+        ttnn.deallocate(topk_indices_u32)
+        reference_points_tt = ttnn.sigmoid(topk_coords_unact)
+        ttnn.deallocate(topk_coords_unact)
+        topk_indices = ttnn.to_torch(topk_indices_tt).long() if not self.trace_mode else None
+        ttnn.deallocate(topk_indices_tt)
 
         qemb = self._decoder_params["query_embedding"]
         qemb = ttnn.reshape(qemb, (1, self.num_queries, self.embed_dims))
@@ -935,10 +914,9 @@ class TtDINO:
             "spatial_shapes": pre_trans["spatial_shapes"],
             "level_start_index": pre_trans["level_start_index"],
             "valid_ratios": pre_trans["valid_ratios"],
+            "valid_ratios_tt": pre_trans.get("valid_ratios_tt"),
+            "spatial_shapes_tt": pre_trans.get("spatial_shapes_tt"),
         }
-        if self.trace_mode:
-            enc_kw["valid_ratios_tt"] = pre_trans.get("valid_ratios_tt")
-            enc_kw["spatial_shapes_tt"] = pre_trans.get("spatial_shapes_tt")
         memory_tt = self.encoder(**enc_kw)
         ttnn.deallocate(pre_trans["feat_flatten"])
         ttnn.deallocate(pre_trans["feat_pos"])
@@ -955,11 +933,9 @@ class TtDINO:
             spatial_shapes=pre_trans["spatial_shapes"],
             level_start_index=pre_trans["level_start_index"],
             valid_ratios=pre_trans["valid_ratios"],
+            valid_ratios_tt=pre_trans.get("valid_ratios_tt"),
+            spatial_shapes_tt=pre_trans.get("spatial_shapes_tt"),
         )
-        if self.trace_mode and "valid_ratios_tt" in pre_trans:
-            dec_kw["valid_ratios_tt"] = pre_trans["valid_ratios_tt"]
-        if self.trace_mode and "spatial_shapes_tt" in pre_trans:
-            dec_kw["spatial_shapes_tt"] = pre_trans["spatial_shapes_tt"]
         hidden_states, references = self.decoder(**dec_kw)
 
         all_cls, all_coords = self.forward_heads(hidden_states, references)
@@ -1006,7 +982,8 @@ class TtDINO:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         backbone_feats_tt = self.backbone(image_tt)
-        ttnn.synchronize_device(self.device)
+        if not self.trace_mode:
+            ttnn.synchronize_device(self.device)
         if profile_mode:
             ttnn.ReadDeviceProfiler(self.device)
         logger.info(f"Backbone: {len(backbone_feats_tt)} feature maps")
@@ -1021,7 +998,8 @@ class TtDINO:
         # --- Neck ---
         logger.info("Neck: ChannelMapper...")
         neck_feats_tt = self.neck(backbone_feats_tt)
-        ttnn.synchronize_device(self.device)
+        if not self.trace_mode:
+            ttnn.synchronize_device(self.device)
         if profile_mode:
             ttnn.ReadDeviceProfiler(self.device)
         logger.info(f"Neck: {len(neck_feats_tt)} output levels")
@@ -1048,14 +1026,14 @@ class TtDINO:
             "spatial_shapes": pre_trans["spatial_shapes"],
             "level_start_index": pre_trans["level_start_index"],
             "valid_ratios": pre_trans["valid_ratios"],
+            "valid_ratios_tt": pre_trans.get("valid_ratios_tt"),
+            "spatial_shapes_tt": pre_trans.get("spatial_shapes_tt"),
         }
-        if self.trace_mode:
-            enc_kw["valid_ratios_tt"] = pre_trans.get("valid_ratios_tt")
-            enc_kw["spatial_shapes_tt"] = pre_trans.get("spatial_shapes_tt")
         memory_tt = self.encoder(**enc_kw)
         ttnn.deallocate(feat_tt)
         ttnn.deallocate(feat_pos_tt)
-        ttnn.synchronize_device(self.device)
+        if not self.trace_mode:
+            ttnn.synchronize_device(self.device)
         if profile_mode:
             ttnn.ReadDeviceProfiler(self.device)
 
@@ -1076,14 +1054,13 @@ class TtDINO:
             spatial_shapes=pre_trans["spatial_shapes"],
             level_start_index=pre_trans["level_start_index"],
             valid_ratios=pre_trans["valid_ratios"],
+            valid_ratios_tt=pre_trans.get("valid_ratios_tt"),
+            spatial_shapes_tt=pre_trans.get("spatial_shapes_tt"),
         )
-        if self.trace_mode and "valid_ratios_tt" in pre_trans:
-            dec_kw["valid_ratios_tt"] = pre_trans["valid_ratios_tt"]
-        if self.trace_mode and "spatial_shapes_tt" in pre_trans:
-            dec_kw["spatial_shapes_tt"] = pre_trans["spatial_shapes_tt"]
         hidden_states, references = self.decoder(**dec_kw)
 
-        ttnn.synchronize_device(self.device)
+        if not self.trace_mode:
+            ttnn.synchronize_device(self.device)
         if profile_mode:
             ttnn.ReadDeviceProfiler(self.device)
 

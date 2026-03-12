@@ -430,13 +430,11 @@ class TtDINODecoder:
         self.embed_dims = embed_dims
         self.trace_mode = trace_mode
 
-        # Precompute dim_t for coordinate_to_encoding_ttnn (avoids ttnn.arange during trace)
-        self._dim_t_cache = None
-        if trace_mode:
-            num_feats = embed_dims // 2
-            self._dim_t_cache = ttnn.arange(0, num_feats, 1, dtype=ttnn.float32, device=device)
-            self._dim_t_cache = ttnn.to_layout(self._dim_t_cache, layout=ttnn.TILE_LAYOUT)
-            self._dim_t_cache = ttnn.to_memory_config(self._dim_t_cache, ttnn.L1_MEMORY_CONFIG)
+        # Precompute dim_t for coordinate_to_encoding_ttnn (avoids ttnn.arange during trace; avoids 6x creation per forward in non-trace)
+        num_feats = embed_dims // 2
+        self._dim_t_cache = ttnn.arange(0, num_feats, 1, dtype=ttnn.float32, device=device)
+        self._dim_t_cache = ttnn.to_layout(self._dim_t_cache, layout=ttnn.TILE_LAYOUT)
+        self._dim_t_cache = ttnn.to_memory_config(self._dim_t_cache, ttnn.L1_MEMORY_CONFIG)
 
         self.layers = [
             TtDINODecoderLayer(
@@ -540,12 +538,11 @@ class TtDINODecoder:
                 ),
                 2,
             )
-            dim_t = self._dim_t_cache if self.trace_mode else None
             query_sine_embed = coordinate_to_encoding_ttnn(
                 ref_lvl0,
                 num_feats=self.embed_dims // 2,
                 temperature=10000,
-                dim_t=dim_t,
+                dim_t=self._dim_t_cache,
             )
             query_pos = self.ref_point_head(query_sine_embed)
 
