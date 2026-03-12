@@ -1186,13 +1186,13 @@ class TT_CCL:
             core_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
 
         # Effective num_links from grid divisibility (test logic: grid_x % num_links when force_transpose)
-        effective_num_links = num_links
+        # Always find the maximum num_links that divides the grid axis evenly
         div_axis = core_grid.x if force_transpose else core_grid.y
-        if div_axis % num_links != 0:
-            for nl in [4, 3, 2, 1]:
-                if div_axis % nl == 0:
-                    effective_num_links = nl
-                    break
+        effective_num_links = 1  # default
+        for nl in [4, 3, 2, 1]:
+            if div_axis % nl == 0:
+                effective_num_links = nl
+                break
 
         # num_workers_per_link: same as test (max_workers_total = grid.x when force_transpose)
         max_workers_total = core_grid.x if force_transpose else core_grid.y

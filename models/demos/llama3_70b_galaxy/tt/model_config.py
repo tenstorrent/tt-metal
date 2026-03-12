@@ -890,7 +890,13 @@ class TtModelArgs:
                 """
                 Returns the best minimal matmul config for prefill FF2 based on sequence length.
                 Configurations are optimized based on sweep results.
+
+                When USE_FUSED_AG_MM=1, uses 6-column grids (6×8 or 6×9) to enable 3 links
+                in the fused AllGather+MatMul op for better performance.
                 """
+                # Check if fused AG+MM is enabled - use 6-column grids to enable 3 links
+                use_fused = os.environ.get("USE_FUSED_AG_MM", "0") == "1"
+
                 # Best configurations from sweep results for each M value
                 if seq_len <= 4096:
                     return ttnn.MinimalMatmulConfig(
@@ -910,7 +916,8 @@ class TtModelArgs:
                         N_block_size=8,
                         subblock_h=2,
                         subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                        # Use 6×8 for fused path (enables 3 links), 7×8 for non-fused
+                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 8) if use_fused else ttnn.CoreCoord(7, 8),
                     )
                 elif seq_len <= 32768:
                     return ttnn.MinimalMatmulConfig(
@@ -919,7 +926,8 @@ class TtModelArgs:
                         N_block_size=8,
                         subblock_h=4,
                         subblock_w=2,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                        # Use 6×8 for fused path (enables 3 links), 7×8 for non-fused
+                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 8) if use_fused else ttnn.CoreCoord(7, 8),
                     )
                 elif seq_len <= 65536:
                     return ttnn.MinimalMatmulConfig(
@@ -928,7 +936,8 @@ class TtModelArgs:
                         N_block_size=8,
                         subblock_h=2,
                         subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 8),
+                        # Use 6×8 for fused path (enables 3 links), 7×8 for non-fused
+                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 8) if use_fused else ttnn.CoreCoord(7, 8),
                     )
                 else:  # For seq_len >= 131072
                     return ttnn.MinimalMatmulConfig(
@@ -937,7 +946,8 @@ class TtModelArgs:
                         N_block_size=8,
                         subblock_h=2,
                         subblock_w=4,
-                        compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
+                        # Use 6×9 for fused path (enables 3 links), 7×9 for non-fused
+                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 9) if use_fused else ttnn.CoreCoord(7, 9),
                     )
 
             self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
