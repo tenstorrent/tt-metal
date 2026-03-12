@@ -24,7 +24,7 @@ training_config:
     kahan_summation: false
 
 grpo_config:
-  max_tokens_to_complete: 512
+  max_tokens_to_complete: 50
   group_size: 4
 
 scheduler_config:
@@ -35,7 +35,7 @@ scheduler_config:
 
 eval_config:
   repetition_penalty: 1.0
-  temperature: 0.1
+  temperature: 0.0
   top_k: 50
   top_p: 1.0
 

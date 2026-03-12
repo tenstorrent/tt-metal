@@ -158,6 +158,7 @@ def tokens_to_input_tensor(tokens, padded_n=None):
     # tokens now has a shape [batch_size, padded_n]
 
     tokens = ttnn.reshape(tokens, (batch_size, 1, 1, padded_n))
+    tokens = ttnn.to_layout(tokens, layout=ttnn.TILE_LAYOUT)
 
     return tokens
 
@@ -211,7 +212,7 @@ def generate_causal_mask(query_len: int, processed_tokens: int, padded_n: int = 
 
 
 class DecodeState:
-    def _init_tokens(self, prompt_tokens: List[int], batch_size: int):
+    def _init_prompt_tensor(self, prompt_tokens: List[int], batch_size: int):
         from torch import tensor, int32
 
         tokens_torch = tensor(prompt_tokens, dtype=int32)  # shape: (len(prompt_tokens))
@@ -223,11 +224,25 @@ class DecodeState:
             device=get_device(),
         )  # shape: (len(prompt_tokens))
 
-        tokens = ttnn.repeat(
-            tokens, (batch_size, 1)
-        )  # [batch_size, len(prompt_tokens)]
+        if batch_size > 1:
+            tokens = ttnn.repeat(
+                tokens, (batch_size, 1)
+            )  # [batch_size, len(prompt_tokens)]
+        else:
+            tokens = ttnn.reshape(tokens, (1, len(prompt_tokens)))
 
-        self.tokens = tokens
+        tokens = ttnn.to_layout(tokens, layout=ttnn.TILE_LAYOUT)
+
+        self.prompt_tensor = tokens
+
+        prompt_np = ttml.autograd.Tensor(self.prompt_tensor, False).to_numpy()
+        print("prompt_tensor shape:", prompt_np.shape)
+        max_show = min(16, prompt_np.shape[1])
+        for i in range(min(batch_size, 4)):
+            print(f"row {i} first {max_show}:", prompt_np[i, :max_show].tolist())
+        if batch_size > 1:
+            eq01 = np.array_equal(prompt_np[0], prompt_np[1])
+            print("row0 == row1:", eq01)
 
     def __init__(self, prompt_tokens: List[int], sample_seed, batch_size=1):
         head_dim = embedding_dim // num_heads
@@ -236,63 +251,85 @@ class DecodeState:
         )
         self.kv_cache = ttml.models.KvCache(cfg)
         self.kv_cache.reset()
-
-        self._init_tokens(prompt_tokens, batch_size)
+        self._init_prompt_tensor(prompt_tokens, batch_size)
         self.tokens_last_column = None
 
-        # The token matrix is padded to the same size every time to reduce number of compilations
+        self.batch_size = batch_size
+        self.sample_seed = sample_seed
+
+        self.prefilled = False
+        self.processed_tokens = 0
+        self.step_tokens_cnt = len(prompt_tokens)
         self.pad_len = round_to_tile(len(prompt_tokens) + max_tokens_to_complete)
 
-        self.batch_size = batch_size
-        self.prefilled = False
-        self.sample_seed = sample_seed
+        self.sequences = np.full(
+            (batch_size, len(prompt_tokens) + max_tokens_to_complete), pad_token
+        )
+        self.sequences[:batch_size, : len(prompt_tokens)] = np.tile(
+            prompt_tokens, (batch_size, 1)
+        )
 
 
 def complete_token(state: DecodeState) -> ttnn.Tensor:
     # step_tokens_np are tokens we are about to compute on in this call of complete_token.
     if not state.prefilled:
-        step_tokens = (
-            state.tokens
-        )  # shape: [batch_size, len(prompt_tokens)], where prompt_tokens is from DecodeState constructor
+        print("got here, not prefilled")
+        # step_tokens shape: [batch_size, len(prompt_tokens)], where prompt_tokens is from DecodeState constructor
+        step_tokens = state.prompt_tensor
         state.prefilled = True
-
-        processed_tokens = 0
-        step_tokens_len = state.tokens.shape[1]
     else:
         step_tokens = state.tokens_last_column  # shape: [batch_size, 1]
-
-        processed_tokens = state.tokens.shape[1] - 1
-        step_tokens_len = 1
 
     input_tensor = tokens_to_input_tensor(
         step_tokens, padded_n=state.pad_len
     )  # [batch_size, 1, 1, padded_n]
     mask_tensor = generate_causal_mask(
-        step_tokens_len, processed_tokens, padded_n=state.pad_len
+        state.step_tokens_cnt, state.processed_tokens, padded_n=state.pad_len
     )  # [1, 1, padded_n, padded_n]
 
+    input_ttml = ttml.autograd.Tensor(input_tensor, False)  # no grad
+    mask_ttml = ttml.autograd.Tensor(mask_tensor, False)  # no grad
+
+    inp_np = input_ttml.to_numpy()  # shape [B,1,1,pad_len]
+    print("input_ttml shape:", inp_np.shape)
+    for b in range(min(state.batch_size, 4)):
+        # show only active prefix, not full pad
+        active = state.step_tokens_cnt if state.processed_tokens == 0 else 1
+        print(f"row {b} input_ids:", inp_np[b, 0, 0, :active].astype(np.int64).tolist())
+
     logits = tt_model(
-        input_tensor, mask_tensor, kv_cache=state.kv_cache, new_tokens=step_tokens_len
+        input_ttml,
+        mask_ttml,  # , kv_cache=state.kv_cache, new_tokens=state.step_tokens_cnt
     ).get_value()
 
-    n, m, k, V = logits.shape()
+    logits_np = ttml.autograd.Tensor(logits, False).to_numpy()
+    t = state.step_tokens_cnt - 1
+    a = np.asarray(logits_np[0, 0, t], dtype=np.float32)
+    b = np.asarray(logits_np[1, 0, t], dtype=np.float32)
+    print("row0==row1 logits at t:", np.allclose(a, b, atol=0.0, rtol=0.0))
+
+    n, m, k, V = logits.shape
     assert n == state.batch_size and m == 1 and k == state.pad_len
 
     sliced = ttnn.slice(
         logits,
-        [0, 0, step_tokens_len - 1, 0],
-        [state.batch_size, 1, step_tokens_len, V],
+        [0, 0, state.step_tokens_cnt - 1, 0],
+        [state.batch_size, 1, state.step_tokens_cnt, V],
     )
 
     assert sliced.shape == [state.batch_size, 1, 1, V]
 
     last_logits_ttml = ttml.autograd.Tensor(sliced, False)  # no grad
-    next_tokens_ttml = sample_tokens(
+    next_tokens_ttml = sample_tokens_from_logits(
         last_logits_ttml, state.sample_seed
     )  # shape: [B, 1]
 
     state.tokens_last_column = next_tokens_ttml
-    state.tokens = ttnn.concat((state.tokens, next_tokens_ttml), dim=1)
+    state.processed_tokens += state.step_tokens_cnt
+    state.step_tokens_cnt = 1
+
+    next_tokens_np = next_tokens_ttml.to_numpy()
+    state.sequences[:, state.processed_tokens] = next_tokens_np[:, 0]
 
     state.sample_seed += state.batch_size
 
@@ -301,7 +338,7 @@ def complete_token(state: DecodeState) -> ttnn.Tensor:
     return next_tokens_ttml
 
 
-def sample_tokens(logits_ttml, sample_seed: int):
+def sample_tokens_from_logits(logits_ttml, sample_seed: int):
     B, m, k, V = logits_ttml.shape()
     assert m == 1 and k == 1
     assert V == full_vocab_size
@@ -317,6 +354,10 @@ def sample_tokens(logits_ttml, sample_seed: int):
         ids_tt = ids_tt.get_value()  # ttnn tensor now
         ids_tt = ttnn.reshape(ids_tt, (B, 1))
 
+    ids_np_dbg = ttml.autograd.Tensor(ids_tt, False).to_numpy().reshape(-1)
+    print("ids_tt (before to_layout):", ids_np_dbg.tolist())
+
+    ids_tt = ttnn.to_layout(ids_tt, layout=ttnn.TILE_LAYOUT)
     return ids_tt  # [B, 1]
 
 
@@ -337,18 +378,12 @@ def complete_tokens(
     tt_model.eval()
 
     with no_grad():
-        for _ in range(max_tokens_to_complete):
+        for i in range(max_tokens_to_complete):
+            start_time = time.perf_counter()
             complete_token(state)
+            print(f"token {i} completed, took {time.perf_counter() - start_time}")
 
-    return state.tokens_np
-
-    # with no_grad():
-    #     for _ in range(max_tokens_to_complete):
-    #         token = complete_token(state)
-    #         if token in stop_ids:
-    #             break
-
-    #     return state.tokens[len(input_tokens) :]
+    return state.sequences
 
 
 def compute_nlog_probs(inputs_np, targets_np, B, T) -> Any:
@@ -699,12 +734,12 @@ def inference_example():
         add_generation_prompt=True,
     )
 
-    completed_tokens_np = complete_tokens(input_tokens, sample_seed=seed, batch_size=4)
+    sequences = complete_tokens(input_tokens, sample_seed=seed, batch_size=2)
 
     print(f"Tokens completed! Time: {time.perf_counter() - start_time} s")
 
-    for i in range(completed_tokens_np.shape[0]):
-        tokens_row = completed_tokens_np[i]
+    for i in range(sequences.shape[0]):
+        tokens_row = sequences[i]
         stop = len(tokens_row)
         for j in range(len(input_tokens), len(tokens_row)):
             if tokens_row[j] in stop_ids:
