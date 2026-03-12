@@ -656,8 +656,7 @@ Tensor ExecuteBinaryFmod::invoke(
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
-    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::FMOD>::invoke(
-        input, scalar, output_mem_config);
+    return ttnn::fmod(input, scalar, output_mem_config);
 }
 
 Tensor _floor_div_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
@@ -808,8 +807,7 @@ Tensor ExecutePower::invoke(
         int32_t exp = exponent;
         return ExecutePower::invoke(input_a, exp, output_mem_config, output_tensor);
     }
-    return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::POWER>::invoke(
-        input_a, exponent, output_mem_config, output_tensor);
+    return ttnn::power(input_a, exponent, output_mem_config, output_tensor);
 }
 
 // power - integer exponent
@@ -821,11 +819,9 @@ Tensor ExecutePower::invoke(
     // For exponents 0, 1, 2, 3: use iterative approach
     if (exponent == 0 || exponent == 1 || exponent == 2 || exponent == 3) {
         uint32_t exp = exponent;
-        return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::POWER_ITERATIVE>::
-            invoke(input, exp, output_mem_config, output_tensor);
+        return ttnn::power_iterative(input, exp, output_mem_config, output_tensor);
     }
-    return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::POWER>::invoke(
-        input, exponent, output_mem_config, output_tensor);
+    return ttnn::power(input, exponent, output_mem_config, output_tensor);
 }
 
 // power - tensor exponent
@@ -930,8 +926,7 @@ Tensor ExecuteRsub::invoke(
             use_legacy);
     }
 
-    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::RSUB>::invoke(
-        input_tensor_a, input_b, memory_config, optional_output_tensor);
+    return ttnn::rsub_sfpu(input_tensor_a, input_b, memory_config, optional_output_tensor);
 }
 
 // Bitwise AND
@@ -1005,9 +1000,7 @@ Tensor ExecuteBitwiseAnd::invoke(
             use_legacy);
     }
 
-    return ttnn::operations::unary::
-        ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::BITWISE_AND, int32_t>::invoke(
-            input_tensor_a, input_b, memory_config, optional_output_tensor);
+    return ttnn::bitwise_and(input_tensor_a, input_b, memory_config, optional_output_tensor);
 }
 
 // Bitwise OR
@@ -1073,9 +1066,7 @@ Tensor ExecuteBitwiseOr::invoke(
             use_legacy);
     }
 
-    return ttnn::operations::unary::
-        ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::BITWISE_OR, int32_t>::invoke(
-            input_tensor_a, input_b, memory_config, optional_output_tensor);
+    return ttnn::bitwise_or(input_tensor_a, input_b, memory_config, optional_output_tensor);
 }
 
 // Bitwise XOR
@@ -1141,9 +1132,7 @@ Tensor ExecuteBitwiseXor::invoke(
             use_legacy);
     }
 
-    return ttnn::operations::unary::
-        ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::BITWISE_XOR, int32_t>::invoke(
-            input_tensor_a, input_b, memory_config, optional_output_tensor);
+    return ttnn::bitwise_xor(input_tensor_a, input_b, memory_config, optional_output_tensor);
 }
 
 // Bitwise Left Shift
@@ -1209,9 +1198,7 @@ Tensor ExecuteBitwiseLeftShift::invoke(
             use_legacy);
     }
 
-    return ttnn::operations::unary::
-        ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::LEFT_SHIFT, int32_t>::invoke(
-            input_tensor_a, input_b, memory_config, optional_output_tensor);
+    return ttnn::bitwise_left_shift(input_tensor_a, input_b, memory_config, optional_output_tensor);
 }
 
 // Bitwise Right Shift
@@ -1277,9 +1264,7 @@ Tensor ExecuteBitwiseRightShift::invoke(
             use_legacy);
     }
 
-    return ttnn::operations::unary::
-        ExecuteUnaryWithIntegerParameter<ttnn::operations::unary::UnaryOpType::RIGHT_SHIFT, int32_t>::invoke(
-            input_tensor_a, input_b, memory_config, optional_output_tensor);
+    return ttnn::bitwise_right_shift(input_tensor_a, input_b, memory_config, optional_output_tensor);
 }
 
 }  // namespace ttnn::operations::binary

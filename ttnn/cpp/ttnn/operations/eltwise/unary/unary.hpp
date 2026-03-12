@@ -29,6 +29,15 @@ Tensor unary_impl(
 
 }  // namespace detail
 
+template <UnaryOpType unary_op_type>
+struct ExecuteUnaryTSVariant {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        ScalarVariant parameter,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+};
+
 }  // namespace operations::unary
 
 #define REGISTER_UNARY_OPERATION(op_name, op_type)                                                     \
@@ -161,8 +170,6 @@ REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(unary_remainder, REMAINDER)
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(celu, CELU)
 REGISTER_UNARY_OPERATION_WITH_FLOAT_PARAMETER(rpow, RPOW)
 
-UNARY_OP_SCALAR_VARIANT(minimum, MINIMUM)
-UNARY_OP_SCALAR_VARIANT(maximum, MAXIMUM)
 UNARY_OP_SCALAR_VARIANT(fill, FILL)
 UNARY_OP_SCALAR_VARIANT(power, POWER)
 UNARY_OP_SCALAR_VARIANT(gt_unary, UNARY_GT)

@@ -15,6 +15,23 @@
 
 namespace ttnn::operations::unary {
 
+template <UnaryOpType unary_op_type>
+Tensor ExecuteUnaryTSVariant<unary_op_type>::invoke(
+    const Tensor& input_tensor,
+    ScalarVariant parameter,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return std::visit(
+        [&](auto param) {
+            return detail::unary_impl(
+                input_tensor, {EltwiseUnaryWithParam{unary_op_type, (param)}}, memory_config, optional_output_tensor);
+        },
+        parameter);
+}
+
+template struct ExecuteUnaryTSVariant<UnaryOpType::MINIMUM>;
+template struct ExecuteUnaryTSVariant<UnaryOpType::MAXIMUM>;
+
 namespace detail {
 
 Tensor unary_impl(
