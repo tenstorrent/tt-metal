@@ -219,6 +219,9 @@ inline void set_packer_config(
 
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
     const std::uint32_t pack_output_dst_format = masked_data_format(pack_dst_format);
+    // Gasket converts Float16_b -> Float16 before the packer, so hardware in_data_format must be Float16 for Fp8 output.
+    const std::uint32_t pack_hw_src_format =
+        ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3)) ? to_underlying(DataFormat::Float16) : pack_output_src_format;
 
     // Set packer config
     pack_config_u config;
@@ -234,7 +237,7 @@ inline void set_packer_config(
 
     config.f.uncompress      = 1;
     config.f.out_data_format = pack_output_dst_format;
-    config.f.in_data_format  = pack_output_src_format;
+    config.f.in_data_format  = pack_hw_src_format;
 
     // Workaround for bug in HW: tenstorrent/budabackend#1394
     if constexpr (is_fp32_dest_acc_en)
@@ -297,7 +300,8 @@ inline void set_packer_config(
     }
 
     // Round to 10 bit mantissa from fp32 dest
-    if (is_fp32_dest_acc_en && (pack_src_format == to_underlying(DataFormat::Float16)))
+    if ((is_fp32_dest_acc_en && (pack_src_format == to_underlying(DataFormat::Float16))) ||
+        (!IS_A_FORMAT(pack_src_format) && (pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3)))
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
     }
@@ -321,6 +325,9 @@ inline void reconfig_packer_data_format(
     LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
     const std::uint32_t pack_output_src_format = masked_data_format(pack_src_format);
     const std::uint32_t pack_output_dst_format = masked_data_format(pack_dst_format);
+    // Gasket converts Float16_b -> Float16 before the packer, so hardware in_data_format must be Float16 for Fp8 output.
+    const std::uint32_t pack_hw_src_format =
+        ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3)) ? to_underlying(DataFormat::Float16) : pack_output_src_format;
 
     // Configure packers
     pack_config_u config;
@@ -328,7 +335,7 @@ inline void reconfig_packer_data_format(
 
     config.f.uncompress      = 1;
     config.f.out_data_format = pack_output_dst_format;
-    config.f.in_data_format  = pack_output_src_format;
+    config.f.in_data_format  = pack_hw_src_format;
     TT_SETDMAREG(0, LOWER_HALFWORD(config.val[2]), 0, LO_16(p_gpr_pack::TMP_LO));
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::PACK | p_stall::THCON);
     TTI_WRCFG(p_gpr_pack::TMP_LO, p_cfg::WRCFG_32b, THCON_SEC0_REG1_Row_start_section_size_ADDR32 + 2);
@@ -361,7 +368,8 @@ inline void reconfig_packer_data_format(
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Read_unsigned = 1;
     }
     // Round to 10 bit mantissa from fp32 dest
-    if (is_fp32_dest_acc_en && (pack_src_format == to_underlying(DataFormat::Float16)))
+    if ((is_fp32_dest_acc_en && (pack_src_format == to_underlying(DataFormat::Float16))) ||
+        (!IS_A_FORMAT(pack_src_format) && (pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3)))
     {
         dest_rd_ctrl.f.PCK_DEST_RD_CTRL_Round_10b_mant = 1;
     }
@@ -430,10 +438,7 @@ inline void configure_pack(
     t6_mutex_acquire(mutex::REG_RMW);
 
     // Set Fp8 E4M3 mode for packer
-    if ((pack_dst_format & 0x1F) == to_underlying(DataFormat::Fp8_e4m3))
-    {
-        cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pac_LF8_4b_exp_RMW>(1);
-    }
+    cfg_reg_rmw_tensix<THCON_SEC0_REG1_Pac_LF8_4b_exp_RMW>(((pack_dst_format & 0x1F) == (std::uint32_t)DataFormat::Fp8_e4m3) ? 1 : 0);
 
     cfg_reg_rmw_tensix<ALU_FORMAT_SPEC_REG2_Dstacc_RMW>(pack_output_src_format);
 

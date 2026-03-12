@@ -21,6 +21,7 @@ format_dict = {
     DataFormat.UInt8: torch.uint8,
     DataFormat.MxFp8R: torch.bfloat16,
     DataFormat.MxFp8P: torch.bfloat16,
+    DataFormat.Fp8_e4m3: torch.bfloat16,
 }
 
 
@@ -369,6 +370,7 @@ format_tile_sizes = {
     # 1024 elements = 32 blocks × (1 scale + 32 elements) = 1056 bytes
     DataFormat.MxFp8R: 1056,
     DataFormat.MxFp8P: 1056,
+    DataFormat.Fp8_e4m3: 1024,  # 1 byte per element, no exponent section
 }
 
 

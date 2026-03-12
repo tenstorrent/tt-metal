@@ -69,6 +69,7 @@ class DataFormat(Enum):
     UInt8 = DataFormatInfo("UInt8", 1)
     MxFp8R = DataFormatInfo("MxFp8R", 1)  # QSR specific
     MxFp8P = DataFormatInfo("MxFp8P", 1)  # QSR specific
+    Fp8_e4m3 = DataFormatInfo("Fp8_e4m3", 1)
 
     @property
     def size(self) -> int:
@@ -356,6 +357,7 @@ BLACKHOLE_DATA_FORMAT_ENUM_VALUES = {
     DataFormat.UInt16: 9,
     DataFormat.Int8: 14,
     DataFormat.UInt32: 24,
+    DataFormat.Fp8_e4m3: 26,
     DataFormat.UInt8: 30,
 }
 
