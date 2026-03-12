@@ -21,6 +21,7 @@ SECTIONS
    */
   .loader_init :
   {
+    . = ALIGN(4);
     __loader_init_start = .;
    . += LENGTH(REGION_LOADER_INIT);
     __loader_init_end = .;

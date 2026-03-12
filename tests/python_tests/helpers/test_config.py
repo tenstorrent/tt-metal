@@ -309,8 +309,12 @@ class TestConfig:
                 "-save-temps=obj -fdump-tree-all -fdump-rtl-all -v"
             )
 
-        TestConfig.OPTIONS_LINK = "-fexceptions -Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -Wl,--trace"
-        TestConfig.INITIAL_OPTIONS_COMPILE = f"-nostdlib -fno-use-cxa-atexit -Wall -fno-exceptions -fno-rtti -Wunused-parameter -Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls -Wuninitialized -Wmaybe-uninitialized -DTENSIX_FIRMWARE -DENV_LLK_INFRA -DENABLE_LLK_ASSERT {TestConfig.ARCH_DEFINE}"
+        TestConfig.OPTIONS_LINK = "-Wl,-z,max-page-size=16 -Wl,-z,common-page-size=16 -nostartfiles -Wl,--trace"
+        TestConfig.INITIAL_OPTIONS_COMPILE = (
+            "-nostdlib -fno-use-cxa-atexit -Wall -fno-asynchronous-unwind-tables -fno-exceptions -fno-rtti -Wunused-parameter "
+            "-Wfloat-equal -Wpointer-arith -Wnull-dereference -Wredundant-decls -Wuninitialized -Wmaybe-uninitialized "
+            f"-DTENSIX_FIRMWARE -DENV_LLK_INFRA -DENABLE_LLK_ASSERT {TestConfig.ARCH_DEFINE}"
+        )
         TestConfig.INCLUDES = [
             "-Isfpi/include",
             f"-I../{TestConfig.ARCH_LLK_ROOT}/llk_lib",
@@ -612,10 +616,11 @@ class TestConfig:
             f"{' '.join(TestConfig.INCLUDES)} {TestConfig.INITIAL_OPTIONS_COMPILE} "
         )
 
-        if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR:
-            OPTIONS_COMPILE += "-DLLK_BOOT_MODE_TRISC "
-        else:
-            OPTIONS_COMPILE += "-DLLK_BOOT_MODE_BRISC "
+        OPTIONS_COMPILE += (
+            "-DLLK_BOOT_MODE_TRISC "
+            if TestConfig.CHIP_ARCH == ChipArchitecture.QUASAR
+            else "-DLLK_BOOT_MODE_BRISC "
+        )
 
         NON_COVERAGE_OPTIONS_COMPILE = OPTIONS_COMPILE
 
@@ -673,60 +678,26 @@ class TestConfig:
                     TestConfig.SHARED_ARTEFACTS_AVAILABLE = True
                 return
 
-            local_options_compile, local_memory_layout_ld, local_non_coverage = (
+            _, local_memory_layout_ld, local_non_coverage = (
                 self.resolve_compile_options()
             )
 
-            # tmu-crt0.o : tmu-crt0.S
-            run_shell_command(
-                f"""{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {local_options_compile} -c -o {shared_obj_dir / "tmu-crt0.o"} {TestConfig.HELPERS / "tmu-crt0.S"}""",
-                TestConfig.TESTS_WORKING_DIR,
-            )
-
-            # brisc.o : brisc.cpp
-            if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                brisc_define_coverage = "-DCOVERAGE" if TestConfig.WITH_COVERAGE else ""
-                run_shell_command(
-                    f"""{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {brisc_define_coverage} {TestConfig.OPTIONS_ALL} {local_non_coverage} -c -o {shared_obj_dir / "brisc.o"} {TestConfig.RISCV_SOURCES / "brisc.cpp"}""",
-                    TestConfig.TESTS_WORKING_DIR,
-                )
-
-            COVERAGE_DEPS = ""
             if self.coverage_build == CoverageBuild.Yes:
-                COVERAGE_DEPS = f"{shared_obj_dir}/coverage.o -lgcov"
-                # coverage.o : coverage.cpp
-                run_shell_command(
-                    f"""{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {local_non_coverage} -fno-strict-aliasing -c -o {shared_obj_dir / "coverage.o"} {TestConfig.RISCV_SOURCES / "coverage.cpp"}""",
-                    TestConfig.TESTS_WORKING_DIR,
+                compile_command = (  # coverage.o : coverage.cpp
+                    f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {local_non_coverage} "
+                    f'-fno-strict-aliasing -c -o {shared_obj_dir / "coverage.o"} {TestConfig.RISCV_SOURCES / "coverage.cpp"}'
                 )
-
-            def build_kernel_part_main(name: str):
-                optional_kernel_flags = ""
-                if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                    optional_kernel_flags = f"-DCOMPILE_FOR_TRISC={TestConfig.KERNEL_COMPONENTS.index(name)}"
-
-                if not self.compile_time_formats:
-                    optional_kernel_flags += " -DRUNTIME_FORMATS"
-
-                run_shell_command(  # main_%.o
-                    f"""{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.OPTIONS_ALL} {local_options_compile} {optional_kernel_flags} -DLLK_TRISC_{name.upper()} -c -o {shared_obj_dir / f"main_{name}.o"} {TestConfig.RISCV_SOURCES / "trisc.cpp"}""",
-                    TestConfig.TESTS_WORKING_DIR,
-                )
-
-            with ThreadPoolExecutor(max_workers=3) as executor:
-                futures = [
-                    executor.submit(build_kernel_part_main, name)
-                    for name in TestConfig.KERNEL_COMPONENTS
-                ]
-                for fut in futures:
-                    fut.result()
+                logger.trace(compile_command)
+                run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
 
             if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                # brisc.elf : tmu-crt0.o brisc.o
-                run_shell_command(
-                    f"""{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {shared_obj_dir / "tmu-crt0.o"} {shared_obj_dir / "brisc.o"} {COVERAGE_DEPS} -T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / "brisc.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} -o {shared_elf_dir / "brisc.elf"}""",
-                    TestConfig.TESTS_WORKING_DIR,
+                compile_command = (  # brisc.elf : brisc.cpp
+                    f"{TestConfig.GXX} {TestConfig.ARCH_NON_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {local_non_coverage} "
+                    f'-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / "brisc.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} '
+                    f'-o {shared_elf_dir / "brisc.elf"} {TestConfig.RISCV_SOURCES / "brisc.cpp"}'
                 )
+                logger.trace(compile_command)
+                run_shell_command(compile_command, TestConfig.TESTS_WORKING_DIR)
 
             # Mark shared artefacts as complete
             done_marker.touch()
@@ -842,6 +813,7 @@ class TestConfig:
                 else ""
             ),
             '#include "tensix_types.h"',
+            "#define RUNTIME_PARAMETERS  const volatile struct RuntimeParams*",
             "",
             f"constexpr bool l1_acc_en = {self.l1_acc.value};",
             f"constexpr bool unpack_to_dest = {str(self.unpack_to_dest).lower()};",
@@ -915,28 +887,35 @@ class TestConfig:
                 else TestConfig.SHARED_OBJ_DIR
             )
 
-            SFPI_DEPS = ""
-            COVERAGE_DEPS = ""
-            if self.coverage_build == CoverageBuild.Yes:
-                SFPI_DEPS = "-lgcov"
-                COVERAGE_DEPS = shared_obj_dir / "coverage.o"
-
             def build_kernel_part(name: str):
                 optional_kernel_flags = ""
                 if TestConfig.CHIP_ARCH != ChipArchitecture.QUASAR:
-                    optional_kernel_flags = f"-DCOMPILE_FOR_TRISC={TestConfig.KERNEL_COMPONENTS.index(name)}"
+                    optional_kernel_flags = "-DCOMPILE_FOR_TRISC=" + str(
+                        TestConfig.KERNEL_COMPONENTS.index(name)
+                    )
 
                 if not self.compile_time_formats:
                     optional_kernel_flags += " -DRUNTIME_FORMATS"
 
-                run_shell_command(  # kernel_%.o
-                    f"""{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.OPTIONS_ALL} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} -DLLK_TRISC_{name.upper()} -c -o {VARIANT_OBJ_DIR / f"kernel_{name}.o"} {TestConfig.TESTS_WORKING_DIR / self.test_name}""",
-                    TestConfig.TESTS_WORKING_DIR,
+                COVERAGES_DEPS = (
+                    f"-Wl,--start-group {shared_obj_dir}/coverage.o -lgcov -Wl,--end-group "
+                    if self.coverage_build == CoverageBuild.Yes
+                    else f""
+                )
+                compile_command = (
+                    f"{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.OPTIONS_ALL} -I{TestConfig.TESTS_WORKING_DIR} "
+                    f"-I{TestConfig.RISCV_SOURCES} -I{VARIANT_DIR} {local_options_compile} {optional_kernel_flags} "
+                    f"-DLLK_TRISC_{name.upper()} {TestConfig.OPTIONS_LINK} {COVERAGES_DEPS} "
+                    f"-T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / name}.ld -T{TestConfig.LINKER_SCRIPTS}/sections.ld "
+                    f"-x c++ - -lc -o {VARIANT_ELF_DIR / name}.elf"
                 )
 
-                run_shell_command(  # %.elf : main_%.o kernel_%.o [coverage.o] tmu-crt0.o
-                    f"""{TestConfig.GXX} {TestConfig.ARCH_COMPUTE} {TestConfig.OPTIONS_ALL} {TestConfig.OPTIONS_LINK} {shared_obj_dir / f"main_{name}.o"} {VARIANT_OBJ_DIR / f"kernel_{name}.o"} {COVERAGE_DEPS} {shared_obj_dir / "tmu-crt0.o"} {SFPI_DEPS} -T{local_memory_layout_ld} -T{TestConfig.LINKER_SCRIPTS / f"{name}.ld"} -T{TestConfig.LINKER_SCRIPTS / "sections.ld"} -o {VARIANT_ELF_DIR / f"{name}.elf"}""",
+                logger.trace(compile_command)
+
+                run_shell_command(  # %.elf : path/to/kernel/test.cpp trisc.cpp [coverage.o libgcov.a]
+                    compile_command,
                     TestConfig.TESTS_WORKING_DIR,
+                    (f"#include  <{self.test_name}>\n" "#include  <trisc.cpp>\n"),
                 )
 
             with ThreadPoolExecutor(max_workers=3) as executor:
@@ -986,6 +965,8 @@ class TestConfig:
             stream_name = "deafult_stream_name.stream"
         else:
             stream_name = f"{sha256(str(' | '.join([str(run_arg) for run_arg in self.runtimes])).encode()).hexdigest()}.stream"
+
+        logger.trace(stream_name)
 
         with open(
             VARIANT_DIR / stream_name,
@@ -1154,7 +1135,7 @@ def process_coverage_run_artefacts() -> bool:
                 info_hash = sha256(str(variant).encode()).hexdigest()
                 command = (
                     f"lcov --gcov-tool {TestConfig.GCOV} --capture "
-                    f"--directory {variant / 'obj/'} "
+                    f"--directory {variant}/elf/ "
                     f"--output-file {TestConfig.COVERAGE_INFO_DIR}/{info_hash}.info "
                     "--rc lcov_branch_coverage=1"
                 )

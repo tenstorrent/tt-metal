@@ -10,6 +10,63 @@
 #include "cfg_defines.h"
 #include "ckernel.h"
 
+// C-runtime related linker symbols
+extern volatile char __ldm_bss_start[], __ldm_bss_end[];
+extern volatile char __loader_init_start[], __loader_init_end[];
+extern volatile char __ldm_data_start[], __ldm_data_end[];
+extern const std::uint32_t __stack_top[];
+extern void (*__init_array_start[])(void);
+extern void (*__init_array_end[])(void);
+
+// TODO @ajankovicTT find out why GCC generates unwinding tables on coverage,
+// even though -fno-asynchronous-unwind-tables -fno-exceptions flags are set
+void* __gxx_personality_v0;
+
+__attribute__((no_profile_instrument_function)) TT_ALWAYS_INLINE void do_crt0()
+{
+    asm volatile(
+        ".option push\n"
+        ".option norelax\n"
+        "la gp, __global_pointer$\n"
+        ".option pop" ::
+            : "memory");
+
+    // Set stack pointer
+    asm volatile("la sp, %0" : : "i"(__stack_top) : "memory");
+
+    // Initialize .bss
+    for (volatile std::uint32_t* p = (volatile std::uint32_t*)__ldm_bss_start; p < (volatile std::uint32_t*)__ldm_bss_end; p++)
+    {
+        *p = 0;
+    }
+
+    // Copy .loader_init to .ldm_data
+    if ((std::uint32_t)__loader_init_start != (std::uint32_t)__loader_init_end)
+    {
+        volatile std::uint32_t* src = (volatile std::uint32_t*)__loader_init_start;
+        volatile std::uint32_t* dst = (volatile std::uint32_t*)__ldm_data_start;
+        volatile std::uint32_t* end = (volatile std::uint32_t*)__ldm_data_end;
+        while (dst < end)
+        {
+            *dst++ = *src++;
+        }
+    }
+
+    // Execute global constructors
+    for (void (**temp_constructor)(void) = __init_array_start; temp_constructor < __init_array_end; temp_constructor++)
+    {
+        (*temp_constructor)();
+    }
+}
+
+void _init(void)
+{
+}
+
+void _fini(void)
+{
+}
+
 inline void device_setup()
 {
 #if defined(ARCH_WORMHOLE)

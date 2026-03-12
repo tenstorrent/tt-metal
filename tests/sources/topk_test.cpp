@@ -246,13 +246,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
     // Each tile-row is processed separately so we do the topk pipeline on each tile-row independently.
     const int NUM_TOPK_PIPELINE_EXECUTIONS = params->FULL_RT_DIM;
 
-    const int NUM_INDEX_TILES_PER_ROW = params->FULL_CT_DIM / NUM_STAGES;
     const int NUM_VALUE_TILES_PER_ROW = params->FULL_CT_DIM / NUM_STAGES;
-
-    // We pack the result with index tiles right after value tiles.
-    const int NUM_TILES_IN_RESULT_BUFFER_PER_ROW = (TOPK_K / ckernel::TILE_C_DIM) * NUM_STAGES;
-
-    const bool is_int_fpu_en = false;
 
     /* TOPK api constants. */
     constexpr bool APPROX             = false;
