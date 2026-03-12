@@ -25,7 +25,9 @@ namespace {
 Nightly tests could be enabled by setting the environment variable ENABLE_NIGHTLY_TT_TRAIN_TESTS=1
 or setting 'is_nightly_tt_train_tests_enabled' variable to true.
 */
-constexpr bool is_nightly_tt_train_tests_enabled = false;
+// TODO: Disabled due to differences exceeding the threshold when comparing loss value.
+// Tracking issue: https://github.com/tenstorrent/tt-metal/issues/37337
+constexpr bool is_nigthly_tt_train_tests_enabled = false;
 
 [[nodiscard]] bool is_wormhole_b0() {
     static bool arch_is_wormhole_b0 = []() {
@@ -40,7 +42,9 @@ constexpr bool is_nightly_tt_train_tests_enabled = false;
 [[nodiscard]] bool should_run_nightly_tests() {
     const char *env_var = std::getenv("ENABLE_NIGHTLY_TT_TRAIN_TESTS");
     bool is_whb0 = is_wormhole_b0();
-    bool is_ci = env_var && is_nightly_tt_train_tests_enabled;
+    // TODO: Disabled due to differences exceeding the threshold when comparing loss value.
+    // Tracking issue: https://github.com/tenstorrent/tt-metal/issues/37337
+    bool is_ci = env_var && is_nigthly_tt_train_tests_enabled;
     return is_whb0 && is_ci;
 }
 
