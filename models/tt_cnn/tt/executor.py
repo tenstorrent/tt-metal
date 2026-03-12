@@ -502,9 +502,11 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
         # address as during the initial trace.
         self._deallocate_structured_tensor(self._compilation_output_tensor, force=True)
 
-        # Capture trace
+        # Capture trace (end before deallocate/allocate - those trigger sync/reads not allowed during capture)
         self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=self.CQ_OPS_AND_OUTPUT_READ)
         self.output_tensor = self.model(l1_input_tensor)
+        ttnn.end_trace_capture(self.device, self.trace_id, cq_id=self.CQ_OPS_AND_OUTPUT_READ)
+
         if l1_input_tensor.is_allocated():
             ttnn.deallocate(l1_input_tensor, force=True)
 
@@ -513,8 +515,6 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
         actual_addr = self.l1_input_tensor.buffer_address()
         if input_trace_addr != actual_addr:
             raise RuntimeError(f"L1 input tensor address mismatch: expected {input_trace_addr}, got {actual_addr}")
-
-        ttnn.end_trace_capture(self.device, self.trace_id, cq_id=self.CQ_OPS_AND_OUTPUT_READ)
         self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
 
     def _execute_single(self, input_tensor):
@@ -530,8 +530,8 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
         # Execute traced model
         ttnn.wait_for_event(self.CQ_OPS_AND_OUTPUT_READ, write_event)
         self.l1_input_tensor = ttnn.reshard(self.dram_input_tensor, self.l1_input_memory_config, self.l1_input_tensor)
-        self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
         ttnn.execute_trace(self.device, self.trace_id, cq_id=self.CQ_OPS_AND_OUTPUT_READ, blocking=False)
+        self.op_event = ttnn.record_event(self.device, self.CQ_OPS_AND_OUTPUT_READ)
 
         return self.output_tensor
 
