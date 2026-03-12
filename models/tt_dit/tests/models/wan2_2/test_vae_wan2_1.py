@@ -1878,3 +1878,99 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         assert_quality(torch_output, tt_output_torch, pcc=0.995_000, relative_rmse=0.1)
     else:
         logger.warning("Skipping check")
+
+
+@pytest.mark.parametrize(
+    "mesh_device, h_axis, w_axis, num_links",
+    [
+        ((4, 8), 0, 1, 2),
+    ],
+    ids=["4x8_h0_w1_2links"],
+    indirect=["mesh_device"],
+)
+@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+def test_wan_decoder_perf_720p_81f(mesh_device, h_axis, w_axis, num_links):
+    """Performance test: WanDecoder, 720p, 81 output frames (21 latent frames), cached mode.
+
+    Runs once to warm up JIT, then times a second run end-to-end after device sync.
+    No PyTorch reference check.
+    """
+    from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
+
+    torch.manual_seed(0)
+    B, C, T, H, W = 1, 16, 21, 90, 160  # 21 latent frames → 81 output frames at 720p
+    dtype = ttnn.DataType.BFLOAT16
+    tt_input_dtype = ttnn.bfloat16
+
+    base_dim = 96
+    z_dim = 16
+    dim_mult = [1, 2, 4, 4]
+    num_res_blocks = 2
+    attn_scales = []
+    temperal_downsample = [False, True, True]
+    out_channels = 3
+    is_residual = False
+
+    torch_model = TorchAutoencoderKLWan(
+        base_dim=base_dim,
+        z_dim=z_dim,
+        dim_mult=dim_mult,
+        num_res_blocks=num_res_blocks,
+        attn_scales=attn_scales,
+        temperal_downsample=temperal_downsample,
+        dropout=0.0,
+        out_channels=out_channels,
+        is_residual=is_residual,
+    )
+    torch_model.eval()
+
+    ccl_manager = CCLManager(mesh_device, topology=ttnn.Topology.Linear, num_links=num_links)
+    parallel_config = VaeHWParallelConfig(
+        height_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[h_axis], mesh_axis=h_axis),
+        width_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[w_axis], mesh_axis=w_axis),
+    )
+    tt_model = WanDecoder(
+        base_dim=base_dim,
+        z_dim=z_dim,
+        dim_mult=dim_mult,
+        num_res_blocks=num_res_blocks,
+        attn_scales=attn_scales,
+        temperal_downsample=temperal_downsample,
+        out_channels=out_channels,
+        is_residual=is_residual,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+        dtype=dtype,
+    )
+    tt_model.load_torch_state_dict(torch_model.state_dict())
+
+    def make_input():
+        torch_input = torch.randn(B, C, T, H, W, dtype=torch.float32)
+        tt_input = torch_input.permute(0, 2, 3, 4, 1)
+        tt_input = conv_pad_in_channels(tt_input)
+        tt_input, logical_h = conv_pad_height(tt_input, parallel_config.height_parallel.factor)
+        tt_input = typed_tensor_2dshard(
+            tt_input,
+            mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            shard_mapping={h_axis: 2, w_axis: 3},
+            dtype=tt_input_dtype,
+        )
+        return tt_input, logical_h
+
+    # Warmup run to trigger JIT compilation
+    logger.info("Warmup run (JIT compilation)...")
+    tt_input, logical_h = make_input()
+    tt_model(tt_input, logical_h)
+
+    # Timed run
+    ttnn.synchronize_device(mesh_device)
+    logger.info("Starting timed run...")
+    start = time.perf_counter()
+    tt_input, logical_h = make_input()
+    tt_model(tt_input, logical_h)
+    ttnn.synchronize_device(mesh_device)
+    elapsed = time.perf_counter() - start
+
+    logger.info(f"WanDecoder 720p 81f cached: {elapsed:.3f}s")
