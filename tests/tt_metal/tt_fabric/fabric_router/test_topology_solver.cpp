@@ -2873,6 +2873,89 @@ TEST_F(TopologySolverTest, MappingConstraintsManyToMany) {
         constraints.is_valid_mapping(4, 10));  // Not in target_nodes set (but constraint still applies if queried)
 }
 
+// Same-group constraint: target groups map within global group boundaries (no splitting).
+// Multiple target groups may share one global group.
+TEST_F(TopologySolverTest, SolveTopologyMapping_SameGroupConstraint_Basic) {
+    // Chain 1-2-3-4; groups {1,2}, {3,4} -> globals {10,11}, {12,13}
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    target_adj[1] = {2};
+    target_adj[2] = {1, 3};
+    target_adj[3] = {2, 4};
+    target_adj[4] = {3};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    global_adj[10] = {11};
+    global_adj[11] = {10, 12};
+    global_adj[12] = {11, 13};
+    global_adj[13] = {12};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1, 2}, {3, 4}},
+        std::vector<std::set<TestGlobalNode>>{{10, 11}, {12, 13}});
+
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    ASSERT_TRUE(result.success) << result.error_message;
+
+    TestGlobalNode g1 = result.target_to_global.at(1), g2 = result.target_to_global.at(2);
+    TestGlobalNode g3 = result.target_to_global.at(3), g4 = result.target_to_global.at(4);
+    bool grp0_first = (g1 == 10 || g1 == 11) && (g2 == 10 || g2 == 11);
+    bool grp1_first = (g3 == 10 || g3 == 11) && (g4 == 10 || g4 == 11);
+    EXPECT_NE(grp0_first, grp1_first) << "Each target group stays within one global group";
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_SameGroupConstraint_SharedGlobalGroup) {
+    // {1} {2} map to {1,3,2}: multiple target groups may share one global group; no boundary breaking
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    target_adj[1] = {2};
+    target_adj[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    global_adj[1] = {3};
+    global_adj[3] = {1, 2};
+    global_adj[2] = {3};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1}, {2}}, std::vector<std::set<TestGlobalNode>>{{1, 3, 2}});
+
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    ASSERT_TRUE(result.success) << result.error_message;
+
+    // Both targets in same global group; chain 1-2 maps to path in 1-3-2
+    EXPECT_TRUE(
+        (result.target_to_global.at(1) == 1 && result.target_to_global.at(2) == 3) ||
+        (result.target_to_global.at(1) == 3 && result.target_to_global.at(2) == 1) ||
+        (result.target_to_global.at(1) == 3 && result.target_to_global.at(2) == 2) ||
+        (result.target_to_global.at(1) == 2 && result.target_to_global.at(2) == 3));
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_SameGroupConstraint_SplittingTargetGroupRejected) {
+    // [1,2,3] must stay together; globals {10},{11},{12} force splitting -> should fail
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    target_adj[1] = {2};
+    target_adj[2] = {1, 3};
+    target_adj[3] = {2};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    global_adj[10] = {11};
+    global_adj[11] = {10, 12};
+    global_adj[12] = {11};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1, 2, 3}}, std::vector<std::set<TestGlobalNode>>{{10}, {11}, {12}});
+
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    ASSERT_FALSE(result.success) << "Target group {1,2,3} cannot be split across global groups {10},{11},{12}";
+}
+
 TEST_F(TopologySolverTest, MappingConstraintsManyToManyIntersection) {
     // Test many-to-many constraint intersection with existing constraints
     MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
