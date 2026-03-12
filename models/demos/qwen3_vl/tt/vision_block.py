@@ -93,10 +93,6 @@ class VisionBlock(LightweightModule):
         attn_out = self.attention.forward(
             attn_in, rot_mats=rot_mats, batch_size=batch_size, user_id_tensor=user_id_tensor
         )
-        # To match the batch-related reshape inside the attention module
-        # Use the batch_size parameter instead of inferring from shape[-3]
-        # because for [32, 1, S, H] tensors, shape[-3] is 1, not 32
-        # This reshape is only applicable in batched prefill
         residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1])
 
         # Here x and attn_out are both fractured across devices

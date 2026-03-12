@@ -362,10 +362,8 @@ class VisionAttention(LightweightModule):
         batch_size=1,
         user_id_tensor=None,
     ):
-        # For batched prefill, x_11SH has shape [B, 1, S, H] where B is batch_size
-        # Following 70B Galaxy: concat before QKV matmul, then reshape back to batch after
+        # For batched prefill, x_11SH has shape [B, 1, S, H]
         if batch_size > 1:
-            # Concatenate batch dimension into sequence for matmul compatibility
             x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
 
         seq_len = x_11SH.shape[-2]
@@ -504,7 +502,6 @@ class VisionAttention(LightweightModule):
         ttnn.deallocate(v_heads_1VSD_8b)
 
         # For single-user prefill, reshape to expected format for nlp_concat_heads
-        # For batched prefill (batch_size > 1), skip this reshape - nlp_concat_heads handles [B, H, S, D]
         if batch_size == 1:
             attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.padded_head_dim])
         else:
@@ -520,8 +517,6 @@ class VisionAttention(LightweightModule):
         ttnn.deallocate(attn_output_1QSD)
 
         # For batched prefill, reshape to concatenate batch dimension into sequence
-        # This MUST happen AFTER nlp_concat_heads to preserve correct data layout
-        # nlp_concat_heads outputs [B, 1, S_per_user, H*D], reshape to [1, 1, B*S, H*D]
         if batch_size > 1:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
 
