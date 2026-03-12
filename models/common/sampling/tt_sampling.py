@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.sampling._utils import is_default_value, is_power_of_2, upper_power_of_2
-from models.common.sampling.tt_log_probs import LogProbsCalculator
+from models.common.sampling.tt_log_probs import LogProbsCalculator, LogProbsResult
 
 
 class TTSampling(LightweightModule):
@@ -323,8 +323,10 @@ class TTSampling(LightweightModule):
             topology=ttnn.Topology.Linear,
         )
 
-    def reset_params(self, k, p, temp, enable_log_probs: bool | list[bool] = None):
-        """Update sampling parameters (k, p, temperature) dynamically."""
+    def reset_params(
+        self, k, p, temp, enable_log_probs: bool | list[bool] = None, num_logprobs: int | list[int] = None
+    ):
+        """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
         if not self._force_argmax_sampling:
             # When _sampling_dp > 1, create multi-device host tensors so
@@ -360,7 +362,7 @@ class TTSampling(LightweightModule):
             ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
             ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
 
-        self.log_probs_calculator.set_log_probs_mode(enable_log_probs)
+        self.log_probs_calculator.set_log_probs_mode(enable_log_probs, num_logprobs=num_logprobs)
 
     def forward(
         self,
@@ -409,9 +411,17 @@ class TTSampling(LightweightModule):
                 keepdim=False,
                 use_multicore=True,
             )
-            # Return dummy log-probs tensor with same shape as regular log-probs would be
-            # to satisfy the return type and for later post-processing
-            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
+            # Calculate sampled token logprob only for argmax path
+            # (top-k logprobs not available since there's no top-k selection in this path)
+            sampled_logprob = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
+            if sampled_logprob is not None:
+                self.tt_log_probs = LogProbsResult(
+                    sampled_token_logprob=sampled_logprob,
+                    top_k_logprobs=None,
+                    top_k_indices=None,
+                )
+            else:
+                self.tt_log_probs = None
             return tt_out_tok, self.tt_log_probs
 
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
@@ -557,11 +567,21 @@ class TTSampling(LightweightModule):
             output_tensor=tt_out_tok,
         )
 
+        # Calculate logprobs before deallocating gathered topk tensors.
+        # If top-k logprobs are needed, use calculate_top_k_log_probs which computes
+        # logprobs for both the sampled token and the gathered top-k tokens.
+        # Otherwise, fall back to the original calculate_log_probs for sampled token only.
+        if self.log_probs_calculator.enable_log_probs and self.log_probs_calculator.top_k_logprobs_needed:
+            self.tt_log_probs = self.log_probs_calculator.calculate_top_k_log_probs(
+                logits_tensor=x,
+                topk_values=topk_values_gathered_bf16_interleaved,
+                topk_global_indices=topk_global_indices,
+                sampled_indices=tt_out_tok,
+            )
+        else:
+            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
+
         ttnn.deallocate(topk_values_gathered_bf16_interleaved)
         ttnn.deallocate(topk_global_indices_interleaved_untilised)
-
-        # Return dummy log-probs tensor with same shape as regular log-probs would be
-        # to satisfy the return type and for later post-processing
-        self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
 
         return tt_out_tok, self.tt_log_probs
