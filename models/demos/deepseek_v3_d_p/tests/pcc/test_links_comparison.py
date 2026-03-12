@@ -769,11 +769,9 @@ def test_topology_matrix(
     ttnn.synchronize_device(mesh_device)
 
     # Measure
-    t_wall_start = time.perf_counter()
     for _ in range(NUM_ITERATIONS):
         tt_dispatch_combined_module(tt_x, tt_weights, tt_indices)
-        ttnn.synchronize_device(mesh_device)
-    wall_ns = int((time.perf_counter() - t_wall_start) * 1e9)
+    ttnn.synchronize_device(mesh_device)
 
     durations = _extract_dispatch_only_profiler_durations(mesh_device)
 
@@ -781,9 +779,11 @@ def test_topology_matrix(
         avg_us = sum(durations) / len(durations) / 1e3
         source = "profiler"
     else:
-        avg_us = wall_ns / NUM_ITERATIONS / 1e3
-        source = "wall"
-        logger.warning("Device profiler unavailable, reporting wall-clock")
+        pytest.fail(
+            "Device profiler not available. Run with: "
+            "TT_METAL_DEVICE_PROFILER=1 TT_METAL_PROFILER_MID_RUN_DUMP=1 "
+            "TT_METAL_PROFILER_CPP_POST_PROCESS=1"
+        )
 
     logger.info(f"  {variant_key}: dispatch={avg_us:.2f} us  ({source})")
 
