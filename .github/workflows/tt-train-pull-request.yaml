@@ -67,7 +67,7 @@ jobs:
             -DTT_METAL_BUILD_TESTS=ON \
             -DTTNN_BUILD_TESTS=ON \
             -DTT_UNITY_BUILDS=OFF \
-            -DTT_METAL_BUILD_TT_TRAIN=ON \
+            -DBUILD_TT_TRAIN=ON \
             -GNinja
           cmake --build build --target all_generated_files
 
