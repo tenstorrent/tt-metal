@@ -20,7 +20,7 @@
 #include <ttnn-nanobind/small_vector_caster.hpp>
 
 #include "ttnn/decorators.hpp"  // testing
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
@@ -28,7 +28,627 @@
 
 namespace ttnn::operations::binary {
 
+namespace unary = operations::unary;
+
 namespace detail {
+
+Tensor hypot_composite_wrapper(const Tensor& a, const Tensor& b, const std::optional<MemoryConfig>& m) {
+    return ttnn::hypot(a, b, m, std::nullopt);
+}
+
+Tensor minimum_tensor_scalar_binding(
+    const Tensor& input_tensor_a,
+    unary::ScalarVariant scalar,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy) {
+    return ttnn::minimum(
+        input_tensor_a,
+        scalar,
+        dtype,
+        memory_config,
+        output_tensor,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy);
+}
+
+Tensor minimum_tensor_tensor_binding(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy) {
+    return ttnn::minimum(
+        input_tensor_a,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        output_tensor,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy);
+}
+
+Tensor maximum_tensor_scalar_binding(
+    const Tensor& input_tensor_a,
+    unary::ScalarVariant scalar,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy) {
+    return ttnn::maximum(
+        input_tensor_a,
+        scalar,
+        dtype,
+        memory_config,
+        output_tensor,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy);
+}
+
+Tensor maximum_tensor_tensor_binding(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy) {
+    return ttnn::maximum(
+        input_tensor_a,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        output_tensor,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy);
+}
+
+Tensor gcd_binding(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy) {
+    return ttnn::gcd(
+        input_tensor_a,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        output_tensor,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy);
+}
+
+Tensor lcm_binding(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy) {
+    return ttnn::lcm(
+        input_tensor_a,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        output_tensor,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy);
+}
+
+Tensor div_no_nan_tensor_tensor_binding(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
+    return ttnn::div_no_nan(input_tensor_a, input_tensor_b, memory_config);
+}
+
+Tensor div_no_nan_tensor_scalar_binding(
+    const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config) {
+    return ttnn::div_no_nan(input_tensor_a, value, memory_config);
+}
+
+Tensor floor_div_tensor_tensor_binding(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
+    return ttnn::floor_div(input_tensor_a, input_tensor_b, memory_config);
+}
+
+Tensor floor_div_tensor_scalar_binding(
+    const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config) {
+    return ttnn::floor_div(input_tensor_a, value, memory_config);
+}
+
+Tensor div_tensor_tensor_binding(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    bool fast_and_approximate_mode,
+    const std::optional<std::string>& rounding_mode,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::div(
+        input_tensor_a,
+        input_tensor_b,
+        fast_and_approximate_mode,
+        rounding_mode,
+        dtype,
+        memory_config,
+        output_tensor,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy,
+        sub_core_grids);
+}
+
+Tensor prelu_tensor_tensor_binding(
+    const Tensor& input_tensor_a, const Tensor& input_tensor_b, const std::optional<MemoryConfig>& memory_config) {
+    return ttnn::prelu(input_tensor_a, input_tensor_b, memory_config);
+}
+
+Tensor prelu_tensor_scalar_binding(
+    const Tensor& input_tensor_a, float weight, const std::optional<MemoryConfig>& memory_config) {
+    return ttnn::prelu(input_tensor_a, weight, memory_config);
+}
+
+Tensor prelu_tensor_array_binding(
+    const Tensor& input_tensor_a,
+    const std::array<float, 1>& weight,
+    const std::optional<MemoryConfig>& memory_config) {
+    return ttnn::prelu(input_tensor_a, weight, memory_config);
+}
+
+Tensor fmod_tensor_scalar_binding(
+    const Tensor& input_tensor,
+    float scalar,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::fmod(input_tensor, scalar, memory_config, sub_core_grids);
+}
+
+Tensor fmod_tensor_tensor_binding(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::fmod(input_tensor_a, input_tensor_b, memory_config, sub_core_grids);
+}
+
+Tensor remainder_tensor_scalar_binding(
+    const Tensor& input_tensor,
+    float scalar,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::remainder(input_tensor, scalar, memory_config, sub_core_grids);
+}
+
+Tensor remainder_tensor_tensor_binding(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::remainder(input_tensor_a, input_tensor_b, memory_config, sub_core_grids);
+}
+
+Tensor pow_tensor_exponent_binding(
+    const Tensor& input_tensor,
+    const Tensor& exponent,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy) {
+    return ttnn::pow(
+        input_tensor,
+        exponent,
+        dtype,
+        memory_config,
+        output_tensor,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy);
+}
+
+Tensor pow_tensor_int_exponent_binding(
+    const Tensor& input_tensor,
+    int32_t exponent,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor) {
+    return ttnn::pow(input_tensor, exponent, memory_config, output_tensor);
+}
+
+Tensor pow_tensor_float_exponent_binding(
+    const Tensor& input_tensor,
+    float exponent,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor) {
+    return ttnn::pow(input_tensor, exponent, memory_config, output_tensor);
+}
+
+Tensor pow_scalar_tensor_binding(
+    float input_a,
+    const Tensor& exponent,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy) {
+    return ttnn::pow(
+        input_a,
+        exponent,
+        dtype,
+        memory_config,
+        output_tensor,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy);
+}
+
+Tensor rsub_tensor_scalar_binding(
+    const Tensor& input_tensor_a,
+    float input_b,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy) {
+    return ttnn::rsub(
+        input_tensor_a,
+        input_b,
+        dtype,
+        memory_config,
+        output_tensor,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy);
+}
+
+Tensor rsub_tensor_tensor_binding(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy) {
+    return ttnn::rsub(
+        input_tensor_a,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        output_tensor,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy);
+}
+
+Tensor bitwise_and_scalar_binding(
+    const Tensor& a,
+    int32_t b,
+    const std::optional<MemoryConfig>& m,
+    const std::optional<Tensor>& o,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& a_act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& b_act,
+    const std::optional<bool>& leg) {
+    return ttnn::bitwise_and(
+        a,
+        b,
+        m,
+        o,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(act.data(), act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(a_act.data(), a_act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(b_act.data(), b_act.size()),
+        leg);
+}
+Tensor bitwise_and_tensor_binding(
+    const Tensor& a,
+    const Tensor& b,
+    const std::optional<MemoryConfig>& m,
+    const std::optional<Tensor>& o,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& a_act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& b_act,
+    const std::optional<bool>& leg) {
+    return ttnn::bitwise_and(
+        a,
+        b,
+        m,
+        o,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(act.data(), act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(a_act.data(), a_act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(b_act.data(), b_act.size()),
+        leg);
+}
+Tensor bitwise_or_scalar_binding(
+    const Tensor& a,
+    int32_t b,
+    const std::optional<MemoryConfig>& m,
+    const std::optional<Tensor>& o,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& a_act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& b_act,
+    const std::optional<bool>& leg) {
+    return ttnn::bitwise_or(
+        a,
+        b,
+        m,
+        o,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(act.data(), act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(a_act.data(), a_act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(b_act.data(), b_act.size()),
+        leg);
+}
+Tensor bitwise_or_tensor_binding(
+    const Tensor& a,
+    const Tensor& b,
+    const std::optional<MemoryConfig>& m,
+    const std::optional<Tensor>& o,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& a_act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& b_act,
+    const std::optional<bool>& leg) {
+    return ttnn::bitwise_or(
+        a,
+        b,
+        m,
+        o,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(act.data(), act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(a_act.data(), a_act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(b_act.data(), b_act.size()),
+        leg);
+}
+Tensor bitwise_xor_scalar_binding(
+    const Tensor& a,
+    int32_t b,
+    const std::optional<MemoryConfig>& m,
+    const std::optional<Tensor>& o,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& a_act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& b_act,
+    const std::optional<bool>& leg) {
+    return ttnn::bitwise_xor(
+        a,
+        b,
+        m,
+        o,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(act.data(), act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(a_act.data(), a_act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(b_act.data(), b_act.size()),
+        leg);
+}
+Tensor bitwise_xor_tensor_binding(
+    const Tensor& a,
+    const Tensor& b,
+    const std::optional<MemoryConfig>& m,
+    const std::optional<Tensor>& o,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& a_act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& b_act,
+    const std::optional<bool>& leg) {
+    return ttnn::bitwise_xor(
+        a,
+        b,
+        m,
+        o,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(act.data(), act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(a_act.data(), a_act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(b_act.data(), b_act.size()),
+        leg);
+}
+Tensor bitwise_left_shift_scalar_binding(
+    const Tensor& a,
+    int32_t b,
+    const std::optional<MemoryConfig>& m,
+    const std::optional<Tensor>& o,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& a_act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& b_act,
+    const std::optional<bool>& leg) {
+    return ttnn::bitwise_left_shift(
+        a,
+        b,
+        m,
+        o,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(act.data(), act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(a_act.data(), a_act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(b_act.data(), b_act.size()),
+        leg);
+}
+Tensor bitwise_left_shift_tensor_binding(
+    const Tensor& a,
+    const Tensor& b,
+    const std::optional<MemoryConfig>& m,
+    const std::optional<Tensor>& o,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& a_act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& b_act,
+    const std::optional<bool>& leg) {
+    return ttnn::bitwise_left_shift(
+        a,
+        b,
+        m,
+        o,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(act.data(), act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(a_act.data(), a_act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(b_act.data(), b_act.size()),
+        leg);
+}
+Tensor bitwise_right_shift_scalar_binding(
+    const Tensor& a,
+    int32_t b,
+    const std::optional<MemoryConfig>& m,
+    const std::optional<Tensor>& o,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& a_act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& b_act,
+    const std::optional<bool>& leg) {
+    return ttnn::bitwise_right_shift(
+        a,
+        b,
+        m,
+        o,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(act.data(), act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(a_act.data(), a_act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(b_act.data(), b_act.size()),
+        leg);
+}
+Tensor bitwise_right_shift_tensor_binding(
+    const Tensor& a,
+    const Tensor& b,
+    const std::optional<MemoryConfig>& m,
+    const std::optional<Tensor>& o,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& a_act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& b_act,
+    const std::optional<bool>& leg) {
+    return ttnn::bitwise_right_shift(
+        a,
+        b,
+        m,
+        o,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(act.data(), act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(a_act.data(), a_act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(b_act.data(), b_act.size()),
+        leg);
+}
+Tensor logical_left_shift_scalar_binding(
+    const Tensor& a,
+    int32_t b,
+    const std::optional<MemoryConfig>& m,
+    const std::optional<Tensor>& o,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& a_act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& b_act,
+    const std::optional<bool>& leg) {
+    return ttnn::logical_left_shift(
+        a,
+        b,
+        m,
+        o,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(act.data(), act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(a_act.data(), a_act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(b_act.data(), b_act.size()),
+        leg);
+}
+Tensor logical_left_shift_tensor_binding(
+    const Tensor& a,
+    const Tensor& b,
+    const std::optional<MemoryConfig>& m,
+    const std::optional<Tensor>& o,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& a_act,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& b_act,
+    const std::optional<bool>& leg) {
+    return ttnn::logical_left_shift(
+        a,
+        b,
+        m,
+        o,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(act.data(), act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(a_act.data(), a_act.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(b_act.data(), b_act.size()),
+        leg);
+}
+
+Tensor div_tensor_scalar_binding(
+    const Tensor& input_tensor_a,
+    float value,
+    bool fast_and_approximate_mode,
+    const std::optional<std::string>& rounding_mode,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::div(
+        input_tensor_a,
+        value,
+        fast_and_approximate_mode,
+        rounding_mode,
+        dtype,
+        memory_config,
+        output_tensor,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy,
+        sub_core_grids);
+}
 
 // Common broadcasting and performance documentation for binary operations
 constexpr auto BINARY_BROADCAST_DOC = R"doc(
@@ -43,77 +663,475 @@ constexpr auto BINARY_BROADCAST_DOC = R"doc(
         L1 sharded layout is preferred, with no broadcast and matching tensor specs for A, B and C.
 )doc";
 
-template <typename binary_operation_t>
-void bind_primitive_binary_operation(
-    nb::module_& mod, const binary_operation_t& operation, const std::string& description) {
+// Free function template that dispatches to the appropriate ttnn binary operation
+template <BinaryOpType Op>
+Tensor binary_op_binding_tensor_scalar(
+    const Tensor& input_tensor_a,
+    float scalar,
+    const std::optional<const DataType>& dtype,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    auto act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size());
+    auto lhs_act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+        input_tensor_a_activations.data(), input_tensor_a_activations.size());
+    auto rhs_act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+        input_tensor_b_activations.data(), input_tensor_b_activations.size());
+    if constexpr (Op == BinaryOpType::ADD) {
+        return ttnn::add(
+            input_tensor_a,
+            scalar,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::SUB) {
+        return ttnn::subtract(
+            input_tensor_a,
+            scalar,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::EQ) {
+        return ttnn::eq(
+            input_tensor_a,
+            scalar,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::NE) {
+        return ttnn::ne(
+            input_tensor_a,
+            scalar,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LT) {
+        return ttnn::lt(
+            input_tensor_a,
+            scalar,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LE) {
+        return ttnn::le(
+            input_tensor_a,
+            scalar,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::GT) {
+        return ttnn::gt(
+            input_tensor_a,
+            scalar,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::GE) {
+        return ttnn::ge(
+            input_tensor_a,
+            scalar,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::BIAS_GELU) {
+        return ttnn::bias_gelu(
+            input_tensor_a,
+            scalar,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else {
+        return ttnn::binary_op<Op>(
+            input_tensor_a,
+            scalar,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    }
+}
+
+template <BinaryOpType Op>
+Tensor binary_op_binding_tensor_tensor(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& dtype,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    auto act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size());
+    auto lhs_act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+        input_tensor_a_activations.data(), input_tensor_a_activations.size());
+    auto rhs_act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+        input_tensor_b_activations.data(), input_tensor_b_activations.size());
+    if constexpr (Op == BinaryOpType::ADD) {
+        return ttnn::add(
+            input_tensor_a,
+            input_tensor_b,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::SUB) {
+        return ttnn::subtract(
+            input_tensor_a,
+            input_tensor_b,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::EQ) {
+        return ttnn::eq(
+            input_tensor_a,
+            input_tensor_b,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::NE) {
+        return ttnn::ne(
+            input_tensor_a,
+            input_tensor_b,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LT) {
+        return ttnn::lt(
+            input_tensor_a,
+            input_tensor_b,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LE) {
+        return ttnn::le(
+            input_tensor_a,
+            input_tensor_b,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::GT) {
+        return ttnn::gt(
+            input_tensor_a,
+            input_tensor_b,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::GE) {
+        return ttnn::ge(
+            input_tensor_a,
+            input_tensor_b,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::BIAS_GELU) {
+        return ttnn::bias_gelu(
+            input_tensor_a,
+            input_tensor_b,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    } else {
+        return ttnn::binary_op<Op>(
+            input_tensor_a,
+            input_tensor_b,
+            dtype,
+            memory_config,
+            output_tensor,
+            act,
+            lhs_act,
+            rhs_act,
+            use_legacy,
+            sub_core_grids);
+    }
+}
+
+// Free function template that dispatches to the appropriate ttnn inplace binary operation
+template <BinaryOpType Op>
+Tensor inplace_binding_tensor_scalar(
+    const Tensor& input_tensor_a,
+    float scalar,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    auto act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size());
+    auto lhs_act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+        input_tensor_a_activations.data(), input_tensor_a_activations.size());
+    auto rhs_act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+        input_tensor_b_activations.data(), input_tensor_b_activations.size());
+    if constexpr (Op == BinaryOpType::ADD) {
+        return ttnn::add_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::SUB) {
+        return ttnn::subtract_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::GT) {
+        return ttnn::gt_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::GE) {
+        return ttnn::ge_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LT) {
+        return ttnn::lt_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LE) {
+        return ttnn::le_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::EQ) {
+        return ttnn::eq_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::NE) {
+        return ttnn::ne_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LDEXP) {
+        return ttnn::ldexp_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LOGADDEXP) {
+        return ttnn::logaddexp_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LOGADDEXP2) {
+        return ttnn::logaddexp2_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::SQUARED_DIFFERENCE) {
+        return ttnn::squared_difference_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::RSUB) {
+        return ttnn::rsub_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::BIAS_GELU) {
+        return ttnn::bias_gelu_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LOGICAL_OR) {
+        return ttnn::logical_or_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LOGICAL_XOR) {
+        return ttnn::logical_xor_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LOGICAL_AND) {
+        return ttnn::logical_and_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    }
+}
+
+template <BinaryOpType Op>
+Tensor inplace_binding_tensor_tensor(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    auto act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size());
+    auto lhs_act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+        input_tensor_a_activations.data(), input_tensor_a_activations.size());
+    auto rhs_act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+        input_tensor_b_activations.data(), input_tensor_b_activations.size());
+    if constexpr (Op == BinaryOpType::ADD) {
+        return ttnn::add_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::SUB) {
+        return ttnn::subtract_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::GT) {
+        return ttnn::gt_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::GE) {
+        return ttnn::ge_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LT) {
+        return ttnn::lt_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LE) {
+        return ttnn::le_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::EQ) {
+        return ttnn::eq_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::NE) {
+        return ttnn::ne_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LDEXP) {
+        return ttnn::ldexp_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LOGADDEXP) {
+        return ttnn::logaddexp_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LOGADDEXP2) {
+        return ttnn::logaddexp2_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::SQUARED_DIFFERENCE) {
+        return ttnn::squared_difference_(
+            input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::RSUB) {
+        return ttnn::rsub_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::BIAS_GELU) {
+        return ttnn::bias_gelu_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LOGICAL_OR) {
+        return ttnn::logical_or_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LOGICAL_XOR) {
+        return ttnn::logical_xor_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    } else if constexpr (Op == BinaryOpType::LOGICAL_AND) {
+        return ttnn::logical_and_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+    }
+}
+
+template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
+void bind_binary_inplace_operation(
+    nb::module_& mod,
+    const std::string& description,
+    const std::string& math,
+    TensorScalarFn tensor_scalar_fn,
+    TensorTensorFn tensor_tensor_fn,
+    const std::string& supported_dtype = "BFLOAT16",
+    const std::string& note = " ") {
     auto doc = fmt::format(
         R"doc(
         {2}
 
-        {3}
+        .. math::
+            {3}
 
         Args:
-            * :attr:`input_tensor_a`
-            * :attr:`input_tensor_b` (ttnn.Tensor or Number): the tensor or number to add to :attr:`input_tensor_a`.
+            input_tensor_a (ttnn.Tensor): the input tensor.
+            input_tensor_b (ttnn.Tensor or Number): the input tensor.
 
         Keyword args:
-            * :attr:`memory_config` (Optional[ttnn.MemoryConfig]): memory config for the output tensor
-            * :attr:`dtype` (Optional[ttnn.DataType]): data type for the output tensor
-            * :attr:`output_tensor` (Optional[ttnn.Tensor]): preallocated output tensor
-            * :attr:`activations` (Optional[List[str]]): list of activation functions to apply to the output tensor
+            activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
+            input_tensor_a_activations (List[str], optional): list of activation functions to apply to input_a. Defaults to `None`.
+            input_tensor_b_activations (List[str], optional): list of activation functions to apply to input_b. Defaults to `None`.
+            use_legacy (bool, optional): use legacy implementation. Defaults to `None`.
+            sub_core_grids (CoreRangeSet, optional): sub core grids. Defaults to `None`.
 
-        Example:
+        {6}
 
-            >>> tensor1 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
-            >>> tensor2 = ttnn.to_device(ttnn.from_torch(torch.tensor(([[1, 2], [3, 4]]), dtype=torch.bfloat16)), device)
-            >>> output = {1}(tensor1, tensor2)
+        Note:
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - {4}
+                 - TILE, ROW_MAJOR
+
+            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
+
+            {5}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
+        math,
+        supported_dtype,
+        note,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               BinaryOpType binary_op_type,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<unary::EltwiseFusedActivations>& activations,
-               const std::optional<unary::EltwiseUnaryWithParam>& input_tensor_a_activation) -> ttnn::Tensor {
-                return self(
-                    input_tensor_a,
-                    input_tensor_b,
-                    binary_op_type,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activation);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            tensor_scalar_fn,
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
-            nb::arg("binary_op_type"),
             nb::kw_only(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::none(),
-            nb::arg("input_tensor_a_activation") = nb::none()});
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("use_legacy") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            tensor_tensor_fn,
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
+            nb::kw_only(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("use_legacy") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()));
 }
 
-template <typename binary_operation_t>
+template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
 void bind_binary_operation(
     nb::module_& mod,
-    const binary_operation_t& operation,
     const std::string& description,
     const std::string& math,
+    TensorScalarFn tensor_scalar_fn,
+    TensorTensorFn tensor_tensor_fn,
     const std::string& info = ". ",
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = " ") {
@@ -155,8 +1173,8 @@ void bind_binary_operation(
 
             {6}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         math,
         info,
@@ -164,91 +1182,43 @@ void bind_binary_operation(
         note,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        // tensor and scalar
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const ttnn::Tensor& input_tensor_a,
-               const float scalar,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(
-                    input_tensor_a,
-                    scalar,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy,
-                    sub_core_grids);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            tensor_scalar_fn,
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
             nb::arg("use_legacy") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()},
-
-        // tensor and tensor
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(
-                    input_tensor_a,
-                    input_tensor_b,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy,
-                    sub_core_grids);
-            },
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            tensor_tensor_fn,
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
             nb::arg("use_legacy") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()});
+            nb::arg("sub_core_grids") = nb::none()));
 }
 
-template <typename binary_operation_t>
+template <ttnn::unique_string Name, typename Fn>
 void bind_binary_gcd_lcm_operation(
     nb::module_& mod,
-    const binary_operation_t& operation,
     const std::string& description,
     const std::string& math,
+    Fn fn,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
     auto doc = fmt::format(
@@ -290,57 +1260,36 @@ void bind_binary_gcd_lcm_operation(
             {5}
         )doc",
 
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         math,
         supported_dtype,
         note,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) -> ttnn::Tensor {
-                return self(
-                    input_tensor_a,
-                    input_tensor_b,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy);
-            },
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("use_legacy") = nb::none()});
+        doc.c_str(),
+        fn,
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+        nb::arg("use_legacy") = nb::none());
 }
 
-template <typename binary_operation_t>
+template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
 void bind_binary_unary_max_operation(
     nb::module_& mod,
-    const binary_operation_t& operation,
     const std::string& description,
+    TensorScalarFn tensor_scalar_fn,
+    TensorTensorFn tensor_tensor_fn,
     const std::string& note = " ",
     const std::string& supported_dtype = "BFLOAT16, FLOAT32, INT32") {
     auto doc = fmt::format(
@@ -378,93 +1327,47 @@ void bind_binary_unary_max_operation(
 
             {4}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         supported_dtype,
         note,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        // tensor and scalar
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const ttnn::Tensor& input_tensor_a,
-               unary::ScalarVariant scalar,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) -> ttnn::Tensor {
-                return self(
-                    input_tensor_a,
-                    scalar,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy);
-            },
-            nb::arg("input_tensor_a"),
-            nb::arg("input_b"),
-            nb::kw_only(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("use_legacy") = nb::none(),
-        },
-
-        // tensor and tensor
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) -> ttnn::Tensor {
-                return self(
-                    input_tensor_a,
-                    input_tensor_b,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy);
-            },
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("use_legacy") = nb::none()});
+    auto scalar_overload = ttnn::overload_t(
+        tensor_scalar_fn,
+        nb::arg("input_tensor_a"),
+        nb::arg("input_b"),
+        nb::kw_only(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+        nb::arg("use_legacy") = nb::none());
+    auto tensor_overload = ttnn::overload_t(
+        tensor_tensor_fn,
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+        nb::arg("use_legacy") = nb::none());
+    ttnn::bind_function<Name>(mod, doc.c_str(), scalar_overload, tensor_overload);
 }
 
-template <typename binary_operation_t>
+template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
 void bind_binary_unary_operation(
     nb::module_& mod,
-    const binary_operation_t& operation,
     const std::string& description,
     const std::string& math,
+    TensorScalarFn tensor_scalar_fn,
+    TensorTensorFn tensor_tensor_fn,
     const std::string& info = ". ",
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = " ") {
@@ -506,8 +1409,8 @@ void bind_binary_unary_operation(
 
             {6}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         math,
         info,
@@ -515,85 +1418,41 @@ void bind_binary_unary_operation(
         note,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        // tensor and scalar
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const ttnn::Tensor& input_tensor_a,
-               const float scalar,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) -> ttnn::Tensor {
-                return self(
-                    input_tensor_a,
-                    scalar,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            tensor_scalar_fn,
             nb::arg("input_tensor_a"),
             nb::arg("input_b"),
             nb::kw_only(),
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("use_legacy") = nb::none()},
-
-        // tensor and tensor
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) -> ttnn::Tensor {
-                return self(
-                    input_tensor_a,
-                    input_tensor_b,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy);
-            },
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("use_legacy") = nb::none()),
+        ttnn::overload_t(
+            tensor_tensor_fn,
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_a_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("input_tensor_b_activations") = ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-            nb::arg("use_legacy") = nb::none()});
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("use_legacy") = nb::none()));
 }
 
-template <typename binary_operation_t>
+template <ttnn::unique_string Name, typename Fn>
 void bind_binary_with_float_param(
     nb::module_& mod,
-    const binary_operation_t& operation,
     const std::string& description,
     const std::string& math,
+    Fn fn,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
     auto doc = fmt::format(
@@ -633,41 +1492,33 @@ void bind_binary_with_float_param(
 
             {5}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         math,
         supported_dtype,
         note,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               float alpha,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor_a, input_tensor_b, alpha, memory_config, output_tensor);
-            },
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::arg("alpha") = 1.0f,
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()});
+        doc.c_str(),
+        fn,
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::arg("alpha"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none());
 }
 
-template <typename binary_operation_t>
+template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
 void bind_bitwise_binary_ops_operation(
     nb::module_& mod,
-    const binary_operation_t& operation,
     const std::string& description,
     const std::string& math,
+    TensorScalarFn tensor_scalar_fn,
+    TensorTensorFn tensor_tensor_fn,
     const std::string& info = ". ",
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = " ") {
@@ -707,8 +1558,8 @@ void bind_bitwise_binary_ops_operation(
 
             {6}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         math,
         info,
@@ -716,166 +1567,39 @@ void bind_bitwise_binary_ops_operation(
         note,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        // tensor and scalar
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const ttnn::Tensor& input_tensor_a,
-               const int32_t scalar,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) -> ttnn::Tensor {
-                return self(
-                    input_tensor_a,
-                    scalar,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            tensor_scalar_fn,
             nb::arg("input_tensor_a"),
             nb::arg("input_b"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("use_legacy") = nb::none()},
-
-        // tensor and tensor
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) -> ttnn::Tensor {
-                return self(
-                    input_tensor_a,
-                    input_tensor_b,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy);
-            },
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("use_legacy") = nb::none()),
+        ttnn::overload_t(
+            tensor_tensor_fn,
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("use_legacy") = nb::none(),
-        });
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("use_legacy") = nb::none()));
 }
 
-template <typename binary_operation_t>
-void bind_logical_binary_ops_operation(
-    nb::module_& mod,
-    const binary_operation_t& operation,
-    const std::string& description,
-    const std::string& math,
-    const std::string& info = ". ",
-    const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = " ") {
-    auto doc = fmt::format(
-        R"doc(
-        {2}
-
-        .. math::
-            {3}
-
-        Args:
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor or Integer): the input tensor.
-
-        Keyword args:
-            memory_config (ttnn.MemoryConfig, optional): memory configuration for the operation. Defaults to `None`.
-            output_tensor (ttnn.Tensor, optional): preallocated output tensor. Defaults to `None`.
-
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        {7}
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - {5}
-                 - TILE, ROW_MAJOR
-
-            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
-
-            {6}
-        )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        description,
-        math,
-        info,
-        supported_dtype,
-        note,
-        BINARY_BROADCAST_DOC);
-
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const ttnn::Tensor& input_tensor_a,
-               const ttnn::Tensor& input_tensor_b,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const std::optional<bool>& use_legacy) -> ttnn::Tensor {
-                return self(
-                    input_tensor_a,
-                    input_tensor_b,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-                    ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-                    ttnn::SmallVector<unary::EltwiseUnaryWithParam>(),
-                    use_legacy);
-            },
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("use_legacy") = nb::none()});
-}
-
-template <typename binary_operation_t>
+template <ttnn::unique_string Name, typename Fn>
 void bind_binary_composite(
     nb::module_& mod,
-    const binary_operation_t& operation,
     const std::string& description,
     const std::string& math,
+    Fn fn,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
     auto doc = fmt::format(
@@ -912,35 +1636,27 @@ void bind_binary_composite(
 
             {5}
         )doc",
-
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         math,
         supported_dtype,
         note,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor_a, input_tensor_b, memory_config);
-            },
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+        doc.c_str(),
+        fn,
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
-template <typename binary_operation_t>
+template <ttnn::unique_string Name, typename Fn>
 void bind_binary_composite_with_rtol_atol(
-    nb::module_& mod, const binary_operation_t& operation, const std::string& description, const std::string& math) {
+    nb::module_& mod, const std::string& description, const std::string& math, Fn fn) {
     auto doc = fmt::format(
         R"doc(
         {2}
@@ -977,42 +1693,33 @@ void bind_binary_composite_with_rtol_atol(
             If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
         )doc",
 
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         math,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               float rtol,
-               float atol,
-               const bool equal_nan,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor_a, input_tensor_b, rtol, atol, equal_nan, memory_config);
-            },
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("rtol") = 1e-05f,
-            nb::arg("atol") = 1e-08f,
-            nb::arg("equal_nan") = false,
-            nb::arg("memory_config") = nb::none()});
+        doc.c_str(),
+        fn,
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("rtol") = 1e-05f,
+        nb::arg("atol") = 1e-08f,
+        nb::arg("equal_nan") = false,
+        nb::arg("memory_config") = nb::none());
 }
 
 // https://nanobind.readthedocs.io/en/latest/api_extra.html
 
-template <typename binary_operation_t>
+template <ttnn::unique_string Name, typename TensorTensorFn, typename TensorScalarFn>
 void bind_binary_composite_overload(
     nb::module_& mod,
-    const binary_operation_t& operation,
     const std::string& description,
+    TensorTensorFn tensor_tensor_fn,
+    TensorScalarFn tensor_scalar_fn,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
     auto doc = fmt::format(
@@ -1049,45 +1756,37 @@ void bind_binary_composite_overload(
 
             {4}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         supported_dtype,
         note,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor_a, input_tensor_b, memory_config);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            tensor_tensor_fn,
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()},
-
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               float value,
-               const std::optional<MemoryConfig>& memory_config) { return self(input_tensor_a, value, memory_config); },
+            nb::arg("memory_config") = nb::none()),
+        ttnn::overload_t(
+            tensor_scalar_fn,
             nb::arg("input_tensor_a"),
             nb::arg("value"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 
-template <typename binary_operation_t>
+template <ttnn::unique_string Name, typename TensorTensorFn, typename TensorScalarFn, typename TensorArrayFn>
 void bind_prelu(
     nb::module_& mod,
-    const binary_operation_t& operation,
     const std::string& description,
+    TensorTensorFn tensor_tensor_fn,
+    TensorScalarFn tensor_scalar_fn,
+    TensorArrayFn tensor_array_fn,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
     auto doc = fmt::format(
@@ -1124,58 +1823,43 @@ void bind_prelu(
 
             {4}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         supported_dtype,
         note,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor_a, input_tensor_b, memory_config);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            tensor_tensor_fn,
             nb::arg("input_tensor_a"),
             nb::arg("weight"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()},
-
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               float value,
-               const std::optional<MemoryConfig>& memory_config) { return self(input_tensor_a, value, memory_config); },
+            nb::arg("memory_config") = nb::none()),
+        ttnn::overload_t(
+            tensor_scalar_fn,
             nb::arg("input_tensor_a"),
             nb::arg("weight"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()},
-
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const std::array<float, 1>& weight,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor_a, weight, memory_config);
-            },
+            nb::arg("memory_config") = nb::none()),
+        ttnn::overload_t(
+            tensor_array_fn,
             nb::arg("input_tensor_a"),
             nb::arg("weight"),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 
-template <typename binary_operation_t>
+template <ttnn::unique_string Name, typename TensorTensorFn, typename TensorScalarFn>
 void bind_div(
     nb::module_& mod,
-    const binary_operation_t& operation,
     const std::string& description,
     const std::string& math,
+    TensorTensorFn tensor_tensor_fn,
+    TensorScalarFn tensor_scalar_fn,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = " ") {
     auto doc = fmt::format(
@@ -1216,111 +1900,167 @@ void bind_div(
 
         )doc",
 
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         math,
         supported_dtype,
         note,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               bool fast_and_approximate_mode,
-               const std::optional<std::string>& rounding_mode,
-               const std::optional<const DataType>& dtype,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(
-                    input_tensor_a,
-                    input_tensor_b,
-                    fast_and_approximate_mode,
-                    rounding_mode,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy,
-                    sub_core_grids);
-            },
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("fast_and_approximate_mode") = false,
-            nb::arg("rounding_mode") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("use_legacy") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none(),
-        },
-
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               float value,
-               bool fast_and_approximate_mode,
-               const std::optional<std::string>& rounding_mode,
-               const std::optional<const DataType>& dtype,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(
-                    input_tensor_a,
-                    value,
-                    fast_and_approximate_mode,
-                    rounding_mode,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy,
-                    sub_core_grids);
-            },
-            nb::arg("input_tensor_a"),
-            nb::arg("value"),
-            nb::kw_only(),
-            nb::arg("fast_and_approximate_mode") = false,
-            nb::arg("rounding_mode") = nb::none(),
-            nb::arg("dtype") = nb::none(),
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("use_legacy") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none(),
-        });
+    auto tensor_tensor_overload = ttnn::overload_t(
+        tensor_tensor_fn,
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("fast_and_approximate_mode") = false,
+        nb::arg("rounding_mode") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+        nb::arg("use_legacy") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
+    auto tensor_scalar_overload = ttnn::overload_t(
+        tensor_scalar_fn,
+        nb::arg("input_tensor_a"),
+        nb::arg("value"),
+        nb::kw_only(),
+        nb::arg("fast_and_approximate_mode") = false,
+        nb::arg("rounding_mode") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+        nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+        nb::arg("use_legacy") = nb::none(),
+        nb::arg("sub_core_grids") = nb::none());
+    ttnn::bind_function<Name>(mod, doc.c_str(), tensor_tensor_overload, tensor_scalar_overload);
 }
 
-template <typename binary_operation_t>
+// Free functions for multiply and divide with fast_and_approximate_mode
+Tensor multiply_fast_approx_tensor_scalar(
+    const Tensor& input_tensor_a,
+    float value,
+    bool fast_and_approximate_mode,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::multiply(
+        input_tensor_a,
+        value,
+        dtype,
+        memory_config,
+        output_tensor,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy,
+        fast_and_approximate_mode,
+        sub_core_grids);
+}
+
+Tensor multiply_fast_approx_tensor_tensor(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    bool fast_and_approximate_mode,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::multiply(
+        input_tensor_a,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        output_tensor,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy,
+        fast_and_approximate_mode,
+        sub_core_grids);
+}
+
+Tensor divide_fast_approx_tensor_scalar(
+    const Tensor& input_tensor_a,
+    float value,
+    bool fast_and_approximate_mode,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::divide(
+        input_tensor_a,
+        value,
+        dtype,
+        memory_config,
+        output_tensor,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy,
+        fast_and_approximate_mode,
+        sub_core_grids);
+}
+
+Tensor divide_fast_approx_tensor_tensor(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    bool fast_and_approximate_mode,
+    const std::optional<const DataType>& dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::divide(
+        input_tensor_a,
+        input_tensor_b,
+        dtype,
+        memory_config,
+        output_tensor,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy,
+        fast_and_approximate_mode,
+        sub_core_grids);
+}
+
+template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
 void bind_binary_operation_with_fast_approx(
     nb::module_& mod,
-    const binary_operation_t& operation,
     const std::string& description,
     const std::string& math,
+    TensorScalarFn tensor_scalar_fn,
+    TensorTensorFn tensor_tensor_fn,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = " ") {
     auto doc = fmt::format(
@@ -1359,44 +2099,19 @@ void bind_binary_operation_with_fast_approx(
 
             {5}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         math,
         supported_dtype,
         note,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               bool fast_and_approximate_mode,
-               const std::optional<const DataType>& dtype,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(
-                    input_tensor_a,
-                    input_tensor_b,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy,
-                    fast_and_approximate_mode,
-                    sub_core_grids);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            tensor_scalar_fn,
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
             nb::kw_only(),
@@ -1404,59 +2119,33 @@ void bind_binary_operation_with_fast_approx(
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
             nb::arg("use_legacy") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none(),
-        },
-
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               float value,
-               bool fast_and_approximate_mode,
-               const std::optional<const DataType>& dtype,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(
-                    input_tensor_a,
-                    value,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy,
-                    fast_and_approximate_mode,
-                    sub_core_grids);
-            },
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            tensor_tensor_fn,
             nb::arg("input_tensor_a"),
-            nb::arg("value"),
+            nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg("fast_and_approximate_mode") = false,
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
             nb::arg("use_legacy") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()});
+            nb::arg("sub_core_grids") = nb::none()));
 }
 
-template <typename binary_operation_t>
+template <ttnn::unique_string Name, typename Fn>
 void bind_polyval(
     nb::module_& mod,
-    const binary_operation_t& operation,
     const std::string& description,
     const std::string& math,
+    Fn fn,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = " ") {
     auto doc = fmt::format(
@@ -1493,37 +2182,31 @@ void bind_polyval(
 
             {5}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         math,
         supported_dtype,
         note,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const std::vector<float>& coeffs,
-               const std::optional<MemoryConfig>& memory_config) {
-                return self(input_tensor_a, coeffs, memory_config);
-            },
-            nb::arg("input_tensor_a"),
-            nb::arg("coeffs"),
-            nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+        doc.c_str(),
+        fn,
+        nb::arg("input_tensor_a"),
+        nb::arg("coeffs"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
-template <typename binary_operation_t>
+template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
 void bind_binary_overload_operation(
     nb::module_& mod,
-    const binary_operation_t& operation,
     const std::string& description,
     const std::string& math,
+    TensorScalarFn tensor_scalar_fn,
+    TensorTensorFn tensor_tensor_fn,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = " ") {
     auto doc = fmt::format(
@@ -1561,56 +2244,40 @@ void bind_binary_overload_operation(
 
             {5}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         math,
         supported_dtype,
         note,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-
-        // tensor and scalar
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor,
-               float scalar,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(input_tensor, scalar, memory_config, sub_core_grids);
-            },
-            nb::arg("input_tensor"),
+        doc.c_str(),
+        ttnn::overload_t(
+            tensor_scalar_fn,
+            nb::arg("input_tensor_a"),
             nb::arg("scalar"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()},
-
-        // tensor and tensor
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(input_tensor_a, input_tensor_b, memory_config, sub_core_grids);
-            },
-            nb::arg("input_a"),
-            nb::arg("input_b"),
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            tensor_tensor_fn,
+            nb::arg("input_tensor_a"),
+            nb::arg("input_tensor_b"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()});
+            nb::arg("sub_core_grids") = nb::none()));
 }
 
-template <typename binary_operation_t>
+template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
 void bind_inplace_operation(
     nb::module_& mod,
-    const binary_operation_t& operation,
     const std::string& description,
     const std::string& math,
+    TensorScalarFn tensor_scalar_fn,
+    TensorTensorFn tensor_tensor_fn,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
     auto doc = fmt::format(
@@ -1647,83 +2314,180 @@ void bind_inplace_operation(
 
             {5}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         math,
         supported_dtype,
         note,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-
-        // tensor and scalar
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor,
-               const float scalar,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(
-                    input_tensor,
-                    scalar,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy,
-                    sub_core_grids);
-            },
-            nb::arg("input_a"),
-            nb::arg("input_b"),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("use_legacy") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none(),
-        },
-
-        // tensor and tensor
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(
-                    input_tensor_a,
-                    input_tensor_b,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy,
-                    sub_core_grids);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            tensor_scalar_fn,
             nb::arg("input_a"),
             nb::arg("input_b"),
             nb::kw_only(),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
             nb::arg("use_legacy") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none(),
-        });
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            tensor_tensor_fn,
+            nb::arg("input_a"),
+            nb::arg("input_b"),
+            nb::kw_only(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("use_legacy") = nb::none(),
+            nb::arg("sub_core_grids") = nb::none()));
 }
 
-template <typename binary_operation_t>
+// Free functions for inplace multiply and divide with fast_and_approximate_mode
+Tensor multiply_inplace_fast_approx_tensor_scalar(
+    const Tensor& input_tensor_a,
+    float scalar,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy,
+    bool fast_and_approximate_mode,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::multiply_(
+        input_tensor_a,
+        scalar,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy,
+        std::optional<bool>(fast_and_approximate_mode),
+        sub_core_grids);
+}
+
+Tensor multiply_inplace_fast_approx_tensor_tensor(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy,
+    bool fast_and_approximate_mode,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::multiply_(
+        input_tensor_a,
+        input_tensor_b,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy,
+        std::optional<bool>(fast_and_approximate_mode),
+        sub_core_grids);
+}
+
+Tensor divide_inplace_fast_approx_tensor_scalar(
+    const Tensor& input_tensor_a,
+    float scalar,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy,
+    bool fast_and_approximate_mode,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::divide_(
+        input_tensor_a,
+        scalar,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy,
+        std::optional<bool>(fast_and_approximate_mode),
+        sub_core_grids);
+}
+
+Tensor divide_inplace_fast_approx_tensor_tensor(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy,
+    bool fast_and_approximate_mode,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return ttnn::divide_(
+        input_tensor_a,
+        input_tensor_b,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy,
+        std::optional<bool>(fast_and_approximate_mode),
+        sub_core_grids);
+}
+
+template <typename InplaceFastApproxOp>
+Tensor inplace_fast_approx_binding_tensor_scalar(
+    const Tensor& input_tensor_a,
+    float scalar,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy,
+    bool fast_and_approximate_mode,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return InplaceFastApproxOp::tensor_scalar(
+        input_tensor_a,
+        scalar,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy,
+        fast_and_approximate_mode,
+        sub_core_grids);
+}
+template <typename InplaceFastApproxOp>
+Tensor inplace_fast_approx_binding_tensor_tensor(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
+    const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
+    const std::optional<bool>& use_legacy,
+    bool fast_and_approximate_mode,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return InplaceFastApproxOp::tensor_tensor(
+        input_tensor_a,
+        input_tensor_b,
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_a_activations.data(), input_tensor_a_activations.size()),
+        tt::stl::Span<const unary::EltwiseUnaryWithParam>(
+            input_tensor_b_activations.data(), input_tensor_b_activations.size()),
+        use_legacy,
+        fast_and_approximate_mode,
+        sub_core_grids);
+}
+
+template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
 void bind_inplace_operation_with_fast_approx(
     nb::module_& mod,
-    const binary_operation_t& operation,
     const std::string& description,
     const std::string& math,
+    TensorScalarFn tensor_scalar_fn,
+    TensorTensorFn tensor_tensor_fn,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = " ") {
     auto doc = fmt::format(
@@ -1761,280 +2525,42 @@ void bind_inplace_operation_with_fast_approx(
 
             {5}
         )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
+        std::string(Name),
+        "ttnn." + std::string(Name),
         description,
         math,
         supported_dtype,
         note,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
+    ttnn::bind_function<Name>(
         mod,
-        operation,
-        doc,
-        // tensor and tensor
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               bool fast_and_approximate_mode,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(
-                    input_tensor_a,
-                    input_tensor_b,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy,
-                    fast_and_approximate_mode,
-                    sub_core_grids);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            tensor_scalar_fn,
             nb::arg("input_a"),
             nb::arg("input_b"),
             nb::kw_only(),
-            nb::arg("fast_and_approximate_mode") = false,
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
             nb::arg("use_legacy") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none(),
-        },
-
-        // tensor and scalar
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               float value,
-               bool fast_and_approximate_mode,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(
-                    input_tensor_a,
-                    value,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy,
-                    fast_and_approximate_mode,
-                    sub_core_grids);
-            },
-            nb::arg("input_a"),
-            nb::arg("value"),
-            nb::kw_only(),
             nb::arg("fast_and_approximate_mode") = false,
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("use_legacy") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none(),
-        });
-}
-
-template <typename binary_operation_t>
-void bind_logical_inplace_operation(
-    nb::module_& mod,
-    const binary_operation_t& operation,
-    const std::string& description,
-    const std::string& math,
-    const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = " ") {
-    auto doc = fmt::format(
-        R"doc(
-        {2}
-
-        .. math::
-            {3}
-
-        Args:
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor): the input tensor.
-
-        Returns:
-            ttnn.Tensor: the output tensor.
-
-        {6}
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - {4}
-                 - TILE, ROW_MAJOR
-
-            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
-
-            {5}
-        )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        description,
-        math,
-        supported_dtype,
-        note,
-        BINARY_BROADCAST_DOC);
-
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(
-                    input_tensor_a,
-                    input_tensor_b,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy,
-                    sub_core_grids);
-            },
+            nb::arg("sub_core_grids") = nb::none()),
+        ttnn::overload_t(
+            tensor_tensor_fn,
             nb::arg("input_a"),
             nb::arg("input_b"),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
+            nb::kw_only(),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
             nb::arg("use_legacy") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none(),
-        });
+            nb::arg("fast_and_approximate_mode") = false,
+            nb::arg("sub_core_grids") = nb::none()));
 }
 
-template <typename binary_operation_t>
-void bind_binary_inplace_operation(
-    nb::module_& mod,
-    const binary_operation_t& operation,
-    const std::string& description,
-    const std::string& math,
-    const std::string& supported_dtype = "BFLOAT16",
-    const std::string& note = " ") {
-    auto doc = fmt::format(
-        R"doc(
-        {2}
-
-        .. math::
-            {3}
-
-        Args:
-            input_tensor_a (ttnn.Tensor): the input tensor.
-            input_tensor_b (ttnn.Tensor or Number): the input tensor.
-
-        Keyword args:
-            activations (List[str], optional): list of activation functions to apply to the output tensor. Defaults to `None`.
-            input_tensor_a_activations (List[str], optional): list of activation functions to apply to input_a. Defaults to `None`.
-            input_tensor_b_activations (List[str], optional): list of activation functions to apply to input_b. Defaults to `None`.
-            use_legacy (bool, optional): use legacy implementation. Defaults to `None`.
-            sub_core_grids (CoreRangeSet, optional): sub core grids. Defaults to `None`.
-
-        {6}
-
-        Note:
-            Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - {4}
-                 - TILE, ROW_MAJOR
-
-            If the input tensor is ROW_MAJOR layout, it will be internally converted to TILE layout.
-
-            {5}
-        )doc",
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        description,
-        math,
-        supported_dtype,
-        note,
-        BINARY_BROADCAST_DOC);
-
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-
-        // tensor and scalar
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor,
-               const float scalar,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(
-                    input_tensor,
-                    scalar,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy,
-                    sub_core_grids);
-            },
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("use_legacy") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none(),
-        },
-
-        // tensor and tensor
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor_a,
-               const Tensor& input_tensor_b,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(
-                    input_tensor_a,
-                    input_tensor_b,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy,
-                    sub_core_grids);
-            },
-            nb::arg("input_tensor_a"),
-            nb::arg("input_tensor_b"),
-            nb::kw_only(),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("use_legacy") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none(),
-        });
-}
-
-template <typename binary_operation_t>
-void bind_power(nb::module_& mod, const binary_operation_t& /*operation*/, const std::string& note = "") {
+void bind_power(nb::module_& mod, const std::string& note = "") {
     auto doc = fmt::format(
         R"doc(
         Perform element-wise {0} operation on :attr:`input_tensor` with :attr:`exponent`.
@@ -2071,274 +2597,231 @@ void bind_power(nb::module_& mod, const binary_operation_t& /*operation*/, const
 
             {2}
         )doc",
-        ttnn::pow.base_name(),
-        ttnn::pow.python_fully_qualified_name(),
+        "pow",
+        "ttnn.pow",
         note,
         BINARY_BROADCAST_DOC);
 
-    bind_registered_operation(
+    ttnn::bind_function<"pow">(
         mod,
-        ttnn::pow,
-        doc,
-        // integer exponent
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor,
-               int32_t exponent,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, exponent, memory_config, output_tensor);
-            },
+        doc.c_str(),
+        ttnn::overload_t(
+            &detail::pow_tensor_int_exponent_binding,
             nb::arg("input_tensor"),
             nb::arg("exponent"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none(),
-        },
-
-        // float exponent
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor,
-               float exponent,
-               const std::optional<MemoryConfig>& memory_config,
-               const std::optional<Tensor>& output_tensor) -> ttnn::Tensor {
-                return self(input_tensor, exponent, memory_config, output_tensor);
-            },
+            nb::arg("output_tensor") = nb::none()),
+        ttnn::overload_t(
+            &detail::pow_tensor_float_exponent_binding,
             nb::arg("input_tensor"),
             nb::arg("exponent"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("output_tensor") = nb::none()},
-
-        // tensor exponent
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               const Tensor& input_tensor,
-               const Tensor& exponent,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    exponent,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy);
-            },
+            nb::arg("output_tensor") = nb::none()),
+        ttnn::overload_t(
+            &detail::pow_tensor_exponent_binding,
             nb::arg("input_tensor"),
             nb::arg("exponent"),
             nb::kw_only(),
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("use_legacy") = nb::none(),
-        },
-
-        // scalar input - tensor exponent
-        ttnn::nanobind_overload_t{
-            [](const binary_operation_t& self,
-               float input,
-               const Tensor& exponent,
-               const std::optional<const DataType>& dtype,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<ttnn::Tensor>& output_tensor,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_a_activations,
-               const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
-               const std::optional<bool>& use_legacy) -> ttnn::Tensor {
-                return self(
-                    input,
-                    exponent,
-                    dtype,
-                    memory_config,
-                    output_tensor,
-                    activations,
-                    input_tensor_a_activations,
-                    input_tensor_b_activations,
-                    use_legacy);
-            },
-            nb::arg("input"),
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("use_legacy") = nb::none()),
+        ttnn::overload_t(
+            &detail::pow_scalar_tensor_binding,
+            nb::arg("input_tensor"),
             nb::arg("exponent"),
             nb::kw_only(),
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none(),
-            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>()),
-            nb::arg("use_legacy") = nb::none()});
+            nb::arg("activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_a_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("input_tensor_b_activations") = nb::cast(ttnn::SmallVector<unary::EltwiseUnaryWithParam>{}),
+            nb::arg("use_legacy") = nb::none()));
 }
 }  // namespace detail
 
 void py_module(nb::module_& mod) {
     export_enum<BinaryOpType>(mod, "BinaryOpType");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation<"add">(
         mod,
-        ttnn::add,
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::ADD>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::ADD>,
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]))doc");
 
-    detail::bind_binary_inplace_operation(
+    detail::bind_binary_inplace_operation<"add_">(
         mod,
-        ttnn::add_,
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc",
+        &detail::inplace_binding_tensor_scalar<BinaryOpType::ADD>,
+        &detail::inplace_binding_tensor_tensor<BinaryOpType::ADD>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]))doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation<"subtract">(
         mod,
-        ttnn::subtract,
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::SUB>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::SUB>,
         R"doc(: :code:`'None'` | :code:`'relu'`. )doc",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
 
-    detail::bind_binary_inplace_operation(
+    detail::bind_binary_inplace_operation<"subtract_">(
         mod,
-        ttnn::subtract_,
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc",
+        &detail::inplace_binding_tensor_scalar<BinaryOpType::SUB>,
+        &detail::inplace_binding_tensor_tensor<BinaryOpType::SUB>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation<"eq">(
         mod,
-        ttnn::eq,
         R"doc(Compares if :attr:`input_tensor_a` is equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i == \mathrm{{input\_tensor\_b}}_i))doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::EQ>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::EQ>,
         ". ",
         R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation<"ne">(
         mod,
-        ttnn::ne,
         R"doc(Compares if :attr:`input_tensor_a` is not equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i != \mathrm{{input\_tensor\_b}}_i))doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::NE>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::NE>,
         ". ",
         R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation<"lt">(
         mod,
-        ttnn::lt,
         R"doc(Compares if :attr:`input_tensor_a` is less than :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i < \mathrm{{input\_tensor\_b}}_i))doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::LT>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::LT>,
         ". ",
         R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
         "INT32 supported only for tensor-tensor.");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation<"le">(
         mod,
-        ttnn::le,
         R"doc(Compares if :attr:`input_tensor_a` is less than or equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i <= \mathrm{{input\_tensor\_b}}_i))doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::LE>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::LE>,
         ". ",
         R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
         "INT32 supported only for tensor-tensor.");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation<"gt">(
         mod,
-        ttnn::gt,
         R"doc(Compares if :attr:`input_tensor_a` is greater than :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i > \mathrm{{input\_tensor\_b}}_i))doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::GT>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::GT>,
         ". ",
         R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
         "INT32 supported only for tensor-tensor.");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation<"ge">(
         mod,
-        ttnn::ge,
         R"doc(Compares if :attr:`input_tensor_a` is greater than or equal to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i >= \mathrm{{input\_tensor\_b}}_i))doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::GE>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::GE>,
         ". ",
         R"doc(Float32, BFLOAT16, BFLOAT8_B, INT32)doc",
         "INT32 supported only for tensor-tensor.");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation<"logical_and">(
         mod,
-        ttnn::logical_and,
         R"doc(Computes logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \, \& \, \mathrm{{input\_tensor\_b}}_i)doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::LOGICAL_AND>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::LOGICAL_AND>,
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16)doc",
         "INT32 for tensor-scalar is supported only when use_legacy= False.");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation<"logical_or">(
         mod,
-        ttnn::logical_or,
         R"doc(Computes logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i \, | \, \mathrm{{input\_tensor\_b}}_i)doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::LOGICAL_OR>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::LOGICAL_OR>,
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation<"ldexp">(
         mod,
-        ttnn::ldexp,
         R"doc(Computes ldexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|ldexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::LDEXP>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::LDEXP>,
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation<"logaddexp">(
         mod,
-        ttnn::logaddexp,
         R"doc(Computes logaddexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|logaddexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::LOGADDEXP>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::LOGADDEXP>,
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation<"logaddexp2">(
         mod,
-        ttnn::logaddexp2,
         R"doc(Computes logaddexp2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|logaddexp2|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::LOGADDEXP2>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::LOGADDEXP2>,
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation<"squared_difference">(
         mod,
-        ttnn::squared_difference,
         R"doc(Computes squared difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::SQUARED_DIFFERENCE>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::SQUARED_DIFFERENCE>,
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation<"bias_gelu">(
         mod,
-        ttnn::bias_gelu,
         R"doc(Computes bias_gelu of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|bias_gelu|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::BIAS_GELU>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::BIAS_GELU>,
         ". ",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    detail::bind_binary_operation_with_fast_approx(
+    detail::bind_binary_operation_with_fast_approx<"multiply">(
         mod,
-        ttnn::multiply,
         R"doc(Multiplies :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_a}}_i * \mathrm{{input\_tensor\_b}}_i)doc",
+        &detail::multiply_fast_approx_tensor_scalar,
+        &detail::multiply_fast_approx_tensor_tensor,
         R"doc(BFLOAT16, FLOAT32, INT32, UINT16, UINT32)doc",
         R"doc(
         When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
         When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
         )doc");
-    detail::bind_binary_operation_with_fast_approx(
+    detail::bind_binary_operation_with_fast_approx<"divide">(
         mod,
-        ttnn::divide,
         R"doc(Divides :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = (\mathrm{{input\_tensor\_a}}_i / \mathrm{{input\_tensor\_b}}_i))doc",
+        &detail::divide_fast_approx_tensor_scalar,
+        &detail::divide_fast_approx_tensor_tensor,
         R"doc(BFLOAT16, FLOAT32, INT32, UINT16)doc",
         R"doc(
         When :attr:`fast_and_approximate_mode` is `True`, operation assumes that :attr:`input_tensor_b` is not zero.
@@ -2346,180 +2829,195 @@ void py_module(nb::module_& mod) {
         When the inputs are INT32, the outputs are FLOAT32 and output datatype conversion is not supported.
         )doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation<"xlogy">(
         mod,
-        ttnn::xlogy,
         R"doc(Computes xlogy :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \mathrm{input\_tensor\_a}_i \cdot \log(\mathrm{input\_tensor\_b}_i)
-        )doc");
+        )doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::XLOGY>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::XLOGY>);
 
-    detail::bind_binary_unary_operation(
+    detail::bind_binary_unary_operation<"rsub">(
         mod,
-        ttnn::rsub,
         R"doc(Subtracts :attr:`input_tensor_a` from :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \mathrm{{input\_tensor\_b}}_i - \mathrm{{input\_tensor\_a}}_i)doc",
+        &detail::rsub_tensor_scalar_binding,
+        &detail::rsub_tensor_tensor_binding,
         ". ",
         R"doc(FLOAT32,BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
-    detail::bind_bitwise_binary_ops_operation(
+    detail::bind_bitwise_binary_ops_operation<"bitwise_and">(
         mod,
-        ttnn::bitwise_and,
         R"doc(Perform bitwise_and operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
+        &detail::bitwise_and_scalar_binding,
+        &detail::bitwise_and_tensor_binding,
         ". ",
         R"doc(INT32, UINT16 (range: 0 - 65535), UINT32)doc");
 
-    detail::bind_bitwise_binary_ops_operation(
+    detail::bind_bitwise_binary_ops_operation<"bitwise_or">(
         mod,
-        ttnn::bitwise_or,
         R"doc(Perform bitwise_or operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_or|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
+        &detail::bitwise_or_scalar_binding,
+        &detail::bitwise_or_tensor_binding,
         ". ",
         R"doc(INT32, UINT16 (range: 0 - 65535), UINT32)doc");
 
-    detail::bind_bitwise_binary_ops_operation(
+    detail::bind_bitwise_binary_ops_operation<"bitwise_xor">(
         mod,
-        ttnn::bitwise_xor,
         R"doc(Perform bitwise_xor operation on :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_xor|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
+        &detail::bitwise_xor_scalar_binding,
+        &detail::bitwise_xor_tensor_binding,
         ". ",
         R"doc(INT32, UINT16 (range: 0 - 65535), UINT32)doc");
 
-    detail::bind_bitwise_binary_ops_operation(
+    detail::bind_bitwise_binary_ops_operation<"bitwise_left_shift">(
         mod,
-        ttnn::bitwise_left_shift,
         R"doc(Perform bitwise_left_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31))doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
+        &detail::bitwise_left_shift_scalar_binding,
+        &detail::bitwise_left_shift_tensor_binding,
         ". ",
         R"doc(INT32, UINT32, UINT16)doc");
 
-    detail::bind_bitwise_binary_ops_operation(
+    detail::bind_bitwise_binary_ops_operation<"bitwise_right_shift">(
         mod,
-        ttnn::bitwise_right_shift,
         R"doc(Perform bitwise_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31))doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|bitwise_and|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
+        &detail::bitwise_right_shift_scalar_binding,
+        &detail::bitwise_right_shift_tensor_binding,
         ". ",
         R"doc(INT32, UINT32, UINT16)doc");
 
-    detail::bind_bitwise_binary_ops_operation(
+    detail::bind_bitwise_binary_ops_operation<"logical_left_shift">(
         mod,
-        ttnn::logical_left_shift,
         R"doc(Perform logical_left_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31). Equivalent to multiplying by 2^shift_amt.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|logical_left_shift|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
+        &detail::logical_left_shift_scalar_binding,
+        &detail::logical_left_shift_tensor_binding,
         ". ",
         R"doc(INT32, UINT32)doc");
 
-    detail::bind_logical_binary_ops_operation(
+    detail::bind_binary_operation<"logical_right_shift">(
         mod,
-        ttnn::logical_right_shift,
         R"doc(Perform logical_right_shift operation on :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`. :attr:`input_tensor_b` has shift_bits which are integers within range (0, 31). Logical right shift fills vacated bits with zeros. Equivalent to integer division by 2^shift_amt.)doc",
         R"doc(\mathrm{{output\_tensor}}_i = \verb|logical_right_shift|(\mathrm{{input\_tensor\_a, input\_tensor\_b}}))doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::LOGICAL_RIGHT_SHIFT>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::LOGICAL_RIGHT_SHIFT>,
         ". ",
         R"doc(INT32, UINT32)doc");
 
-    detail::bind_binary_composite(
+    detail::bind_binary_composite<"hypot">(
         mod,
-        ttnn::hypot,
         R"doc(Computes hypot :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \sqrt{(\mathrm{input\_tensor\_a}_i^2 + \mathrm{input\_tensor\_b}_i^2)})doc",
+        &detail::hypot_composite_wrapper,
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B)doc");
 
-    detail::bind_binary_composite(
+    detail::bind_binary_composite<"nextafter">(
         mod,
-        ttnn::nextafter,
         R"doc(Computes nextafter :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \begin{cases} \mathrm{next\_float}(\mathrm{input\_tensor\_a}_i, \mathrm{input\_tensor\_b}_i), & \text{if } \mathrm{input\_tensor\_a}_i \neq \mathrm{input\_tensor\_b}_i \\ \mathrm{input\_tensor\_a}_i, & \text{if } \mathrm{input\_tensor\_a}_i = \mathrm{input\_tensor\_b}_i \end{cases}
         )doc",
+        &ttnn::nextafter,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    detail::bind_binary_unary_max_operation(
+    detail::bind_binary_unary_max_operation<"minimum">(
         mod,
-        ttnn::minimum,
-        R"doc(Computes minimum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+        R"doc(Computes minimum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        &detail::minimum_tensor_scalar_binding,
+        &detail::minimum_tensor_tensor_binding);
 
-    detail::bind_binary_composite(
+    detail::bind_binary_composite<"atan2">(
         mod,
-        ttnn::atan2,
         R"doc(Computes atan2 :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = \arctan\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)
         )doc",
+        &ttnn::atan2,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc",
         R"doc(Input arguments for the atan2 function are in the format (y, x))doc");
 
-    detail::bind_binary_operation(
+    detail::bind_binary_operation<"logical_xor">(
         mod,
-        ttnn::logical_xor,
         R"doc(Compute logical_xor :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor}_i = (\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i))doc",
+        &detail::binary_op_binding_tensor_scalar<BinaryOpType::LOGICAL_XOR>,
+        &detail::binary_op_binding_tensor_tensor<BinaryOpType::LOGICAL_XOR>,
         ".",
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
-    detail::bind_logical_inplace_operation(
+    detail::bind_inplace_operation<"logical_or_">(
         mod,
-        ttnn::logical_or_,
         R"doc(Computes inplace logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i)doc",
+        &detail::inplace_binding_tensor_scalar<BinaryOpType::LOGICAL_OR>,
+        &detail::inplace_binding_tensor_tensor<BinaryOpType::LOGICAL_OR>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
-    detail::bind_logical_inplace_operation(
+    detail::bind_inplace_operation<"logical_xor_">(
         mod,
-        ttnn::logical_xor_,
         R"doc(Computes inplace logical XOR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i)doc",
+        &detail::inplace_binding_tensor_scalar<BinaryOpType::LOGICAL_XOR>,
+        &detail::inplace_binding_tensor_tensor<BinaryOpType::LOGICAL_XOR>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
-    detail::bind_logical_inplace_operation(
+    detail::bind_inplace_operation<"logical_and_">(
         mod,
-        ttnn::logical_and_,
         R"doc(Computes inplace logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i)doc",
+        &detail::inplace_binding_tensor_scalar<BinaryOpType::LOGICAL_AND>,
+        &detail::inplace_binding_tensor_tensor<BinaryOpType::LOGICAL_AND>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
-    detail::bind_binary_gcd_lcm_operation(
+    detail::bind_binary_gcd_lcm_operation<"gcd">(
         mod,
-        ttnn::gcd,
         R"doc(Computes Greatest common divisor of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.
         [supported range [-2147483648, 2147483647]].)doc",
         R"doc(\mathrm{output\_tensor}_i = \verb|gcd|\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
         )doc",
+        &detail::gcd_binding,
         R"doc(INT32)doc");
 
-    detail::bind_binary_gcd_lcm_operation(
+    detail::bind_binary_gcd_lcm_operation<"lcm">(
         mod,
-        ttnn::lcm,
         R"doc(Computes Least common multiple of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`.
         [supported range [-32768, 32767]].)doc",
         R"doc(\mathrm{output\_tensor}_i = \verb|lcm|\left(\mathrm{input\_tensor\_a}_i , \mathrm{input\_tensor\_b}_i\right)
         )doc",
+        &detail::lcm_binding,
         R"doc(INT32)doc");
 
-    detail::bind_binary_with_float_param(
+    detail::bind_binary_with_float_param<"addalpha">(
         mod,
-        ttnn::addalpha,
         R"doc(Computes addalpha for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \mathrm{{input\_tensor\_a\ + input\_tensor\_b\ * \alpha}})doc",
+        &ttnn::addalpha,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    detail::bind_binary_with_float_param(
+    detail::bind_binary_with_float_param<"subalpha">(
         mod,
-        ttnn::subalpha,
         R"doc(Computes subalpha for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{output\_tensor}} = \mathrm{{input\_tensor\_a\ - input\_tensor\_b\ * \alpha}})doc",
+        &ttnn::subalpha,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    detail::bind_binary_composite_with_rtol_atol(
+    detail::bind_binary_composite_with_rtol_atol<"isclose">(
         mod,
-        ttnn::isclose,
         R"doc(Computes isclose for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor} = \begin{cases} 1, & \text{if } |\mathrm{input\_tensor\_a} - \mathrm{input\_tensor\_b}| \leq (\mathrm{atol} + \mathrm{rtol} \times |\mathrm{input\_tensor\_b}|) \\ 0, & \text{otherwise} \end{cases}
-        )doc");
+        )doc",
+        &ttnn::isclose);
 
-    detail::bind_div(
+    detail::bind_div<"div">(
         mod,
-        ttnn::div,
         R"doc(Divides :attr:`input_tensor_a` by :attr:`input_tensor_b` and returns a tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output}_i = \begin{cases} \mathrm{\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{None} \\ \mathrm{\text{floor}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{floor} \\ \mathrm{\text{trunc}\left(\frac{\mathrm{input\_tensor\_a}_i}{\mathrm{input\_tensor\_b}_i}\right)}, & \text{if } \mathrm{round\_mode} = \mathrm{trunc} \end{cases}
         )doc",
+        &detail::div_tensor_tensor_binding,
+        &detail::div_tensor_scalar_binding,
         R"doc(BFLOAT16, FLOAT32, INT32, UINT16)doc",
         R"doc(
         With INT32 inputs, rounding_mode `None` produces a FLOAT32 output, while `floor` and `trunc` produce an INT32 output.
@@ -2527,144 +3025,163 @@ void py_module(nb::module_& mod) {
         When :attr:`fast_and_approximate_mode` is `False` (default), operation properly handles division by zero (accurate mode).
         )doc");
 
-    detail::bind_binary_composite_overload(
+    detail::bind_binary_composite_overload<"div_no_nan">(
         mod,
-        ttnn::div_no_nan,
-        R"doc(Computes div_no_nan for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+        R"doc(Computes div_no_nan for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        &detail::div_no_nan_tensor_tensor_binding,
+        &detail::div_no_nan_tensor_scalar_binding);
 
-    detail::bind_binary_composite_overload(
+    detail::bind_binary_composite_overload<"floor_div">(
         mod,
-        ttnn::floor_div,
-        R"doc(Computes floor division for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc");
+        R"doc(Computes floor division for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        &detail::floor_div_tensor_tensor_binding,
+        &detail::floor_div_tensor_scalar_binding);
 
-    detail::bind_binary_unary_max_operation(
+    detail::bind_binary_unary_max_operation<"maximum">(
         mod,
-        ttnn::maximum,
         R"doc(Computes maximum for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
+        &detail::maximum_tensor_scalar_binding,
+        &detail::maximum_tensor_tensor_binding,
         R"doc(Supported range for :attr:`input_tensor_b` when its of scalar type is [-16777216, 16777216])doc");
 
-    detail::bind_prelu(
+    detail::bind_prelu<"prelu">(
         mod,
-        ttnn::prelu,
         R"doc(Perform an eltwise-prelu operation.)doc",
+        &detail::prelu_tensor_tensor_binding,
+        &detail::prelu_tensor_scalar_binding,
+        &detail::prelu_tensor_array_binding,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc",
         R"doc(PReLU supports the case where weight is a scalar or 1D list/array of size=1 or a 1D tensor :attr:`input_tensor_b` of size = the second dimension in :attr:`input_tensor_a`)doc");
 
-    detail::bind_binary_composite(
+    detail::bind_binary_composite<"outer">(
         mod,
-        ttnn::outer,
         R"doc(Computes outer for :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor} = \mathrm{input\_tensor\_a} \text{ } \otimes \text{ } \mathrm{input\_tensor\_b})doc",
+        &ttnn::outer,
         R"doc(BFLOAT16, FLOAT32)doc");
 
-    detail::bind_polyval(
+    detail::bind_polyval<"polyval">(
         mod,
-        ttnn::polyval,
         R"doc(Computes polyval of all elements of :attr:`input_tensor_a` with coefficients :attr:`coeffs` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{output\_tensor} = \sum_{i=0}^{n} (\mathrm{coeffs}_i) (\mathrm{input\_tensor}^i)
         )doc",
+        &ttnn::polyval,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    detail::bind_binary_overload_operation(
+    detail::bind_binary_overload_operation<"fmod">(
         mod,
-        ttnn::fmod,
         R"doc(Performs an eltwise-fmod operation.)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|fmod|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        &detail::fmod_tensor_scalar_binding,
+        &detail::fmod_tensor_tensor_binding,
         R"doc(BFLOAT16, FLOAT32, INT32)doc");
 
-    detail::bind_binary_overload_operation(
+    detail::bind_binary_overload_operation<"remainder">(
         mod,
-        ttnn::remainder,
         R"doc(Performs an eltwise-modulus operation.)doc",
         R"doc(\mathrm{{output\_tensor}} = \verb|remainder|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        &detail::remainder_tensor_scalar_binding,
+        &detail::remainder_tensor_tensor_binding,
         R"doc(BFLOAT16, FLOAT32, INT32)doc");
 
-    detail::bind_inplace_operation(
+    detail::bind_inplace_operation<"gt_">(
         mod,
-        ttnn::gt_,
         R"doc(Performs Greater than in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} > \mathrm{{input\_tensor\_b}})doc",
+        &detail::inplace_binding_tensor_scalar<BinaryOpType::GT>,
+        &detail::inplace_binding_tensor_tensor<BinaryOpType::GT>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    detail::bind_inplace_operation(
+    detail::bind_inplace_operation<"ge_">(
         mod,
-        ttnn::ge_,
         R"doc(Performs Greater than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} >= \mathrm{{input\_tensor\_b}})doc",
+        &detail::inplace_binding_tensor_scalar<BinaryOpType::GE>,
+        &detail::inplace_binding_tensor_tensor<BinaryOpType::GE>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    detail::bind_inplace_operation(
+    detail::bind_inplace_operation<"lt_">(
         mod,
-        ttnn::lt_,
         R"doc(Performs Less than in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} < \mathrm{{input\_tensor\_b}})doc",
+        &detail::inplace_binding_tensor_scalar<BinaryOpType::LT>,
+        &detail::inplace_binding_tensor_tensor<BinaryOpType::LT>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    detail::bind_inplace_operation(
+    detail::bind_inplace_operation<"le_">(
         mod,
-        ttnn::le_,
         R"doc(Performs Less than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} <= \mathrm{{input\_tensor\_b}})doc",
+        &detail::inplace_binding_tensor_scalar<BinaryOpType::LE>,
+        &detail::inplace_binding_tensor_tensor<BinaryOpType::LE>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    detail::bind_inplace_operation(
+    detail::bind_inplace_operation<"eq_">(
         mod,
-        ttnn::eq_,
         R"doc(Performs Equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} == \mathrm{{input\_tensor\_b}})doc",
+        &detail::inplace_binding_tensor_scalar<BinaryOpType::EQ>,
+        &detail::inplace_binding_tensor_tensor<BinaryOpType::EQ>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    detail::bind_inplace_operation(
+    detail::bind_inplace_operation<"ne_">(
         mod,
-        ttnn::ne_,
         R"doc(Performs Not equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}}\: != \mathrm{{input\_tensor\_b}})doc",
+        &detail::inplace_binding_tensor_scalar<BinaryOpType::NE>,
+        &detail::inplace_binding_tensor_tensor<BinaryOpType::NE>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    detail::bind_inplace_operation(
+    detail::bind_inplace_operation<"ldexp_">(
         mod,
-        ttnn::ldexp_,
         R"doc(Performs ldexp in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|ldexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        &detail::inplace_binding_tensor_scalar<BinaryOpType::LDEXP>,
+        &detail::inplace_binding_tensor_tensor<BinaryOpType::LDEXP>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    detail::bind_inplace_operation(
+    detail::bind_inplace_operation<"logaddexp_">(
         mod,
-        ttnn::logaddexp_,
         R"doc(Performs logaddexp in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|logaddexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        &detail::inplace_binding_tensor_scalar<BinaryOpType::LOGADDEXP>,
+        &detail::inplace_binding_tensor_tensor<BinaryOpType::LOGADDEXP>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    detail::bind_inplace_operation(
+    detail::bind_inplace_operation<"logaddexp2_">(
         mod,
-        ttnn::logaddexp2_,
         R"doc(Performs logaddexp2 in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|logaddexp2|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        &detail::inplace_binding_tensor_scalar<BinaryOpType::LOGADDEXP2>,
+        &detail::inplace_binding_tensor_tensor<BinaryOpType::LOGADDEXP2>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
-    detail::bind_inplace_operation(
+    detail::bind_inplace_operation<"squared_difference_">(
         mod,
-        ttnn::squared_difference_,
         R"doc(Performs squared_difference in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        &detail::inplace_binding_tensor_scalar<BinaryOpType::SQUARED_DIFFERENCE>,
+        &detail::inplace_binding_tensor_tensor<BinaryOpType::SQUARED_DIFFERENCE>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
-    detail::bind_inplace_operation_with_fast_approx(
+    detail::bind_inplace_operation_with_fast_approx<"multiply_">(
         mod,
-        ttnn::multiply_,
         R"doc(Performs in-place multiplication operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|multiply|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        &detail::multiply_inplace_fast_approx_tensor_scalar,
+        &detail::multiply_inplace_fast_approx_tensor_tensor,
         R"doc(BFLOAT16, FLOAT32, UINT16)doc",
         R"doc(
         When :attr:`fast_and_approximate_mode` is `True` for bfloat16 datatype, the operation uses FPU implementation for better performance.
         When :attr:`fast_and_approximate_mode` is `False` for bfloat16 datatype, the operation uses SFPU with the result rounded to nearest even (RNE).
         The operation is not supported for INT32 inputs since the outputs are returned as FLOAT32.
         )doc");
-    detail::bind_inplace_operation_with_fast_approx(
+    detail::bind_inplace_operation_with_fast_approx<"divide_">(
         mod,
-        ttnn::divide_,
         R"doc(Performs in-place division operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|divide|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        &detail::divide_inplace_fast_approx_tensor_scalar,
+        &detail::divide_inplace_fast_approx_tensor_tensor,
         R"doc(BFLOAT16, FLOAT32, UINT16)doc",
         R"doc(
         When :attr:`fast_and_approximate_mode` is `True`, the operation uses FPU+SFPU implementation for better performance.
@@ -2672,23 +3189,24 @@ void py_module(nb::module_& mod) {
         The operation is not supported for INT32 inputs since the outputs are returned as FLOAT32.
         )doc");
 
-    detail::bind_inplace_operation(
+    detail::bind_inplace_operation<"rsub_">(
         mod,
-        ttnn::rsub_,
         R"doc(Subtracts :attr:`input_a` from :attr:`input_b` in-place and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_b}} - \mathrm{{input\_tensor\_a}})doc",
+        &detail::inplace_binding_tensor_scalar<BinaryOpType::RSUB>,
+        &detail::inplace_binding_tensor_tensor<BinaryOpType::RSUB>,
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
-    detail::bind_inplace_operation(
+    detail::bind_inplace_operation<"bias_gelu_">(
         mod,
-        ttnn::bias_gelu_,
         R"doc(Performs bias_gelu in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|bias_gelu|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
+        &detail::inplace_binding_tensor_scalar<BinaryOpType::BIAS_GELU>,
+        &detail::inplace_binding_tensor_tensor<BinaryOpType::BIAS_GELU>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_power(
         mod,
-        ttnn::pow,
         R"doc(When :attr:`exponent` is a Tensor, supported dtypes are: BFLOAT16, FLOAT32. Both input tensors should be of same dtype.)doc");
 }
 
