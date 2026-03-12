@@ -89,23 +89,22 @@ struct RingJointSDPAInputs {
     Tensor input_q;
     Tensor input_k;
     Tensor input_v;
-    std::optional<Tensor> joint_q;  // Optional joint tensors - always populated with real or dummy tensors
-    std::optional<Tensor> joint_k;  // Optional joint tensors - always populated with real or dummy tensors
-    std::optional<Tensor> joint_v;  // Optional joint tensors - always populated with real or dummy tensors
+    Tensor joint_q;  // Mandatory joint tensors
+    Tensor joint_k;  // Mandatory joint tensors
+    Tensor joint_v;  // Mandatory joint tensors
     Tensor gathered_k;
     Tensor gathered_v;
 };
 
-struct RingJointSDPAResult {
-    Tensor output;
-    std::optional<Tensor> joint_output;  // Optional when no joint input provided
-    Tensor lse_output;
-};
+// Index constants for RingJointSDPAResult vector
+constexpr size_t RING_JOINT_SDPA_OUTPUT_IDX = 0;
+constexpr size_t RING_JOINT_SDPA_JOINT_OUTPUT_IDX = 1;
+constexpr size_t RING_JOINT_SDPA_STATS_OUTPUT_IDX = 2;
 
-struct RingJointSDPAResultSpec {
-    TensorSpec output;
-    std::optional<TensorSpec> joint_output;  // Optional when no joint input provided
-    TensorSpec lse_output;
-};
+// RingJointSDPAResult is a vector of 3 tensors: [output, joint_output, stats_output]
+using RingJointSDPAResult = Tensors;
+
+// RingJointSDPAResultSpec is a vector of 3 TensorSpecs: [output, joint_output, stats_output]
+using RingJointSDPAResultSpec = std::vector<TensorSpec>;
 
 }  // namespace ttnn::prim

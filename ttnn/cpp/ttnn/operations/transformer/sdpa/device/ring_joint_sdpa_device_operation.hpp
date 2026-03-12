@@ -25,6 +25,8 @@ struct RingJointSDPADeviceOperation {
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
     static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<Tensors> create_op_performance_model(
+        const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensors);
 };
 
 RingJointSDPAResult ring_joint_scaled_dot_product_attention(
@@ -42,15 +44,15 @@ RingJointSDPAResult ring_joint_scaled_dot_product_attention(
     const MeshDevice& mesh_device,
     ttnn::ccl::Topology topology,
     CoreCoord ccl_core_grid_offset,
-    std::optional<tt::tt_metal::SubDeviceId> subdevice_id = std::nullopt,
-    bool is_causal = false,
-    bool is_balanced = false,
-    std::optional<float> scale = std::nullopt,
-    std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
-    const std::optional<ttnn::Tensor>& joint_tensor_q = std::nullopt,
-    const std::optional<ttnn::Tensor>& joint_tensor_k = std::nullopt,
-    const std::optional<ttnn::Tensor>& joint_tensor_v = std::nullopt,
-    const std::optional<std::string>& joint_strategy = std::nullopt);
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
+    bool is_causal,
+    bool is_balanced,
+    std::optional<float> scale,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
+    const ttnn::Tensor& joint_tensor_q,
+    const ttnn::Tensor& joint_tensor_k,
+    const ttnn::Tensor& joint_tensor_v,
+    const std::optional<std::string>& joint_strategy);
 
 }  // namespace ttnn::prim

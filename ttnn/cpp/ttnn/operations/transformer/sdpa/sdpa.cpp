@@ -147,7 +147,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> ExecuteJointAttention::invoke(
         program_config,
         scale,
         compute_kernel_config);
-    return {output_tensors.output, output_tensors.joint_output};
+    return {output_tensors[prim::JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::JOINT_SDPA_JOINT_OUTPUT_IDX]};
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::invoke(
@@ -196,15 +196,14 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttention::
         scale,
         compute_kernel_config,
         core_allocation_strategy,
-        joint_tensor_q,
-        joint_tensor_k,
-        joint_tensor_v,
+        joint_tensor_q.value(),
+        joint_tensor_k.value(),
+        joint_tensor_v.value(),
         joint_strategy);
-    // For backward compatibility, return actual tensor (even if empty when no joint input)
-    auto joint_output = output_tensors.joint_output.has_value()
-                            ? output_tensors.joint_output.value()
-                            : ttnn::Tensor{};  // Empty tensor when no joint input provided
-    return {output_tensors.output, joint_output, output_tensors.lse_output};
+    return {
+        output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
+        output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
+        output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
 }
 
 ttnn::Tensor ExecuteFlashMLAPrefill::invoke(
@@ -347,9 +346,11 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttentionPr
         joint_tensor_k,
         joint_tensor_v,
         joint_strategy);
-    // Return actual tensor (even if empty when no joint input)
-    auto joint_output = output_tensors.joint_output.has_value() ? output_tensors.joint_output.value() : ttnn::Tensor{};
-    return {output_tensors.output, joint_output, output_tensors.lse_output};
+    // Return joint_output tensor (may be dummy if no joint input)
+    return {
+        output_tensors[prim::PROFILE_OUTPUT_IDX],
+        output_tensors[prim::PROFILE_JOINT_OUTPUT_IDX],
+        output_tensors[prim::PROFILE_STATS_OUTPUT_IDX]};
 }
 
 }  // namespace ttnn::operations::transformer

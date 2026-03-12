@@ -93,23 +93,16 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const auto& input_tensor_k = tensor_args.input_k;
     const auto& input_tensor_v = tensor_args.input_v;
 
-    // Check if joint tensors are provided
-    const bool use_joint_tensors =
-        tensor_args.joint_q.has_value() && tensor_args.joint_k.has_value() && tensor_args.joint_v.has_value();
-    uint32_t L = 0;  // Default joint sequence length
-    if (use_joint_tensors) {
-        const auto& joint_q_shape = tensor_args.joint_q.value().logical_shape();
-        L = joint_q_shape[2];
-    }
+    // Joint tensors are mandatory
+    const auto& joint_q_shape = tensor_args.joint_q.logical_shape();
+    const uint32_t L = joint_q_shape[2];
 
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
     const auto& gathered_input_tensor_v = tensor_args.gathered_v;
 
-    auto& output_tensor = output_tensors.output;
-    auto& lse_output_tensor = output_tensors.lse_output;
-
-    // Check if joint output tensor exists
-    const bool has_joint_output = output_tensors.joint_output.has_value();
+    auto& output_tensor = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX];
+    auto& joint_output_tensor = output_tensors[RING_JOINT_SDPA_JOINT_OUTPUT_IDX];
+    auto& stats_output_tensor = output_tensors[RING_JOINT_SDPA_STATS_OUTPUT_IDX];
 
     std::size_t q_chunk_size = args.get_q_chunk_size();
     std::size_t k_chunk_size = args.get_k_chunk_size();
@@ -414,12 +407,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     TensorAccessorArgs(input_tensor_v.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(gathered_input_tensor_k.buffer()).append_to(reader_compile_time_args);
     TensorAccessorArgs(gathered_input_tensor_v.buffer()).append_to(reader_compile_time_args);
-    TensorAccessorArgs(tensor_args.joint_q.has_value() ? tensor_args.joint_q->buffer() : nullptr)
-        .append_to(reader_compile_time_args);
-    TensorAccessorArgs(tensor_args.joint_k.has_value() ? tensor_args.joint_k->buffer() : nullptr)
-        .append_to(reader_compile_time_args);
-    TensorAccessorArgs(tensor_args.joint_v.has_value() ? tensor_args.joint_v->buffer() : nullptr)
-        .append_to(reader_compile_time_args);
+    TensorAccessorArgs(tensor_args.joint_q.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(tensor_args.joint_k.buffer()).append_to(reader_compile_time_args);
+    TensorAccessorArgs(tensor_args.joint_v.buffer()).append_to(reader_compile_time_args);
 
     /**
      * Create semaphores used for L1-L1 store-and-forward of KV between cores.
@@ -462,9 +452,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         args.is_balanced};
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(has_joint_output ? output_tensors.joint_output.value().buffer() : nullptr)
-        .append_to(writer_compile_time_args);
-    TensorAccessorArgs(lse_output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(joint_output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
 
     // Early format check: when all data formats are identical, reconfig calls can be skipped.
     const tt::DataFormat q_df_early = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
@@ -701,12 +690,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     uint32_t v_addr = input_tensor_v.buffer()->address();
     uint32_t gathered_k_addr = gathered_input_tensor_k.buffer()->address();
     uint32_t gathered_v_addr = gathered_input_tensor_v.buffer()->address();
-    uint32_t joint_q_addr = use_joint_tensors ? tensor_args.joint_q.value().buffer()->address() : 0;
-    uint32_t joint_k_addr = use_joint_tensors ? tensor_args.joint_k.value().buffer()->address() : 0;
-    uint32_t joint_v_addr = use_joint_tensors ? tensor_args.joint_v.value().buffer()->address() : 0;
+    uint32_t joint_q_addr = tensor_args.joint_q.buffer()->address();
+    uint32_t joint_k_addr = tensor_args.joint_k.buffer()->address();
+    uint32_t joint_v_addr = tensor_args.joint_v.buffer()->address();
     uint32_t out_addr = output_tensor.buffer()->address();
-    uint32_t joint_out_addr = has_joint_output ? output_tensors.joint_output.value().buffer()->address() : 0;
-    uint32_t lse_addr = lse_output_tensor.buffer()->address();
+    uint32_t joint_out_addr = joint_output_tensor.buffer()->address();
+    uint32_t stats_addr = stats_output_tensor.buffer()->address();
 
     /**
      * Build chain selection for store-and-forward across cores per (batch, head).
@@ -935,7 +924,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         std::vector<uint32_t> writer_args = {
             out_addr,
             joint_out_addr,
-            lse_addr,
+            stats_addr,
             global_q_start,
             global_q_end,
         };
@@ -1011,32 +1000,28 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
         auto* v_buffer = tensor_args.input_v.buffer();
         auto* gathered_k_buffer = tensor_args.gathered_k.buffer();
         auto* gathered_v_buffer = tensor_args.gathered_v.buffer();
-        // Check if joint tensors are provided
-        const bool use_joint_tensors =
-            tensor_args.joint_q.has_value() && tensor_args.joint_k.has_value() && tensor_args.joint_v.has_value();
-        const bool has_joint_output = output_tensors.joint_output.has_value();
 
-        // Get joint buffer pointers conditionally
-        auto* joint_q_buffer = use_joint_tensors ? tensor_args.joint_q.value().buffer() : nullptr;
-        auto* joint_k_buffer = use_joint_tensors ? tensor_args.joint_k.value().buffer() : nullptr;
-        auto* joint_v_buffer = use_joint_tensors ? tensor_args.joint_v.value().buffer() : nullptr;
+        // Joint tensors are mandatory
+        auto* joint_q_buffer = tensor_args.joint_q.buffer();
+        auto* joint_k_buffer = tensor_args.joint_k.buffer();
+        auto* joint_v_buffer = tensor_args.joint_v.buffer();
 
         // Get addresses for output tensors
-        auto* out_buffer = output_tensors.output.buffer();
-        auto* joint_out_buffer = has_joint_output ? output_tensors.joint_output.value().buffer() : nullptr;
-        auto* lse_buffer = output_tensors.lse_output.buffer();
+        auto* out_buffer = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX].buffer();
+        auto* joint_out_buffer = output_tensors[RING_JOINT_SDPA_JOINT_OUTPUT_IDX].buffer();
+        auto* stats_buffer = output_tensors[RING_JOINT_SDPA_STATS_OUTPUT_IDX].buffer();
 
         uint32_t q_addr = q_buffer->address();
         uint32_t k_addr = k_buffer->address();
         uint32_t v_addr = v_buffer->address();
         uint32_t gathered_k_addr = gathered_k_buffer->address();
         uint32_t gathered_v_addr = gathered_v_buffer->address();
-        uint32_t joint_q_addr = use_joint_tensors ? joint_q_buffer->address() : 0;
-        uint32_t joint_k_addr = use_joint_tensors ? joint_k_buffer->address() : 0;
-        uint32_t joint_v_addr = use_joint_tensors ? joint_v_buffer->address() : 0;
+        uint32_t joint_q_addr = joint_q_buffer->address();
+        uint32_t joint_k_addr = joint_k_buffer->address();
+        uint32_t joint_v_addr = joint_v_buffer->address();
         uint32_t out_addr = out_buffer->address();
-        uint32_t joint_out_addr = has_joint_output ? joint_out_buffer->address() : 0;
-        uint32_t lse_addr = lse_buffer->address();
+        uint32_t joint_out_addr = joint_out_buffer->address();
+        uint32_t stats_addr = stats_buffer->address();
 
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
         auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
@@ -1060,7 +1045,7 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
             // Update writer args
             writer_args[0] = out_addr;
             writer_args[1] = joint_out_addr;
-            writer_args[2] = lse_addr;
+            writer_args[2] = stats_addr;
         }
     }
 }

@@ -80,17 +80,16 @@ struct RingJointSDPAProfileInputs {
     std::optional<Tensor> joint_v;
 };
 
-// Reuse result types from ring_joint_sdpa
-struct RingJointSDPAProfileResult {
-    Tensor output;
-    std::optional<Tensor> joint_output;
-    Tensor lse_output;
-};
+// Index constants for RingJointSDPAProfileResult vector
+constexpr size_t PROFILE_OUTPUT_IDX = 0;
+constexpr size_t PROFILE_JOINT_OUTPUT_IDX = 1;
+constexpr size_t PROFILE_STATS_OUTPUT_IDX = 2;
 
-struct RingJointSDPAProfileResultSpec {
-    TensorSpec output;
-    std::optional<TensorSpec> joint_output;
-    TensorSpec lse_output;
-};
+// RingJointSDPAProfileResult is a vector of 3 tensors: [output, joint_output, stats_output]
+// When no joint input is provided, joint_output is a dummy placeholder tensor
+using RingJointSDPAProfileResult = Tensors;
+
+// RingJointSDPAProfileResultSpec is a vector of 3 TensorSpecs: [output, joint_output, stats_output]
+using RingJointSDPAProfileResultSpec = std::vector<TensorSpec>;
 
 }  // namespace ttnn::prim

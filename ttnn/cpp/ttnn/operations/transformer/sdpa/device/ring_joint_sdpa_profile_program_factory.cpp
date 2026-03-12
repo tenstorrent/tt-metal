@@ -68,11 +68,9 @@ RingJointSDPAProfileProgramFactory::cached_program_t RingJointSDPAProfileProgram
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
     const auto& gathered_input_tensor_v = tensor_args.gathered_v;
 
-    auto& output_tensor = output_tensors.output;
-    auto& lse_output_tensor = output_tensors.lse_output;
-
-    // Check if joint output tensor exists
-    const bool has_joint_output = output_tensors.joint_output.has_value();
+    auto& output_tensor = output_tensors[PROFILE_OUTPUT_IDX];
+    auto& joint_output_tensor = output_tensors[PROFILE_JOINT_OUTPUT_IDX];
+    auto& stats_output_tensor = output_tensors[PROFILE_STATS_OUTPUT_IDX];
 
     std::size_t q_chunk_size = args.get_q_chunk_size();
     std::size_t k_chunk_size = args.get_k_chunk_size();
@@ -336,9 +334,8 @@ RingJointSDPAProfileProgramFactory::cached_program_t RingJointSDPAProfileProgram
         args.is_balanced};
 
     TensorAccessorArgs(output_tensor.buffer()).append_to(writer_compile_time_args);
-    TensorAccessorArgs(has_joint_output ? output_tensors.joint_output.value().buffer() : nullptr)
-        .append_to(writer_compile_time_args);
-    TensorAccessorArgs(lse_output_tensor.buffer()).append_to(writer_compile_time_args);
+    TensorAccessorArgs(use_joint_tensors ? joint_output_tensor.buffer() : nullptr).append_to(writer_compile_time_args);
+    TensorAccessorArgs(stats_output_tensor.buffer()).append_to(writer_compile_time_args);
 
     // Early format check: when all data formats are identical, reconfig calls can be skipped.
     const tt::DataFormat q_df_early = tt::tt_metal::datatype_to_dataformat_converter(input_tensor_q.dtype());
@@ -575,8 +572,8 @@ RingJointSDPAProfileProgramFactory::cached_program_t RingJointSDPAProfileProgram
     uint32_t joint_k_addr = use_joint_tensors ? tensor_args.joint_k.value().buffer()->address() : 0;
     uint32_t joint_v_addr = use_joint_tensors ? tensor_args.joint_v.value().buffer()->address() : 0;
     uint32_t out_addr = output_tensor.buffer()->address();
-    uint32_t joint_out_addr = has_joint_output ? output_tensors.joint_output.value().buffer()->address() : 0;
-    uint32_t lse_addr = lse_output_tensor.buffer()->address();
+    uint32_t joint_out_addr = use_joint_tensors ? joint_output_tensor.buffer()->address() : 0;
+    uint32_t stats_addr = stats_output_tensor.buffer()->address();
 
     // Set runtime args for each core
     const uint32_t total_q_chunks = B * NH * num_q_chunks;
@@ -620,7 +617,7 @@ RingJointSDPAProfileProgramFactory::cached_program_t RingJointSDPAProfileProgram
         std::vector<uint32_t> writer_args = {
             out_addr,
             joint_out_addr,
-            lse_addr,
+            stats_addr,
             global_q_start,
             global_q_end,
         };
@@ -665,7 +662,6 @@ void RingJointSDPAProfileProgramFactory::override_runtime_arguments(
     // Check if joint tensors are provided
     const bool use_joint_tensors =
         tensor_args.joint_q.has_value() && tensor_args.joint_k.has_value() && tensor_args.joint_v.has_value();
-    const bool has_joint_output = output_tensors.joint_output.has_value();
 
     // Get joint buffer pointers conditionally
     auto* joint_q_buffer = use_joint_tensors ? tensor_args.joint_q.value().buffer() : nullptr;
@@ -673,9 +669,9 @@ void RingJointSDPAProfileProgramFactory::override_runtime_arguments(
     auto* joint_v_buffer = use_joint_tensors ? tensor_args.joint_v.value().buffer() : nullptr;
 
     // Get addresses for output tensors
-    auto* out_buffer = output_tensors.output.buffer();
-    auto* joint_out_buffer = has_joint_output ? output_tensors.joint_output.value().buffer() : nullptr;
-    auto* lse_buffer = output_tensors.lse_output.buffer();
+    auto* out_buffer = output_tensors[PROFILE_OUTPUT_IDX].buffer();
+    auto* joint_out_buffer = use_joint_tensors ? output_tensors[PROFILE_JOINT_OUTPUT_IDX].buffer() : nullptr;
+    auto* stats_buffer = output_tensors[PROFILE_STATS_OUTPUT_IDX].buffer();
 
     uint32_t q_addr = q_buffer->address();
     uint32_t k_addr = k_buffer->address();
@@ -686,8 +682,8 @@ void RingJointSDPAProfileProgramFactory::override_runtime_arguments(
     uint32_t joint_k_addr = use_joint_tensors ? joint_k_buffer->address() : 0;
     uint32_t joint_v_addr = use_joint_tensors ? joint_v_buffer->address() : 0;
     uint32_t out_addr = out_buffer->address();
-    uint32_t joint_out_addr = has_joint_output ? joint_out_buffer->address() : 0;
-    uint32_t lse_addr = lse_buffer->address();
+    uint32_t joint_out_addr = use_joint_tensors ? joint_out_buffer->address() : 0;
+    uint32_t stats_addr = stats_buffer->address();
 
     auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
     auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
@@ -711,7 +707,7 @@ void RingJointSDPAProfileProgramFactory::override_runtime_arguments(
         // Update writer args
         writer_args[0] = out_addr;
         writer_args[1] = joint_out_addr;
-        writer_args[2] = lse_addr;
+        writer_args[2] = stats_addr;
     }
 }
 
