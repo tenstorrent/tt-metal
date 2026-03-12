@@ -28,6 +28,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     even_int_div,
     find_largest_divisor,
     get_activation_sharding_core_counts_for_dram_matmul,
+    get_dequantized_tensor,
     get_dram_sharded_matmul_config,
     shard_and_save,
 )
@@ -80,7 +81,7 @@ class LMHead(AbstractModule):
 
         hidden_dim, vocab_size = cls._get_model_dims_from_cfg(hf_config)
 
-        weight_tensor = state_dict["weight"].permute(
+        weight_tensor = get_dequantized_tensor(state_dict, "weight").permute(
             1, 0
         )  # In torch the weights are in (out_features, in_features) format
         assert weight_tensor.shape == (hidden_dim, vocab_size)
