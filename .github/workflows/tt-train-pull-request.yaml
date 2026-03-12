@@ -74,6 +74,7 @@ jobs:
             -DTTNN_BUILD_TESTS=ON \
             -DTT_UNITY_BUILDS=OFF \
             -DBUILD_TT_TRAIN=ON \
+            -DENABLE_DISTRIBUTED=OFF \
             -GNinja
           cmake --build build --target all_generated_files
 
