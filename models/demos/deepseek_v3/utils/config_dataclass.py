@@ -403,9 +403,10 @@ class AllToAllDispatchMetadataConfig(OpConfigBase):
     """Common parameters for a ttnn.all_to_all_dispatch_metadata op"""
 
     @classmethod
-    def create_preallocated_dispatch_output_tensors(
-        mesh_device, mesh_shape, dispatch_devices, batch, hidden_size, num_experts_per_tok
-    ):
+    def create_preallocated_dispatch_output_tensors(mesh_device, batch, hidden_size, num_experts_per_tok):
+        mesh_shape = mesh_device.shape
+        dispatch_devices = mesh_shape[0]
+
         preallocated_dispatch_output_sparse_buffer = ttnn.from_torch(
             torch.zeros([dispatch_devices, batch, hidden_size], dtype=torch.bfloat16),
             device=mesh_device,
@@ -461,6 +462,16 @@ class AllToAllDispatchMetadataConfig(OpConfigBase):
     dispatch_algorithm: ttnn.DispatchAlgorithm
     output_tensors: list[ttnn.Tensor] | None = None
     cross_device_semaphore: ttnn.global_semaphore.global_semaphore | None = None
+
+
+@dataclass
+class MorehFullConfig(OpConfigBase):
+    shape: ttnn.Shape
+    fill_value: int
+    device: ttnn.Device
+    dtype: ttnn.DataType
+    layout: ttnn.layout
+    memory_config: ttnn.MemoryConfig
 
 
 @dataclass
