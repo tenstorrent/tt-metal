@@ -2,22 +2,25 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 # SPDX-License-Identifier: Apache-2.0
 # Comprehensive Unit Tests for Input Validation Library
+#
+# shellcheck disable=SC2016  # Single-quoted $() and backticks are intentional test data
 
 passed=0
 failed=0
 
 test_pass() {
-    echo "  ✓ PASS: $1"
+    printf '%s\n' "  ✓ PASS: $1"
     ((passed++)) || true
 }
 
 test_fail() {
-    echo "  ✗ FAIL: $1"
+    printf '%s\n' "  ✗ FAIL: $1"
     ((failed++)) || true
 }
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-source "$SCRIPT_DIR/../input-validation.sh"
+# shellcheck disable=SC1091  # Path is resolved at runtime via SCRIPT_DIR
+source "${SCRIPT_DIR}/../input-validation.sh"
 
 set +e
 set +u
@@ -32,10 +35,10 @@ assert_returns_0() {
         exit $?
     )
     local ret=$?
-    if [[ $ret -eq 0 ]]; then
-        test_pass "$description"
+    if [[ ${ret} -eq 0 ]]; then
+        test_pass "${description}"
     else
-        test_fail "$description"
+        test_fail "${description}"
     fi
 }
 
@@ -48,10 +51,10 @@ assert_returns_1() {
         exit $?
     )
     local ret=$?
-    if [[ $ret -ne 0 ]]; then
-        test_pass "$description"
+    if [[ ${ret} -ne 0 ]]; then
+        test_pass "${description}"
     else
-        test_fail "$description"
+        test_fail "${description}"
     fi
 }
 
@@ -64,10 +67,10 @@ assert_output_equals() {
         set +e
         "$@" 2>/dev/null
     )
-    if [[ "$output" == "$expected" ]]; then
-        test_pass "$description"
+    if [[ "${output}" == "${expected}" ]]; then
+        test_pass "${description}"
     else
-        test_fail "$description (expected '$expected', got '$output')"
+        test_fail "${description} (expected '${expected}', got '${output}')"
     fi
 }
 
@@ -80,10 +83,10 @@ assert_output_contains() {
         set +e
         "$@" 2>&1
     )
-    if [[ "$output" == *"$pattern"* ]]; then
-        test_pass "$description"
+    if [[ "${output}" == *"${pattern}"* ]]; then
+        test_pass "${description}"
     else
-        test_fail "$description (output didn't contain '$pattern')"
+        test_fail "${description} (output didn't contain '${pattern}')"
     fi
 }
 
@@ -126,11 +129,11 @@ assert_returns_1 "hostname: embedded CRLF" validate_hostname $'host\r\nname.com'
 
 # Length boundaries
 long_hostname="$(printf 'a%.0s' {1..63}).$(printf 'a%.0s' {1..63}).$(printf 'a%.0s' {1..63}).$(printf 'a%.0s' {1..60})"
-assert_returns_0 "hostname: max total length (252 chars with dots)" validate_hostname "$long_hostname"
+assert_returns_0 "hostname: max total length (252 chars with dots)" validate_hostname "${long_hostname}"
 long_hostname_253="$(printf 'a%.0s' {1..63}).$(printf 'a%.0s' {1..63}).$(printf 'a%.0s' {1..63}).$(printf 'a%.0s' {1..61})"
-assert_returns_0 "hostname: boundary length (253 chars with dots)" validate_hostname "$long_hostname_253"
+assert_returns_0 "hostname: boundary length (253 chars with dots)" validate_hostname "${long_hostname_253}"
 long_hostname_plus="$(printf 'a%.0s' {1..63}).$(printf 'a%.0s' {1..63}).$(printf 'a%.0s' {1..63}).$(printf 'a%.0s' {1..62})"
-assert_returns_1 "hostname: exceeds max length (254 chars with dots)" validate_hostname "$long_hostname_plus"
+assert_returns_1 "hostname: exceeds max length (254 chars with dots)" validate_hostname "${long_hostname_plus}"
 
 echo ""
 
@@ -299,7 +302,7 @@ assert_returns_1 "path: GHA expression" validate_path '/tmp/${{ github.event.com
 # Length boundary
 assert_returns_0 "path: max length (4096 chars)" validate_path "/$(printf 'a%.0s' {1..4095})"
 long_path_plus="/$(printf 'a%.0s' {1..4096})"
-assert_returns_1 "path: exceeds max length" validate_path "$long_path_plus"
+assert_returns_1 "path: exceeds max length" validate_path "${long_path_plus}"
 
 echo ""
 
@@ -454,16 +457,16 @@ echo "Testing sanitize_path..."
 # sanitize_path uses realpath under the hood; results vary by OS.
 # Test with paths that exist to avoid realpath failures.
 sanitized=$(sanitize_path "/tmp" 2>/dev/null)
-if [[ -n "$sanitized" && "$sanitized" == *"tmp"* ]]; then
+if [[ -n "${sanitized}" && "${sanitized}" == *"tmp"* ]]; then
     test_pass "sanitize_path: resolves existing absolute path"
 else
-    test_fail "sanitize_path: resolves existing absolute path (got: $sanitized)"
+    test_fail "sanitize_path: resolves existing absolute path (got: ${sanitized})"
 fi
 
 # Traversal rejection
 sanitized=$(sanitize_path "/home/../etc/passwd" 2>/dev/null)
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "sanitize_path: rejects path traversal"
 else
     test_fail "sanitize_path: rejects path traversal"
@@ -472,7 +475,7 @@ fi
 # Shell metacharacter rejection
 sanitized=$(sanitize_path '/tmp/$(whoami)' 2>/dev/null)
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "sanitize_path: rejects shell metacharacters"
 else
     test_fail "sanitize_path: rejects shell metacharacters"
@@ -481,7 +484,7 @@ fi
 # Base directory containment (use existing dirs to avoid realpath issues)
 sanitized=$(sanitize_path "/etc/passwd" "/tmp" 2>/dev/null)
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "sanitize_path: rejects path outside base dir"
 else
     test_fail "sanitize_path: rejects path outside base dir"
@@ -503,7 +506,7 @@ assert_output_equals "'\`whoami\`'" "sanitize_shell_arg: backtick command sub" s
 
 # Verify quotes protect the value
 quoted=$(sanitize_shell_arg "hello world")
-if [[ "$quoted" == "'hello world'" ]]; then
+if [[ "${quoted}" == "'hello world'" ]]; then
     test_pass "sanitize_shell_arg: single quotes prevent word splitting"
 else
     test_fail "sanitize_shell_arg: single quotes prevent word splitting"
@@ -511,7 +514,7 @@ fi
 
 # Combined single and double quotes
 result=$(sanitize_shell_arg "it's a \"test\"" 2>/dev/null)
-if [[ -n "$result" ]]; then
+if [[ -n "${result}" ]]; then
     test_pass "sanitize_shell_arg: handles mixed quotes"
 else
     test_fail "sanitize_shell_arg: handles mixed quotes"
@@ -531,10 +534,10 @@ assert_output_equals 'hello\\world' "escape_quotes: escapes backslash" escape_qu
 
 # Combined dangerous sequence
 result=$(escape_quotes '$(rm -rf /)')
-if [[ "$result" == '\$(rm -rf /)' ]]; then
+if [[ "${result}" == '\$(rm -rf /)' ]]; then
     test_pass "escape_quotes: neutralizes command substitution"
 else
-    test_fail "escape_quotes: neutralizes command substitution (got: $result)"
+    test_fail "escape_quotes: neutralizes command substitution (got: ${result})"
 fi
 
 echo ""
@@ -546,8 +549,8 @@ assert_output_equals "hello\\&world" "sanitize_sed_replacement: escapes ampersan
 assert_output_equals "hello\\\\world" "sanitize_sed_replacement: escapes backslash" sanitize_sed_replacement "hello\\world"
 
 test_string="hello/world&test"
-sanitized=$(sanitize_sed_replacement "$test_string")
-if [[ "$sanitized" == "hello\\/world\\&test" ]]; then
+sanitized=$(sanitize_sed_replacement "${test_string}")
+if [[ "${sanitized}" == "hello\\/world\\&test" ]]; then
     test_pass "sanitize_sed_replacement: correctly escapes sed metacharacters"
 else
     test_fail "sanitize_sed_replacement: correctly escapes sed metacharacters"
@@ -563,7 +566,7 @@ echo "Testing safe_exec_script..."
 # Test with invalid path (relative path)
 safe_exec_script "echo test" "../invalid/path.sh" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "safe_exec_script: rejects invalid path"
 else
     test_fail "safe_exec_script: rejects invalid path"
@@ -572,7 +575,7 @@ fi
 # Test requires .sh extension
 safe_exec_script "echo test" "/tmp/test.txt" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "safe_exec_script: requires .sh extension"
 else
     test_fail "safe_exec_script: requires .sh extension"
@@ -581,17 +584,21 @@ fi
 # Test successful execution with temp file
 result=$(safe_exec_script "echo hello_world" 2>/dev/null)
 ret=$?
-if [[ $ret -eq 0 && "$result" == "hello_world" ]]; then
+if [[ ${ret} -eq 0 && "${result}" == "hello_world" ]]; then
     test_pass "safe_exec_script: executes command successfully"
 else
-    test_fail "safe_exec_script: executes command successfully (ret=$ret, output=$result)"
+    test_fail "safe_exec_script: executes command successfully (ret=${ret}, output=${result})"
 fi
 
 # Test cleanup: temp files should not accumulate
-before_count=$(ls /tmp/safe_exec.*.sh 2>/dev/null | wc -l || echo 0)
+shopt -s nullglob
+_before_files=(/tmp/safe_exec.*.sh)
+before_count=${#_before_files[@]}
 safe_exec_script "echo cleanup_test" 2>/dev/null
-after_count=$(ls /tmp/safe_exec.*.sh 2>/dev/null | wc -l || echo 0)
-if [[ "$after_count" -le "$before_count" ]]; then
+_after_files=(/tmp/safe_exec.*.sh)
+after_count=${#_after_files[@]}
+shopt -u nullglob
+if [[ "${after_count}" -le "${before_count}" ]]; then
     test_pass "safe_exec_script: cleans up temp files"
 else
     test_fail "safe_exec_script: cleans up temp files"
@@ -603,7 +610,7 @@ echo "Testing safe_docker_exec (validation only, no docker daemon required)..."
 # Invalid image
 safe_docker_exec "" "echo test" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "safe_docker_exec: rejects empty image"
 else
     test_fail "safe_docker_exec: rejects empty image"
@@ -611,7 +618,7 @@ fi
 
 safe_docker_exec "alpine;rm -rf /" "echo test" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "safe_docker_exec: rejects image with shell injection"
 else
     test_fail "safe_docker_exec: rejects image with shell injection"
@@ -620,7 +627,7 @@ fi
 # Dangerous docker options (H5 fix)
 safe_docker_exec "alpine" "echo test" "--privileged" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "safe_docker_exec: blocks --privileged flag"
 else
     test_fail "safe_docker_exec: blocks --privileged flag"
@@ -628,7 +635,7 @@ fi
 
 safe_docker_exec "alpine" "echo test" "--pid=host" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "safe_docker_exec: blocks --pid=host flag"
 else
     test_fail "safe_docker_exec: blocks --pid=host flag"
@@ -636,7 +643,7 @@ fi
 
 safe_docker_exec "alpine" "echo test" "--cap-add" "ALL" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "safe_docker_exec: blocks --cap-add flag"
 else
     test_fail "safe_docker_exec: blocks --cap-add flag"
@@ -644,7 +651,7 @@ fi
 
 safe_docker_exec "alpine" "echo test" "--network=host" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "safe_docker_exec: blocks --network=host flag"
 else
     test_fail "safe_docker_exec: blocks --network=host flag"
@@ -652,7 +659,7 @@ fi
 
 safe_docker_exec "alpine" "echo test" "--security-opt" "apparmor=unconfined" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "safe_docker_exec: blocks --security-opt flag"
 else
     test_fail "safe_docker_exec: blocks --security-opt flag"
@@ -664,7 +671,7 @@ echo "Testing safe_ssh_exec (validation only, no SSH required)..."
 # Invalid hostname
 safe_ssh_exec "" "echo test" "" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "safe_ssh_exec: rejects empty hostname"
 else
     test_fail "safe_ssh_exec: rejects empty hostname"
@@ -672,7 +679,7 @@ fi
 
 safe_ssh_exec "-invalid.host" "echo test" "" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "safe_ssh_exec: rejects invalid hostname"
 else
     test_fail "safe_ssh_exec: rejects invalid hostname"
@@ -681,7 +688,7 @@ fi
 # Invalid username
 safe_ssh_exec "valid.host" "echo test" "-invalid" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "safe_ssh_exec: rejects invalid username"
 else
     test_fail "safe_ssh_exec: rejects invalid username"
@@ -690,7 +697,7 @@ fi
 # Dangerous SSH options (H6 fix)
 safe_ssh_exec "valid.host" "echo test" "user" "-o" "ProxyCommand=evil" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "safe_ssh_exec: blocks ProxyCommand"
 else
     test_fail "safe_ssh_exec: blocks ProxyCommand"
@@ -698,7 +705,7 @@ fi
 
 safe_ssh_exec "valid.host" "echo test" "user" "-o" "LocalCommand=evil" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "safe_ssh_exec: blocks LocalCommand"
 else
     test_fail "safe_ssh_exec: blocks LocalCommand"
@@ -706,7 +713,7 @@ fi
 
 safe_ssh_exec "valid.host" "echo test" "user" "-o" "PermitLocalCommand=yes" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "safe_ssh_exec: blocks PermitLocalCommand"
 else
     test_fail "safe_ssh_exec: blocks PermitLocalCommand"
@@ -720,37 +727,37 @@ echo ""
 echo "Testing validation_error..."
 
 error_output=$(validation_error "test error message" 2>&1)
-if [[ "$error_output" == "::error::test error message" ]]; then
+if [[ "${error_output}" == "::error::test error message" ]]; then
     test_pass "validation_error: outputs correct GitHub Actions format"
 else
-    test_fail "validation_error: outputs correct GitHub Actions format (got: $error_output)"
+    test_fail "validation_error: outputs correct GitHub Actions format (got: ${error_output})"
 fi
 
 error_output=$(validation_error "test error" "test.sh" 2>&1)
-if [[ "$error_output" == "::error file=test.sh::test error" ]]; then
+if [[ "${error_output}" == "::error file=test.sh::test error" ]]; then
     test_pass "validation_error: includes file reference"
 else
-    test_fail "validation_error: includes file reference (got: $error_output)"
+    test_fail "validation_error: includes file reference (got: ${error_output})"
 fi
 
 error_output=$(validation_error "test error" "test.sh" "42" 2>&1)
-if [[ "$error_output" == "::error file=test.sh,line=42::test error" ]]; then
+if [[ "${error_output}" == "::error file=test.sh,line=42::test error" ]]; then
     test_pass "validation_error: includes file and line"
 else
-    test_fail "validation_error: includes file and line (got: $error_output)"
+    test_fail "validation_error: includes file and line (got: ${error_output})"
 fi
 
 # Newline injection prevention (M1 fix)
 error_output=$(validation_error $'line1\nline2' 2>&1)
-line_count=$(echo "$error_output" | wc -l | tr -d ' ')
-if [[ "$line_count" -eq 1 ]]; then
+line_count=$(printf '%s\n' "${error_output}" | wc -l | tr -d ' ')
+if [[ "${line_count}" -eq 1 ]]; then
     test_pass "validation_error: strips newlines from message"
 else
-    test_fail "validation_error: strips newlines from message (got $line_count lines)"
+    test_fail "validation_error: strips newlines from message (got ${line_count} lines)"
 fi
 
 error_output=$(validation_error "msg" $'file\n::warning::injected' 2>&1)
-if [[ "$error_output" != *"::warning::"* ]]; then
+if [[ "${error_output}" != *"::warning::"* ]]; then
     test_pass "validation_error: prevents workflow command injection via file param"
 else
     test_fail "validation_error: prevents workflow command injection via file param"
@@ -760,22 +767,22 @@ echo ""
 echo "Testing validation_warning..."
 
 warn_output=$(validation_warning "test warning" 2>&1)
-if [[ "$warn_output" == "::warning::test warning" ]]; then
+if [[ "${warn_output}" == "::warning::test warning" ]]; then
     test_pass "validation_warning: outputs correct format"
 else
-    test_fail "validation_warning: outputs correct format (got: $warn_output)"
+    test_fail "validation_warning: outputs correct format (got: ${warn_output})"
 fi
 
 warn_output=$(validation_warning "test warning" "file.sh" "10" 2>&1)
-if [[ "$warn_output" == "::warning file=file.sh,line=10::test warning" ]]; then
+if [[ "${warn_output}" == "::warning file=file.sh,line=10::test warning" ]]; then
     test_pass "validation_warning: includes file and line"
 else
-    test_fail "validation_warning: includes file and line (got: $warn_output)"
+    test_fail "validation_warning: includes file and line (got: ${warn_output})"
 fi
 
 # Newline injection prevention
 warn_output=$(validation_warning $'injected\n::error::boom' 2>&1)
-if [[ "$warn_output" != *"::error::"* ]]; then
+if [[ "${warn_output}" != *"::error::"* ]]; then
     test_pass "validation_warning: prevents newline injection"
 else
     test_fail "validation_warning: prevents newline injection"
@@ -785,22 +792,22 @@ echo ""
 echo "Testing validation_notice..."
 
 notice_output=$(validation_notice "test notice" 2>&1)
-if [[ "$notice_output" == "::notice::test notice" ]]; then
+if [[ "${notice_output}" == "::notice::test notice" ]]; then
     test_pass "validation_notice: outputs correct format"
 else
-    test_fail "validation_notice: outputs correct format (got: $notice_output)"
+    test_fail "validation_notice: outputs correct format (got: ${notice_output})"
 fi
 
 notice_output=$(validation_notice "test notice" "file.sh" "5" 2>&1)
-if [[ "$notice_output" == "::notice file=file.sh,line=5::test notice" ]]; then
+if [[ "${notice_output}" == "::notice file=file.sh,line=5::test notice" ]]; then
     test_pass "validation_notice: includes file and line"
 else
-    test_fail "validation_notice: includes file and line (got: $notice_output)"
+    test_fail "validation_notice: includes file and line (got: ${notice_output})"
 fi
 
 # Newline injection prevention
 notice_output=$(validation_notice $'injected\n::error::boom' 2>&1)
-if [[ "$notice_output" != *"::error::"* ]]; then
+if [[ "${notice_output}" != *"::error::"* ]]; then
     test_pass "validation_notice: prevents newline injection"
 else
     test_fail "validation_notice: prevents newline injection"
@@ -812,26 +819,26 @@ echo "Testing set_github_output..."
 # Test with GITHUB_OUTPUT not set (should use deprecated format)
 unset GITHUB_OUTPUT || true
 output=$(set_github_output "test_name" "test_value" 2>/dev/null)
-if [[ "$output" == "::set-output name=test_name::test_value" ]]; then
+if [[ "${output}" == "::set-output name=test_name::test_value" ]]; then
     test_pass "set_github_output: uses deprecated format when GITHUB_OUTPUT unset"
 else
-    test_fail "set_github_output: uses deprecated format when GITHUB_OUTPUT unset (got: $output)"
+    test_fail "set_github_output: uses deprecated format when GITHUB_OUTPUT unset (got: ${output})"
 fi
 
 # Test with GITHUB_OUTPUT set
 temp_output=$(mktemp)
-export GITHUB_OUTPUT="$temp_output"
+export GITHUB_OUTPUT="${temp_output}"
 set_github_output "output_name" "output_value" 2>/dev/null
-if grep -q "output_name=output_value" "$temp_output"; then
+if grep -q "output_name=output_value" "${temp_output}"; then
     test_pass "set_github_output: writes to GITHUB_OUTPUT file"
 else
     test_fail "set_github_output: writes to GITHUB_OUTPUT file"
 fi
 
 # Test with multi-line value
-: > "$temp_output"
+: > "${temp_output}"
 set_github_output "multi" $'line1\nline2' 2>/dev/null
-if grep -q "line1" "$temp_output" && grep -q "line2" "$temp_output"; then
+if grep -q "line1" "${temp_output}" && grep -q "line2" "${temp_output}"; then
     test_pass "set_github_output: handles multi-line values"
 else
     test_fail "set_github_output: handles multi-line values"
@@ -840,16 +847,16 @@ fi
 # Test invalid output name
 set_github_output "invalid@name" "value" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "set_github_output: rejects invalid output name"
 else
     test_fail "set_github_output: rejects invalid output name"
 fi
 
 # CRLF injection test (M2 fix)
-: > "$temp_output"
+: > "${temp_output}"
 set_github_output "crlf_test" $'value\r\nother=injected' 2>/dev/null
-if grep -q "<<OUTPUT_" "$temp_output"; then
+if grep -q "<<OUTPUT_" "${temp_output}"; then
     test_pass "set_github_output: uses delimiter for values with CR"
 else
     test_fail "set_github_output: uses delimiter for values with CR"
@@ -861,14 +868,14 @@ fi
 # but it's harmless as part of a single set-output command value.
 unset GITHUB_OUTPUT
 output=$(set_github_output "fallback_test" $'value\n::error::injected' 2>/dev/null)
-line_count=$(printf '%s' "$output" | wc -l | tr -d ' ')
-if [[ "$line_count" -le 1 ]]; then
+line_count=$(printf '%s' "${output}" | wc -l | tr -d ' ')
+if [[ "${line_count}" -le 1 ]]; then
     test_pass "set_github_output: deprecated fallback produces single line"
 else
-    test_fail "set_github_output: deprecated fallback produces single line (got $line_count lines)"
+    test_fail "set_github_output: deprecated fallback produces single line (got ${line_count} lines)"
 fi
 
-rm -f "$temp_output"
+rm -f "${temp_output}"
 
 echo ""
 echo "Testing set_github_env..."
@@ -876,7 +883,7 @@ echo "Testing set_github_env..."
 # Test name validation
 set_github_env "VALID_NAME" "value" 2>/dev/null
 ret=$?
-if [[ $ret -eq 0 ]]; then
+if [[ ${ret} -eq 0 ]]; then
     test_pass "set_github_env: accepts valid name"
 else
     test_fail "set_github_env: accepts valid name"
@@ -884,7 +891,7 @@ fi
 
 set_github_env "123invalid" "value" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "set_github_env: rejects name starting with digit"
 else
     test_fail "set_github_env: rejects name starting with digit"
@@ -892,7 +899,7 @@ fi
 
 set_github_env "invalid-name" "value" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "set_github_env: rejects name with hyphen"
 else
     test_fail "set_github_env: rejects name with hyphen"
@@ -900,52 +907,52 @@ fi
 
 # Test with GITHUB_ENV file
 temp_env=$(mktemp)
-export GITHUB_ENV="$temp_env"
+export GITHUB_ENV="${temp_env}"
 set_github_env "MY_VAR" "my_value" 2>/dev/null
-if grep -q "MY_VAR=my_value" "$temp_env"; then
+if grep -q "MY_VAR=my_value" "${temp_env}"; then
     test_pass "set_github_env: writes to GITHUB_ENV file"
 else
     test_fail "set_github_env: writes to GITHUB_ENV file"
 fi
 
 # Multi-line value
-: > "$temp_env"
+: > "${temp_env}"
 set_github_env "MULTI_VAR" $'line1\nline2' 2>/dev/null
-if grep -q "line1" "$temp_env" && grep -q "line2" "$temp_env"; then
+if grep -q "line1" "${temp_env}" && grep -q "line2" "${temp_env}"; then
     test_pass "set_github_env: handles multi-line values"
 else
     test_fail "set_github_env: handles multi-line values"
 fi
 
 # CRLF uses delimiter (M2 fix)
-: > "$temp_env"
+: > "${temp_env}"
 set_github_env "CRLF_VAR" $'value\r\ninjected' 2>/dev/null
-if grep -q "<<ENV_" "$temp_env"; then
+if grep -q "<<ENV_" "${temp_env}"; then
     test_pass "set_github_env: uses delimiter for values with CR"
 else
     test_fail "set_github_env: uses delimiter for values with CR"
 fi
 
 unset GITHUB_ENV
-rm -f "$temp_env"
+rm -f "${temp_env}"
 
 # Dangerous env var name warning (M4 fix)
 warn_output=$(set_github_env "PATH" "/usr/bin" 2>&1)
-if [[ "$warn_output" == *"security-sensitive"* ]]; then
+if [[ "${warn_output}" == *"security-sensitive"* ]]; then
     test_pass "set_github_env: warns on dangerous env var name (PATH)"
 else
     test_fail "set_github_env: warns on dangerous env var name (PATH)"
 fi
 
 warn_output=$(set_github_env "LD_PRELOAD" "/evil.so" 2>&1)
-if [[ "$warn_output" == *"security-sensitive"* ]]; then
+if [[ "${warn_output}" == *"security-sensitive"* ]]; then
     test_pass "set_github_env: warns on dangerous env var name (LD_PRELOAD)"
 else
     test_fail "set_github_env: warns on dangerous env var name (LD_PRELOAD)"
 fi
 
 warn_output=$(set_github_env "BASH_ENV" "/evil.sh" 2>&1)
-if [[ "$warn_output" == *"security-sensitive"* ]]; then
+if [[ "${warn_output}" == *"security-sensitive"* ]]; then
     test_pass "set_github_env: warns on dangerous env var name (BASH_ENV)"
 else
     test_fail "set_github_env: warns on dangerous env var name (BASH_ENV)"
@@ -965,7 +972,7 @@ export TEST_VAR1 TEST_VAR2 TEST_VAR3
 
 validate_required "TEST_VAR1" "TEST_VAR2" 2>/dev/null
 ret=$?
-if [[ $ret -eq 0 ]]; then
+if [[ ${ret} -eq 0 ]]; then
     test_pass "validate_required: passes when all vars are set"
 else
     test_fail "validate_required: passes when all vars are set"
@@ -973,7 +980,7 @@ fi
 
 validate_required "TEST_VAR1" "TEST_VAR3" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "validate_required: fails when a var is empty"
 else
     test_fail "validate_required: fails when a var is empty"
@@ -981,7 +988,7 @@ fi
 
 validate_required "TEST_VAR1" "NONEXISTENT_VAR_XYZ" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "validate_required: fails when a var is unset"
 else
     test_fail "validate_required: fails when a var is unset"
@@ -992,7 +999,7 @@ echo "Testing validate_array..."
 
 validate_array "validate_hostname" "host1.local" "host2.local" "host3.local" 2>/dev/null
 ret=$?
-if [[ $ret -eq 0 ]]; then
+if [[ ${ret} -eq 0 ]]; then
     test_pass "validate_array: passes with all valid elements"
 else
     test_fail "validate_array: passes with all valid elements"
@@ -1000,7 +1007,7 @@ fi
 
 validate_array "validate_hostname" "host1.local" "-invalid" "host3.local" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "validate_array: fails with one invalid element"
 else
     test_fail "validate_array: fails with one invalid element"
@@ -1008,7 +1015,7 @@ fi
 
 validate_array "validate_hostname" 2>/dev/null
 ret=$?
-if [[ $ret -eq 0 ]]; then
+if [[ ${ret} -eq 0 ]]; then
     test_pass "validate_array: passes with empty array"
 else
     test_fail "validate_array: passes with empty array"
@@ -1017,7 +1024,7 @@ fi
 # Validator whitelist test (cleanup-dead-code fix)
 validate_array "rm" "test" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "validate_array: rejects non-function validator (rm)"
 else
     test_fail "validate_array: rejects non-function validator (rm)"
@@ -1025,7 +1032,7 @@ fi
 
 validate_array "cat" "/etc/passwd" 2>/dev/null
 ret=$?
-if [[ $ret -ne 0 ]]; then
+if [[ ${ret} -ne 0 ]]; then
     test_pass "validate_array: rejects non-function validator (cat)"
 else
     test_fail "validate_array: rejects non-function validator (cat)"
@@ -1076,17 +1083,17 @@ echo ""
 # ============================================
 # Summary
 # ============================================
-echo "============================================"
-echo "Test Summary"
-echo "============================================"
-echo "Results: $passed passed, $failed failed"
+printf '%s\n' "============================================"
+printf '%s\n' "Test Summary"
+printf '%s\n' "============================================"
+printf '%s\n' "Results: ${passed} passed, ${failed} failed"
 
-if [[ $failed -gt 0 ]]; then
-    echo ""
-    echo "✗ Some tests failed!"
+if [[ ${failed} -gt 0 ]]; then
+    printf '\n'
+    printf '%s\n' "✗ Some tests failed!"
     exit 1
 else
-    echo ""
-    echo "✓ All tests passed!"
+    printf '\n'
+    printf '%s\n' "✓ All tests passed!"
     exit 0
 fi

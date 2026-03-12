@@ -9,10 +9,14 @@
 #
 # Example:
 #   source .github/scripts/security/input-validation.sh
-#   validate_hostname "$HOST" || exit 1
-#   validate_path "$FILE" || exit 1
+#   validate_hostname "${HOST}" || exit 1
+#   validate_path "${FILE}" || exit 1
 
-set -euo pipefail
+# Only set strict mode when running as a script, not when sourced as a library.
+# Callers should control their own shell options (BashPitfalls #60).
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+    set -euo pipefail
+fi
 
 # ============================================
 # Configuration / Whitelists
@@ -55,60 +59,60 @@ validate_hostname() {
     local hostname="$1"
 
     # Check empty
-    if [[ -z "$hostname" ]]; then
+    if [[ -z "${hostname}" ]]; then
         validation_error "Hostname cannot be empty"
         return 1
     fi
 
     # Check max length (253 chars)
-    if [[ ${#hostname} -gt $MAX_HOSTNAME_LENGTH ]]; then
-        validation_error "Hostname exceeds maximum length of $MAX_HOSTNAME_LENGTH characters"
+    if [[ ${#hostname} -gt ${MAX_HOSTNAME_LENGTH} ]]; then
+        validation_error "Hostname exceeds maximum length of ${MAX_HOSTNAME_LENGTH} characters"
         return 1
     fi
 
     # Check overall pattern (alphanumeric, dots, hyphens)
-    if [[ ! "$hostname" =~ ^[a-zA-Z0-9] ]]; then
+    if [[ ! "${hostname}" =~ ^[a-zA-Z0-9] ]]; then
         validation_error "Hostname must start with alphanumeric character"
         return 1
     fi
 
-    if [[ ! "$hostname" =~ [a-zA-Z0-9]$ ]]; then
+    if [[ ! "${hostname}" =~ [a-zA-Z0-9]$ ]]; then
         validation_error "Hostname must end with alphanumeric character"
         return 1
     fi
 
     # Check for consecutive dots
-    if [[ "$hostname" =~ \.\. ]]; then
+    if [[ "${hostname}" =~ \.\. ]]; then
         validation_error "Hostname cannot contain consecutive dots"
         return 1
     fi
 
     # Reject control characters (including newlines) that could bypass label checks
-    if [[ "$hostname" =~ [[:cntrl:]] ]]; then
+    if [[ "${hostname}" =~ [[:cntrl:]] ]]; then
         validation_error "Hostname cannot contain control characters"
         return 1
     fi
 
     # Validate each label (parts between dots)
     local labels
-    IFS='.' read -ra labels <<< "$hostname"
+    IFS='.' LC_ALL=C read -ra labels <<< "${hostname}"
     local label
     for label in "${labels[@]}"; do
         # Check label length (max 63 chars)
-        if [[ ${#label} -gt $MAX_HOSTNAME_LABEL_LENGTH ]]; then
-            validation_error "Hostname label '$label' exceeds maximum length of $MAX_HOSTNAME_LABEL_LENGTH characters"
+        if [[ ${#label} -gt ${MAX_HOSTNAME_LABEL_LENGTH} ]]; then
+            validation_error "Hostname label '${label}' exceeds maximum length of ${MAX_HOSTNAME_LABEL_LENGTH} characters"
             return 1
         fi
 
         # Check label content
-        if [[ ! "$label" =~ ^[a-zA-Z0-9-]+$ ]]; then
-            validation_error "Hostname label '$label' contains invalid characters (only alphanumerics and hyphens allowed)"
+        if [[ ! "${label}" =~ ^[a-zA-Z0-9-]+$ ]]; then
+            validation_error "Hostname label '${label}' contains invalid characters (only alphanumerics and hyphens allowed)"
             return 1
         fi
 
         # Check label doesn't start/end with hyphen
-        if [[ "$label" =~ ^- || "$label" =~ -$ ]]; then
-            validation_error "Hostname label '$label' cannot start or end with hyphen"
+        if [[ "${label}" =~ ^- || "${label}" =~ -$ ]]; then
+            validation_error "Hostname label '${label}' cannot start or end with hyphen"
             return 1
         fi
     done
@@ -125,25 +129,25 @@ validate_username() {
     local username="$1"
 
     # Check empty
-    if [[ -z "$username" ]]; then
+    if [[ -z "${username}" ]]; then
         validation_error "Username cannot be empty"
         return 1
     fi
 
     # Check max length
-    if [[ ${#username} -gt $MAX_USERNAME_LENGTH ]]; then
-        validation_error "Username exceeds maximum length of $MAX_USERNAME_LENGTH characters"
+    if [[ ${#username} -gt ${MAX_USERNAME_LENGTH} ]]; then
+        validation_error "Username exceeds maximum length of ${MAX_USERNAME_LENGTH} characters"
         return 1
     fi
 
     # Check valid characters and format
-    if [[ ! "$username" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_-]*$ ]]; then
+    if [[ ! "${username}" =~ ^[a-zA-Z0-9_][a-zA-Z0-9_-]*$ ]]; then
         validation_error "Username contains invalid characters (only alphanumerics, underscores, and hyphens allowed, must start with alphanumeric or underscore)"
         return 1
     fi
 
     # Check doesn't end with hyphen
-    if [[ "$username" =~ -$ ]]; then
+    if [[ "${username}" =~ -$ ]]; then
         validation_error "Username cannot end with hyphen"
         return 1
     fi
@@ -162,42 +166,42 @@ validate_allocation_name() {
     local name="$1"
 
     # Check empty
-    if [[ -z "$name" ]]; then
+    if [[ -z "${name}" ]]; then
         validation_error "Allocation name cannot be empty"
         return 1
     fi
 
     # Check max length
-    if [[ ${#name} -gt $MAX_ALLOCATION_NAME_LENGTH ]]; then
-        validation_error "Allocation name exceeds maximum length of $MAX_ALLOCATION_NAME_LENGTH characters"
+    if [[ ${#name} -gt ${MAX_ALLOCATION_NAME_LENGTH} ]]; then
+        validation_error "Allocation name exceeds maximum length of ${MAX_ALLOCATION_NAME_LENGTH} characters"
         return 1
     fi
 
     # Check lowercase only
-    if [[ "$name" =~ [A-Z] ]]; then
+    if [[ "${name}" =~ [A-Z] ]]; then
         validation_error "Allocation name must be lowercase only"
         return 1
     fi
 
     # Check start/end with alphanumeric
-    if [[ ! "$name" =~ ^[a-z0-9] ]]; then
+    if [[ ! "${name}" =~ ^[a-z0-9] ]]; then
         validation_error "Allocation name must start with lowercase alphanumeric character"
         return 1
     fi
 
-    if [[ ! "$name" =~ [a-z0-9]$ ]]; then
+    if [[ ! "${name}" =~ [a-z0-9]$ ]]; then
         validation_error "Allocation name must end with lowercase alphanumeric character"
         return 1
     fi
 
     # Check no consecutive hyphens
-    if [[ "$name" =~ -- ]]; then
+    if [[ "${name}" =~ -- ]]; then
         validation_error "Allocation name cannot contain consecutive hyphens"
         return 1
     fi
 
     # Check valid characters
-    if [[ ! "$name" =~ ^[a-z0-9-]+$ ]]; then
+    if [[ ! "${name}" =~ ^[a-z0-9-]+$ ]]; then
         validation_error "Allocation name contains invalid characters (only lowercase alphanumerics and hyphens allowed)"
         return 1
     fi
@@ -215,84 +219,84 @@ validate_branch_name() {
     local branch="$1"
 
     # Check empty
-    if [[ -z "$branch" ]]; then
+    if [[ -z "${branch}" ]]; then
         validation_error "Branch name cannot be empty"
         return 1
     fi
 
     # Check max length
-    if [[ ${#branch} -gt $MAX_BRANCH_NAME_LENGTH ]]; then
-        validation_error "Branch name exceeds maximum length of $MAX_BRANCH_NAME_LENGTH characters"
+    if [[ ${#branch} -gt ${MAX_BRANCH_NAME_LENGTH} ]]; then
+        validation_error "Branch name exceeds maximum length of ${MAX_BRANCH_NAME_LENGTH} characters"
         return 1
     fi
 
     # Check for @ (reserved in git)
-    if [[ "$branch" == "@" ]]; then
+    if [[ "${branch}" == "@" ]]; then
         validation_error "Branch name cannot be '@'"
         return 1
     fi
 
     # Check for control characters
-    if [[ "$branch" =~ [[:cntrl:]] ]]; then
+    if [[ "${branch}" =~ [[:cntrl:]] ]]; then
         validation_error "Branch name cannot contain control characters"
         return 1
     fi
 
     # Check doesn't start with hyphen
-    if [[ "$branch" =~ ^- ]]; then
+    if [[ "${branch}" =~ ^- ]]; then
         validation_error "Branch name cannot start with hyphen"
         return 1
     fi
 
     # Check doesn't start with dot
-    if [[ "$branch" =~ ^\. ]]; then
+    if [[ "${branch}" =~ ^\. ]]; then
         validation_error "Branch name cannot start with dot"
         return 1
     fi
 
     # Check doesn't end with dot
-    if [[ "$branch" =~ \.$ ]]; then
+    if [[ "${branch}" =~ \.$ ]]; then
         validation_error "Branch name cannot end with dot"
         return 1
     fi
 
     # Check doesn't end with slash
-    if [[ "$branch" =~ /$ ]]; then
+    if [[ "${branch}" =~ /$ ]]; then
         validation_error "Branch name cannot end with slash"
         return 1
     fi
 
     # Check for double dots (path traversal or parent reference)
-    if [[ "$branch" =~ \.\. ]]; then
+    if [[ "${branch}" =~ \.\. ]]; then
         validation_error "Branch name cannot contain consecutive dots"
         return 1
     fi
 
     # Check for forbidden sequences
-    if [[ "$branch" =~ @\{ ]]; then
+    if [[ "${branch}" =~ @\{ ]]; then
         validation_error "Branch name cannot contain '@{' sequence"
         return 1
     fi
 
-    if [[ "$branch" =~ [~\^:] ]]; then
+    if [[ "${branch}" =~ [~\^:] ]]; then
         validation_error "Branch name cannot contain '~', '^', or ':' characters"
         return 1
     fi
 
     # Check for backslash
-    if [[ "$branch" =~ \\ ]]; then
+    if [[ "${branch}" =~ \\ ]]; then
         validation_error "Branch name cannot contain backslash"
         return 1
     fi
 
     # Check for space characters
-    if [[ "$branch" =~ [[:space:]] ]]; then
+    if [[ "${branch}" =~ [[:space:]] ]]; then
         validation_error "Branch name cannot contain spaces"
         return 1
     fi
 
     # Check for consecutive slashes
-    if [[ "$branch" =~ // ]]; then
+    if [[ "${branch}" =~ // ]]; then
         validation_error "Branch name cannot contain consecutive slashes"
         return 1
     fi
@@ -302,7 +306,7 @@ validate_branch_name() {
     # Pattern stored in variable to prevent bash from consuming escape sequences.
     # The ] must be first in the bracket expression to be treated as literal.
     local _shell_metachar_pattern='[][$*?{}"'"'"'!#()<>`]'
-    if [[ "$branch" =~ $_shell_metachar_pattern ]]; then
+    if [[ "${branch}" =~ ${_shell_metachar_pattern} ]]; then
         validation_error "Branch name cannot contain shell metacharacters"
         return 1
     fi
@@ -331,19 +335,21 @@ validate_path() {
                 base_dir="$2"
                 shift
                 ;;
+            *)
+                ;;
         esac
         shift
     done
 
     # Check empty
-    if [[ -z "$path" ]]; then
+    if [[ -z "${path}" ]]; then
         validation_error "Path cannot be empty"
         return 1
     fi
 
     # Check max length
-    if [[ ${#path} -gt $MAX_PATH_LENGTH ]]; then
-        validation_error "Path exceeds maximum length of $MAX_PATH_LENGTH characters"
+    if [[ ${#path} -gt ${MAX_PATH_LENGTH} ]]; then
+        validation_error "Path exceeds maximum length of ${MAX_PATH_LENGTH} characters"
         return 1
     fi
 
@@ -352,53 +358,53 @@ validate_path() {
     # by the shell itself before reaching this function.
 
     # Check for path traversal sequences
-    if [[ "$path" =~ \.\.(/|$) ]]; then
+    if [[ "${path}" =~ \.\.(/|$) ]]; then
         validation_error "Path contains directory traversal sequence"
         return 1
     fi
 
     # Allowlist: only permit safe characters in paths.
     # Letters, digits, dot, underscore, slash, hyphen, plus, at, space, comma, equals.
-    if [[ ! "$path" =~ ^[a-zA-Z0-9._/@+[:space:],:=-]+$ ]]; then
+    if [[ ! "${path}" =~ ^[a-zA-Z0-9._/@+[:space:],:=-]+$ ]]; then
         validation_error "Path contains forbidden characters (only alphanumerics, ._/@+,-= and spaces allowed)"
         return 1
     fi
 
     # Check for carriage return/newline (command injection risk)
-    if [[ "$path" =~ [$'\r\n'] ]]; then
+    if [[ "${path}" =~ [$'\r\n'] ]]; then
         validation_error "Path cannot contain line ending characters"
         return 1
     fi
 
     # If absolute path required
-    if [[ "$allow_relative" == false && ! "$path" =~ ^/ ]]; then
+    if [[ "${allow_relative}" == false && ! "${path}" =~ ^/ ]]; then
         validation_error "Path must be absolute (start with /)"
         return 1
     fi
 
     # If base directory specified, verify path is within it
-    if [[ -n "$base_dir" ]]; then
+    if [[ -n "${base_dir}" ]]; then
         # Normalize paths for comparison
         local normalized_path
         local normalized_base
 
         if command -v realpath &>/dev/null; then
-            normalized_path=$(realpath -m "$path" 2>/dev/null) || \
-                normalized_path=$(realpath "$path" 2>/dev/null) || \
-                normalized_path="$path"
-            normalized_base=$(realpath -m "$base_dir" 2>/dev/null) || \
-                normalized_base=$(realpath "$base_dir" 2>/dev/null) || \
-                normalized_base="$base_dir"
+            normalized_path=$(realpath -m "${path}" 2>/dev/null) || \
+                normalized_path=$(realpath "${path}" 2>/dev/null) || \
+                normalized_path="${path}"
+            normalized_base=$(realpath -m "${base_dir}" 2>/dev/null) || \
+                normalized_base=$(realpath "${base_dir}" 2>/dev/null) || \
+                normalized_base="${base_dir}"
         else
-            normalized_path="$path"
-            normalized_base="$base_dir"
+            normalized_path="${path}"
+            normalized_base="${base_dir}"
         fi
 
         # Ensure base_dir ends with /
-        [[ "$normalized_base" =~ /$ ]] || normalized_base="${normalized_base}/"
+        [[ "${normalized_base}" =~ /$ ]] || normalized_base="${normalized_base}/"
 
-        if [[ ! "$normalized_path" =~ ^"$normalized_base" ]]; then
-            validation_error "Path must be within base directory: $base_dir"
+        if [[ ! "${normalized_path}" =~ ^"${normalized_base}" ]]; then
+            validation_error "Path must be within base directory: ${base_dir}"
             return 1
         fi
     fi
@@ -412,19 +418,19 @@ validate_workflow_id() {
     local id="$1"
 
     # Check empty
-    if [[ -z "$id" ]]; then
+    if [[ -z "${id}" ]]; then
         validation_error "Workflow ID cannot be empty"
         return 1
     fi
 
     # Check max length (reasonable limit for int64)
-    if [[ ${#id} -gt $MAX_WORKFLOW_ID_LENGTH ]]; then
+    if [[ ${#id} -gt ${MAX_WORKFLOW_ID_LENGTH} ]]; then
         validation_error "Workflow ID exceeds maximum length"
         return 1
     fi
 
     # Check numeric only
-    if [[ ! "$id" =~ ^[0-9]+$ ]]; then
+    if [[ ! "${id}" =~ ^[0-9]+$ ]]; then
         validation_error "Workflow ID must be numeric only"
         return 1
     fi
@@ -441,23 +447,23 @@ validate_positive_integer() {
     local label="${2:-Value}"
     local max="${3:-}"
 
-    if [[ -z "$value" ]]; then
-        validation_error "$label cannot be empty"
+    if [[ -z "${value}" ]]; then
+        validation_error "${label} cannot be empty"
         return 1
     fi
 
-    if [[ ! "$value" =~ ^[0-9]+$ ]]; then
-        validation_error "$label must be a positive integer"
+    if [[ ! "${value}" =~ ^[0-9]+$ ]]; then
+        validation_error "${label} must be a positive integer"
         return 1
     fi
 
-    if [[ "$value" == "0" ]]; then
-        validation_error "$label must be greater than zero"
+    if [[ "${value}" == "0" ]]; then
+        validation_error "${label} must be greater than zero"
         return 1
     fi
 
-    if [[ -n "$max" ]] && [[ "$value" -gt "$max" ]]; then
-        validation_error "$label exceeds maximum of $max"
+    if [[ -n "${max}" ]] && [[ "${value}" -gt "${max}" ]]; then
+        validation_error "${label} exceeds maximum of ${max}"
         return 1
     fi
 
@@ -476,25 +482,25 @@ validate_docker_image() {
     fi
 
     # Check empty
-    if [[ -z "$image" ]]; then
+    if [[ -z "${image}" ]]; then
         validation_error "Docker image cannot be empty"
         return 1
     fi
 
     # Check max length
-    if [[ ${#image} -gt $MAX_DOCKER_IMAGE_LENGTH ]]; then
-        validation_error "Docker image reference exceeds maximum length of $MAX_DOCKER_IMAGE_LENGTH characters"
+    if [[ ${#image} -gt ${MAX_DOCKER_IMAGE_LENGTH} ]]; then
+        validation_error "Docker image reference exceeds maximum length of ${MAX_DOCKER_IMAGE_LENGTH} characters"
         return 1
     fi
 
     # Reject control characters (newlines, tabs, etc.)
-    if [[ "$image" =~ [[:cntrl:]] ]]; then
+    if [[ "${image}" =~ [[:cntrl:]] ]]; then
         validation_error "Docker image cannot contain control characters"
         return 1
     fi
 
     # Check for dangerous characters
-    if [[ "$image" =~ [\;\|\&\$\`\'\"\(\)] ]]; then
+    if [[ "${image}" =~ [\;\|\&\$\`\'\"\(\)] ]]; then
         validation_error "Docker image contains forbidden characters"
         return 1
     fi
@@ -502,53 +508,53 @@ validate_docker_image() {
     # Split into name and digest/tag components
     local tag=""
     local digest=""
-    local name="$image"
+    local name="${image}"
 
     # Extract digest first (takes precedence over tag)
-    if [[ "$image" == *@sha256:* ]]; then
+    if [[ "${image}" == *@sha256:* ]]; then
         digest="${image#*@}"
         name="${image%%@*}"
 
-        if [[ ! "$digest" =~ ^sha256:[a-f0-9]{64}$ ]]; then
+        if [[ ! "${digest}" =~ ^sha256:[a-f0-9]{64}$ ]]; then
             validation_error "Invalid image digest format"
             return 1
         fi
-    elif [[ "$image" == *:* ]]; then
+    elif [[ "${image}" == *:* ]]; then
         # Find the tag: it's the part after the LAST colon that appears
         # AFTER the last slash. This distinguishes port numbers
         # (registry:5000/image) from tags (image:latest).
         local after_last_slash="${image##*/}"
-        if [[ "$after_last_slash" == *:* ]]; then
+        if [[ "${after_last_slash}" == *:* ]]; then
             tag="${after_last_slash##*:}"
             name="${image%:*}"
         fi
     fi
 
     # Validate tag if extracted
-    if [[ -n "$tag" ]]; then
-        if [[ ! "$tag" =~ ^[a-zA-Z0-9._-]+$ ]]; then
+    if [[ -n "${tag}" ]]; then
+        if [[ ! "${tag}" =~ ^[a-zA-Z0-9._-]+$ ]]; then
             validation_error "Docker image tag contains invalid characters"
             return 1
         fi
     fi
 
     # Validate image name characters (registry/namespace/name, may include port numbers)
-    if [[ ! "$name" =~ ^[a-zA-Z0-9][a-zA-Z0-9._/:-]*$ ]]; then
+    if [[ ! "${name}" =~ ^[a-zA-Z0-9][a-zA-Z0-9._/:-]*$ ]]; then
         validation_error "Docker image name contains invalid characters"
         return 1
     fi
 
     # Strict mode: check against allowlist
-    if [[ "$strict" == true ]]; then
+    if [[ "${strict}" == true ]]; then
         local found=false
         for prefix in "${SAFE_CONTAINER_PREFIXES[@]}"; do
-            if [[ "$image" =~ ^"$prefix" ]]; then
+            if [[ "${image}" =~ ^"${prefix}" ]]; then
                 found=true
                 break
             fi
         done
 
-        if [[ "$found" == false ]]; then
+        if [[ "${found}" == false ]]; then
             validation_error "Docker image not in allowed registry list (strict mode enabled)"
             return 1
         fi
@@ -563,14 +569,14 @@ validate_commit_sha() {
     local sha="$1"
 
     # Check empty
-    if [[ -z "$sha" ]]; then
+    if [[ -z "${sha}" ]]; then
         validation_error "Commit SHA cannot be empty"
         return 1
     fi
 
     # Check max length
-    if [[ ${#sha} -gt $MAX_COMMIT_SHA_LENGTH ]]; then
-        validation_error "Commit SHA exceeds maximum length of $MAX_COMMIT_SHA_LENGTH characters"
+    if [[ ${#sha} -gt ${MAX_COMMIT_SHA_LENGTH} ]]; then
+        validation_error "Commit SHA exceeds maximum length of ${MAX_COMMIT_SHA_LENGTH} characters"
         return 1
     fi
 
@@ -581,7 +587,7 @@ validate_commit_sha() {
     fi
 
     # Check hex only
-    if [[ ! "$sha" =~ ^[a-fA-F0-9]+$ ]]; then
+    if [[ ! "${sha}" =~ ^[a-fA-F0-9]+$ ]]; then
         validation_error "Commit SHA must contain only hexadecimal characters (0-9, a-f, A-F)"
         return 1
     fi
@@ -596,13 +602,13 @@ validate_semver() {
     local version="$1"
 
     # Check empty
-    if [[ -z "$version" ]]; then
+    if [[ -z "${version}" ]]; then
         validation_error "Semantic version cannot be empty"
         return 1
     fi
 
     # Remove leading 'v' if present (loose mode)
-    if [[ "$version" =~ ^v ]]; then
+    if [[ "${version}" =~ ^v ]]; then
         version="${version#v}"
     fi
 
@@ -611,7 +617,7 @@ validate_semver() {
     local core_pattern='^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)'
 
     # Check core version
-    if [[ ! "$version" =~ $core_pattern ]]; then
+    if [[ ! "${version}" =~ ${core_pattern} ]]; then
         validation_error "Invalid semantic version format (expected: MAJOR.MINOR.PATCH)"
         return 1
     fi
@@ -620,32 +626,32 @@ validate_semver() {
     local remainder="${version#"${BASH_REMATCH[0]}"}"
 
     # Remainder must be empty, start with '-' (prerelease), or '+' (build metadata)
-    if [[ -n "$remainder" && ! "$remainder" =~ ^[-+] ]]; then
-        validation_error "Invalid trailing content after version core: $remainder"
+    if [[ -n "${remainder}" && ! "${remainder}" =~ ^[-+] ]]; then
+        validation_error "Invalid trailing content after version core: ${remainder}"
         return 1
     fi
 
     # Validate prerelease if present (after -)
-    if [[ "$remainder" =~ ^- ]]; then
+    if [[ "${remainder}" =~ ^- ]]; then
         local prerelease="${remainder#-}"
         prerelease="${prerelease%%+*}"
 
-        if [[ -z "$prerelease" ]]; then
+        if [[ -z "${prerelease}" ]]; then
             validation_error "Empty prerelease identifier"
             return 1
         fi
 
         local IFS='.'
-        read -ra identifiers <<< "$prerelease"
+        LC_ALL=C read -ra identifiers <<< "${prerelease}"
 
         for id in "${identifiers[@]}"; do
-            if [[ ! "$id" =~ ^[a-zA-Z0-9-]+$ ]]; then
-                validation_error "Invalid prerelease identifier: $id"
+            if [[ ! "${id}" =~ ^[a-zA-Z0-9-]+$ ]]; then
+                validation_error "Invalid prerelease identifier: ${id}"
                 return 1
             fi
 
-            if [[ "$id" =~ ^[0-9]+$ && "$id" != "0" && "$id" =~ ^0 ]]; then
-                validation_error "Numeric prerelease identifier cannot have leading zeros: $id"
+            if [[ "${id}" =~ ^[0-9]+$ && "${id}" != "0" && "${id}" =~ ^0 ]]; then
+                validation_error "Numeric prerelease identifier cannot have leading zeros: ${id}"
                 return 1
             fi
         done
@@ -660,7 +666,7 @@ validate_job_name() {
     local name="$1"
 
     # Check empty
-    if [[ -z "$name" ]]; then
+    if [[ -z "${name}" ]]; then
         validation_error "Job name cannot be empty"
         return 1
     fi
@@ -673,7 +679,7 @@ validate_job_name() {
 
     # Valid characters: alphanumerics, underscores, hyphens, spaces
     # We'll be more restrictive and not allow spaces for safety
-    if [[ ! "$name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+    if [[ ! "${name}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
         validation_error "Job name contains invalid characters (only alphanumerics, underscores, and hyphens allowed)"
         return 1
     fi
@@ -695,53 +701,56 @@ sanitize_path() {
     local sanitized=""
 
     # Basic validation first
-    if ! validate_path "$path" --allow-relative; then
+    # SC2310: validate_path returns 0 for valid, non-zero for invalid; any
+    # internal failure is also treated as invalid, which is correct here.
+    # shellcheck disable=SC2310
+    if ! validate_path "${path}" --allow-relative; then
         return 1
     fi
 
     # Try to get absolute path (GNU realpath -m, then BSD realpath, then manual)
     if command -v realpath &>/dev/null; then
-        sanitized=$(realpath -m "$path" 2>/dev/null) || \
-            sanitized=$(realpath "$path" 2>/dev/null) || {
+        sanitized=$(realpath -m "${path}" 2>/dev/null) || \
+            sanitized=$(realpath "${path}" 2>/dev/null) || {
             # Fallback: manual resolution if realpath can't resolve
             sanitized="${path//\/\//\/}"
-            if [[ ! "$sanitized" =~ ^/ ]]; then
+            if [[ ! "${sanitized}" =~ ^/ ]]; then
                 sanitized="${PWD}/${sanitized}"
             fi
         }
     else
         # realpath is not available; symlinks will NOT be resolved.
         # --base-dir containment checks rely on string comparison only.
-        if [[ -n "$base_dir" ]]; then
+        if [[ -n "${base_dir}" ]]; then
             validation_warning "realpath not available; symlink resolution skipped for --base-dir check"
         fi
         sanitized="${path//\/\//\/}"
-        if [[ ! "$sanitized" =~ ^/ ]]; then
+        if [[ ! "${sanitized}" =~ ^/ ]]; then
             sanitized="${PWD}/${sanitized}"
         fi
     fi
 
     # Check against base directory if specified
-    if [[ -n "$base_dir" ]]; then
+    if [[ -n "${base_dir}" ]]; then
         local base_abs
         if command -v realpath &>/dev/null; then
-            base_abs=$(realpath -m "$base_dir" 2>/dev/null) || \
-                base_abs=$(realpath "$base_dir" 2>/dev/null) || \
-                base_abs="$base_dir"
+            base_abs=$(realpath -m "${base_dir}" 2>/dev/null) || \
+                base_abs=$(realpath "${base_dir}" 2>/dev/null) || \
+                base_abs="${base_dir}"
         else
-            base_abs="$base_dir"
+            base_abs="${base_dir}"
         fi
 
         # Ensure base ends with slash
-        [[ "$base_abs" =~ /$ ]] || base_abs="${base_abs}/"
+        [[ "${base_abs}" =~ /$ ]] || base_abs="${base_abs}/"
 
-        if [[ ! "$sanitized" =~ ^"$base_abs" ]]; then
+        if [[ ! "${sanitized}" =~ ^"${base_abs}" ]]; then
             validation_error "Sanitized path is outside base directory"
             return 1
         fi
     fi
 
-    echo "$sanitized"
+    printf '%s\n' "${sanitized}"
 }
 
 # Sanitizes a string for safe use as a shell argument
@@ -751,7 +760,7 @@ sanitize_shell_arg() {
     local arg="$1"
 
     # Check for single quotes in the argument
-    if [[ "$arg" == *"'"* ]]; then
+    if [[ "${arg}" == *"'"* ]]; then
         # Contains single quotes, use double quotes with escaping
         # Escape: $ ` \ and "
         # Note: ! is not escaped because GitHub Actions run bash non-interactively
@@ -760,10 +769,10 @@ sanitize_shell_arg() {
         escaped="${escaped//\$/\\$}"
         escaped="${escaped//\`/\\\`}"
         escaped="${escaped//\"/\\\"}"
-        echo "\"$escaped\""
+        printf '%s\n' "\"${escaped}\""
     else
         # Safe to use single quotes (stronger protection)
-        echo "'$arg'"
+        printf '%s\n' "'${arg}'"
     fi
 }
 
@@ -776,7 +785,7 @@ escape_quotes() {
     str="${str//\$/\\$}"
     str="${str//\`/\\\`}"
     str="${str//\"/\\\"}"
-    printf '%s\n' "$str"
+    printf '%s\n' "${str}"
 }
 
 # Sanitizes a string for use in sed replacement
@@ -787,7 +796,7 @@ sanitize_sed_replacement() {
     str="${str//\\/\\\\}"
     str="${str//\&/\\&}"
     str="${str//\//\\/}"
-    echo "$str"
+    printf '%s\n' "${str}"
 }
 
 # ============================================
@@ -807,59 +816,61 @@ safe_exec_script() {
     local cleanup=false
 
     # Create temp file if no path specified
-    if [[ -z "$script_file" ]]; then
+    if [[ -z "${script_file}" ]]; then
         script_file=$(mktemp /tmp/safe_exec.XXXXXX.sh)
         cleanup=true
     fi
 
     # Validate the script path
-    if ! validate_path "$script_file"; then
-        validation_error "Invalid script file path: $script_file"
+    # shellcheck disable=SC2310
+    if ! validate_path "${script_file}"; then
+        validation_error "Invalid script file path: ${script_file}"
         return 1
     fi
 
     # Ensure script file has .sh extension for safety
-    if [[ ! "$script_file" =~ \.sh$ ]]; then
+    if [[ ! "${script_file}" =~ \.sh$ ]]; then
         validation_error "Script file must have .sh extension"
         return 1
     fi
 
     # Write script content
-    cat > "$script_file" << 'SAFEEXEC_EOF'
+    cat > "${script_file}" << 'SAFEEXEC_EOF'
 #!/usr/bin/env bash
 set -euo pipefail
 SAFEEXEC_EOF
 
-    printf '%s\n' "$cmd" >> "$script_file"
+    printf '%s\n' "${cmd}" >> "${script_file}"
 
     # Set executable
-    chmod +x "$script_file"
+    chmod +x "${script_file}"
 
     # Change directory if specified
-    if [[ -n "$work_dir" ]]; then
-        if ! validate_path "$work_dir"; then
-            validation_error "Invalid working directory: $work_dir"
-            [[ "$cleanup" == true ]] && rm -f "$script_file"
+    if [[ -n "${work_dir}" ]]; then
+        # shellcheck disable=SC2310
+        if ! validate_path "${work_dir}"; then
+            validation_error "Invalid working directory: ${work_dir}"
+            [[ "${cleanup}" == true ]] && rm -f "${script_file}"
             return 1
         fi
-        pushd "$work_dir" > /dev/null || return 1
+        pushd "${work_dir}" > /dev/null || return 1
     fi
 
     # Execute the script
     local exit_code=0
-    "$script_file" || exit_code=$?
+    "${script_file}" || exit_code=$?
 
     # Restore directory
-    if [[ -n "$work_dir" ]]; then
+    if [[ -n "${work_dir}" ]]; then
         popd > /dev/null || true
     fi
 
     # Clean up temp file only (never delete user-provided script files)
-    if [[ "$cleanup" == true ]]; then
-        rm -f "$script_file"
+    if [[ "${cleanup}" == true ]]; then
+        rm -f "${script_file}"
     fi
 
-    return $exit_code
+    return "${exit_code}"
 }
 
 # Safely executes commands in Docker containers
@@ -874,7 +885,8 @@ safe_docker_exec() {
     local docker_opts=("$@")
 
     # Validate image
-    if ! validate_docker_image "$image"; then
+    # shellcheck disable=SC2310
+    if ! validate_docker_image "${image}"; then
         return 1
     fi
 
@@ -900,16 +912,16 @@ safe_docker_exec() {
     local _skip_next=false
     local i
     for (( i=0; i<${#docker_opts[@]}; i++ )); do
-        local opt="${docker_opts[$i]}"
+        local opt="${docker_opts[${i}]}"
 
-        if [[ "$_skip_next" == true ]]; then
+        if [[ "${_skip_next}" == true ]]; then
             _skip_next=false
             continue
         fi
 
         for pattern in "${_dangerous_docker_patterns[@]}"; do
-            if [[ "$opt" == "$pattern" || "$opt" == "$pattern"=* ]]; then
-                validation_error "Dangerous Docker option blocked: $opt"
+            if [[ "${opt}" == "${pattern}" || "${opt}" == "${pattern}"=* ]]; then
+                validation_error "Dangerous Docker option blocked: ${opt}"
                 return 1
             fi
         done
@@ -917,22 +929,22 @@ safe_docker_exec() {
         # Block volume mounts of host root or sensitive directories.
         # Handle both forms: "--volume=/src:/dst" and "-v /src:/dst" (two separate args)
         local mount_spec=""
-        if [[ "$opt" == --volume=* ]]; then
+        if [[ "${opt}" == --volume=* ]]; then
             mount_spec="${opt#--volume=}"
-        elif [[ "$opt" == "-v" ]]; then
+        elif [[ "${opt}" == "-v" ]]; then
             local next_idx=$((i + 1))
-            if [[ $next_idx -lt ${#docker_opts[@]} ]]; then
-                mount_spec="${docker_opts[$next_idx]}"
+            if [[ ${next_idx} -lt ${#docker_opts[@]} ]]; then
+                mount_spec="${docker_opts[${next_idx}]}"
                 _skip_next=true
             fi
-        elif [[ "$opt" == -v* ]]; then
+        elif [[ "${opt}" == -v* ]]; then
             mount_spec="${opt#-v}"
         fi
 
-        if [[ -n "$mount_spec" ]]; then
+        if [[ -n "${mount_spec}" ]]; then
             local mount_src="${mount_spec%%:*}"
-            if [[ "$mount_src" == "/" || "$mount_src" == /etc* || "$mount_src" == /var/run/docker* ]]; then
-                validation_error "Dangerous Docker volume mount blocked: $mount_src"
+            if [[ "${mount_src}" == "/" || "${mount_src}" == /etc* || "${mount_src}" == /var/run/docker* ]]; then
+                validation_error "Dangerous Docker volume mount blocked: ${mount_src}"
                 return 1
             fi
         fi
@@ -940,31 +952,31 @@ safe_docker_exec() {
 
     # Sanitize command for logging
     local safe_cmd
-    safe_cmd=$(sanitize_shell_arg "$cmd")
+    safe_cmd=$(sanitize_shell_arg "${cmd}")
 
     # Build docker command array to avoid shell injection
     local docker_cmd=("docker" "run" "--rm")
 
     # Add user options
     for opt in "${docker_opts[@]}"; do
-        docker_cmd+=("$opt")
+        docker_cmd+=("${opt}")
     done
 
-    docker_cmd+=("$image")
+    docker_cmd+=("${image}")
 
     # Use safe_exec_script approach for the command
     local script_file
     script_file=$(mktemp /tmp/docker_exec.XXXXXX.sh)
 
-    echo "#!/usr/bin/env bash" > "$script_file"
-    echo "set -euo pipefail" >> "$script_file"
-    echo "$cmd" >> "$script_file"
-    chmod +x "$script_file"
+    printf '%s\n' "#!/usr/bin/env bash" > "${script_file}"
+    printf '%s\n' "set -euo pipefail" >> "${script_file}"
+    printf '%s\n' "${cmd}" >> "${script_file}"
+    chmod +x "${script_file}"
 
-    docker_cmd+=("/bin/bash" "-c" "$(cat "$script_file")")
+    docker_cmd+=("/bin/bash" "-c" "$(cat "${script_file}")")
 
     # Cleanup temp file
-    rm -f "$script_file"
+    rm -f "${script_file}"
 
     # Execute docker command
     "${docker_cmd[@]}"
@@ -980,17 +992,20 @@ safe_ssh_exec() {
     local hostname="$1"
     local cmd="$2"
     local username="${3:-}"
-    shift 3
+    shift 2
+    [[ $# -gt 0 ]] && shift
     local ssh_opts=("$@")
 
     # Validate hostname
-    if ! validate_hostname "$hostname"; then
+    # shellcheck disable=SC2310
+    if ! validate_hostname "${hostname}"; then
         return 1
     fi
 
     # Validate username if provided
-    if [[ -n "$username" ]]; then
-        if ! validate_username "$username"; then
+    if [[ -n "${username}" ]]; then
+        # shellcheck disable=SC2310
+        if ! validate_username "${username}"; then
             return 1
         fi
     fi
@@ -1011,15 +1026,15 @@ safe_ssh_exec() {
 
     # Also block -J (shorthand for ProxyJump)
     for opt in "${ssh_opts[@]}"; do
-        if [[ "$opt" == "-J" || "$opt" == -J* ]]; then
-            validation_error "Dangerous SSH option blocked: $opt (ProxyJump shorthand)"
+        if [[ "${opt}" == "-J" || "${opt}" == -J* ]]; then
+            validation_error "Dangerous SSH option blocked: ${opt} (ProxyJump shorthand)"
             return 1
         fi
     done
     for opt in "${ssh_opts[@]}"; do
         for pattern in "${_dangerous_ssh_patterns[@]}"; do
-            if [[ "$opt" == *"$pattern"* ]]; then
-                validation_error "Dangerous SSH option blocked: $opt"
+            if [[ "${opt}" == *"${pattern}"* ]]; then
+                validation_error "Dangerous SSH option blocked: ${opt}"
                 return 1
             fi
         done
@@ -1034,20 +1049,20 @@ safe_ssh_exec() {
 
     # Add user options
     for opt in "${ssh_opts[@]}"; do
-        ssh_cmd+=("$opt")
+        ssh_cmd+=("${opt}")
     done
 
     # Add target
-    if [[ -n "$username" ]]; then
+    if [[ -n "${username}" ]]; then
         ssh_cmd+=("${username}@${hostname}")
     else
-        ssh_cmd+=("$hostname")
+        ssh_cmd+=("${hostname}")
     fi
 
     # Sanitize and add command
     local safe_cmd
-    safe_cmd=$(sanitize_shell_arg "$cmd")
-    ssh_cmd+=("$safe_cmd")
+    safe_cmd=$(sanitize_shell_arg "${cmd}")
+    ssh_cmd+=("${safe_cmd}")
 
     # Execute
     "${ssh_cmd[@]}"
@@ -1064,7 +1079,7 @@ _sanitize_workflow_cmd_param() {
     str="${str//$'\n'/ }"
     str="${str//$'\r'/}"
     str="${str//::/ }"
-    printf '%s' "$str"
+    printf '%s' "${str}"
 }
 
 # Outputs validation error in GitHub Actions format
@@ -1077,16 +1092,16 @@ validation_error() {
     local file="${2:-}"
     local line="${3:-}"
 
-    if [[ -n "$file" ]]; then
-        file=$(_sanitize_workflow_cmd_param "$file")
-        if [[ -n "$line" ]]; then
-            line=$(_sanitize_workflow_cmd_param "$line")
-            echo "::error file=$file,line=$line::$msg" >&2
+    if [[ -n "${file}" ]]; then
+        file=$(_sanitize_workflow_cmd_param "${file}")
+        if [[ -n "${line}" ]]; then
+            line=$(_sanitize_workflow_cmd_param "${line}")
+            printf '%s\n' "::error file=${file},line=${line}::${msg}" >&2
         else
-            echo "::error file=$file::$msg" >&2
+            printf '%s\n' "::error file=${file}::${msg}" >&2
         fi
     else
-        echo "::error::$msg" >&2
+        printf '%s\n' "::error::${msg}" >&2
     fi
 }
 
@@ -1100,16 +1115,16 @@ validation_warning() {
     local file="${2:-}"
     local line="${3:-}"
 
-    if [[ -n "$file" ]]; then
-        file=$(_sanitize_workflow_cmd_param "$file")
-        if [[ -n "$line" ]]; then
-            line=$(_sanitize_workflow_cmd_param "$line")
-            echo "::warning file=$file,line=$line::$msg" >&2
+    if [[ -n "${file}" ]]; then
+        file=$(_sanitize_workflow_cmd_param "${file}")
+        if [[ -n "${line}" ]]; then
+            line=$(_sanitize_workflow_cmd_param "${line}")
+            printf '%s\n' "::warning file=${file},line=${line}::${msg}" >&2
         else
-            echo "::warning file=$file::$msg" >&2
+            printf '%s\n' "::warning file=${file}::${msg}" >&2
         fi
     else
-        echo "::warning::$msg" >&2
+        printf '%s\n' "::warning::${msg}" >&2
     fi
 }
 
@@ -1123,16 +1138,16 @@ validation_notice() {
     local file="${2:-}"
     local line="${3:-}"
 
-    if [[ -n "$file" ]]; then
-        file=$(_sanitize_workflow_cmd_param "$file")
-        if [[ -n "$line" ]]; then
-            line=$(_sanitize_workflow_cmd_param "$line")
-            echo "::notice file=$file,line=$line::$msg"
+    if [[ -n "${file}" ]]; then
+        file=$(_sanitize_workflow_cmd_param "${file}")
+        if [[ -n "${line}" ]]; then
+            line=$(_sanitize_workflow_cmd_param "${line}")
+            printf '%s\n' "::notice file=${file},line=${line}::${msg}"
         else
-            echo "::notice file=$file::$msg"
+            printf '%s\n' "::notice file=${file}::${msg}"
         fi
     else
-        echo "::notice::$msg"
+        printf '%s\n' "::notice::${msg}"
     fi
 }
 
@@ -1145,31 +1160,33 @@ set_github_output() {
     local value="$2"
 
     # Validate output name
-    if [[ ! "$name" =~ ^[a-zA-Z0-9_-]+$ ]]; then
-        validation_error "Invalid output name: $name"
+    if [[ ! "${name}" =~ ^[a-zA-Z0-9_-]+$ ]]; then
+        validation_error "Invalid output name: ${name}"
         return 1
     fi
 
     # Use environment file if available (GitHub Actions recommended way)
     if [[ -n "${GITHUB_OUTPUT:-}" ]]; then
         # Handle multi-line values or values with \r using delimiter
-        if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
-            local delimiter
-            delimiter="OUTPUT_$(date +%s)_$(head -c 16 /dev/urandom | xxd -p | head -c 16)"
+        if [[ "${value}" == *$'\n'* || "${value}" == *$'\r'* ]]; then
+            local delimiter _ts _rand
+            _ts=$(date +%s)
+            _rand=$(head -c 16 /dev/urandom | xxd -p | head -c 16)
+            delimiter="OUTPUT_${_ts}_${_rand}"
             {
-                echo "${name}<<${delimiter}"
-                echo "$value"
-                echo "${delimiter}"
-            } >> "$GITHUB_OUTPUT"
+                printf '%s\n' "${name}<<${delimiter}"
+                printf '%s\n' "${value}"
+                printf '%s\n' "${delimiter}"
+            } >> "${GITHUB_OUTPUT}"
         else
-            echo "${name}=${value}" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "${name}=${value}" >> "${GITHUB_OUTPUT}"
         fi
     else
         # Fallback: use deprecated ::set-output command
         # Strip newlines and CR to prevent workflow command injection
         local safe_value="${value//$'\n'/}"
         safe_value="${safe_value//$'\r'/}"
-        echo "::set-output name=${name}::${safe_value}"
+        printf '%s\n' "::set-output name=${name}::${safe_value}"
     fi
 }
 
@@ -1181,8 +1198,8 @@ set_github_env() {
     local value="$2"
 
     # Validate variable name (shell variable naming rules)
-    if [[ ! "$name" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
-        validation_error "Invalid environment variable name: $name"
+    if [[ ! "${name}" =~ ^[a-zA-Z_][a-zA-Z0-9_]*$ ]]; then
+        validation_error "Invalid environment variable name: ${name}"
         return 1
     fi
 
@@ -1192,8 +1209,8 @@ set_github_env() {
         "GITHUB_TOKEN" "ACTIONS_RUNTIME_TOKEN" "ACTIONS_ID_TOKEN_REQUEST_TOKEN"
     )
     for _dname in "${_dangerous_env_names[@]}"; do
-        if [[ "$name" == "$_dname" ]]; then
-            validation_warning "Setting security-sensitive environment variable: $name"
+        if [[ "${name}" == "${_dname}" ]]; then
+            validation_warning "Setting security-sensitive environment variable: ${name}"
             break
         fi
     done
@@ -1201,16 +1218,18 @@ set_github_env() {
     # Use environment file if available
     if [[ -n "${GITHUB_ENV:-}" ]]; then
         # Handle multi-line values or values with \r
-        if [[ "$value" == *$'\n'* || "$value" == *$'\r'* ]]; then
-            local delimiter
-            delimiter="ENV_$(date +%s)_$(head -c 16 /dev/urandom | xxd -p | head -c 16)"
+        if [[ "${value}" == *$'\n'* || "${value}" == *$'\r'* ]]; then
+            local delimiter _ts _rand
+            _ts=$(date +%s)
+            _rand=$(head -c 16 /dev/urandom | xxd -p | head -c 16)
+            delimiter="ENV_${_ts}_${_rand}"
             {
-                echo "${name}<<${delimiter}"
-                echo "$value"
-                echo "${delimiter}"
-            } >> "$GITHUB_ENV"
+                printf '%s\n' "${name}<<${delimiter}"
+                printf '%s\n' "${value}"
+                printf '%s\n' "${delimiter}"
+            } >> "${GITHUB_ENV}"
         else
-            echo "${name}=${value}" >> "$GITHUB_ENV"
+            printf '%s\n' "${name}=${value}" >> "${GITHUB_ENV}"
         fi
     else
         # Export in current shell
@@ -1230,8 +1249,8 @@ validate_required() {
 
     for var_name in "$@"; do
         local value="${!var_name:-}"
-        if [[ -z "$value" ]]; then
-            missing+=("$var_name")
+        if [[ -z "${value}" ]]; then
+            missing+=("${var_name}")
         fi
     done
 
@@ -1251,15 +1270,16 @@ validate_array() {
     shift
 
     # Ensure the validator is actually a declared function (not an arbitrary command)
-    if ! declare -f "$validator" > /dev/null 2>&1; then
-        validation_error "Unknown validator function: $validator"
+    if ! declare -f "${validator}" > /dev/null 2>&1; then
+        validation_error "Unknown validator function: ${validator}"
         return 1
     fi
 
     local item
     for item in "$@"; do
-        if ! "$validator" "$item"; then
-            validation_error "Array validation failed for item: $item"
+        # shellcheck disable=SC2310
+        if ! "${validator}" "${item}"; then
+            validation_error "Array validation failed for item: ${item}"
             return 1
         fi
     done

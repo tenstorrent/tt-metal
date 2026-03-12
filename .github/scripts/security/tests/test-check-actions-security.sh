@@ -10,29 +10,29 @@ failed=0
 case_index=0
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-SECURITY_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
-CHECKER="$SECURITY_DIR/check-actions-security.sh"
-PARALLEL_CHECKER="$SECURITY_DIR/check-actions-security-parallel.sh"
+SECURITY_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
+CHECKER="${SECURITY_DIR}/check-actions-security.sh"
+PARALLEL_CHECKER="${SECURITY_DIR}/check-actions-security-parallel.sh"
 TMP_DIR="$(mktemp -d)"
 
 cleanup() {
-    rm -rf "$TMP_DIR"
+    rm -rf "${TMP_DIR}"
 }
 trap cleanup EXIT
 
 test_pass() {
-    echo "  PASS: $1"
+    printf '%s\n' "  PASS: $1"
     ((passed++)) || true
 }
 
 test_fail() {
-    echo "  FAIL: $1"
+    printf '%s\n' "  FAIL: $1"
     ((failed++)) || true
 }
 
 next_case_file() {
     ((case_index++)) || true
-    echo "$TMP_DIR/case-${case_index}.yaml"
+    printf '%s\n' "${TMP_DIR}/case-${case_index}.yaml"
 }
 
 assert_detects() {
@@ -43,14 +43,14 @@ assert_detects() {
     local output
 
     file="$(next_case_file)"
-    cat > "$file"
+    cat > "${file}"
 
-    output=$(bash "$CHECKER" --strict -c "$checks" "$file" 2>&1 || true)
-    if [[ "$output" == *"$expected"* ]]; then
-        test_pass "$description"
+    output=$(bash "${CHECKER}" --strict -c "${checks}" "${file}" 2>&1 || true)
+    if [[ "${output}" == *"${expected}"* ]]; then
+        test_pass "${description}"
     else
-        test_fail "$description (expected output to contain '$expected')"
-        echo "$output"
+        test_fail "${description} (expected output to contain '${expected}')"
+        printf '%s\n' "${output}"
     fi
 }
 
@@ -62,27 +62,27 @@ assert_clean() {
     local status
 
     file="$(next_case_file)"
-    cat > "$file"
+    cat > "${file}"
 
-    output=$(bash "$CHECKER" --strict -c "$checks" "$file" 2>&1)
+    output=$(bash "${CHECKER}" --strict -c "${checks}" "${file}" 2>&1)
     status=$?
-    if [[ $status -eq 0 && "$output" == *"No security issues found!"* ]]; then
-        test_pass "$description"
+    if [[ ${status} -eq 0 && "${output}" == *"No security issues found!"* ]]; then
+        test_pass "${description}"
     else
-        test_fail "$description (expected clean run)"
-        echo "$output"
+        test_fail "${description} (expected clean run)"
+        printf '%s\n' "${output}"
     fi
 }
 
 assert_parallel_detects() {
     local description="$1"
     local expected="$2"
-    local bad_file="$TMP_DIR/parallel-bad.yaml"
-    local good_file="$TMP_DIR/parallel-good.yaml"
+    local bad_file="${TMP_DIR}/parallel-bad.yaml"
+    local good_file="${TMP_DIR}/parallel-good.yaml"
     local output
 
-    cat > "$bad_file"
-    cat > "$good_file" <<'EOF'
+    cat > "${bad_file}"
+    cat > "${good_file}" <<'EOF'
 name: good
 on: push
 jobs:
@@ -92,12 +92,12 @@ jobs:
       - run: echo hi
 EOF
 
-    output=$(bash "$PARALLEL_CHECKER" --strict "$bad_file" "$good_file" 2>&1 || true)
-    if [[ "$output" == *"$expected"* ]]; then
-        test_pass "$description"
+    output=$(bash "${PARALLEL_CHECKER}" --strict "${bad_file}" "${good_file}" 2>&1 || true)
+    if [[ "${output}" == *"${expected}"* ]]; then
+        test_pass "${description}"
     else
-        test_fail "$description (expected output to contain '$expected')"
-        echo "$output"
+        test_fail "${description} (expected output to contain '${expected}')"
+        printf '%s\n' "${output}"
     fi
 }
 
@@ -1696,9 +1696,9 @@ jobs:
       - run: echo test
 EOF
 
-echo ""
-echo "Results: $passed passed, $failed failed"
+printf '\n'
+printf '%s\n' "Results: ${passed} passed, ${failed} failed"
 
-if [[ $failed -ne 0 ]]; then
+if [[ ${failed} -ne 0 ]]; then
     exit 1
 fi
