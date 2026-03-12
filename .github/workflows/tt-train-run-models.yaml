@@ -122,7 +122,7 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          path: /work/build/tt-train/generated_metrics
+          path: /work/generated_metrics
           prefix: "metrics_"
 
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
