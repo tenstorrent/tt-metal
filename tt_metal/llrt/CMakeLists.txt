@@ -27,6 +27,7 @@ target_link_libraries(
         enchantum::enchantum
         TT::Metalium::Common
         tt-logger::tt-logger
+        Metalium::Metal::Hardware
 )
 target_include_directories(llrt PUBLIC .)
 target_compile_options(llrt PRIVATE -Wno-int-to-pointer-cast)
