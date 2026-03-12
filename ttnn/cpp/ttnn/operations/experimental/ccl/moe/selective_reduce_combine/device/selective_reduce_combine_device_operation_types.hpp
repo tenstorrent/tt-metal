@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <tt_stl/reflection.hpp>
 
 #include <cstdint>
 #include <optional>
@@ -54,7 +55,7 @@ struct SelectiveReduceCombineParams {
 
 struct SelectiveReduceCombineTensors {
     ttnn::Tensor dense_input_tensor;
-    ttnn::Tensor dense_metadata_tensor;
+    ttnn::Tensor dense_activations_tensor;
     ttnn::Tensor dense_token_maps_tensor;
     ttnn::Tensor dense_token_counts_tensor;
     std::optional<ttnn::Tensor> optional_output_tensor;

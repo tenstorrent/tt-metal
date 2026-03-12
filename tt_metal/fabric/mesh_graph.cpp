@@ -15,6 +15,8 @@
 #include <iomanip>
 #include <optional>
 
+#include <tt_stl/fmt.hpp>
+#include <tt_stl/reflection.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include <llrt/tt_cluster.hpp>
@@ -24,7 +26,7 @@
 #include <tt_stl/caseless_comparison.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph_descriptor.hpp>
-#include "physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include "protobuf/mesh_graph_descriptor.pb.h"
 #include <numeric>
 #include <set>
@@ -32,7 +34,7 @@
 
 // Implementation of hash function for port_id_t
 std::size_t std::hash<tt::tt_fabric::port_id_t>::operator()(const tt::tt_fabric::port_id_t& p) const {
-    return tt::stl::hash::hash_objects_with_default_seed(p.first, p.second);
+    return ttsl::hash::hash_objects_with_default_seed(p.first, p.second);
 }
 
 namespace tt::tt_fabric {
@@ -58,7 +60,9 @@ RoutingDirection routing_direction_to_port_direction(const proto::RoutingDirecti
         case proto::RoutingDirection::W: return RoutingDirection::W;
         case proto::RoutingDirection::C: return RoutingDirection::C;
         case proto::RoutingDirection::NONE: return RoutingDirection::NONE;
-        default: TT_THROW("Invalid routing direction: {}", routing_direction);
+        default: TT_THROW(
+            "Invalid routing direction: {}",
+            static_cast<std::underlying_type_t<proto::RoutingDirection>>(routing_direction));
     }
 }
 
@@ -248,7 +252,7 @@ void MeshGraph::initialize_from_mgd(
 
     this->inter_mesh_connectivity_.resize(total_mesh_count);
 
-    // This is to make sure emtpy elements are filled
+    // This is to make sure empty elements are filled
     for (const auto& mesh : mgd.all_meshes()) {
         const auto& mesh_instance = mgd.get_instance(mesh);
         this->inter_mesh_connectivity_[mesh_instance.local_id].resize(mesh_instance.sub_instances.size());
@@ -1060,7 +1064,10 @@ std::filesystem::path MeshGraph::get_mesh_graph_descriptor_path_for_cluster_type
         }
     }
 
-    TT_THROW("Cannot find mesh graph descriptor for fabric type {} and cluster type {}", fabric_type, cluster_type);
+    TT_THROW(
+        "Cannot find mesh graph descriptor for fabric type {} and cluster type {}",
+        enchantum::to_string(fabric_type),
+        enchantum::to_string(cluster_type));
 }
 
 }  // namespace tt::tt_fabric

@@ -10,9 +10,7 @@
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include "tt_cluster.hpp"
-#include "tt_metal/fabric/topology_solver_internal.hpp"
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
-#include "tt_metal/fabric/serialization/physical_system_descriptor_serialization.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/mock_device.hpp>
 
 namespace tt::tt_fabric {
@@ -115,6 +113,83 @@ TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalWithSwitch) {
     EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes total (1 compute + 1 switch)";
     EXPECT_EQ(compute_mesh_count, 1u) << "Should have 1 compute mesh (mesh_id 0)";
     EXPECT_EQ(switch_mesh_count, 1u) << "Should have 1 switch mesh (mesh_id 1)";
+}
+
+TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor) {
+    // Use 2x2 T3K multiprocess MGD (has 2 compute meshes: mesh_id 0 and 1)
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
+
+    // Create mesh graph from descriptor
+    auto mesh_graph_descriptor = MeshGraphDescriptor(mesh_graph_desc_path);
+    auto mesh_graph = MeshGraph(cluster_type, mesh_graph_desc_path.string());
+
+    // Build adjacency map logical (includes all meshes, including switches if present)
+    auto adjacency_map = build_adjacency_graph_logical(mesh_graph_descriptor);
+    auto adjacency_map_from_graph = build_adjacency_graph_logical(mesh_graph);
+
+    for (const auto& [mesh_id, adj_graph] : adjacency_map) {
+        ASSERT_TRUE(adjacency_map_from_graph.contains(mesh_id))
+            << "Mesh " << mesh_id.get() << " should exist in adjacency map from graph";
+        const auto& adj_graph_from_graph = adjacency_map_from_graph.find(mesh_id)->second;
+        EXPECT_EQ(adj_graph.get_nodes().size(), adj_graph_from_graph.get_nodes().size())
+            << "Mesh " << mesh_id.get() << " should have the same number of nodes";
+        for (int i = 0; i < adj_graph.get_nodes().size(); i++) {
+            EXPECT_EQ(
+                adj_graph.get_neighbors(adj_graph.get_nodes()[i]).size(),
+                adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).size())
+                << "Mesh " << mesh_id.get() << " should have the same number of neighbors for node "
+                << adj_graph.get_nodes()[i];
+        }
+    }
+
+    // For T3K 2x2 multiprocess, we expect 2 meshes (mesh_id 0 and 1)
+    // Note: This includes all meshes returned by get_all_mesh_ids() (compute meshes and switches if present)
+    EXPECT_EQ(adjacency_map.size(), 2u) << "Should have 2 meshes (mesh_id 0 and 1)";
+}
+
+TEST_F(TopologySolverTest, BuildAdjacencyMapLogicalFromDescriptor2) {
+    const char* tt_metal_home = std::getenv("TT_METAL_HOME");
+    ASSERT_NE(tt_metal_home, nullptr) << "TT_METAL_HOME environment variable must be set";
+    const std::filesystem::path mesh_graph_desc_path =
+        std::filesystem::path(tt_metal_home) /
+        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_8x2_mesh_graph_descriptor.textproto";
+
+    // Create mesh graph from descriptor
+    auto mesh_graph_descriptor = MeshGraphDescriptor(mesh_graph_desc_path);
+    auto mesh_graph = MeshGraph(cluster_type, mesh_graph_desc_path.string());
+
+    // Build adjacency map logical (includes all meshes, including switches if present)
+    auto adjacency_map = build_adjacency_graph_logical(mesh_graph_descriptor);
+    auto adjacency_map_from_graph = build_adjacency_graph_logical(mesh_graph);
+
+    for (const auto& [mesh_id, adj_graph] : adjacency_map) {
+        ASSERT_TRUE(adjacency_map_from_graph.contains(mesh_id))
+            << "Mesh " << mesh_id.get() << " should exist in adjacency map from graph";
+        const auto& adj_graph_from_graph = adjacency_map_from_graph.find(mesh_id)->second;
+        EXPECT_EQ(adj_graph.get_nodes().size(), adj_graph_from_graph.get_nodes().size())
+            << "Mesh " << mesh_id.get() << " should have the same number of nodes";
+        for (int i = 0; i < adj_graph.get_nodes().size(); i++) {
+            EXPECT_EQ(
+                adj_graph.get_neighbors(adj_graph.get_nodes()[i]).size(),
+                adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).size())
+                << "Mesh " << mesh_id.get() << " should have the same number of neighbors for node "
+                << adj_graph.get_nodes()[i];
+
+            for (const auto& neighbor : adj_graph.get_neighbors(adj_graph.get_nodes()[i])) {
+                EXPECT_TRUE(
+                    std::find(
+                        adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).begin(),
+                        adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).end(),
+                        neighbor) != adj_graph_from_graph.get_neighbors(adj_graph_from_graph.get_nodes()[i]).end())
+                    << "Mesh " << mesh_id.get() << " should have neighbor " << neighbor << " for node "
+                    << adj_graph.get_nodes()[i];
+            }
+        }
+    }
 }
 
 TEST_F(TopologySolverTest, BuildAdjacencyMapPhysical) {
@@ -2796,6 +2871,89 @@ TEST_F(TopologySolverTest, MappingConstraintsManyToMany) {
     EXPECT_FALSE(constraints.is_valid_mapping(1, 20));  // Not in global_nodes set
     EXPECT_FALSE(
         constraints.is_valid_mapping(4, 10));  // Not in target_nodes set (but constraint still applies if queried)
+}
+
+// Same-group constraint: target groups map within global group boundaries (no splitting).
+// Multiple target groups may share one global group.
+TEST_F(TopologySolverTest, SolveTopologyMapping_SameGroupConstraint_Basic) {
+    // Chain 1-2-3-4; groups {1,2}, {3,4} -> globals {10,11}, {12,13}
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    target_adj[1] = {2};
+    target_adj[2] = {1, 3};
+    target_adj[3] = {2, 4};
+    target_adj[4] = {3};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    global_adj[10] = {11};
+    global_adj[11] = {10, 12};
+    global_adj[12] = {11, 13};
+    global_adj[13] = {12};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1, 2}, {3, 4}},
+        std::vector<std::set<TestGlobalNode>>{{10, 11}, {12, 13}});
+
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    ASSERT_TRUE(result.success) << result.error_message;
+
+    TestGlobalNode g1 = result.target_to_global.at(1), g2 = result.target_to_global.at(2);
+    TestGlobalNode g3 = result.target_to_global.at(3), g4 = result.target_to_global.at(4);
+    bool grp0_first = (g1 == 10 || g1 == 11) && (g2 == 10 || g2 == 11);
+    bool grp1_first = (g3 == 10 || g3 == 11) && (g4 == 10 || g4 == 11);
+    EXPECT_NE(grp0_first, grp1_first) << "Each target group stays within one global group";
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_SameGroupConstraint_SharedGlobalGroup) {
+    // {1} {2} map to {1,3,2}: multiple target groups may share one global group; no boundary breaking
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    target_adj[1] = {2};
+    target_adj[2] = {1};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    global_adj[1] = {3};
+    global_adj[3] = {1, 2};
+    global_adj[2] = {3};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1}, {2}}, std::vector<std::set<TestGlobalNode>>{{1, 3, 2}});
+
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    ASSERT_TRUE(result.success) << result.error_message;
+
+    // Both targets in same global group; chain 1-2 maps to path in 1-3-2
+    EXPECT_TRUE(
+        (result.target_to_global.at(1) == 1 && result.target_to_global.at(2) == 3) ||
+        (result.target_to_global.at(1) == 3 && result.target_to_global.at(2) == 1) ||
+        (result.target_to_global.at(1) == 3 && result.target_to_global.at(2) == 2) ||
+        (result.target_to_global.at(1) == 2 && result.target_to_global.at(2) == 3));
+}
+
+TEST_F(TopologySolverTest, SolveTopologyMapping_SameGroupConstraint_SplittingTargetGroupRejected) {
+    // [1,2,3] must stay together; globals {10},{11},{12} force splitting -> should fail
+    AdjacencyGraph<TestTargetNode>::AdjacencyMap target_adj;
+    target_adj[1] = {2};
+    target_adj[2] = {1, 3};
+    target_adj[3] = {2};
+    AdjacencyGraph<TestTargetNode> target_graph(target_adj);
+
+    AdjacencyGraph<TestGlobalNode>::AdjacencyMap global_adj;
+    global_adj[10] = {11};
+    global_adj[11] = {10, 12};
+    global_adj[12] = {11};
+    AdjacencyGraph<TestGlobalNode> global_graph(global_adj);
+
+    MappingConstraints<TestTargetNode, TestGlobalNode> constraints;
+    constraints.set_same_rank_groups_constraint(
+        std::vector<std::set<TestTargetNode>>{{1, 2, 3}}, std::vector<std::set<TestGlobalNode>>{{10}, {11}, {12}});
+
+    auto result = solve_topology_mapping(target_graph, global_graph, constraints, ConnectionValidationMode::RELAXED);
+    ASSERT_FALSE(result.success) << "Target group {1,2,3} cannot be split across global groups {10},{11},{12}";
 }
 
 TEST_F(TopologySolverTest, MappingConstraintsManyToManyIntersection) {

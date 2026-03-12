@@ -17,9 +17,8 @@
 #include <tt-metalium/program_cache.hpp>
 #include <tracy/Tracy.hpp>
 #include "tools/profiler/op_profiler.hpp"
-#include <tt_stl/reflection.hpp>
 #include <tt_stl/concepts.hpp>
-#include <tt-metalium/graph_tracking.hpp>
+#include "ttnn/graph/graph_serialization.hpp"
 #include "ttnn/graph/graph_processor.hpp"
 #include "ttnn/core.hpp"
 #include "ttnn/distributed/api.hpp"
@@ -30,6 +29,7 @@
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/device_operation_detail.hpp"
 
 namespace ttnn::device_operation {
 
@@ -189,7 +189,8 @@ void enqueue_mesh_workload(
     [[maybe_unused]] const typename mesh_device_operation_t::tensor_args_t& tensor_args,
     [[maybe_unused]] typename mesh_device_operation_t::tensor_return_value_t& tensor_return_value,
     distributed::MeshDevice* mesh_device,
-    tt::tt_metal::distributed::MeshWorkload& workload) {
+    tt::tt_metal::distributed::MeshWorkload& workload,
+    [[maybe_unused]] bool program_cache_hit = false) {
     mesh_device_operation_utils::set_runtime_id(workload);
     if (mesh_device_operation_utils::track_workload(workload, mesh_device)) {
         return;
@@ -197,7 +198,13 @@ void enqueue_mesh_workload(
     tt::tt_metal::distributed::EnqueueMeshWorkload(mesh_device->mesh_command_queue(), workload, false);
 
     TracyOpMeshWorkload(
-        mesh_device, workload, mesh_device_operation_t{}, operation_attributes, tensor_args, tensor_return_value);
+        mesh_device,
+        workload,
+        mesh_device_operation_t{},
+        operation_attributes,
+        tensor_args,
+        tensor_return_value,
+        program_cache_hit);
 }
 
 // Dispatches `fn` to `program_factory` through either the `MeshWorkloadFactoryConcept` directly, or through the adapted
@@ -245,38 +252,29 @@ void handle_mesh_adapter_cache_hit(
                 cached_mesh_workload, operation_attributes, tensor_args, tensor_return_value);
 
             enqueue_mesh_workload<mesh_device_operation_t>(
-                operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_mesh_workload.workload);
+                operation_attributes,
+                tensor_args,
+                tensor_return_value,
+                mesh_device,
+                cached_mesh_workload.workload,
+                true);
         });
 }
 
-// Helper for logging operation info to inspector
+// Helper for logging operation info to inspector.
+// Extracts tensors from the templated tensor_args and delegates to the non-template implementation
+// in device_operation_detail.cpp to reduce per-operation template instantiation cost.
 template <DeviceOperationConcept mesh_device_operation_t>
 void emit_mesh_workload_annotation(
     tt::tt_metal::distributed::MeshWorkload& workload,
     const typename mesh_device_operation_t::operation_attributes_t& operation_attributes,
     const typename mesh_device_operation_t::tensor_args_t& tensor_args) {
-
     if (tt::tt_metal::experimental::inspector::IsEnabled()) {
         auto operation_name = get_operation_name<mesh_device_operation_t>(operation_attributes);
-
-        auto index = 0;
-        // tensor args - format as comma-separated list
-        constexpr size_t TENSOR_ARGS_BUFFER_SIZE = 4096;
-        fmt::memory_buffer tensor_args_buffer;
-        tensor_args_buffer.reserve(TENSOR_ARGS_BUFFER_SIZE);  // Will grow if needed
-
+        std::vector<std::reference_wrapper<const Tensor>> tensors;
         tt::stl::reflection::visit_object_of_type<Tensor>(
-            [&index, &tensor_args_buffer](const Tensor& tensor) {
-                if (index > 0) {
-                    fmt::format_to(std::back_inserter(tensor_args_buffer), ", ");
-                }
-                fmt::format_to(std::back_inserter(tensor_args_buffer), "[{}]: {}", index, tensor);
-                index++;
-            },
-            tensor_args);
-
-        tt::tt_metal::experimental::inspector::EmitMeshWorkloadAnnotation(
-            workload, operation_name, std::string_view(tensor_args_buffer.data(), tensor_args_buffer.size()));
+            [&tensors](const Tensor& t) { tensors.push_back(std::cref(t)); }, tensor_args);
+        emit_mesh_workload_annotation_impl(workload, operation_name, tensors);
     }
 }
 
@@ -338,10 +336,18 @@ void create_and_cache_mesh_workload(
                 auto& cached_program_factory = program_cache.get(program_hash);
                 auto& workload = cached_program_factory.cached_program.template get<cached_mesh_workload_t>().workload;
                 enqueue_mesh_workload<mesh_device_operation_t>(
-                    operation_attributes, tensor_args, tensor_return_value, mesh_device, workload);
+                    operation_attributes,
+                    tensor_args,
+                    tensor_return_value,
+                    mesh_device,
+                    workload);
             } else {
                 enqueue_mesh_workload<mesh_device_operation_t>(
-                    operation_attributes, tensor_args, tensor_return_value, mesh_device, cached_workload.workload);
+                    operation_attributes,
+                    tensor_args,
+                    tensor_return_value,
+                    mesh_device,
+                    cached_workload.workload);
             }
         });
 }
@@ -390,124 +396,9 @@ void launch_operation_with_adapter(
     }
 }
 
-// Returns true if the tensor is fully replicated, false otherwise.
-inline bool is_fully_replicated(const Tensor& tensor) {
-    for (const auto& placement : tensor.tensor_topology().placements()) {
-        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placement)) {
-            return false;
-        }
-    }
-    return true;
-}
-
-// Default TensorTopology for output tensors is determined only by the input tensors with the highest distribution rank
-// (highest number of dimensions). The output tensor will have the same distribution rank as these input tensors, taking
-// the max strides of all input tensors. The placement for each distribution dimension will be Shard if at least one
-// input tensor has a Shard placement for that dimension, otherwise it will be Replicate. Duplicate Shard placements are
-// disallowed, Replicate is used instead. If two input tensors shard different tensor dimensions across the same
-// distribution dimension, the earlier-seen shard dimension is kept.
-template <DeviceOperationConcept device_operation_t>
-std::pair<
-    tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
-    tt::tt_metal::distributed::MeshShape>
-get_output_placements_and_shape(
-    const typename device_operation_t::tensor_args_t& tensor_args, const Tensor& first_tensor) {
-    std::vector<Tensor> sharded_tensors;
-    tt::stl::reflection::visit_object_of_type<Tensor>(
-        [&](const Tensor& tensor) {
-            if (!is_fully_replicated(tensor)) {
-                sharded_tensors.push_back(tensor);
-            }
-        },
-        tensor_args);
-
-    // Compute max distribution rank: use only sharded tensors if they exist, otherwise use all tensors (fully
-    // replicated)
-    size_t max_distribution_rank = 0;
-    if (!sharded_tensors.empty()) {
-        tt::stl::reflection::visit_object_of_type<Tensor>(
-            [&](const Tensor& tensor) {
-                max_distribution_rank =
-                    std::max(max_distribution_rank, tensor.tensor_topology().distribution_shape().dims());
-            },
-            sharded_tensors);
-    } else {
-        max_distribution_rank = first_tensor.tensor_topology().distribution_shape().dims();
-    }
-
-    auto result_strides = tt::stl::SmallVector<uint32_t>(max_distribution_rank, 1);
-    auto result_placements = tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>(
-        max_distribution_rank, tt::tt_metal::distributed::MeshMapperConfig::Replicate{});
-    std::unordered_map<int, int> shard_dim_to_distribution_dim;
-    bool dim_mismatch = false;
-
-    // TODO: #25340 - Add back logging / validation. Currently, this results in a lot of log spam.
-    constexpr bool kEnableLogging = false;
-    tt::stl::reflection::visit_object_of_type<Tensor>(
-        [&](const Tensor& tensor) {
-            // Augment output tensor distribution shape with the max strides of all input tensors with the max
-            // distribution rank
-            const auto& tensor_distribution_shape = tensor.tensor_topology().distribution_shape();
-            if (tensor_distribution_shape.dims() == max_distribution_rank) {
-                for (int i = 0; i < std::min(result_strides.size(), tensor_distribution_shape.dims()); i++) {
-                    result_strides[i] = std::max(result_strides[i], tensor_distribution_shape[i]);
-                }
-
-                const auto& tensor_placements = tensor.tensor_topology().placements();
-                for (int i = 0; i < tensor_placements.size(); i++) {
-                    tt::tt_metal::distributed::MeshMapperConfig::Placement output_placement = result_placements[i];
-                    if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(
-                            tensor_placements[i])) {
-                        auto new_shard_placement =
-                            std::get<tt::tt_metal::distributed::MeshMapperConfig::Shard>(tensor_placements[i]);
-
-                        // Only shard if the tensor dimension is not already sharded
-                        if (!shard_dim_to_distribution_dim.contains(new_shard_placement.dim)) {
-                            shard_dim_to_distribution_dim.insert({new_shard_placement.dim, i});
-                            if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(
-                                    output_placement)) {
-                                auto existing_shard_placement =
-                                    std::get<tt::tt_metal::distributed::MeshMapperConfig::Shard>(output_placement);
-
-                                // If a different tensor dim is sharded across this distribution dim, keep the
-                                // earliest-seen shard dimension.
-                                if (new_shard_placement.dim != existing_shard_placement.dim && kEnableLogging) {
-                                    log_warning(
-                                        tt::LogOp,
-                                        "Output tensor cannot shard different tensor dimensions across the same "
-                                        "distribution "
-                                        "dimension: tensor dims {} (kept) and {} (ignored) across distribution dim {}",
-                                        existing_shard_placement.dim,
-                                        new_shard_placement.dim,
-                                        i);
-                                }
-                                continue;
-                            }
-                            output_placement = new_shard_placement;
-                        } else if (shard_dim_to_distribution_dim.at(new_shard_placement.dim) != i && kEnableLogging) {
-                            log_warning(
-                                tt::LogOp,
-                                "Duplicate tensor shard dimension {} across distribution dim {} replaced with "
-                                "Replicate",
-                                new_shard_placement.dim,
-                                i);
-                        }
-                    }
-                    result_placements[i] = output_placement;
-                }
-            } else if (!is_fully_replicated(tensor)) {
-                dim_mismatch = true;
-            }
-        },
-        tensor_args);
-    if (dim_mismatch && kEnableLogging) {
-        log_warning(
-            tt::LogOp,
-            "Input tensors have different distribution ranks, only imputing output tensor topology with tensors that "
-            "have the max distribution rank");
-    }
-    return {result_placements, tt::tt_metal::distributed::MeshShape(result_strides)};
-}
+// get_output_placements_and_shape has been factored into the non-template function
+// compute_output_placements_and_shape() in device_operation_detail.hpp/cpp.
+// This eliminates ~100 lines of template code that was instantiated per operation type.
 
 template <DeviceOperationConcept device_operation_t>
 ttnn::MeshDevice* get_mesh_device(
@@ -595,9 +486,10 @@ typename device_operation_t::tensor_return_value_t launch(
                 },
                 tensor_return_value);
         } else {
-            // Fall back to default topology imputation
+            // Fall back to default topology imputation.
+            // Uses the pre-extracted input_tensors to avoid re-visiting the templated tensor_args struct.
             auto output_topology_result =
-                detail::get_output_placements_and_shape<device_operation_t>(tensor_args, first_tensor.value());
+                detail::compute_output_placements_and_shape(input_tensors, first_tensor.value());
 
             tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
                 [&output_topology_result](const Tensor& output_tensor) {

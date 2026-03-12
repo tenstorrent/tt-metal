@@ -9,6 +9,7 @@
 
 #include "llrt/hal.hpp"
 #include "tt_metal/impl/dispatch/device_command.hpp"
+#include <numeric>
 
 struct CQDispatchWritePackedCmd;
 

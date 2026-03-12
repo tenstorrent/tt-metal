@@ -15,12 +15,11 @@
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "device_fixture.hpp"
 #include "multi_device_fixture.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 
 namespace tt::tt_metal {
@@ -61,6 +60,7 @@ TEST_F(MeshDeviceFixture, TensixTestTwentyThousandCompileTimeArgs) {
                 .compile_args = compile_time_args,
                 .defines = defines});
         distributed::EnqueueMeshWorkload(cq, workload, false);
+        distributed::Finish(cq);
 
         const std::vector<uint32_t> compile_time_args_expected{
             std::accumulate(compile_time_args.begin(), compile_time_args.end(), 0u)};

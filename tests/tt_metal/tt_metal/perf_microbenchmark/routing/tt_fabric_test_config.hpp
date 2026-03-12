@@ -462,8 +462,6 @@ private:
 
     uint32_t calculate_core_sweep_iterations(const ParsedTestConfig& p_config, uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations);
 
-    void parametrize_core_sweep_test_name(ParsedTestConfig& iteration_test, uint32_t sender_core_sweep_iterations, uint32_t dest_core_sweep_iterations, uint32_t sender_core_idx, uint32_t dest_core_idx, const std::vector<tt::tt_metal::CoreCoord>& all_cores, uint32_t iteration_num);
-
     std::vector<ParsedTestConfig> expand_parametrizations(const ParsedTestConfig& raw_config);
 
     void validate_pattern(const TrafficPatternConfig& pattern, const TestConfig& test) const;
@@ -518,6 +516,11 @@ private:
         const ParsedTrafficPatternConfig& base_pattern);
 
     void split_all_unicast_or_multicast_patterns(ParsedTestConfig& test);
+
+    // In benchmark mode, split senders that would require multiple fabric connections
+    // into separate senders (one per routing direction) so each worker feeds exactly
+    // one fabric connection. This prevents the worker from becoming the bottleneck.
+    void split_senders_by_direction_for_benchmark(ParsedTestConfig& test);
 
     bool expand_link_duplicates(ParsedTestConfig& test);
 

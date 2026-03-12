@@ -34,7 +34,6 @@
 #include <tt_stl/assert.hpp>
 #include "buffer.hpp"
 #include "core_coord.hpp"
-#include "data_types.hpp"
 #include "hal_types.hpp"
 #include "hostdevcommon/profiler_common.h"
 #include "context/metal_context.hpp"
@@ -497,7 +496,7 @@ void setSyncInfo(
 }
 
 void syncAllDevices(ChipId host_connected_device) {
-    // Check if profiler on host connected device is initilized
+    // Check if profiler on host connected device is initialized
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
         MetalContext::instance().profiler_state_manager();
     if (!profiler_state_manager->device_profiler_map.contains(host_connected_device)) {
@@ -529,7 +528,7 @@ void syncAllDevices(ChipId host_connected_device) {
             double receiverSquareSum = 0;
             double senderReceiverProductSum = 0;
 
-            // Direct computation causes large error because sqaure of clock is very big
+            // Direct computation causes large error because square of clock is very big
             // So apply linear regression on shifted values
             uint64_t senderBase = 0;
             uint64_t receiverBase = 0;
@@ -1150,8 +1149,12 @@ void ReadMeshDeviceProfilerResults(
             profiler_state_manager->signal_debug_dump_read();
         }
         if (auto& noc_debug_state = MetalContext::instance().noc_debug_state()) {
+            noc_debug_state->process_accumulated_events_all_chips();
             noc_debug_state->finish_cores();
-            noc_debug_state->print_aggregated_errors();
+            // Only print when called by the user (state == normal) to avoid duplicate printing
+            if (state != ProfilerReadState::LAST_FD_READ) {
+                noc_debug_state->print_aggregated_errors();
+            }
         }
         return;
     }

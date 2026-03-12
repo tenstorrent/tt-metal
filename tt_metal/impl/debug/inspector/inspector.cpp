@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include "inspector.hpp"
 #include "impl/context/metal_context.hpp"
 #include "impl/debug/inspector/data.hpp"
@@ -505,6 +506,37 @@ void Inspector::set_build_env_fw_compile_hash(const uint64_t fw_compile_hash) {
     } catch (const std::exception& e) {
         TT_INSPECTOR_LOG("Failed to set FW compile hash: {}", e.what());
     }
+}
+
+std::string Inspector::get_kernel_path_from_watcher_kernel_id(int watcher_kernel_id) {
+    std::string elf_path;
+
+    if (!is_enabled()) {
+        return elf_path;
+    }
+    auto* data = get_inspector_data();
+    if (!data) {
+        // Inspector failed to initialize.
+        return elf_path;
+    }
+    try {
+        std::lock_guard<std::mutex> lock(data->programs_mutex);
+        auto program_id_it = data->kernel_id_to_program_id.find(watcher_kernel_id);
+        if (program_id_it != data->kernel_id_to_program_id.end()) {
+            auto program_id = data->kernel_id_to_program_id.at(watcher_kernel_id);
+            auto program_data_it = data->programs_data.find(program_id);
+            if (program_data_it != data->programs_data.end()) {
+                auto& program_data = program_data_it->second;
+                auto kernel_data_it = program_data.kernels.find(watcher_kernel_id);
+                if (kernel_data_it != program_data.kernels.end()) {
+                    elf_path = kernel_data_it->second.path;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        TT_INSPECTOR_LOG("Failed to get ELF path from watcher kernel ID {}: {}", watcher_kernel_id, e.what());
+    }
+    return elf_path;
 }
 
 namespace experimental::inspector {

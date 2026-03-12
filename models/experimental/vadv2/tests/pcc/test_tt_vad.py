@@ -17,6 +17,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.experimental.vadv2.common import load_torch_model
 
 
+@pytest.mark.timeout(600)
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 20 * 1024}], indirect=True)
 def test_vadv2(
     device,

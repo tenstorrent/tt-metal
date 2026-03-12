@@ -6,6 +6,9 @@
 
 #include <unordered_set>
 
+// UMD: EthCoord is a UMD type alias used in the private method
+// get_physical_chip_id_from_eth_coord(). No tt-metalium equivalent exists yet.
+#include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <tt-metalium/core_coord.hpp>
@@ -172,7 +175,7 @@ public:
     // Returns the distributed context with only one host.
     const std::shared_ptr<tt::tt_metal::distributed::multihost::DistributedContext>& get_host_local_context() const;
 
-    // Return valid ethernet channels on the specificed routing plane
+    // Return valid ethernet channels on the specified routing plane
     std::vector<chan_id_t> get_valid_eth_chans_on_routing_plane(
         FabricNodeId fabric_node_id, routing_plane_id_t routing_plane_id) const;
 

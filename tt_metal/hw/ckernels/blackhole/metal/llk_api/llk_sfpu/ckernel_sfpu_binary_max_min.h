@@ -20,6 +20,16 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
     uint offset1 = (dst_index_in1 * 32) << 1;
     uint offset2 = (dst_index_out * 32) << 1;
 
+#ifdef DISABLE_SFPLOADMACRO
+#pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        // Swap and store maximum in lreg1, minimum in lreg0
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset0);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_7, offset1);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        TT_SFPSTORE(IS_MAX_OP ? p_sfpu::LREG1 : p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, offset2);
+    }
+#else
     // This uses SFPLOADMACRO to achieve a throughput of 3 cycles per input row.
     //
     // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
@@ -47,6 +57,7 @@ inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_in
     TTI_SFPNOP;
     TTI_SFPNOP;
     TTI_SFPNOP;
+#endif
 }
 
 template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false, int ITERATIONS = 8>
@@ -56,6 +67,23 @@ inline void calculate_binary_max_min_int32(
     uint offset1 = (dst_index_in1 * 32) << 1;
     uint offset2 = (dst_index_out * 32) << 1;
 
+#ifdef DISABLE_SFPLOADMACRO
+#pragma GCC unroll 0
+    for (int d = 0; d < ITERATIONS; d++) {
+        // Swap and store maximum in lreg1, minimum in lreg0 (or reversed if unsigned)
+        TT_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_7, offset0);
+        TT_SFPLOAD(p_sfpu::LREG1, InstrModLoadStore::INT32, ADDR_MOD_7, offset1);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, IS_UNSIGNED ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+
+        // Conditionally swap again to fix the cases where SFPSWAP got the result backwards
+        TTI_SFPSETCC(0, p_sfpu::LREG0, 0, IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+        TTI_SFPSETCC(0, p_sfpu::LREG1, 0, IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPSWAP_MOD1_SWAP);
+        TTI_SFPENCC(0, 0, 0, 0);
+
+        TT_SFPSTORE(IS_MAX_OP ? p_sfpu::LREG1 : p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_6, offset2);
+    }
+#else
     // This uses SFPLOADMACRO to achieve a throughput of 5 cycles per input row.
     //
     // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
@@ -112,10 +140,12 @@ inline void calculate_binary_max_min_int32(
     }
 
     TTI_SFPNOP;
+#endif
 }
 
 template <bool IS_MAX_OP = true>
 inline void binary_max_min_init() {
+#ifndef DISABLE_SFPLOADMACRO
     constexpr int b = p_sfpu::LREG2;
 
     // InstructionTemplate[0]
@@ -154,10 +184,12 @@ inline void binary_max_min_init() {
     //   UnitDelayKind: {1,1}, (WaitForElapsedInstructions=1)
     // }
     TTI_SFPCONFIG(0x330, 8, 1);
+#endif
 }
 
 template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false>
 inline void binary_max_min_int32_init() {
+#ifndef DISABLE_SFPLOADMACRO
     constexpr int b0 = p_sfpu::LREG1;
     constexpr int b1 = p_sfpu::LREG3;
 
@@ -229,6 +261,7 @@ inline void binary_max_min_int32_init() {
     //   UnitDelayKind: {1,1,1,1}, (WaitForElapsedInstructions=1)
     // }
     TTI_SFPCONFIG(0xff0, 8, 1);
+#endif
 }
 
 }  // namespace sfpu

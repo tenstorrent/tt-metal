@@ -18,7 +18,30 @@ import logging
 from typing import Dict, List, Any, Optional, Tuple
 from dataclasses import dataclass
 from pathlib import Path
+
+# Add repo root and current dir to sys.path BEFORE dependent imports
+_current_file = os.path.abspath(__file__)
+_current_dir = os.path.dirname(_current_file)
+_repo_root = os.path.abspath(os.path.join(_current_dir, "..", ".."))
+if _repo_root not in sys.path:
+    sys.path.insert(0, _repo_root)
+
 from tests.sweep_framework.framework.constants import LEAD_MODELS
+
+
+# Inline lead_models_filter state (avoids dependency on untracked/separate module)
+class lead_models_filter:
+    _lead_models_only = os.environ.get("TTNN_LEAD_MODELS_ONLY", "").lower() in ("1", "true", "yes")
+
+    @classmethod
+    def set_lead_models_filter(cls, enabled: bool) -> None:
+        cls._lead_models_only = enabled
+        os.environ["TTNN_LEAD_MODELS_ONLY"] = "1" if enabled else "0"
+
+    @classmethod
+    def get_lead_models_filter(cls) -> bool:
+        return cls._lead_models_only
+
 
 # Set up logger
 logger = logging.getLogger(__name__)
@@ -32,21 +55,48 @@ try:
 except ImportError:
     # Fallback: define inline if generic_ops_tracer not found
     def get_base_dir():
-        """Get the tt-metal base directory from PYTHONPATH or current working directory"""
+        """Get the tt-metal base directory.
+
+        Resolution order:
+        1. Walk up from this script's location to find model_tracer/traced_operations
+        2. TT_METAL_HOME env var (validated to contain model_tracer/traced_operations)
+        3. PYTHONPATH entries
+        4. Current working directory
+        """
+        _marker = os.path.join("model_tracer", "traced_operations")
+
+        def _walk_up(start_dir):
+            current = os.path.abspath(start_dir)
+            while current != "/":
+                if os.path.isdir(os.path.join(current, _marker)):
+                    return current
+                parent = os.path.dirname(current)
+                if parent == current:
+                    break
+                current = parent
+            return None
+
+        script_dir = os.path.dirname(os.path.abspath(__file__))
+        base = _walk_up(script_dir)
+        if base:
+            return base
+
+        tt_metal_home = os.environ.get("TT_METAL_HOME", "").strip()
+        if tt_metal_home and os.path.isdir(os.path.join(tt_metal_home, _marker)):
+            return tt_metal_home
+
         pythonpath = os.environ.get("PYTHONPATH", "")
         if pythonpath:
-            paths = pythonpath.split(":")
-            for path in paths:
-                if "tt-metal" in path:
-                    if path.endswith("tt-metal"):
-                        return path
-                    parts = path.split("tt-metal")
-                    if parts:
-                        return parts[0] + "tt-metal"
+            for path in pythonpath.split(":"):
+                base = _walk_up(path)
+                if base:
+                    return base
+
         current_dir = os.getcwd()
-        if "tt-metal" in current_dir:
-            parts = current_dir.split("tt-metal")
-            return parts[0] + "tt-metal"
+        base = _walk_up(current_dir)
+        if base:
+            return base
+
         return current_dir
 
 
@@ -88,6 +138,10 @@ class MasterConfigLoader:
     # Mesh filter for server-side filtering (Phase 3)
     _mesh_filter: Optional[Tuple[int, int]] = None
 
+    # Override path for the master trace JSON file.
+    # When set, __init__ uses this instead of the hardcoded default paths.
+    _master_file_override: Optional[str] = None
+
     @classmethod
     def set_lead_models_filter(cls, enabled: bool) -> None:
         """Set the lead models filter.
@@ -100,12 +154,15 @@ class MasterConfigLoader:
             This must be called BEFORE importing sweep modules that use MasterConfigLoader,
             as the filtering happens at module load time when get_suite_parameters() is called.
         """
-        cls._lead_models_only = enabled
+        # Use shared global filter state
+        lead_models_filter.set_lead_models_filter(enabled)
+        cls._lead_models_only = enabled  # Keep for backwards compatibility
 
     @classmethod
     def get_lead_models_filter(cls) -> bool:
         """Get the current lead models filter setting."""
-        return cls._lead_models_only
+        # Read from shared global filter state
+        return lead_models_filter.get_lead_models_filter()
 
     @classmethod
     def set_database_mode(cls, enabled: bool) -> None:
@@ -145,6 +202,25 @@ class MasterConfigLoader:
     def get_mesh_filter(cls) -> Optional[Tuple[int, int]]:
         """Get the current mesh filter setting."""
         return cls._mesh_filter
+
+    @classmethod
+    def set_master_file_path(cls, path: Optional[str]) -> None:
+        """Override the default master trace JSON file path.
+
+        Args:
+            path: Absolute or relative path to a master trace JSON file.
+                  Set to None to revert to the built-in default resolution.
+
+        Note:
+            Must be called BEFORE importing sweep modules that instantiate
+            MasterConfigLoader, since the path is resolved at __init__ time.
+        """
+        cls._master_file_override = path
+
+    @classmethod
+    def get_master_file_path(cls) -> Optional[str]:
+        """Get the current master file path override (None means use defaults)."""
+        return cls._master_file_override
 
     @staticmethod
     def _parse_list_from_string(s: str) -> List:
@@ -260,26 +336,35 @@ class MasterConfigLoader:
         """Initialize the MasterConfigLoader for V2 format.
 
         Args:
-            master_file_path: Explicit path to JSON file. If None, uses ttnn_operations_master_v2.json
+            master_file_path: Explicit path to JSON file. If None, resolves in order:
+                1. Class-level override set via set_master_file_path()
+                2. ttnn_operations_master_v2_reconstructed.json (DB-reconstructed)
+                3. ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json (fresh trace)
+                4. None (degraded mode — empty configs)
         """
-        if master_file_path is None:
-            traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
-            v2_path = os.path.join(traced_dir, "ttnn_operations_master_v2.json")
-            reconstructed_v2_path = os.path.join(traced_dir, "ttnn_operations_master_v2_reconstructed.json")
+        if master_file_path is None and MasterConfigLoader._master_file_override is not None:
+            override = MasterConfigLoader._master_file_override
+            if os.path.exists(override):
+                logger.info(f"✅ Using master trace JSON from --master-trace: {override}")
+                master_file_path = override
+            else:
+                logger.error(f"❌ --master-trace path does not exist: {override}")
+                logger.error("Falling back to default master trace resolution.")
+                MasterConfigLoader._master_file_override = None
 
-            # Prefer reconstructed V2 if it exists (from database)
+        if master_file_path is None and MasterConfigLoader._master_file_override is None:
+            traced_dir = os.path.join(BASE_DIR, "model_tracer", "traced_operations")
+            reconstructed_v2_path = os.path.join(traced_dir, "ttnn_operations_master_v2_reconstructed.json")
+            default_trace_path = os.path.join(traced_dir, "ttnn_operations_master_UF_EV_B9_GWH01_deepseek.json")
+
             if os.path.exists(reconstructed_v2_path):
                 logger.info(f"✅ Using V2 reconstructed JSON from database: {reconstructed_v2_path}")
                 master_file_path = reconstructed_v2_path
-            elif os.path.exists(v2_path):
-                logger.info(f"✅ Using V2 JSON: {v2_path}")
-                master_file_path = v2_path
+            elif os.path.exists(default_trace_path):
+                logger.info(f"✅ Using fresh trace JSON: {default_trace_path}")
+                master_file_path = default_trace_path
             else:
-                logger.warning(f"⚠️  V2 JSON not found at {v2_path}")
-                logger.warning(
-                    f"   Please ensure ttnn_operations_master_v2.json exists in model_tracer/traced_operations/"
-                )
-                master_file_path = v2_path  # Set it anyway, will fail gracefully in load_master_data
+                master_file_path = None
 
         self.master_file_path = master_file_path
         self.master_data = None
@@ -292,6 +377,9 @@ class MasterConfigLoader:
         to allow the system to function in degraded mode (no traced configs).
         """
         if self.master_data is None:
+            if self.master_file_path is None:
+                self.master_data = {"operations": {}}
+                return
             try:
                 with open(self.master_file_path, "r") as f:
                     self.master_data = json.load(f)
@@ -396,8 +484,8 @@ class MasterConfigLoader:
             List of (arguments, source, machine_info, config_hash) tuples for traceability
         """
         # Check if we should filter for lead models only
-        # Uses class-level setting instead of environment variable for cleaner control
-        lead_models_only = MasterConfigLoader._lead_models_only
+        # Uses shared global filter state to work across V1 and V2 loaders
+        lead_models_only = lead_models_filter.get_lead_models_filter()
 
         normalized = []
         for config in configs:
@@ -693,8 +781,18 @@ class MasterConfigLoader:
         """
         traced_config_list = []
 
+        logger.debug(f"_get_generic_parameters processing {len(configs)} configs for {operation_name}")
+
         for config_args, source, machine_info, config_hash in configs:
             try:
+                # Convert config_args from list of dicts to single dict if needed
+                if isinstance(config_args, list):
+                    merged_args = {}
+                    for arg_dict in config_args:
+                        if isinstance(arg_dict, dict):
+                            merged_args.update(arg_dict)
+                    config_args = merged_args
+
                 config_dict = {}
                 positional_tensors = []
 
@@ -750,8 +848,13 @@ class MasterConfigLoader:
                 logger.warning(f"⚠️ Skipping config_hash={config_hash_display} due to error: {e}")
                 continue
 
-            # Skip if no tensors found
+            # If no tensors found, add a minimal entry with just the source info
+            # This ensures configs pass through even if tensor extraction fails
             if not positional_tensors:
+                config_dict["traced_source"] = source
+                config_dict["traced_machine_info"] = machine_info
+                config_dict["config_hash"] = config_hash
+                traced_config_list.append(config_dict)
                 continue
 
             # Add positional tensor parameters with consistent naming
@@ -787,6 +890,10 @@ class MasterConfigLoader:
                     config_dict[f"{key}_layout"] = parsed_layout
                     config_dict[f"{key}_memory_config"] = parsed_mem_config
                     config_dict[f"{key}_tensor_placement"] = tensor_config.tensor_placement
+                elif key == "memory_config" and isinstance(value, dict) and "memory_layout" in value:
+                    config_dict[key] = self.parse_memory_config(value)
+                elif isinstance(value, dict) and value.get("type") == "DataType":
+                    config_dict[key] = self.parse_dtype(value.get("repr", ""))
                 else:
                     # Scalar/bool kwarg - pass as-is (preserve name)
                     # Try enum parsing first, then float parsing

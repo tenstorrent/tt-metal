@@ -341,11 +341,11 @@ void kernel_main() {
                     uint32_t dst_index = 0;  // start at 0, each call to matmul_block internally increments dst_index
                     uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
                     uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
-                    // inner dim that we accumualte is the inner dim of in0/in1, which is in0_block_w
+                    // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
                     for (uint32_t inner_dim_idx = 0; inner_dim_idx < unpadded_in0_block_w; ++inner_dim_idx) {
                         // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                         // accumulation is done by iterating matmul_block across inner dim
-                        // in0_block_w is passed as innder dim (kt) to matmul_block, interally used to stride in0
+                        // in0_block_w is passed as innder dim (kt) to matmul_block, internally used to stride in0
                         matmul_block(
                             input0_cb_id,
                             in1_cb_id,

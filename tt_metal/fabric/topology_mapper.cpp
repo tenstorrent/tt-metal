@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include <tt-metalium/experimental/fabric/topology_mapper.hpp>
 
 #include <algorithm>
@@ -9,16 +10,16 @@
 #include <unordered_set>
 #include <limits>
 #include <functional>
+#include <numeric>
 #include <optional>
 #include <tuple>
 #include <map>
 
 #include <tt-logger/tt-logger.hpp>
-#include "tt_metal/fabric/physical_system_descriptor.hpp"
+#include <tt-metalium/experimental/fabric/physical_system_descriptor.hpp>
 #include <tt-metalium/experimental/fabric/control_plane.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/topology_solver.hpp>
-#include "tt_metal/fabric/topology_solver_internal.hpp"
 #include <fmt/format.h>
 #include <set>
 #include "tt_metal/impl/context/metal_context.hpp"
@@ -68,32 +69,48 @@ void execute_with_timeout(
     OperationType&& operation,
     const std::string& operation_description,
     std::chrono::duration<float> timeout,
+    const tt::tt_metal::distributed::multihost::DistributedContext* /* abort_on_timeout */,
     Args&&... args) {
     std::atomic<bool> operation_completed{false};
     std::atomic<bool> operation_failed{false};
     std::exception_ptr exception_ptr{nullptr};
 
+    // Use internal flag
+    std::atomic<bool>* operation_failed_to_use = &operation_failed;
+
     // Run operation in a separate thread
     std::thread operation_thread([&]() {
         try {
+            // Check if we should abort before starting
+            if (operation_failed_to_use->load()) {
+                throw std::runtime_error("Operation cancelled due to timeout on another rank");
+            }
             operation(std::forward<Args>(args)...);
-            operation_completed = true;
+            if (!operation_failed_to_use->load()) {
+                operation_completed = true;
+            }
         } catch (...) {
             exception_ptr = std::current_exception();
-            operation_failed = true;
+            operation_failed_to_use->store(true);
         }
     });
 
     // Wait for completion or timeout
     auto start = std::chrono::steady_clock::now();
-    while (!operation_completed && !operation_failed) {
+    while (!operation_completed && !operation_failed_to_use->load()) {
         std::this_thread::yield();
         if (timeout.count() > 0.0f) {
             auto now = std::chrono::steady_clock::now();
             float elapsed = std::chrono::duration<float>(now - start).count();
             if (elapsed >= timeout.count()) {
-                // Timeout occurred - detach the thread and throw an error
-                operation_thread.detach();
+                // Timeout occurred - signal the operation thread to stop and throw
+                // The operation thread will check operation_failed and throw if needed
+                operation_failed_to_use->store(true);
+                // Wait briefly for thread to respond, then detach if still running
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+                if (operation_thread.joinable()) {
+                    operation_thread.detach();
+                }
                 TT_THROW(
                     "Timeout while waiting for {} operation. One or more hosts may have failed.",
                     operation_description);
@@ -107,7 +124,7 @@ void execute_with_timeout(
     }
 
     // Re-throw any exception that occurred in the thread
-    if (operation_failed && exception_ptr) {
+    if (operation_failed_to_use->load() && exception_ptr) {
         std::rethrow_exception(exception_ptr);
     }
 }
@@ -115,7 +132,11 @@ void execute_with_timeout(
 // Specialized wrapper for request-based operations (like irecv)
 template <typename RequestType>
 void wait_for_request_with_timeout(
-    RequestType& req, const std::string& operation_description, int rank, std::chrono::duration<float> timeout) {
+    RequestType& req,
+    const std::string& operation_description,
+    int rank,
+    std::chrono::duration<float> timeout,
+    const tt::tt_metal::distributed::multihost::DistributedContext* /* abort_on_timeout */ = nullptr) {
     auto start = std::chrono::steady_clock::now();
 
     while (!req->test()) {
@@ -125,6 +146,7 @@ void wait_for_request_with_timeout(
             float elapsed = std::chrono::duration<float>(now - start).count();
             if (elapsed >= timeout.count()) {
                 req->cancel();
+                // Throw exception instead of aborting - let exceptions propagate normally
                 TT_THROW(
                     "Timeout while waiting for {} from rank {}. Controller likely failed.",
                     operation_description,
@@ -145,6 +167,7 @@ void all_gather_with_timeout(
         [&context](tt::stl::Span<std::byte> send, tt::stl::Span<std::byte> recv) { context.all_gather(send, recv); },
         operation_description,
         topology_mapping_timeout,
+        &context,
         send_buf,
         recv_buf);
 }
@@ -274,16 +297,28 @@ TopologyMapper::TopologyMapper(
         info->physical_chip_id = physical_chip_id;
         info->mesh_coord = mesh_graph_.chip_to_coordinate(fabric_node_id.mesh_id, fabric_node_id.chip_id);
 
-        // Get host rank from mesh graph
-        auto host_rank = mesh_graph_.get_host_rank_for_chip(fabric_node_id.mesh_id, fabric_node_id.chip_id);
-        TT_FATAL(host_rank.has_value(), "Fabric node id {} not found in mesh graph", fabric_node_id);
-        info->mesh_host_rank = host_rank.value();
-
         // Get hostname and MPI rank from physical system descriptor
         info->hostname = physical_system_descriptor_.get_host_name_for_asic(info->asic_id);
         info->mpi_rank = (!info->hostname.empty())
                              ? static_cast<int>(physical_system_descriptor_.get_rank_for_hostname(info->hostname))
                              : -1;
+
+        // Assign mesh host rank: if local_mesh_binding.host_rank is set (not UNSET),
+        // use it for all fabric nodes on the current physical host to ensure get_local_host_rank() works correctly.
+        // The coordinate ranges will be rebuilt using the mesh graph's original assignments.
+        const auto& my_host = physical_system_descriptor_.my_host_name();
+        auto mesh_graph_host_rank = mesh_graph_.get_host_rank_for_chip(fabric_node_id.mesh_id, fabric_node_id.chip_id);
+        TT_FATAL(mesh_graph_host_rank.has_value(), "Fabric node id {} not found in mesh graph", fabric_node_id);
+
+        if (!info->hostname.empty() && info->hostname == my_host &&
+            local_mesh_binding_.host_rank != MESH_HOST_RANK_UNSET) {
+            // For local host: use the environment variable's host rank for all nodes
+            // This ensures get_local_host_rank() returns a consistent value
+            info->mesh_host_rank = local_mesh_binding_.host_rank;
+        } else {
+            // For remote hosts: use the mesh graph's host rank
+            info->mesh_host_rank = mesh_graph_host_rank.value();
+        }
 
         info->is_mapped = true;
     }
@@ -539,7 +574,11 @@ std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> TopologyMapper::build_f
     for (const auto& mesh_id : mesh_graph_.get_all_mesh_ids()) {
         for (const auto& [_, chip_id] : mesh_graph_.get_chip_ids(mesh_id)) {
             auto host_rank = mesh_graph_.get_host_rank_for_chip(mesh_id, chip_id);
-            TT_FATAL(host_rank.has_value(), "Fabric node id {} not found", FabricNodeId(mesh_id, chip_id));
+            TT_FATAL(
+                host_rank.has_value(),
+                "Fabric node id mesh_id={}, chip_id={} not found",
+                *mesh_id,
+                chip_id);
             mapping[mesh_id][FabricNodeId(mesh_id, chip_id)] = host_rank.value();
         }
     }
@@ -820,7 +859,8 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
             Rank{static_cast<int>(source_rank)},
             Tag{tag_base});
 
-        wait_for_request_with_timeout(req, "chip info header", source_rank, topology_mapping_timeout_);
+        wait_for_request_with_timeout(
+            req, "chip info header", source_rank, topology_mapping_timeout_, &distributed_context);
     }
 
     // Don't clear chip_topology_mapping_ - we want to keep initialized entries and update them
@@ -857,7 +897,8 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
                 req,
                 "chip info record size " + std::to_string(i + 1) + " of " + std::to_string(count),
                 source_rank,
-                topology_mapping_timeout_);
+                topology_mapping_timeout_,
+                &distributed_context);
         }
 
         TT_FATAL(
@@ -878,7 +919,8 @@ void TopologyMapper::receive_chip_info_from_host(std::size_t source_rank) {
             req,
             "chip info record " + std::to_string(i + 1) + " of " + std::to_string(count),
             source_rank,
-            topology_mapping_timeout_);
+            topology_mapping_timeout_,
+            &distributed_context);
 
         std::size_t idx = 0;
 
@@ -1027,7 +1069,7 @@ MeshShape TopologyMapper::get_mesh_shape(MeshId mesh_id, std::optional<MeshHostR
             it != mesh_host_rank_coord_ranges_.end(),
             "TopologyMapper: host_rank {} not found for mesh {}",
             *host_rank,
-            *mesh_id);
+            mesh_id);
         return it->second.shape();
     }
     return mesh_graph_.get_mesh_shape(mesh_id);
@@ -1040,7 +1082,7 @@ MeshCoordinateRange TopologyMapper::get_coord_range(MeshId mesh_id, std::optiona
             it != mesh_host_rank_coord_ranges_.end(),
             "TopologyMapper: host_rank {} not found for mesh {}",
             *host_rank,
-            *mesh_id);
+            mesh_id);
         return it->second;
     }
     return mesh_graph_.get_coord_range(mesh_id);
@@ -1146,12 +1188,15 @@ void TopologyMapper::rebuild_host_rank_structs_from_mapping(
             "MappedChipInfo entry for ASIC {} in fabric_node_id_to_mapping_ is not mapped",
             info.asic_id);
         const auto mesh_id_val = info.fabric_node_id.mesh_id;
-        const auto host_rank = info.mesh_host_rank;
         const auto coord = info.mesh_coord;
-        // All mapped entries should have valid host ranks (assigned from fabric node ranks)
-        // No need to check for UNSET here since mapping assigns valid ranks from fabric nodes
-        mesh_to_hosts[mesh_id_val].insert(host_rank);
-        mesh_host_to_coords[mesh_id_val][host_rank].push_back(coord);
+        // Use the mesh graph's original host rank assignment for coordinate range calculation
+        // This preserves the correct coordinate ranges even when mesh_host_rank is overridden for get_local_host_rank()
+        auto mesh_graph_host_rank = mesh_graph_.get_host_rank_for_chip(mesh_id_val, fabric_node_id.chip_id);
+        if (mesh_graph_host_rank.has_value()) {
+            const auto host_rank = mesh_graph_host_rank.value();
+            mesh_to_hosts[mesh_id_val].insert(host_rank);
+            mesh_host_to_coords[mesh_id_val][host_rank].push_back(coord);
+        }
     }
 
     // Build minimal wraparound-aware ranges per host
@@ -1335,7 +1380,7 @@ HostName TopologyMapper::get_hostname_for_switch(SwitchId switch_id) const {
             break;
         }
     }
-    TT_FATAL(switch_exists, "Switch ID {} not found in mesh graph", *switch_id);
+    TT_FATAL(switch_exists, "Switch ID {} not found in mesh graph", switch_id);
 
     // Convert SwitchId to MeshId and use the consolidated mesh hostname function
     return get_hostname_for_mesh(MeshId(*switch_id));
@@ -1422,74 +1467,23 @@ int TopologyMapper::get_mpi_rank_for_mesh_host_rank(MeshId mesh_id, MeshHostRank
 
 void TopologyMapper::print_logical_adjacency_map(
     const ::tt::tt_metal::experimental::tt_fabric::LogicalMultiMeshGraph& multi_mesh_graph) const {
-    log_debug(tt::LogFabric, "TopologyMapper: Logical Multi-Mesh Adjacency Map:");
+    log_info(tt::LogFabric, "TopologyMapper: Logical Multi-Mesh Adjacency Map:");
 
-    // Print mesh-level connectivity
-    log_debug(tt::LogFabric, "  Mesh-Level Connectivity:");
-    for (const auto& mesh_id : multi_mesh_graph.mesh_level_graph_.get_nodes()) {
-        const auto& neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(mesh_id);
-        std::string neigh_str;
-        for (size_t i = 0; i < neighbors.size(); ++i) {
-            neigh_str += fmt::format("{}", neighbors[i].get());
-            if (i < neighbors.size() - 1) {
-                neigh_str += ", ";
-            }
-        }
-        log_debug(tt::LogFabric, "    Mesh {} connected to: [{}]", mesh_id.get(), neigh_str);
-    }
-
-    // Print internal mesh connectivity
-    log_debug(tt::LogFabric, "  Internal Mesh Connectivity:");
+    // Print adjacency maps using topology solver's print functions (includes degree histograms)
+    multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Logical Mesh-Level Graph", true);
     for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
-        log_debug(tt::LogFabric, "  Mesh ID: {}", mesh_id.get());
-        for (const auto& node : graph.get_nodes()) {
-            const auto& neighbors = graph.get_neighbors(node);
-            std::string neigh_str;
-            for (size_t i = 0; i < neighbors.size(); ++i) {
-                neigh_str += fmt::format("{}", neighbors[i]);
-                if (i < neighbors.size() - 1) {
-                    neigh_str += ", ";
-                }
-            }
-            log_debug(tt::LogFabric, "    Node {} connected to: [{}]", node, neigh_str);
-        }
+        graph.print_adjacency_map(fmt::format("Logical Mesh {} Internal Graph", mesh_id.get()), true);
     }
 }
 
 void TopologyMapper::print_physical_adjacency_map(
     const ::tt::tt_metal::experimental::tt_fabric::PhysicalMultiMeshGraph& multi_mesh_graph) const {
-    log_debug(tt::LogFabric, "TopologyMapper: Physical Multi-Mesh Adjacency Map:");
+    log_info(tt::LogFabric, "TopologyMapper: Physical Multi-Mesh Adjacency Map:");
 
-    // Print mesh-level connectivity
-    log_debug(tt::LogFabric, "  Mesh-Level Connectivity:");
-    for (const auto& mesh_id : multi_mesh_graph.mesh_level_graph_.get_nodes()) {
-        const auto& neighbors = multi_mesh_graph.mesh_level_graph_.get_neighbors(mesh_id);
-        std::string neigh_str;
-        for (size_t i = 0; i < neighbors.size(); ++i) {
-            neigh_str += fmt::format("{}", neighbors[i].get());
-            if (i < neighbors.size() - 1) {
-                neigh_str += ", ";
-            }
-        }
-        log_debug(tt::LogFabric, "    Mesh {} connected to: [{}]", mesh_id.get(), neigh_str);
-    }
-
-    // Print internal mesh connectivity
-    log_debug(tt::LogFabric, "  Internal Mesh Connectivity:");
+    // Print adjacency maps using topology solver's print functions (includes degree histograms)
+    multi_mesh_graph.mesh_level_graph_.print_adjacency_map("Physical Mesh-Level Graph", true);
     for (const auto& [mesh_id, graph] : multi_mesh_graph.mesh_adjacency_graphs_) {
-        log_debug(tt::LogFabric, "  Mesh ID: {}", mesh_id.get());
-        for (const auto& node : graph.get_nodes()) {
-            const auto& neighbors = graph.get_neighbors(node);
-            std::string neigh_str;
-            for (size_t i = 0; i < neighbors.size(); ++i) {
-                neigh_str += fmt::format("{}", neighbors[i].get());
-                if (i < neighbors.size() - 1) {
-                    neigh_str += ", ";
-                }
-            }
-            log_debug(tt::LogFabric, "    Node {} connected to: [{}]", node.get(), neigh_str);
-            log_debug(tt::LogFabric, "    Host_name = {}", physical_system_descriptor_.get_host_name_for_asic(node));
-        }
+        graph.print_adjacency_map(fmt::format("Physical Mesh {} Internal Graph", mesh_id.get()), true);
     }
 }
 
@@ -1808,7 +1802,7 @@ void TopologyMapper::verify_topology_mapping(const Cluster& cluster) const {
                 info.fabric_node_id,
                 info.hostname,
                 e.what());
-        }
+            }
 
         // Check 3: For local chips, verify physical chip ID maps correctly to ASIC ID via cluster API
         if (is_local_chip) {
@@ -1816,9 +1810,8 @@ void TopologyMapper::verify_topology_mapping(const Cluster& cluster) const {
             if (physical_chip_to_asic_it == physical_chip_id_to_asic_id.end()) {
                 TT_FATAL(
                     false,
-                    "TopologyMapper verification failed: Physical chip ID {} not found in local cluster for local ASIC "
-                    "{} "
-                    "(fabric_node_id={}, hostname={})",
+                    "TopologyMapper verification failed: Physical chip ID {} not found in local cluster for local "
+                    "ASIC {} (fabric_node_id={}, hostname={})",
                     info.physical_chip_id,
                     info.asic_id,
                     info.fabric_node_id,
