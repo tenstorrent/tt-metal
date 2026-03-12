@@ -195,22 +195,21 @@ inline void _llk_pack_reduce_mask_config_()
     if constexpr (dim == ReduceDim::REDUCE_ROW)
     {
         // PCK_EDGE_OFFSET_SEC1 mask will clear out all the datums in the row except the first one
+
+        // All packers use TILE_ROW_SET_MAPPING_1 to support both narrow tiles (packers 0,1)
+        // and wide tiles (packers 0,2)
+        pack_edge_offset.f.tile_row_set_select_pack0 = 1;
+        pack_edge_offset.f.tile_row_set_select_pack1 = 1;
+        pack_edge_offset.f.tile_row_set_select_pack2 = 1;
+        pack_edge_offset.f.tile_row_set_select_pack3 = 1;
+
         edge_offset_sec1_mask = 0x0001;
         if constexpr (untilize)
         {
-            pack_edge_offset.f.tile_row_set_select_pack0 = 1;
-            pack_edge_offset.f.tile_row_set_select_pack1 = 1;
-            pack_edge_offset.f.tile_row_set_select_pack2 = 1;
-            pack_edge_offset.f.tile_row_set_select_pack3 = 1;
-            row_set_mapping_1                            = 0x11111111; // each packer packs 1x32 row
+            row_set_mapping_1 = 0x11111111; // each packer packs 1x32 row
         }
         else
         {
-            // Packer 0 and 2 will use TILE_ROW_SET_MAPPING_1, while packer 1 and 3 will keep using
-            // TILE_ROW_SET_MAPPING_0 configuration which is the default one
-            pack_edge_offset.f.tile_row_set_select_pack0 = 1;
-            pack_edge_offset.f.tile_row_set_select_pack2 = 1;
-
             // TILE_ROW_SET_MAPPING_1 configuration sets all rows to use PCK_EDGE_OFFSET_SEC1 mask
             row_set_mapping_1 = 0x55555555; // each packer packs 1x16 row
         }

@@ -13,6 +13,7 @@
 #include "cmath_common.h"
 #include "llk_assert.h"
 #include "llk_math_common.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 
@@ -22,6 +23,111 @@ inline void reduce_configure_addrmod();
 template <ReduceDim dim, MathFidelity math_fidelity>
 inline void reduce_configure_mop();
 
+template <bool enforce_fp32_accumulation, bool is_int_fpu_en>
+inline void reduce_row_perform_transpose()
+{
+    if constexpr (enforce_fp32_accumulation)
+    {
+        // Move back to B and transpose in 2 parts, first hi16 bits then lo16 bits
+        constexpr int dest_32b_hi = 0;
+        constexpr int dest_32b_lo = 1;
+
+        // move hi16 bits D2B
+        // we avoid clobbering weights in src B by moving to rows 16 - 31
+        TTI_MOVD2B(dest_32b_hi, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        // note: transpose on src B on works on rows 16 - 31
+        TTI_TRNSPSRCB;
+        // move row D2B again for cases of reducing across multiple tiles
+        TTI_MOVD2B(dest_32b_hi, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+
+        // move hi16 bits B2D
+        TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
+        TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
+        TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
+        TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+
+        // move lo16 bits D2B
+        TTI_MOVD2B(dest_32b_lo, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        // transpose face
+        TTI_TRNSPSRCB;
+        // move row again for cases of reducing multiple tiles
+        TTI_MOVD2B(dest_32b_lo, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+
+        // move lo16 bits B2D
+        TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
+        TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
+        TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
+        TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
+    }
+    else
+    {
+        // Datums stored in int32 dest cannot be moved to SrcB which is configured for int8 inputs
+        // Cast int32 datums to int8 using SFPU instructions (load int32, store int8) before moving data to srcB
+        // Besides SFPU instructions to do cast we also need to set chicken bit FP16A_FORCE_Enable to force dest
+        // view to be fp16a as int8 datums are stored in src registers as fp16a
+        if constexpr (is_int_fpu_en)
+        {
+            TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0 /*DEST offset*/);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 0 /*DEST offset*/);
+            TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 2 /*DEST offset*/);
+            TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 2 /*DEST offset*/);
+            TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
+            TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
+        }
+
+        // Move back to B and transpose
+        // we avoid clobbering weights in src B by moving to rows 16 - 31
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
+        /*
+        if constexpr (is_fp32_dest_acc_en) {
+            if (0 == (((std::uint32_t)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
+                TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
+                TTI_SFPLOAD(0, 0, 3, 0);
+                TTI_SFP_STOCH_RND(0,0,0,0,0,8);
+                TTI_SFPSTORE(0,1,3,0);
+            }
+        }
+        */
+        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        // Note: transpose on src B on works on rows 16 - 31
+        TTI_TRNSPSRCB;
+        TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
+        if constexpr (is_int_fpu_en)
+        {
+            TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x0);
+        }
+
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
+        TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
+        TTI_ZEROSRC(0, 1, 0, 1); // Clear src A
+        TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
+        TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
+    }
+}
+
+template <PoolType type, bool high_fidelity, std::uint32_t clear_mode, std::uint32_t index = 0>
+inline void reduce_pool_op()
+{
+    // Transpose for each face in src A done at unpacker, and pool
+    if constexpr (type == PoolType::MAX)
+    {
+        TTI_GMPOOL(clear_mode, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, index);
+    }
+    else if constexpr (high_fidelity)
+    {
+        ckernel_template::run();
+        if constexpr (clear_mode != p_setrwc::CLR_NONE)
+        {
+            TTI_CLEARDVALID(clear_mode, 0);
+        }
+    }
+    else
+    {
+        TTI_GAPOOL(clear_mode, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, index);
+    }
+}
+
 template <
     PoolType type,
     ReduceDim dim,
@@ -29,294 +135,63 @@ template <
     MathFidelity math_fidelity,
     bool is_int_fpu_en             = false,
     bool enforce_fp32_accumulation = false>
-inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = false, const std::uint32_t num_faces = 4)
+inline void _llk_math_reduce_(const std::uint32_t dst_index, const ckernel::TensorShape& tensor_shape)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    LLK_ASSERT(!(narrow_tile && num_faces == 4), "Reduce narrow tile requires num_faces 1 or 2; num_faces=4 is full-width 32x32");
-    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
+    validate_tensor_shape_tile_dependent_ops_(tensor_shape);
 
+    // Supported narrow tiles per BH Tiny Tile Summary: [16]x16 (num_faces=1) and [32]x16 (num_faces=2) only
+    LLK_ASSERT(
+        !((tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim) /* narrow_tile */ && tensor_shape.total_num_faces() == 4),
+        "Reduce narrow tile requires num_faces 1 or 2; num_faces=4 is full-width 32x32");
+
+    constexpr bool high_fidelity = is_high_fidelity(math_fidelity);
     math::set_dst_write_addr<DstTileShape::Tile32x32, UnpackDestination::SrcRegs>(dst_index);
+
     if constexpr (dim == ReduceDim::REDUCE_ROW)
     {
-        // Transpose for each face in src A done at unpacker, and pool
-        if constexpr (type == PoolType::MAX)
+        // Reduce all faces in a row and perform transpose
+        for (std::uint32_t col_num = 0; col_num < static_cast<std::uint32_t>(tensor_shape.num_faces_c_dim - 1); col_num++)
         {
-            TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
+            reduce_pool_op<type, high_fidelity, p_setrwc::CLR_AB, 0>();
         }
-        else if constexpr (high_fidelity)
+        reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 0>();
+        reduce_row_perform_transpose<enforce_fp32_accumulation, is_int_fpu_en>();
+
+        // If there is only 1 row of faces, then we are done
+        if (tensor_shape.num_faces_r_dim > 1)
         {
-            ckernel_template::run();
-            TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
-        }
-        else
-        {
-            TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-        }
-        if (num_faces > 1)
-        {
-            if constexpr (type == PoolType::MAX)
+            // Increment dest by 32 or 16 if narrow tile for the next accumulation
+            if (!(tensor_shape.num_faces_c_dim < tensor_shape.num_faces_r_dim) /* narrow_tile */)
             {
-                TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-            }
-            else if constexpr (high_fidelity)
-            {
-                ckernel_template::run();
-            }
-            else
-            {
-                TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-            }
-
-            if constexpr (enforce_fp32_accumulation)
-            {
-                // Move back to B and transpose in 2 parts, first hi16 bits then lo16 bits
-                constexpr int dest_32b_hi = 0;
-                constexpr int dest_32b_lo = 1;
-
-                // move hi16 bits D2B
-                // we avoid clobbering weights in src B by moving to rows 16 - 31
-                TTI_MOVD2B(dest_32b_hi, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-                // note: transpose on src B on works on rows 16 - 31
-                TTI_TRNSPSRCB;
-                // move row D2B again for cases of reducing across multiple tiles
-                TTI_MOVD2B(dest_32b_hi, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-
-                // move hi16 bits B2D
-                TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-                TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-                TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-                TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
-
-                // move lo16 bits D2B
-                TTI_MOVD2B(dest_32b_lo, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-                // transpose face
-                TTI_TRNSPSRCB;
-                // move row again for cases of reducing multiple tiles
-                TTI_MOVD2B(dest_32b_lo, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-
-                // move lo16 bits B2D
-                TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-                TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-                TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-                TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
-            }
-            else
-            {
-                // Datums stored in int32 dest cannot be moved to SrcB which is configured for int8 inputs
-                // Cast int32 datums to int8 using SFPU instructions (load int32, store int8) before moving data to srcB
-                // Besides SFPU instructions to do cast we also need to set chicken bit FP16A_FORCE_Enable to force dest
-                // view to be fp16a as int8 datums are stored in src registers as fp16a
-                if constexpr (is_int_fpu_en)
-                {
-                    TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-                    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0 /*DEST offset*/);
-                    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 0 /*DEST offset*/);
-                    TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 2 /*DEST offset*/);
-                    TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 2 /*DEST offset*/);
-                    TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
-                    TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
-                }
-
-                // Move back to B and transpose
-                // we avoid clobbering weights in src B by moving to rows 16 - 31
-                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
-                /*
-                if constexpr (is_fp32_dest_acc_en) {
-                    if (0 == (((std::uint32_t)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
-                        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-                        TTI_SFPLOAD(0, 0, 3, 0);
-                        TTI_SFP_STOCH_RND(0,0,0,0,0,8);
-                        TTI_SFPSTORE(0,1,3,0);
-                    }
-                }
-                */
-                TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-                // Note: transpose on src B on works on rows 16 - 31
-                TTI_TRNSPSRCB;
-                TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-                if constexpr (is_int_fpu_en)
-                {
-                    TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x0);
-                }
-
-                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
-                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
-                TTI_ZEROSRC(0, 1, 0, 1); // Clear src A
-                TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
-                TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
-            }
-
-            if (num_faces == 2 && !narrow_tile)
-            {
-                TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
-            }
-            else
-            {
-                // Increment dest by 32 or 16 if narrow tile for the next accumulation
-                if (!narrow_tile)
-                {
-                    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-                    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-                }
                 TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
-                TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
-
-                /////////////////////
-                // Second Tile Row //
-                /////////////////////
-
-                // Transpose at unpacker and pool
-                if constexpr (type == PoolType::MAX)
-                {
-                    TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-                }
-                else if constexpr (high_fidelity)
-                {
-                    ckernel_template::run();
-                    TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
-                }
-                else
-                {
-                    TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-                }
-
-                if constexpr (type == PoolType::MAX)
-                {
-                    TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-                }
-                else if constexpr (high_fidelity)
-                {
-                    ckernel_template::run();
-                }
-                else
-                {
-                    TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-                }
-
-                if constexpr (enforce_fp32_accumulation)
-                {
-                    // Move back to B and transpose in 2 parts, first hi16 bits then lo16 bits
-                    constexpr int dest_32b_hi = 0;
-                    constexpr int dest_32b_lo = 1;
-
-                    // move hi16 bits D2B
-                    // we avoid clobbering weights in src B by moving to rows 16 - 31
-                    TTI_MOVD2B(dest_32b_hi, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-                    // note: transpose on src B on works on rows 16 - 31
-                    TTI_TRNSPSRCB;
-                    // move row D2B again for cases of reducing across multiple tiles
-                    TTI_MOVD2B(dest_32b_hi, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-
-                    // move hi16 bits B2D
-                    TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-                    TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-                    TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-                    TTI_MOVB2D(dest_32b_hi, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
-
-                    // move lo16 bits D2B
-                    TTI_MOVD2B(dest_32b_lo, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-                    // transpose face
-                    TTI_TRNSPSRCB;
-                    // move row again for cases of reducing multiple tiles
-                    TTI_MOVD2B(dest_32b_lo, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-
-                    // move lo16 bits B2D
-                    TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 0);
-                    TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET + 4, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 4);
-                    TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET + 8, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 8);
-                    TTI_MOVB2D(dest_32b_lo, p_movb2d::SRC_ROW16_OFFSET + 12, ADDR_MOD_0, p_movb2d::MOV_4_ROWS, 12);
-                }
-                else
-                {
-                    // Datums stored in int32 dest cannot be moved to SrcB which is configured for int8 inputs
-                    // Cast int32 datums to int8 using SFPU instructions (load int32, store int8) before moving data to srcB
-                    // Besides SFPU instructions to do cast we also need to set chicken bit FP16A_FORCE_Enable to force dest
-                    // view to be fp16a as int8 datums are stored in src registers as fp16a
-                    if constexpr (is_int_fpu_en)
-                    {
-                        TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-                        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 0 /*DEST offset*/);
-                        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 0 /*DEST offset*/);
-                        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::INT32, ADDR_MOD_0, 2 /*DEST offset*/);
-                        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::INT8, ADDR_MOD_0, 2 /*DEST offset*/);
-                        TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::WAIT_SFPU);
-                        TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x1);
-                    }
-
-                    // Move back to B and transpose
-                    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
-                    /*
-                    if constexpr (is_fp32_dest_acc_en) {
-                        if (0 == (((uint)unpack_dst_format[0]>>2)&0x1)) { // fp32 to fp16_a conversion
-                            TTI_STALLWAIT(p_stall::STALL_SFPU, p_stall::MATH);
-                            TTI_SFPLOAD(0, 0, 3, 0);
-                            TTI_SFP_STOCH_RND(0,0,0,0,0,8);
-                            TTI_SFPSTORE(0,1,3,0);
-                        }
-                    }
-                    */
-                    TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-                    // Note: transpose on src B on works on rows 16 - 31
-                    TTI_TRNSPSRCB;
-                    TTI_MOVD2B(0, p_movd2b::SRC_ROW16_OFFSET, ADDR_MOD_0, p_movd2b::MOV_1_ROW, 0);
-                    if constexpr (is_int_fpu_en)
-                    {
-                        TTI_SETC16(FP16A_FORCE_Enable_ADDR32, 0x0);
-                    }
-
-                    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
-                    TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_B, 0, 8, 0, p_setrwc::SET_B);
-                    TTI_ZEROSRC(0, 1, 0, 1); // Clear src A
-                    TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
-                    TTI_ELWADD(0, 0, p_elwise::SRCB_NO_BCAST, ADDR_MOD_2, 0);
-                }
-
-                // Reset counters to 0 for next accumulation
-                TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
+                TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
             }
+            TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
+            TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_BD);
+
+            // Reduce all faces in a row and perform transpose
+            for (std::uint32_t col_num = 0; col_num < static_cast<std::uint32_t>(tensor_shape.num_faces_c_dim - 1); col_num++)
+            {
+                reduce_pool_op<type, high_fidelity, p_setrwc::CLR_AB, 0>();
+            }
+            reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 0>();
+            reduce_row_perform_transpose<enforce_fp32_accumulation, is_int_fpu_en>();
         }
+
+        TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_BD);
     }
     else if constexpr (dim == ReduceDim::REDUCE_COL)
     {
-        const std::uint32_t num_row_tiles = narrow_tile ? 2 : ((num_faces > 1) ? num_faces / 2 : 1);
-        for (std::uint32_t row_tile = 0; row_tile < num_row_tiles; row_tile++)
+        for (std::uint32_t row_num = 0; row_num < tensor_shape.num_faces_r_dim; row_num++)
         {
             // Just pool
-            if constexpr (type == PoolType::MAX)
-            {
-                TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-            }
-            else
-            {
-                if constexpr (high_fidelity)
-                {
-                    ckernel_template::run();
-                }
-                else
-                {
-                    TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-                }
-            }
-            if ((!narrow_tile) && (num_faces > 1))
+            reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 0>();
+            if (tensor_shape.num_faces_c_dim > 1)
             {
                 TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
                 TTI_SETRWC(p_setrwc::CLR_AB, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
 
-                if constexpr (type == PoolType::MAX)
-                {
-                    TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-                }
-                else
-                {
-                    if constexpr (high_fidelity)
-                    {
-                        ckernel_template::run();
-                    }
-                    else
-                    {
-                        TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 0);
-                    }
-                }
+                reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 0>();
             }
             // Reset Dest Counter
             TTI_SETRWC(p_setrwc::CLR_AB, 0, 0, 0, 0, p_setrwc::SET_AD);
@@ -324,42 +199,13 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = 
     }
     else if constexpr (dim == ReduceDim::REDUCE_SCALAR)
     {
-        for (std::uint32_t face_num = 0; face_num < (num_faces - 1); face_num++)
+        for (std::uint32_t face_num = 0; face_num < static_cast<std::uint32_t>(tensor_shape.total_num_faces() - 1); face_num++)
         {
             // Wait and pool
-            if constexpr (type == PoolType::MAX)
-            {
-                TTI_GMPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 4);
-            }
-            else
-            {
-                if constexpr (high_fidelity)
-                {
-                    ckernel_template::run();
-                    TTI_CLEARDVALID(p_setrwc::CLR_AB, 0);
-                }
-                else
-                {
-                    TTI_GAPOOL(p_setrwc::CLR_AB, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 4);
-                }
-            }
+            reduce_pool_op<type, high_fidelity, p_setrwc::CLR_AB, 4>();
         }
         // Wait and pool
-        if constexpr (type == PoolType::MAX)
-        {
-            TTI_GMPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 4);
-        }
-        else
-        {
-            if constexpr (high_fidelity)
-            {
-                ckernel_template::run();
-            }
-            else
-            {
-                TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_0, p_gpool::INDEX_DIS, 4);
-            }
-        }
+        reduce_pool_op<type, high_fidelity, p_setrwc::CLR_NONE, 4>();
 
         // Need row in dest as column in src A
         TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 0, 0, 0, p_setrwc::SET_AB);
@@ -389,7 +235,7 @@ inline void _llk_math_reduce_(const std::uint32_t dst_index, bool narrow_tile = 
         {
             if constexpr (high_fidelity)
             {
-                for (int i = 0; i < to_underlying(math_fidelity) - 1; i++)
+                for (std::uint32_t i = 0; i < to_underlying(math_fidelity) - 1; i++)
                 {
                     TTI_GAPOOL(p_setrwc::CLR_NONE, p_gpool::DIM_16X16, ADDR_MOD_3, p_gpool::INDEX_DIS, 0);
                 }

@@ -24,6 +24,7 @@
 #include "llk_assert.h"
 #include "llk_unpack_common.h"
 #include "lltt.h"
+#include "tensor_shape.h"
 
 using namespace ckernel;
 using namespace ckernel::unpacker;
@@ -34,17 +35,16 @@ using namespace ckernel::unpacker;
  * @tparam pool_type The type of pooling operation (MAX, SUM, AVG)
  * @tparam reduce_dim The dimension along which to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
  *
- * @param face_r_dim The number of rows per face (must be either 1, 2, 4, 8, or 16)
- * @param num_faces The number of faces to process (must be 1, 2, or 4)
+ * @param tensor_shape The shape of the tensor, including face_r_dim and num_faces
  *
  * @note For tiny tiles (face_r_dim < 16), padding is applied to prevent incorrect outputs
  * @note For REDUCE_SCALAR operations, SrcA is cleared before unpacking because SrcA is clobbered in the Math kernel.
  */
 template <PoolType pool_type, ReduceDim reduce_dim>
-inline void _llk_unpack_AB_reduce_mop_config_(const std::uint32_t face_r_dim, const std::uint32_t num_faces)
+inline void _llk_unpack_AB_reduce_mop_config_(const ckernel::TensorShape &tensor_shape)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    LLK_ASSERT(face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16, "face_r_dim must be either 1, 2, 4, 8, or 16");
+    // Validate tensor shape for tile-dependent operations
+    validate_tensor_shape_tile_dependent_ops_(tensor_shape);
 
     // Data valid for clear instructions is set to 0 since the MATH kernel should not process this data.
     // pool_type == PoolType::MAX sets the clear value to neginf if the pool-type is MAX and 0 if the pool-type is AVG/SUM
@@ -61,10 +61,10 @@ inline void _llk_unpack_AB_reduce_mop_config_(const std::uint32_t face_r_dim, co
 
     // MOP constants
     constexpr std::uint32_t outerloop = 1;
-    const std::uint32_t innerloop     = num_faces;
+    const std::uint32_t innerloop     = tensor_shape.total_num_faces();
 
     // Padding should only be done when using tiny tiles otherwise the entire face overwrites the data read in Math
-    if (face_r_dim < FACE_R_DIM) // Using tiny faces
+    if (tensor_shape.face_r_dim < FACE_R_DIM) // Using tiny faces
     {
         // Fill SrcA with pool-type dependent padding value for tiny tiles before unpacking a face
         ckernel_template tmp(outerloop, innerloop, clear_pool_dep_srca, lltt::replay_insn(0, REPLAY_BUF_LEN));
@@ -99,18 +99,17 @@ inline void _llk_unpack_AB_reduce_mop_config_(const std::uint32_t face_r_dim, co
  * @tparam pool_type The type of pooling operation (MAX, SUM, AVG)
  * @tparam reduce_dim The dimension along which to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
  *
- * @param face_r_dim The number of rows per face (must be either 1, 2, 4, 8, or 16)
- * @param num_faces The number of faces to process (must be 1, 2, or 4)
+ * @param tensor_shape The shape of the tensor, including face_r_dim and num_faces
  *
  * @note For REDUCE_ROW operations, the face is transposed using haloize mode
  * @note Unpacker 0 (SrcA) reads face_r_dim*FACE_R_DIM datums
  * @note Unpacker 1 (SrcB) reads one row (FACE_R_DIM datums)
  */
 template <PoolType pool_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
-inline void _llk_unpack_AB_reduce_init_(const std::uint32_t face_r_dim, const std::uint32_t num_faces)
+inline void _llk_unpack_AB_reduce_init_(const ckernel::TensorShape &tensor_shape)
 {
-    LLK_ASSERT(num_faces == 1 || num_faces == 2 || num_faces == 4, "num_faces must be 1, 2, or 4");
-    LLK_ASSERT(face_r_dim == 1 || face_r_dim == 2 || face_r_dim == 4 || face_r_dim == 8 || face_r_dim == 16, "face_r_dim must be either 1, 2, 4, 8, or 16");
+    // Validate tensor shape for tile-dependent operations
+    validate_tensor_shape_tile_dependent_ops_(tensor_shape);
 
     if constexpr (enforce_fp32_accumulation)
     {
@@ -122,13 +121,13 @@ inline void _llk_unpack_AB_reduce_init_(const std::uint32_t face_r_dim, const st
     cfg_reg_rmw_tensix<THCON_SEC0_REG2_Haloize_mode_RMW>(reduce_dim == ReduceDim::REDUCE_ROW);
 
     // Sets up Unpacker 0 to read face_r_dim*16 datums into SrcA register
-    config_unpacker_x_end<p_setadc::UNP_A>(face_r_dim);
+    config_unpacker_x_end<p_setadc::UNP_A>(tensor_shape.face_r_dim);
 
     // Sets up Unpacker 1 to read one row (16 datums) into SrcB register
     config_unpacker_x_end<p_setadc::UNP_B>(1);
 
     // Configure unpack MOP
-    _llk_unpack_AB_reduce_mop_config_<pool_type, reduce_dim>(face_r_dim, num_faces);
+    _llk_unpack_AB_reduce_mop_config_<pool_type, reduce_dim>(tensor_shape);
 }
 
 /**

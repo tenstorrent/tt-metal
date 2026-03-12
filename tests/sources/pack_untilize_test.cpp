@@ -164,6 +164,12 @@ void run_kernel(const volatile struct RuntimeParams* params)
             _llk_pack_dest_section_done_<dest_sync, is_fp32_dest_acc_en>();
         }
     }
+
+#ifdef ARCH_BLACKHOLE
+    _llk_pack_untilize_uninit_(formats.pack_src);
+#else
+    _llk_pack_untilize_uninit_(FACE_R_DIM);
+#endif
 }
 
 #endif
