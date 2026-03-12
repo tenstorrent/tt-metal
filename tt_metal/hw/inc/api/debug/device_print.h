@@ -1145,60 +1145,75 @@ uint32_t wait_for_space(volatile tt_l1_ptr DevicePrintMemoryLayout* device_print
         return 0;
     }
 
-    // Check if we are regular state with write position ahead of read position
-    if (write_position > read_position) {
-        // We are writing in front of the read position. Check if there is enough space until end of buffer.
-        // If not we will need to wrap around and wait for reader to catch up.
-        if (write_position + message_size > sizeof(device_print_buffer->data)) {
-            // It is important not to perform wrap around while reader position is at the beginning of the buffer,
-            // as it will be the same state as at the beginning when buffer is empty. So in order to distinguish real
-            // empty state and wrap around state, we will wait for reader to progress from start.
-            if (read_position == 0) {
-                // Reader is at the beginning, we need to wait for it to move before we can safely wrap around.
-                WAYPOINT("DPW");
-                while (read_position == 0) {
-                    invalidate_l1_cache();
+    // Check if there is enough space for the message until end of the buffer.
+    if (write_position + message_size > sizeof(device_print_buffer->data)) {
+        // It is important not to perform wrap around while reader position is at the beginning of the buffer,
+        // as it will be the same state as at the beginning when buffer is empty. So in order to distinguish real
+        // empty state and wrap around state, we will wait for reader to progress from start.
+        if (read_position == 0) {
+            // Reader is at the beginning, we need to wait for it to move before we can safely wrap around.
+            WAYPOINT("DPW");
+            while (read_position == 0) {
+                invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
-                    internal_::risc_context_switch();
+                internal_::risc_context_switch();
 #endif
-                    // If we've closed the device, we've now disabled printing on it, don't hang.
-                    if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
-                        return 0;
-                    };
+                // If we've closed the device, we've now disabled printing on it, don't hang.
+                if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
+                    return 0;
+                };
 
-                    // Read new read position for next check
-                    read_position = device_print_buffer->aux.rpos;
-                }
-                WAYPOINT("DPD");
+                // Read new read position for next check
+                read_position = device_print_buffer->aux.rpos;
             }
-
-            // There is not enough space for our message until end of buffer.
-            // Check if we should add wrap around message in the buffer.
-            if (write_position <
-                sizeof(device_print_buffer->data) - sizeof(device_print_detail::structures::DevicePrintHeader::value)) {
-                // We can fit a wrap around message, write it now so reader can process it while we wait for space.
-                device_print_detail::structures::DevicePrintHeader wrap_header = {};
-                wrap_header.is_kernel = 0;
-                wrap_header.risc_id = 0;
-                wrap_header.message_payload = 0;
-                wrap_header.info_id = device_print_detail::structures::DevicePrintHeader::max_info_id_value;
-                auto value = wrap_header.value;
-                *reinterpret_cast<device_print_buffer_ptr<decltype(value)>>(
-                    device_print_buffer->data + write_position) = value;
-            }
-            // Wrap around to the beginning of the buffer and continue waiting for space there.
-            write_position = device_print_buffer->aux.wpos = 0;
-        } else {
-            // There is enough space in the buffer.
-            return write_position;
+            WAYPOINT("DPD");
         }
+
+        // Check if we should wair for reader to consume until end of the buffer before we can wrap around.
+        if (write_position < read_position) {
+            WAYPOINT("DPW");
+            while (write_position < read_position) {
+                invalidate_l1_cache();
+#if defined(COMPILE_FOR_ERISC)
+                internal_::risc_context_switch();
+#endif
+                // If we've closed the device, we've now disabled printing on it, don't hang.
+                if (device_print_buffer->aux.wpos == DEBUG_PRINT_SERVER_DISABLED_MAGIC) {
+                    return 0;
+                };
+
+                // Read new read position for next check
+                read_position = device_print_buffer->aux.rpos;
+            }
+            WAYPOINT("DPD");
+        }
+
+        // There is not enough space for our message until end of buffer.
+        // Check if we should add wrap around message in the buffer.
+        if (write_position + sizeof(device_print_detail::structures::DevicePrintHeader::value) <=
+            sizeof(device_print_buffer->data)) {
+            // We can fit a wrap around message, write it now so reader can process it while we wait for space.
+            device_print_detail::structures::DevicePrintHeader wrap_header = {};
+            wrap_header.is_kernel = 0;
+            wrap_header.risc_id = 0;
+            wrap_header.message_payload = 0;
+            wrap_header.info_id = device_print_detail::structures::DevicePrintHeader::max_info_id_value;
+            auto value = wrap_header.value;
+            *reinterpret_cast<device_print_buffer_ptr<decltype(value)>>(device_print_buffer->data + write_position) =
+                value;
+        }
+        // Wrap around to the beginning of the buffer and continue waiting for space there.
+        write_position = device_print_buffer->aux.wpos = 0;
+    } else if (write_position > read_position) {
+        // There is enough space in the buffer.
+        return write_position;
     }
 
     // Check if there is enough space between wpos and rpos
     if (write_position < read_position) {
         // Wrapped around, check if there is enough space between wpos and rpos
         WAYPOINT("DPW");
-        while (write_position < read_position && read_position <= write_position + message_size) {
+        while (write_position < read_position && write_position + message_size >= read_position) {
             invalidate_l1_cache();
 #if defined(COMPILE_FOR_ERISC)
             internal_::risc_context_switch();
