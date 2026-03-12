@@ -23,36 +23,6 @@ namespace tt::tt_fabric::test {
 
 using fabric_router_tests::BaseFabricFixture;
 
-namespace {
-
-// Generate deterministic TX pattern: 0xA5A50000 + i
-inline std::vector<uint32_t> make_tx_pattern(size_t n_words) {
-    std::vector<uint32_t> tx(n_words);
-    for (size_t i = 0; i < n_words; ++i) {
-        tx[i] = 0xA5A50000u + static_cast<uint32_t>(i);
-    }
-    return tx;
-}
-
-// Validate RX payload equals TX payload word-by-word.
-inline void verify_payload_words(
-    const std::vector<uint32_t>& rx,
-    const std::vector<uint32_t>& tx,
-    size_t word_offset = 0,
-    size_t n_words = 0) {
-    size_t count = (n_words > 0) ? n_words : tx.size();
-    for (size_t i = 0; i < count; ++i) {
-        if (rx[i + word_offset] != tx[i]) {
-            ADD_FAILURE() << "Data mismatch at word " << i << " (offset " << word_offset
-                          << "): got 0x" << std::hex << rx[i + word_offset]
-                          << ", exp 0x" << tx[i] << std::dec;
-            return;
-        }
-    }
-}
-
-}  // anonymous namespace
-
 // Main unicast runner: dispatches the correct device kernel for the given family
 // and verifies data correctness on silicon.
 void run_raw_unicast_write_test(BaseFabricFixture* fixture, const RawTestParams& p) {
