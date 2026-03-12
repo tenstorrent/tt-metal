@@ -21,7 +21,7 @@ namespace unit_tests::dm::direct_write {
 struct DirectWriteConfig {
     uint32_t test_id = 0;
     CoreCoord sender_core_coord;
-    vector<CoreCoord> receiver_core_coords = {};  // Support multiple receivers for multicast case
+    vector<CoreCoord> receiver_core_coords;  // Support multiple receivers for multicast case
     uint32_t num_writes = 100;               // Number of direct writes to perform
     uint32_t write_value_base = 0x12340000;  // Base value for writes
     bool use_posted_writes = false;          // Posted vs non-posted writes
