@@ -66,26 +66,17 @@ class TtDINONeck:
             math_approx_mode=False,
         )
 
-        # Move conv weights to host for ttnn.conv2d
-        for i in range(4):
-            self.parameters["convs"][i]["conv"]["weight"] = ttnn.from_device(
-                self.parameters["convs"][i]["conv"]["weight"]
-            )
-            self.parameters["convs"][i]["conv"]["bias"] = ttnn.from_device(self.parameters["convs"][i]["conv"]["bias"])
-        self.parameters["extra_convs"][0]["conv"]["weight"] = ttnn.from_device(
-            self.parameters["extra_convs"][0]["conv"]["weight"]
-        )
-        self.parameters["extra_convs"][0]["conv"]["bias"] = ttnn.from_device(
-            self.parameters["extra_convs"][0]["conv"]["bias"]
-        )
+        conv_sources = [self.parameters["convs"][i]["conv"] for i in range(4)] + [
+            self.parameters["extra_convs"][0]["conv"]
+        ]
+        for c in conv_sources:
+            c["weight"] = ttnn.from_device(c["weight"])
+            c["bias"] = ttnn.from_device(c["bias"])
 
-        # Precompute Welford reciprocals for each GN level (following SDXL VAE pattern)
         if level_shapes is None:
             level_shapes = DINO_NECK_LEVEL_SHAPES
 
         self.gn_core_grid = ttnn.CoreGrid(y=8, x=8)
-        # Welford only for large spatial where it provides real benefit;
-        # basic DRAM GN is fine for smaller spatial where padding ratio is low.
         self.welford_threshold = 50000
         self.num_out_blocks = {}
         self.reciprocals_sharded = {}
@@ -94,12 +85,7 @@ class TtDINONeck:
         for lvl, (N, C, H, W) in level_shapes.items():
             spatial = H * W
             use_welford = spatial >= self.welford_threshold
-
-            if spatial > 50000:
-                nob = 32
-            else:
-                nob = 1
-            self.num_out_blocks[lvl] = nob
+            self.num_out_blocks[lvl] = 32 if use_welford else 1
 
             gn_w = parameters["convs" if lvl < 4 else "extra_convs"][lvl if lvl < 4 else 0]["gn"]["_torch_w"]
             gn_b = parameters["convs" if lvl < 4 else "extra_convs"][lvl if lvl < 4 else 0]["gn"]["_torch_b"]
@@ -121,7 +107,6 @@ class TtDINONeck:
                 torch_recip = ttnn.create_group_norm_reciprocals(N, C, H, W, num_groups, self.gn_core_grid)
                 inner_dim = torch_recip.shape[1]
                 page_bytes = inner_dim * 4
-                n_rows = torch_recip.shape[0]
                 if page_bytes % 64 != 0:
                     aligned_inner = ((page_bytes + 63) // 64 * 64) // 4
                     recip_tt = ttnn.from_torch(
@@ -131,7 +116,6 @@ class TtDINONeck:
                         device=device,
                         memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     )
-                    # Trace-safe: use pad instead of zeros + concat
                     recip_tt = ttnn.pad(
                         recip_tt,
                         padding=[(0, 0), (0, aligned_inner - inner_dim)],
@@ -169,14 +153,10 @@ class TtDINONeck:
         C = self.out_channels
         spatial = out_h * out_w
 
-        # Untilize to ROW_MAJOR so we can cleanly reshape/slice
         x = ttnn.to_memory_config(x_nhwc, ttnn.DRAM_MEMORY_CONFIG)
         x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-
-        # Slice to valid spatial positions only: [N, 1, spatial, C]
         x = x[:, :, :spatial, :]
 
-        # Re-tilize with zero-padding aligned to GN core grid distribution
         grid_x = self.gn_core_grid.x
         grid_y = self.gn_core_grid.y
         padded_h = _nearest_32_per_core(spatial, grid_x)
@@ -208,7 +188,6 @@ class TtDINONeck:
 
         x = ttnn.group_norm(x, **gn_kwargs)
 
-        # Reshape [N, 1, padded_spatial, C] -> slice -> [N, H, W, C] -> [N, C, H, W]
         x = x[:, :, :spatial, :C]
         x = ttnn.reshape(x, (N, out_h, out_w, C))
         x = ttnn.permute(x, (0, 3, 1, 2), memory_config=ttnn.DRAM_MEMORY_CONFIG)
@@ -216,7 +195,6 @@ class TtDINONeck:
 
     def _conv1x1_gn(self, x, conv_params, in_ch, level_idx):
         """1x1 Conv2d (HEIGHT_SHARDED) + GroupNorm (DRAM Welford). NCHW in/out."""
-        # N, C, H, W = x.shape
         N, H, W, C = x.shape
 
         shard_grid = get_shard_grid_from_num_cores(64, self.device)
@@ -255,7 +233,6 @@ class TtDINONeck:
 
     def _conv3x3_s2_gn(self, x, conv_params, in_ch, level_idx):
         """3x3 stride-2 Conv2d (BLOCK_SHARDED) + GroupNorm (DRAM). NCHW in/out."""
-        # N, C, H, W = x.shape
         N, H, W, C = x.shape
 
         conv_config = ttnn.Conv2dConfig(

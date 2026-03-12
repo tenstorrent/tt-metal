@@ -102,8 +102,6 @@ def split_value_into_levels(value_tt, value_spatial_shapes, num_heads, head_dim)
         val_l = value_level_list[level]
         val_l = ttnn.permute(val_l, (0, 2, 1, 3))
         val_l = ttnn.reshape(val_l, (bs * num_heads, H_, W_, head_dim))
-        # Keep value levels in ROW_MAJOR once so chunk loop does not repeatedly
-        # trigger layout-side conversions around grid_sample.
         val_l = ttnn.to_layout(val_l, ttnn.ROW_MAJOR_LAYOUT)
         val_l = ttnn.to_memory_config(val_l, ttnn.DRAM_MEMORY_CONFIG)
         value_l_tts.append(val_l)
@@ -180,80 +178,6 @@ def multi_scale_deformable_attn_ttnn(
     return output
 
 
-def multi_scale_deformable_attn_uniad_style(
-    value_tt,
-    value_spatial_shapes,
-    sampling_locations_tt,
-    attention_weights_tt,
-    device,
-    num_heads,
-    head_dim,
-):
-    """
-    Optimized UniAD-style multi-scale deformable attention for decoder.
-    """
-    if isinstance(sampling_locations_tt, torch.Tensor):
-        sampling_locations_tt = ttnn.from_torch(
-            sampling_locations_tt, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
-        )
-    if isinstance(attention_weights_tt, torch.Tensor):
-        attention_weights_tt = ttnn.from_torch(attention_weights_tt, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-    bs = sampling_locations_tt.shape[0]
-    num_queries = sampling_locations_tt.shape[1]
-    num_points = sampling_locations_tt.shape[4]
-
-    split_sizes = [int(H) * int(W) for H, W in value_spatial_shapes]
-    value_level_list = ttnn.split(value_tt, split_sizes, dim=1)
-
-    sampling_grids = ttnn.multiply(sampling_locations_tt, 2.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-    sampling_grids = ttnn.add(sampling_grids, -1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-    output = None
-    for level, (H_, W_) in enumerate(value_spatial_shapes):
-        H_, W_ = int(H_), int(W_)
-
-        # Value: [bs, H*W, heads, dim] → [bs*heads, H, W, dim] (ROW_MAJOR)
-        val_l = value_level_list[level]
-        val_l = ttnn.permute(val_l, (0, 2, 1, 3))
-        val_l = ttnn.reshape(val_l, (bs * num_heads, H_, W_, head_dim))
-        val_l = ttnn.to_memory_config(val_l, ttnn.L1_MEMORY_CONFIG)
-
-        grid = sampling_grids[:, :, :, level, :, :]
-        grid = ttnn.permute(grid, (0, 2, 1, 3, 4))
-        grid = ttnn.reshape(grid, (bs * num_heads, num_queries * num_points, 1, 2))
-
-        grid = ttnn.to_layout(grid, ttnn.ROW_MAJOR_LAYOUT)
-
-        sampled = ttnn.grid_sample(val_l, grid, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(grid)
-        ttnn.deallocate(val_l)
-
-        sampled = ttnn.reshape(sampled, (bs, num_heads, num_queries, num_points, head_dim))
-        sampled = ttnn.permute(sampled, (0, 2, 1, 3, 4))  # [bs, Q, heads, points, dim]
-
-        # Attention weights for this level: [bs, Q, heads, points, 1] - small, fits L1
-        attn = attention_weights_tt[:, :, :, level, :]
-        attn = ttnn.unsqueeze(attn, -1)
-
-        # Weighted sum over points
-        weighted = ttnn.mul(sampled, attn, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(sampled)
-        ttnn.deallocate(attn)
-
-        level_out = ttnn.sum(weighted, dim=-2, memory_config=ttnn.L1_MEMORY_CONFIG)
-        ttnn.deallocate(weighted)
-
-        if output is None:
-            output = level_out
-        else:
-            output = ttnn.add(output, level_out, memory_config=ttnn.L1_MEMORY_CONFIG)
-            ttnn.deallocate(level_out)
-
-    output = ttnn.reshape(output, (bs, num_queries, num_heads * head_dim))
-    return output
-
-
 class TtMSDeformAttn:
     """
     Multi-Scale Deformable Attention for DINO encoder/decoder.
@@ -323,11 +247,8 @@ class TtMSDeformAttn:
 
         if key_padding_mask is not None:
             mask = ttnn.reshape(key_padding_mask, (bs, num_keys, 1))
-            # Trace-safe: use multiply(value, 0) instead of zeros_like
             value = ttnn.where(mask, ttnn.multiply(value, 0, memory_config=ttnn.DRAM_MEMORY_CONFIG), value)
 
-        # Trace_mode: device-only path (no to_torch/from_torch). Process per-chunk to avoid OOM
-        # from full 89K sampling_locations allocation.
         if self.trace_mode and spatial_shapes_tt is not None and isinstance(reference_points, ttnn.Tensor):
             logger.info("  MSDeformAttn: device-only path (trace_mode, per-chunk)...")
             value_l_tts = split_value_into_levels(value, spatial_shapes, self.num_heads, self.head_dim)
@@ -391,7 +312,6 @@ class TtMSDeformAttn:
             output = ttnn.concat(output_chunks_device, dim=1)
             output = ttnn.linear(output, self.params["output_proj"]["weight"], bias=self.params["output_proj"]["bias"])
             output = ttnn.add(output, identity)
-            # Deallocate chunks only after output is fully consumed (concat may reference them)
             for c in output_chunks_device:
                 ttnn.deallocate(c)
             logger.info("  MSDeformAttn: done (trace_mode).")
@@ -602,7 +522,6 @@ class TtDINOEncoder:
             for i in range(num_layers)
         ]
 
-        # Precompute reference points in __init__ (before trace) to avoid ttnn.arange/ttnn.full
         self._ref_points_cache = None
         if trace_mode:
             from models.experimental.dino_5scale_swin_l.tt.tt_neck import DINO_NECK_LEVEL_SHAPES
@@ -635,7 +554,6 @@ class TtDINOEncoder:
         Returns: [B, sum(H_i*W_i), num_levels, 2] as ttnn.Tensor on device.
         When valid_ratios_tt is provided (trace_mode), use it instead of from_torch.
         """
-        # Normalize to list of (H, W) for iteration
         if hasattr(spatial_shapes, "tolist"):
             hw_list = spatial_shapes.tolist()
         else:
@@ -643,7 +561,6 @@ class TtDINOEncoder:
         B = valid_ratios.shape[0] if valid_ratios is not None else valid_ratios_tt.shape[0]
         num_levels = len(hw_list)
 
-        # Use provided device tensor (trace_mode) or upload from host
         if valid_ratios_tt is not None:
             valid_ratios_tt = ttnn.to_memory_config(valid_ratios_tt, ttnn.L1_MEMORY_CONFIG)
         else:
@@ -661,29 +578,24 @@ class TtDINOEncoder:
             if H * W == 0:
                 continue
 
-            # ref_y: [0.5, 1.5, ..., H-0.5] repeated W times -> [1, H*W]
             ref_y_vals = TtDINOEncoder._linspace_ttnn(0.5, H - 0.5, H, device)
             ref_y_vals = ttnn.reshape(ref_y_vals, (H, 1))
             ref_y_vals = ttnn.repeat(ref_y_vals, (1, W))
             ref_y_vals = ttnn.reshape(ref_y_vals, (1, H * W))
 
-            # ref_x: [0.5, 1.5, ..., W-0.5] repeated H times -> [1, H*W]
             ref_x_vals = TtDINOEncoder._linspace_ttnn(0.5, W - 0.5, W, device)
             ref_x_vals = ttnn.reshape(ref_x_vals, (1, W))
             ref_x_vals = ttnn.repeat(ref_x_vals, (H, 1))
             ref_x_vals = ttnn.reshape(ref_x_vals, (1, H * W))
 
-            # Per-level valid_ratio: [B, 2] -> denom_y [B,1], denom_x [B,1] (small -> L1)
             vr_slice = ttnn.slice(valid_ratios_tt, [0, lvl, 0], [B, lvl + 1, 2], memory_config=ttnn.L1_MEMORY_CONFIG)
             vr_slice = ttnn.reshape(vr_slice, (B, 2))
             denom_y = ttnn.multiply(ttnn.reshape(vr_slice[:, 1:2], (B, 1)), float(H))
             denom_x = ttnn.multiply(ttnn.reshape(vr_slice[:, 0:1], (B, 1)), float(W))
 
-            # [1, H*W] / [B, 1] -> [B, H*W]
             ref_y = ttnn.divide(ref_y_vals, denom_y)
             ref_x = ttnn.divide(ref_x_vals, denom_x)
 
-            # [B, H*W, 2] with (x, y) order to match original
             ref_level = ttnn.stack([ref_x, ref_y], dim=-1)
             reference_points_list.append(ref_level)
             ttnn.deallocate(ref_y_vals)
@@ -693,13 +605,11 @@ class TtDINOEncoder:
         for t in reference_points_list:
             ttnn.deallocate(t)
 
-        # [B, N, 2] * [B, num_levels, 2] -> [B, N, num_levels, 2]
         ref_bn12 = ttnn.reshape(reference_points, (B, reference_points.shape[1], 1, 2))
         valid_b1l2 = ttnn.reshape(valid_ratios_tt, (B, 1, num_levels, 2))
         reference_points = ttnn.multiply(ref_bn12, valid_b1l2)
 
         ttnn.deallocate(ref_bn12)
-        # valid_b1l2 is a view of valid_ratios_tt; only deallocate the base
         ttnn.deallocate(valid_ratios_tt)
 
         return reference_points
