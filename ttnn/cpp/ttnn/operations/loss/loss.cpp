@@ -11,9 +11,7 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
-namespace ttnn::operations::loss {
-
-namespace loss_utils {
+namespace ttnn::operations::loss::loss_utils {
 
 using ttnn::operations::loss::LossFunction;
 using ttnn::operations::loss::LossReductionMode;
@@ -51,8 +49,7 @@ Tensor loss_function(
     return result;
 }
 
-}  // namespace loss_utils
-}  // namespace ttnn::operations::loss
+}  // namespace ttnn::operations::loss::loss_utils
 
 namespace ttnn {
 
