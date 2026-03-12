@@ -235,42 +235,6 @@ class DropInVisionTransformer(torch.nn.Module):
     def spatial_merge_size(self):
         return self.model_args.hf_config.vision_config.spatial_merge_size
 
-    def get_position_embeds(self, grid_thw: torch.Tensor):
-        cos_padded, sin_padded = [], []
-        for img in grid_thw:
-            seq_len = (img[1] * img[2]).item()
-            padded_seq_len = ((seq_len // 2048) + 1) * 2048
-            _, position_embeddings = qwen3_vision_transformer_preprocess(
-                seq_len=seq_len,
-                grid_thw=img.unsqueeze(0),
-                head_dim=self.model_args.head_dim,
-                spatial_merge_size=self.model_args.hf_config.vision_config.spatial_merge_size,
-            )
-
-            cos_orig, sin_orig = position_embeddings
-            cos_orig, sin_orig = convert_rope_style_hf_to_meta(cos_orig, sin_orig)
-            # pad sequence length with cos = 1, sin = 0 (identity rotation)
-            cos_padded.append(
-                torch.nn.functional.pad(cos_orig, (0, 0, 0, padded_seq_len - seq_len), value=1)
-                .unsqueeze(0)
-                .unsqueeze(0)
-            )
-            sin_padded.append(
-                torch.nn.functional.pad(sin_orig, (0, 0, 0, padded_seq_len - seq_len), value=0)
-                .unsqueeze(0)
-                .unsqueeze(0)
-            )
-        return cos_padded, sin_padded
-
-    def get_padded_seq(self, grid_thw: torch.Tensor, batched_prefill=False):
-        seq_len, padded_seq_len = [], []
-        for img in grid_thw:
-            seq_len.append((img[1] * img[2]).item())
-            padded_seq_len.append(((seq_len[-1] // 2048) + 1) * 2048)
-        if batched_prefill:
-            padded_seq_len = [max(padded_seq_len)] * len(padded_seq_len)
-        return seq_len, padded_seq_len
-
     def forward(self, pixel_values: torch.Tensor, grid_thw: torch.Tensor) -> torch.Tensor:
         """
         Forward pass mimicking the Qwen2_5_VisionTransformerPretrainedModel interface.
@@ -284,46 +248,53 @@ class DropInVisionTransformer(torch.nn.Module):
         Returns:
             torch.Tensor: Output tensor matching the reference model's output shape [total_seq_len, out_hidden_size].
         """
-        # process pixel_values for each image/video separately
-        all_pixel_values = pixel_values.clone()
-        grid_thw_clone = grid_thw.clone()
+        # process pixel_values for each image/video separately (sequential like main)
+        all_pixel_values = pixel_values
+        all_grid_thw = grid_thw
         final_outputs = []
         deepstack_visual_embeds_list = [None] * len(self.deepstack_visual_indexes)
-        batch_size = grid_thw.shape[0]
-        batched_prefill = True
-        all_grid_thw = grid_thw
-        if batched_prefill:
-            all_grid_thw = all_grid_thw.unsqueeze(0)
-
-        cos_padded, sin_padded = self.get_position_embeds(grid_thw)
-        seq_len_list, padded_seq_len_list = self.get_padded_seq(grid_thw, batched_prefill=batched_prefill)
-
         # todo)) refactor this code to leverage tt-mesh's ttnn.ShardTensorToMesh(mesh_device, dim=batch_size_dim) for data parallelism
-        for id, grid_thw in enumerate(all_grid_thw):
+        for grid_thw in all_grid_thw:
+            # --- pick out the pixel_values for this users' images (grid_thw.prod() pixels) ---
+            pixel_values = all_pixel_values[: grid_thw.prod(), :]
+            all_pixel_values = all_pixel_values[grid_thw.prod() :, :]
+            # --- Preprocessing ---
+            # 1. Calculate total unpadded sequence length
+            grid_thw = grid_thw.unsqueeze(0)
+            unpadded_seq_len = (grid_thw[:, 1] * grid_thw[:, 2]).sum().item()
             # Calculate padded sequence length (divisible by 2048) required by models/tt_transformers/tt/attention.py::forward_prefill
-            if not batched_prefill:
-                current_pixel_values = pixel_values[: grid_thw.prod(), :]
-                pixel_values = pixel_values[grid_thw.prod() :, :]
-                grid_thw = grid_thw.unsqueeze(0)
-                seq_len = seq_len_list[id]
-                padded_seq_len = padded_seq_len_list[id]
-            else:
-                current_pixel_values = pixel_values
-                seq_len = seq_len_list
-                padded_seq_len = padded_seq_len_list
+            seq_len = ((unpadded_seq_len // 2048) + 1) * 2048
+
+            # 2. Use preprocessing function from reference/functional to get indices and embeddings
+            cu_seqlens, position_embeddings = qwen3_vision_transformer_preprocess(
+                seq_len=unpadded_seq_len,
+                grid_thw=grid_thw,
+                head_dim=self.model_args.head_dim,
+                spatial_merge_size=self.model_args.hf_config.vision_config.spatial_merge_size,
+            )
 
             # 3. Use reference model's patch embedding
-            patch_input = self.reference_model.patch_embed(current_pixel_values)
+            patch_input = self.reference_model.patch_embed(pixel_values)
             pos_embeds = self.reference_model.fast_pos_embed_interpolate(grid_thw)
             patch_input = patch_input + pos_embeds
 
-            if batched_prefill:
-                cos_padded = [torch.cat(cos_padded, dim=2)]
-                sin_padded = [torch.cat(sin_padded, dim=2)]
-
+            # 4. Prepare rotational embeddings (cos, sin) -> pad -> convert to TT tensors
+            cos_orig, sin_orig = position_embeddings
+            cos_orig, sin_orig = convert_rope_style_hf_to_meta(cos_orig, sin_orig)
+            # pad sequence length with cos = 1, sin = 0 (identity rotation)
+            cos_padded = (
+                torch.nn.functional.pad(cos_orig, (0, 0, 0, seq_len - unpadded_seq_len), value=1)
+                .unsqueeze(0)
+                .unsqueeze(0)
+            )
+            sin_padded = (
+                torch.nn.functional.pad(sin_orig, (0, 0, 0, seq_len - unpadded_seq_len), value=0)
+                .unsqueeze(0)
+                .unsqueeze(0)
+            )
             # Convert to TT tensors on the mesh device
             cos = ttnn.from_torch(
-                cos_padded[id],
+                cos_padded,
                 dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
                 layout=ttnn.TILE_LAYOUT,
                 device=self.model_args.mesh_device,
@@ -331,7 +302,7 @@ class DropInVisionTransformer(torch.nn.Module):
                 mesh_mapper=ttnn.ShardTensorToMesh(self.model_args.mesh_device, dim=0),
             )
             sin = ttnn.from_torch(
-                sin_padded[id],
+                sin_padded,
                 dtype=ttnn.bfloat16,  # Use bfloat16 for RoPE
                 layout=ttnn.TILE_LAYOUT,
                 device=self.model_args.mesh_device,
@@ -341,28 +312,13 @@ class DropInVisionTransformer(torch.nn.Module):
             rot_mats = [cos, sin]
 
             # 5. Prepare input tensor for the TT model using window_index
-            if batched_prefill:
-                # For batched prefill, pad each image's patches individually to its padded_seq_len,
-                # then concatenate along dim 0 so the total shape is [sum(padded_seq_len_list), hidden_dim].
-                padded_chunks = []
-                offset = 0
-                for s, ps in zip(seq_len, padded_seq_len):
-                    chunk = patch_input[offset : offset + s, :]
-                    padded_chunks.append(torch.nn.functional.pad(chunk, (0, 0, 0, ps - s)))
-                    offset += s
-                patch_input = torch.cat(padded_chunks, dim=0)
-                total_padded_seq_len = sum(padded_seq_len)
-            else:
-                total_padded_seq_len = padded_seq_len
-            tt_input = self.tt_model.prepare_input(patch_input, total_padded_seq_len)
+            tt_input = self.tt_model.prepare_input(patch_input, seq_len)
 
             # --- TT Model Execution ---
             tt_out, deepstack_visual_embeds = self.tt_model(
                 tt_input,
-                unpadded_seq_len=seq_len,
+                unpadded_seq_len=unpadded_seq_len,
                 rot_mats=rot_mats,  # Use rot_mats generated in this forward pass
-                batch_size=batch_size,
-                padded_seq_len_list=padded_seq_len if batched_prefill else None,
             )
 
             # deallocate device tensors that are not needed by decode
@@ -456,46 +412,72 @@ class Transformer(TTTransformer):
         start_pos=0,
         page_table=None,
         chunk_page_table=None,
+        batch_size=1,
     ):
         assert isinstance(rot_mats[0], torch.Tensor)
         assert isinstance(rot_mats[1], torch.Tensor)
-        # tokens is actually embeddings
-        assert len(tokens.shape) == 3, "tokens should be a 3D tensor"  # [batch_size = 1, seq_len, head_dim]
-        S = tokens.shape[-2]
-        tokens_embd = ttnn.unsqueeze(tokens, 1)
+        assert tokens.dim() == 3
+        B, S, H = tokens.shape
+        if batch_size > 1:
+            tokens = tokens.reshape(1, 1, B * S, H)
+        else:
+            tokens = tokens.unsqueeze(1)
 
-        # Slice the rot mats to the prefill seqlen
+        tokens_embd = ttnn.from_torch(
+            tokens,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                mesh_device=self.mesh_device, dims=(None, 3), mesh_shape=self.args.cluster_shape
+            ),
+        )
+
+        if deepstack_visual_embeds is not None:
+            deepstack_visual_embeds = [
+                ttnn.from_torch(
+                    ds.unsqueeze(0).unsqueeze(0) if ds.dim() == 2 else ds.reshape(1, 1, -1, ds.shape[-1]),
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        mesh_device=self.mesh_device, dims=(None, 3), mesh_shape=self.args.cluster_shape
+                    ),
+                )
+                for ds in deepstack_visual_embeds
+            ]
+
         cos_matrix, sin_matrix = self._prepare_cos_sin(rot_mats=rot_mats)
-        assert (
-            cos_matrix.shape[2] >= start_pos + S
-        ), f"Padded prefill end idx {start_pos + S} exceeds max seq len {cos_matrix.shape[2]}"
-        tt_rot_mats_prefill = [
-            cos_matrix[:, :, start_pos : start_pos + S, :],
-            sin_matrix[:, :, start_pos : start_pos + S, :],
-        ]
+        assert cos_matrix.shape[2] >= start_pos + S
+        cos_slice = cos_matrix[:, :, start_pos : start_pos + S, :]
+        sin_slice = sin_matrix[:, :, start_pos : start_pos + S, :]
+        if batch_size > 1:
+            cos_slice = ttnn.reshape(cos_slice, [1, 1, B * S, cos_slice.shape[-1]])
+            sin_slice = ttnn.reshape(sin_slice, [1, 1, B * S, sin_slice.shape[-1]])
+        tt_rot_mats_prefill = [cos_slice, sin_slice]
 
-        if page_table is not None:
-            tt_page_table = ttnn.from_torch(
+        tt_page_table = (
+            ttnn.from_torch(
                 page_table,
                 device=self.mesh_device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-        else:
-            tt_page_table = None
-
-        if chunk_page_table is not None:
-            tt_chunk_page_table = ttnn.from_torch(
+            if page_table is not None
+            else None
+        )
+        tt_chunk_page_table = (
+            ttnn.from_torch(
                 chunk_page_table,
                 device=self.mesh_device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
             )
-        else:
-            tt_chunk_page_table = None
-
+            if chunk_page_table is not None
+            else None
+        )
         return tokens_embd, tt_rot_mats_prefill, tt_page_table, tt_chunk_page_table, deepstack_visual_embeds
 
     def deepstack_process(self, x, deepstack_visual_embeds):
@@ -514,6 +496,7 @@ class Transformer(TTTransformer):
         get_last_token=-1,
         kv_cache=None,
         deepstack_visual_embeds=None,
+        batch_size=1,
     ):
         return self.forward(
             x,
@@ -528,6 +511,7 @@ class Transformer(TTTransformer):
             get_last_token=get_last_token,
             kv_cache=kv_cache,
             deepstack_visual_embeds=deepstack_visual_embeds,
+            batch_size=batch_size,
         )
 
     def forward(
@@ -545,6 +529,7 @@ class Transformer(TTTransformer):
         kv_cache=None,
         visual_pos_masks=None,
         deepstack_visual_embeds=None,
+        batch_size=1,
     ):
         for i, layer in enumerate(self.layers):
             # No-op if callers already provide the right memory config
@@ -565,6 +550,7 @@ class Transformer(TTTransformer):
                 chunk_page_table=chunk_page_table,
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache[i] if kv_cache is not None else None,
+                batch_size=batch_size,
             )
             if deepstack_visual_embeds is not None and i in range(len(deepstack_visual_embeds)):
                 x = self.deepstack_process(x, deepstack_visual_embeds[i])
