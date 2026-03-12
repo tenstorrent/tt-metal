@@ -326,10 +326,10 @@ class TtMSDeformAttn:
             # Trace-safe: use multiply(value, 0) instead of zeros_like
             value = ttnn.where(mask, ttnn.multiply(value, 0, memory_config=ttnn.DRAM_MEMORY_CONFIG), value)
 
-        # Trace_mode: device-only path (no to_torch/from_torch). Process per-chunk to avoid OOM
-        # from full 89K sampling_locations allocation.
-        if self.trace_mode and spatial_shapes_tt is not None and isinstance(reference_points, ttnn.Tensor):
-            logger.info("  MSDeformAttn: device-only path (trace_mode, per-chunk)...")
+        # Device-only path (no to_torch/from_torch) when spatial_shapes_tt and reference_points (ttnn) available.
+        # Process per-chunk to avoid OOM from full 89K sampling_locations allocation.
+        if spatial_shapes_tt is not None and isinstance(reference_points, ttnn.Tensor):
+            logger.info("  MSDeformAttn: device-only path (per-chunk)...")
             value_l_tts = split_value_into_levels(value, spatial_shapes, self.num_heads, self.head_dim)
 
             output_chunks_device = []
@@ -394,7 +394,7 @@ class TtMSDeformAttn:
             # Deallocate chunks only after output is fully consumed (concat may reference them)
             for c in output_chunks_device:
                 ttnn.deallocate(c)
-            logger.info("  MSDeformAttn: done (trace_mode).")
+            logger.info("  MSDeformAttn: done (device-only).")
             return output
 
         logger.info("  MSDeformAttn: computing sampling locations and attention weights on host...")

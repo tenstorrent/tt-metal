@@ -38,7 +38,7 @@ from models.tt_cnn.tt.pipeline import (
 )
 
 PAD_CHANNELS = 16
-NUM_MEASUREMENT_ITERS = 4
+NUM_MEASUREMENT_ITERS = 2
 
 
 def _get_ckpt_path():
@@ -132,7 +132,7 @@ def _build_model_and_inputs(device):
         backbone_num_heads=tuple(SWIN_L_NUM_HEADS),
         window_size=SWIN_L_WINDOW_SIZE,
         in_channels=(192, 384, 768, 1536),
-        trace_mode=True,
+        trace_mode=False,
     )
     tt_inputs_host, dram_config, l1_config, input_dims, hw = _setup_sharded_input(device)
     return tt_model, tt_inputs_host, dram_config, l1_config, input_dims, hw
@@ -202,7 +202,7 @@ def _run_pipeline(device, tt_model, tt_inputs_host, dram_config, l1_config, inpu
 
     pipeline = create_pipeline_from_config(
         config=PipelineConfig(
-            use_trace=True,
+            use_trace=False,
             num_command_queues=2,
             all_transfers_on_separate_command_queue=False,
         ),

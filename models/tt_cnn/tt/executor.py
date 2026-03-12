@@ -502,7 +502,7 @@ class MultiCQTracedModelOverlappedInputExecutor(Executor):
         # address as during the initial trace.
         self._deallocate_structured_tensor(self._compilation_output_tensor, force=True)
 
-        # Capture trace (end before deallocate/allocate - those trigger sync/reads not allowed during capture)
+        # Capture trace
         self.trace_id = ttnn.begin_trace_capture(self.device, cq_id=self.CQ_OPS_AND_OUTPUT_READ)
         self.output_tensor = self.model(l1_input_tensor)
         ttnn.end_trace_capture(self.device, self.trace_id, cq_id=self.CQ_OPS_AND_OUTPUT_READ)
