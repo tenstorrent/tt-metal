@@ -149,13 +149,15 @@ void drain_save_cbs(cat_out_generator, stats_writer, stats_tile_logical,
 
 The `cb_reserve_back` inside `issue_restore_reads` naturally blocks until compute pops Q[q]'s restore data via `copy_block`. This happens early in Q[q]'s K-loop. So the reads fly during **the entire K-loop**, not just the save drain. This was an important correction during implementation — the initial approach issued prefetch after the save drain, giving only ~few μs of overlap (save write time) instead of ~500μs (full K-loop).
 
-**2. Cross-ring-iteration prefetch for Q[0].**
+**2. Cross-ring-iteration prefetch for Q[0] — issued inside the Q loop at Q[N-1].**
 
-After Q[N-1]'s save drain at the end of ring_iter R, we issue prefetch reads for Q[0] of ring_iter R+1. The reads fly during the `write_barrier` + ring device sync + mask setup. This eliminates Q[0]'s restore stall on subsequent ring iterations.
+At Q[N-1] position (last Q chunk of a ring iteration), we issue prefetch reads for Q[0] of the *next* ring iteration. This fires on **any** ring_iter (including 0), giving the reads Q[N-1]'s entire K-loop (~700us) to fly — the same overlap as intra-ring prefetches.
 
-This required two insights:
-- **No RAW hazard**: Q[0]'s save was written early in ring_iter R. With N-1 full Q chunk cycles elapsed (each ~500μs), the data has long landed in DRAM. A `noc_async_write_barrier()` before issuing the reads provides formal safety (completes instantly since writes departed long ago).
+Key insights:
+- **No RAW hazard**: Q[0]'s save was written early in the current ring iteration. A `noc_async_write_barrier()` before issuing the reads ensures DRAM arrival (completes instantly since writes departed hundreds of us ago).
 - **No ring_id dependency**: `get_q_chunk_info` uses `ring_id` only for `end_seq_tile`, which controls `maybe_read_tile`'s padding logic. For accumulator restore, all tiles are valid (we wrote them), so we pass `restore_end_seq_tile = 0xFFFFFFFF` to bypass padding. This decouples the prefetch from the ring sync.
+- **Ring_iter 0 safety**: On ring_iter 0, the restore CBs have never been used, so `cb_reserve_back` succeeds immediately. Compute never calls `copy_block` for restore on ring_iter 0, so the data sits in the CBs until ring_iter 1's `complete_restore` pushes it.
+- **Intra-ring prefetch must NOT fire on ring_iter 0**: Q[q+1]'s accumulators don't exist in DRAM yet (they haven't been saved). Only the cross-ring prefetch (Q[0]'s save from the current iteration) is valid on ring_iter 0. An earlier attempt that also issued intra-ring prefetches on ring_iter 0 read garbage from DRAM, causing PCC failure (RMSE 0.287).
 
 **3. `writes_flushed` instead of `write_barrier` in save drain.**
 
@@ -168,43 +170,134 @@ The original `read_prev_accumulators` had three separate `noc_async_read_barrier
 ### Implemented Writer Flow
 
 ```
-// ── Ring iteration R (not last) ──
+// ── Ring iteration 0 ──
 
-// Cross-ring prefetch from previous iteration already in flight for Q[0]
-// (issued at end of ring_iter R-1, or before the loop for ring_iter 1)
+for q = 0 to N-1:
+    // No complete_restore (ring_iter == 0 — nothing to restore)
+    // No intra-ring prefetch (Q[q+1]'s accumulators don't exist in DRAM yet)
+
+    if q == N-1 and not last_ring_iter:
+        write_barrier()                  // ensure Q[0]'s save landed (instant — saved long ago)
+        issue_restore_reads(Q[0])        // cross-ring: reads fly during Q[N-1]'s K-loop
+
+    // ═══ Compute runs K-loop for Q[q] ═══
+    wait_for_save_cbs(Q[q])
+    drain_save_cbs(Q[q])
+
+write_barrier()
+
+// ── Ring iteration R > 0 (not last) ──
 
 for q = 0 to N-1:
     complete_restore(Q[q])               // barrier + push (instant — reads landed during prior K-loop)
-    issue_restore_reads(Q[q+1])          // cb_reserve_back blocks until compute pops Q[q]'s restore
-                                         // then issues reads — fly during Q[q]'s entire K-loop
+    issue_restore_reads(Q[q+1])          // intra-ring: blocks until compute pops Q[q]'s restore,
+                                         // then reads fly during Q[q]'s entire K-loop
+
+    if q == N-1 and not last_ring_iter:
+        write_barrier()                  // ensure Q[0]'s save landed (instant)
+        issue_restore_reads(Q[0])        // cross-ring: reads fly during Q[N-1]'s K-loop
 
     // ═══ Compute runs K-loop for Q[q] ═══
-    // Prefetch reads for Q[q+1] flying in parallel
+    wait_for_save_cbs(Q[q])
+    drain_save_cbs(Q[q])
 
-    wait_for_save_cbs(Q[q])              // blocks until compute pushes save data
-    drain_save_cbs(Q[q])                 // issue writes, writes_flushed, pop
-
-// Cross-ring prefetch: issue Q[0] reads for ring_iter R+1
-noc_async_write_barrier()                // all saves landed in DRAM
-issue_restore_reads(Q[0])               // reads fly during ring sync + mask setup
+write_barrier()
 
 // ── Last ring iteration ──
-// Same pattern but save is replaced by write_block for final normalized output.
-// No cross-ring prefetch after the last iteration.
+// Same as R > 0 but save is replaced by write_block for final normalized output.
+// No cross-ring prefetch (no next iteration).
 ```
 
-### Timeline After Prefetch
+### Detailed Timeline (q_per_core=3, Q chunks 0,1,2)
 
 ```
-Writer:  [complete Q0][prefetch Q1][blocked] [save Q0][complete Q1][prefetch Q2][blocked] [save Q1] ...
-Compute: [copy→K-loop Q0]                   [→save]  [copy→K-loop Q1]                   [→save]
-                        ↑                                            ↑
-                  reads issued here                            reads issued here
-                  fly during K-loop Q0                         fly during K-loop Q1
-                  barrier instant at complete Q1               barrier instant at complete Q2
+═══════════════════════════════════════════════════════════════════════
+ RING ITER 0  (no restores — accumulators don't exist in DRAM yet)
+═══════════════════════════════════════════════════════════════════════
+
+  Q[0]:
+    Writer:  (nothing)
+    Compute: [────── K-loop Q[0] ──────][copy→save CBs]
+    Writer:  [wait_for_save][drain_save Q[0] → DRAM]
+
+  Q[1]:
+    Writer:  (nothing)
+    Compute: [────── K-loop Q[1] ──────][copy→save CBs]
+    Writer:  [wait_for_save][drain_save Q[1] → DRAM]
+
+  Q[2] (last Q chunk → cross-ring prefetch fires):
+    Writer:  [write_barrier][issue_restore_reads Q[0] for next ring iter]
+                                  │
+                                  ▼ reads fly during Q[2]'s K-loop ──────────┐
+    Compute: [────────────── K-loop Q[2] ──────────────────][copy→save CBs]  │
+    Writer:  [wait_for_save][drain_save Q[2] → DRAM]                         │
+                                                                              │
+  write_barrier() ◄── ensures all saves landed                               │
+                                                                              │
+═══════════════════════════════════════════════════════════════════════       │
+ RING ITER 1  (ring sync + mask setup happens here)                          │
+═══════════════════════════════════════════════════════════════════════       │
+                                                                              │
+  Q[0]:                                                                       │
+    Writer:  [complete_restore Q[0]]  ◄── barrier instant (reads flew above)──┘
+             [issue_restore_reads Q[1]]
+                     │
+                     ▼ cb_reserve_back blocks until compute pops Q[0]'s restore
+                       then reads fly during Q[0]'s K-loop ─────────────┐
+    Compute: [copy_block restore→accum][─── K-loop Q[0] ───][copy→save] │
+    Writer:  [wait_for_save][drain_save Q[0] → DRAM]                     │
+                                                                          │
+  Q[1]:                                                                   │
+    Writer:  [complete_restore Q[1]]  ◄── instant ────────────────────────┘
+             [issue_restore_reads Q[2]]
+                     │
+                     ▼ reads fly during Q[1]'s K-loop ─────────────────┐
+    Compute: [copy_block restore→accum][─── K-loop Q[1] ───][copy→save]│
+    Writer:  [wait_for_save][drain_save Q[1] → DRAM]                    │
+                                                                         │
+  Q[2] (last Q → cross-ring prefetch):                                   │
+    Writer:  [complete_restore Q[2]]  ◄── instant ───────────────────────┘
+             [write_barrier][issue_restore_reads Q[0] for next ring iter]
+                                  │
+                                  ▼ reads fly during Q[2]'s K-loop ────────┐
+    Compute: [copy_block restore→accum][─── K-loop Q[2] ───][copy→save]   │
+    Writer:  [wait_for_save][drain_save Q[2] → DRAM]                       │
+                                                                            │
+  write_barrier()                                                           │
+                                                                            │
+═══════════════════════════════════════════════════════════════════════     │
+ LAST RING ITER                                                            │
+═══════════════════════════════════════════════════════════════════════     │
+                                                                            │
+  Q[0]:                                                                     │
+    Writer:  [complete_restore Q[0]]  ◄── instant ──────────────────────────┘
+             [issue_restore_reads Q[1]]
+                     │
+                     ▼ reads fly during Q[0]'s K-loop ─────────────┐
+    Compute: [copy_block][─── K-loop Q[0] ───][normalize → cb_out] │
+    Writer:  [write_block final output → DRAM]                      │
+                                                                     │
+  Q[1]:                                                              │
+    Writer:  [complete_restore Q[1]]  ◄── instant ───────────────────┘
+             [issue_restore_reads Q[2]]
+                     ▼ ...                                          ┐
+    Compute: [copy_block][─── K-loop Q[1] ───][normalize → cb_out] │
+    Writer:  [write_block final output → DRAM]                      │
+                                                                     │
+  Q[2]:                                                              │
+    Writer:  [complete_restore Q[2]]  ◄── instant ───────────────────┘
+             (no cross-ring prefetch — last ring iter)
+    Compute: [copy_block][─── K-loop Q[2] ───][normalize → cb_out]
+    Writer:  [write_block final output → DRAM]
+
+  write_barrier()
 ```
 
-All Q chunks (including Q[0] via cross-ring prefetch) have their restore data prefetched during the prior Q chunk's K-loop. The `complete_restore` barrier should be instant.
+Key points:
+- Every Q chunk's restore is prefetched during the *previous* Q chunk's K-loop (~500-700μs of overlap), so `complete_restore`'s `noc_async_read_barrier()` is instant.
+- Q[0] is special: its prefetch comes from the *cross-ring* path at Q[N-1] of the prior ring iteration, giving equally long overlap.
+- Ring iter 0 has no restores (accumulators don't exist yet), only the cross-ring prefetch for Q[0] of ring iter 1.
+- `issue_restore_reads` blocks on `cb_reserve_back` until compute pops the current Q's restore data — this is the natural synchronization point.
 
 ## Branch History
 
@@ -307,25 +400,66 @@ git show d327858d008c44abe1f1433d098007a785d2ef07:ttnn/cpp/ttnn/operations/exper
 
 ### Build & Run
 
+Kernel changes (`.cpp`/`.hpp` under `kernels/`) are JIT-compiled — only need `rm -rf built/tt-metal-cache*`, not a full `./build_metal.sh`. Full rebuild is needed for host-side changes (factory, Python bindings).
+
 ```bash
+# After kernel-only changes:
+rm -rf built/tt-metal-cache*
+
+# After host-side changes:
 ./build_metal.sh && rm -rf built/tt-metal-cache*
 
 # PCC (CCLs restored):
+source python_env/bin/activate
 pytest tests/nightly/blackhole/ccl/test_ring_joint_sdpa.py::test_ring_joint_attention_sdpa_accuracy -x
 
-# Perf table (CCLs disabled):
+# Perf table with math util (CCLs disabled, uses Tracy subprocess):
+source python_env/bin/activate
+export TT_METAL_DEVICE_PROFILER=1
 pytest tests/nightly/blackhole/ccl/test_ring_joint_sdpa.py::test_ring_joint_attention_create_perf_table -x -s
 ```
+
+### Generating Tracy Profiles for the GUI
+
+To produce a `.tracy` file for the Tracy profiler GUI, run the perf test wrapped with `python -m tracy`:
+
+```bash
+source python_env/bin/activate
+rm -rf built/tt-metal-cache*
+export TT_METAL_DEVICE_PROFILER=1
+python -m tracy -r -p -n <run_name> \
+  -m pytest "tests/nightly/blackhole/ccl/test_ring_joint_sdpa.py::test_ring_joint_attention_sdpa_sweep_perf_impl[wan2_2_compat_8544x4_h10-k512-q288-bf16]"
+```
+
+Flags:
+- `-r` — generate report (starts `capture-release`, produces `.tracy` + CSV)
+- `-p` — partial profiling (only enabled zones, less overhead)
+- `-n <run_name>` — names the output folder
+
+Output location:
+```
+generated/profiler/reports/<run_name>/<timestamp>/tracy_profile_log_host.tracy
+generated/profiler/reports/<run_name>/<timestamp>/profile_log_device.csv
+generated/profiler/reports/<run_name>/<timestamp>/ops_perf_results_*.csv
+```
+
+The `.tracy` file can be opened in the Tracy GUI (`tracy` or `Tracy-release`). The `profile_log_device.csv` has per-core per-zone timestamps (ZONE_START/ZONE_END with cycle counts at 1.35 GHz).
+
+**Profiling markers**: `DeviceZoneScopedN("name")` in compute kernels appears on TRISC threads; in writer kernels it appears on **BRISC** (not NCRISC). Markers add overhead (~1-2%), so comment them out for clean perf measurement and uncomment for profiling analysis.
+
+**Board resets**: If tests hang with "Timed out while waiting for active ethernet core", reset boards with `tt-smi -r 0,1,2,3`. This can happen intermittently with commented-out CCLs.
 
 ### A/B Comparison
 
 1. Stash writer changes: `git stash -- ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_writer.cpp`
-2. `./build_metal.sh && rm -rf built/tt-metal-cache*`
-3. Run perf test → record baseline
+2. `rm -rf built/tt-metal-cache*`
+3. Run perf table test → record baseline
 4. `git stash pop`
-5. `./build_metal.sh && rm -rf built/tt-metal-cache*`
-6. Run perf test → record prefetch
+5. `rm -rf built/tt-metal-cache*`
+6. Run perf table test → record prefetch
 7. Compare
+
+For Tracy profile comparison, use `python -m tracy -r -p -n before ...` / `-n after ...` and compare the two `.tracy` files in the GUI.
 
 ## PCC Results
 
@@ -338,37 +472,53 @@ pytest tests/nightly/blackhole/ccl/test_ring_joint_sdpa.py::test_ring_joint_atte
 | s=8544/q224/k512 | 4-5 | 0.9997 | 0.006372 | PASS (identical to baseline) |
 | s=8544/q288/k512 | 3 | 0.9997 | 0.006372 | PASS (identical to baseline) |
 
-All values are **bit-identical** to baseline (no prefetch), confirming the prefetch is a pure scheduling change with no effect on computed values. These results are from the original branch; re-validation on the v2 branch (after rebase) is recommended.
+All values are **bit-identical** to baseline (no prefetch), confirming the prefetch is a pure scheduling change with no effect on computed values.
+
+**v2 branch re-validation** (s=8544/q288/k512 with in-loop cross-ring prefetch):
+- PCC: 0.9997, RMSE: 0.006372 — **PASS** (identical to baseline)
 
 ## Performance Results (Blackhole, 4 devices, CCLs disabled)
 
-**s=8544/q288/k512** (the multi-Q case — q_per_core=3, all cores hit prefetch path, 6 restores per core):
+Measured via `test_ring_joint_attention_create_perf_table` (Tracy subprocess profiling, no profiling markers). All DeviceZoneScopedN markers were commented out for clean measurement.
+
+**s=8544/q288/k512** (q_per_core=3, 100 SDPA cores, 17 K chunks × 4 ring iters):
 
 | Variant | Duration | Math Util |
 |---|---|---|
-| Baseline | 8.375 ms | 64.6% |
-| Prefetch | 8.403 ms | 64.4% |
-| Delta | +0.028 ms | -0.2pp |
+| No prefetch (main baseline) | 8.574 ms | 63.1% |
+| In-loop cross-ring prefetch (v2) | 8.508 ms | 63.6% |
+| Delta | **-0.066 ms (-0.8%)** | **+0.5pp** |
 
-**s=2240/q224/k512** (most cores have q_per_core=1, prefetch only on 10/100 cores):
+### Tracy-Measured K CHUNK Gaps (TRISC_0, core (1,2), device 0)
 
-| Variant | Duration | Math Util |
-|---|---|---|
-| Baseline | 0.678 ms | 54.8% |
-| Prefetch | 0.680 ms | 54.6% |
-| Delta | +0.002 ms | -0.2pp |
+Ring iteration boundaries show the stall between Q[N-1]'s last K chunk and Q[0]'s first K chunk:
 
-**No measurable improvement.** Within run-to-run noise.
+| Boundary | No Prefetch (us) | V2 Prefetch (us) | Saved (us) |
+|---|---|---|---|
+| Ring 0→1 | 12.7 | 9.0 | 3.7 |
+| Ring 1→2 | 12.1 | 8.9 | 3.2 |
+| Ring 2→3 | 12.1 | 8.1 | 4.0 |
+| Ring 3→last | 11.5 | 7.9 | 3.6 |
+| **Total** | **48.4** | **33.9** | **~14.5** |
 
-### Why No Impact
+Intra-ring Q[q]→Q[q+1] gaps (~2.4us) are unchanged — these are the irreducible `copy_block` overhead.
 
-Per-Q-chunk restore transfers ~54 tiles (~108KB for q288) from DRAM. At ~10+ GB/s DRAM bandwidth, this takes ~10-15μs. One Q chunk's K-loop against 17 K chunks takes ~510μs (based on tracy measurements of ~150μs per 5 K chunks). The restore stall is ~2-3% of per-Q-chunk time.
+### Why Small Impact
 
-Total restore overhead: 9 restores × ~15μs = ~135μs out of 8,400μs = **~1.6% of total runtime**. This is within measurement noise of the tracy-based profiling, which runs the op in a subprocess.
+The cross-ring prefetch saves ~3-4us per ring boundary by eliminating the DRAM read latency from `complete_restore`. The remaining ~8-9us gap is structural overhead: Q chunk teardown (pop Q, swap accumulators) + `copy_block` transferring restored data from CBs to accumulator CBs through DST.
 
-The prefetch correctly eliminates the stall (verified by PCC — identical results mean the same data flows through the same compute), but the stall was never large enough to measure on these workloads.
+Per-Q-chunk restore transfers ~54 tiles (~108KB for q288) from DRAM. At ~10+ GB/s DRAM bandwidth, this takes ~10-15μs. The prefetch hides this latency but can't eliminate the `copy_block` time.
 
-### When Prefetch Would Matter
+### Tracy Profiles
+
+Profiles with RING ITER, Q CHUNK, K CHUNK, and WR-* markers (these add ~1-2% overhead):
+
+| Profile | File |
+|---|---|
+| No prefetch (baseline) | `sdpa_s8544_q288_k512_no_prefetch.tracy` (repo root) |
+| V2 in-loop cross-ring prefetch | `sdpa_s8544_q288_k512_prefetch.tracy` (repo root) |
+
+### When Prefetch Would Matter More
 
 The restore overhead grows as a fraction of total time when:
 - **Fewer K chunks per ring iteration** (shorter sequences, larger k_chunk) — K-loop is shorter, restore fraction is larger
@@ -389,9 +539,75 @@ This would provide latency hiding even when the K-loop is short, at the cost of 
 
 Currently all transfers are chunk-granular (full Sq_chunk_t at once). Restructuring to work at subblock_h granularity would enable finer-grained overlap.
 
-### Stage 4: Transaction ID (trid) Based Barriers
+### Stage 4: Transaction ID (trid) Based Write Barriers
 
-Assign separate trids to save writes vs prefetch reads for fully independent barrier tracking.
+#### Problem: Blanket Write Barriers Wait for Unrelated Saves
+
+The current code has two blanket `noc_async_write_barrier()` calls per ring iteration:
+
+1. **Cross-ring prefetch barrier** (line 517): Fires at Q[N-1] before issuing cross-ring prefetch reads for Q[0]. Only *needs* Q[0]'s save to have arrived at DRAM, but waits for ALL pending writes — including Q[N-2]'s save, which departed L1 just ~100ns ago via `writes_flushed` in `drain_save_cbs`.
+
+2. **End-of-ring barrier** (line 576): Fires after all Q chunks. Only *needs* Q[N-1]'s save to have arrived, but waits for everything.
+
+The cross-ring barrier (1) is potentially the worse offender: Q[N-2]'s save (~108KB of accumulator data) has had almost no time to traverse the NOC and arrive at DRAM. Q[0]'s save (the one actually needed) landed hundreds of μs ago during Q[1]'s K-loop.
+
+#### Measurement: End-of-Ring Barrier (line 576)
+
+Measured with `DeviceZoneScopedN("WR-END-BARRIER")` on s=8544/q288/k512 (q_per_core=3, 4 devices, 1600 samples across all cores):
+
+| Stat | Duration |
+|---|---|
+| p0 (min) | 0.03 μs |
+| p25 | 0.10 μs |
+| p50 | 0.26 μs |
+| p75 | 0.50 μs |
+| p90 | 0.88 μs |
+| p99 | 2.50 μs |
+| p100 (max) | 7.94 μs |
+
+The barrier is nearly free in this config — Q[N-1]'s save has had Q[N-1]'s entire K-loop to land. However, with only 3 barriers per core (4 ring iters, last takes a different path), statistics are thin. The 7.94μs max could represent a real stall under NOC congestion.
+
+**TODO**: Measure the cross-ring prefetch barrier (line 517) similarly. This one is more likely to show real stalls since Q[N-2]'s save is so recent.
+
+#### Proposed Solution: Per-Save Transaction IDs
+
+The NOC API provides per-trid write barriers:
+- `noc_async_write_set_trid(trid)` — tag subsequent writes
+- `noc_async_write_barrier_with_trid(trid)` — block until trid's writes arrive at DRAM
+- `noc_async_write_flushed_with_trid(trid)` — block until trid's writes depart L1
+
+**Two-trid scheme** (TRID_Q0=0, TRID_REST=1):
+
+```
+drain_save_cbs(Q[q]):
+    noc_async_write_set_trid(q == 0 ? TRID_Q0 : TRID_REST);
+    // ... issue writes ...
+    noc_async_write_flushed_with_trid(...);   // L1 safe
+
+Cross-ring prefetch at Q[N-1]:
+    noc_async_write_barrier_with_trid(TRID_Q0);   // only Q[0]'s save — instant
+    issue_restore_reads(Q[0]);
+
+End of ring:
+    (no barrier — drain_save_cbs already did writes_flushed)
+
+Next ring iter, Q[0]:
+    complete_restore(Q[0]);
+    noc_async_write_barrier_with_trid(TRID_REST);  // Q[1]..Q[N-1] saves — instant
+    issue_restore_reads(Q[1]);
+```
+
+#### Rejected: Move Barrier Without Trids
+
+Moving the end-of-ring blanket `write_barrier()` to right before the first intra-ring `issue_restore_reads` in the next ring iteration would give Q[N-1]'s save more time to land. However, this only helps the end-of-ring barrier — it cannot fix the cross-ring barrier (line 517), which is the more problematic one (Q[N-2]'s save departed ~100ns ago). Trids are required to solve both.
+
+#### Implementation Notes
+
+- `noc_async_write_set_trid` is stateful — once set, all subsequent writes use that trid until changed. Must restore default trid (0) or set explicitly before each drain.
+- The cross-ring prefetch's existing `noc_async_write_barrier()` should change to `noc_async_write_barrier_with_trid(TRID_Q0)`. This is the higher-value change (avoids waiting for Q[N-2]'s recent save).
+- `write_block` (used for final output on last ring iter) uses its own internal `noc_async_write_barrier()`. This is fine — it's not in the prefetch path.
+- Ring iter 0 has no restores, so trid barriers are skipped (same guards as current prefetch logic).
+- PCC must be re-validated after changes — trid misuse could cause RAW hazards.
 
 ## Key Files
 

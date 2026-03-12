@@ -71,7 +71,6 @@ void issue_restore_reads(
     const uint32_t nq,
     const uint32_t Sq_chunk_t,
     const Slice out_slice,
-    const uint32_t end_seq_tile,
     const uint32_t stats_seq_start_tile,
     const uint32_t stats_seq_end_tile,
     const uint32_t sum_offset,
@@ -80,6 +79,10 @@ void issue_restore_reads(
     const uint32_t cb_sum_in,
     const uint32_t tile_bytes,
     const uint32_t stats_tile_bytes) {
+    // All accumulator tiles are valid (we wrote them), so bypass maybe_read_tile's
+    // padding logic. This decouples restore from ring_id, enabling cross-ring prefetch.
+    constexpr uint32_t end_seq_tile = 0xFFFFFFFF;
+
     // Issue output reads (reserve + async reads, no barrier)
     const uint32_t out_rows = out_slice.get_d2_size();
     const uint32_t out_cols = out_slice.get_d3_size();
@@ -451,17 +454,13 @@ void kernel_main() {
             // Prefetch optimization: issue restore reads for Q[q+1] right after completing
             // Q[q]'s restore. cb_reserve_back blocks until compute pops Q[q]'s data, then
             // reads are issued and fly during Q[q]'s ENTIRE K-loop. This also works across
-            // ring iteration boundaries: after Q[N-1]'s save drain, we prefetch Q[0] for the
-            // next ring iteration. The reads fly during the write_barrier + ring sync + mask
-            // setup, so Q[0]'s restore on the next iteration is instant.
+            // ring iteration boundaries: at Q[N-1], we prefetch Q[0] for the next ring
+            // iteration before the save drain. The reads fly during Q[N-1]'s K-loop +
+            // save drain, so Q[0]'s restore on the next iteration is instant.
             const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
             const bool single_q_chunk = (global_q_end - global_q_start == 1);
             constexpr uint32_t sum_offset = local_padded_Nt + Lt;
             constexpr uint32_t out_num_tiles = Sq_chunk_t * DHt;
-            // For accumulator restore, all tiles are valid (we wrote them), so end_seq_tile
-            // doesn't matter. Use a large value to bypass maybe_read_tile's padding logic.
-            // This decouples restore prefetch from ring_id, enabling cross-ring-iteration prefetch.
-            constexpr uint32_t restore_end_seq_tile = 0xFFFFFFFF;
 
             for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
@@ -471,18 +470,15 @@ void kernel_main() {
                 const auto qi = get_q_chunk_info(
                     q_chunk, nb, nq, ring_id, num_local_q_chunks, Sq_chunk_t, DHt, Lt, local_padded_Nt);
 
+                // 1. Complete restore (ring_iter > 0 only)
                 if (!single_q_chunk && ring_iter > 0) {
-                    // Complete previously issued restore (barrier + push).
-                    // Reads were prefetched during Q[q-1]'s K-loop (or during the prior
-                    // ring iteration's tail for Q[0]) — should be instant.
+                    // DeviceZoneScopedN("WR-COMPLETE-RESTORE");
                     complete_restore(cb_prev_out, out_num_tiles, cb_max_in, cb_sum_in, Sq_chunk_t);
 
-                    // Prefetch: issue restore reads for Q[q+1].
-                    // cb_reserve_back blocks until compute pops Q[q]'s restore data
-                    // (via copy_block at the start of the K-loop). Once unblocked,
-                    // reads are issued and fly during Q[q]'s entire K-loop.
+                    // Intra-ring prefetch: Q[q] → Q[q+1]. Only on ring_iter > 0.
                     const uint32_t next_q = global_q_chunk + 1;
                     if (next_q < global_q_end) {
+                        // DeviceZoneScopedN("WR-PREFETCH-NEXT-Q");
                         const uint32_t nb_next = next_q / (NH * num_q_chunks);
                         const uint32_t nq_next = (next_q % (NH * num_q_chunks)) / num_q_chunks;
                         const uint32_t qc_next = next_q % num_q_chunks;
@@ -504,7 +500,6 @@ void kernel_main() {
                             nq_next,
                             Sq_chunk_t,
                             qi_next.out_slice,
-                            restore_end_seq_tile,
                             qi_next.stats_seq_start_tile,
                             qi_next.stats_seq_end_tile,
                             sum_offset,
@@ -516,11 +511,38 @@ void kernel_main() {
                     }
                 }
 
+                // 2. Cross-ring prefetch: Q[N-1] → Q[0] of next ring iter.
+                if (!single_q_chunk && !is_last_ring_iter && (global_q_chunk + 1 >= global_q_end)) {
+                    // DeviceZoneScopedN("WR-XRING-PREFETCH-Q0");
+                    noc_async_write_barrier();
+                    const uint32_t gq0 = global_q_start;
+                    const uint32_t nb0 = gq0 / (NH * num_q_chunks);
+                    const uint32_t nq0 = (gq0 % (NH * num_q_chunks)) / num_q_chunks;
+                    const uint32_t qc0 = gq0 % num_q_chunks;
+                    const auto qi0 = get_q_chunk_info(
+                        qc0, nb0, nq0, 0 /*unused*/, num_local_q_chunks, Sq_chunk_t, DHt, Lt, local_padded_Nt);
+                    issue_restore_reads(
+                        qi0.is_joint_q ? joint_out_generator : out_generator,
+                        stats_writer,
+                        stats_tile_logical,
+                        nb0,
+                        nq0,
+                        Sq_chunk_t,
+                        qi0.out_slice,
+                        qi0.stats_seq_start_tile,
+                        qi0.stats_seq_end_tile,
+                        sum_offset,
+                        cb_prev_out,
+                        cb_max_in,
+                        cb_sum_in,
+                        tile_bytes,
+                        stats_tile_bytes);
+                }
+
                 // === Compute runs K-loop for this Q chunk ===
-                // Prefetch reads for Q[q+1] are flying in parallel.
-                // Writer blocks on cb_wait_front until compute pushes save/output data.
 
                 if (is_last_ring_iter) {
+                    // DeviceZoneScopedN("WR-WRITE-FINAL");
                     write_block(
                         qi.is_joint_q ? joint_out_generator : out_generator,
                         qi.out_slice,
@@ -528,6 +550,7 @@ void kernel_main() {
                         cb_out,
                         tile_bytes);
                 } else if (!single_q_chunk) {
+                    // DeviceZoneScopedN("WR-SAVE-DRAIN");
                     wait_for_save_cbs(Sq_chunk_t, qi.out_slice, cb_out, cb_max_out, cb_sum_out);
                     drain_save_cbs(
                         qi.is_joint_q ? joint_out_generator : out_generator,
@@ -549,41 +572,8 @@ void kernel_main() {
                 }
             }
 
-            // Cross-ring-iteration prefetch: after Q[N-1]'s save, issue restore reads
-            // for Q[0] of the NEXT ring iteration. Reads fly during the write_barrier,
-            // ring sync, and mask setup — so Q[0]'s complete_restore is instant.
-            // On ring_iter 0 the restore CBs were never used, so cb_reserve_back succeeds
-            // immediately. On ring_iter > 0, compute has popped Q[N-1]'s restore data.
-            // Q[0]'s save data is guaranteed in DRAM: it was written early in this ring
-            // iteration and writes_flushed long ago (N-1 full Q cycles have elapsed).
-            if (!single_q_chunk && !is_last_ring_iter) {
-                noc_async_write_barrier();
-                const uint32_t gq0 = global_q_start;
-                const uint32_t nb0 = gq0 / (NH * num_q_chunks);
-                const uint32_t nq0 = (gq0 % (NH * num_q_chunks)) / num_q_chunks;
-                const uint32_t qc0 = gq0 % num_q_chunks;
-                const auto qi0 = get_q_chunk_info(
-                    qc0, nb0, nq0, 0 /*unused*/, num_local_q_chunks, Sq_chunk_t, DHt, Lt, local_padded_Nt);
-                issue_restore_reads(
-                    qi0.is_joint_q ? joint_out_generator : out_generator,
-                    stats_writer,
-                    stats_tile_logical,
-                    nb0,
-                    nq0,
-                    Sq_chunk_t,
-                    qi0.out_slice,
-                    restore_end_seq_tile,
-                    qi0.stats_seq_start_tile,
-                    qi0.stats_seq_end_tile,
-                    sum_offset,
-                    cb_prev_out,
-                    cb_max_in,
-                    cb_sum_in,
-                    tile_bytes,
-                    stats_tile_bytes);
-            } else {
-                noc_async_write_barrier();
-            }
+            // Cross-ring prefetch for Q[0] is now issued inside the Q loop at Q[N-1].
+            noc_async_write_barrier();
         } else {
             for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
                 // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
