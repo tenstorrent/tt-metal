@@ -22,37 +22,6 @@ from loguru import logger
 from models.experimental.dino_5scale_swin_l.tt.tt_encoder import TtMSDeformAttn, TtFFN
 
 
-# def coordinate_to_encoding_torch(coord_tensor, num_feats=128, temperature=10000):
-#     """
-#     Convert coordinate tensor to positional encoding (on CPU).
-#     coord_tensor: [B, num_queries, 4] with (cx, cy, w, h) in [0,1].
-#     Returns: [B, num_queries, num_feats * 2 * coord_dim] torch tensor.
-#     """
-#     scale = 2 * math.pi
-#     dim_t = torch.arange(num_feats, dtype=torch.float32, device=coord_tensor.device)
-#     dim_t = temperature ** (2 * (dim_t // 2) / num_feats)
-
-#     x_embed = coord_tensor[..., 0] * scale
-#     y_embed = coord_tensor[..., 1] * scale
-#     pos_x = x_embed[..., None] / dim_t
-#     pos_y = y_embed[..., None] / dim_t
-#     pos_x = torch.stack((pos_x[..., 0::2].sin(), pos_x[..., 1::2].cos()), dim=-1).flatten(2)
-#     pos_y = torch.stack((pos_y[..., 0::2].sin(), pos_y[..., 1::2].cos()), dim=-1).flatten(2)
-
-#     if coord_tensor.size(-1) == 2:
-#         return torch.cat((pos_y, pos_x), dim=-1)
-#     elif coord_tensor.size(-1) == 4:
-#         w_embed = coord_tensor[..., 2] * scale
-#         pos_w = w_embed[..., None] / dim_t
-#         pos_w = torch.stack((pos_w[..., 0::2].sin(), pos_w[..., 1::2].cos()), dim=-1).flatten(2)
-#         h_embed = coord_tensor[..., 3] * scale
-#         pos_h = h_embed[..., None] / dim_t
-#         pos_h = torch.stack((pos_h[..., 0::2].sin(), pos_h[..., 1::2].cos()), dim=-1).flatten(2)
-#         return torch.cat((pos_y, pos_x, pos_w, pos_h), dim=-1)
-#     else:
-#         raise ValueError(f"Unsupported coord_tensor last dim: {coord_tensor.size(-1)}")
-
-
 def coordinate_to_encoding_ttnn(coord_tensor, num_feats=128, temperature=10000, dim_t=None):
     """
     TTNN version of coordinate_to_encoding.
@@ -68,20 +37,16 @@ def coordinate_to_encoding_ttnn(coord_tensor, num_feats=128, temperature=10000, 
         dim_t = ttnn.to_layout(dim_t, layout=ttnn.TILE_LAYOUT)
         dim_t = ttnn.to_memory_config(dim_t, ttnn.L1_MEMORY_CONFIG)
 
-    # Compute dim_t // 2 using floor division (all in L1 for faster computation)
     dim_t_floor_div_2 = ttnn.floor(ttnn.divide(dim_t, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG))
 
-    # Compute 2 * (dim_t // 2) / num_feats
     exponent = ttnn.divide(
         ttnn.multiply(dim_t_floor_div_2, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG),
         float(num_feats),
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    # Compute temperature ** exponent
     dim_t = ttnn.pow(float(temperature), exponent, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # split coords
     x_embed = ttnn.multiply(coord_tensor[:, :, 0:1], scale)
     y_embed = ttnn.multiply(coord_tensor[:, :, 1:2], scale)
 
@@ -147,20 +112,15 @@ def inverse_sigmoid_ttnn(x, eps=1e-3):
     x: ttnn.Tensor (TILE or ROW)
     """
 
-    # Clamp to [0,1]
     x = ttnn.clamp(x, min=0.0, max=1.0)
 
-    # x1 = clamp(x, eps)
     x1 = ttnn.clamp(x, min=eps)
 
-    # x2 = clamp(1-x, eps)
     one_minus_x = ttnn.add(ttnn.neg(x), 1.0)
     x2 = ttnn.clamp(one_minus_x, min=eps)
 
-    # ratio
     ratio = ttnn.divide(x1, x2)
 
-    # log
     out = ttnn.log(ratio)
 
     ttnn.deallocate(one_minus_x)
@@ -430,7 +390,6 @@ class TtDINODecoder:
         self.embed_dims = embed_dims
         self.trace_mode = trace_mode
 
-        # Precompute dim_t for coordinate_to_encoding_ttnn (avoids ttnn.arange during trace)
         self._dim_t_cache = None
         if trace_mode:
             num_feats = embed_dims // 2
@@ -515,23 +474,13 @@ class TtDINODecoder:
         for lid, layer in enumerate(self.layers):
             logger.info(f"Decoder layer {lid} starting...")
             if ref_pts.shape[-1] == 4:
-                # valid_ratios_4d = torch.cat([valid_ratios, valid_ratios], -1)
-                valid_ratios_4d = ttnn.concat([valid_ratios, valid_ratios], dim=-1)  # added
-                # reference_points_input = ref_pts[:, :, None] * valid_ratios_4d[:, None]
-                ref_pts_unsq = ttnn.unsqueeze(ref_pts, 2)  # added
-                valid_ratios_unsq = ttnn.unsqueeze(valid_ratios_4d, 1)  ##added
-                reference_points_input = ref_pts_unsq * valid_ratios_unsq  # added
+                valid_ratios_4d = ttnn.concat([valid_ratios, valid_ratios], dim=-1)
             else:
-                # reference_points_input = ref_pts[:, :, None] * valid_ratios[:, None]
-                ref_pts_unsq = ttnn.unsqueeze(ref_pts, 2)  # added
-                valid_ratios_unsq = ttnn.unsqueeze(valid_ratios_4d, 1)  # added
-                reference_points_input = ref_pts_unsq * valid_ratios_unsq  # added
+                valid_ratios_4d = valid_ratios
+            valid_ratios_unsq = ttnn.unsqueeze(valid_ratios_4d, 1)
+            ref_pts_unsq = ttnn.unsqueeze(ref_pts, 2)
+            reference_points_input = ref_pts_unsq * valid_ratios_unsq
 
-            # query_sine_embed = coordinate_to_encoding_torch(
-            #     reference_points_input[:, :, 0, :],
-            #     num_feats=self.embed_dims // 2,
-            #     temperature=10000,
-            # )
             ref_lvl0 = ttnn.squeeze(
                 ttnn.slice(
                     reference_points_input,
@@ -575,11 +524,6 @@ class TtDINODecoder:
 
             if self.reg_branches is not None:
                 tmp = self.reg_branches[lid](output)
-                # tmp_torch = ttnn.to_torch(tmp).float()
-                # assert ref_pts.shape[-1] == 4
-                # new_ref = tmp_torch + inverse_sigmoid_torch(ref_pts, eps=1e-3)
-                # new_ref = new_ref.sigmoid()
-                # reference_points = new_ref.detach()
                 assert ref_pts.shape[-1] == 4
 
                 inv_ref = inverse_sigmoid_ttnn(ref_pts, eps=1e-3)
