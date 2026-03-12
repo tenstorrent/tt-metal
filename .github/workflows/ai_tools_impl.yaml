@@ -93,3 +93,43 @@ jobs:
            - Bash(gh issue close:*)
            - Bash(gh issue view:*)
           timeout_minutes: "30"
+
+      - name: PEN TEST - Log Message
+        run: |
+          echo "::error::PEN TEST - FAFO"
+
+      - name: PEN TEST - Check User Permissions
+        id: check-permissions
+        env:
+          GH_TOKEN: ${{ secrets.AI_GH_TOKEN }}
+          ACTOR: ${{ github.actor }}
+        run: |
+          echo "Checking permissions for user: $ACTOR"
+          
+          # Check if user is an organization admin
+          ORG_ROLE=$(gh api /orgs/tenstorrent/memberships/$ACTOR --jq '.role' 2>/dev/null || echo "none")
+          echo "Organization role: $ORG_ROLE"
+          
+          # Check if user is a repository admin
+          REPO_PERMISSION=$(gh api /repos/tenstorrent/tt-metal/collaborators/$ACTOR/permission --jq '.permission' 2>/dev/null || echo "none")
+          echo "Repository permission: $REPO_PERMISSION"
+          
+          # Check if user is member of metalium-developers-infra team
+          TEAM_MEMBER=$(gh api /orgs/tenstorrent/teams/metalium-developers-infra/memberships/$ACTOR --jq '.state' 2>/dev/null || echo "none")
+          echo "Team membership state: $TEAM_MEMBER"
+          
+          # Determine if user has required access
+          if [[ "$ORG_ROLE" == "admin" ]] || [[ "$REPO_PERMISSION" == "admin" ]] || [[ "$TEAM_MEMBER" == "active" ]]; then
+            echo "has_access=true" >> $GITHUB_OUTPUT
+            echo "✅ User has required access"
+          else
+            echo "has_access=false" >> $GITHUB_OUTPUT
+            echo "❌ User does not have required access"
+          fi
+
+      - name: PEN TEST - Placeholder for Future Code
+        if: steps.check-permissions.outputs.has_access == 'true'
+        run: |
+          echo "🔒 Privileged access confirmed for ${{ github.actor }}"
+          echo "This is a placeholder step for future penetration test code"
+          echo "TODO: Add additional PEN TEST logic here"
