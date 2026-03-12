@@ -76,6 +76,14 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
     const tt::DataFormat index_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(index_tensor.dtype());
     const bool is32_bit_data = index_cb_data_format == tt::DataFormat::UInt32;
 
+    // Use bf16 for compute intermediate buffers to avoid precision loss from bfp8/bfp4
+    // shared-exponent grouping during sort (e.g. a single inf in a block makes all other
+    // elements in that block encode to 0, corrupting the sort result).
+    const tt::DataFormat compute_cb_data_format =
+        (input_cb_data_format == tt::DataFormat::Bfp8_b || input_cb_data_format == tt::DataFormat::Bfp4_b)
+            ? tt::DataFormat::Float16_b
+            : input_cb_data_format;
+
     // Core grid and tile size calculations
     const auto first_core_range = args.sub_core_grids.ranges().at(0);
     const auto first_core_range_set = CoreRangeSet(first_core_range);
@@ -83,6 +91,7 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
     const uint32_t input_tile_size = tile_size(input_cb_data_format);
     const uint32_t value_tile_size = tile_size(value_cb_data_format);
     const uint32_t index_tile_size = tile_size(index_cb_data_format);
+    const uint32_t compute_tile_size = tile_size(compute_cb_data_format);
 
     // DRAM buffer pointers for kernel runtime arguments
     const auto* input_buffer = input_tensor.buffer();
@@ -162,13 +171,17 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
             .set_page_size(index_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, index_input_intermed0_config);
 
-    // Gathered values (aggregation buffer for final core)
-    // Receives local TopK results from all worker cores (Wt_final = num_cores * Kt)
+    // Gathered values (aggregation buffer for final core).
+    // Uses compute_cb_data_format (bf16 when input is bfp8/bfp4): the local cores write
+    // tiles in transposed layout where each tile row mixes values from different H positions
+    // (e.g. [normal_H0, INF_H1, ..., INF_H31]). If stored as bfp8 the shared-exponent
+    // block is dominated by INF, zeroing out H=0's value. Keeping bf16 here and in
+    // values_cb_index (local) avoids that precision loss for the inter-core transfer.
     constexpr uint32_t gathered_values_cb_index = tt::CBIndex::c_4;
     const tt::tt_metal::CircularBufferConfig gathered_values_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            Wt_final * value_tile_size, {{gathered_values_cb_index, value_cb_data_format}})
-            .set_page_size(gathered_values_cb_index, value_tile_size);
+            Wt_final * compute_tile_size, {{gathered_values_cb_index, compute_cb_data_format}})
+            .set_page_size(gathered_values_cb_index, compute_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, gathered_values_cb_config);
 
     // Gathered indices (aggregation buffer for final core)
@@ -179,13 +192,6 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
             .set_page_size(gathered_indices_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, gathered_indices_cb_config);
 
-    // Local TopK values output (local cores → writer → final core)
-    constexpr uint32_t values_cb_index = tt::CBIndex::c_8;
-    const tt::tt_metal::CircularBufferConfig values_cb_config =
-        tt::tt_metal::CircularBufferConfig(num_cb_unit * value_tile_size, {{values_cb_index, value_cb_data_format}})
-            .set_page_size(values_cb_index, value_tile_size);
-    tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, values_cb_config);
-
     // Local TopK indices output (local cores → writer → final core)
     constexpr uint32_t output_ind_cb_index = tt::CBIndex::c_9;
     const tt::tt_metal::CircularBufferConfig output_ind_cb_config =
@@ -194,12 +200,14 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
     tt::tt_metal::CreateCircularBuffer(program, all_cores_range_set, output_ind_cb_config);
 
     // Transposed values (single-buffered for in-place bitonic operations)
-    // Holds all Wt_local tiles for complete width chunk processing
+    // Holds all Wt_local tiles for complete width chunk processing.
+    // Uses bf16 when input is bfp8/bfp4 to avoid precision loss from shared-exponent
+    // grouping during the sort (inf in one slot zeroes out its block-mates).
     constexpr uint32_t input_transposed_cb_index = tt::CBIndex::c_2;
     const tt::tt_metal::CircularBufferConfig input_transposed_cb_config =
         tt::tt_metal::CircularBufferConfig(
-            Wt_local * value_tile_size, {{input_transposed_cb_index, input_cb_data_format}})
-            .set_page_size(input_transposed_cb_index, input_tile_size);
+            Wt_local * compute_tile_size, {{input_transposed_cb_index, compute_cb_data_format}})
+            .set_page_size(input_transposed_cb_index, compute_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, local_cores_range_set, input_transposed_cb_config);
 
     // Transposed indices (single-buffered for in-place bitonic operations)
@@ -210,11 +218,36 @@ TopKMultiCoreProgramFactory::cached_program_t TopKMultiCoreProgramFactory::creat
             .set_page_size(index_transposed_cb_index, index_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, local_cores_range_set, index_transposed_cb_config);
 
-    // Final values (staging buffer for final compute output)
+    // Local TopK values output — split format between local and final cores.
+    //
+    // Local cores (bf16): the sorted Kt tile in transposed layout has rows of the form
+    // [normal_H0, INF_H1, ..., INF_H31]. Packing such a row to bfp8 makes the
+    // shared-exponent INF-dominated, reducing H=0's value to 0. Using bf16 here
+    // preserves all values through the NoC transfer to the final core's c_4 buffer
+    // (also bf16, same tile size, so the raw-byte NoC copy is format-consistent).
+    //
+    // Final core (bfp8): after the final merge and transpose-back, the tile rows are
+    // per-H-row (H=0 row has only normal values, no INF mixing), so bfp8 quantisation
+    // is safe. bfp8 also matches the output tensor dtype for the DRAM write.
+    constexpr uint32_t values_cb_index = tt::CBIndex::c_8;
+    const tt::tt_metal::CircularBufferConfig values_cb_config_local =
+        tt::tt_metal::CircularBufferConfig(num_cb_unit * compute_tile_size, {{values_cb_index, compute_cb_data_format}})
+            .set_page_size(values_cb_index, compute_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, local_cores_range_set, values_cb_config_local);
+
+    const tt::tt_metal::CircularBufferConfig values_cb_config_final =
+        tt::tt_metal::CircularBufferConfig(num_cb_unit * value_tile_size, {{values_cb_index, value_cb_data_format}})
+            .set_page_size(values_cb_index, value_tile_size);
+    tt::tt_metal::CreateCircularBuffer(program, final_cores_range_set, values_cb_config_final);
+
+    // Final values (staging buffer for final compute output).
+    // Uses bf16 when input is bfp8/bfp4 so that the final bitonic merge operates at
+    // higher precision (same rationale as input_transposed_cb_index above).
     constexpr uint32_t final_values_cb_index = tt::CBIndex::c_6;
     const tt::tt_metal::CircularBufferConfig final_values_cb_config =
-        tt::tt_metal::CircularBufferConfig(Wt_final * value_tile_size, {{final_values_cb_index, value_cb_data_format}})
-            .set_page_size(final_values_cb_index, value_tile_size);
+        tt::tt_metal::CircularBufferConfig(
+            Wt_final * compute_tile_size, {{final_values_cb_index, compute_cb_data_format}})
+            .set_page_size(final_values_cb_index, compute_tile_size);
     tt::tt_metal::CreateCircularBuffer(program, final_cores_range_set, final_values_cb_config);
 
     // Final indices (staging buffer for final compute output)
