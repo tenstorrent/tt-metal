@@ -29,7 +29,21 @@ from pathlib import Path
 # Paths & defaults
 # =============================================================================
 
-TT_METAL_HOME = Path(os.environ.get("TT_METAL_HOME", "/data/philei/tt-metal"))
+
+def _resolve_tt_metal_home() -> Path:
+    env_val = os.environ.get("TT_METAL_HOME")
+    if env_val:
+        return Path(env_val)
+    # Infer from script location: <TT_METAL_HOME>/tt-train/tools/profiling/run_experiments.py
+    inferred = Path(__file__).resolve().parents[3]
+    print(
+        f"WARNING: TT_METAL_HOME not set. Inferred from script location: {inferred}",
+        file=sys.stderr,
+    )
+    return inferred
+
+
+TT_METAL_HOME = _resolve_tt_metal_home()
 TT_TRAIN_HOME = TT_METAL_HOME / "tt-train"
 BASE_DIR = TT_TRAIN_HOME / "tools" / "profiling"
 NANO_GPT_BIN = (
