@@ -4,6 +4,12 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
+#include "experimental/noc_semaphore.h"
+#include "experimental/endpoints.h"
+#include "experimental/core_local_mem.h"
 
 void kernel_main() {
     uint32_t i = 0;
@@ -45,8 +51,8 @@ void kernel_main() {
     uint32_t in1_mcast_num_dests = get_arg_val<uint32_t>(i++);
     uint32_t in1_mcast_num_cores = get_arg_val<uint32_t>(i++);
     uint32_t in1_mcast_grid_size = get_arg_val<uint32_t>(i++);
-    uint32_t in1_mcast_sender_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
-    uint32_t in1_mcast_receiver_semaphore_addr = get_semaphore(get_arg_val<uint32_t>(i++));
+    experimental::Semaphore<> sender_sem(get_arg_val<uint32_t>(i++));
+    experimental::Semaphore<> receiver_sem(get_arg_val<uint32_t>(i++));
 
     uint32_t in1_mcast_sender_size_bytes = get_arg_val<uint32_t>(i++);
     uint32_t in1_mcast_sender_id = get_arg_val<uint32_t>(i++);
@@ -64,6 +70,10 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = 1;  // mcast receive all kv_heads; compute chooses which kv_heads to use for matmul
     constexpr uint32_t cb_id_in2 = 2;  // all interleaved or sharded KV heads for one user batch
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in1_obj(cb_id_in1);
+    experimental::CircularBuffer cb_in2_obj(cb_id_in2);
+
     constexpr uint32_t num_rows_in_one_tile = 32;
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
     constexpr uint32_t in0_num_blocks_w = 1;  // TODO: Must be 1; generalize to support inner dim blocking
@@ -74,21 +84,17 @@ void kernel_main() {
 #endif
 
     // Mcast setup
-    // Set ur local VALID value, to be mcasted to destinations flag address after the data has been mcasted
-    volatile tt_l1_ptr uint32_t* in1_mcast_receiver_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_receiver_semaphore_addr);
-    noc_semaphore_set(in1_mcast_receiver_semaphore_addr_ptr, VALID);
-    // local address that will be atomically incremented by mcast receivers, to know when all receivers are ready
-    // to receive the mcast
-    volatile tt_l1_ptr uint32_t* in1_mcast_sender_semaphore_addr_ptr =
-        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(in1_mcast_sender_semaphore_addr);
+    // Set our local VALID value, to be mcasted to destinations flag address after the data has been mcasted
+    receiver_sem.set(VALID);
 
-    uint64_t in1_mcast_sender_semaphore_noc_addr_vec[num_rows_in_one_tile];
+    // Pre-compute sender core coordinates for each tile_row_id (for receiver to increment sender semaphore)
+    uint32_t sender_sem_noc_x_vec[num_rows_in_one_tile];
+    uint32_t sender_sem_noc_y_vec[num_rows_in_one_tile];
     if constexpr (row_major) {
         uint32_t x = 0, y = 0;
         for (uint32_t i = 0; i < num_rows_in_one_tile; ++i) {
-            in1_mcast_sender_semaphore_noc_addr_vec[i] =
-                get_noc_addr(in1_mcast_sender_noc_x[x], in1_mcast_sender_noc_y[y], in1_mcast_sender_semaphore_addr);
+            sender_sem_noc_x_vec[i] = in1_mcast_sender_noc_x[x];
+            sender_sem_noc_y_vec[i] = in1_mcast_sender_noc_y[y];
             ++x;
             if (x == in1_mcast_sender_num_x) {
                 x = 0;
@@ -98,8 +104,8 @@ void kernel_main() {
     } else {
         uint32_t x = 0, y = 0;
         for (uint32_t i = 0; i < num_rows_in_one_tile; ++i) {
-            in1_mcast_sender_semaphore_noc_addr_vec[i] =
-                get_noc_addr(in1_mcast_sender_noc_x[x], in1_mcast_sender_noc_y[y], in1_mcast_sender_semaphore_addr);
+            sender_sem_noc_x_vec[i] = in1_mcast_sender_noc_x[x];
+            sender_sem_noc_y_vec[i] = in1_mcast_sender_noc_y[y];
             ++y;
             if (y == in1_mcast_sender_num_y) {
                 y = 0;
@@ -108,19 +114,17 @@ void kernel_main() {
         }
     }
 
-    uint64_t in1_multicast_noc_addr = get_noc_multicast_addr(
-        in1_mcast_dest_noc_start_x, in1_mcast_dest_noc_start_y, in1_mcast_dest_noc_end_x, in1_mcast_dest_noc_end_y, 0);
-
-    uint64_t in1_mcast_receiver_semaphore_noc_addr = in1_multicast_noc_addr | in1_mcast_receiver_semaphore_addr;
+    uint32_t local_noc_x = my_x[noc.get_noc_id()];
+    uint32_t local_noc_y = my_y[noc.get_noc_id()];
+    experimental::UnicastEndpoint local_src;
 
     const bool in1_sender_in_receiver_grid = in1_mcast_sender_id < in1_mcast_grid_size;
     bool mcast_in1_to_local_cb = false;
-    uint32_t in1_sharded_cb_addr = get_read_ptr(cb_id_in2);
+    uint32_t in1_sharded_cb_addr = cb_in2_obj.get_read_ptr();
 #ifdef IN1_SHARDED
     // Only used for sharded
     // Don't need to track batch because user batch must be 32 (ie. Mt must be 1)
-    uint64_t in1_sharded_cb_noc_addr_Nt = get_noc_addr(in1_sharded_cb_addr);
-    uint64_t in1_sharded_cb_noc_addr;
+    uint32_t in1_sharded_l1_addr_Nt = in1_sharded_cb_addr;
     uint32_t in1_block_w_tile_read_bytes = in1_block_w_tile_bytes;
     if (in1_num_blocks == 1) {
         mcast_in1_to_local_cb =
@@ -161,8 +165,8 @@ void kernel_main() {
                 for (uint32_t tile_row_id = 0; tile_row_id < num_rows_in_one_tile; tile_row_id++) {
                     for (uint32_t in0_block = 0; in0_block < in0_num_blocks_w;
                          in0_block++) {  // TODO: Must be 1; generalize to support inner dim blocking
-                        cb_reserve_back(cb_id_in1, in1_block_num_tiles);
-                        uint32_t l1_write_addr_in1 = get_write_ptr(cb_id_in1);
+                        cb_in1_obj.reserve_back(in1_block_num_tiles);
+                        uint32_t l1_write_addr_in1 = cb_in1_obj.get_write_ptr();
 
                         for (uint32_t in1_subblock = 0; in1_subblock < in1_num_subblocks;
                              in1_subblock++) {  // TODO: Must be 1; for generic padding, need full + partial subblocks
@@ -178,76 +182,104 @@ void kernel_main() {
                                     // work to writer)
 
                                     // Copy to cb_id_in1 to mcast
-                                    uint64_t in1_sharded_cb_noc_addr = in1_sharded_cb_noc_addr_Nt;
-                                    uint32_t in1_current_l1_write_addr = l1_write_addr_in1;
+                                    uint32_t in1_sharded_l1_addr = in1_sharded_l1_addr_Nt;
+                                    uint32_t write_offset = 0;
                                     for (uint32_t kv_heads_id = 0; kv_heads_id < num_kv_heads; kv_heads_id++) {
                                         for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
-                                            noc_async_read(
-                                                in1_sharded_cb_noc_addr,
-                                                in1_current_l1_write_addr,
-                                                in1_block_w_tile_read_bytes);
-                                            in1_sharded_cb_noc_addr += Nt_bytes;  // Increment by Nt to get to next kt
-                                            in1_current_l1_write_addr += in1_block_w_tile_bytes;
+                                            noc.async_read(
+                                                local_src,
+                                                cb_in1_obj,
+                                                in1_block_w_tile_read_bytes,
+                                                {.noc_x = local_noc_x,
+                                                 .noc_y = local_noc_y,
+                                                 .addr = in1_sharded_l1_addr},
+                                                {.offset_bytes = write_offset});
+                                            in1_sharded_l1_addr += Nt_bytes;  // Increment by Nt to get to next kt
+                                            write_offset += in1_block_w_tile_bytes;
                                         }
                                         // Next head follows after finishing KtNt, so no need to increment
-                                        // in1_current_l1_write_addr
+                                        // write_offset
                                     }
                                     // These indices are local to each core, so don't modify when looping
                                     // num_rows_in_one_tile
-                                    noc_async_read_barrier();
+                                    noc.async_read_barrier();
                                 }
 #else
                                 uint32_t in1_tensor_id_along_Kt = in1_tensor_id;
-                                uint32_t in1_current_l1_write_addr = l1_write_addr_in1;
+                                uint32_t write_offset = 0;
                                 for (uint32_t kv_heads_id = 0; kv_heads_id < num_kv_heads; kv_heads_id++) {
                                     for (uint32_t inner_dim = 0; inner_dim < in0_block_w; inner_dim++) {
                                         uint32_t in1_tensor_current_id = in1_tensor_id_along_Kt;
                                         for (uint32_t w = 0; w < out_subblock_w_; w++) {
-                                            noc_async_read_tile(in1_tensor_current_id, s1, in1_current_l1_write_addr);
+                                            noc.async_read(
+                                                s1,
+                                                cb_in1_obj,
+                                                in1_tile_bytes,
+                                                {.page_id = in1_tensor_current_id},
+                                                {.offset_bytes = write_offset});
                                             in1_tensor_current_id++;  // Increment to get next Nt
-                                            in1_current_l1_write_addr += in1_tile_bytes;
+                                            write_offset += in1_tile_bytes;
                                         }
-                                        in1_current_l1_write_addr += in1_block_addr_skip;
+                                        write_offset += in1_block_addr_skip;
                                         in1_tensor_id_along_Kt += Nt;  // Increment by Nt to get next Kt
                                     }
                                     // Next head follows after finishing KtNt, so no need to increment
                                 }
-                                noc_async_read_barrier();
+                                noc.async_read_barrier();
 #endif
 
                                 // wait until all in1 mcast destinations have atomically incremented the in1
                                 // semaphore_addr (i.e. its value should be in1_mcast_num_dests), then reset the
                                 // semaphore_addr value back to zero for the next block
-                                noc_semaphore_wait(in1_mcast_sender_semaphore_addr_ptr, in1_mcast_num_dests);
-                                noc_semaphore_set(in1_mcast_sender_semaphore_addr_ptr, 0);
+                                sender_sem.wait(in1_mcast_num_dests);
+                                sender_sem.set(0);
 
                                 // Now we have the block in the CB address, we can mcast to dests!
-                                uint64_t in1_multicast_data_addr = in1_multicast_noc_addr | l1_write_addr_in1;
                                 if (mcast_in1_to_local_cb) {  // directly mcast data in in1 sharded cb
+                                    experimental::CoreLocalMem<uint32_t> mcast_src(in1_sharded_cb_addr);
                                     if (in1_sender_in_receiver_grid) {
                                         // if sender is in receiver grid, num_dests will include source, since we are
                                         // copying to a different local CB as well
-                                        noc_async_write_multicast_loopback_src(
-                                            in1_sharded_cb_addr,
-                                            in1_multicast_data_addr,
+                                        noc.async_write_multicast<experimental::Noc::McastMode::INCLUDE_SRC>(
+                                            mcast_src,
+                                            cb_in1_obj,
                                             in1_mcast_sender_size_bytes,
-                                            in1_mcast_num_cores + 1);
+                                            in1_mcast_num_cores + 1,
+                                            {},
+                                            {.noc_x_start = in1_mcast_dest_noc_start_x,
+                                             .noc_y_start = in1_mcast_dest_noc_start_y,
+                                             .noc_x_end = in1_mcast_dest_noc_end_x,
+                                             .noc_y_end = in1_mcast_dest_noc_end_y,
+                                             .offset_bytes = 0});
                                     } else {
                                         // if sender is not in receiver grid, do a regular multicast but from
                                         // in1_sharded_cb_addr
-                                        noc_async_write_multicast(
-                                            in1_sharded_cb_addr,
-                                            in1_multicast_data_addr,
+                                        noc.async_write_multicast<experimental::Noc::McastMode::EXCLUDE_SRC>(
+                                            mcast_src,
+                                            cb_in1_obj,
                                             in1_mcast_sender_size_bytes,
-                                            in1_mcast_num_cores);
+                                            in1_mcast_num_cores,
+                                            {},
+                                            {.noc_x_start = in1_mcast_dest_noc_start_x,
+                                             .noc_y_start = in1_mcast_dest_noc_start_y,
+                                             .noc_x_end = in1_mcast_dest_noc_end_x,
+                                             .noc_y_end = in1_mcast_dest_noc_end_y,
+                                             .offset_bytes = 0});
                                     }
                                 } else {  // mcast from l1_write_addr_in1 which is populated locally by copying from in1
                                           // sharded or interleaved
-                                    noc_async_write_multicast(
-                                        l1_write_addr_in1,
-                                        in1_multicast_data_addr,
+                                    experimental::CoreLocalMem<uint32_t> mcast_src(l1_write_addr_in1);
+                                    noc.async_write_multicast<experimental::Noc::McastMode::EXCLUDE_SRC>(
+                                        mcast_src,
+                                        cb_in1_obj,
                                         in1_mcast_sender_size_bytes,
-                                        in1_mcast_num_cores);
+                                        in1_mcast_num_cores,
+                                        {},
+                                        {.noc_x_start = in1_mcast_dest_noc_start_x,
+                                         .noc_y_start = in1_mcast_dest_noc_start_y,
+                                         .noc_x_end = in1_mcast_dest_noc_end_x,
+                                         .noc_y_end = in1_mcast_dest_noc_end_y,
+                                         .offset_bytes = 0});
                                 }
 
                                 // Note: no need for write barrier, since these two multicasts are done on the same noc
@@ -256,42 +288,44 @@ void kernel_main() {
 #ifdef ARCH_BLACKHOLE
                                 // On Blackhole the flush is needed because the commands go into separate cmd buffer
                                 // FIFOs and may not be sent in order they are issued
-                                noc_async_writes_flushed();
+                                noc.async_writes_flushed();
 #endif
 
                                 // We should also multicast VALID flag to destinations for receiver semaphore
-                                noc_semaphore_set_multicast(
-                                    in1_mcast_receiver_semaphore_addr,
-                                    in1_mcast_receiver_semaphore_noc_addr,
+                                receiver_sem.set_multicast(
+                                    noc,
+                                    in1_mcast_dest_noc_start_x,
+                                    in1_mcast_dest_noc_start_y,
+                                    in1_mcast_dest_noc_end_x,
+                                    in1_mcast_dest_noc_end_y,
                                     in1_mcast_num_cores);
 
                                 // Write barrier needed to make sure we finish sending mcast flag before we modify
                                 // locally
-                                noc_async_write_barrier();
+                                noc.async_write_barrier();
                             } else if (in1_sender_in_receiver_grid) {
                                 // MCAST RECEIVER: receive all kv_heads in one user batch
                                 // All cores in mcast grid needs to participate in receiving otherwise data corruption
                                 // since we mcast from and to the same CB
 
                                 // Set in1 semaphore value to INVALID
-                                noc_semaphore_set(in1_mcast_receiver_semaphore_addr_ptr, INVALID);
+                                receiver_sem.set(INVALID);
 
                                 // Atomic increment source core counter
-                                uint64_t in1_mcast_sender_semaphore_noc_addr =
-                                    in1_mcast_sender_semaphore_noc_addr_vec[tile_row_id];
-                                noc_semaphore_inc(in1_mcast_sender_semaphore_noc_addr, 1);
+                                sender_sem.up(
+                                    noc, sender_sem_noc_x_vec[tile_row_id], sender_sem_noc_y_vec[tile_row_id], 1);
 
                                 // wait on in1 semaphore value to become VALID (set by mcast sender after it multicasts
                                 // data)
-                                noc_semaphore_wait(in1_mcast_receiver_semaphore_addr_ptr, VALID);
+                                receiver_sem.wait(VALID);
                             }
                             if (has_work_for_q_heads_bool) {
-                                cb_push_back(cb_id_in1, in1_block_num_tiles);
+                                cb_in1_obj.push_back(in1_block_num_tiles);
                             } else {
                                 // Mcast is in lockstep; this makes write ptr addresses are synced properly for cores
                                 // that only send and have no compute / writer active
-                                cb_push_back(cb_id_in1, in1_block_num_tiles);
-                                cb_pop_front(cb_id_in1, in1_block_num_tiles);
+                                cb_in1_obj.push_back(in1_block_num_tiles);
+                                cb_in1_obj.pop_front(in1_block_num_tiles);
                             }
 
 #ifndef IN1_SHARDED
@@ -302,7 +336,7 @@ void kernel_main() {
                 }  // 32 tiles loop
 
 #ifdef IN1_SHARDED
-                in1_sharded_cb_noc_addr_Nt += in1_block_w_tile_bytes;
+                in1_sharded_l1_addr_Nt += in1_block_w_tile_bytes;
 #else
                 in1_tensor_id_along_Nt += out_block_w;
 #endif

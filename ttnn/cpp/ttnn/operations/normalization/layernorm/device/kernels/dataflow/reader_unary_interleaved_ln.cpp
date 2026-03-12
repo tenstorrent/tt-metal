@@ -57,14 +57,28 @@ void kernel_main() {
     const uint32_t beta_addr = get_arg_val<uint32_t>(7);
     const uint32_t b_addr = get_arg_val<uint32_t>(8);
     const uint32_t W = get_arg_val<uint32_t>(9);
+    const uint32_t tile_width = get_arg_val<uint32_t>(10);
+    const uint32_t tile_height = get_arg_val<uint32_t>(11);
 #ifdef TILIZE_IN
-    const uint32_t H_logical = get_arg_val<uint32_t>(10);
+    const uint32_t H_logical = get_arg_val<uint32_t>(12);
 #endif
 
     constexpr uint32_t cb_id_in0 = tt::CBIndex::c_0;
     constexpr uint32_t cb_id_in1 = tt::CBIndex::c_1;
     constexpr uint32_t cb_id_gamma = tt::CBIndex::c_5;
     constexpr uint32_t cb_id_beta = tt::CBIndex::c_6;
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0(cb_id_in0);
+#ifdef FUSE_PRE_ADD
+    experimental::CircularBuffer cb_in1(cb_id_in1);
+#endif
+#ifdef FUSE_GAMMA
+    experimental::CircularBuffer cb_gamma(cb_id_gamma);
+#endif
+#ifdef FUSE_BETA
+    experimental::CircularBuffer cb_beta(cb_id_beta);
+#endif
 
     constexpr uint32_t block_size = get_compile_time_arg_val(0);
     constexpr bool use_welford = get_compile_time_arg_val(1) == 1;
@@ -111,9 +125,10 @@ void kernel_main() {
         constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
         uint32_t scaler = get_arg_val<uint32_t>(4);
         generate_reduce_scaler(cb_in_2, scaler);
-        const auto partial_last_tile_cols = W % tt::constants::TILE_WIDTH;
+        const auto partial_last_tile_cols = W % tile_width;
         if (partial_last_tile_cols > 0 && !use_welford) {
-            norm::kernel_util::dataflow::generate_partial_reduce_scaler(cb_in_2, scaler, partial_last_tile_cols);
+            norm::kernel_util::dataflow::generate_partial_reduce_scaler(
+                cb_in_2, scaler, partial_last_tile_cols, tile_height, tile_width);
         }
     }
     constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;
@@ -133,16 +148,16 @@ void kernel_main() {
 #ifdef FUSE_PRE_ADD
         for (auto block : generic::blocks(Wt, block_size)) {
             layernorm_dataflow_utils::read_block_to_cb(
-                cb_id_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
+                noc, cb_in1, src_b, src1_tile_bytes, curr_tile_row * Wt + block.start(), block);
         }
 #endif
 #else
         // TILE: read input a and b (if present) interleaved per block.
         for (auto block : generic::blocks(Wt, block_size)) {
             const uint32_t flat_offset = curr_tile_row * Wt + block.start();
-            layernorm_dataflow_utils::read_block_to_cb(cb_id_in0, src_a, src0_page_bytes, flat_offset, block);
+            layernorm_dataflow_utils::read_block_to_cb(noc, cb_in0, src_a, src0_page_bytes, flat_offset, block);
 #ifdef FUSE_PRE_ADD
-            layernorm_dataflow_utils::read_block_to_cb(cb_id_in1, src_b, src1_tile_bytes, flat_offset, block);
+            layernorm_dataflow_utils::read_block_to_cb(noc, cb_in1, src_b, src1_tile_bytes, flat_offset, block);
 #endif
         }
 #endif
@@ -152,10 +167,10 @@ void kernel_main() {
         if (ncht == 0) {
             for (auto block : generic::blocks(Wt, block_size)) {
 #ifdef FUSE_GAMMA
-                layernorm_dataflow_utils::read_block_to_cb(cb_id_gamma, addrg, gamma_tile_bytes, block.start(), block);
+                layernorm_dataflow_utils::read_block_to_cb(noc, cb_gamma, addrg, gamma_tile_bytes, block.start(), block);
 #endif
 #ifdef FUSE_BETA
-                layernorm_dataflow_utils::read_block_to_cb(cb_id_beta, addrb, beta_tile_bytes, block.start(), block);
+                layernorm_dataflow_utils::read_block_to_cb(noc, cb_beta, addrb, beta_tile_bytes, block.start(), block);
 #endif
             }  // wt loop
         }

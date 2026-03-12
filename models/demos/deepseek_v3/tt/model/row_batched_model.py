@@ -2,6 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import itertools
+import os
 from pathlib import Path
 from typing import Any, Sequence
 
@@ -31,6 +32,12 @@ from models.demos.deepseek_v3.utils.run_config import (
 )
 from models.demos.deepseek_v3.utils.shared_state_addon import SharedStateAddOn
 from models.tt_transformers.tt.common import PagedAttentionConfig
+
+
+def get_fabric_config():
+    return (
+        ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
+    )
 
 
 class RowBatchedModel(SharedStateAddOn, AbstractModule):
@@ -99,12 +106,14 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 DecoderBlock2D.prefill_model_config(
                     hf_config,
                     mesh_device,
+                    get_fabric_config(),
                 )
             ],
             "moe_decoder_block": [
                 MoEDecoderBlock2D.prefill_model_config(
                     hf_config,
                     mesh_device,
+                    get_fabric_config(),
                 )
             ],
             "norm": DistributedRMSNorm.prefill_model_config(hf_config, mesh_device),
@@ -125,12 +134,14 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 DecoderBlock2D.decode_model_config(
                     hf_config,
                     mesh_device,
+                    get_fabric_config(),
                 )
             ],
             "moe_decoder_block": [
                 MoEDecoderBlock2D.decode_model_config(
                     hf_config,
                     mesh_device,
+                    get_fabric_config(),
                 )
             ],
             "norm_reshard": ReshardConfig(memory_config=norm_config["input_memory_config"]),
