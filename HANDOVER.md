@@ -12,7 +12,8 @@
 - **dispatch_compute** (`moe_gpt`): PCC ~0.990 on all 32 devices
 - **dispatch_compute_combine** (`selective_reduce_combine`): PCC ~0.987 on ALL 32 devices (all ring positions)
 - **E2E test** (`test_moe_gpt_e2e.py`): All 5 subtests PASS, ring_pos>0 failures are now blocking
-- **test_decoder fused_experts** (`test_modules.py`): PCC = 0.933 (full fused pipeline E2E)
+- **Multi-layer model test** (`test_model`): 1-layer PCC 0.96, 2-layer PCC 0.87, 5-layer PCC 0.72
+- Full pipeline: dispatch -> moe_gpt -> combine -> score weighting -> K-sum -> all_reduce
 
 ### PCC Summary
 | Stage | PCC | Notes |
@@ -67,6 +68,14 @@ bfloat16 score multiplication, K-dimension summation, and all_reduce across 8 co
 
 10. **CMakeLists.txt cleanup**: Removed leftover MoEGPTFused target reference.
 
+11. **Multi-layer hang fix**: Do NOT pass `output_tensor` to `selective_reduce_combine`.
+    Passing output_tensor causes hang on 2nd invocation (program cache hit path).
+
+12. **CB address stale on cache hit**: Added `UpdateDynamicCircularBufferAddress` in
+    `override_runtime_arguments` for the input CB (`data_cb`).
+
+13. **use_init_semaphore forced true**: Multi-layer requires init semaphore always ON.
+
 ## How to Run Tests
 
 ```bash
@@ -113,5 +122,6 @@ cmake --build build -- -j16 && cp build/ttnn/_ttnn.so ttnn/ttnn/_ttnn.so
 
 ## Remaining Work
 - Wire fused path into `ThroughputExperts` class for production use
-- Clean up debug logging from `fused_decode.py`
+- Investigate output_tensor hang root cause (TTNN framework bug with fabric + cache hit)
+- PCC degrades across layers (0.96->0.87->0.72); investigate if expected
 - Clean up scratch files in repo root (`diagnose_*.py`, `fix_*.py`, `*_hang*.txt`, etc.)

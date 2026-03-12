@@ -31,6 +31,7 @@ path that the ThroughputExperts class can route to when fused_config is provided
 from math import prod
 
 import torch
+from loguru import logger
 
 import ttnn
 
@@ -157,6 +158,7 @@ def fused_decode_forward(
     # ------------------------------------------------------------------
     # Step 1: all_to_all_dispatch_metadata
     # ------------------------------------------------------------------
+    logger.info("fused_decode: Step 1 - all_to_all_dispatch_metadata")
     (tt_sparse, tt_indices, tt_scores) = ttnn.experimental.all_to_all_dispatch_metadata(
         hidden_states,
         topk_expert_indices,
@@ -172,6 +174,8 @@ def fused_decode_forward(
         cross_device_semaphore=fused_config.dispatch_semaphore,
         dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_UNICAST,
     )
+    ttnn.synchronize_device(mesh_device)
+    logger.info("fused_decode: Step 1 sync done")
     ttnn.deallocate(hidden_states)
 
     tt_sparse_l1 = ttnn.to_memory_config(tt_sparse, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -180,6 +184,7 @@ def fused_decode_forward(
     # ------------------------------------------------------------------
     # Step 2: moe_gpt (fused sparse compute)
     # ------------------------------------------------------------------
+    logger.info("fused_decode: Step 2 - moe_gpt")
     moe_gpt_outputs = ttnn.experimental.moe_gpt(
         tt_sparse_l1,
         expert_indices=tt_indices,
@@ -189,9 +194,12 @@ def fused_decode_forward(
         w2_tensor=fused_config.tt_w2,
         cluster_axis=cluster_axis,
     )
+    ttnn.synchronize_device(mesh_device)
+    logger.info("fused_decode: Step 2 sync done")
     ttnn.deallocate(tt_sparse_l1)
 
     # ------------------------------------------------------------------
+    logger.info("fused_decode: Step 3 - selective_reduce_combine")
     # Step 3: selective_reduce_combine
     # With the K-indexed fix (upstream #38542), the combine writer uses the
     # token_activations metadata to look up each token's K-index, so the
@@ -214,9 +222,9 @@ def fused_decode_forward(
         data_parallel_core_dim=fused_config.combine_data_parallel_core_dim,
         worker_cores=fused_config.combine_worker_cores,
         mux_core_range_set=fused_config.combine_mux_cores,
-        output_tensor=fused_config.combine_preallocated,
-        optional_cross_device_semaphore=fused_config.combine_semaphore,
     )
+    ttnn.synchronize_device(mesh_device)
+    logger.info("fused_decode: Step 3 sync done")
 
     for i in range(4):
         ttnn.deallocate(moe_gpt_outputs[i])
@@ -232,6 +240,7 @@ def fused_decode_forward(
     # 4. Sum over K dim -> [1, 1, M, H]
     # 5. All-reduce across columns (cluster_axis=1)
     # ------------------------------------------------------------------
+    logger.info("fused_decode: Step 4 - post-processing (tilize, score weighting, sum, all_reduce)")
     tt_combine_tile = ttnn.to_layout(tt_combine_output, ttnn.TILE_LAYOUT)
     ttnn.deallocate(tt_combine_output)
 
@@ -249,6 +258,7 @@ def fused_decode_forward(
     tt_sum = ttnn.sum(tt_weighted, dim=0, keepdim=True)  # [1, 1, M, H]
     ttnn.deallocate(tt_weighted)
 
+    logger.info("fused_decode: Step 4d - all_reduce")
     tt_output = ttnn.all_reduce(
         tt_sum,
         num_links=1,
@@ -258,4 +268,6 @@ def fused_decode_forward(
     )
     ttnn.deallocate(tt_sum)
 
+    ttnn.synchronize_device(mesh_device)
+    logger.info("fused_decode: Done")
     return tt_output  # [1, 1, tokens_per_device, H]

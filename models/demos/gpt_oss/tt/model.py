@@ -352,6 +352,10 @@ class Model:
 
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
+            logger.info(f"Model forward: starting layer {i}")
+            if i > 0:
+                ttnn.synchronize_device(self.mesh_device)
+                logger.info(f"Model forward: layer {i} sync done")
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
 
             hidden_states = decoder_layer(

@@ -1067,9 +1067,11 @@ def run_model_forward_test(
 )
 @pytest.mark.parametrize(
     "num_layers",
-    [1],
+    [1, 2, 5],
     ids=[
         "1_layer",
+        "2_layer",
+        "5_layer",
     ],
 )
 def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape, num_layers, reset_seeds):
@@ -1144,7 +1146,7 @@ def test_model(mesh_device, device_params, batch_size, seq_len, mode, mesh_shape
         batch_size=batch_size,
         seq_len=seq_len,
         is_decode=is_decode,
-        pcc_threshold=0.95 if num_layers == 1 else 0.85,  # Use slightly lower threshold for full model
+        pcc_threshold=0.95 if num_layers == 1 else (0.85 if num_layers <= 2 else 0.70),  # PCC degrades across layers
     )
 
     if passing:

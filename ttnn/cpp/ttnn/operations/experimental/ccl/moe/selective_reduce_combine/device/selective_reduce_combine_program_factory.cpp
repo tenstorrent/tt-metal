@@ -286,7 +286,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
             .set_page_size(client_interface_cb_id, CLIENT_INTERFACE_SIZE);
 
     // create circular buffers
-    CreateCircularBuffer(program, needed_worker_core_range_set, cb_data_config);
+    auto data_cb = CreateCircularBuffer(program, needed_worker_core_range_set, cb_data_config);
     CreateCircularBuffer(program, needed_worker_core_range_set, cb_dense_token_maps_config);
     CreateCircularBuffer(program, needed_worker_core_range_set, cb_token_counts_config);
     CreateCircularBuffer(program, needed_worker_core_range_set, cb_token_activations_config);
@@ -347,8 +347,9 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     const auto end_coord =
         mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().end_coord);
 
-    const bool use_init_semaphore = !tensor_args.optional_output_tensor.has_value() ||
-                                    !operation_attributes.optional_cross_device_semaphore.has_value();
+    // Force init semaphore ON even in persistent mode — needed for multi-layer
+    // to ensure all devices are synchronized before combine starts
+    const bool use_init_semaphore = true;
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
         {"data_cb_id", data_cb_id},
@@ -486,6 +487,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
         std::move(program),
         {.reader_kernel_id = ternary_reader_kernel_id,
          .writer_kernel_id = unary_writer_kernel_id,
+         .data_cb = data_cb,
          .cores = sender_cores,
          .init_semaphore = init_semaphore,
          .cross_device_semaphore = cross_device_semaphore}};
@@ -508,6 +510,8 @@ void UnifiedSelectReduce::override_runtime_arguments(
         const auto& reader_kernel_id = shared_variables.reader_kernel_id;
         const auto& writer_kernel_id = shared_variables.writer_kernel_id;
         const auto& cores = shared_variables.cores;
+        // Update the input CB's globally allocated address for the new input tensor
+        UpdateDynamicCircularBufferAddress(program, shared_variables.data_cb, *tensor_args.dense_input_tensor.buffer());
 
         for (const auto& core : cores) {
             auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
