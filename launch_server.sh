@@ -66,55 +66,102 @@ export TTNN_CONFIG_OVERRIDES='{"enable_model_cache": true, "model_cache_path": "
 export LOG_LEVEL="${LOG_LEVEL:-INFO}"
 
 # ---------------------------------------------------------------------------
-# Model-specific environment variables
-# ---------------------------------------------------------------------------
-if [ "$MODEL" = "sdxl" ]; then
-    # T3K: 4 devices, 7x7 grid, MM throttle
-    export TT_VISIBLE_DEVICES="0,1,2,3"
-    export TT_METAL_VISIBLE_DEVICES="0,1,2,3"
-    export TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7"
-    export TT_MM_THROTTLE_PERF=5
-elif [ "$MODEL" = "sd35" ]; then
-    # LoudBox: 8 devices, no grid override, no throttle
-    export TT_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
-    export TT_METAL_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
-    # No TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE for SD3.5
-    # No TT_MM_THROTTLE_PERF for SD3.5
-fi
-
-# ---------------------------------------------------------------------------
-# Check devices via tt-smi (optional, continues if not available)
+# Detect available TT devices via tt-smi, set TT_VISIBLE_DEVICES, and validate
 # ---------------------------------------------------------------------------
 echo ""
-echo "Checking TT devices..."
+echo "Detecting TT devices..."
 TT_SMI_VENV="/home/tt-admin/tt-smi/venv"
+DETECTED_DEVICE_COUNT=0
+DETECTED_DEVICE_IDS=""
 
 if [ ! -f "${TT_SMI_VENV}/bin/activate" ]; then
-    echo "Warning: tt-smi venv not found at ${TT_SMI_VENV}"
+    echo "Warning: tt-smi venv not found at ${TT_SMI_VENV}, skipping device detection"
 else
     source "${TT_SMI_VENV}/bin/activate"
 
-    echo "Available devices:"
-    tt-smi -s --snapshot_no_tty 2>/dev/null | python3 -c "
+    DEVICE_INFO=$(tt-smi -s --snapshot_no_tty 2>/dev/null | python3 -c "
 import sys, json
 try:
     data = json.load(sys.stdin)
+    # Count ALL devices — both PCIe-attached (n300 L) and remote (n300 R).
+    # On a LoudBox, 4 n300 boards each have an L (PCIe) and R (ethernet) chip = 8 total.
+    # The R chips have bus_id='N/A' but are still valid TT devices.
     devices = data.get('device_info', [])
-    if not devices:
-        print('  No devices found')
-        sys.exit(1)
-    for idx, dev in enumerate(devices):
+    ids = ','.join(str(i) for i in range(len(devices)))
+    print(f'{len(devices)}:{ids}')
+    for i, dev in enumerate(devices):
         board_info = dev.get('board_info', {})
-        bus_id = board_info.get('bus_id', 'N/A')
-        board_type = board_info.get('board_type', 'Unknown')
-        if bus_id != 'N/A':
-            print(f'  Device {idx}: {bus_id} ({board_type})')
+        bus = board_info.get('bus_id', 'N/A')
+        btype = board_info.get('board_type', 'Unknown')
+        loc = '(PCIe)' if bus != 'N/A' else '(remote)'
+        print(f'  Device {i}: {btype} {loc} bus={bus}', file=sys.stderr)
 except Exception as e:
-    print(f'  Error checking devices: {e}')
-    sys.exit(1)
-" || echo "Warning: Could not verify TT devices"
+    print(f'0:', file=sys.stdout)
+    print(f'  Error: {e}', file=sys.stderr)
+" 2>/tmp/tt_device_info_$$.txt)
+
+    cat /tmp/tt_device_info_$$.txt  # Print device list to stdout
+    rm -f /tmp/tt_device_info_$$.txt
+
+    DETECTED_DEVICE_COUNT=$(echo "$DEVICE_INFO" | cut -d: -f1)
+    DETECTED_DEVICE_IDS=$(echo "$DEVICE_INFO" | cut -d: -f2)
+
+    echo "Detected ${DETECTED_DEVICE_COUNT} TT device(s) (PCIe + remote)"
 
     deactivate
+fi
+
+# ---------------------------------------------------------------------------
+# Set TT_VISIBLE_DEVICES based on detected devices (not hardcoded)
+# SD35 requires exactly 8 devices (2x4 mesh). SDXL requires at least 1.
+# ---------------------------------------------------------------------------
+if [ "$MODEL" = "sdxl" ]; then
+    if [ "${DETECTED_DEVICE_COUNT}" -gt 0 ] 2>/dev/null && [ -n "$DETECTED_DEVICE_IDS" ]; then
+        # Use detected IDs, capped at 4 for SDXL (T3K: 4 devices)
+        SDXL_IDS=$(echo "$DETECTED_DEVICE_IDS" | python3 -c "
+import sys
+ids = sys.stdin.read().strip().split(',')
+print(','.join(ids[:4]))
+")
+        export TT_VISIBLE_DEVICES="$SDXL_IDS"
+        export TT_METAL_VISIBLE_DEVICES="$SDXL_IDS"
+    else
+        # Fall back to assuming 4 devices (T3K default)
+        export TT_VISIBLE_DEVICES="0,1,2,3"
+        export TT_METAL_VISIBLE_DEVICES="0,1,2,3"
+    fi
+    export TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE="7,7"
+    export TT_MM_THROTTLE_PERF=5
+
+elif [ "$MODEL" = "sd35" ]; then
+    # SD3.5 requires 8 devices (2x4 mesh). Fail fast with a clear error if unavailable.
+    if [ "${DETECTED_DEVICE_COUNT}" -gt 0 ] 2>/dev/null; then
+        if [ "${DETECTED_DEVICE_COUNT}" -lt 8 ]; then
+            echo ""
+            echo "ERROR: SD3.5 requires 8 TT devices (LoudBox, 2x4 mesh)."
+            echo "       Only ${DETECTED_DEVICE_COUNT} device(s) detected."
+            echo ""
+            echo "SD3.5 uses a 2x4 mesh with CFG parallelism — the pipeline"
+            echo "requires at least 8 chips and cannot run on T3K (4 devices)."
+            echo ""
+            echo "To run SDXL on this machine: ./launch_server.sh --model sdxl"
+            exit 1
+        fi
+        # Use exactly the first 8 detected device IDs
+        SD35_IDS=$(echo "$DETECTED_DEVICE_IDS" | python3 -c "
+import sys
+ids = sys.stdin.read().strip().split(',')
+print(','.join(ids[:8]))
+")
+        export TT_VISIBLE_DEVICES="$SD35_IDS"
+        export TT_METAL_VISIBLE_DEVICES="$SD35_IDS"
+    else
+        echo "Warning: Could not detect device count. Assuming 8 devices for SD3.5."
+        export TT_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
+        export TT_METAL_VISIBLE_DEVICES="0,1,2,3,4,5,6,7"
+    fi
+    # No TT_METAL_CORE_GRID_OVERRIDE_TODEPRECATE for SD3.5
+    # No TT_MM_THROTTLE_PERF for SD3.5
 fi
 
 # ---------------------------------------------------------------------------

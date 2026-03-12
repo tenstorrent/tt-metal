@@ -29,8 +29,17 @@ class SD35Runner:
         self.pipeline = None
 
     def initialize_device(self):
-        """Initialize 2x4 mesh device with FABRIC_1D and SD3.5-specific parameters"""
-        self.logger.info(f"Initializing 2x4 mesh device for worker {self.worker_id}")
+        """Initialize 2x4 mesh device with FABRIC_1D and SD3.5-specific parameters.
+
+        On a LoudBox, 4 n300 boards each have a PCIe-attached L chip and a
+        remote R chip connected via ethernet, giving 8 total devices (IDs 0-7).
+        Only the L chips appear in /dev/tenstorrent; the R chips are discovered
+        by ttnn via the fabric when opening the mesh.
+        """
+        self.logger.info(
+            f"Initializing {self.config.device_mesh_shape[0]}x{self.config.device_mesh_shape[1]} "
+            f"mesh device for worker {self.worker_id}"
+        )
 
         rows, cols = self.config.device_mesh_shape
 
