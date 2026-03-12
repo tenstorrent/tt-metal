@@ -297,9 +297,8 @@ TEST_F(GeluFwUlpTest, NearZeroRegion) {
 // Precision guard: sweeps ALL ~65K BF16 values, enforces per-region ULP caps.
 // Regions match the kernel's piecewise implementation:
 //   x <= -13.1875: saturation to 0
-//   (-13.1875, -5]: exp-based asymptotic
-//   [-5, -3): left CDF polynomial
-//   [-3, 2.78125): core CDF polynomial
+//   (-13.1875, -3.125): exp-based asymptotic with 3-term Mills ratio
+//   [-3.125, 2.78125): core CDF polynomial (degree-15)
 //   x >= 2.78125: identity (return x)
 //   2.78125 (BF16 0x4032) is the exact boundary where GELU rounds to x with RNE
 TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
@@ -365,9 +364,8 @@ TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
 
     std::vector<RegionStats> regions = {
         {"Saturation to 0 (x <= -13.1875)"},
-        {"Exp-based (-13.1875, -5]"},
-        {"Left CDF poly [-5, -3)"},
-        {"Core CDF poly [-3, 2.78125)"},
+        {"Exp-based (-13.1875, -3.125)"},
+        {"Core CDF poly [-3.125, 2.78125)"},
         {"Identity (x >= 2.78125)"},
     };
 
@@ -385,18 +383,16 @@ TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
             continue;
         }
 
-        // Categorize by kernel region
+        // Categorize by kernel region (3 active regions + zero default)
         int region_idx;
         if (x <= -13.1875f) {
-            region_idx = 0;
-        } else if (x <= -5.0f) {
-            region_idx = 1;
-        } else if (x < -3.0f) {
-            region_idx = 2;
+            region_idx = 0;  // Zero saturation
+        } else if (x < -3.125f) {
+            region_idx = 1;  // Exp-based
         } else if (x < 2.78125f) {
-            region_idx = 3;
+            region_idx = 2;  // Core CDF polynomial
         } else {
-            region_idx = 4;  // Identity (x >= 2.78125)
+            region_idx = 3;  // Identity
         }
 
         regions[region_idx].count++;
@@ -441,7 +437,6 @@ TEST_F(GeluFwUlpTest, ComprehensiveULPByRegion) {
     std::vector<int> region_max_ulp_thresholds = {
         0,  // Saturation to 0: exact
         2,  // Exp-based: allow 2 for hardware precision
-        2,  // Left CDF poly: allow 2
         2,  // Core CDF poly: allow 2
         0,  // Identity (x >= 2.78125): exact (GELU rounds to x with RNE)
     };
@@ -779,8 +774,8 @@ TEST_F(GeluFwUlpTest, SaturationBoundaryVerification) {
 }
 
 // Research test: locate every BF16 value with ULP > 1 and print full detail.
-// Also analyzes the boundary neighborhood at x=-5 (exp/left-CDF boundary)
-// to determine whether shifting the boundary could eliminate ULP=2 values.
+// Also analyzes the boundary neighborhood at x=-3.125 (exp/core-CDF boundary)
+// to verify accuracy at region transitions.
 TEST_F(GeluFwUlpTest, LocateULP2Values) {
     // Collect all valid BF16 values
     std::vector<float> input_values;
@@ -860,14 +855,12 @@ TEST_F(GeluFwUlpTest, LocateULP2Values) {
             continue;
         }
 
-        // Determine region
+        // Determine region (3 active regions + zero default)
         std::string region;
         if (x <= -13.1875f) {
             region = "saturation";
-        } else if (x <= -5.0f) {
+        } else if (x < -3.125f) {
             region = "exp-based";
-        } else if (x < -3.0f) {
-            region = "left-CDF";
         } else if (x < 2.78125f) {
             region = "core-CDF";
         } else {
@@ -886,7 +879,7 @@ TEST_F(GeluFwUlpTest, LocateULP2Values) {
                  region});
         }
 
-        // Collect values in the exp/left-CDF overlap research zone
+        // Collect values in the exp/core-CDF boundary research zone
         if (x >= -7.0f && x <= -3.0f) {
             boundary_entries.push_back({x, bf16_ulp_fw::float_to_bf16_bits(x), actual, expected, ulp, region});
         }
