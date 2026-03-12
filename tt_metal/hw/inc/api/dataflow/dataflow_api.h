@@ -86,6 +86,33 @@ inline uint8_t get_relative_logical_y() {
     return my_relative_y_;
 }
 
+#ifdef ARCH_QUASAR
+#include "internal/tt-2xx/quasar/kernel_thread_globals.h"
+// clang-format off
+/**
+ * Returns the number of threads (processors) in the kernel that this processor belongs to.
+ * Set by Quasar firmware from kernel_config before the kernel runs. Valid only on ARCH_QUASAR.
+ *
+ * Return value: Number of kernel threads (num_processors_per_cluster for this kernel).
+ */
+// clang-format on
+inline uint32_t get_num_threads() {
+    return num_sw_threads;
+}
+
+// clang-format off
+/**
+ * Returns this processor's thread ID within its kernel (0 to get_num_threads() - 1).
+ * Set by Quasar firmware from kernel_config before the kernel runs. Valid only on ARCH_QUASAR.
+ *
+ * Return value: Thread ID for this processor.
+ */
+// clang-format on
+inline uint32_t get_my_thread_id() {
+    return my_thread_id;
+}
+#endif
+
 // clang-format off
 /**
  * Helper function to check if an address is in L1 memory space (not register space).
@@ -1057,10 +1084,12 @@ FORCE_INLINE void noc_async_read_page(
     uint8_t noc = noc_index) {
     static_assert(
         has_required_addrgen_traits_v<AddrGen>,
-        "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
+        "AddrGen must have get_noc_addr() and either get_aligned_page_size(), page_size, or log_base_2_of_page_size");
 
     uint32_t page_size;
-    if constexpr (has_page_size_v<AddrGen>) {
+    if constexpr (has_get_aligned_page_size_v<AddrGen>) {
+        page_size = addrgen.get_aligned_page_size();
+    } else if constexpr (has_page_size_v<AddrGen>) {
         page_size = addrgen.page_size;
     } else {
         page_size = (1 << addrgen.log_base_2_of_page_size);
@@ -1112,7 +1141,7 @@ FORCE_INLINE void noc_async_read_tile(
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ID(
-        NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, addrgen.page_size, -1, false, noc);
+        NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, addrgen.get_aligned_page_size(), -1, false, noc);
     noc_async_read_page<TensorAccessor<DSpec>, false>(id, addrgen, dst_local_l1_addr, offset, noc);
 }
 
@@ -1230,10 +1259,12 @@ FORCE_INLINE void noc_async_write_page(
     uint8_t noc = noc_index) {
     static_assert(
         has_required_addrgen_traits_v<AddrGen>,
-        "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
+        "AddrGen must have get_noc_addr() and either get_aligned_page_size(), page_size, or log_base_2_of_page_size");
 
     uint32_t page_size;
-    if constexpr (has_page_size_v<AddrGen>) {
+    if constexpr (has_get_aligned_page_size_v<AddrGen>) {
+        page_size = addrgen.get_aligned_page_size();
+    } else if constexpr (has_page_size_v<AddrGen>) {
         page_size = addrgen.page_size;
     } else {
         page_size = (1 << addrgen.log_base_2_of_page_size);
@@ -1354,12 +1385,12 @@ FORCE_INLINE void noc_async_write_tile(
         id,
         addrgen,
         0 /* offset */,
-        addrgen.page_size,
+        addrgen.get_aligned_page_size(),
         NOC_UNICAST_WRITE_VC,
         false,
         noc);
     noc_async_write_page<TensorAccessor<DSpec>, false>(
-        id, addrgen, src_local_l1_addr, addrgen.page_size, 0 /* offset */, noc);
+        id, addrgen, src_local_l1_addr, addrgen.get_aligned_page_size(), 0 /* offset */, noc);
 }
 
 // clang-format off
@@ -1425,12 +1456,12 @@ FORCE_INLINE void noc_async_read_shard(
         NocEventType::READ,
         dst_local_l1_addr,
         s.get_shard_noc_addr(shard_id, noc),
-        s.page_size * shard_volume,
+        s.get_aligned_page_size() * shard_volume,
         -1,
         false,
         noc);
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
-        s.get_shard_noc_addr(shard_id, noc), dst_local_l1_addr, s.page_size * shard_volume, noc);
+        s.get_shard_noc_addr(shard_id, noc), dst_local_l1_addr, s.get_aligned_page_size() * shard_volume, noc);
 }
 
 // clang-format off
@@ -1459,12 +1490,12 @@ FORCE_INLINE void noc_async_write_shard(
         NocEventType::WRITE_,
         src_local_l1_addr,
         s.get_shard_noc_addr(shard_id, noc),
-        s.page_size * shard_volume,
+        s.get_aligned_page_size() * shard_volume,
         NOC_UNICAST_WRITE_VC,
         posted,
         noc);
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
-        src_local_l1_addr, s.get_shard_noc_addr(shard_id, noc), s.page_size * shard_volume, noc);
+        src_local_l1_addr, s.get_shard_noc_addr(shard_id, noc), s.get_aligned_page_size() * shard_volume, noc);
 }
 
 // clang-format off

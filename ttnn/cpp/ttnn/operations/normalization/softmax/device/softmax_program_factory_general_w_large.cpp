@@ -8,7 +8,6 @@
 
 #include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/host_api.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
 #include <utility>
@@ -26,11 +25,13 @@ SoftmaxProgramFactoryGeneralWLarge::cached_program_t SoftmaxProgramFactoryGenera
     auto* const device = input.device();
     const auto grid_coord = device->compute_with_storage_grid_size();
     const CoreRange core_range({0, 0}, {grid_coord.x - 1, grid_coord.y - 1});
+    const uint32_t tile_height = input.tensor_spec().tile().get_height();
+    const uint32_t tile_width = input.tensor_spec().tile().get_width();
     const auto shape = input.padded_shape();
     const auto H = shape[-2];
     const auto W = shape[-1];
-    const auto Ht = H / tt::constants::TILE_HEIGHT;
-    const auto Wt = W / tt::constants::TILE_WIDTH;
+    const auto Ht = H / tile_height;
+    const auto Wt = W / tile_width;
 
     // Worksplit
     const auto num = input.physical_volume() / H / W;
@@ -125,9 +126,9 @@ SoftmaxProgramFactoryGeneralWLarge::cached_program_t SoftmaxProgramFactoryGenera
         }
 
         float scaler = 1.0f;
-        uint32_t mask_w = input.logical_shape()[-1] % tt::constants::TILE_WIDTH;
+        uint32_t mask_w = input.logical_shape()[-1] % tile_width;
         if (mask_w == 0) {
-            mask_w = tt::constants::TILE_WIDTH;
+            mask_w = tile_width;
         }
         const std::vector<uint32_t> reader_args = {
             input.buffer()->address(),
