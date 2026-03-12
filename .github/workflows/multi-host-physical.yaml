@@ -47,10 +47,10 @@ on:
 
 run-name: >
   ${{ github.event_name == 'schedule' &&
-      (github.event.schedule == '0 */3 * * *' && 'T3K/Dual Validation' ||
-       github.event.schedule == '0 2 * * *'  && 'Quad Nightly' ||
-       'Scheduled Run')
-      || 'Manual Run' }}
+      (github.event.schedule == '0 */3 * * *' && 'Multi host T3K/Dual Galaxy Validation' ||
+       github.event.schedule == '0 4 * * *'  && 'Multi host Quad Galaxy Nightly' ||
+       'Multi host Scheduled Run')
+      || 'Multi host Manual Run' }}
 
 jobs:
   build-artifact:
