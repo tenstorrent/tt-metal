@@ -17,14 +17,25 @@ Optionally, the operation applies affine transformations using gamma (scale) and
 beta (shift) parameters. Both gamma and beta are optional input tensors in the ROW MAJOR memory layout
 tensors with shape (1, 1, 1, W), where W is the input width. When gamma and/or
 beta are not provided (i.e., None), the operation returns the pure normalized
-output without the affine transform. The function signature must support these
-call patterns:
+output without the affine transform.
+
+Import path and function signature must be exactly:
+
+    from ttnn.operations.layer_norm_rm import layer_norm_rm
+
+    layer_norm_rm(
+        input_tensor: ttnn.Tensor,
+        gamma: ttnn.Tensor = None,   # Optional scale, shape (1, 1, 1, W)
+        beta: ttnn.Tensor = None,    # Optional shift, shape (1, 1, 1, W)
+        *,
+        epsilon: float = 1e-5,       # Keyword-only, default 1e-5
+    ) -> ttnn.Tensor
+
+This supports these call patterns:
   - layer_norm_rm(input)                           # pure normalization
   - layer_norm_rm(input, gamma)                    # scale only
   - layer_norm_rm(input, gamma, beta)              # full affine
   - layer_norm_rm(input, gamma, beta, epsilon=X)   # custom epsilon
-
-Epsilon should default to 1e-5 and must be a keyword-only argument.
 
 The operation should validate inputs on the Python side and raise ValueError or
 RuntimeError for: non-bfloat16 input dtype, tile-layout input, gamma/beta shape

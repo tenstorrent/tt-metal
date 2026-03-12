@@ -5,7 +5,9 @@ exp(x_i) / sum(exp(x_j)) where the sum is over all elements along that
 dimension. This is the standard softmax function used in attention mechanisms
 and classification heads.
 
-The function signature must be:
+Import path and function signature must be exactly:
+
+    from ttnn.operations.softmax import softmax
 
     softmax(
         input_tensor: ttnn.Tensor,    # bfloat16, TILE_LAYOUT, 4D

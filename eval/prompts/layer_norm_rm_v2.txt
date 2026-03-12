@@ -14,9 +14,19 @@ The operation normalizes each row of the input tensor through the following step
 Optionally, apply learnable affine parameters gamma (scale) and beta (shift).
 Both gamma and beta are optional input tensor in ROW MAJOR memory layout with shape (1, 1, 1, W) where
 W matches the input width. When gamma and/or beta are not provided (None), the
-operation returns purely normalized output. The function signature must be:
+operation returns purely normalized output.
 
-    layer_norm_rm(input_tensor, gamma=None, beta=None, *, epsilon=1e-5)
+Import path and function signature must be exactly:
+
+    from ttnn.operations.layer_norm_rm import layer_norm_rm
+
+    layer_norm_rm(
+        input_tensor: ttnn.Tensor,
+        gamma: ttnn.Tensor = None,   # Optional scale, shape (1, 1, 1, W)
+        beta: ttnn.Tensor = None,    # Optional shift, shape (1, 1, 1, W)
+        *,
+        epsilon: float = 1e-5,       # Keyword-only, default 1e-5
+    ) -> ttnn.Tensor
 
 This supports these call patterns:
   - layer_norm_rm(input)                           # pure normalization
