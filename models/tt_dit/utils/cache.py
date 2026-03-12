@@ -110,14 +110,11 @@ def load_model(
         raise MissingCacheError(cache_dir)
 
     logger.info("Cache does not exist. Loading PyTorch state dict.")
-    # Create host tensors when creating the cache to circumvent the issue that replicated device
-    # tensors lead to redundant copies when saved to disk.
-    tt_model.load_torch_state_dict(get_torch_state_dict(), on_host=create_cache)
+    tt_model.load_torch_state_dict(get_torch_state_dict())
 
     if create_cache:
         logger.info(f"Writing cache to '{cache_dir}'.")
         tt_model.save(cache_dir)
-        tt_model.load(cache_dir)  # move to device
 
 
 def model_cache_dir(
