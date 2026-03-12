@@ -11,6 +11,11 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch origin/main
+        run: git fetch origin main
 
       - name: Run pre-commit hooks (check only)
         run: |
