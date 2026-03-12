@@ -403,7 +403,9 @@ class AllToAllDispatchMetadataConfig(OpConfigBase):
     """Common parameters for a ttnn.all_to_all_dispatch_metadata op"""
 
     @classmethod
-    def create_preallocated_dispatch_output_tensors(mesh_device, batch, hidden_size, num_experts_per_tok):
+    def create_preallocated_dispatch_output_tensors(
+        cls, mesh_device: ttnn.Device, batch: int, hidden_size: int, num_experts_per_tok: int
+    ):
         mesh_shape = mesh_device.shape
         dispatch_devices = mesh_shape[0]
 
