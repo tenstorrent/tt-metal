@@ -10,9 +10,9 @@
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 
-namespace ttnn::operations::ccl {
+namespace ttnn {
 
-ttnn::Tensor ExecuteAllReduce::invoke(
+ttnn::Tensor all_reduce(
     const ttnn::Tensor& input_tensor,
     std::optional<uint32_t> cluster_axis,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
@@ -55,4 +55,4 @@ ttnn::Tensor ExecuteAllReduce::invoke(
         subdevice_id);
 }
 
-}  // namespace ttnn::operations::ccl
+}  // namespace ttnn
