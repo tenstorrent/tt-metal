@@ -321,6 +321,7 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def _create_expert_mapping_tensor(
+        cls,
         mesh_device: ttnn.Device,
         mode: str,
         num_experts_per_device: int,
