@@ -20,12 +20,11 @@ namespace sfpu {
 // Strategy: approximate Phi(x) via piecewise polynomials, then multiply by x.
 // This ensures GELU(0) = 0 exactly and handles linear growth naturally.
 //
-// Four active regions (plus zero default):
-//   x >= 2.78125:        Identity (result = x)
-//   -3 <= x < 2.78125:   Core CDF polynomial (degree-13 in u=x²)
-//   -5 <= x < -3:         Left CDF polynomial (degree-8, shifted t=x+4)
-//   -13.1875 < x < -5:   Inline Cody-Waite exp with Mills ratio correction
-//   x <= -13.1875:        Zero (BF16 natural saturation)
+// Three active regions (plus zero default):
+//   x >= 2.78125:          Identity (result = x)
+//   -3.125 <= x < 2.78125: Core CDF polynomial (degree-15 in u=x²)
+//   -13.1875 < x < -3.125: Inline Cody-Waite exp with 3-term Mills ratio
+//   x <= -13.1875:          Zero (BF16 natural saturation)
 //
 // The exp region uses inline Cody-Waite range reduction instead of the library
 // _sfpu_exp_f32_accurate_ call, saving ~15 SFPU ops by skipping special-case
@@ -35,31 +34,21 @@ namespace sfpu {
 // Saturation thresholds verified by exhaustive BF16 sweep with RNE rounding.
 // =============================================================================
 
-// Degree-13 CDF polynomial for Phi(x) over [-3, 3]
+// Degree-15 CDF polynomial for Phi(x) over [-3.125, 2.78125]
 // Phi(x) is an even function offset by 0.5: Phi(x) = 0.5 + odd_function(x)
 // Only odd-power coefficients are non-zero; evaluated via u=x^2 factoring
 // to avoid wasting SFPU cycles on zero even-power coefficients.
-// Refitted as degree-13 (vs degree-15): same Max ULP = 1, saves 2 SFPU ops.
+// Covers the extended range [-3.125, 2.78125) to eliminate the LEFT polynomial
+// region entirely, reducing from 4 active regions to 3.
 constexpr float GELU_CDF_CORE_C0 = 5.000000000e-01f;
-constexpr float GELU_CDF_CORE_C1 = 3.989379361e-01f;
-constexpr float GELU_CDF_CORE_C3 = -6.644114224e-02f;
-constexpr float GELU_CDF_CORE_C5 = 9.881129978e-03f;
-constexpr float GELU_CDF_CORE_C7 = -1.120736963e-03f;
-constexpr float GELU_CDF_CORE_C9 = 9.164031378e-05f;
-constexpr float GELU_CDF_CORE_C11 = -4.721944427e-06f;
-constexpr float GELU_CDF_CORE_C13 = 1.119074048e-07f;
-
-// Degree-8 SHIFTED CDF polynomial for Phi(x) over [-5, -3]
-// Evaluate p(t) where t = x + 4, so t in [-1, 1] for x in [-5, -3]
-constexpr float GELU_CDF_LEFT_C0 = 3.166996445e-05f;
-constexpr float GELU_CDF_LEFT_C1 = 1.338698095e-04f;
-constexpr float GELU_CDF_LEFT_C2 = 2.677243205e-04f;
-constexpr float GELU_CDF_LEFT_C3 = 3.340583863e-04f;
-constexpr float GELU_CDF_LEFT_C4 = 2.894546153e-04f;
-constexpr float GELU_CDF_LEFT_C5 = 1.835831419e-04f;
-constexpr float GELU_CDF_LEFT_C6 = 8.395823421e-05f;
-constexpr float GELU_CDF_LEFT_C7 = 2.329905868e-05f;
-constexpr float GELU_CDF_LEFT_C8 = 2.286483037e-06f;
+constexpr float GELU_CDF_CORE_C1 = 3.9894151688e-01f;
+constexpr float GELU_CDF_CORE_C3 = -6.6479682922e-02f;
+constexpr float GELU_CDF_CORE_C5 = 9.9489670247e-03f;
+constexpr float GELU_CDF_CORE_C7 = -1.1655492708e-03f;
+constexpr float GELU_CDF_CORE_C9 = 1.0574820044e-04f;
+constexpr float GELU_CDF_CORE_C11 = -7.0036203397e-06f;
+constexpr float GELU_CDF_CORE_C13 = 2.9501944709e-07f;
+constexpr float GELU_CDF_CORE_C15 = -5.7769380390e-09f;
 
 // Forward GELU Evaluation with CDF Polynomial Approximation
 // GELU(x) = x * Phi(x) where Phi is approximated piecewise
@@ -68,10 +57,10 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     sfpi::vFloat result = sfpi::vConst0;  // Default: 0 for x <= -13.1875
 
     v_if(x >= 2.78125f) { result = x; }
-    // Core CDF region [-3, 2.78125): GELU(x) = x * Phi_core(x)
-    // Phi(x) = C0 + x*(C1 + x^2*(C3 + x^2*(C5 + ...)))
+    // Core CDF region [-3.125, 2.78125): GELU(x) = x * Phi_core(x)
+    // Phi(x) = C0 + x*(C1 + x^2*(C3 + x^2*(C5 + ... + x^2*C15)))
     // Factored via u=x^2 to eliminate zero even-power coefficients
-    v_elseif(x >= -3.0f) {
+    v_elseif(x >= -3.125f) {
         sfpi::vFloat u = x * x;
         sfpi::vFloat odd_poly = PolynomialEvaluator::eval(
             u,
@@ -81,41 +70,24 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
             GELU_CDF_CORE_C7,
             GELU_CDF_CORE_C9,
             GELU_CDF_CORE_C11,
-            GELU_CDF_CORE_C13);
+            GELU_CDF_CORE_C13,
+            GELU_CDF_CORE_C15);
         sfpi::vFloat phi = GELU_CDF_CORE_C0 + x * odd_poly;
         result = x * phi;
     }
-    // Left CDF region (-5, -3): GELU(x) = x * Phi_left(x+4)
-    // Shifted: t = x + 4 maps x in [-5, -3] to t in [-1, 1]
-    // Boundary at -5 uses strict > so x=-5.0 falls to the exp region
-    // (asymptotic formula is more accurate than the polynomial at t=-1 edge)
-    v_elseif(x > -5.0f) {
-        sfpi::vFloat t = x + 4.0f;
-        sfpi::vFloat phi = PolynomialEvaluator::eval(
-            t,
-            GELU_CDF_LEFT_C0,
-            GELU_CDF_LEFT_C1,
-            GELU_CDF_LEFT_C2,
-            GELU_CDF_LEFT_C3,
-            GELU_CDF_LEFT_C4,
-            GELU_CDF_LEFT_C5,
-            GELU_CDF_LEFT_C6,
-            GELU_CDF_LEFT_C7,
-            GELU_CDF_LEFT_C8);
-        result = x * phi;
-    }
-    // Exp-based region (-13.1875, -5): asymptotic formula
-    // GELU(x) ≈ -exp(-x²/2) / √(2π) · (1 - 1/x² + 3/x⁴)
+    // Exp-based region (-13.1875, -3.125): asymptotic formula
+    // GELU(x) ≈ -exp(-x²/2) / √(2π) · (1 - 1/x² + 3/x⁴ - 15/x⁶)
     //
     // Uses inline Cody-Waite range reduction instead of library exp call.
-    // For x ∈ (-13.1875, -5), t = -x²/2 ∈ (-86.8, -12.5), so z = t/ln2
-    // ∈ (-125.3, -18.0). No overflow/underflow/NaN possible in this range,
+    // For x ∈ (-13.1875, -3.125), t = -x²/2 ∈ (-86.8, -4.88), so z = t/ln2
+    // ∈ (-125.3, -7.0). No overflow/underflow/NaN possible in this range,
     // so all special-case checks from _sfpu_exp_f32_accurate_ are skipped.
     // Degree-5 Taylor (vs degree-7 in library): error < 3.3e-9 relative,
     // negligible for BF16 output.
     v_elseif(x > -13.1875f) {
         constexpr float K = -0.3989422804014327f;  // -1/√(2π)
         constexpr float K3 = 3.0f * K;             // -3/√(2π)
+        constexpr float K15 = 15.0f * K;           // -15/√(2π)
 
         sfpi::vFloat x2 = x * x;
         sfpi::vFloat t = x2 * (-0.5f);  // t = -x²/2
@@ -147,9 +119,10 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         sfpi::vInt new_exp = p_exp + k_int;
         sfpi::vFloat exp_val = sfpi::setexp(p, new_exp);
 
-        // Mills ratio correction: K·(1 - 1/x² + 3/x⁴)
+        // 3-term Mills ratio correction: K·(1 - 1/x² + 3/x⁴ - 15/x⁶)
+        // Let u = 1/x². Horner: K + u·(-K + u·(3K + u·(-15K)))
         sfpi::vFloat inv_x2 = _sfpu_reciprocal_<2>(x2);
-        sfpi::vFloat scaled = (K3 * inv_x2 - K) * inv_x2 + K;
+        sfpi::vFloat scaled = ((-K15 * inv_x2 + K3) * inv_x2 - K) * inv_x2 + K;
 
         result = exp_val * scaled;
     }
