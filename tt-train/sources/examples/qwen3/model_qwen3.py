@@ -23,16 +23,14 @@ from ttml.modules import AbstractModuleBase, ModuleList, Parameter
 from utils.checkpoint import checkpoint
 
 from utils.tensor_utils import (
-    torch_to_ttml as _torch_to_ttml,
-    make_empty_on_device as _make_empty_on_device,
-    make_weight as _make_weight,
-    make_ones as _make_ones,
-    make_zeros as _make_zeros,
+    torch_to_ttml,
+    make_weight,
+    make_ones,
+    make_zeros,
 )
 from utils.param_utils import (  # noqa: F401 — re-exported for callers
     unpermute_proj_rows,
     unpermute_norm_weights,
-    repermute_norm_weights,
     build_weight_mapping_single,
 )
 
@@ -202,7 +200,7 @@ class Qwen3RMSNorm(AbstractModuleBase):
         super().__init__()
         self.eps = eps
         self.hidden_size = hidden_size
-        self.weight = Parameter(_make_ones((1, 1, 1, hidden_size)))
+        self.weight = Parameter(make_ones((1, 1, 1, hidden_size)))
 
     def forward(self, hidden_states):
         # requires for 14B/32B backward, without throws an error ttml::metal::rmsnorm_bw
@@ -226,9 +224,9 @@ class LinearProjection(AbstractModuleBase):
 
     def __init__(self, in_features: int, out_features: int, has_bias: bool = False):
         super().__init__()
-        self.weight = Parameter(_make_weight((1, 1, out_features, in_features)))
+        self.weight = Parameter(make_weight((1, 1, out_features, in_features)))
         if has_bias:
-            self.bias = Parameter(_make_zeros((1, 1, 1, out_features)))
+            self.bias = Parameter(make_zeros((1, 1, 1, out_features)))
         else:
             self.bias = None
 
@@ -413,7 +411,7 @@ class Qwen3Model(AbstractModuleBase):
         self.use_checkpoint = use_checkpoint
         vocab_size_tiled = ((config.vocab_size + 31) // 32) * 32
         self.embed_tokens = Parameter(
-            _make_weight((1, 1, vocab_size_tiled, config.hidden_size))
+            make_weight((1, 1, vocab_size_tiled, config.hidden_size))
         )
         self.layers = ModuleList(
             [Qwen3DecoderLayer(config, i) for i in range(config.num_hidden_layers)]
@@ -482,7 +480,7 @@ class Qwen3ForCausalLM(AbstractModuleBase):
         else:
             vocab_size_tiled = ((config.vocab_size + 31) // 32) * 32
             self.lm_head_weight = Parameter(
-                _make_weight((1, 1, vocab_size_tiled, config.hidden_size))
+                make_weight((1, 1, vocab_size_tiled, config.hidden_size))
             )
 
     def forward(self, input_ids, attention_mask=None, past_key_values=None, **kwargs):
@@ -567,7 +565,7 @@ def load_weights_from_hf(
                 weight = padded
             weight = weight.unsqueeze(0).unsqueeze(0).unsqueeze(0)
 
-        return _torch_to_ttml(weight)
+        return torch_to_ttml(weight)
 
     from concurrent.futures import ThreadPoolExecutor
 

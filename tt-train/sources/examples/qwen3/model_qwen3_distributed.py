@@ -68,15 +68,9 @@ from utils.param_utils import (
 from utils.tensor_utils import (
     get_device,
     get_tp_size,
-    make_weight as _make_weight,
-    make_ones as _make_ones,
-    make_zeros as _make_zeros,
     make_sharded_weight,
     make_sharded_zeros,
-    make_dist_replicated,
-    make_replicated_ones,
     make_replicated_zeros,
-    make_replicated_weight,
 )
 from utils.distributed_ops import (
     all_gather_fwd_scatter_bwd,
