@@ -325,15 +325,26 @@ def infer_data_formats(
     # The data format used for mathematical computations, desired format in dest register (typically matches unpack_out if both regs have same format)
     math = infer_math_format(unpack_out_A, unpack_out_B)
 
+    # FP8 is a compressed L1 format; hardware unpacks it to Float16 (float16_a) in
+    # source registers. The ALU and packer must see Float16, not Lf8/Fp8_e4m3.
+    if math == DataFormat.Fp8_e4m3:
+        math = DataFormat.Float16
+
     pack_in = infer_pack_in(
         input_format,
         output_format,
-        unpack_out_A,
+        math,
         is_fp32_dest_acc_en,
         unpacking_to_dest,
         chip_arch,
     )  # input to the packing stage, determines what gasket can convert from dest register
     # potentially different from unpack_out and pack_out depending on FP32 accumulation
+
+    # FP8 output: gasket must produce Float16 for packer's Pac_LF8_4b_exp encode path.
+    # When math is a B-format (Float16_b), use Float16_b so the packer can distinguish
+    # A-format vs B-format pipelines and enable 10-bit mantissa rounding accordingly.
+    if output_format == DataFormat.Fp8_e4m3:
+        pack_in = DataFormat.Float16_b if math.is_exponent_B() else DataFormat.Float16
 
     # We fall back to using input_format for src_B if input_format_B is not provided, ensuring same_src_format is True in this case.
     if input_format_B is None:
@@ -426,6 +437,10 @@ def data_formats(
             unpack_dst = DataFormat.Float16_b
             math_format = DataFormat.Float16_b
             pack_src_format = DataFormat.Float16_b
+        elif input_format == DataFormat.Fp8_e4m3:
+            unpack_dst = DataFormat.Fp8_e4m3
+            math_format = DataFormat.Float16
+            pack_src_format = DataFormat.Float16
         else:
             unpack_dst = input_format
             math_format = input_format
@@ -440,6 +455,8 @@ def data_formats(
         # For B destination format when format inference is disabled
         if input_format_B is not None and input_format_B.is_mx_format():
             unpack_B_dst_val = DataFormat.Float16_b
+        elif input_format_B is not None and input_format_B == DataFormat.Fp8_e4m3:
+            unpack_B_dst_val = DataFormat.Fp8_e4m3
         elif input_format_B is not None:
             unpack_B_dst_val = input_format_B
         else:

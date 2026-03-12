@@ -16,6 +16,7 @@ from .logger import logger
 from .pack import (
     pack_bfp8_b,
     pack_bfp16,
+    pack_fp8_e4m3,
     pack_fp16,
     pack_fp32,
     pack_int8,
@@ -200,6 +201,7 @@ class StimuliConfig:
             DataFormat.Int32: pack_int32,
             DataFormat.MxFp8R: pack_mxfp8r,
             DataFormat.MxFp8P: pack_mxfp8p,
+            DataFormat.Fp8_e4m3: pack_fp8_e4m3,
             DataFormat.UInt32: pack_uint32,
             DataFormat.Int16: pack_int16,
             DataFormat.UInt16: pack_uint16,

@@ -34,6 +34,7 @@ from .llk_params import DataFormat, MailboxesPerf, format_dict
 from .pack import (
     pack_bfp8_b,
     pack_bfp16,
+    pack_fp8_e4m3,
     pack_fp16,
     pack_fp32,
     pack_int8,
@@ -372,6 +373,7 @@ def write_pipeline_operands_to_l1(
             DataFormat.UInt32: pack_uint32,
             DataFormat.Int16: pack_int16,
             DataFormat.UInt16: pack_uint16,
+            DataFormat.Fp8_e4m3: pack_fp8_e4m3,
             DataFormat.Int8: pack_int8,
             DataFormat.UInt8: pack_uint8,
         }
