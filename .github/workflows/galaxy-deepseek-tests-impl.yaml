@@ -173,6 +173,7 @@ jobs:
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests -x --timeout 600 --durations=0
+          # Using -x stops on the first failure
       - name: Run DeepSeek op unit tests (Device Performance)
         if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
