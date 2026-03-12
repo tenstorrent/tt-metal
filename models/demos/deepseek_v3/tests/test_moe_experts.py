@@ -18,13 +18,7 @@ from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.experts import Experts as TTExperts
 from models.demos.deepseek_v3.utils.config_helpers import even_int_div, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import (
-    add_inv_scale_to_state_dict,
-    dequantize_state_dict,
-    get_model_config,
-    get_test_weight_config,
-    run_module_forward,
-)
+from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, run_module_forward
 
 
 class DeepseekV3MoEExperts(nn.Module):
@@ -105,17 +99,15 @@ def test_forward_pass(
     batch_size = 1
     num_experts_per_device = even_int_div(hf_config.n_routed_experts, mesh_device.get_num_devices())
 
-    reference_model = DeepseekV3MoEExperts(hf_config).eval()
-    torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size)
+    reference_model = DeepseekV3MoEExperts(hf_config).eval().to(torch.bfloat16)
+    torch_input = torch.randn(batch_size, 1, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
 
     if weight_type == "random":
-        state_dict = add_inv_scale_to_state_dict(
-            reference_model.state_dict(), block_shape=hf_config.quantization_config["weight_block_size"]
-        )
+        state_dict = reference_model.state_dict()
     else:
         assert weight_type == "real"
         state_dict = create_combined_state_dict(module_path, model_path, state_dict)
-        reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
+        reference_model.load_state_dict(state_dict)
 
     weight_config = get_test_weight_config(
         TTExperts,
