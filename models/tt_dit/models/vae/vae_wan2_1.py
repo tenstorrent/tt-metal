@@ -1002,7 +1002,8 @@ class WanResample(Module):
                     feat_cache[idx] = cache_x_BTHWC
                     feat_idx[0] += 1
             else:
-                raise ValueError("feat_cache cannot be None")
+                # No-cache full-T mode: time_conv with zero-padded temporal boundary
+                x_conv_BTHWC = self.time_conv(x_conv_BTHWC, logical_h)
         return x_conv_BTHWC, logical_h
 
 
@@ -1352,7 +1353,6 @@ class WanDecoder(Module):
     def forward(self, z_BTHWC: ttnn.Tensor, logical_h: int, use_cache: bool = True) -> tuple[ttnn.Tensor, int]:
         B, T, H, W, C = z_BTHWC.shape
 
-        self.clear_cache()
         z_tile_BTHWC = ttnn.to_layout(z_BTHWC, ttnn.TILE_LAYOUT)
         x_tile_BTHWC = self.post_quant_conv(z_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
