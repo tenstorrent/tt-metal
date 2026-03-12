@@ -24,6 +24,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor
+from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import _ZERO_TILE_SENTINEL, pack_tile_pairs
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     UnifiedCompileTimeCoreDescriptor,
@@ -33,10 +34,6 @@ from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
 # Must match compressed::TILE_SIZES in llk_unpack_compressed.h
 _TILE_SIZES = [1088, 576, 320, 0]  # bfp8, bfp4, bfp2, bfp0
 
-# Pre-resolved DataFormat values and shifted tile sizes (match op.py in matmul_custom_compressed)
-_DATA_FORMATS = [6, 7, 15, 0]  # bfp8=Bfp8_b(6), bfp4=Bfp4_b(7), bfp2=Bfp2_b(15), bfp0=0
-_TILE_SIZES_SHIFTED = [68, 36, 20, 0]  # tile_bytes >> 4
-
 
 def _compute_subblock_metadata(
     device,
@@ -45,7 +42,7 @@ def _compute_subblock_metadata(
     per_core_n: int,
     num_subblocks_k: int,
 ) -> tuple[list[int], list[int]]:
-    """Compute per-subblock NOC read metadata and packed pair format metadata.
+    """Compute per-subblock NOC read metadata and per-tile format metadata.
 
     The assignment is in column-major order within the shard:
     for each N column, K tiles are contiguous.
@@ -53,15 +50,16 @@ def _compute_subblock_metadata(
     Returns:
         block_sizes: list of uint32, one per subblock (block_size_bytes).
             Total entries: num_subblocks_k * per_core_n
-        packed_pairs: list of uint32, packed pair format info for TRISC.
-            Each word: [sz1:8 | sz0:8 | fmt1:8 | fmt0:8]
-            Total entries: (subblock_k / 2) * num_subblocks_k * per_core_n
+        tile_infos: list of uint32, per-tile [relative_offset:24 | fmt:8].
+            Relative offsets are within each subblock (base=0).
+            Zero tiles use _ZERO_TILE_SENTINEL as address.
+            Total entries: subblock_k * num_subblocks_k * per_core_n
     """
     num_tiles_k = subblock_k * num_subblocks_k
     assert len(shard_assignment) == num_tiles_k * per_core_n
 
     block_sizes = []
-    packed_pairs = []
+    tile_infos = []
 
     tile_idx = 0
     for _n in range(per_core_n):
@@ -76,19 +74,14 @@ def _compute_subblock_metadata(
 
             block_sizes.append(block_bytes)
 
-            # Pack pairs for this subblock
-            for p in range(0, subblock_k, 2):
-                a0 = int(shard_assignment[subblock_start + p])
-                a1 = int(shard_assignment[subblock_start + p + 1])
-                packed = (
-                    _DATA_FORMATS[a0]
-                    | (_DATA_FORMATS[a1] << 8)
-                    | (_TILE_SIZES_SHIFTED[a0] << 16)
-                    | (_TILE_SIZES_SHIFTED[a1] << 24)
-                )
-                packed_pairs.append(packed)
+            # Pack per-tile info for this subblock using pack_tile_pairs.
+            # base_addr_shifted=0 gives relative offsets within the subblock.
+            # The kernel adds addr_in1 (CB read pointer) at runtime.
+            subblock_slice = shard_assignment[subblock_start : subblock_start + subblock_k]
+            tiles = pack_tile_pairs(subblock_slice, base_addr_shifted=0, zero_tile_addr=_ZERO_TILE_SENTINEL)
+            tile_infos.extend(tiles)
 
-    return block_sizes, packed_pairs
+    return block_sizes, tile_infos
 
 
 class DRAMStreamingMatmulCompressed:
@@ -232,16 +225,17 @@ class DRAMStreamingMatmulCompressed:
         )
         meta_l1_addr = meta_tensor.buffer_address()
 
-        # Upload format pairs metadata to L1 (HEIGHT_SHARDED)
-        num_pairs = (subblock_k // 2) * num_subblocks_k * per_core_N
+        # Upload per-tile format metadata to L1 (HEIGHT_SHARDED)
+        # Each tile has one uint32: [relative_offset:24 | fmt:8]
+        num_tile_entries = subblock_k * num_subblocks_k * per_core_N
         fmt_flat = []
         for core_pairs in all_fmt_pairs:
             fmt_flat.extend(core_pairs)
-        fmt_torch = torch.tensor(fmt_flat, dtype=torch.int32).reshape(num_cores, num_pairs)
-        fmt_shard_spec = ttnn.ShardSpec(compute_cores, [1, num_pairs * 4], ttnn.ShardOrientation.ROW_MAJOR)
+        fmt_torch = torch.tensor(fmt_flat, dtype=torch.int32).reshape(num_cores, num_tile_entries)
+        fmt_shard_spec = ttnn.ShardSpec(compute_cores, [1, num_tile_entries * 4], ttnn.ShardOrientation.ROW_MAJOR)
         fmt_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, fmt_shard_spec)
         fmt_tensor = ttnn.from_torch(
-            fmt_torch.view(torch.uint8).reshape(num_cores, num_pairs * 4),
+            fmt_torch.view(torch.uint8).reshape(num_cores, num_tile_entries * 4),
             dtype=ttnn.uint8,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
