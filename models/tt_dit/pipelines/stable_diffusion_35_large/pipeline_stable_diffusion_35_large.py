@@ -176,8 +176,7 @@ class StableDiffusion3Pipeline:
             ttnn.synchronize_device(submesh_device)
 
         self._step_inner_tracers = [
-            Tracer(self._step_inner, device=device, prep_run=False, clone_prep_inputs=False)
-            for device in self.submesh_devices
+            Tracer(self._step_inner, device=device, prep_run=False) for device in self.submesh_devices
         ]
 
         self._num_channels_latents = torch_transformer.config.in_channels
@@ -250,12 +249,8 @@ class StableDiffusion3Pipeline:
         self._text_encoder_1.load_torch_state_dict(text_encoder_1_state_dict)
         self._text_encoder_2.load_torch_state_dict(text_encoder_2_state_dict)
 
-        self._clip_tracer_1 = Tracer(
-            self._text_encoder_1.forward, device=encoder_device, prep_run=False, clone_prep_inputs=False
-        )
-        self._clip_tracer_2 = Tracer(
-            self._text_encoder_2.forward, device=encoder_device, prep_run=False, clone_prep_inputs=False
-        )
+        self._clip_tracer_1 = Tracer(self._text_encoder_1.forward, device=encoder_device, prep_run=False)
+        self._clip_tracer_2 = Tracer(self._text_encoder_2.forward, device=encoder_device, prep_run=False)
 
         if enable_t5_text_encoder:
             logger.info("creating TT-NN T5 text encoder...")
@@ -287,9 +282,7 @@ class StableDiffusion3Pipeline:
 
             # Load state dict into new encoder
             self._text_encoder_3.load_torch_state_dict(torch_text_encoder_3_state_dict)
-            self._t5_tracer = Tracer(
-                self._text_encoder_3.forward, device=encoder_device, prep_run=False, clone_prep_inputs=False
-            )
+            self._t5_tracer = Tracer(self._text_encoder_3.forward, device=encoder_device, prep_run=False)
         else:
             self._text_encoder_3 = None
             self._t5_tracer = None
@@ -305,9 +298,7 @@ class StableDiffusion3Pipeline:
             parallel_config=self.vae_parallel_config,
             ccl_manager=self.ccl_managers[vae_submesh_idx],
         )
-        self._vae_decoder_tracer = Tracer(
-            self._vae_decoder.forward, device=self.vae_device, prep_run=False, clone_prep_inputs=False
-        )
+        self._vae_decoder_tracer = Tracer(self._vae_decoder.forward, device=self.vae_device, prep_run=False)
 
         if self.desired_encoder_submesh_shape != self.original_submesh_shape:
             # HACK: reshape submesh device 0 to 1D

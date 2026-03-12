@@ -226,9 +226,7 @@ class MochiPipeline(DiffusionPipeline):
             parallel_config=parallel_config,
             is_fsdp=True,
         )
-        self._transformer_tracer = Tracer(
-            self.transformer.forward, device=mesh_device, prep_run=False, clone_prep_inputs=False
-        )
+        self._transformer_tracer = Tracer(self.transformer.forward, device=mesh_device, prep_run=False)
 
         # Load state dict into TT transformer
         cache.load_model(
@@ -272,9 +270,7 @@ class MochiPipeline(DiffusionPipeline):
                 scaling_factor=torch_vae.config.scaling_factor,
             )
             self.vae.load_torch_state_dict(torch_vae.decoder.state_dict())
-            self._vae_decoder_tracer = Tracer(
-                self.vae.decode, device=self.mesh_device, prep_run=False, clone_prep_inputs=False
-            )
+            self._vae_decoder_tracer = Tracer(self.vae.decode, device=self.mesh_device, prep_run=False)
 
             # Reshape the device mesh back to the DiT mesh shape:
             if tuple(self.mesh_device.shape) != self.dit_mesh_shape:
@@ -780,9 +776,7 @@ class MochiPipeline(DiffusionPipeline):
                 parallel_config=self.parallel_config,
                 is_fsdp=True,
             )
-            self._transformer_tracer = Tracer(
-                self.transformer.forward, device=self.mesh_device, prep_run=False, clone_prep_inputs=False
-            )
+            self._transformer_tracer = Tracer(self.transformer.forward, device=self.mesh_device, prep_run=False)
 
             # Load state dict into TT transformer
             logger.info("Loading MochiTransformer3DModel state_dict")

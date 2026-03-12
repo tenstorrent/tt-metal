@@ -163,8 +163,7 @@ class QwenImagePipeline:
             for i, submesh_device in enumerate(self._submesh_devices)
         ]
         self._step_inner_tracers = [
-            Tracer(self._step_inner, device=device, prep_run=False, clone_prep_inputs=False)
-            for device in self._submesh_devices
+            Tracer(self._step_inner, device=device, prep_run=False) for device in self._submesh_devices
         ]
         self._transformers_loaded = False
 
@@ -215,9 +214,7 @@ class QwenImagePipeline:
                     parallel_config=self._wan_vae_parallel_config,
                     ccl_manager=self._ccl_managers[self.vae_submesh_idx],
                 )
-                self._vae_decoder_tracer = Tracer(
-                    self._vae_decoder.forward, device=self.vae_device, prep_run=False, clone_prep_inputs=False
-                )
+                self._vae_decoder_tracer = Tracer(self._vae_decoder.forward, device=self.vae_device, prep_run=False)
 
             # Load VAE weights based on configuration
             if not dynamic_load_vae:

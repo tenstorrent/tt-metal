@@ -153,8 +153,7 @@ class Flux1Pipeline:
             ttnn.synchronize_device(submesh_device)
 
         self._step_inner_tracers = [
-            Tracer(self._step_inner, device=device, prep_run=False, clone_prep_inputs=False)
-            for device in self._submesh_devices
+            Tracer(self._step_inner, device=device, prep_run=False) for device in self._submesh_devices
         ]
 
         self._pos_embed = torch_transformer.pos_embed
@@ -198,9 +197,7 @@ class Flux1Pipeline:
             )
 
             self._text_encoder_1.load_torch_state_dict(torch_text_encoder_1.state_dict())
-            self._clip_tracer = Tracer(
-                self._text_encoder_1.forward, device=self.encoder_device, prep_run=False, clone_prep_inputs=False
-            )
+            self._clip_tracer = Tracer(self._text_encoder_1.forward, device=self.encoder_device, prep_run=False)
 
         if enable_t5_text_encoder:
             if use_torch_t5_text_encoder:
@@ -237,9 +234,7 @@ class Flux1Pipeline:
                     parallel_config=encoder_parallel_config,
                     mesh_shape=tuple(self.encoder_device.shape),
                 )
-                self._t5_tracer = Tracer(
-                    self._t5_text_encoder.forward, device=self.encoder_device, prep_run=False, clone_prep_inputs=False
-                )
+                self._t5_tracer = Tracer(self._t5_text_encoder.forward, device=self.encoder_device, prep_run=False)
         else:
             self._t5_text_encoder = None
             self._t5_tracer = None
@@ -252,9 +247,7 @@ class Flux1Pipeline:
             parallel_config=self._vae_parallel_config,
             ccl_manager=self._ccl_managers[self.vae_submesh_idx],
         )
-        self._vae_decoder_tracer = Tracer(
-            self._vae_decoder.forward, device=self.vae_device, prep_run=False, clone_prep_inputs=False
-        )
+        self._vae_decoder_tracer = Tracer(self._vae_decoder.forward, device=self.vae_device, prep_run=False)
 
         self._allocate_persistent_buffers()
 

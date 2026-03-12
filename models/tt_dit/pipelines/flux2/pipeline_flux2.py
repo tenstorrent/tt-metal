@@ -160,8 +160,7 @@ class Flux2Pipeline:
             ttnn.synchronize_device(submesh_device)
 
         self._step_inner_tracers = [
-            Tracer(self._step_inner, device=device, prep_run=False, clone_prep_inputs=False)
-            for device in self._submesh_devices
+            Tracer(self._step_inner, device=device, prep_run=False) for device in self._submesh_devices
         ]
 
         self._pos_embed = torch_transformer.pos_embed
@@ -193,9 +192,7 @@ class Flux2Pipeline:
                     ccl_manager=self._ccl_managers[self.vae_submesh_idx],
                 )
                 self._vae_decoder.load_torch_state_dict(self._torch_vae.state_dict())
-                self._vae_decoder_tracer = Tracer(
-                    self._vae_decoder.forward, device=self.vae_device, prep_run=False, clone_prep_inputs=False
-                )
+                self._vae_decoder_tracer = Tracer(self._vae_decoder.forward, device=self.vae_device, prep_run=False)
             else:
                 self._vae_decoder = None
                 self._vae_decoder_tracer = None
