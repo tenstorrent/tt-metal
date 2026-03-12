@@ -285,40 +285,25 @@ def _fused_kv_branch_forward(
     spec_crs = fused_kv["spec_crs"]
     rope_crs = fused_kv["rope_crs"]
 
-    # 1. Replicate input x onto the 18-core grid (HEIGHT_SHARDED).
-    # x is [1,1,1,hidden] in DRAM. Each core needs the same [1, hidden] input row.
-    # Standard 32x32 tiles can't represent height-1 shards, so we roundtrip
-    # through torch to create a tensor with Tile((1,32)) directly via from_torch,
-    # then shard it.  (TODO: avoid host roundtrip once on-device tile conversion works)
+    # 1. Replicate input x onto the 18-core grid (HEIGHT_SHARDED, ROW_MAJOR).
+    # x is [1,1,1,hidden] standard TILE in DRAM. Convert to ROW_MAJOR, replicate
+    # across num_cores rows, then shard. The kernel's CB is configured with TILE_1x32
+    # descriptors, so it interprets the identical bytes as 1x32 tiles.
     num_cores = spec_crs.num_cores()
     hidden_size = int(x.shape[-1])
-    TILE_1x32 = ttnn.Tile((1, 32))
-    is_mesh = hasattr(x.device(), "shape")
 
-    def _to_torch_single(t):
-        """Read device tensor back to torch (device-0 only for mesh)."""
-        if is_mesh:
-            return ttnn.to_torch(ttnn.get_device_tensors(t)[0])
-        return ttnn.to_torch(t)
-
-    x_torch = _to_torch_single(x)
-    x_row = x_torch.reshape(1, hidden_size).expand(num_cores, hidden_size).contiguous()
+    x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+    x_2d = ttnn.reshape(x_rm, [1, hidden_size])
+    x_repeated = ttnn.concat([x_2d] * num_cores, dim=0)
 
     input_shard_spec = ttnn.ShardSpec(spec_crs, (1, hidden_size), ttnn.ShardOrientation.ROW_MAJOR)
     input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
-    x_sharded = ttnn.from_torch(
-        x_row,
-        dtype=x.dtype,
-        layout=ttnn.TILE_LAYOUT,
-        tile=TILE_1x32,
-        device=x.device(),
-        memory_config=input_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(x.device()) if is_mesh else None,
-    )
+    x_sharded = ttnn.to_memory_config(x_repeated, input_mem_config)
+    ttnn.deallocate(x_repeated, force=False)
 
-    # 2. Shard cos/sin for current position onto rope cores.
-    # cos_batch/sin_batch: [1,1,1,64] in DRAM for batch=1.
-    # Shard shape (1, 32) requires 1x32 tile layout.
+    # 2. Shard cos/sin for current position onto rope cores (WIDTH_SHARDED, ROW_MAJOR).
+    # cos_batch/sin_batch: [1,1,1,64] standard TILE HEIGHT_SHARDED.
+    # Convert to ROW_MAJOR [1, 64] in DRAM, then WIDTH_SHARD onto 2 rope cores.
     rope_dim = int(cos_batch.shape[-1])
     num_rope_cores = rope_crs.num_cores()
     cos_sin_shard_width = rope_dim // num_rope_cores
@@ -327,29 +312,17 @@ def _fused_kv_branch_forward(
         ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, cos_sin_shard_spec
     )
 
-    cos_torch = _to_torch_single(cos_batch)
-    cos_1d = cos_torch.reshape(1, rope_dim).contiguous()
-    cos_sharded = ttnn.from_torch(
-        cos_1d,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        tile=TILE_1x32,
-        device=x.device(),
-        memory_config=cos_sin_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(x.device()) if is_mesh else None,
-    )
+    cos_rm = ttnn.to_layout(cos_batch, ttnn.ROW_MAJOR_LAYOUT)
+    cos_2d = ttnn.reshape(cos_rm, [1, rope_dim])
+    cos_dram = ttnn.to_memory_config(cos_2d, ttnn.DRAM_MEMORY_CONFIG)
+    cos_sharded = ttnn.to_memory_config(cos_dram, cos_sin_mem_config)
+    ttnn.deallocate(cos_dram, force=False)
 
-    sin_torch = _to_torch_single(sin_batch)
-    sin_1d = sin_torch.reshape(1, rope_dim).contiguous()
-    sin_sharded = ttnn.from_torch(
-        sin_1d,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        tile=TILE_1x32,
-        device=x.device(),
-        memory_config=cos_sin_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(x.device()) if is_mesh else None,
-    )
+    sin_rm = ttnn.to_layout(sin_batch, ttnn.ROW_MAJOR_LAYOUT)
+    sin_2d = ttnn.reshape(sin_rm, [1, rope_dim])
+    sin_dram = ttnn.to_memory_config(sin_2d, ttnn.DRAM_MEMORY_CONFIG)
+    sin_sharded = ttnn.to_memory_config(sin_dram, cos_sin_mem_config)
+    ttnn.deallocate(sin_dram, force=False)
 
     # 3. Reshard weight from DRAM to L1 for this layer, call fused op, then free L1 copy.
     w_kv_a_l1 = ttnn.to_memory_config(fused_kv["w_kv_a"], fused_kv["w_kv_a_l1_config"])
@@ -368,35 +341,28 @@ def _fused_kv_branch_forward(
 
     ttnn.deallocate(w_kv_a_l1, force=True)
 
-    # 4. Read sharded results back to host, then concat.
-    # WORKAROUND: sharded_to_interleaved crashes on TILE_1x32 tensors (FPE: divides
-    # shard_height by TILE_HEIGHT=32, giving 0 for height=1). Use host round-trip instead.
-    # Output must be [1,1,B,kvpe_dim] ROW_MAJOR in DRAM — matching the non-fused path.
-    print("[FUSED_KV_DBG] Syncing device after fused kernel...", flush=True)
-    ttnn.synchronize_device(x.device())
-    print("[FUSED_KV_DBG] Device sync done. Reading nope_result from device...", flush=True)
-    nope_torch = _to_torch_single(nope_result).reshape(1, -1)  # [1, kv_lora_rank]
-    print(f"[FUSED_KV_DBG] nope_torch shape={nope_torch.shape}", flush=True)
-    rope_torch = _to_torch_single(rope_result).reshape(1, -1)  # [1, qk_rope_head_dim]
-    print(f"[FUSED_KV_DBG] rope_torch shape={rope_torch.shape}", flush=True)
+    # 4. Concat nope + rope on-device (no host roundtrip).
+    # Output tensors are ROW_MAJOR (bytes identical to TILE_1x32 for 1-row data).
+    # to_memory_config (sharded→interleaved) uses raw shard_height for ROW_MAJOR.
+    kvpe_dim = int(fused_kv["nope_output"].shape[-1]) + int(fused_kv["rope_output"].shape[-1])
 
-    kvpe_torch = torch.cat([nope_torch, rope_torch], dim=-1)
-    print(f"[FUSED_KV_DBG] kvpe_torch shape={kvpe_torch.shape}, creating DRAM tensor...", flush=True)
-    kvpe_new = ttnn.from_torch(
-        kvpe_torch.reshape(1, 1, 1, -1),  # [1,1,1,576]
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-        device=x.device(),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(x.device()) if is_mesh else None,
-    )
+    nope_dram = ttnn.to_memory_config(nope_result, ttnn.DRAM_MEMORY_CONFIG)
+    rope_dram = ttnn.to_memory_config(rope_result, ttnn.DRAM_MEMORY_CONFIG)
+
+    kvpe_rm = ttnn.concat([nope_dram, rope_dram], dim=-1)
+    ttnn.deallocate(nope_dram, force=False)
+    ttnn.deallocate(rope_dram, force=False)
+
+    kvpe_4d = ttnn.reshape(kvpe_rm, [1, 1, 1, kvpe_dim])
+    kvpe_new = ttnn.to_layout(kvpe_4d, ttnn.TILE_LAYOUT)
+    if kvpe_4d is not kvpe_new:
+        ttnn.deallocate(kvpe_4d, force=False)
 
     # Cleanup sharded temporaries
     ttnn.deallocate(x_sharded, force=False)
     ttnn.deallocate(cos_sharded, force=False)
     ttnn.deallocate(sin_sharded, force=False)
 
-    print("[FUSED_KV_DBG] _fused_kv_branch_forward completed", flush=True)
     return kvpe_new
 
 
