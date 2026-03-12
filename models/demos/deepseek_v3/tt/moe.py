@@ -21,6 +21,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     DeepseekMoEReduceScatterConfig,
     MeshDeviceStub,
     MoEComputeConfig,
+    MorehFullConfig,
     MulConfig,
     ReduceScatterAsyncMinimalConfig,
     RepeatConfig,
@@ -249,12 +250,18 @@ class MoE(SharedStateAddOn, AbstractModule):
                     dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
                     output_tensors=AllToAllDispatchMetadataConfig.create_preallocated_dispatch_output_tensors(
                         mesh_device,
-                        mesh_device.shape,
-                        mesh_device.shape[0],
                         batch,
                         HIDDEN_SIZE,
                         hf_config.num_experts_per_tok,
                     ),
+                )
+                decode_config["quad_ring_moreh_full"] = MorehFullConfig(
+                    shape=ttnn.Shape([hf_config.num_experts_per_tok, USERS_PER_ROW, hf_config.hidden_size]),
+                    fill_value=0,
+                    device=mesh_device,
+                    dtype=torch.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
                 decode_config["quad_ring_moe_compute"] = MoEComputeConfig(
                     output_height_shard_dim=4,
@@ -466,9 +473,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         # MoE Gate
         topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
 
-        # Repeat + Permute Expert weights
-        topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
-
         # MOE
         post_combine_output_tensor = cls._fwd_prefill_moe(
             x,
@@ -518,14 +522,17 @@ class MoE(SharedStateAddOn, AbstractModule):
         if cfg["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING and cfg["num_dispatch_devices"] == 16:
             ccl = cfg["ccl"]
 
-            preallocated_combine_output = ttnn.moreh_full(
-                shape=[cfg["num_experts_per_tok"], batch_size_per_device, cfg["hidden_size"]],
-                fill_value=0,
-                device=cfg["mesh_device"],
-                dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            # L1 sharded topk_experts_weights need to be deallocated before moe_compute
+            # configure weights for post combine scaling prior to that deallocation, and store in DRAM
+            permuted_topk_experts_weights = ttnn.permute(
+                topk_experts_weights, (3, 1, 0, 2), memory_config=ttnn.L1_MEMORY_CONFIG
             )
+            permuted_topk_experts_weights = ttnn.to_layout(
+                permuted_topk_experts_weights, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
+
+            # NOTE: needs to run prior to all_to_all_dispatch_metadata
+            preallocated_combine_output = ttnn.moreh_full(**cfg["quad_ring_moreh_full"])
 
             (
                 dispatch_output_sparse_buffer,
@@ -539,10 +546,14 @@ class MoE(SharedStateAddOn, AbstractModule):
                 **ccl.populate_all_to_all_dispatch_metadata_args(cfg["quad_ring_all_to_all_dispatch_metadata"]),
             )
 
-            # TODO: (GR)
-            w0_w1 = ()
-            w2 = ()
-            layer_id = 0
+            # deallocation required in order to free up L1 space for moe_compute
+            ttnn.deallocate(x_rm)
+            ttnn.deallocate(topk_experts_indices)
+            ttnn.deallocate(topk_experts_weights)
+
+            w0_w1 = ()  # TODO: (GR)
+            w2 = ()  # TODO: (GR)
+            layer_id = 0  # TODO: (GR)
             (
                 compute_output_token_counts,
                 compute_output_dense_expert_activation,
@@ -554,11 +565,15 @@ class MoE(SharedStateAddOn, AbstractModule):
                 dispatch_output_expert_indices,
                 dispatch_output_expert_scores,
                 cfg["expert_mapping_tensor"],
-                w0_w1,  # TODO: (GR)
-                w2,  # TODO: (GR)
-                layer_id=layer_id,  # TODO: (GR)
+                w0_w1,
+                w2,
+                layer_id=layer_id,
                 **cfg["quad_ring_moe_compute"],
             )
+
+            ttnn.deallocate(dispatch_output_sparse_buffer)
+            ttnn.deallocate(dispatch_output_expert_indices)
+            ttnn.deallocate(dispatch_output_expert_scores)
 
             combine_output = ttnn.experimental.selective_reduce_combine(
                 compute_output,
@@ -569,6 +584,11 @@ class MoE(SharedStateAddOn, AbstractModule):
                 **ccl.populate_selective_reduce_combine_args(cfg["quad_ring_selective_reduce_combine"]),
             )
 
+            ttnn.deallocate(compute_output)
+            ttnn.deallocate(compute_output_dense_expert_activation)
+            ttnn.deallocate(compute_ouput_dense_e_t)
+            ttnn.deallocate(compute_output_token_counts)
+
             combine_output = ttnn.to_layout(
                 combine_output,
                 layout=ttnn.TILE_LAYOUT,
@@ -576,15 +596,13 @@ class MoE(SharedStateAddOn, AbstractModule):
             )
             combine_output = ttnn.unsqueeze(combine_output, dim=1)
 
-            topk_experts_weights = ttnn.permute(topk_experts_weights, (3, 1, 0, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
-            topk_experts_weights = ttnn.to_layout(
-                topk_experts_weights, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
-            )
-
             post_combine_output_tensor = ttnn.mul(
-                combine_output, topk_experts_weights, memory_config=ttnn.L1_MEMORY_CONFIG
+                combine_output, permuted_topk_experts_weights, **cfg["mul_experts_output_with_weights"]
             )
         else:
+            # Repeat + Permute Expert weights
+            topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
+
             topk_experts_indices_rm = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
             topk_experts_indices_rm = ttnn.reshape(
                 topk_experts_indices_rm, shape=(batch_size_per_device, 1, seq_len, cfg["num_experts_per_tok"])
@@ -652,6 +670,9 @@ class MoE(SharedStateAddOn, AbstractModule):
         batch_size: int,
         seq_len: int,
     ) -> ttnn.Tensor:
+        # Repeat + Permute Expert weights
+        topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
+
         tokens = batch_size * seq_len
         x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
         x_rm = ttnn.reshape(
