@@ -54,7 +54,8 @@ jobs:
             clang-20 clang-tidy-20 \
             libc++-20-dev libc++abi-20-dev \
             python3-dev python3-numpy python3.12-venv \
-            ninja-build jq
+            ninja-build jq \
+            libnuma-dev libhwloc-dev
           sudo ln -s $(which clang-tidy-20) /usr/local/bin/clang-tidy
 
       - name: Prepare compile_commands.json
