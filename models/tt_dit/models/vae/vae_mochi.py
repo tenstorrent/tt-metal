@@ -141,6 +141,10 @@ class ResBlock(Module):
                 8: 4,  # 28 padded up to 32, divided by 8
                 4: 7,  # 28/4
             },
+            512: {
+                8: 5,
+                4: 8,
+            },
         }
         self.num_out_blocks_map = {
             # small latent, large latent
@@ -166,8 +170,8 @@ class ResBlock(Module):
 
         grid_size_x = mesh_device.core_grid.x
         grid_size_y = (
-            self.core_grid_y_map[768][self.parallel_config.time_parallel.factor]
-            if in_channels == 768
+            self.core_grid_y_map[in_channels][self.parallel_config.time_parallel.factor]
+            if in_channels == 768 or in_channels == 512
             else mesh_device.core_grid.y
         )
         self.grid_size = ttnn.CoreGrid(y=grid_size_y, x=grid_size_x)
