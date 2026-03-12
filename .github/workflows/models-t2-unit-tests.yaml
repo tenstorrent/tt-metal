@@ -12,6 +12,11 @@ on:
           - all
           - llama3.1-8b
           - llama3.3-70b
+          - qwen3-32b
+          - qwen2.5-coder-32b
+          - mistral-7b
+          - gemma-3-27b
+          - mixtral-8x7b
       sku:
         description: "Select SKU to test (not all models are configured for all SKUs. If a combination is non-existent no test will be run)"
         required: false
