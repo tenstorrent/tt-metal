@@ -8,7 +8,6 @@ import torch
 import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc, check_with_pcc, check_with_pcc_without_tensor_printout
 import ttnn
-from models.common.utility_functions import skip_with_llk_assert
 
 
 def run_conv(
@@ -134,7 +133,6 @@ def run_conv(
     assert passing
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, use_1d_systolic_array, config_override",
@@ -210,7 +208,6 @@ def test_conv1d_mamba(
     )
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 @pytest.mark.parametrize(
     "batch_size, output_channels, input_channels, input_length, kernel_size, stride, padding, groups, use_1d_systolic_array, config_override",
