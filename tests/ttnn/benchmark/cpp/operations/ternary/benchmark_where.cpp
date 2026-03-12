@@ -4,7 +4,6 @@
 
 #include <benchmark/benchmark.h>
 #include <tt_stl/reflection.hpp>
-#include "ttnn/operations/experimental/where/where.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/device.hpp"
 
@@ -43,36 +42,6 @@ tt::tt_metal::Tensor genRandomTensor(const ttnn::Shape& shape, const tt::tt_meta
     return tt::tt_metal::Tensor(tt::tt_metal::HostBuffer(std::move(output_buffer)), spec);
 }
 
-void BM_where_experimental_bf16_ttt(benchmark::State& state) {
-    using namespace ttnn::types;
-
-    auto shape = ttnn::Shape({state.range(0), state.range(0)});
-    auto layout = Layout::TILE;
-    auto device_id = 0;
-
-    auto device = ttnn::device::open_mesh_device(device_id);
-
-    auto host_condition = genRandomTensor<::bfloat16>(shape, layout);
-    auto host_true_values = genRandomTensor<::bfloat16>(shape, layout);
-    auto host_false_values = genRandomTensor<::bfloat16>(shape, layout);
-
-    auto* dev_ptr = device.get();
-    auto cond_tensor = host_condition.to_device(dev_ptr);
-    auto true_value_tensor = host_true_values.to_device(dev_ptr);
-    auto false_value_tensor = host_false_values.to_device(dev_ptr);
-
-    auto output = ttnn::experimental::ternary::where(cond_tensor, true_value_tensor, false_value_tensor);
-
-    for ([[maybe_unused]] auto _ : state) {
-        auto out = ttnn::experimental::ternary::where(cond_tensor, true_value_tensor, false_value_tensor);
-        tt::tt_metal::distributed::Synchronize(dev_ptr, std::nullopt);
-        benchmark::DoNotOptimize(out);
-        benchmark::ClobberMemory();
-    }
-    state.SetComplexityN(3 * shape[0] * shape[1]);
-    ttnn::device::close_device(*device);
-}
-
 void BM_where_bf16_ttt(benchmark::State& state) {
     using namespace ttnn::types;
 
@@ -103,11 +72,6 @@ void BM_where_bf16_ttt(benchmark::State& state) {
     ttnn::device::close_device(*device);
 }
 
-BENCHMARK(BM_where_experimental_bf16_ttt)
-    ->Unit(benchmark::kMillisecond)
-    ->RangeMultiplier(2)
-    ->Range(32, 16384)
-    ->Complexity();
 BENCHMARK(BM_where_bf16_ttt)->Unit(benchmark::kMillisecond)->RangeMultiplier(2)->Range(32, 16384)->Complexity();
 
 }  // namespace
