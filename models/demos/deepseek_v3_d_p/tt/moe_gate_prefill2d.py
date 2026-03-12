@@ -3,6 +3,7 @@
 
 
 import torch
+from tracy import signpost
 
 import ttnn
 
@@ -115,7 +116,11 @@ class MoEGatePrefill:
         return cumsum_result
 
     def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+        signpost(header="moe_gate_linear_allreduce")
         logits = self.all_reduce(self.linear(x))
+        signpost(header="moe_gate_linear_allreduce")
+
+        signpost(header="moe_gate_deepseek_grouped_gate")
         ttnn_scores, ttnn_top_k_experts_indices = ttnn.experimental.deepseek_grouped_gate(
             logits,
             self.bias,
@@ -126,26 +131,30 @@ class MoEGatePrefill:
             route_scale=1.0,
             epsilon=1e-20,
         )
+        signpost(header="moe_gate_deepseek_grouped_gate")
+
+        signpost(header="moe_gate_calculate_dispatch_offsets")
         # global_onehot_experts = self.get_onehot_expert_selection(ttnn_top_k_experts_indices)
         # expert_histograms = ttnn.sum(global_onehot_experts, dim=0)
-
         # ttnn_top_k_experts_indices = ttnn.to_layout(ttnn_top_k_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
         # expert_histograms = ttnn.moe_dispatch_offsets(ttnn_top_k_experts_indices, self.n_routed_experts)
 
         ttnn_top_k_experts_indices = self.reshard_expert_indices(ttnn_top_k_experts_indices)
         expert_histograms = ttnn.masked_bincount(ttnn_top_k_experts_indices, self.n_routed_experts)
+        expert_histograms = ttnn.to_layout(expert_histograms, ttnn.TILE_LAYOUT)
+
         # device_hist = ttnn.get_device_tensors(expert_histograms)[0]
         # device_hist2 = ttnn.get_device_tensors(expert_histograms2)[0]
         # device_hist_torch = ttnn.to_torch(device_hist)
         # device_hist_torch2 = ttnn.to_torch(device_hist2)
-        # dispatch_offsets = self.cumulative_sum_across_columns(expert_histograms)
-
-        dispatch_offsets = ttnn.offset_cumsum(
-            expert_histograms,
-            cluster_axis=self.ccl_config["DISPATCH_AXIS"],
-            num_links=self.ccl_config["NUM_LINKS"],
-            memory_config=ttnn.L1_MEMORY_CONFIG,
-        )
+        dispatch_offsets = self.cumulative_sum_across_columns(expert_histograms)
+        signpost(header="moe_gate_calculate_dispatch_offsets")
+        # dispatch_offsets = ttnn.offset_cumsum(
+        #     expert_histograms,
+        #     cluster_axis=self.ccl_config["DISPATCH_AXIS"],
+        #     num_links=self.ccl_config["NUM_LINKS"],
+        #     memory_config=ttnn.L1_MEMORY_CONFIG,
+        # )
 
         return (ttnn_scores, ttnn_top_k_experts_indices, logits, dispatch_offsets)
 
