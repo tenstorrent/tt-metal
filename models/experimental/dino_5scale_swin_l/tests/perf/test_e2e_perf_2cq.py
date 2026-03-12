@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 """
@@ -6,11 +6,11 @@ E2E performance test for DINO-5scale Swin-L with 2CQ pipeline.
 """
 
 import os
+from pathlib import Path
+
 import pytest
 import torch
 import ttnn
-from pathlib import Path
-
 from loguru import logger
 from models.common.utility_functions import profiler, run_for_wormhole_b0
 from models.demos.utils.common_demo_utils import get_mesh_mappers
@@ -37,14 +37,17 @@ from models.tt_cnn.tt.pipeline import (
     get_memory_config_for_persistent_dram_tensor,
 )
 
-PAD_CHANNELS = 16
+_CHECKPOINT_CANDIDATES = (
+    "dino_5scale_swin_l.pth",
+    "dino-5scale_swin-l_8xb2-36e_coco-5486e051.pth",
+)
 NUM_MEASUREMENT_ITERS = 4
 
 
 def _get_ckpt_path():
     base = Path(os.environ.get("TT_METAL_HOME", Path.cwd()))
     ckpt_dir = base / "models/experimental/dino_5scale_swin_l/checkpoints/dino_5scale_swin_l"
-    for name in ("dino_5scale_swin_l.pth", "dino-5scale_swin-l_8xb2-36e_coco-5486e051.pth"):
+    for name in _CHECKPOINT_CANDIDATES:
         path = ckpt_dir / name
         if path.is_file():
             return str(path)
@@ -81,7 +84,7 @@ def _setup_sharded_input(device):
         tt_inputs_host.shape, ttnn.TensorMemoryLayout.HEIGHT_SHARDED, device.dram_grid_size()
     )
     l1_config = _get_l1_input_memory_config(tt_inputs_host)
-    return tt_inputs_host, dram_config, l1_config, (batch, height, width, channels), batch * height * width
+    return tt_inputs_host, dram_config, l1_config, (batch, height, width, channels)
 
 
 def _build_model_and_inputs(device):
@@ -96,7 +99,7 @@ def _build_model_and_inputs(device):
 
     ckpt_path = _get_ckpt_path()
     if not Path(ckpt_path).is_file():
-        return None, None, None, None, None, None
+        return None, None, None, None, None
     sd = _resolve_state_dict(ckpt_path)
     backbone_params = load_backbone_weights(
         sd,
@@ -132,19 +135,19 @@ def _build_model_and_inputs(device):
         backbone_num_heads=tuple(SWIN_L_NUM_HEADS),
         window_size=SWIN_L_WINDOW_SIZE,
         in_channels=(192, 384, 768, 1536),
-        trace_mode=True,
+        trace_mode=False,
     )
-    tt_inputs_host, dram_config, l1_config, input_dims, hw = _setup_sharded_input(device)
-    return tt_model, tt_inputs_host, dram_config, l1_config, input_dims, hw
+    tt_inputs_host, dram_config, l1_config, input_dims = _setup_sharded_input(device)
+    return tt_model, tt_inputs_host, dram_config, l1_config, input_dims
 
 
-def _run_pipeline(device, tt_model, tt_inputs_host, dram_config, l1_config, input_dims, hw, num_iters):
+def _run_pipeline(device, tt_model, tt_inputs_host, dram_config, l1_config, input_dims, num_iters):
     batch, height, width, channels = input_dims
     dram_cfg = ttnn.DRAM_MEMORY_CONFIG
     padded_width = ((width + 31) // 32) * 32
 
     def model_wrapper(device_input):
-        # Swin-compatible: reshape only (no slice) for trace capture. Matches test_e2e_perf_swin_l.
+        # Swin-compatible: reshape only (no slice) for trace capture.
         reshaped = ttnn.reshape(device_input, (batch, channels, height, padded_width))
         nchw = ttnn.to_memory_config(reshaped, dram_cfg)
         if reshaped is not nchw:
@@ -196,13 +199,11 @@ def _run_pipeline(device, tt_model, tt_inputs_host, dram_config, l1_config, inpu
         all_cls, all_coords = tt_model.forward_heads(hidden_states, references, return_device_tensors=True)
         cls_tt = ttnn.to_memory_config(all_cls, dram_cfg)
         coords_tt = ttnn.to_memory_config(all_coords, dram_cfg)
-        # Do NOT deallocate all_cls/all_coords: trace capture records deallocate ops.
-        # Replay would free output buffers, causing "Buffer must be allocated on device".
         return (cls_tt, coords_tt)
 
     pipeline = create_pipeline_from_config(
         config=PipelineConfig(
-            use_trace=True,
+            use_trace=False,
             num_command_queues=2,
             all_transfers_on_separate_command_queue=False,
         ),
@@ -216,9 +217,6 @@ def _run_pipeline(device, tt_model, tt_inputs_host, dram_config, l1_config, inpu
     pipeline.compile(tt_inputs_host)
     profiler.end("compile")
     host_inputs = [tt_inputs_host] * num_iters
-    # Skip preallocate: after trace capture, device allocations are marked unsafe.
-    # The non-preallocated path uses cpu() which allocates host memory only.
-    # pipeline.preallocate_output_tensors_on_host(num_iters)
     profiler.start("run_model_pipeline_2cqs")
     pipeline.enqueue(host_inputs).pop_all()
     profiler.end("run_model_pipeline_2cqs")
@@ -235,19 +233,20 @@ def _run_pipeline(device, tt_model, tt_inputs_host, dram_config, l1_config, inpu
 )
 @pytest.mark.parametrize("batch_size_per_device", (1,))
 @pytest.mark.parametrize("expected_inference_throughput", (0.04,))
-def test_dino_5scale_swin_l_e2e_perf_2cq_trace(device, batch_size_per_device, expected_inference_throughput):
-    tt_model, tt_inputs_host, dram_config, l1_config, input_dims, hw = _build_model_and_inputs(device)
+def test_dino_5scale_swin_l_e2e_perf_2cq(device, batch_size_per_device, expected_inference_throughput):
+    """Measures compile time and inference throughput for DINO-5scale Swin-L with 2CQ pipeline (non-traced)."""
+    tt_model, tt_inputs_host, dram_config, l1_config, input_dims = _build_model_and_inputs(device)
     if tt_model is None:
         pytest.skip("Checkpoint not found")
     profiler.clear()
     num_devices = device.get_num_devices()
     batch_size = batch_size_per_device * num_devices
-    _run_pipeline(device, tt_model, tt_inputs_host, dram_config, l1_config, input_dims, hw, NUM_MEASUREMENT_ITERS)
+    _run_pipeline(device, tt_model, tt_inputs_host, dram_config, l1_config, input_dims, NUM_MEASUREMENT_ITERS)
     compile_time = profiler.get("compile")
     inference_time_avg = profiler.get("run_model_pipeline_2cqs") / NUM_MEASUREMENT_ITERS
     expected_inference_time = batch_size / expected_inference_throughput
     prep_perf_report(
-        model_name=f"ttnn_dino_5scale_swin_l_trace_2cqs_batch_size{batch_size}",
+        model_name=f"ttnn_dino_5scale_swin_l_2cqs_batch_size{batch_size}",
         batch_size=batch_size,
         inference_and_compile_time=compile_time,
         inference_time=inference_time_avg,

@@ -16,14 +16,14 @@ Swin-L Backbone (TTNN)          → 4 feature maps (stages 0–3)
 ChannelMapper Neck (TTNN)        → 5 feature maps (P2–P6)
   │                                all 256 channels, conv + GroupNorm
   ▼
-Pre-Transformer (Host)           → flatten + positional encoding + level embed
+Pre-Transformer (TTNN)           → flatten + positional encoding + level embed
   │
   ▼
 Encoder (TTNN, 6 layers)        → multi-scale deformable attention + FFN
   │                                ~89K queries across 5 levels
   ▼
-Pre-Decoder (Host, float32)      → top-K selection (900 queries) + proposals
-  │
+Pre-Decoder (TTNN or Host)       → top-K selection (900 queries) + proposals
+  │                                device path when trace_mode; host fallback otherwise
   ▼
 Decoder (TTNN, 6 layers)        → self-attention + cross-attention + FFN
   │                                900 queries, iterative box refinement
@@ -34,20 +34,16 @@ Detection Heads (TTNN)           → per-layer: cls (80), bbox (4)
 Post-processing (Host)           → sigmoid, NMS → bboxes, scores, labels
 ```
 
-## Host Fallbacks
+## Device vs Host
 
-The following operations run on the host CPU (not on device):
-
-| Component | Operation | Reason |
+| Component | Device | Host |
 |---|---|---|
-| Pre-Transformer | Sine positional encoding, level embed, flatten | Lightweight, one-time per inference |
-| Encoder (MSDeformAttn) | Sampling location computation, attention weight softmax | 6D reshape not supported in TTNN |
-| Encoder (MSDeformAttn) | `grid_sample` bilinear interpolation | Uses `ttnn.grid_sample` but values transferred via host |
-| Pre-Decoder | `memory_trans_fc`, `layer_norm`, `cls_branches[6]`, `reg_branches[6]`, `top-K` | Float32 precision required — top-K is extremely sensitive to bfloat16 rounding |
-| Decoder | Reference point refinement (`inverse_sigmoid` + delta) | Small tensor, requires float32 |
-| Decoder | Sine query embed generation | Small tensor, computed per-layer |
-| Detection Heads | Collect cls/bbox outputs across layers | `torch.stack` on host |
-| Post-processing | Sigmoid, NMS, bbox decode | Standard CPU post-processing |
+| Pre-Transformer | Flatten, positional encoding, level embed | — |
+| Encoder (MSDeformAttn) | Linear projections, grid_sample, output proj | Sampling locations + softmax (when device-only tensors not provided) |
+| Pre-Decoder | Proposals, memory_trans, cls6, reg6, top-K (when cached) | Proposals + top-K (when not cached) |
+| Decoder | Self-attn, cross-attn, FFN, box refinement | — |
+| Detection Heads | cls + reg branches, stack | — |
+| Post-processing | — | Sigmoid, NMS, bbox decode |
 
 ## Module Structure
 
@@ -65,6 +61,9 @@ models/experimental/dino_5scale_swin_l/
 │   ├── tt_encoder.py                  #   Transformer encoder + MSDeformAttn
 │   ├── tt_decoder.py                  #   Transformer decoder + heads
 │   └── model_preprocessing.py         #   Weight loading (neck, encoder, decoder)
+├── tests/perf/                         # Performance tests
+│   ├── test_e2e_perf_2cq.py           #   E2E with 2CQ pipeline (non-traced)
+│   └── test_dino_device_perf.py       #   Device kernel performance
 ├── tests/pcc/                          # PCC validation tests
 │   ├── conftest.py                    #   Shared fixtures
 │   ├── test_ttnn_dino_e2e.py          #   Full E2E (real image, stage-by-stage PCC)
@@ -126,8 +125,18 @@ pytest models/experimental/dino_5scale_swin_l/tests/pcc/test_ttnn_neck.py -v
 pytest models/experimental/dino_5scale_swin_l/tests/pcc/test_ttnn_encoder.py -v
 pytest models/experimental/dino_5scale_swin_l/tests/pcc/test_ttnn_decoder.py -v
 
-# All tests
+# All PCC tests
 pytest models/experimental/dino_5scale_swin_l/tests/pcc/ -v
+```
+
+### Run Performance Tests
+
+```bash
+# E2E with 2CQ pipeline (non-traced; requires bare-metal)
+pytest models/experimental/dino_5scale_swin_l/tests/perf/test_e2e_perf_2cq.py -v
+
+# Device kernel timing only
+pytest models/experimental/dino_5scale_swin_l/tests/perf/test_dino_device_perf.py -v
 ```
 
 ### Demo
@@ -212,9 +221,8 @@ detections = TtDINO.postprocess(
 - [x] Pre-decoder (Host float32) — top-K selection
 - [x] Post-processing (Host) — sigmoid, NMS
 - [x] Full E2E pipeline + demo
+- [x] Optimization (sharding, L1 memory persistence, multi-CQ)
 
 ### Next TODOs
 
-- Move MSDeformAttn sampling location computation fully on-device
-- Move pre-transformer (positional encoding, flatten) on-device
-- Optimization (sharding, L1 memory persistence, multi-CQ)
+- Demo detection fix for trace_mode=True. Currently, trace_mode=False by default.
