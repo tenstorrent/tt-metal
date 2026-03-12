@@ -53,20 +53,20 @@ from models.experimental.dino_5scale_swin_l.tt.tt_encoder import TtMSDeformAttn,
 #         raise ValueError(f"Unsupported coord_tensor last dim: {coord_tensor.size(-1)}")
 
 
-def coordinate_to_encoding_ttnn(coord_tensor, num_feats=128, temperature=10000):
+def coordinate_to_encoding_ttnn(coord_tensor, num_feats=128, temperature=10000, dim_t=None):
     """
     TTNN version of coordinate_to_encoding.
     coord_tensor: [B, num_queries, 4]  (cx, cy, w, h)
     Returns: [B, num_queries, num_feats * 2 * coord_dim]
+    dim_t: optional precomputed [num_feats] tensor (avoids ttnn.arange during trace capture).
     """
-
     scale = 2 * math.pi
 
-    # create dim_t same as torch.arange - compute entirely in TTNN with L1 memory for speed
     device = coord_tensor.device()
-    dim_t = ttnn.arange(0, num_feats, 1, dtype=ttnn.float32, device=device)
-    dim_t = ttnn.to_layout(dim_t, layout=ttnn.TILE_LAYOUT)
-    dim_t = ttnn.to_memory_config(dim_t, ttnn.L1_MEMORY_CONFIG)
+    if dim_t is None:
+        dim_t = ttnn.arange(0, num_feats, 1, dtype=ttnn.float32, device=device)
+        dim_t = ttnn.to_layout(dim_t, layout=ttnn.TILE_LAYOUT)
+        dim_t = ttnn.to_memory_config(dim_t, ttnn.L1_MEMORY_CONFIG)
 
     # Compute dim_t // 2 using floor division (all in L1 for faster computation)
     dim_t_floor_div_2 = ttnn.floor(ttnn.divide(dim_t, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG))
@@ -328,7 +328,16 @@ class TtDINODecoderLayer:
     Self-Attention (MHA) -> LN -> Cross-Attention (MSDeformAttn) -> LN -> FFN -> LN
     """
 
-    def __init__(self, params, device, embed_dims=256, num_heads=8, num_levels=5, num_points=4):
+    def __init__(
+        self,
+        params,
+        device,
+        embed_dims=256,
+        num_heads=8,
+        num_levels=5,
+        num_points=4,
+        trace_mode=False,
+    ):
         self.self_attn = TtMultiheadAttention(
             params["self_attn"],
             device,
@@ -342,6 +351,7 @@ class TtDINODecoderLayer:
             num_heads=num_heads,
             num_levels=num_levels,
             num_points=num_points,
+            trace_mode=trace_mode,
         )
         self.ffn = TtFFN(params["ffn"], device)
         self.norm1_w = params["norms"][0]["weight"]
@@ -376,7 +386,7 @@ class TtDINODecoderLayer:
         query = ttnn.layer_norm(query, weight=self.norm1_w, bias=self.norm1_b)
 
         logger.info("  DecoderLayer: cross-attention...")
-        query = self.cross_attn(
+        cross_kw = dict(
             query=query,
             value=value,
             query_pos=query_pos,
@@ -385,6 +395,9 @@ class TtDINODecoderLayer:
             spatial_shapes=spatial_shapes,
             level_start_index=level_start_index,
         )
+        if "spatial_shapes_tt" in kwargs:
+            cross_kw["spatial_shapes_tt"] = kwargs["spatial_shapes_tt"]
+        query = self.cross_attn(**cross_kw)
         query = ttnn.layer_norm(query, weight=self.norm2_w, bias=self.norm2_b)
 
         query = self.ffn(query)
@@ -401,10 +414,29 @@ class TtDINODecoder:
     returns intermediate hidden states and reference points for each layer.
     """
 
-    def __init__(self, params, device, num_layers=6, embed_dims=256, num_heads=8, num_levels=5, num_points=4):
+    def __init__(
+        self,
+        params,
+        device,
+        num_layers=6,
+        embed_dims=256,
+        num_heads=8,
+        num_levels=5,
+        num_points=4,
+        trace_mode=False,
+    ):
         self.device = device
         self.num_layers = num_layers
         self.embed_dims = embed_dims
+        self.trace_mode = trace_mode
+
+        # Precompute dim_t for coordinate_to_encoding_ttnn (avoids ttnn.arange during trace)
+        self._dim_t_cache = None
+        if trace_mode:
+            num_feats = embed_dims // 2
+            self._dim_t_cache = ttnn.arange(0, num_feats, 1, dtype=ttnn.float32, device=device)
+            self._dim_t_cache = ttnn.to_layout(self._dim_t_cache, layout=ttnn.TILE_LAYOUT)
+            self._dim_t_cache = ttnn.to_memory_config(self._dim_t_cache, ttnn.L1_MEMORY_CONFIG)
 
         self.layers = [
             TtDINODecoderLayer(
@@ -414,6 +446,7 @@ class TtDINODecoder:
                 num_heads=num_heads,
                 num_levels=num_levels,
                 num_points=num_points,
+                trace_mode=trace_mode,
             )
             for i in range(num_layers)
         ]
@@ -436,6 +469,8 @@ class TtDINODecoder:
         spatial_shapes,
         level_start_index,
         valid_ratios,
+        valid_ratios_tt=None,
+        spatial_shapes_tt=None,
     ):
         """
         Args:
@@ -443,10 +478,12 @@ class TtDINODecoder:
             value: [B, N, 256] encoder memory ttnn
             key_padding_mask: [B, N] or None
             self_attn_mask: [num_queries, num_queries] or None
-            reference_points: torch.Tensor [B, num_queries, 4] (cx, cy, w, h) in [0,1]
+            reference_points: ttnn or torch [B, num_queries, 4] (cx, cy, w, h) in [0,1]
             spatial_shapes: torch.Tensor [num_levels, 2]
             level_start_index: torch.Tensor [num_levels]
             valid_ratios: torch.Tensor [B, num_levels, 2]
+            valid_ratios_tt: optional ttnn [B, num_levels, 2] (trace_mode; avoids from_torch)
+            spatial_shapes_tt: optional ttnn [num_levels, 2] (trace_mode; for decoder MSDeformAttn)
 
         Returns:
             intermediate: list of [B, num_queries, 256] (one per layer, after norm)
@@ -461,14 +498,17 @@ class TtDINODecoder:
                 device=self.device,
                 dtype=ttnn.bfloat16,
                 layout=ttnn.TILE_LAYOUT,
-            )  # added
+            )
 
-        valid_ratios = ttnn.from_torch(
-            valid_ratios,
-            device=self.device,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-        )  # added
+        if valid_ratios_tt is not None:
+            valid_ratios = valid_ratios_tt
+        else:
+            valid_ratios = ttnn.from_torch(
+                valid_ratios,
+                device=self.device,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+            )
 
         ref_pts = reference_points
 
@@ -500,10 +540,12 @@ class TtDINODecoder:
                 ),
                 2,
             )
+            dim_t = self._dim_t_cache if self.trace_mode else None
             query_sine_embed = coordinate_to_encoding_ttnn(
                 ref_lvl0,
                 num_feats=self.embed_dims // 2,
                 temperature=10000,
+                dim_t=dim_t,
             )
             query_pos = self.ref_point_head(query_sine_embed)
 
@@ -516,7 +558,7 @@ class TtDINODecoder:
                     layout=ttnn.TILE_LAYOUT,
                 )
 
-            output = layer(
+            layer_kw = dict(
                 query=output,
                 query_pos=query_pos,
                 value=value,
@@ -527,6 +569,9 @@ class TtDINODecoder:
                 valid_ratios=valid_ratios,
                 reference_points=reference_points_input,
             )
+            if spatial_shapes_tt is not None:
+                layer_kw["spatial_shapes_tt"] = spatial_shapes_tt
+            output = layer(**layer_kw)
 
             if self.reg_branches is not None:
                 tmp = self.reg_branches[lid](output)
