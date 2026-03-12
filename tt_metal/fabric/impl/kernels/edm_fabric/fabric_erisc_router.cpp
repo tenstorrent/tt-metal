@@ -2820,17 +2820,8 @@ void initialize_fabric_telemetry() {
 // does not expose channel_base_address() or get_max_eth_payload_size()).
 template <size_t ChannelIdx>
 struct get_sender_channel_base_address {
-    static constexpr size_t pool_idx = SENDER_TO_POOL_IDX[ChannelIdx];
-    static constexpr auto pool_type =
-        static_cast<FabricChannelPoolType>(channel_pools_args::channel_pool_types[pool_idx]);
-    using PoolType = std::tuple_element_t<pool_idx, typename channel_pools_args::PoolsTuple>;
-    static constexpr size_t value = []() constexpr {
-        if constexpr (pool_type == FabricChannelPoolType::STATIC) {
-            return PoolType::base_address;
-        } else {
-            return PoolType::chunk_base_addresses[0];
-        }
-    }();
+    static constexpr size_t entry_idx = SENDER_TO_ENTRY_IDX[ChannelIdx];
+    static constexpr size_t value = channel_allocs::Entry<entry_idx>::base_address;
 };
 
 template <typename SenderChannels, typename ReceiverChannels>
