@@ -121,6 +121,7 @@ void MetalEnvImpl::initialize_base_objects() {
     this->rtoptions_ = std::make_unique<llrt::RunTimeOptions>();
 
     if (descriptor_.is_mock_device()) {
+        log_info(tt::LogMetal, "Using programmatically configured mock mode: {}", descriptor_.mock_cluster_desc_path());
         this->rtoptions_->set_mock_cluster_desc(std::string(descriptor_.mock_cluster_desc_path()));
     }
 

@@ -13,6 +13,7 @@
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <tt-metalium/experimental/context/metal_env.hpp>
 #include "hostdevcommon/api/hostdevcommon/common_values.hpp"
+#include "context_types.hpp"
 
 namespace tt::tt_fabric {
 class ControlPlane;
@@ -55,11 +56,23 @@ public:
     MetalContext& operator=(MetalContext&& other) noexcept = delete;
     MetalContext(const MetalContext&) = delete;
     MetalContext(MetalContext&& other) noexcept = delete;
-    static MetalContext& instance();
 
-    static void destroy_instance(bool check_device_count = true);
+    // Access the MetalContext for a given context id.
+    // The context can be created beforehand using MetalContext::create_instance(). Otherwise an exception is thrown.
+    // NOTE: To maintain legacy behavior, the default context id is automatically created if not already initialized
+    static MetalContext& instance(ContextId context_id = DEFAULT_CONTEXT_ID);
 
-    static bool instance_exists();
+    // Create a MetalContext instance which will use the given MetalEnv to facilitate runtime.
+    static ContextId create_instance(MetalEnv& env_to_use);
+
+    // Destroy the MetalContext for a given context id.
+    static void destroy_instance(bool check_device_count = true, ContextId context_id = DEFAULT_CONTEXT_ID);
+
+    // Destroy all MetalContext instances.
+    static void destroy_all_instances(bool check_device_count = true);
+
+    // Check if a MetalContext for a given context id exists.
+    static bool instance_exists(ContextId context_id = DEFAULT_CONTEXT_ID);
 
     [[deprecated("Use MetalEnv instead")]] Cluster& get_cluster();
     [[deprecated("Use MetalEnv instead")]] llrt::RunTimeOptions& rtoptions();
@@ -162,13 +175,24 @@ public:
 
 private:
     friend class tt::stl::Indestructible<MetalContext>;
-    MetalContext();
+
+    // Construct MetalContext to use the given MetalEnv and assign it context id. The MetalEnv must not be
+    // destroyed while its associated MetalContext instance is alive.
+    MetalContext(ContextId context_id, tt::tt_metal::MetalEnv& metal_env);
     ~MetalContext();
 
+    // This will create a MetalContext instance and create a default MetalEnv owned by the context.
+    // Usually the MetalEnv is owned by the user, but in this case of legacy behaviour, the context will own it.
+    // Caller holds the g_instance mutex.
+    static ContextId create_default_instance_implicit_locked();
+
+    // Register handlers -- caller already holds the instance lock
+    static void register_handlers_locked();
+
+    // Reinitialize dispatch managers when transitioning dispatch modes (SD<->FD)
+    // This updates cached dispatch/compute core allocations to match current dispatch mode
     void reinitialize_dispatch_managers();
-    void teardown_base_objects();
     void teardown_dispatch_state();
-    void initialize_base_objects();
 
     void init_context_descriptor(int num_hw_cqs, size_t l1_small_size, size_t trace_region_size, size_t worker_l1_size);
     void init_risc_fw_context_descriptor(int num_hw_cqs, size_t worker_l1_size);
@@ -190,10 +214,12 @@ private:
     std::mutex dispatch_timeout_detection_mutex_;
     bool dispatch_timeout_detection_processed_ = false;
 
-    // The MetalEnv is owned by the user.
-    // For the legacy code, we initialize it in the MetalContext constructor.
+    // The MetalEnv is normally owned by the user
+    // For the legacy code, we will initialize it in the MetalContext constructor and own the env
+    // This means MetalContext will delete the env in the MetalContext destructor.
     tt::tt_metal::MetalEnv* env_;
     bool env_owned_ = false;
+    ContextId context_id_;
 
     std::unique_ptr<dispatch_core_manager> dispatch_core_manager_;
     std::unique_ptr<DispatchQueryManager> dispatch_query_manager_;
