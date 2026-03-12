@@ -355,6 +355,13 @@ class DeepseekGenerator(WarmupForwardMixin):
         except Exception as e:
             logger.warning(f"Failed to cleanup model shared state: {e}")
 
+        # Clean up sampling trace state
+        try:
+            if hasattr(self, "sampling_generator") and self.sampling_generator is not None:
+                self.sampling_generator.reset_trace()
+        except Exception as e:
+            logger.warning(f"Failed to reset sampling trace state: {e}")
+
         # Clean up trace state
         try:
             if self._trace_id is not None:
@@ -822,6 +829,9 @@ class DeepseekGenerator(WarmupForwardMixin):
                 # Generate remaining tokens with decode (each decode call produces the next token)
                 decode_steps = max_new_tokens - 1
                 profiler.start("inference_decode")
+                # In trace mode, outputs are reused across iterations. Keep a handle
+                # so we can release the final sampled-token tensor after the loop.
+                pred_tokens_device_last: ttnn.Tensor | None = None
                 for gen_idx in range(decode_steps):
                     logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
                     profiler.start(f"decode_time_{gen_idx}")
@@ -838,10 +848,12 @@ class DeepseekGenerator(WarmupForwardMixin):
                     self.ccl.reset_sem_counters()
                     if self.sample_on_device:
                         pred_tokens_device = self._sample_tokens_device(decode_logits, enable_trace=self.enable_trace)
+                        pred_tokens_device_last = pred_tokens_device
                         pred_tokens = self._tokens_from_device(
                             pred_tokens_device, self.mesh_device, batch_size_per_row=self.batch_size_per_row
                         )
                         if not self.enable_trace:
+                            # Non-trace path allocates fresh outputs each step.
                             ttnn.deallocate(decode_logits)
                             ttnn.deallocate(pred_tokens_device)
                     else:
@@ -864,6 +876,9 @@ class DeepseekGenerator(WarmupForwardMixin):
                             else:
                                 print(f"{token_value} ", end="", flush=True)
 
+                # Trace path: deallocate once after replay loop completes.
+                if self.sample_on_device and self.enable_trace and pred_tokens_device_last is not None:
+                    ttnn.deallocate(pred_tokens_device_last)
                 profiler.end("inference_decode")
 
             if early_print_first_user:
