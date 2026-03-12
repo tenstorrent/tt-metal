@@ -4,7 +4,6 @@
 
 #pragma once
 
-#include "dev_mem_map.h"
 #include "api/compute/common.h"
 #include "core_config.h"
 #include "noc/noc_parameters.h"
@@ -38,8 +37,7 @@ class Semaphore {
 public:
     explicit Semaphore(uint32_t semaphore_id) :
         local_l1_addr_(
-            MEM_L1_UNCACHED_BASE +
-            ((uintptr_t)sem_l1_base[static_cast<int>(ProgrammableCoreType::TENSIX)] + semaphore_id * L1_ALIGNMENT)) {}
+            (uintptr_t)(sem_l1_base[static_cast<int>(ProgrammableCoreType::TENSIX)]) + semaphore_id * L1_ALIGNMENT) {}
 
     /**
      * @brief Increment the semaphore by the specified value.
@@ -103,7 +101,7 @@ public:
     }
 
 private:
-    uint32_t local_l1_addr_;
+    uintptr_t local_l1_addr_;
 };
 #endif
 }  // namespace ckernel

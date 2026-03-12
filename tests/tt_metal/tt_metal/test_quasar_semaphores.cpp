@@ -27,13 +27,6 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarComputeKernelSemaphores) {
 
     auto mesh_device = devices_[0];
 
-    if (!MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
-        std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
-                     "the kernels."
-                  << std::endl;
-        std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << std::endl;
-    }
-
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     constexpr CoreCoord core = {0, 0};
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
@@ -75,13 +68,6 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarDmAndComputeKernelSemaphores) {
     }
 
     auto mesh_device = devices_[0];
-
-    if (!MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
-        std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
-                     "the kernels."
-                  << std::endl;
-        std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << std::endl;
-    }
 
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     constexpr CoreCoord core = {0, 0};
@@ -153,13 +139,6 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarMultiSemaphorePipeline) {
 
     auto mesh_device = devices_[0];
 
-    if (!MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
-        std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to 0,0 to see the output of "
-                     "the kernels."
-                  << std::endl;
-        std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=0,0" << std::endl;
-    }
-
     // We are going to use the first device (0) and the first core (0, 0) on the device.
     constexpr CoreCoord core = {0, 0};
     // Command queue lets us submit work (execute programs and read/write buffers) to the device.
@@ -228,13 +207,6 @@ TEST_F(MeshDeviceSingleCardFixture, QuasarMultipleClustersMultiSemaphorePipeline
     }
 
     auto mesh_device = devices_[0];
-
-    if (!MetalContext::instance().rtoptions().get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
-        std::cerr << "WARNING: Please set the environment variable TT_METAL_DPRINT_CORES to (0,0),(1,0) to see the "
-                     "output of the kernels."
-                  << std::endl;
-        std::cerr << "WARNING: For example, export TT_METAL_DPRINT_CORES=(0,0),(1,0)" << std::endl;
-    }
 
     constexpr CoreCoord core_0 = {0, 0};
     constexpr CoreCoord core_1 = {1, 0};
