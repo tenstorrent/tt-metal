@@ -444,6 +444,22 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+  # Triage tests (including hang report generation test)
+  triage-tests:
+    needs: [build-artifact, generate-arch-matrix]
+    if: ${{ needs.generate-arch-matrix.outputs.matrix-wormhole-only != '[]' }}
+    secrets: inherit
+    strategy:
+      fail-fast: false
+      matrix:
+        test-group: ${{ fromJson(needs.generate-arch-matrix.outputs.matrix-wormhole-only) }}
+    uses: ./.github/workflows/triage.yaml
+    with:
+      runner-label: ${{ matrix.test-group.runner-label }}
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      run-hang-report-test: true
   # TT-CNN Unit tests
   tt-cnn-unit-tests:
     needs: [build-artifact, generate-arch-matrix]

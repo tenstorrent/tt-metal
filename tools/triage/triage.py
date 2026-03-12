@@ -800,69 +800,14 @@ class TTTriageError(Exception):
     pass
 
 
-def _write_hang_junit_xml(script_queue: list[TriageScript]) -> None:
-    """Write a JUnit XML test report for the hung test so it appears in CI artifacts.
-
-    Reads PYTEST_CURRENT_TEST to identify the test and TT_METAL_HANG_REPORT_DIR
-    for the output directory. If either is missing, this is a no-op.
-    """
-    current_test = os.environ.get("PYTEST_CURRENT_TEST")
-    if not current_test:
-        return
-
-    report_dir = "generated/test_reports"
-
-    from datetime import datetime, timezone
-    from html import escape
-
-    # PYTEST_CURRENT_TEST format: "path/to/test.py::test_name[params] (phase)"
-    test_id = current_test.rsplit(" (", 1)[0]
-    filepath, sep, test_name = test_id.partition("::")
-    if not sep:
-        test_name = "unknown"
-
-    classname = filepath.replace("/", ".").removesuffix(".py")
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S%z")
-    hostname = os.environ.get("HOSTNAME", "unknown")
-
-    # Build triage summary from script results
+def _build_triage_summary(script_queue: list[TriageScript]) -> str:
     summary_lines = []
     for script in script_queue:
         if script.failed:
             summary_lines.append(f"{script.name}: FAIL - {script.failure_message or 'unknown error'}")
         elif not script.config.data_provider:
             summary_lines.append(f"{script.name}: pass")
-    triage_summary = "\n".join(summary_lines) if summary_lines else "No triage scripts executed."
-
-    failure_message = "[HANG DETECTED] Card hang detected during test execution. tt-triage was invoked."
-
-    xml_content = f"""\
-<?xml version="1.0" encoding="utf-8"?>
-<testsuites name="pytest tests">
-  <testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="0" timestamp="{timestamp}" hostname="{escape(hostname)}">
-    <testcase classname="{escape(classname)}" name="{escape(test_name)}" time="0">
-      <properties>
-        <property name="failure_type" value="hang"/>
-        <property name="start_timestamp" value="{timestamp}"/>
-        <property name="end_timestamp" value="{timestamp}"/>
-      </properties>
-      <failure message="{escape(failure_message)}">{escape(failure_message)}
-
-Triage summary:
-{escape(triage_summary)}
-      </failure>
-    </testcase>
-  </testsuite>
-</testsuites>"""
-
-    try:
-        os.makedirs(report_dir, exist_ok=True)
-        report_path = os.path.join(report_dir, f"hang_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xml")
-        with open(report_path, "w") as f:
-            f.write(xml_content)
-        utils.INFO(f"Hang report written to {report_path}")
-    except Exception as e:
-        utils.WARN(f"Failed to write hang JUnit XML report: {e}")
+    return "\n".join(summary_lines) if summary_lines else "No triage scripts executed."
 
 
 def main():
@@ -972,7 +917,9 @@ def main():
                 utils.INFO(f"Total execution time: {total_time:.2f}s")
         progress.remove_task(scripts_task)
 
-    _write_hang_junit_xml(script_queue)
+    from hang_report import write_hang_junit_xml
+
+    write_hang_junit_xml(_build_triage_summary(script_queue))
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)
