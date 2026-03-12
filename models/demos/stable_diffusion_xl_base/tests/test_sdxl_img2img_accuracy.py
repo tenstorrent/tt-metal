@@ -18,7 +18,11 @@ from models.demos.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
 )
-from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import get_benchmark_summary, save_report_json
+from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
+    accuracy_assert,
+    get_benchmark_summary,
+    save_report_json,
+)
 from models.demos.stable_diffusion_xl_base.utils.clip_fid_ranges import accuracy_check_clip
 
 test_demo.__test__ = False
@@ -214,6 +218,7 @@ def test_accuracy_sdxl_img2img(
 
     save_report_json(report_json, metadata)
     print(json.dumps(report_json, indent=4))
+    accuracy_assert(metadata, {"average_clip_score": average_clip_score})
 
 
 def load_clip_models():
