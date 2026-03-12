@@ -134,6 +134,8 @@ void kernel_main() {
 
     // split work
     auto* token_counts_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_counts_l1_addr);
+    DPRINT << "COUNTS: " << token_counts_l1_ptr[0] << " " << token_counts_l1_ptr[1] << "\n";
+
     uint32_t token_split_offsets[num_local_experts];
     uint32_t token_split_counts[num_local_experts];
     detail::token_work_split_even<num_local_experts, num_token_parallel_cores>(
