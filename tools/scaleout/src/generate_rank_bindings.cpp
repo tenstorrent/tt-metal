@@ -229,6 +229,22 @@ TopologyMappingResult run_topology_mapping(
         config.hostname_to_asics[desc.host_name].insert(asic_id);
     }
 
+    // Extract pinnings from MGD and add to config (same as control plane)
+    const auto& pinnings = mesh_graph.get_mesh_graph_descriptor().get_pinnings();
+    for (const auto& [pos, fabric_node] : pinnings) {
+        config.pinnings.emplace_back(pos, fabric_node);
+    }
+
+    // Build ASIC positions map (required if pinnings are used)
+    if (!config.pinnings.empty()) {
+        const auto& asic_descriptors = psd.get_asic_descriptors();
+        for (const auto& [asic_id, _] : asic_descriptors) {
+            auto tray_id = psd.get_tray_id(asic_id);
+            auto asic_location = psd.get_asic_location(asic_id);
+            config.asic_positions[asic_id] = std::make_pair(tray_id, asic_location);
+        }
+    }
+
     // Set per-mesh validation modes based on mesh graph policy
     for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
         config.mesh_validation_modes[mesh_id] = mesh_graph.is_intra_mesh_policy_relaxed(mesh_id)

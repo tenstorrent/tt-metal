@@ -78,12 +78,11 @@ namespace {
 // o o o o
 // o o o o
 // * o o * < Corners pinned with *
-// Generate fixed ASIC position pinnings for UBB galaxy systems during auto-discovery.
-// This function is only called during auto-discovery (when no manual mapping is provided).
+// Generate fixed ASIC position pinnings for a single mesh in UBB galaxy systems.
 // For UBB galaxy runs with 32 chips, it can optionally hard pin fabric node id 0 to asic 1 tray 1.
 // If MGD pinnings are provided for fabric node id 0, MGD pinnings take precedence and hard pinning is skipped.
-std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings(
-    const MeshGraph& mesh_graph, bool hard_pin_node_0 = false) {
+std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed_asic_position_pinnings_for_mesh(
+    MeshId mesh_id, const MeshShape& mesh_shape, bool hard_pin_node_0 = false) {
     std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
 
     // Get all 4 possible corners ASIC positions
@@ -93,14 +92,12 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed
     corner_asic_positions.emplace_back(AsicPosition{3, 1});  // Bottom left corner
     corner_asic_positions.emplace_back(AsicPosition{4, 1});  // Bottom right corner
 
+    // Generate corner fabric node IDs for this mesh
     std::vector<FabricNodeId> corner_fabric_node_ids;
-    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
-        const auto& mesh_shape = mesh_graph.get_mesh_shape(mesh_id);
-        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, 0});
-        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] - 1});
-        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] * (mesh_shape[0] - 1)});
-        corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, (mesh_shape[1] * mesh_shape[0]) - 1});
-    }
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, 0});
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] - 1});
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, mesh_shape[1] * (mesh_shape[0] - 1)});
+    corner_fabric_node_ids.emplace_back(FabricNodeId{mesh_id, (mesh_shape[1] * mesh_shape[0]) - 1});
 
     fixed_asic_position_pinnings.reserve(corner_fabric_node_ids.size());
     for (const auto& corner_fabric_node_id : corner_fabric_node_ids) {
@@ -488,15 +485,23 @@ void ControlPlane::init_control_plane(
         this->load_physical_chip_mapping(logical_mesh_chip_id_to_physical_chip_id_mapping->get());
     } else {
         // Generate corner pinning for full host galaxy systems
-        const bool is_1d = this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 ||
-                           this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
         std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
-        const size_t total_num_chips = cluster.get_unique_chip_ids().size();
 
-        if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
-            auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_, world_size == 1);
-            fixed_asic_position_pinnings.insert(
-                fixed_asic_position_pinnings.end(), galaxy_pinnings.begin(), galaxy_pinnings.end());
+        // Apply galaxy pinnings to each mesh separately if it has 32 chips and is not 1D
+        if (cluster.is_ubb_galaxy()) {
+            for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
+                const auto& mesh_shape = this->mesh_graph_->get_mesh_shape(mesh_id);
+                const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
+                const size_t mesh_chip_count = mesh_shape.mesh_size();
+
+                // Only apply galaxy pinnings if mesh has 32 chips and is not 1D
+                if (!is_1d && mesh_chip_count == 32) {
+                    auto mesh_pinnings =
+                        get_galaxy_fixed_asic_position_pinnings_for_mesh(mesh_id, mesh_shape, world_size == 1);
+                    fixed_asic_position_pinnings.insert(
+                        fixed_asic_position_pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
+                }
+            }
         }
 
         // Add MGD pinnings to the topology mapper
@@ -588,17 +593,23 @@ void ControlPlane::init_control_plane_auto_discovery() {
     // Pin the start of the mesh to match the Galaxy Topology, ensuring that external QSFP links align with the
     // corner node IDs of the fabric mesh. This is a performance optimization to ensure that MGD mapping does not
     // bisect a device.
-    const bool is_1d =
-        this->mesh_graph_->get_mesh_shape(MeshId{0})[0] == 1 || this->mesh_graph_->get_mesh_shape(MeshId{0})[1] == 1;
     std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
-    const size_t total_num_chips = cluster.get_unique_chip_ids().size();
 
-    // Special corner pinning for galaxy systems to avoid MGD folding across torus edges
-    if (cluster.is_ubb_galaxy() && !is_1d && total_num_chips % 32 == 0) {
-        auto galaxy_pinnings = get_galaxy_fixed_asic_position_pinnings(*this->mesh_graph_, world_size == 1);
-        // Merge galaxy pinnings with existing pinnings (e.g., the hard pin above)
-        fixed_asic_position_pinnings.insert(
-            fixed_asic_position_pinnings.end(), galaxy_pinnings.begin(), galaxy_pinnings.end());
+    // Apply galaxy pinnings to each mesh separately if it has 32 chips and is not 1D
+    if (cluster.is_ubb_galaxy()) {
+        for (const auto& mesh_id : this->mesh_graph_->get_all_mesh_ids()) {
+            const auto& mesh_shape = this->mesh_graph_->get_mesh_shape(mesh_id);
+            const bool is_1d = mesh_shape[0] == 1 || mesh_shape[1] == 1;
+            const size_t mesh_chip_count = mesh_shape.mesh_size();
+
+            // Only apply galaxy pinnings if mesh has 32 chips and is not 1D
+            if (!is_1d && mesh_chip_count == 32) {
+                auto mesh_pinnings =
+                    get_galaxy_fixed_asic_position_pinnings_for_mesh(mesh_id, mesh_shape, world_size == 1);
+                fixed_asic_position_pinnings.insert(
+                    fixed_asic_position_pinnings.end(), mesh_pinnings.begin(), mesh_pinnings.end());
+            }
+        }
     }
 
     this->topology_mapper_ = std::make_unique<tt::tt_fabric::TopologyMapper>(
@@ -2653,7 +2664,6 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
                 // Override direction to Z BEFORE creating port_id if needed
                 RoutingDirection final_direction = (should_assign_z) ? RoutingDirection::Z : port_direction;
                 port_id_t port_id = {final_direction, logical_chan_id};
-#
                 // Assign this port id to the exit node if it is not already assigned
                 bool valid_direction = !curr_exit_node_direction.contains(exit_node_hash) ||
                                        curr_exit_node_direction.at(exit_node_hash) == final_direction;
