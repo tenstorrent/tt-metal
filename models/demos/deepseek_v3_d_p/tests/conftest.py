@@ -12,7 +12,7 @@ device count and topology constraints for Blackhole vs Wormhole architectures.
 import pytest
 
 import ttnn
-from models.common.utility_functions import is_blackhole, is_wormhole_b0
+from models.common.utility_functions import is_wormhole_b0
 
 
 def pytest_configure(config):
@@ -57,11 +57,6 @@ def pytest_collection_modifyitems(config, items):
             skip_reason = f"Requires {devices_needed} devices, only {num_devices} available"
 
         # Architecture-specific constraints
-        elif is_blackhole():
-            # BH: only supports 4-device configs
-            if devices_needed != 4:
-                skip_reason = f"Blackhole only supports 4-device mesh configs (requested {devices_needed})"
-
         elif is_wormhole_b0():
             # WH: ring topology only works with 8 devices
             if is_ring and devices_needed != 8:
