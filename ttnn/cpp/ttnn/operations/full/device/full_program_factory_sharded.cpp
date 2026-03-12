@@ -43,56 +43,33 @@ FullShardedProgramFactory::cached_program_t FullShardedProgramFactory::create(
     uint32_t num_shards_height = tt::div_up(tensor_height, shard_height);
     uint32_t num_shards = num_shards_height * num_input_blocks_across_width;
 
-    std::vector<CoreCoord> ordered_cores_with_data;
     CoreRangeSet compute_core_range;
     std::vector<CoreCoord> runtime_cores;
     if (memory_config.is_dram()) {  // For DRAM sharded tensors, we take one core that is optimal for each DRAM bank
                                     // with a shard to use as our compute cores.
         num_compute_cores =
             std::min(num_compute_cores, num_shards);  // If the number of banks to shard over is more than the number
-                                                      // of. shards, only num_shards DRAM banks will have data.
-        auto all_dram_workers =
-            output.device()->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
-        ordered_cores_with_data.assign(all_dram_workers.begin(), all_dram_workers.begin() + num_compute_cores);
-        compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
-        runtime_cores = ordered_cores_with_data;
+                                                      // of shards, only num_shards DRAM banks will have data.
+        auto all_dram_workers = output.device()->get_optimal_dram_bank_to_logical_worker_assignment(
+            tt::tt_metal::NOC::RISCV_0_default);  // Getting optimal worker core for each DRAM bank index.
+        bool is_row_major = (output_shard_spec.orientation == ShardOrientation::ROW_MAJOR);
+        auto shard_grid_cores = corerange_to_cores(
+            output_shard_spec.grid, num_compute_cores, is_row_major);  // Getting the DRAM banks with shards in order.
+        runtime_cores.reserve(shard_grid_cores.size());
+        for (const auto& dram_core : shard_grid_cores) {
+            uint32_t dram_channel =
+                output.device()->dram_channel_from_logical_core(dram_core);  // For each DRAM coord, get its bank ID.
+            runtime_cores.push_back(all_dram_workers[dram_channel]);  // Get the worker core for the DRAM bank and add
+                                                                      // it to the vector of worker cores.
+        }
+        compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(runtime_cores));
     } else {
         if (num_compute_cores >
             num_shards) {  // For L1 sharding, the user may specify a core grid larger than the number of shards. In
-                           // this case, we need to use the buffer distribution spec to determine which cores have data
-                           // on them so that we are not running programs on cores with no data being processed.
-            if (output.buffer()
-                    ->buffer_distribution_spec()
-                    .has_value()) {  // If the tensor also has an nd_shard_spec, then it has a bufferdistributionspec.
-                                     // Use it.
-                auto buffer_dist_spec = output.buffer()->buffer_distribution_spec().value();
-                ordered_cores_with_data = buffer_dist_spec.cores_with_data();
-            } else {  // If the tensor does not have an nd_shard_spec, then we need to create a bufferdistributionspec
-                      // from the shard_spec to figure out which cores have data on them.
-                const auto page_shape =
-                    (operation_attributes.layout == Layout::TILE)
-                        ? tt::tt_metal::Shape2D(
-                              output.tensor_spec().tile().get_tile_shape())  // In tilized layout, the page is a tile.
-                        : tt::tt_metal::Shape2D(
-                              1, shard_width);  // In row-major layout, the page is a row of the shard.
-                auto buffer_dist_spec = tt::tt_metal::BufferDistributionSpec::from_shard_spec(
-                    output.padded_shape(),
-                    Shape({shard_height, shard_width}),
-                    page_shape,
-                    output_shard_spec.grid,
-                    output_shard_spec.orientation,
-                    output.memory_config().memory_layout() ==
-                            TensorMemoryLayout::BLOCK_SHARDED  // If the tensor is block-sharded, then we need to use
-                                                               // the grid_2d strategy to distribute the shards across
-                                                               // the cores. Otherwise, we use the round-robin_1d
-                                                               // strategy.
-                        ? tt::tt_metal::ShardDistributionStrategy::GRID_2D
-                        : tt::tt_metal::ShardDistributionStrategy::ROUND_ROBIN_1D);
-                ordered_cores_with_data = buffer_dist_spec.cores_with_data();
-            }
-            compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
-            runtime_cores = ordered_cores_with_data;
-
+                           // this case, we need to determine which cores have data on them so that we are not running
+                           // programs on cores with no data being processed.
+            runtime_cores = output.buffer()->buffer_distribution_spec().value().cores_with_data();
+            compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(runtime_cores));
         } else {
             compute_core_range =
                 output_shard_spec.grid;  // If the user specified the same number of compute cores as the number of

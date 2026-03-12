@@ -211,6 +211,36 @@ TEST_P(NdToLegacyShardingTests, NdToLegacySharding) {
     }
 }
 
+class BufferDistributionSpecCreationTests
+    : public ttnn::TTNNFixtureWithSuiteDevice<BufferDistributionSpecCreationTests> {};
+
+TEST_F(BufferDistributionSpecCreationTests, LegacyAndNdShardSpecCreateBufferDistributionSpec) {
+    const Shape shape({3, 64, 64});
+    const CoreRangeSet cores(CoreRange(CoreCoord{0, 0}, CoreCoord{1, 5}));
+    const std::vector<uint16_t> data(shape.volume(), 1);
+
+    {
+        MemoryConfig memory_config{
+            TensorMemoryLayout::BLOCK_SHARDED,
+            BufferType::L1,
+            ShardSpec{cores, Shape2D{32, 32}, ShardOrientation::ROW_MAJOR}};
+        TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
+        TensorSpec tensor_spec(shape, tensor_layout);
+
+        auto tensor = Tensor::from_vector(data, tensor_spec, device_);
+        EXPECT_TRUE(tensor.buffer()->buffer_distribution_spec().has_value());
+    }
+
+    {
+        MemoryConfig memory_config{BufferType::L1, NdShardSpec{Shape({2, 32, 32}), cores, ShardOrientation::ROW_MAJOR}};
+        TensorLayout tensor_layout(DataType::UINT16, PageConfig(Layout::TILE), memory_config);
+        TensorSpec tensor_spec(shape, tensor_layout);
+
+        auto tensor = Tensor::from_vector(data, tensor_spec, device_);
+        EXPECT_TRUE(tensor.buffer()->buffer_distribution_spec().has_value());
+    }
+}
+
 class NdShardingOpCompatTests : public ttnn::TTNNFixtureWithSuiteDevice<NdShardingOpCompatTests>,
                                 public ::testing::WithParamInterface<NDShardingOpCompatParams> {};
 
