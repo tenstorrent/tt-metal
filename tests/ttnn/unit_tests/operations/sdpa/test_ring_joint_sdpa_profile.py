@@ -5,10 +5,10 @@
 """
 Test file for single-device profiling of ring_joint_sdpa (causal+balanced mode).
 
-This is Phase 1 of the zigzag profiling journey: validating helper functions and
-PyTorch reference before implementing the actual profiling op.
+Phase 1: Validates helper functions and PyTorch reference.
+Phase 2: Tests the actual profiling op on device.
 
-The profiling op will measure pure compute time by simulating what one device
+The profiling op measures pure compute time by simulating what one device
 in a causal+balanced ring would compute, using pre-staged KV data instead of
 actual ring communication.
 """
@@ -16,6 +16,8 @@ actual ring communication.
 import torch
 import pytest
 from typing import List, Tuple
+import ttnn
+from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
 
 # ============================================================================
@@ -623,6 +625,110 @@ class TestRingJointSdpaProfile:
         assert Q_local.shape == (b, nh, local_seq_len, d)
         assert expected.shape == (b, nh, local_seq_len, d)
         assert K_gathered.shape == (b, nh, seq_len, d)
+
+
+# ============================================================================
+# Device Tests: Actual Op Execution (Phase 2)
+# ============================================================================
+
+
+@pytest.mark.parametrize(
+    "ring_size, ring_index",
+    [
+        (2, 0),
+        (2, 1),
+        (4, 0),
+        (4, 1),
+        (4, 2),
+        (4, 3),
+    ],
+)
+def test_ring_joint_sdpa_profile_device(device, ring_size: int, ring_index: int):
+    """
+    Test ring_joint_sdpa_profile op on actual device.
+
+    This test validates:
+    1. Op executes without errors
+    2. Output matches PyTorch reference (PCC > 0.99)
+    """
+    # Config
+    b, nh, d = 1, 8, 64
+    seq_len = 128 * ring_size  # Total sequence length
+    local_seq_len = seq_len // ring_size
+    chunk_size = seq_len // (2 * ring_size)
+
+    # Program config
+    q_chunk_size = 64
+    k_chunk_size = 64
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    # Create full tensors
+    Q_full = fa_rand(b, nh, seq_len, d)
+    K_full = fa_rand(b, nh, seq_len, d)
+    V_full = fa_rand(b, nh, seq_len, d)
+
+    # Prepare local Q/K/V (this device's chunks)
+    device_chunks = get_device_chunk_indices(ring_index, ring_size)
+    Q_local = extract_chunks(Q_full, device_chunks, chunk_size)
+    K_local = extract_chunks(K_full, device_chunks, chunk_size)
+    V_local = extract_chunks(V_full, device_chunks, chunk_size)
+
+    # Prepare gathered KV (all KV in arrival order)
+    K_gathered = build_gathered_kv_buffer(K_full, ring_index, ring_size, chunk_size)
+    V_gathered = build_gathered_kv_buffer(V_full, ring_index, ring_size, chunk_size)
+
+    # Compute expected output via PyTorch reference
+    expected = compute_causal_balanced_reference(Q_full, K_full, V_full, ring_index, ring_size)
+
+    # Move tensors to device
+    memory_config = ttnn.DRAM_MEMORY_CONFIG
+    dtype = ttnn.bfloat16
+
+    tt_Q = ttnn.from_torch(Q_local, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device)
+    tt_K = ttnn.from_torch(K_local, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device)
+    tt_V = ttnn.from_torch(V_local, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device)
+    tt_K_gathered = ttnn.from_torch(
+        K_gathered, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device
+    )
+    tt_V_gathered = ttnn.from_torch(
+        V_gathered, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device
+    )
+
+    # Call the profiling op
+    tt_output, _, tt_lse = ttnn.transformer.ring_joint_sdpa_profile(
+        tt_Q,
+        tt_K,
+        tt_V,
+        tt_K_gathered,
+        tt_V_gathered,
+        ring_size=ring_size,
+        ring_index=ring_index,
+        logical_n=seq_len,
+        program_config=program_config,
+        is_causal=True,
+        is_balanced=True,
+        compute_kernel_config=compute_kernel_config,
+    )
+
+    # Convert back to torch and compare
+    output = ttnn.to_torch(tt_output)
+    output = output[:, :, :local_seq_len, :]  # Remove any tile padding
+
+    # Compare with expected (PCC > 0.99)
+    passing, pcc_val = comp_pcc(expected, output, 0.99)
+    assert passing, f"PCC {pcc_val} is below threshold 0.99 for ring_size={ring_size}, ring_index={ring_index}"
 
 
 # ============================================================================

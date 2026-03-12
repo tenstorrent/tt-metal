@@ -660,5 +660,104 @@ void bind_sdpa(nb::module_& mod) {
             nb::arg("compute_kernel_config") = nb::none(),
             nb::arg("page_table") = nb::none(),
             nb::arg("chunk_start_idx") = nb::none()});
+
+    const auto* ring_joint_profile_doc = R"doc(
+        Single-device profiling op for ring_joint_sdpa (causal+balanced mode).
+
+        This operation simulates what one device in a ring would compute, using
+        pre-staged KV data instead of actual ring communication. Enables accurate
+        compute time measurement without synchronization overhead.
+
+        Args:
+            input_tensor_q (ttnn.Tensor): Local Q tensor for this device  [b x nh x local_N x dh]
+            input_tensor_k (ttnn.Tensor): Local K tensor for this device  [b x nh x local_N x dh]
+            input_tensor_v (ttnn.Tensor): Local V tensor for this device  [b x nh x local_N x dh]
+            gathered_k (ttnn.Tensor): Pre-staged K from all devices in arrival order [b x nh x N x dh]
+            gathered_v (ttnn.Tensor): Pre-staged V from all devices in arrival order [b x nh x N x dh]
+            ring_size (int): Number of devices in the ring
+            ring_index (int): Which device position we're simulating (0 to ring_size-1)
+            logical_n (int): Logical sequence length (unpadded)
+
+        Keyword args:
+            program_config (ttnn.SDPAProgramConfig): Program configuration for the operation.
+            is_causal (bool): Whether to use causal attention masking. Defaults to False.
+            is_balanced (bool): Whether to use balanced workload distribution. Defaults to False.
+            scale (float, optional): Attention scale factor. Defaults to None.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel configuration.
+            joint_tensor_q (ttnn.Tensor, optional): Joint Q tensor.
+            joint_tensor_k (ttnn.Tensor, optional): Joint K tensor.
+            joint_tensor_v (ttnn.Tensor, optional): Joint V tensor.
+            joint_strategy (str, optional): Joint attention strategy (default: "rear").
+
+        Returns:
+            (ttnn.Tensor, ttnn.Tensor, ttnn.Tensor):
+              - The attention output for this device [b x nh x local_N x dh]
+              - The joint output (empty if no joint input)
+              - The final log-sum-exp [b x nh x (local_N + L) x 1]
+        )doc";
+
+    using RingJointProfileOperationType = decltype(ttnn::transformer::ring_joint_sdpa_profile);
+
+    ttnn::bind_registered_operation(
+        mod,
+        ttnn::transformer::ring_joint_sdpa_profile,
+        ring_joint_profile_doc,
+        ttnn::nanobind_overload_t{
+            [](const RingJointProfileOperationType& self,
+               const ttnn::Tensor& input_tensor_q,
+               const ttnn::Tensor& input_tensor_k,
+               const ttnn::Tensor& input_tensor_v,
+               const ttnn::Tensor& gathered_k,
+               const ttnn::Tensor& gathered_v,
+               std::size_t ring_size,
+               std::size_t ring_index,
+               std::size_t logical_n,
+               const SDPAProgramConfig& program_config,
+               bool is_causal,
+               bool is_balanced,
+               std::optional<float> scale,
+               std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+               const std::optional<ttnn::Tensor>& joint_tensor_q,
+               const std::optional<ttnn::Tensor>& joint_tensor_k,
+               const std::optional<ttnn::Tensor>& joint_tensor_v,
+               const std::optional<std::string>& joint_strategy) {
+                auto outputs = self(
+                    input_tensor_q,
+                    input_tensor_k,
+                    input_tensor_v,
+                    gathered_k,
+                    gathered_v,
+                    ring_size,
+                    ring_index,
+                    logical_n,
+                    program_config,
+                    is_causal,
+                    is_balanced,
+                    scale,
+                    compute_kernel_config,
+                    joint_tensor_q,
+                    joint_tensor_k,
+                    joint_tensor_v,
+                    joint_strategy);
+                return outputs;
+            },
+            nb::arg("input_tensor_q").noconvert(),
+            nb::arg("input_tensor_k").noconvert(),
+            nb::arg("input_tensor_v").noconvert(),
+            nb::arg("gathered_k").noconvert(),
+            nb::arg("gathered_v").noconvert(),
+            nb::arg("ring_size"),
+            nb::arg("ring_index"),
+            nb::arg("logical_n"),
+            nb::kw_only(),
+            nb::arg("program_config").noconvert(),
+            nb::arg("is_causal").noconvert() = false,
+            nb::arg("is_balanced").noconvert() = false,
+            nb::arg("scale") = nb::none(),
+            nb::arg("compute_kernel_config") = nb::none(),
+            nb::arg("joint_tensor_q") = nb::none(),
+            nb::arg("joint_tensor_k") = nb::none(),
+            nb::arg("joint_tensor_v") = nb::none(),
+            nb::arg("joint_strategy") = nb::none()});
 }
 }  // namespace ttnn::operations::transformer

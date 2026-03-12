@@ -141,6 +141,34 @@ struct ExecuteRingDistributedScaledDotProductAttention {
         std::optional<int64_t> chunk_start_idx = std::nullopt);
 };
 
+/**
+ * Single-device profiling op for ring_joint_sdpa.
+ *
+ * Simulates what one device in a ring would compute, using pre-staged KV data
+ * instead of actual ring communication. Enables accurate compute time measurement
+ * without synchronization overhead.
+ */
+struct ExecuteRingJointAttentionProfile {
+    static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
+        const ttnn::Tensor& input_tensor_q,
+        const ttnn::Tensor& input_tensor_k,
+        const ttnn::Tensor& input_tensor_v,
+        const ttnn::Tensor& gathered_k,
+        const ttnn::Tensor& gathered_v,
+        std::size_t ring_size,
+        std::size_t ring_index,
+        std::size_t logical_n,
+        SDPAProgramConfig program_config,
+        bool is_causal = false,
+        bool is_balanced = false,
+        std::optional<float> scale = std::nullopt,
+        std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
+        const std::optional<ttnn::Tensor>& joint_tensor_q = std::nullopt,
+        const std::optional<ttnn::Tensor>& joint_tensor_k = std::nullopt,
+        const std::optional<ttnn::Tensor>& joint_tensor_v = std::nullopt,
+        const std::optional<std::string>& joint_strategy = std::nullopt);
+};
+
 }  // namespace operations::transformer
 
 namespace transformer {
@@ -171,6 +199,10 @@ constexpr auto chunked_flash_mla_prefill = ttnn::register_operation<
 constexpr auto ring_distributed_scaled_dot_product_attention = ttnn::register_operation<
     "ttnn::transformer::ring_distributed_scaled_dot_product_attention",
     ttnn::operations::transformer::ExecuteRingDistributedScaledDotProductAttention>();
+
+constexpr auto ring_joint_sdpa_profile = ttnn::register_operation<
+    "ttnn::transformer::ring_joint_sdpa_profile",
+    ttnn::operations::transformer::ExecuteRingJointAttentionProfile>();
 
 }  // namespace transformer
 

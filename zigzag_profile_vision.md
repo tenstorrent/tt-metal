@@ -47,19 +47,22 @@ Create a **single-device profiling op** (`ring_joint_sdpa_profile`) that:
 
 **Status**: Completed 2026-03-12. All 26 tests pass. Ready for Phase 2 (op implementation).
 
-### Phase 2: Full Op Implementation (Next Step)
+### Phase 2: Full Op Implementation ✅ COMPLETED
 **Goal**: Implement the profiling op with all kernel changes
 
-- Create new device operation files
-- Copy and modify reader kernel (remove gather, add DRAM reads)
-- Copy and modify writer kernel (remove sync)
-- Reuse compute kernel exactly
-- Create program factory (simplified, no CCL setup)
-- Add Python bindings
+- ✅ Create new device operation files (types, header, implementation)
+- ✅ Create simplified reader kernel (ProfileRingIndexer, DRAM reads, no sync)
+- ✅ Create simplified writer kernel (no fused_op_receiver, no sync)
+- ✅ Reuse compute kernel exactly (ring_joint_sdpa.cpp unchanged)
+- ✅ Create program factory (simplified, no CCL setup)
+- ✅ Add Python bindings (sdpa_nanobind.cpp)
+- ✅ Add source files to CMakeLists.txt
 
 **Success Criteria**: Profiling op compiles and runs on single device
 
-### Phase 3: Extended Test Coverage
+**Status**: Completed 2026-03-12. All 32 tests pass (26 helper + 6 device tests). PCC > 0.99 against PyTorch reference.
+
+### Phase 3: Extended Test Coverage (Next Step)
 **Goal**: Validate across configurations
 
 - Test all devices in ring (`ring_index` = 0, 1, ..., ring_size-1)
@@ -160,5 +163,15 @@ The profiling op bridges `ring_joint_sdpa` and single-device profiling capabilit
 ## File References
 
 - **Phase 1 Plan**: `zigzag_profile_phase1_plan.md` - Test infrastructure plan (COMPLETED)
+- **Phase 2 Plan**: `zigzag_profile_phase2_plan.md` - Op implementation plan (COMPLETED)
 - **Context**: `zigzag_profile_codebase_context.md` - Codebase details and kernel analysis
 - **Test file**: `tests/ttnn/unit_tests/operations/sdpa/test_ring_joint_sdpa_profile.py`
+
+### Implementation Files (Phase 2)
+- `ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_profile_device_operation_types.hpp`
+- `ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_profile_device_operation.hpp`
+- `ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_profile_device_operation.cpp`
+- `ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_profile_program_factory.hpp`
+- `ttnn/cpp/ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_profile_program_factory.cpp`
+- `ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_profile_reader.cpp`
+- `ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/ring_joint_profile_writer.cpp`

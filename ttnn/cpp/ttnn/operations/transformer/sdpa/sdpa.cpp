@@ -10,6 +10,7 @@
 #include "ttnn/operations/transformer/sdpa/device/joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/ring_distributed_sdpa_device_operation.hpp"
+#include "ttnn/operations/transformer/sdpa/device/ring_joint_sdpa_profile_device_operation.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/device.hpp"
 
@@ -308,6 +309,47 @@ ttnn::Tensor ExecuteRingDistributedScaledDotProductAttention::invoke(
         kernel_config_val,
         page_table,
         chunk_start_idx);
+}
+
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteRingJointAttentionProfile::invoke(
+    const ttnn::Tensor& input_tensor_q,
+    const ttnn::Tensor& input_tensor_k,
+    const ttnn::Tensor& input_tensor_v,
+    const ttnn::Tensor& gathered_k,
+    const ttnn::Tensor& gathered_v,
+    std::size_t ring_size,
+    std::size_t ring_index,
+    std::size_t logical_n,
+    SDPAProgramConfig program_config,
+    bool is_causal,
+    bool is_balanced,
+    std::optional<float> scale,
+    std::optional<DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<ttnn::Tensor>& joint_tensor_q,
+    const std::optional<ttnn::Tensor>& joint_tensor_k,
+    const std::optional<ttnn::Tensor>& joint_tensor_v,
+    const std::optional<std::string>& joint_strategy) {
+    auto output_tensors = ttnn::prim::ring_joint_scaled_dot_product_attention_profile(
+        input_tensor_q,
+        input_tensor_k,
+        input_tensor_v,
+        gathered_k,
+        gathered_v,
+        ring_size,
+        ring_index,
+        logical_n,
+        std::move(program_config),
+        is_causal,
+        is_balanced,
+        scale,
+        compute_kernel_config,
+        joint_tensor_q,
+        joint_tensor_k,
+        joint_tensor_v,
+        joint_strategy);
+    // Return actual tensor (even if empty when no joint input)
+    auto joint_output = output_tensors.joint_output.has_value() ? output_tensors.joint_output.value() : ttnn::Tensor{};
+    return {output_tensors.output, joint_output, output_tensors.lse_output};
 }
 
 }  // namespace ttnn::operations::transformer
