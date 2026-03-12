@@ -96,9 +96,12 @@ def run(
     if isinstance(arg1, dict):
         arg1 = dict_to_memory_config(arg1)
 
-    if output_memory_config is None and arg1 is not None:
+    # arg1 IS the target sharded memory config — always prioritize it.
+    # The loader's fallback sets output_memory_config from the input tensor's
+    # memory_config (DRAM/interleaved), which is wrong for this op.
+    if arg1 is not None:
         output_memory_config = arg1
-    if output_memory_config is None and memory_config is not None:
+    elif output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
 
     # Handle tuple input_a_shape

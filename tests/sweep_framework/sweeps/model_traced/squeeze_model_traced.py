@@ -93,8 +93,9 @@ def run(
         partial(torch_random, low=-100, high=100, dtype=torch.float32), input_a_dtype
     )(shape)
 
+    # In V2 format, dim comes as arg1 (positional parameter)
     if dim is None:
-        dim = 0
+        dim = kwargs.get("arg1", 0)
     torch_output_tensor = torch.squeeze(torch_input_tensor_a, dim=dim)
 
     # Check if storage_type is HOST - if so, don't pass device to from_torch
