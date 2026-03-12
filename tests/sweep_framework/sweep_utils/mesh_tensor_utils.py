@@ -35,7 +35,8 @@ def parse_placement_from_traced(tensor_placement: Optional[Dict]) -> Optional[tt
         return None
 
     try:
-        placement_str = tensor_placement.get("placement", "")
+        placement_raw = tensor_placement.get("placement", "")
+        placement_str = str(placement_raw) if not isinstance(placement_raw, str) else placement_raw
 
         # Check if it's a replicate placement
         if "PlacementReplicate" in placement_str:
@@ -47,7 +48,7 @@ def parse_placement_from_traced(tensor_placement: Optional[Dict]) -> Optional[tt
             # e.g., "['PlacementShard(2)', 'PlacementShard(3)']" -> shard on dims 2,3
             import re
 
-            shard_dims = re.findall(r"PlacementShard\((\d+)\)", placement_str)
+            shard_dims = re.findall(r"PlacementShard\((-?\d+)\)", placement_str)
 
             if shard_dims:
                 # For 2D mesh, we typically shard on the last dimension(s)
@@ -184,19 +185,56 @@ def create_tensor_on_mesh(
         TTNN tensor on mesh device with proper placement
     """
     # Determine mesh mapper based on placement
-    num_devices = mesh_device.get_num_devices() if hasattr(mesh_device, "get_num_devices") else 1
-    if _is_shard_placement(tensor_placement, num_devices):
-        placement_str = tensor_placement.get("placement", "")
-        shard_dim = _parse_shard_dim(placement_str)
+    if tensor_placement:
+        import re
+        import ast as _ast
 
-        try:
-            mesh_shape = (1, num_devices)
-            mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape, dims=shard_dim)
-        except (TypeError, RuntimeError):
-            # Fallback to replicate if shard mapper creation fails
+        placement_raw = tensor_placement.get("placement", "")
+        placement_str = str(placement_raw) if not isinstance(placement_raw, str) else placement_raw
+
+        mesh_shape_raw = tensor_placement.get("mesh_device_shape", "[1, 1]")
+        if isinstance(mesh_shape_raw, str):
+            mesh_shape_raw = _ast.literal_eval(mesh_shape_raw)
+        mesh_shape_tuple = tuple(mesh_shape_raw) if isinstance(mesh_shape_raw, (list, tuple)) else (1, 1)
+
+        entries = re.findall(r"Placement(?:Shard\(-?\d+\)|Replicate)", placement_str)
+
+        if len(entries) >= 2:
+            dims = []
+            for entry in entries[:2]:
+                shard_match = re.search(r"PlacementShard\((-?\d+)\)", entry)
+                if shard_match:
+                    dims.append(int(shard_match.group(1)))
+                else:
+                    dims.append(None)
+            dims_tuple = tuple(dims)
+
+            # Traced shapes are per-device (post-shard). ShardTensor2dMesh expects
+            # global (pre-shard) shapes. Expand by tiling shard dims by mesh sizes.
+            repeat_factors = [1] * torch_tensor.ndim
+            if dims_tuple[0] is not None:
+                repeat_factors[dims_tuple[0]] = mesh_shape_tuple[0]
+            if dims_tuple[1] is not None:
+                repeat_factors[dims_tuple[1]] = mesh_shape_tuple[1]
+            torch_tensor = torch_tensor.repeat(*repeat_factors)
+
+            mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
+        elif len(entries) == 1:
+            shard_match = re.search(r"PlacementShard\((-?\d+)\)", entries[0])
+            if shard_match:
+                dim = int(shard_match.group(1))
+                dims_tuple = (None, dim)
+
+                repeat_factors = [1] * torch_tensor.ndim
+                repeat_factors[dim] = mesh_shape_tuple[1] if len(mesh_shape_tuple) > 1 else mesh_shape_tuple[0]
+                torch_tensor = torch_tensor.repeat(*repeat_factors)
+
+                mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
+            else:
+                mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
+        else:
             mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
     else:
-        # Replicate or no placement
         mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
 
     # Create tensor on mesh

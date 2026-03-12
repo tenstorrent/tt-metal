@@ -11,10 +11,11 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
+from models.demos.deepseek_v3.tt.model.row_batched_model import get_fabric_config
 from models.demos.deepseek_v3.tt.moe import MoE
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
-    add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
     get_model_config,
     get_test_weight_config,
@@ -33,13 +34,38 @@ def reference_model(hf_config):
 
 _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
 _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DEFAULT_PREFILL_SEQ_LEN
+_moe_layer_path = "model.layers.3.mlp"
+
+
+def _get_test_state_dict(
+    reference_model: DeepseekV3MoE,
+    weight_type: str,
+    checkpoint_state_dict: dict[str, torch.Tensor] | None,
+) -> dict[str, torch.Tensor]:
+    if weight_type == "random":
+        # Keep the original random-init dtypes for the TT conversion path.
+        # In particular, the gate score-correction bias should remain fp32.
+        return {name: tensor.detach().clone() for name, tensor in reference_model.state_dict().items()}
+
+    assert weight_type == "real"
+    assert checkpoint_state_dict is not None
+    moe_state_dict = {
+        name: tensor
+        for name, tensor in sub_state_dict(checkpoint_state_dict, f"{_moe_layer_path}.").items()
+        if not name.startswith("shared_experts.")
+    }
+    if not moe_state_dict:
+        pytest.skip(f"Checkpoint does not contain routed MoE weights under '{_moe_layer_path}'")
+
+    reference_model.load_state_dict(moe_state_dict)
+    return moe_state_dict
 
 
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": get_fabric_config()},
     ],
     indirect=True,
 )
@@ -56,24 +82,27 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
         True,
     ],
 )
+@pytest.mark.parametrize("weight_type", ["random"], ids=["random_weights"])
 def test_forward_pass(
+    device_params,
     mode,
     num_tokens,
     set_deterministic_env,
     reference_model,
     hf_config,
+    request,
     cache_path,
     mesh_device,
     ccl,
     topk_fallback,
+    weight_type,
+    force_recalculate_weight_config,
 ):
     """Test forward pass against reference model."""
 
-    # Get state dict from actual model - pass directly to convert_weights
-    state_dict = add_inv_scale_to_state_dict(
-        reference_model.state_dict(),
-        block_shape=hf_config.quantization_config["weight_block_size"],
-    )
+    # Load checkpoint only for real weights; random path needs no checkpoint.
+    checkpoint_state_dict = request.getfixturevalue("state_dict") if weight_type == "real" else None
+    state_dict = _get_test_state_dict(reference_model, weight_type, checkpoint_state_dict)
 
     # Create input tensor
     torch_input = torch.randn(1, num_tokens, hf_config.hidden_size, dtype=torch.bfloat16)
@@ -90,13 +119,16 @@ def test_forward_pass(
         (state_dict,),
         cache_path,
         mesh_device,
-        force_recalculate=False,
+        force_recalculate=force_recalculate_weight_config,
         test_name="test_moe",
-        real_weights=False,
+        real_weights=weight_type == "real",
+        layer_id=_moe_layer_path,
     )
 
     # Generate appropriate config using utility function
-    model_config = get_model_config(MoE, mode, hf_config, mesh_device, topk_fallback=topk_fallback)
+    model_config = get_model_config(
+        MoE, mode, hf_config, mesh_device, device_params["fabric_config"], topk_fallback=topk_fallback
+    )
 
     # Create a new model state with CCL
     model_state = MoE.create_state(hf_config, mesh_device, ccl)
@@ -117,9 +149,8 @@ def test_forward_pass(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    # TTNN forward pass - collective operations handled inside forward functions
+    # TTNN forward pass using utility function
     tt_input = ttnn.to_memory_config(tt_input, run_config["input_memory_config"])
-
     # Pass handle_tensor_parallel=True to enable collective operations inside the forward functions
     tt_output = run_module_forward(MoE, mode, tt_input, run_config, handle_tensor_parallel=True)
 

@@ -96,7 +96,7 @@ def run(
     torch.manual_seed(0)
 
     # Extract kwargs
-    scalar = kwargs.get("scalar", None)
+    scalar = kwargs.get("scalar", kwargs.get("arg1", None))
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get("input_b_tensor_placement", None)
 
