@@ -237,8 +237,7 @@ TensorSpec ConcatDeviceOperation::compute_output_specs(
         shape_out[args.dim] += curr_shape[args.dim];
     }
 
-    const auto& ref_nd_spec = ref_in_tensor.nd_shard_spec();
-    if (!ref_nd_spec.has_value()) {
+    if (ref_in_tensor.memory_config().memory_layout() != TensorMemoryLayout::ND_SHARDED) {
         return TensorSpec(
             shape_out, TensorLayout(ref_in_tensor.dtype(), PageConfig(ref_in_tensor.layout()), args.output_mem_config));
     }
@@ -246,6 +245,7 @@ TensorSpec ConcatDeviceOperation::compute_output_specs(
     // output memory config is constant, btw
     // When ref input has ND sharding, build output memory config with derived NdShardSpec:
     // same grid/orientation/strategy. Use first input's shard_shape for calculations.
+    const auto& ref_nd_spec = ref_in_tensor.nd_shard_spec();
     const auto& first_spec = ref_nd_spec.value();
     ttnn::Shape output_shard_shape = first_spec.shard_shape;
 
