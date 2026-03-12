@@ -21,6 +21,15 @@ class Tracer:
     All inputs and outputs of the traced function must be ``ttnn.Tensor`` instances or plain
     Python scalars (``int``, ``float``, ``str``, ``bool``, ``None``), optionally nested in
     tuples, lists, or dicts.
+
+    Executing a trace overwrites any device memory that was used during trace capture. In
+    particular, any device tensors that are allocated after the trace was captured may be
+    overwritten when the trace is executed, even if they are not inputs or outputs of the trace.
+    Host tensors will not be overwritten. Input tensors are copied before trace execution, so
+    they can safely be allocated on device if their content is not needed after trace execution.
+
+    Every call returns the **same** output tensor objects. A subsequent call overwrites the
+    previous output data in place.
     """
 
     def __init__(
@@ -62,25 +71,16 @@ class Tracer:
     ) -> Any:
         """Capture or execute trace.
 
-        On the first call, runs the wrapped function multiple times to capture the trace. On
-        subsequent calls, executes the captured trace. On the first call, inputs are used to
-        initialize the trace inputs. On subsequent calls, they are used to update the trace inputs.
-        Only `ttnn.Tensor` inputs can be changed. Aside from omitting positional inputs to reuse
-        previous values, a value of `None` can be passed to reuse the previous value for tensor
-        inputs as well.
-
-        Host tensor inputs will automatically be moved to the tracer device for the trace capture
-        and execution.
-
-        Executing a trace overwrites any device memory that was used during trace capture. In
-        particular, any device tensors that are allocated after the trace was captured may be
-        overwritten when the trace is executed, even if they are not inputs or outputs of the trace.
-        Host tensors will not be overwritten. Input tensors are copied before trace execution, so
-        they can safely be allocated on device if their content is not needed after trace execution.
+        On the first call, runs the wrapped function to capture the trace. On subsequent calls,
+        executes the captured trace. On the first call, inputs initialize the trace inputs. On
+        subsequent calls, they update the trace inputs. Only ``ttnn.Tensor`` inputs can be changed.
+        Aside from omitting positional inputs to reuse previous values, a value of ``None`` can be
+        passed to reuse the previous value for tensor inputs as well. Host tensor inputs will
+        automatically be moved to the tracer device.
 
         Args:
             tracer_cq_id: Command queue id.
-            tracer_blocking_execution: Whether `ttnn.execute_trace` should block.
+            tracer_blocking_execution: Whether ``ttnn.execute_trace`` should block.
             *args: Positional inputs to pass to the wrapped function.
             **kwargs: Named inputs to pass to the wrapped function. Optional on subsequent calls.
 
