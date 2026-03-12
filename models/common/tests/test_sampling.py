@@ -858,6 +858,52 @@ def test_set_log_probs_mode_validation(shape, mesh_device):
     assert calc.enable_log_probs is True
     assert not calc.top_k_logprobs_needed
 
+    # Test 6: empty_slots partial update — only specified positions are modified
+    calc.set_log_probs_mode(False, num_logprobs=0)  # start clean
+    assert not calc.enable_log_probs
+
+    # Update only slots 2 and 5
+    calc.set_log_probs_mode(
+        enable_log_probs=[True, True],
+        num_logprobs=[10, 15],
+        empty_slots=[2, 5],
+    )
+    assert calc.logprobs_enabled[2] is True
+    assert calc.logprobs_enabled[5] is True
+    assert calc.logprobs_enabled[0] is False  # untouched
+    assert calc.logprobs_enabled[1] is False  # untouched
+    assert calc.num_logprobs[2] == 10
+    assert calc.num_logprobs[5] == 15
+    assert calc.num_logprobs[0] == 0  # untouched
+    assert calc.enable_log_probs is True  # at least one slot enabled
+    assert calc.top_k_logprobs_needed is True  # slots 2 and 5 need top-k
+
+    # Test 7: empty_slots with scalar values — broadcasts to all specified slots
+    calc.set_log_probs_mode(False, num_logprobs=0)  # reset
+    calc.set_log_probs_mode(
+        enable_log_probs=True,
+        num_logprobs=7,
+        empty_slots=[0, 3, 4],
+    )
+    assert calc.logprobs_enabled[0] is True
+    assert calc.logprobs_enabled[3] is True
+    assert calc.logprobs_enabled[4] is True
+    assert calc.logprobs_enabled[1] is False  # untouched
+    assert all(calc.num_logprobs[i] == 7 for i in [0, 3, 4])
+    assert calc.num_logprobs[1] == 0  # untouched
+
+    # Test 8: second empty_slots call preserves earlier partial state
+    calc.set_log_probs_mode(
+        enable_log_probs=[True],
+        num_logprobs=[20],
+        empty_slots=[1],
+    )
+    # slot 0,3,4 from previous call should still be set
+    assert calc.logprobs_enabled[0] is True
+    assert calc.logprobs_enabled[1] is True  # newly set
+    assert calc.num_logprobs[0] == 7  # preserved
+    assert calc.num_logprobs[1] == 20  # newly set
+
 
 @pytest.mark.parametrize(
     "shape",

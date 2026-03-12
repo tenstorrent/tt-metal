@@ -324,7 +324,13 @@ class TTSampling(LightweightModule):
         )
 
     def reset_params(
-        self, k, p, temp, enable_log_probs: bool | list[bool] = None, num_logprobs: int | list[int] = None
+        self,
+        k,
+        p,
+        temp,
+        enable_log_probs: bool | list[bool] = None,
+        num_logprobs: int | list[int] = None,
+        empty_slots: list[int] | None = None,
     ):
         """Update sampling parameters (k, p, temperature, logprobs) dynamically."""
         self._force_argmax_sampling = self._is_force_argmax_sampling(k, p, temp)
@@ -362,7 +368,9 @@ class TTSampling(LightweightModule):
             ttnn.copy_host_to_device_tensor(self.p_tensor_new, self.p_tensor)
             ttnn.copy_host_to_device_tensor(self.temp_tensor_new, self.temp_tensor)
 
-        self.log_probs_calculator.set_log_probs_mode(enable_log_probs, num_logprobs=num_logprobs)
+        self.log_probs_calculator.set_log_probs_mode(
+            enable_log_probs, num_logprobs=num_logprobs, empty_slots=empty_slots
+        )
 
     def forward(
         self,

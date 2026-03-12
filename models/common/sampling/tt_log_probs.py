@@ -168,6 +168,7 @@ class LogProbsCalculator:
         self,
         enable_log_probs: bool | list[bool] = False,
         num_logprobs: int | list[int] | None = None,
+        empty_slots: list[int] | None = None,
     ):
         """Set logprobs mode for the current batch.
 
@@ -177,27 +178,47 @@ class LogProbsCalculator:
             num_logprobs: Integer or per-user integer list (0-20). Specifies how many
                 top logprobs to return per user. 0 means sampled token logprob only.
                 Values > 0 trigger top-k logprobs computation on device.
+            empty_slots: Optional list of batch indices at which to apply the new
+                logprobs settings. When provided, only those positions are updated
+                and the rest of the batch retains its previous values. This is used
+                during prefill when only a subset of batch slots are being filled.
+                The enable_log_probs / num_logprobs values are zipped with
+                empty_slots positionally (i-th value → empty_slots[i]).
         """
-        if isinstance(enable_log_probs, list):
-            self.logprobs_enabled = list(enable_log_probs)
-            # If any user in the batch has log_probs enabled, run for whole batch
-            enable_log_probs_result = any(enable_log_probs)
-        else:
-            self.logprobs_enabled = [enable_log_probs] * self.batch_size
-            enable_log_probs_result = enable_log_probs
-
-        self.enable_log_probs = enable_log_probs_result
-
-        # Track per-user num_logprobs and whether top-k computation is needed
-        if num_logprobs is not None:
-            if isinstance(num_logprobs, list):
-                self.num_logprobs = list(num_logprobs)
+        if empty_slots is not None:
+            # Partial update: only modify the specified batch positions
+            if isinstance(enable_log_probs, list):
+                for i, slot in enumerate(empty_slots):
+                    self.logprobs_enabled[slot] = enable_log_probs[i]
             else:
-                self.num_logprobs = [num_logprobs] * self.batch_size
-            self.top_k_logprobs_needed = any(n > 0 for n in self.num_logprobs)
+                for slot in empty_slots:
+                    self.logprobs_enabled[slot] = enable_log_probs
+
+            if num_logprobs is not None:
+                if isinstance(num_logprobs, list):
+                    for i, slot in enumerate(empty_slots):
+                        self.num_logprobs[slot] = num_logprobs[i]
+                else:
+                    for slot in empty_slots:
+                        self.num_logprobs[slot] = num_logprobs
         else:
-            self.num_logprobs = [0] * self.batch_size
-            self.top_k_logprobs_needed = False
+            # Full batch update
+            if isinstance(enable_log_probs, list):
+                self.logprobs_enabled = list(enable_log_probs)
+            else:
+                self.logprobs_enabled = [enable_log_probs] * self.batch_size
+
+            if num_logprobs is not None:
+                if isinstance(num_logprobs, list):
+                    self.num_logprobs = list(num_logprobs)
+                else:
+                    self.num_logprobs = [num_logprobs] * self.batch_size
+            else:
+                self.num_logprobs = [0] * self.batch_size
+
+        # Recompute derived flags from the full arrays
+        self.enable_log_probs = any(self.logprobs_enabled)
+        self.top_k_logprobs_needed = any(n > 0 for n in self.num_logprobs)
 
     def _compute_global_stats(
         self,

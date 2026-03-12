@@ -137,7 +137,7 @@ class SamplingGenerator:
 
         Resets params, seeds, prompt tokens, and output state in the correct order.
         """
-        self.reset_sampling_params(sampling_params)
+        self.reset_sampling_params(sampling_params, empty_slots=empty_slots)
         seed = getattr(sampling_params, "seed", None)
         # assert on condition that seed is not None
         assert seed is not None, "sampling_params must be formatted (seed should be a list, not None)"
@@ -196,7 +196,7 @@ class SamplingGenerator:
     # ---------------------------------------------------------------------
     # Sampling helpers
     # ---------------------------------------------------------------------
-    def reset_sampling_params(self, sampling_params):
+    def reset_sampling_params(self, sampling_params, empty_slots: list[int] | None = None):
         old_force_argmax_sampling = self.tt_sampling.force_argmax_sampling
         num_logprobs = getattr(sampling_params, "num_logprobs", None)
         self.tt_sampling.reset_params(
@@ -205,6 +205,7 @@ class SamplingGenerator:
             temp=sampling_params.temperature,
             enable_log_probs=sampling_params.enable_log_probs,
             num_logprobs=num_logprobs,
+            empty_slots=empty_slots,
         )
         if self.tt_sampling.force_argmax_sampling != old_force_argmax_sampling:
             self.reset_trace()
