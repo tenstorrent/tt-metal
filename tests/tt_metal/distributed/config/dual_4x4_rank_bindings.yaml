@@ -7,4 +7,4 @@ rank_bindings:
     mesh_id: 1
     env_overrides:
       TT_VISIBLE_DEVICES: 14,30,29,13,10,26,25,9,6,22,21,5,2,18,17,1
-mesh_graph_desc_path: /home/rsong/dev/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_4x4_mesh_graph_descriptor.textproto
+mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_4x4_mesh_graph_descriptor.textproto"

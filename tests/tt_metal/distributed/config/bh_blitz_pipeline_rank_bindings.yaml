@@ -239,4 +239,4 @@ rank_bindings:
     mesh_host_rank: 0
     env_overrides:
       TT_VISIBLE_DEVICES: 1,15,12,27,18,14,28,19
-mesh_graph_desc_path: /home/rsong/dev/tt-metal/tt_metal/fabric/mesh_graph_descriptors/bh_glx_split_4x2.textproto
+mesh_graph_desc_path: "tt_metal/fabric/mesh_graph_descriptors/bh_glx_split_4x2.textproto"
