@@ -12,7 +12,9 @@ namespace ttnn::experimental::prim {
 struct MaskedBincountSharedVariables {
     tt::tt_metal::KernelHandle kernel_id_brisc = 0;
     tt::tt_metal::KernelHandle kernel_id_ncrisc = 0;
-    CoreCoord core;
+    std::vector<CoreCoord> all_cores_vec;
+    CoreCoord collector_core;
+    uint32_t num_cores;
 };
 
 struct MaskedBincountProgramFactory {

@@ -6,6 +6,7 @@
 #include "masked_bincount_device_operation_types.hpp"
 
 #include <tt-metalium/host_api.hpp>
+#include <tt-metalium/work_split.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <tt-metalium/math.hpp>
 #include "ttnn/operation.hpp"
@@ -21,12 +22,14 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
         tt::tt_metal::datatype_to_dataformat_converter(tt::tt_metal::DataType::UINT32);
     uint32_t n_routed_experts = operation_attributes.n_routed_experts;
 
-    const auto& logical_shape = input.logical_shape();
-    uint32_t H = logical_shape[-2];
-    uint32_t W = logical_shape[-1];
+    const auto& shard_spec = input.shard_spec().value();
+    auto all_cores = shard_spec.grid;
+    uint32_t num_cores = all_cores.num_cores();
+    uint32_t shard_height = shard_spec.shape[0];
+    uint32_t W = shard_spec.shape[1];
 
-    uint32_t h_brisc = H / 2;
-    uint32_t h_ncrisc = H - h_brisc;
+    uint32_t h_brisc = shard_height / 2;
+    uint32_t h_ncrisc = shard_height - h_brisc;
 
     auto* src_buffer = input.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
@@ -34,35 +37,45 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
     uint32_t input_page_size = src_buffer->aligned_page_size();
     uint32_t output_page_size = dst_buffer->aligned_page_size();
 
-    CoreCoord core = {0, 0};
-    CoreRange core_range(core, core);
+    auto all_cores_vec = tt::tt_metal::corerange_to_cores(all_cores, num_cores, true);
+    CoreCoord collector_core = all_cores_vec[0];
+    const tt::tt_metal::IDevice* device = input.device();
+    auto collector_noc = device->worker_core_from_logical_core(collector_core);
 
     // --- Circular Buffers ---
 
-    // CB 0: BRISC input pages
+    // CB 0: BRISC input pages (per-shard)
     uint32_t cb_in_brisc = tt::CBIndex::c_0;
     tt::tt_metal::CircularBufferConfig cb_in_brisc_config =
         tt::tt_metal::CircularBufferConfig(h_brisc * input_page_size, {{cb_in_brisc, input_cb_data_format}})
             .set_page_size(cb_in_brisc, input_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, cb_in_brisc_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_in_brisc_config);
 
-    // CB 1: shared output histogram
+    // CB 1: local output histogram
     uint32_t cb_out_index = tt::CBIndex::c_1;
     tt::tt_metal::CircularBufferConfig cb_out_config =
         tt::tt_metal::CircularBufferConfig(output_page_size, {{cb_out_index, output_cb_data_format}})
             .set_page_size(cb_out_index, output_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, cb_out_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_out_config);
 
-    // CB 2: NCRISC input pages
+    // CB 2: NCRISC input pages (per-shard)
     uint32_t cb_in_ncrisc = tt::CBIndex::c_2;
     tt::tt_metal::CircularBufferConfig cb_in_ncrisc_config =
         tt::tt_metal::CircularBufferConfig(h_ncrisc * input_page_size, {{cb_in_ncrisc, input_cb_data_format}})
             .set_page_size(cb_in_ncrisc, input_page_size);
-    tt::tt_metal::CreateCircularBuffer(program, core_range, cb_in_ncrisc_config);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_in_ncrisc_config);
+
+    // CB 3: gather temp buffer (collector reads remote histograms here)
+    uint32_t cb_gather_tmp = tt::CBIndex::c_3;
+    tt::tt_metal::CircularBufferConfig cb_gather_config =
+        tt::tt_metal::CircularBufferConfig(output_page_size, {{cb_gather_tmp, output_cb_data_format}})
+            .set_page_size(cb_gather_tmp, output_page_size);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_gather_config);
 
     // --- Semaphores ---
-    auto init_sem_idx = tt::tt_metal::CreateSemaphore(program, core_range, 0);
-    auto done_sem_idx = tt::tt_metal::CreateSemaphore(program, core_range, 0);
+    auto init_sem_idx = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    auto done_sem_idx = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
+    auto gather_sem_idx = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
     // --- TensorAccessor args (shared by both kernels) ---
     std::vector<uint32_t> accessor_args;
@@ -81,6 +94,11 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
         1,  // is_initializer
         init_sem_idx,
         done_sem_idx,
+        gather_sem_idx,
+        cb_gather_tmp,
+        (uint32_t)collector_noc.x,
+        (uint32_t)collector_noc.y,
+        num_cores,
     };
     ct_args_brisc.insert(ct_args_brisc.end(), accessor_args.begin(), accessor_args.end());
 
@@ -96,6 +114,11 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
         0,  // is_initializer
         init_sem_idx,
         done_sem_idx,
+        gather_sem_idx,
+        cb_gather_tmp,
+        (uint32_t)collector_noc.x,
+        (uint32_t)collector_noc.y,
+        num_cores,
     };
     ct_args_ncrisc.insert(ct_args_ncrisc.end(), accessor_args.begin(), accessor_args.end());
 
@@ -103,7 +126,7 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
     tt::tt_metal::KernelHandle kernel_id_brisc = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/masked_bincount/device/kernels/reader_masked_bincount.cpp",
-        core_range,
+        all_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::RISCV_0_default,
@@ -113,32 +136,58 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
     tt::tt_metal::KernelHandle kernel_id_ncrisc = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/masked_bincount/device/kernels/reader_masked_bincount.cpp",
-        core_range,
+        all_cores,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = ct_args_ncrisc});
 
-    // --- Runtime args: src_addr, dst_addr, h_start ---
-    tt::tt_metal::SetRuntimeArgs(program, kernel_id_brisc, core, {src_buffer->address(), dst_buffer->address(), 0u});
-    tt::tt_metal::SetRuntimeArgs(
-        program, kernel_id_ncrisc, core, {src_buffer->address(), dst_buffer->address(), h_brisc});
+    // --- Per-core runtime args ---
+    for (uint32_t i = 0; i < all_cores_vec.size(); i++) {
+        uint32_t page_offset = i * shard_height;
+        bool is_coll = (all_cores_vec[i] == collector_core);
 
-    return cached_program_t{std::move(program), {kernel_id_brisc, kernel_id_ncrisc, core}};
+        std::vector<uint32_t> rt_brisc = {src_buffer->address(), dst_buffer->address(), page_offset, is_coll ? 1u : 0u};
+
+        if (is_coll) {
+            for (uint32_t j = 0; j < all_cores_vec.size(); j++) {
+                if (j == i) {
+                    continue;
+                }
+                auto noc = device->worker_core_from_logical_core(all_cores_vec[j]);
+                rt_brisc.push_back(noc.x);
+                rt_brisc.push_back(noc.y);
+            }
+        }
+
+        tt::tt_metal::SetRuntimeArgs(program, kernel_id_brisc, all_cores_vec[i], rt_brisc);
+        tt::tt_metal::SetRuntimeArgs(
+            program,
+            kernel_id_ncrisc,
+            all_cores_vec[i],
+            {src_buffer->address(), dst_buffer->address(), page_offset + h_brisc, 0u});
+    }
+
+    return cached_program_t{
+        std::move(program), {kernel_id_brisc, kernel_id_ncrisc, all_cores_vec, collector_core, num_cores}};
 }
 
 void MaskedBincountProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program, const MaskedBincountParams&, const Tensor& input, Tensor& tensor_return_value) {
     auto& program = cached_program.program;
-    auto& core = cached_program.shared_variables.core;
+    auto& all_cores_vec = cached_program.shared_variables.all_cores_vec;
+    auto kernel_id_brisc = cached_program.shared_variables.kernel_id_brisc;
+    auto kernel_id_ncrisc = cached_program.shared_variables.kernel_id_ncrisc;
 
-    auto& rt_brisc = GetRuntimeArgs(program, cached_program.shared_variables.kernel_id_brisc, core);
-    rt_brisc[0] = input.buffer()->address();
-    rt_brisc[1] = tensor_return_value.buffer()->address();
+    for (const auto& core : all_cores_vec) {
+        auto& rt_brisc = GetRuntimeArgs(program, kernel_id_brisc, core);
+        rt_brisc[0] = input.buffer()->address();
+        rt_brisc[1] = tensor_return_value.buffer()->address();
 
-    auto& rt_ncrisc = GetRuntimeArgs(program, cached_program.shared_variables.kernel_id_ncrisc, core);
-    rt_ncrisc[0] = input.buffer()->address();
-    rt_ncrisc[1] = tensor_return_value.buffer()->address();
+        auto& rt_ncrisc = GetRuntimeArgs(program, kernel_id_ncrisc, core);
+        rt_ncrisc[0] = input.buffer()->address();
+        rt_ncrisc[1] = tensor_return_value.buffer()->address();
+    }
 }
 
 }  // namespace ttnn::experimental::prim
