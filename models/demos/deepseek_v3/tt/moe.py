@@ -540,8 +540,8 @@ class MoE(SharedStateAddOn, AbstractModule):
                 dispatch_output_expert_scores,
             ) = ttnn.experimental.all_to_all_dispatch_metadata(
                 x_rm,
-                topk_experts_indices,  # TODO: (GR) may need to change shard spec of aho gate output
-                topk_experts_weights,  # TODO: (GR) may need to change shard spec of aho gate output
+                topk_experts_indices,  # TODO: (GR) need to change shard spec of aho gate module output (once it's merged)
+                topk_experts_weights,  # TODO: (GR) need to change shard spec of aho gate module output (once it's merged)
                 cfg["expert_mapping_tensor"],
                 **ccl.populate_all_to_all_dispatch_metadata_args(cfg["quad_ring_all_to_all_dispatch_metadata"]),
             )
@@ -550,6 +550,8 @@ class MoE(SharedStateAddOn, AbstractModule):
             ttnn.deallocate(x_rm)
             ttnn.deallocate(topk_experts_indices)
             ttnn.deallocate(topk_experts_weights)
+
+            # NOTE: we are actively working on fusing moe_compute and selective_reduce_combine
 
             w0_w1 = ()  # TODO: (GR)
             w2 = ()  # TODO: (GR)
