@@ -202,6 +202,7 @@ def main() -> int:
         ]
         page_table = _alloc_contiguous_page_table(batch=1, blocks_per_seq=blocks_per_seq)
 
+
         # Pre-load all layer weights before the decode loop.  Lazy loading
         # inside decode() can deadlock because ttnn.as_tensor (host->device DMA)
         # contends with in-flight device compute ops dispatched earlier in the
@@ -213,6 +214,12 @@ def main() -> int:
             f"Pre-loaded {runner.num_layers_to_run} layer(s) in {time.perf_counter() - t_preload:.1f}s",
             flush=True,
         )
+
+        # On single-device, enable weight eviction so all 47 layers fit in
+        # ~12.8 GB DRAM.  Multi-device systems have enough aggregate DRAM.
+        if mesh_cols <= 1:
+            os.environ.setdefault("GLM4_MOE_LITE_EVICT_WEIGHTS", "1")
+
 
         phase = str(args.phase)
 
@@ -277,6 +284,16 @@ def main() -> int:
         if use_trace:
             mode_label = f"trace-{args.trace_mode}"
 
+            t0 = time.perf_counter()
+            logits = None
+            for t in range(prompt_len):
+                tok_in = prompt_ids[:, t : t + 1].contiguous()
+                pos = torch.tensor([t], dtype=torch.int32)
+                logits = runner.decode(tokens=tok_in, start_pos=pos, page_table=page_table, kv_cache=kv_cache)
+            assert logits is not None
+            prefill_s = time.perf_counter() - t0
+
+        # -- Decode phase --
         generated: list[int] = []
         if use_sampling and phase == "decode":
             token_in = _sampling_result_to_token(last_sampling_result, mesh_device)
@@ -348,6 +365,10 @@ def main() -> int:
             else:
                 print(f"  single token: {step_times[0]:>10.1f} ms", flush=True)
         print("", flush=True)
+                f"prefill_s={prefill_s:.3f} decode_tok_s={decode_s/ max(1,len(generated)-1):.4f} tok_s={(len(generated)-1)/decode_s:.2f}",
+                flush=True,
+            )
+        print("")
         print(text, flush=True)
 
         # Cleanup.

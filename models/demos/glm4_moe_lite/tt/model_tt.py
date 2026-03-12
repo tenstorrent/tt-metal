@@ -440,6 +440,7 @@ class Glm4MoeLiteDenseOnlyTT:
         )
 
     def _ensure_layer_weights(self, layer_idx: int) -> Any:
+
         layer_idx = int(layer_idx)
         w = self.layer_weights.get(layer_idx)
         if w is not None:
@@ -453,10 +454,103 @@ class Glm4MoeLiteDenseOnlyTT:
             cache_dir=self.cache_dir / "layers",
             force_shared_expert_dense=False,
             enable_moe=self.enable_moe,
+            skip_fused_kv_branch=skip_fused_kv_branch,
         )
 
         self.layer_weights[layer_idx] = w
         return w
+
+    def _ensure_fused_kv_branch(self, layer_idx: int) -> None:
+        """Create fused KV branch L1 tensors for a single layer on demand.
+
+        These are WIDTH_SHARDED in L1 (~2.3 MB/layer) and cannot all be resident
+        simultaneously.  Call this just before the layer's forward pass, after a
+        device sync to prevent command-queue deadlocks.
+        """
+        w = self.layer_weights.get(int(layer_idx))
+        if w is None or w.fused_kv_branch is not None:
+            return
+        if os.environ.get("GLM4_MOE_LITE_FUSED_KV_BRANCH", "").strip() != "1":
+            return
+        ttnn.synchronize_device(self.device)
+        from models.demos.glm4_moe_lite.tt.layer_weights import _env_dense_dtype, _prepare_fused_kv_branch_weights
+
+        fused = _prepare_fused_kv_branch_weights(
+            device=self.device,
+            state=self.state,
+            layer_idx=int(layer_idx),
+            hparams=self.hparams,
+            cache_dir=self.cache_dir / "layers",
+            dense_dtype=_env_dense_dtype(),
+            mesh_mapper=None,
+        )
+        object.__setattr__(w, "fused_kv_branch", fused)
+
+    def _release_fused_kv_branch(self, layer_idx: int) -> None:
+        """Deallocate fused KV branch L1 tensors to free L1 for the next layer."""
+        w = self.layer_weights.get(int(layer_idx))
+        if w is None or w.fused_kv_branch is None:
+            return
+        fused = w.fused_kv_branch
+        for key in ("w_kv_a", "gamma", "trans_mat", "nope_output", "rope_output"):
+            t = fused.get(key)
+            if t is not None:
+                try:
+                    ttnn.deallocate(t, force=True)
+                except Exception:
+                    pass
+        object.__setattr__(w, "fused_kv_branch", None)
+
+    def _evict_layer_weights(self, layer_idx: int) -> None:
+        """Deallocate all device tensors for a layer to free DRAM.
+
+        After eviction the layer_weights entry is removed so
+        _ensure_layer_weights will reload from cache on the next pass.
+        """
+        layer_idx = int(layer_idx)
+        w = self.layer_weights.pop(layer_idx, None)
+        if w is None:
+            return
+
+        def _dealloc(t):
+            if t is not None and isinstance(t, ttnn.Tensor):
+                try:
+                    ttnn.deallocate(t, force=True)
+                except Exception:
+                    pass
+
+        # Norms (RMSNorm stores weight in .weight attribute)
+        for norm in (w.input_layernorm, w.q_a_layernorm, w.kv_a_layernorm, w.post_attention_layernorm):
+            if norm is not None and hasattr(norm, "weight"):
+                _dealloc(norm.weight)
+            if norm is not None and hasattr(norm, "weight_distributed"):
+                _dealloc(getattr(norm, "weight_distributed", None))
+
+        # Attention projections
+        for t in (w.w_q_a, w.w_q_b, w.w_kv_a, w.w_kv_b1, w.w_kv_b2, w.w_o, w.w_q_kv_a):
+            _dealloc(t)
+
+        # MLP
+        for t in (w.w_mlp_gate, w.w_mlp_up, w.w_mlp_down, w.w_mlp_gate_up):
+            _dealloc(t)
+
+        # MoE
+        if w.moe is not None:
+            for t in (
+                w.moe.w_gate,
+                w.moe.e_score_correction_bias,
+                w.moe.e_score_correction_bias_tile,
+                w.moe.w1_experts,
+                w.moe.w2_experts,
+                w.moe.w3_experts,
+                w.moe.w1w3_experts,
+            ):
+                _dealloc(t)
+
+        # Fused KV branch (L1 sharded)
+        if w.fused_kv_branch is not None:
+            for key in ("w_kv_a", "gamma", "trans_mat", "nope_output", "rope_output"):
+                _dealloc(w.fused_kv_branch.get(key))
 
     def _profile_record(
         self,
@@ -1226,9 +1320,16 @@ class Glm4MoeLiteDenseOnlyTT:
                 mesh_mapper=mesh_mapper,
             )
 
-        # Run decoder stack.
+        # Run decoder stack.  Weight eviction keeps at most one layer's DRAM
+        # weights resident, reloading each layer from the on-disk cache.  This
+        # trades I/O for fitting all 47 layers on a single Wormhole device
+        # (~12.8 GB DRAM, each MoE layer ~800 MB).
+        _evict_weights = os.environ.get("GLM4_MOE_LITE_EVICT_WEIGHTS", "").strip() == "1"
         for layer_idx in range(self.num_layers_to_run):
-            w = self._ensure_layer_weights(layer_idx)
+            # Drain in-flight device ops before weight loading to prevent deadlock.
+            ttnn.synchronize_device(self.device)
+            w = self._ensure_layer_weights(layer_idx, skip_fused_kv_branch=True)
+            self._ensure_fused_kv_branch(layer_idx)
             layer_profile: dict[str, float] | None = None
             if profile_on and (profile_layer < 0 or profile_layer == layer_idx):
                 layer_profile = {}
@@ -1253,6 +1354,9 @@ class Glm4MoeLiteDenseOnlyTT:
                 positions_main_tt=positions_main_tt,
                 positions_draft_tt=positions_draft_tt,
             )
+            self._release_fused_kv_branch(layer_idx)
+            if _evict_weights:
+                self._evict_layer_weights(layer_idx)
             if layer_profile is not None:
                 for key, value in layer_profile.items():
                     stage_key = f"layer_{key}"

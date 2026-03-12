@@ -536,6 +536,7 @@ def convert_decoder_layer_weights(
     cache_dir: Optional[Path] = None,
     force_shared_expert_dense: bool = False,
     enable_moe: bool = False,
+    skip_fused_kv_branch: bool = False,
 ) -> DecoderLayerTTWeights:
     """Convert weights for a single decoder layer.
 
@@ -728,7 +729,6 @@ def convert_decoder_layer_weights(
         mesh_mapper=kvb2_mapper,
     )
 
-    # w_o stays row-parallel even when ATTN_DP=1 (it MUST have all_reduce for correctness).
     w_o = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.o_proj.weight"],
@@ -840,9 +840,6 @@ def convert_decoder_layer_weights(
             cache_file=c("e_score_correction_bias_centered_v1"),
             dtype=ttnn.bfloat16,
         )
-        # Pre-convert bias to TILE layout for decode (T=1) to avoid per-step to_layout calls.
-        e_bias_tile = ttnn.to_layout(e_bias, ttnn.TILE_LAYOUT)
-
         experts_dtype = _env_experts_dtype()
         num_experts = int(hparams.n_routed_experts)
         moe_intermediate = int(hparams.moe_intermediate_size)
@@ -910,6 +907,20 @@ def convert_decoder_layer_weights(
                 dtype=experts_dtype,
             )
 
+        # Pre-convert bias to TILE layout for decode (T=1).  Created directly
+        # on host as TILE to avoid ttnn.to_layout on device, which deadlocks
+        # the ETH dispatch command queue when followed by host→device DMA.
+        e_bias_tile_host = e_bias_centered.contiguous().view(1, 1, 1, -1)
+        is_mesh = _is_mesh_device(device)
+        e_bias_tile = ttnn.as_tensor(
+            e_bias_tile_host,
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
+        )
+
         moe = MoELayerTTWeights(
             w_gate=w_gate,
             e_score_correction_bias=e_bias,
@@ -921,8 +932,12 @@ def convert_decoder_layer_weights(
         )
 
     # ---- Optional fused KV cache branch weights ----
+    # When skip_fused_kv_branch=True, L1-sharded tensors are NOT created here.
+    # This is used during eager pre-loading to avoid L1 OOM (each layer's fused
+    # KV branch consumes ~2.3 MB of L1; only ~10 layers fit simultaneously).
+    # The fused KV branch is then created lazily per-layer during forward.
     fused_kv_branch: Optional[dict] = None
-    if os.environ.get("GLM4_MOE_LITE_FUSED_KV_BRANCH", "").strip() == "1":
+    if not skip_fused_kv_branch and os.environ.get("GLM4_MOE_LITE_FUSED_KV_BRANCH", "").strip() == "1":
         fused_kv_branch = _prepare_fused_kv_branch_weights(
             device=device,
             state=state,
