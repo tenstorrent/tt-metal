@@ -171,7 +171,7 @@ public:
     bool compile_fabric() override;
     [[deprecated("This is an internal function. It will be removed.")]]
     void configure_fabric() override;
-    void init_fabric() override;
+    void init_fabric();
     void init_realtime_profiler_socket();
     D2HSocket* get_realtime_profiler_socket() const;
     bool close() override;

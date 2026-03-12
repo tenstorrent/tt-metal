@@ -1267,6 +1267,8 @@ void MeshDeviceImpl::configure_fabric() {
     reference_device()->configure_fabric();
 }
 
+void MeshDeviceImpl::init_fabric() {}
+
 // Sync marker ID - must match device-side REALTIME_PROFILER_SYNC_MARKER_ID
 constexpr uint32_t REALTIME_PROFILER_SYNC_MARKER_ID = 0xFFFFFFFF;
 

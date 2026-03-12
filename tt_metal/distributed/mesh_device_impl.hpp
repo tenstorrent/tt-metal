@@ -283,7 +283,7 @@ public:
     void init_command_queue_device() override;
     bool compile_fabric() override;
     void configure_fabric() override;
-    void init_fabric() override;
+    void init_fabric();
     void init_realtime_profiler_socket(const std::shared_ptr<MeshDevice>& mesh_device);
     void run_realtime_profiler_sync(RealtimeProfilerDeviceState& dev_state, uint32_t num_samples);
     D2HSocket* get_realtime_profiler_socket() const;

@@ -176,6 +176,10 @@ void socket_notify_receiver(const SocketSenderInterface& socket) {
 }
 
 void pcie_socket_notify_receiver(const SocketSenderInterface& socket) {
+    volatile tt_l1_ptr sender_socket_md* socket_config =
+        reinterpret_cast<volatile tt_l1_ptr sender_socket_md*>(socket.config_addr);
+    socket_config->bytes_sent = socket.bytes_sent;
+
     uint32_t local_bytes_sent_addr = socket.config_addr;
     tt_l1_ptr uint32_t* socket_config_words = reinterpret_cast<tt_l1_ptr uint32_t*>(socket.config_addr);
     // 8 word of MD + 4 Words of Ack

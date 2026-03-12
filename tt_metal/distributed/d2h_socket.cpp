@@ -11,6 +11,8 @@
 #include <tt-metalium/tt_align.hpp>
 #include <immintrin.h>
 #include <tt-logger/tt-logger.hpp>
+#include <cstring>
+#include <chrono>
 
 namespace tt::tt_metal::distributed {
 
@@ -20,6 +22,10 @@ struct SocketSenderSize_ {
     const uint32_t ack_size_bytes = tt::align(sizeof(uint32_t), l1_alignment);
     const uint32_t enc_size_bytes = tt::align(sizeof(sender_downstream_encoding), l1_alignment);
 };
+
+D2HSocket::D2HSocket(
+    const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size) :
+    D2HSocket(mesh_device, sender_core, BufferType::L1, fifo_size, 0) {}
 
 D2HSocket::D2HSocket(
     const std::shared_ptr<MeshDevice>& mesh_device,
@@ -277,11 +283,42 @@ void D2HSocket::notify_sender() {
         device, sender_core_.core_coord, bytes_acked_addr, ack_data, CoreType::WORKER);
 }
 
-void D2HSocket::barrier() {
-    volatile uint32_t bytes_sent_value = using_hugepage_ ? *hugepage_bytes_sent_host_ptr_ : bytes_sent_buffer_->at(0);
-    while (bytes_acked_ - bytes_sent_value != 0) {
-        bytes_sent_value = using_hugepage_ ? *hugepage_bytes_sent_host_ptr_ : bytes_sent_buffer_->at(0);
+void D2HSocket::read(void* data, uint32_t num_pages, bool notify_sender) {
+    TT_FATAL(page_size_ > 0, "Page size must be set before reading.");
+    uint32_t num_bytes = num_pages * page_size_;
+    TT_FATAL(num_bytes <= fifo_curr_size_, "Cannot read more pages than the socket FIFO size.");
+    wait_for_pages(num_pages);
+    auto* src = using_hugepage_ ? reinterpret_cast<uint32_t*>(hugepage_data_host_ptr_) + (read_ptr_ / sizeof(uint32_t))
+                                : data_buffer_->data() + (read_ptr_ / sizeof(uint32_t));
+    std::memcpy(data, src, num_bytes);
+    pop_pages(num_pages);
+    if (notify_sender) {
+        this->notify_sender();
     }
 }
+
+void D2HSocket::barrier(std::optional<uint32_t> timeout_ms) {
+    volatile uint32_t bytes_sent_value = using_hugepage_ ? *hugepage_bytes_sent_host_ptr_ : bytes_sent_buffer_->at(0);
+    auto start_time = std::chrono::high_resolution_clock::now();
+    while (bytes_acked_ - bytes_sent_value != 0) {
+        bytes_sent_value = using_hugepage_ ? *hugepage_bytes_sent_host_ptr_ : bytes_sent_buffer_->at(0);
+        if (timeout_ms.has_value()) {
+            auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                                  std::chrono::high_resolution_clock::now() - start_time)
+                                  .count();
+            if (elapsed_ms > timeout_ms.value()) {
+                TT_THROW(
+                    "Timeout waiting for host to acknowledge data over D2H socket. Bytes sent: {}, Bytes "
+                    "acknowledged: {}.",
+                    bytes_sent_,
+                    bytes_sent_value);
+            }
+        }
+    }
+}
+
+std::vector<MeshCoreCoord> D2HSocket::get_active_cores() const { return {sender_core_}; }
+
+MeshDevice* D2HSocket::get_mesh_device() const { return config_buffer_->device(); }
 
 }  // namespace tt::tt_metal::distributed

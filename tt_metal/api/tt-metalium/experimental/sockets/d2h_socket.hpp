@@ -20,6 +20,8 @@ public:
         uint32_t fifo_size,
         uint32_t l1_data_buffer_size = 0);
 
+    D2HSocket(const std::shared_ptr<MeshDevice>& mesh_device, const MeshCoreCoord& sender_core, uint32_t fifo_size);
+
     void wait_for_pages(uint32_t num_pages);
     uint32_t pages_available();
     void pop_pages(uint32_t num_pages);
@@ -28,7 +30,11 @@ public:
     uint32_t get_config_buffer_address() const { return config_buffer_->address(); }
     uint32_t* get_read_ptr() const;
     void set_page_size(uint32_t page_size);
-    void barrier();
+    void read(void* data, uint32_t num_pages, bool notify_sender = true);
+    void barrier(std::optional<uint32_t> timeout_ms = std::nullopt);
+
+    std::vector<MeshCoreCoord> get_active_cores() const;
+    MeshDevice* get_mesh_device() const;
 
     uint32_t get_l1_data_buffer_address() const { return l1_data_buffer_address_; }
     uint32_t get_l1_data_buffer_size() const { return l1_data_buffer_size_; }
