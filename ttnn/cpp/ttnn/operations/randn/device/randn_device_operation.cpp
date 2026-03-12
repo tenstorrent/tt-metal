@@ -59,29 +59,6 @@ tt::stl::hash::hash_t RandnDeviceOperation::compute_program_hash(
     return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
 }
 
-std::tuple<RandnDeviceOperation::operation_attributes_t, RandnDeviceOperation::tensor_args_t>
-RandnDeviceOperation::invoke(
-    const ttnn::Shape& shape,
-    const DataType dtype,
-    const Layout layout,
-    const MemoryConfig& memory_config,
-    MeshDevice& device,
-    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
-    const std::optional<uint32_t> seed) {
-    return {
-        operation_attributes_t{
-            shape,
-            dtype,
-            layout,
-            memory_config,
-            std::addressof(device),
-            init_device_compute_kernel_config(
-                device.arch(), compute_kernel_config, MathFidelity::HiFi4, false, true, false, true),
-            seed,
-        },
-        tensor_args_t{}};
-}
-
 }  // namespace ttnn::operations::randn
 
 namespace ttnn::prim {
