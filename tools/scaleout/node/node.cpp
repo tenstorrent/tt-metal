@@ -527,21 +527,21 @@ std::unique_ptr<NodeBase> create_node_instance(NodeType node_type) {
             } else {
                 return std::make_unique<BHGalaxyRevABNode>();
             }
-        
+
         case NodeType::BH_GALAXY_X_TORUS:
             if (get_bh_glx_rev_from_system() == NodeType::BH_GALAXY_REV_C) {
                 return std::make_unique<BHGalaxyRevCXTorusNode>();
             } else {
                 return std::make_unique<BHGalaxyRevABXTorusNode>();
             }
-        
+
         case NodeType::BH_GALAXY_Y_TORUS:
             if (get_bh_glx_rev_from_system() == NodeType::BH_GALAXY_REV_C) {
                 return std::make_unique<BHGalaxyRevCYTorusNode>();
             } else {
                 return std::make_unique<BHGalaxyRevABYTorusNode>();
             }
-        
+
         case NodeType::BH_GALAXY_XY_TORUS:
             if (get_bh_glx_rev_from_system() == NodeType::BH_GALAXY_REV_C) {
                 return std::make_unique<BHGalaxyRevCXYTorusNode>();
