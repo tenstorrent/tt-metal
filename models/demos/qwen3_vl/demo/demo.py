@@ -416,22 +416,19 @@ def test_demo(
             # text-only
             num_image_tokens.append([0] * batch_size)
 
-        # Vision prefill
         logger.info(f"Vision model prefill batch {batch_idx}")
-        if not vision_model_traced:
-            image_embeds, deepstack_visual_embeds = (
-                visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
-                if "pixel_values" in inputs
-                else (torch.tensor([], dtype=torch.bfloat16), None)
-            )
-            vision_model_traced = True
-        profiler.start(f"vision_model_prefill", iteration=batch_idx)
-        image_embeds, deepstack_visual_embeds = (
-            visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
-            if "pixel_values" in inputs
-            else (torch.tensor([], dtype=torch.bfloat16), None)
-        )
-        profiler.end(f"vision_model_prefill", iteration=batch_idx)
+        if "pixel_values" not in inputs:
+            image_embeds = torch.tensor([], dtype=torch.bfloat16)
+            deepstack_visual_embeds = None
+        else:
+            if not vision_model_traced:
+                _pv = inputs.pixel_values[: inputs.image_grid_thw[0].prod().item()]
+                _gw = inputs.image_grid_thw[:1]
+                visual_model(_pv, grid_thw=_gw)
+                vision_model_traced = True
+            profiler.start(f"vision_model_prefill", iteration=batch_idx)
+            image_embeds, deepstack_visual_embeds = visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
+            profiler.end(f"vision_model_prefill", iteration=batch_idx)
 
         # Prepare text + vision inputs for decoder model
         logger.info(f"Prepare text + vision inputs for decoder model batch {batch_idx}")

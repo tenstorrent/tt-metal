@@ -390,8 +390,11 @@ class VisionAttention(LightweightModule):
         )
 
         # FIXME: surely ttnn.linear bias should work?
+        # Use in-place add to avoid OOM from allocating a new tensor
         if self.wqkv_bias_prefill is not None:
-            xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
+            xqkv_fused = ttnn.add(
+                xqkv_fused, self.wqkv_bias_prefill, output_tensor=xqkv_fused, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
@@ -535,8 +538,11 @@ class VisionAttention(LightweightModule):
             program_config=self.model_config["VISION_WO_PREFILL_PROGCFG"](seq_len),
         )
         # FIXME: surely ttnn.linear bias should work?
+        # Use in-place add to avoid OOM from allocating a new tensor
         if self.wo_bias_prefill is not None:
-            output_11SH = output_11SH + self.wo_bias_prefill
+            output_11SH = ttnn.add(
+                output_11SH, self.wo_bias_prefill, output_tensor=output_11SH, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
 
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
