@@ -364,11 +364,12 @@ DPrintParser::ParseResult DPrintParser::parse(const uint8_t* data, size_t len) {
                 intermediate_stream_ << std::dec;
                 AssertSize(sz, 1);
                 break;
-            case DPrintUINT8:
-                // iostream default uint8_t printing is as char, not an int
-                intermediate_stream_ << *reinterpret_cast<const uint8_t*>(ptr);
+            case DPrintUINT8: {
+                uint8_t value;
+                memcpy(&value, ptr, sizeof(uint8_t));
+                intermediate_stream_ << static_cast<uint32_t>(value);  // uint8_t is unsigned char; widen to print as number
                 AssertSize(sz, 1);
-                break;
+            } break;
             case DPrintUINT16: {
                 uint16_t value;
                 memcpy(&value, ptr, sizeof(uint16_t));
