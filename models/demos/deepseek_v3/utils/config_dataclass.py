@@ -6,6 +6,8 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Any, Union
 
+import torch
+
 import ttnn
 
 optimal_topology = ttnn.Topology.Ring if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.Topology.Linear
@@ -394,6 +396,100 @@ class AllToAllCombineConfig(OpConfigBase):
     memory_config: ttnn.MemoryConfig
     num_links: int | None = None
     topology: ttnn.Topology = optimal_topology
+
+
+@dataclass
+class AllToAllDispatchMetadataConfig(OpConfigBase):
+    """Common parameters for a ttnn.all_to_all_dispatch_metadata op"""
+
+    @classmethod
+    def create_preallocated_dispatch_output_tensors(
+        mesh_device, mesh_shape, dispatch_devices, batch, hidden_size, num_experts_per_tok
+    ):
+        preallocated_dispatch_output_sparse_buffer = ttnn.from_torch(
+            torch.zeros([dispatch_devices, batch, hidden_size], dtype=torch.bfloat16),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape),
+        )
+
+        preallocated_dispatch_output_expert_indices = ttnn.from_torch(
+            torch.zeros([dispatch_devices, batch, num_experts_per_tok], dtype=torch.uint16),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.uint16,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9))}),
+                    [batch, num_experts_per_tok],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape),
+        )
+
+        preallocated_dispatch_output_expert_scores = ttnn.from_torch(
+            torch.zeros([dispatch_devices, batch, num_experts_per_tok], dtype=torch.bfloat16),
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.MemoryConfig(
+                ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+                ttnn.BufferType.L1,
+                ttnn.ShardSpec(
+                    ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(6, 9), ttnn.CoreCoord(6, 9))}),
+                    [batch, num_experts_per_tok],
+                    ttnn.ShardOrientation.ROW_MAJOR,
+                ),
+            ),
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=mesh_shape),
+        )
+
+        return (
+            preallocated_dispatch_output_sparse_buffer,
+            preallocated_dispatch_output_expert_indices,
+            preallocated_dispatch_output_expert_scores,
+        )
+
+    cluster_axis: int | None = None
+    num_links: int | None = 4
+    worker_mode: ttnn.WorkerMode
+    dispatch_algorithm: ttnn.DispatchAlgorithm
+    output_tensors: list[ttnn.Tensor] | None = None
+    cross_device_semaphore: ttnn.global_semaphore.global_semaphore | None = None
+
+
+@dataclass
+class MoEComputeConfig(OpConfigBase):
+    """Common parameters for a ttnn.moe_compute op"""
+
+    output_height_shard_dim: int
+    output_width_shard_dim: int
+    cluster_axis: int | None = None
+
+
+@dataclass
+class SelectiveReduceCombineConfig(OpConfigBase):
+    """Common parameters for a ttnn.selective_reduce_combine op"""
+
+    hidden_size: int
+    batch: int
+    seq: int
+    select_experts_k: int
+    experts: int
+    axis: int | None = None
+    topology: ttnn.Topology = ttnn.Topology.Ring
+    num_links: int = 4
+    token_parallel_core_dim: int
+    data_parallel_core_dim: int
+    worker_cores: list[ttnn.CoreCoord]
+    mux_core_range_set: ttnn.CoreRangeset
+    output_tensor: ttnn.Tensor | None = None
+    optional_cross_device_semaphore: ttnn.global_semaphore.global_semaphore | None = None
 
 
 @dataclass

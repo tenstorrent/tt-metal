@@ -17,11 +17,14 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
     AllToAllCombineConfig,
     AllToAllDispatchConfig,
+    AllToAllDispatchMetadataConfig,
     DeepseekMoEReduceScatterConfig,
     MeshDeviceStub,
+    MoEComputeConfig,
     MulConfig,
     ReduceScatterAsyncMinimalConfig,
     RepeatConfig,
+    SelectiveReduceCombineConfig,
 )
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import (
@@ -78,8 +81,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         Returns:
             ModelState containing shared tensors
         """
-        num_devices = mesh_device.get_num_devices()
-        num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
         num_dispatch_device_rows = mesh_device.shape[0]
 
         logger.info(
@@ -116,7 +117,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         logger.info(f"Created MoE remap topk mask in {perf_counter() - remap_mask_start:.2f}s")
 
         return {
-            "expert_mapping_tensors": expert_mapping_tensors,
             "remap_topk_mask": remap_topk_mask,
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
         }
@@ -168,6 +168,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         """
 
         num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
+        expert_mapping_tensor = cls._create_expert_mapping_tensor(mesh_device, mode, num_experts_per_device)
 
         if mode == "decode":
             memory_config = ttnn.L1_MEMORY_CONFIG
@@ -189,7 +190,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             )
 
             # Construct the config
-            return {
+            decode_config = {
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 "num_devices": mesh_device.get_num_devices(),
                 "fabric_config": fabric_config,
@@ -197,6 +198,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
+                "expert_mapping_tensor": expert_mapping_tensor,
                 "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
                 "all_to_all_dispatch_output_memory_config": memory_config,
                 "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -235,6 +237,44 @@ class MoE(SharedStateAddOn, AbstractModule):
                     cluster_axis=1,
                 ),
             }
+
+            # optimized MoE ops only functional for quad torus
+            if ["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING and mesh_device.shape[0] == 16:
+                batch = USERS_PER_ROW * mesh_device.shape[0]
+                seq_len = 1
+
+                decode_config["quad_ring_all_to_all_dispatch_metadata"] = AllToAllDispatchMetadataConfig(
+                    cluster_axis=0,
+                    worker_mode=ttnn.WorkerMode.DIRECT,
+                    dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
+                    output_tensors=AllToAllDispatchMetadataConfig.create_preallocated_dispatch_output_tensors(
+                        mesh_device,
+                        mesh_device.shape,
+                        mesh_device.shape[0],
+                        batch,
+                        HIDDEN_SIZE,
+                        hf_config.num_experts_per_tok,
+                    ),
+                )
+                decode_config["quad_ring_moe_compute"] = MoEComputeConfig(
+                    output_height_shard_dim=4,
+                    output_width_shard_dim=4,
+                    cluster_axis=0,
+                )
+                decode_config["quad_ring_selective_reduce_combine"] = SelectiveReduceCombineConfig(
+                    hidden_size=hf_config.hidden_size,
+                    batch=batch,
+                    seq=seq_len,
+                    select_experts_k=hf_config.num_experts_per_tok,
+                    experts=hf_config.n_routed_experts,
+                    axis=0,
+                    token_parallel_core_dim=4,
+                    data_parallel_core_dim=4,
+                    worker_cores=ttnn.experimental.get_moe_combine_cores(mesh_device),
+                    mux_core_range_set=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(4, 7))}),
+                )
+
+            return decode_config
         else:
             memory_config = ttnn.DRAM_MEMORY_CONFIG
             # Construct the config
@@ -273,6 +313,56 @@ class MoE(SharedStateAddOn, AbstractModule):
             }
 
     @classmethod
+    def _create_expert_mapping_tensor(
+        mesh_device: ttnn.Device,
+        mode: str,
+        num_experts_per_device: int,
+    ):
+        num_devices = mesh_device.get_num_devices()
+        if mode == "decode":
+            # optimized MoE ops only functional for quad torus
+            num_dispatch_devices = mesh_device.shape[0]
+            if ["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING and num_dispatch_devices == 16:
+                num_experts = num_devices * num_experts_per_device
+                tp_size = mesh_device.shape[1]
+                num_experts_per_cluster = num_experts // tp_size
+
+                e = torch.arange(num_experts, dtype=torch.int32)
+                torch_expert_mapping_tensor = (
+                    (
+                        ((e % num_experts_per_cluster) // num_experts_per_device) * tp_size
+                        + (e // num_experts_per_cluster)
+                    )
+                    .unsqueeze(0)
+                    .repeat(num_devices, 1)
+                )
+            else:
+                torch_expert_mapping_tensor = (
+                    torch.eye(num_devices, dtype=torch.int32)
+                    .repeat_interleave(num_experts_per_device, dim=0)
+                    .unsqueeze(0)
+                    .unsqueeze(0)
+                )
+        else:
+            torch_expert_mapping_tensor = (
+                torch.eye(num_devices, dtype=torch.int32)
+                .repeat_interleave(num_experts_per_device, dim=0)
+                .unsqueeze(0)
+                .unsqueeze(0)
+            )
+
+        expert_mapping_tensor = ttnn.from_torch(
+            torch_expert_mapping_tensor,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            dtype=ttnn.uint16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+        return expert_mapping_tensor
+
+    @classmethod
     def decode_model_config(
         cls,
         hf_config: PretrainedConfig,
@@ -293,7 +383,34 @@ class MoE(SharedStateAddOn, AbstractModule):
         return cls.model_config(hf_config, mesh_device, fabric_config, "prefill", topk_fallback=topk_fallback)
 
     @classmethod
-    def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+    def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+        seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
+        batch_size_per_device = x.shape[
+            -2
+        ]  # Input is expected to be DP. In prefill, this is equivalent to seq_len_per_device
+        batch_size = batch_size_per_device * cfg["num_dispatch_devices"]  # Global batch size
+
+        # Note: all_gather is handled by the caller (decoder block or test)
+
+        # MoE Gate
+        topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
+
+        # MOE
+        post_combine_output_tensor = cls._fwd_decode_moe(
+            x,
+            topk_experts_indices,
+            topk_experts_weights,
+            cfg,
+            batch_size_per_device,
+            batch_size,
+            seq_len,
+        )
+
+        # Note: sum_experts and reduce_scatter is handled by the caller (decoder block or test)
+        return post_combine_output_tensor
+
+    @classmethod
+    def forward_prefill(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
         # Chunk the full MoE prefill path at 16K tokens to avoid OOM.
         # Use global token count (local seq_len * num_dispatch_devices) to decide.
         chunk_tokens = int(cfg.get("prefill_chunk_size", 16384))
@@ -302,7 +419,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         if global_tokens > chunk_tokens:
             chunk_size = max(1, chunk_tokens // max(1, num_dispatch_devices))
             return cls._forward_chunked_prefill(x, cfg, chunk_size)
-        return cls._forward_impl(x, cfg)
+        return cls._forward_prefill_impl(x, cfg)
 
     @classmethod
     def _forward_chunked_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig, chunk_size: int) -> ttnn.Tensor:
@@ -323,7 +440,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         return output
 
     @classmethod
-    def _forward_impl(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+    def _forward_prefill_impl(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
         # Validate input dimensions
         hidden_size = cfg["hidden_size"]
         mesh_device = cfg.get("mesh_device")
@@ -338,8 +455,6 @@ class MoE(SharedStateAddOn, AbstractModule):
                 f"(hidden_size={hidden_size}, tp_size={tp_size})"
             )
 
-        # breakpoint()
-        ccl = cfg["ccl"]  # CCL runtime initialization in execution order
         seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
         batch_size_per_device = x.shape[
             -2
@@ -352,12 +467,10 @@ class MoE(SharedStateAddOn, AbstractModule):
         topk_experts_weights, topk_experts_indices = cls._fwd_moe_gate(x, cfg)
 
         # Repeat + Permute Expert weights
-
         topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
 
         # MOE
-
-        post_combine_output_tensor = cls._fwd_moe(
+        post_combine_output_tensor = cls._fwd_prefill_moe(
             x,
             topk_experts_indices,
             topk_experts_weights,
@@ -368,7 +481,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         )
 
         # Note: sum_experts and reduce_scatter is handled by the caller (decoder block or test)
-
         return post_combine_output_tensor
 
     @classmethod
@@ -387,7 +499,150 @@ class MoE(SharedStateAddOn, AbstractModule):
         return topk_experts_weights
 
     @classmethod
-    def _fwd_moe(
+    def _fwd_decode_moe(
+        cls,
+        x: ttnn.Tensor,
+        topk_experts_indices: ttnn.Tensor,
+        topk_experts_weights: ttnn.Tensor,
+        cfg: RunDecodeConfig | RunPrefillConfig,
+        batch_size_per_device: int,
+        batch_size: int,
+        seq_len: int,
+    ) -> ttnn.Tensor:
+        x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+        x_rm = ttnn.reshape(
+            x_rm,
+            shape=(batch_size_per_device, 1, seq_len, cfg["hidden_size"]),
+        )
+
+        if cfg["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING and cfg["num_dispatch_devices"] == 16:
+            ccl = cfg["ccl"]
+
+            preallocated_combine_output = ttnn.moreh_full(
+                shape=[cfg["num_experts_per_tok"], batch_size_per_device, cfg["hidden_size"]],
+                fill_value=0,
+                device=cfg["mesh_device"],
+                dtype=ttnn.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            (
+                dispatch_output_sparse_buffer,
+                dispatch_output_expert_indices,
+                dispatch_output_expert_scores,
+            ) = ttnn.experimental.all_to_all_dispatch_metadata(
+                x_rm,
+                topk_experts_indices,  # TODO: (GR) may need to change shard spec of aho gate output
+                topk_experts_weights,  # TODO: (GR) may need to change shard spec of aho gate output
+                cfg["expert_mapping_tensor"],
+                **ccl.populate_all_to_all_dispatch_metadata_args(cfg["quad_ring_all_to_all_dispatch_metadata"]),
+            )
+
+            # TODO: (GR)
+            w0_w1 = ()
+            w2 = ()
+            layer_id = 0
+            (
+                compute_output_token_counts,
+                compute_output_dense_expert_activation,
+                compute_ouput_dense_e_t,
+                _,  # tile layout output of selective tilize (same buffer as output)
+                compute_output,
+            ) = ttnn.experimental.moe_compute(
+                dispatch_output_sparse_buffer,
+                dispatch_output_expert_indices,
+                dispatch_output_expert_scores,
+                cfg["expert_mapping_tensor"],
+                w0_w1,  # TODO: (GR)
+                w2,  # TODO: (GR)
+                layer_id=layer_id,  # TODO: (GR)
+                **cfg["quad_ring_moe_compute"],
+            )
+
+            combine_output = ttnn.experimental.selective_reduce_combine(
+                compute_output,
+                compute_output_dense_expert_activation,
+                compute_ouput_dense_e_t,
+                compute_output_token_counts,
+                output_tensor=preallocated_combine_output,
+                **ccl.populate_selective_reduce_combine_args(cfg["quad_ring_selective_reduce_combine"]),
+            )
+
+            combine_output = ttnn.to_layout(
+                combine_output,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.L1_MEMORY_CONFIG,
+            )
+            combine_output = ttnn.unsqueeze(combine_output, dim=1)
+
+            topk_experts_weights = ttnn.permute(topk_experts_weights, (3, 1, 0, 2), memory_config=ttnn.L1_MEMORY_CONFIG)
+            topk_experts_weights = ttnn.to_layout(
+                topk_experts_weights, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+
+            post_combine_output_tensor = ttnn.mul(
+                combine_output, topk_experts_weights, memory_config=ttnn.L1_MEMORY_CONFIG
+            )
+        else:
+            topk_experts_indices_rm = ttnn.to_layout(topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT)
+            topk_experts_indices_rm = ttnn.reshape(
+                topk_experts_indices_rm, shape=(batch_size_per_device, 1, seq_len, cfg["num_experts_per_tok"])
+            )
+
+            all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
+                x_rm,
+                topk_experts_indices_rm,
+                cfg["expert_mapping_tensor"],
+                **cfg["all_to_all_dispatch"],
+            )
+
+            post_all_to_all_dispatch_output = ttnn.reshape(
+                all_to_all_dispatch_output_tensors, shape=(1, 1, batch_size * seq_len, cfg["hidden_size"])
+            )
+            post_all_to_all_dispatch_output = ttnn.to_layout(post_all_to_all_dispatch_output, ttnn.TILE_LAYOUT)
+            # repeat remap_topk_mask for the num_tokens known at runtime
+
+            remap_topk_mask = ttnn.repeat(
+                cfg["remap_topk_mask"], ttnn.Shape((1, batch_size_per_device, 1, 1))
+            )  # TODO: move to static path
+
+            _, sparsity_t = ttnn.moe_expert_token_remap(
+                remap_topk_mask,
+                cfg["expert_mapping_tensor"],
+                all_to_all_dispatch_metadata_tensors,
+                reduction_size=cfg["sparsity_block_size"],
+            )
+
+            experts_output = MoEExperts._forward(post_all_to_all_dispatch_output, sparsity_t, cfg["moe_experts"])
+            ttnn.deallocate(post_all_to_all_dispatch_output)
+
+            experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
+            experts_output = ttnn.reshape(
+                experts_output, shape=(cfg["num_experts_per_device"], batch_size, seq_len, cfg["hidden_size"])
+            )
+
+            all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
+                experts_output,
+                all_to_all_dispatch_metadata_tensors,
+                cfg["expert_mapping_tensor"],
+                **cfg["all_to_all_combine"],
+            )
+
+            post_combine_output_tensor = ttnn.reshape(
+                all_to_all_combine_output_tensors,
+                shape=(cfg["num_experts_per_tok"], 1, batch_size_per_device * seq_len, cfg["hidden_size"]),
+            )
+            post_combine_output_tensor = ttnn.to_layout(post_combine_output_tensor, ttnn.TILE_LAYOUT)
+
+            post_combine_output_tensor = ttnn.mul(
+                post_combine_output_tensor, topk_experts_weights, **cfg["mul_experts_output_with_weights"]
+            )
+
+        return post_combine_output_tensor
+
+    @classmethod
+    def _fwd_prefill_moe(
         cls,
         x: ttnn.Tensor,
         topk_experts_indices: ttnn.Tensor,
@@ -529,32 +784,13 @@ class MoE(SharedStateAddOn, AbstractModule):
         return ttnn.reduce_scatter(post_combine_output_tensor, **rs_kwargs)
 
     @classmethod
-    def forward_prefill(
-        cls, x: ttnn.Tensor, cfg: RunPrefillConfig, handle_tensor_parallel: bool = False
-    ) -> ttnn.Tensor:
-        # Handle all_gather if tensor parallel is enabled
-        if handle_tensor_parallel:
-            x = cls._fwd_all_gather(x, cfg)
-
-        # Run the forward pass
-        output = cls.forward(x, cfg)
-
-        # Handle sum_experts and reduce_scatter if tensor parallel is enabled
-        if handle_tensor_parallel:
-            ccl = cfg["ccl"]
-            output = ttnn.sum(output, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
-            output = cls._fwd_reduce_scatter(output, cfg, ccl)
-
-        return output
-
-    @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig, handle_tensor_parallel: bool = False) -> ttnn.Tensor:
         # Handle all_gather if tensor parallel is enabled
         if handle_tensor_parallel:
             x = cls._fwd_all_gather(x, cfg)
 
         # Run the forward pass
-        output = cls.forward(x, cfg)
+        output = cls.forward_decode(x, cfg)
 
         # Handle sum_experts and reduce_scatter if tensor parallel is enabled
         if handle_tensor_parallel:
@@ -574,5 +810,24 @@ class MoE(SharedStateAddOn, AbstractModule):
             else:
                 output = ttnn.sum(output, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
                 output = cls._fwd_reduce_scatter(output, cfg, ccl)
+
+        return output
+
+    @classmethod
+    def forward_prefill(
+        cls, x: ttnn.Tensor, cfg: RunPrefillConfig, handle_tensor_parallel: bool = False
+    ) -> ttnn.Tensor:
+        # Handle all_gather if tensor parallel is enabled
+        if handle_tensor_parallel:
+            x = cls._fwd_all_gather(x, cfg)
+
+        # Run the forward pass
+        output = cls.forward_prefill(x, cfg)
+
+        # Handle sum_experts and reduce_scatter if tensor parallel is enabled
+        if handle_tensor_parallel:
+            ccl = cfg["ccl"]
+            output = ttnn.sum(output, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
+            output = cls._fwd_reduce_scatter(output, cfg, ccl)
 
         return output
