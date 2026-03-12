@@ -176,7 +176,6 @@ def kv_cache_update(
         ttnn.experimental.paged_update_cache(
             kvpe_cache, kvpe_new_sharded, update_idxs_tensor=tt_positions, **_puc_kwargs
         )
-
     if cfg.sync_after_kv_update:
         ttnn.synchronize_device(device)
     ttnn.deallocate(kvpe_new_sharded, force=False)

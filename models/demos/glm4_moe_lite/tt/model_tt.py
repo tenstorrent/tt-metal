@@ -439,7 +439,8 @@ class Glm4MoeLiteDenseOnlyTT:
             mtp_decoder_w=mtp_decoder_w,
         )
 
-    def _ensure_layer_weights(self, layer_idx: int, *, skip_fused_kv_branch: bool = False) -> Any:
+    def _ensure_layer_weights(self, layer_idx: int) -> Any:
+
         layer_idx = int(layer_idx)
         w = self.layer_weights.get(layer_idx)
         if w is not None:

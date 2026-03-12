@@ -431,19 +431,21 @@ def _prepare_fused_kv_branch_weights(
     kv_a_shuffled = kv_a_torch.transpose(-2, -1).contiguous()  # [2048, 576]
 
     W_shard_spec = ttnn.ShardSpec(spec_crs, (hidden_size, shard_width), ttnn.ShardOrientation.ROW_MAJOR)
-    W_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, W_shard_spec)
+    W_l1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, W_shard_spec)
     is_mesh = _is_mesh_device(device)
     # The fused op runs the full matmul on each device independently, so the
     # weight must be REPLICATED across the mesh (not TP-sharded).  Ignore the
     # caller-provided mesh_mapper which may be a TP row-parallel shard mapper.
     w_mapper = ttnn.ReplicateTensorToMesh(device) if is_mesh else None
 
+    # Store weight in DRAM to avoid L1 OOM when all 47 layers are pre-loaded.
+    # The forward pass reshards to L1 on demand before the fused kernel.
     w_kv_a_fused = ttnn.from_torch(
         kv_a_shuffled.unsqueeze(0).unsqueeze(0),  # [1, 1, 2048, 576]
         dtype=dense_dtype,
         layout=ttnn.TILE_LAYOUT,
         device=device,
-        memory_config=W_mem_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=w_mapper if is_mesh else None,
     )
 
@@ -488,10 +490,9 @@ def _prepare_fused_kv_branch_weights(
     nope_output_fused = ttnn.from_torch(
         torch.zeros((1, kv_lora_rank), dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=nope_output_mem_config,
-        tile=TILE_1x32,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
     )
 
@@ -505,15 +506,15 @@ def _prepare_fused_kv_branch_weights(
     rope_output_fused = ttnn.from_torch(
         torch.zeros((1, qk_rope_head_dim), dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
         memory_config=rope_output_mem_config,
-        tile=TILE_1x32,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
     )
 
     return {
         "w_kv_a": w_kv_a_fused,
+        "w_kv_a_l1_config": W_l1_mem_config,
         "gamma": gamma_fused,
         "gamma_torch": gamma_torch.squeeze(0),  # [kv_lora_rank] for host-side RMSNorm
         "trans_mat": trans_mat_fused,
