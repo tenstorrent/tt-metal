@@ -598,7 +598,7 @@ def test_per_user_logprobs_enabled(shape, mesh_device):
     """Test that per-user logprobs_enabled array works correctly.
 
     When only some users have logprobs enabled, the computation still runs
-    for the whole batch (since at least one user needs it), and get_host_results
+    for the whole batch (since at least one user needs it), and transfer_logprobs_to_host
     returns None for users with logprobs disabled.
     """
     seed = 42
@@ -650,9 +650,9 @@ def test_per_user_logprobs_enabled(shape, mesh_device):
     result = log_probs_calculator.calculate_top_k_log_probs(logits_tensor, topk_values_tt, topk_indices_tt)
     assert result is not None, "Expected LogProbsResult"
 
-    # Verify get_host_results returns None for disabled users
+    # Verify transfer_logprobs_to_host returns None for disabled users
     sampled_ids = argmax_tensor.squeeze()
-    host_results = log_probs_calculator.get_host_results(result, sampled_ids, mesh_device)
+    host_results = log_probs_calculator.transfer_logprobs_to_host(result, sampled_ids)
     assert len(host_results) == batch_size, f"Expected {batch_size} results, got {len(host_results)}"
 
     for i in range(batch_size):
@@ -681,8 +681,8 @@ def test_per_user_logprobs_enabled(shape, mesh_device):
     indirect=["device_params"],
     ids=["fabric_linear"],
 )
-def test_get_host_results_response_format(shape, mesh_device):
-    """Test that get_host_results returns correctly structured response objects.
+def test_transfer_logprobs_to_host_response_format(shape, mesh_device):
+    """Test that transfer_logprobs_to_host returns correctly structured response objects.
 
     Verifies the OpenAI-compatible response format:
     {
@@ -736,7 +736,7 @@ def test_get_host_results_response_format(shape, mesh_device):
     assert result is not None
 
     sampled_ids = argmax_tensor.squeeze()
-    host_results = log_probs_calculator.get_host_results(result, sampled_ids, mesh_device)
+    host_results = log_probs_calculator.transfer_logprobs_to_host(result, sampled_ids)
 
     for i in range(batch_size):
         r = host_results[i]
@@ -887,7 +887,7 @@ def test_top_k_logprobs_pcc_host_vs_device_20_logprobs(shape, mesh_device):
     For every user in the batch this test:
     1. Computes the full log-softmax on host (PyTorch float32 – ground truth).
     2. Runs calculate_top_k_log_probs on device (bfloat16).
-    3. Transfers the device top-k logprobs to host via get_host_results.
+    3. Transfers the device top-k logprobs to host via transfer_logprobs_to_host.
     4. For each user, looks up the PyTorch logprobs at the same token indices
        that the device returned and checks PCC >= 0.99.
 
@@ -953,7 +953,7 @@ def test_top_k_logprobs_pcc_host_vs_device_20_logprobs(shape, mesh_device):
 
     # Get structured host results (sorted, trimmed to 20 per user)
     sampled_ids = argmax_tensor.squeeze()
-    host_results = log_probs_calculator.get_host_results(result, sampled_ids, mesh_device)
+    host_results = log_probs_calculator.transfer_logprobs_to_host(result, sampled_ids)
     assert len(host_results) == batch_size
 
     # Compare each user's top-20 device logprobs against PyTorch reference

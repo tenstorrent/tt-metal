@@ -482,95 +482,117 @@ class LogProbsCalculator:
             top_k_indices=topk_global_indices,
         )
 
-    def get_host_results(
+    def _build_mesh_composer(self):
+        """Build the appropriate mesh composer for transferring tensors from device to host.
+
+        Returns:
+            ConcatMeshToTensor for 1D meshes (T3K), ConcatMesh2dToTensor for 2D meshes (TG).
+        """
+        if self.cluster_shape[0] > 1 and self.cluster_shape[1] > 1:
+            # 2D mesh (TG Galaxy): concat along TP axis and last dim
+            return ttnn.ConcatMesh2dToTensor(
+                self.mesh_device,
+                dims=(1, 3),
+                mesh_shape=self.cluster_shape,
+            )
+        else:
+            # 1D mesh (T3K): concat along last dim
+            return ttnn.ConcatMeshToTensor(self.mesh_device, dim=3)
+
+    def transfer_logprobs_to_host(
         self,
         log_probs_result: LogProbsResult | None,
         sampled_token_ids: torch.Tensor,
-        mesh_device,
         num_logprobs_per_user: list[int] | None = None,
-    ) -> list[dict]:
-        """Convert device tensors to structured per-user result dicts on the host.
+    ) -> list[dict | None]:
+        """Move logprobs from device to host and build per-user response objects.
 
-        Transfers top-k logprobs data from device to host.  The sampled token's
-        logprob is found by matching its ID in the top-k indices (the sampled
-        token is always part of the gathered top-k).  Each user's top logprobs
-        are sorted descending and trimmed to the requested count.
+        Transfers the top-k logprobs and indices tensors from the device mesh to
+        the host, then for each user:
+        1. Sorts the gathered top-k by logprob descending (per-device chunks are
+           individually sorted but not globally sorted after all-gather).
+        2. Truncates to the user's requested ``num_logprobs`` count.
+        3. Extracts the sampled token's logprob by matching its ID in the top-k
+           indices.
 
         Args:
             log_probs_result: LogProbsResult from calculate_top_k_log_probs.
             sampled_token_ids: Host tensor of sampled token IDs, shape (batch_size,).
-            mesh_device: MeshDevice used for tensor composition.
             num_logprobs_per_user: Per-user count of top logprobs to return (0-20).
                 If None, uses self.num_logprobs.
 
         Returns:
-            List of per-user dicts with structure:
+            List of length batch_size.  Each element is None for users with
+            logprobs disabled, otherwise a dict:
             {
                 "returned_token": {"token_idx": int, "logprob": float},
                 "top_logprobs": {"token_indices": [int], "logprobs": [float]}
             }
-            Returns empty list if log_probs_result is None.
         """
         if log_probs_result is None:
-            return []
+            return [None] * self.batch_size
 
         if num_logprobs_per_user is None:
             num_logprobs_per_user = self.num_logprobs
 
-        # Transfer top-k logprobs and indices to host
+        # Build mesh composer based on device topology (T3K vs TG)
+        mesh_composer = self._build_mesh_composer()
+
+        # Transfer top-k logprobs and indices from device to host
         top_k_logprobs_host = ttnn.to_torch(
             log_probs_result.top_k_logprobs,
-            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3),
+            mesh_composer=mesh_composer,
         )
-        K = log_probs_result.top_k_logprobs.shape[-1]
-        top_k_logprobs_host = top_k_logprobs_host[:, :, : self.batch_size, :K].squeeze(0).squeeze(0)
-
         top_k_indices_host = ttnn.to_torch(
             log_probs_result.top_k_indices,
-            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3),
+            mesh_composer=mesh_composer,
         )
-        K = log_probs_result.top_k_indices.shape[-1]
-        top_k_indices_host = top_k_indices_host[:, :, : self.batch_size, :K].squeeze(0).squeeze(0)
 
-        results = []
+        K = log_probs_result.top_k_logprobs.shape[-1]
+        # Slice to (batch_size, K) — discard padding / replicas
+        top_k_logprobs_host = top_k_logprobs_host[:, :, : self.batch_size, :K].squeeze(0).squeeze(0)
+        top_k_indices_host = top_k_indices_host[:, :, : self.batch_size, :K].squeeze(0).squeeze(0).int()
+
+        # Sort each user's top-k by logprob descending (per-device chunks are
+        # sorted locally but not globally after all-gather concatenation)
+        sorted_order = torch.argsort(top_k_logprobs_host, dim=-1, descending=True)
+        top_k_logprobs_host = torch.gather(top_k_logprobs_host, -1, sorted_order).float()
+        top_k_indices_host = torch.gather(top_k_indices_host, -1, sorted_order)
+
+        results: list[dict | None] = []
         for user_idx in range(self.batch_size):
             if not self.logprobs_enabled[user_idx]:
                 results.append(None)
                 continue
 
             sampled_id = int(sampled_token_ids[user_idx].item())
-            user_topk_logprobs = top_k_logprobs_host[user_idx]
-            user_topk_indices = top_k_indices_host[user_idx].int()
+            user_logprobs = top_k_logprobs_host[user_idx]
+            user_indices = top_k_indices_host[user_idx]
 
-            # Look up the sampled token's logprob from the top-k array
-            match_mask = user_topk_indices == sampled_id
+            # Extract sampled token logprob by matching its ID in the sorted top-k
+            match_mask = user_indices == sampled_id
             if match_mask.any():
-                sampled_logprob = float(user_topk_logprobs[match_mask][0].item())
+                sampled_logprob = float(user_logprobs[match_mask][0].item())
             else:
                 # Should not happen — sampled token is always in gathered top-k
+                logger.warning(f"Sampled token {sampled_id} not found in top-k for user {user_idx}")
                 sampled_logprob = float("nan")
 
-            user_result = {
-                "returned_token": {
-                    "token_idx": sampled_id,
-                    "logprob": sampled_logprob,
-                },
-                "top_logprobs": {
-                    "token_indices": [],
-                    "logprobs": [],
-                },
-            }
-
-            # Populate top logprobs if requested
+            # Truncate top logprobs to the user's requested count
             n = num_logprobs_per_user[user_idx] if user_idx < len(num_logprobs_per_user) else 0
-            if n > 0:
-                # Sort by logprob descending and take top-N
-                sorted_order = torch.argsort(user_topk_logprobs, descending=True)
-                top_n = min(n, len(sorted_order))
-                selected = sorted_order[:top_n]
-                user_result["top_logprobs"]["token_indices"] = user_topk_indices[selected].tolist()
-                user_result["top_logprobs"]["logprobs"] = user_topk_logprobs[selected].float().tolist()
+            n = min(n, K)
 
-            results.append(user_result)
+            results.append(
+                {
+                    "returned_token": {
+                        "token_idx": sampled_id,
+                        "logprob": sampled_logprob,
+                    },
+                    "top_logprobs": {
+                        "token_indices": user_indices[:n].tolist(),
+                        "logprobs": user_logprobs[:n].tolist(),
+                    },
+                }
+            )
 
         return results
