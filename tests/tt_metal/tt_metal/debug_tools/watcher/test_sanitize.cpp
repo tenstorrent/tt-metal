@@ -196,10 +196,15 @@ void RunTestOnCore(
             if (multi_dm_race) {
                 constexpr uint32_t multi_dm_base_addr = 0xFFFF0000;
                 constexpr uint32_t multi_dm_base_size = 0x1000;
-                uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+                // Allocate dedicated L1 region for the DM barrier counter (avoid overlap with scratch buffer)
+                distributed::ReplicatedBufferConfig sync_cfg{.size = 32};
+                distributed::DeviceLocalBufferConfig sync_lcl{
+                    .page_size = 32, .buffer_type = tt::tt_metal::BufferType::L1};
+                auto sync_buf = distributed::MeshBuffer::create(sync_cfg, sync_lcl, mesh_device.get());
+                uint32_t l1_sync_addr = sync_buf->address();
                 std::vector<uint32_t> init{0, 0};  // 8 bytes: Quasar barrier uses 64-bit atomics
-                tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, init);
-                config.compile_args = {num_dms, multi_dm_base_addr, multi_dm_base_size, l1_unreserved_base};
+                tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_sync_addr, init);
+                config.compile_args = {num_dms, multi_dm_base_addr, multi_dm_base_size, l1_sync_addr};
                 config.defines = {{"TEST_MULTI_DM_SANITIZE_RACE", "1"}};
             } else {
                 config.compile_args = {dm_id};
