@@ -204,7 +204,7 @@ jobs:
       build-type: ${{ (inputs.build-type == 'Release' && 'Debug') || 'Release' }}
       build-wheel: true
       publish-artifact: false
-      skip-tt-train: true
+      skip-tt-train: false
       distributed: false
       ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
       # Pass pre-built docker images to avoid duplicate builds
@@ -266,35 +266,8 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
 
-  build-tt-train:
-    if: ${{
-        github.event.action != 'destroyed' &&
-        (github.event_name != 'pull_request' || !github.event.pull_request.draft) &&
-        (github.ref_name == 'main' || needs.find-changed-files.outputs.tt-train-changed == 'true')
-      }}
-    needs: [build-docker-images, find-changed-files]
-    uses: ./.github/workflows/build-artifact.yaml
-    permissions:
-      packages: write
-    secrets: inherit
-    with:
-      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
-      toolchain: cmake/x86_64-linux-clang-20-libstdcpp-toolchain.cmake
-      build-type: Release
-      build-wheel: false
-      publish-artifact: true
-      skip-tt-train: false
-      distributed: false
-      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
-      ci-build-docker-image: ${{ needs.build-docker-images.outputs.ci-build-tag }}
-      ci-test-docker-image: ${{ needs.build-docker-images.outputs.ci-test-tag }}
-      dev-docker-image: ${{ needs.build-docker-images.outputs.dev-tag }}
-      basic-dev-docker-image: ${{ needs.build-docker-images.outputs.basic-dev-tag }}
-      basic-ttnn-runtime-docker-image: ${{ needs.build-docker-images.outputs.basic-ttnn-runtime-tag }}
-      manylinux-docker-image: ${{ needs.build-docker-images.outputs.manylinux-tag }}
-
   tt-train-tests:
-    needs: [build-tt-train, find-changed-files]
+    needs: [build, find-changed-files]
     if: ${{
         github.ref_name == 'main' ||
         needs.find-changed-files.outputs.tt-train-changed == 'true'
@@ -310,8 +283,8 @@ jobs:
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build-tt-train.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build-tt-train.outputs.build-artifact-name }}
+      docker-image: ${{ needs.build.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
       ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
 
   ttsim-integration-tests:
@@ -484,7 +457,6 @@ jobs:
       - metalium-smoke-tests
       - ttnn-smoke-tests
       - build
-      - build-tt-train
       - tt-train-tests
       - metalium-examples
       - ttsim-integration-tests
@@ -500,6 +472,6 @@ jobs:
           optional-jobs: >-
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
             ttsim-integration-tests, model-charts-sync, build-docs,
-            build-tt-train, tt-train-tests
+            tt-train-tests
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
