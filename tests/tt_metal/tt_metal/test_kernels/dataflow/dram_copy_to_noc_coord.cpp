@@ -19,8 +19,7 @@
  * */
 void kernel_main() {
 #if defined(COMPILE_FOR_DM)
-    uint64_t cpu_index = 0;
-    asm volatile("csrr %0, mhartid" : "=r"(cpu_index));
+    uint32_t cpu_index = get_my_thread_id();
 
 #if defined(TEST_MULTI_DM_SANITIZE_RACE)
     // Having explicit sync barrier helps stress test CAS in sanitize.h since
