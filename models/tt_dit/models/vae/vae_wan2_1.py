@@ -15,6 +15,7 @@ from models.common.utility_functions import is_blackhole
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
+from ...layers.rm_binary_eltwise import rm_binary_eltwise
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config, prepare_conv3d_weights
@@ -583,9 +584,10 @@ class WanResidualBlock(Module):
         else:
             x_conv_BTHWC = self.conv2(x_BTHWC, logical_h)
 
-        # Add residual
-        x_tile_BTHWC = ttnn.to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
-        x_tile_BTHWC = ttnn.add(h_tile_BTHWC, x_tile_BTHWC)
+        # Add residual (row-major path to avoid tilize+add+untilize)
+        h_rm_BTHWC = ttnn.to_layout(h_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        residual_rm_BTHWC = rm_binary_eltwise(h_rm_BTHWC, x_conv_BTHWC, op="add")
+        x_tile_BTHWC = ttnn.to_layout(residual_rm_BTHWC, ttnn.TILE_LAYOUT)
         return x_tile_BTHWC
 
 
