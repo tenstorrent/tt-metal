@@ -15,7 +15,13 @@
 
 namespace tt::tt_metal {
 
-TEST(MetalEnv, Init) { auto env = MetalEnv(); }
+TEST(MetalEnv, Init) {
+    // If anywhere along the initialization path calls MetalContext::instance() then
+    // this will hang because we will try to create 2 umd clusters
+    // All child objects of the MetalEnv must take in dependencies (Hal, RuntimeOptions, Cluster, etc.)
+    // explicitly rather than calling MetalContext::instance() (being deprecated)
+    auto env = MetalEnv();
+}
 
 TEST(MetalEnv, Mock) {
     auto mock_path = experimental::get_mock_cluster_desc_name(tt::ARCH::WORMHOLE_B0, 1).value();
