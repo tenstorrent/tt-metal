@@ -281,11 +281,6 @@ struct LogicalMultiMeshGraph {
     // Multiple channels between the same pair are represented by duplicate entries.
     // Only populated when strict mode intermesh ports are specified.
     std::map<MeshId, AdjacencyGraph<LogicalExitNode>> mesh_exit_node_graphs_;
-
-    // Track which mesh pairs should use Z direction for intermesh connections and how many connections use Z.
-    // Maps src_mesh_id -> dst_mesh_id -> count of connections that use Z direction.
-    // This information is extracted from the MeshGraphDescriptor's assign_z_direction flag.
-    std::unordered_map<MeshId, std::unordered_map<MeshId, uint32_t>> intermesh_assign_z_direction_;
 };
 
 /**
@@ -357,12 +352,6 @@ struct PhysicalMultiMeshGraph {
     // mesh_id (which mesh it belongs to) and asic_id (the ASIC identifier). Multiple channels between the same pair are
     // represented by duplicate entries.
     std::map<MeshId, AdjacencyGraph<PhysicalExitNode>> mesh_exit_node_graphs_;
-
-    // Track which mesh pairs should use Z direction for intermesh connections and how many connections use Z.
-    // Maps src_mesh_id -> dst_mesh_id -> count of connections that use Z direction.
-    // This information is extracted from the MeshGraphDescriptor's assign_z_direction flag and from physical
-    // connections using channels 8 and 9 (BLACKHOLE intermesh channels).
-    std::unordered_map<MeshId, std::unordered_map<MeshId, uint32_t>> intermesh_assign_z_direction_;
 };
 
 /**
