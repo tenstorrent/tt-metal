@@ -293,17 +293,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         is_fsdp=None,
         pipeline_class=None,
     ):
-        single_device_config = {
-            "sp_axis": 0,
-            "tp_axis": 1,
-            "num_links": 1,
-            "dynamic_load": False,
-            "topology": ttnn.Topology.Linear,
-            "is_fsdp": False,
-        }
         device_configs = {}
         if ttnn.device.is_blackhole():
-            device_configs[(1, 1)] = single_device_config
             device_configs[(1, 4)] = {
                 "sp_axis": 0,
                 "tp_axis": 1,
@@ -331,7 +322,6 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             }
             config = device_configs[tuple(mesh_device.shape)]
         else:
-            device_configs[(1, 1)] = single_device_config
             device_configs[(2, 4)] = {
                 "sp_axis": 0,
                 "tp_axis": 1,
