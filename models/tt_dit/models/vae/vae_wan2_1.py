@@ -393,7 +393,6 @@ class WanCausalConv3d(Module):
                 num_links=links,
             )
 
-        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanCausalConv3d expects ROW_MAJOR input, got {x_BTHWC.layout}"
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
             weight_tensor=self.weight.data,
@@ -526,7 +525,6 @@ class WanResidualBlock(Module):
             else x_BTHWC
         )
         x_norm_tile_BTHWC = self.norm1(x_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
-        # x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_norm_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         # Cached conv
@@ -546,10 +544,7 @@ class WanResidualBlock(Module):
         else:
             x_conv_BTHWC = self.conv1(x_BTHWC, logical_h)
 
-        # x_tile_BTHWC = ttnn.to_layout(x_conv_BTHWC, ttnn.TILE_LAYOUT)
         x_BTHWC = self.norm2(x_conv_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
-        # x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
-        # x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         # Cached conv
         if feat_cache is not None:
@@ -802,7 +797,6 @@ class WanConv2d(Module):
                 num_links=links,
             )
 
-        assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanCausalConv3d expects ROW_MAJOR input, got {x_BTHWC.layout}"
         x_BTHWC = ttnn.experimental.conv3d(
             input_tensor=x_BTHWC,
             weight_tensor=self.weight.data,
@@ -1168,7 +1162,6 @@ class WanDecoder3d(Module):
 
         ## head
         x_norm_tile_BTHWC = self.norm_out(x_BTHWC)
-        # x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_norm_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         if feat_cache is not None:
@@ -1485,7 +1478,6 @@ class WanEncoder3D(Module):
 
         ## head
         x_silu_tile_BTHWC = self.norm_out(x_BTHWC)
-        # x_silu_tile_BTHWC = ttnn.silu(x_norm_tile_BTHWC)
         x_BTHWC = ttnn.to_layout(x_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         if feat_cache is not None:

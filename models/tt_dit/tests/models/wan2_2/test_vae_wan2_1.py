@@ -496,19 +496,19 @@ def test_wan_conv3d(
     "mesh_device, h_axis, w_axis",
     [
         ((1, 1), 0, 1),
-        # ((2, 4), 0, 1),
-        # ((2, 4), 1, 0),
-        # ((1, 8), 0, 1),
-        # ((1, 4), 1, 0),
-        # ((4, 8), 0, 1),
+        ((2, 4), 0, 1),
+        ((2, 4), 1, 0),
+        ((1, 8), 0, 1),
+        ((1, 4), 1, 0),
+        ((4, 8), 0, 1),
     ],
     ids=[
         "1x1_h0_w1",
-        # "2x4_h0_w1",
-        # "2x4_h1_w0",
-        # "1x8_h0_w1",
-        # "1x4_h1_w0",
-        # "4x8_h0_w1",
+        "2x4_h0_w1",
+        "2x4_h1_w0",
+        "1x8_h0_w1",
+        "1x4_h1_w0",
+        "4x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
@@ -634,7 +634,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
 @pytest.mark.parametrize(
     ("B, dim, T, H, W"),
     [
-        # (1, 384, 1, 90, 160),  # decoder.mid_block.resnets.0
+        (1, 384, 1, 90, 160),  # decoder.mid_block.resnets.0
         (1, 384, 4, 60, 104),  # decoder.mid_block.resnets.0
     ],
     ids=[
@@ -1127,31 +1127,26 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
 @pytest.mark.parametrize(
     "dtype, MIN_PCC, MAX_RMSE",
     [
-        # (ttnn.DataType.FLOAT32, 0.999_905, 0.014),
+        (ttnn.DataType.FLOAT32, 0.999_905, 0.014),
         (ttnn.DataType.BFLOAT16, 0.999_410, 0.035),
     ],
-    ids=[
-        # "f32",
-        "bf16"
-    ],
+    ids=["f32", "bf16"],
 )
 @pytest.mark.parametrize(
     "mesh_device, h_axis, w_axis, num_links",
     [
-        ((1, 1), 0, 1, 1),
-        # ((2, 4), 0, 1, 1),
-        # ((2, 4), 1, 0, 1),
-        # ((1, 8), 0, 1, 1),
-        # ((1, 4), 1, 0, 1),
-        # ((4, 8), 0, 1, 4),
+        ((2, 4), 0, 1, 1),
+        ((2, 4), 1, 0, 1),
+        ((1, 8), 0, 1, 1),
+        ((1, 4), 1, 0, 1),
+        ((4, 8), 0, 1, 4),
     ],
     ids=[
-        "1x1_h0_w1",
-        # "2x4_h0_w1",
-        # "2x4_h1_w0",
-        # "1x8_h0_w1",
-        # "1x4_h1_w0",
-        # "4x8_h0_w1",
+        "2x4_h0_w1",
+        "2x4_h1_w0",
+        "1x8_h0_w1",
+        "1x4_h1_w0",
+        "4x8_h0_w1",
     ],
     indirect=["mesh_device"],
 )
