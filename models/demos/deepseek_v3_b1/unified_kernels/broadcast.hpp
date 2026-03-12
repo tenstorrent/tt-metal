@@ -260,6 +260,7 @@ struct Broadcast {
                     }
                     noc_async_writes_flushed();
                     cb_pop_front(CTArgs::cb0_id, CTArgs::num_pages_to_read);
+                    noc_async_atomic_barrier();
                 } else if constexpr (CTArgs::is_secondary_sender) {
                     // Secondary sender: wait for data from primary sender, then broadcast along primary axis
                     // First wait for data to arrive from primary sender

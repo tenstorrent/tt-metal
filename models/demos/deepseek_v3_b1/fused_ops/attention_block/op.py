@@ -179,8 +179,8 @@ class AttentionBlock:
 
     @staticmethod
     def get_num_semaphores():
-        # 14 from pre-SDPA, 4 from post
-        return 18
+        # 15 from pre-SDPA, 4 from post
+        return 19
 
     @staticmethod
     def create_semaphores(mesh_device):
@@ -465,6 +465,9 @@ class AttentionBlock:
         )
         print("AttentionBlock qrope grid calculated")
         dkv_rmsnorm_grid = dkv_rmsnorm_gamma_tensor.core_range_set
+        assert dkv_rmsnorm_grid.num_cores() == 1, "dkv rmsnorm grid must have 1 core"
+        knope_core = dkv_rmsnorm_grid.ranges()[0].start
+        knope_noc_core = device.worker_core_from_logical_core(knope_core)
         print("AttentionBlock dkv rmsnorm grid calculated")
         # Krope grid: columns 8-9, rows 8-9 (2 cores total)
         krope_grid = ttnn.CoreRangeSet(
@@ -824,6 +827,10 @@ class AttentionBlock:
             attention_block_semaphores[semaphore_index]
         )
         semaphore_index += 1
+        mla_kv_cache_rope_ready_semaphore_addr = ttnn.get_global_semaphore_address(
+            attention_block_semaphores[semaphore_index]
+        )
+        semaphore_index += 1
 
         # Post-SDPA semaphores
         sdpa_semaphore1 = attention_block_semaphores[semaphore_index]
@@ -886,7 +893,7 @@ class AttentionBlock:
             data_format, TD_16x32
         )  # Gamma for second RMSNorm (1536 elements = 3 tiles of 16x32)
         rmsnorm2_input_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Input CB for RMSNorm2
-        gather_reduce_half1_scratch_cb = cb_id_context.get_cb_id(
+        gather_reduce_scratch_cb = cb_id_context.get_cb_id(
             data_format, TD_16x32
         )  # Dedicated half1 scratch CB for gather_reduce
         rmsnorm2_output_cb = cb_id_context.get_cb_id(data_format, TD_16x32)  # Output CB for RMSNorm2
@@ -1037,6 +1044,14 @@ class AttentionBlock:
         # KV Cache Branch parameters
         dkv_matmul_k_num_tiles = 7168 // 32
         dkv_matmul_input_page_size = TILE_1x32.get_tile_size(data_format)
+
+        # Create tile descriptor for proper tile dimensions
+        tile_descriptor = ttnn.TileDescriptor(interpreted_tile)
+
+        # RMSNorm2 uses separate CBs with exact sizes (16x32 tiles)
+        TILE_16x32 = ttnn.Tile((16, 32))
+        rmsnorm2_tile_descriptor = ttnn.TileDescriptor(TILE_16x32)
+        rmsnorm2_page_size = TILE_16x32.get_tile_size(data_format)
 
         # RMSNorm reader compile-time args (named args for NCRISC)
         rmsnorm_reader_named_compile_time_args = [
@@ -1334,8 +1349,8 @@ class AttentionBlock:
             ("gather_reduce_grid_end_x", matmul_bbox.end.x),
             ("gather_reduce_grid_end_y", matmul_bbox.end.y),
             ("gather_reduce_half_num_cores", matmul_half_num_cores),
-            ("gather_reduce_half0_cb_id", rmsnorm2_input_cb),
-            ("gather_reduce_half1_cb_id", gather_reduce_half1_scratch_cb),
+            ("gather_reduce_dst_cb", gather_reduce_scratch_cb),
+            ("gather_reduce_half_size_bytes", rmsnorm2_num_tiles * rmsnorm2_page_size),
         ]
 
         # Gather receiver compile-time args (named args for BRISC on rmsnorm core)
@@ -1347,14 +1362,13 @@ class AttentionBlock:
             ("gather_reduce_noc1_num_senders", gather_reduce_noc1_num_senders),
             ("gather_reduce_noc0_receiver_semaphore_addr", gather_reduce_noc0_receiver_semaphore_addr),
             ("gather_reduce_noc1_receiver_semaphore_addr", gather_reduce_noc1_receiver_semaphore_addr),
-            ("gather_reduce_half0_dst_cb", rmsnorm2_input_cb),
-            ("gather_reduce_half1_dst_cb", gather_reduce_half1_scratch_cb),
+            ("gather_reduce_dst_cb", gather_reduce_scratch_cb),
             ("gather_reduce_dst_num_tiles", rmsnorm2_num_tiles),
         ]
         # TRISC: compute-side gather-reduce destination CBs and tile count
         gather_reduce_trisc_named_compile_time_args = [
-            ("gather_reduce_half0_dst_cb", rmsnorm2_input_cb),
-            ("gather_reduce_half1_dst_cb", gather_reduce_half1_scratch_cb),
+            ("gather_reduce_dst_cb", gather_reduce_scratch_cb),
+            ("gather_reduce_out_cb", rmsnorm2_input_cb),
             ("gather_reduce_dst_num_tiles", rmsnorm2_num_tiles),
         ]
 
@@ -1497,6 +1511,10 @@ class AttentionBlock:
             ("full_grid_mcast_end_y", mcast_dest_noc_end_core.y),
             ("full_grid_mcast_num_dests", mcast_num_cores - 1),
             ("kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
+            ("num_rope_cores", num_krope_cores),
+            ("nope_core_x", knope_noc_core.x),
+            ("nope_core_y", knope_noc_core.y),
+            ("kv_cache_rope_ready_semaphore_addr", mla_kv_cache_rope_ready_semaphore_addr),
         ]
         kv_cache_trisc_named_compile_time_args = [
             ("kv_rmsnorm_output_cb", kv_rmsnorm_output_cb),
@@ -1663,7 +1681,7 @@ class AttentionBlock:
             ("mla_ncrisc_brisc_sync_semaphore_addr", mla_ncrisc_brisc_sync_semaphore_addr),
             ("mla_receiver_ready_semaphore_addr", mla_receiver_ready_semaphore_addr),
             ("mla_kv_cache_cur_pos_ready_semaphore_addr", mla_kv_cache_cur_pos_ready_semaphore_addr),
-            ("mla_kv_cache_cur_pos_ready_value", kv_cache_update_grid.num_cores()),
+            ("mla_kv_cache_cur_pos_ready_value", 1),
             ("mla_k_in_cb", mla_k_in_cb),
         ]
         mla_trisc_named_compile_time_args = [
@@ -1920,14 +1938,6 @@ class AttentionBlock:
         )
         print("AttentionBlock sdpa trisc named compile time args calculated")
 
-        # Create tile descriptor for proper tile dimensions
-        tile_descriptor = ttnn.TileDescriptor(interpreted_tile)
-
-        # RMSNorm2 uses separate CBs with exact sizes (16x32 tiles)
-        TILE_16x32 = ttnn.Tile((16, 32))
-        rmsnorm2_tile_descriptor = ttnn.TileDescriptor(TILE_16x32)
-        rmsnorm2_page_size = TILE_16x32.get_tile_size(data_format)
-
         # Reference tensors from device 0 for CB descriptor creation
         # (all devices have identical buffer addresses, sizes, and layouts)
         ref_input_tensor = input_tensors_per_device[0]
@@ -2111,23 +2121,23 @@ class AttentionBlock:
 
         # CB 8: gather_reduce half1 scratch buffer (3 tiles) — overlap with sdpa_out_interm L1 buffer
         # at offset 3136 B. This CB is consumed before SDPA runs.
-        gather_reduce_half1_scratch_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            gather_reduce_half1_scratch_cb,
+        gather_reduce_scratch_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
+            gather_reduce_scratch_cb,
             ref_sdpa_kv_cache_buffer,
             address_offset=sdpa_kv_cache_running_offset_mcast_core,  # 17472 B
-            total_size=rmsnorm2_num_tiles * rmsnorm2_page_size,
+            total_size=2 * rmsnorm2_num_tiles * rmsnorm2_page_size,
             core_ranges=full_device_grid,
         )
-        print("AttentionBlock gather reduce half1 scratch cb descriptor calculated")
-        gather_reduce_half1_scratch_cb_descriptor.format_descriptors = [
+        print("AttentionBlock gather reduce scratch cb descriptor calculated")
+        gather_reduce_scratch_cb_descriptor.format_descriptors = [
             ttnn.CBFormatDescriptor(
-                buffer_index=gather_reduce_half1_scratch_cb,
+                buffer_index=gather_reduce_scratch_cb,
                 data_format=data_format,
                 page_size=rmsnorm2_page_size,
                 tile=rmsnorm2_tile_descriptor,
             )
         ]
-        sdpa_kv_cache_running_offset_mcast_core += gather_reduce_half1_scratch_cb_descriptor.total_size  # +3072 B
+        sdpa_kv_cache_running_offset_mcast_core += gather_reduce_scratch_cb_descriptor.total_size  # +3072 B
 
         # CB: RMSNorm2 output buffer (3 tiles) — overlap with sdpa_kv_cache L1 buffer
         # at offset 20544 B. This CB is consumed before SDPA runs.
@@ -3360,7 +3370,7 @@ class AttentionBlock:
             matmul_input_cb_descriptor,
             rmsnorm2_gamma_cb_descriptor,
             rmsnorm2_input_cb_descriptor,
-            gather_reduce_half1_scratch_cb_descriptor,
+            gather_reduce_scratch_cb_descriptor,
             rmsnorm2_output_cb_descriptor,
             matmul2_input_cb_descriptor,
             matmul2_output_cb_descriptor,

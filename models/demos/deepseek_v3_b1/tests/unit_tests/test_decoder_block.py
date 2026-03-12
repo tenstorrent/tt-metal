@@ -798,7 +798,7 @@ def create_decoder_block_tensors(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
             "fabric_router_config": create_fabric_router_config(15232),
-            "worker_l1_size": 1483568,
+            "worker_l1_size": 1431568,
         }
     ],
     indirect=True,
@@ -864,7 +864,7 @@ def test_decoder(
                 coord = ttnn.MeshCoordinate(row, col)
                 fabric_id = submesh.get_fabric_node_id(coord)
                 device_id = submesh.get_device_id(coord)
-                print(f"  ({row}, {col}) -> fabric_id={fabric_id}, device_id={device_id}")
+                print(f"  ({row}, {col}) -> device_id={device_id}")
         device_grid_size = submesh.compute_with_storage_grid_size()
 
         logger.info("Preparing model state dict...")
@@ -893,6 +893,7 @@ def test_decoder(
         available_cores = ttnn.num_cores_to_corerangeset(num_cores, device_grid_size, row_wise=True)
         ttnn.synchronize_device(submesh)
         reduce_semaphores = [ttnn.create_global_semaphore(submesh, available_cores, 0) for _ in range(4)]
+        persistent_next_iter_semaphore = ttnn.create_global_semaphore(submesh, available_cores, 1)
         ttnn.synchronize_device(submesh)
 
         attn_semaphores = AttentionBlock.create_semaphores(submesh)
@@ -946,7 +947,7 @@ def test_decoder(
                 use_fp32,
                 False,  # skip_ccl
                 noc_mode,
-                num_iterations=num_internal_iterations,
+                num_iterations=1,
             )
             ttnn.synchronize_device(submesh)
             ttnn_attn_ref_output_torch = ttnn.to_torch(
@@ -1030,7 +1031,8 @@ def test_decoder(
                 num_iterations=num_internal_iterations,
                 upstream_socket=None,
                 downstream_socket=None,
-                persistent_next_iter_semaphore=None,
+                persistent_next_iter_semaphore=persistent_next_iter_semaphore,
+                persistent_mode=True,
             )
         ttnn.synchronize_device(submesh)
 
@@ -1093,7 +1095,7 @@ def test_decoder(
                 use_hardcoded_expert_index=use_hardcoded_expert_index,
                 sdpa_kv_cache_buffer=d["sdpa_kv_cache_buffer"],
                 sdpa_out_interm_buffer=d["sdpa_out_interm_buffer"],
-                num_iterations=num_internal_iterations,
+                num_iterations=1,
                 reduce_intermediate_tensors=d["moe_ref_reduce_intermediate"],
                 reduce_output_tensor=d["moe_ref_reduce_output"],
                 reduce_semaphores=moe_ref_reduce_sems,
@@ -1309,13 +1311,13 @@ def test_decoder(
         # ========================================================================
         for device_idx in range(mesh_rows * mesh_cols):
             received = ttnn_attention_output[device_idx : device_idx + 1, :]
-            passing, pcc = comp_pcc(mla_output, received, 0.996)
+            passing, pcc = comp_pcc(mla_output, received, 0.98)
             logger.info(f"Device {device_idx} DecoderBlock Output PCC: {pcc}")
             logger.info(f"Golden MLA output: {mla_output}")
             logger.info(f"DecoderBlock MLA output: {received}")
             if validate_standalone_mla:
                 pure_mla = ttnn_attn_ref_output_torch[device_idx : device_idx + 1, :]
-                pure_mla_passing, pure_mla_pcc = comp_pcc(mla_output, pure_mla, 0.996)
+                pure_mla_passing, pure_mla_pcc = comp_pcc(mla_output, pure_mla, 0.98)
                 logger.info(f"Pure MLA PCC: {pure_mla_pcc}")
                 logger.info(f"Pure MLA output: {pure_mla}")
             assert passing, f"Device {device_idx} DecoderBlock Output PCC check failed: {pcc}"

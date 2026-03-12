@@ -61,6 +61,10 @@ struct KVCacheUpdate {
         uint32_t full_grid_mcast_end_y;
         uint32_t full_grid_mcast_num_dests;
         uint32_t kv_cache_cur_pos_ready_semaphore_addr;
+        uint32_t num_rope_cores;
+        uint32_t nope_core_x;
+        uint32_t nope_core_y;
+        uint32_t kv_cache_rope_ready_semaphore_addr;
     };
     struct ComputeArgs {
         uint32_t kv_cache_input_cb;
@@ -86,7 +90,7 @@ struct KVCacheUpdate {
 
         void signal_cache_ready([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_BRISC)
-            if constexpr (IsRopeCore || IsNopeCore) {
+            if constexpr (IsNopeCore) {
                 static_assert(noc_mode == DM_DYNAMIC_NOC, "KV Cache Update only supports DM_DYNAMIC_NOC");
                 constexpr uint8_t MCAST_NOC = 0;
                 uint64_t sem_noc_addr = get_noc_multicast_addr<MCAST_NOC>(
@@ -95,11 +99,20 @@ struct KVCacheUpdate {
                     args.full_grid_mcast_end_x,
                     args.full_grid_mcast_end_y,
                     args.kv_cache_cur_pos_ready_semaphore_addr);
+                volatile tt_l1_ptr uint32_t* rope_ready_sem_addr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.kv_cache_rope_ready_semaphore_addr);
+                noc_semaphore_wait(rope_ready_sem_addr, args.num_rope_cores);
                 noc_semaphore_inc_multicast(sem_noc_addr, 1, args.full_grid_mcast_num_dests, MCAST_NOC);
                 volatile tt_l1_ptr uint32_t* sem_addr =
                     reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.kv_cache_cur_pos_ready_semaphore_addr);
                 __atomic_fetch_add(&sem_addr[0], 1, __ATOMIC_RELAXED);
+                noc_semaphore_set(rope_ready_sem_addr, 0);
                 noc_async_atomic_barrier(MCAST_NOC);
+            } else if constexpr (IsRopeCore) {
+                uint64_t rope_ready_sem_noc_addr =
+                    get_noc_addr(args.nope_core_x, args.nope_core_y, args.kv_cache_rope_ready_semaphore_addr);
+                noc_semaphore_inc(rope_ready_sem_noc_addr, 1);
+                noc_async_atomic_barrier();
             }
 #endif
         }

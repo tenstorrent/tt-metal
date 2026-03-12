@@ -182,8 +182,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_reduce_grid_end_x"),
         get_named_compile_time_arg_val("gather_reduce_grid_end_y"),
         get_named_compile_time_arg_val("gather_reduce_half_num_cores"),
-        get_named_compile_time_arg_val("gather_reduce_half0_cb_id"),
-        get_named_compile_time_arg_val("gather_reduce_half1_cb_id"),
+        get_named_compile_time_arg_val("gather_reduce_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_half_size_bytes"),
     };
 
     // RMSNorm2 reader args
@@ -558,8 +558,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_reduce_noc1_num_senders"),
         get_named_compile_time_arg_val("gather_reduce_noc0_receiver_semaphore_addr"),
         get_named_compile_time_arg_val("gather_reduce_noc1_receiver_semaphore_addr"),
-        get_named_compile_time_arg_val("gather_reduce_half0_dst_cb"),
-        get_named_compile_time_arg_val("gather_reduce_half1_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_dst_cb"),
         get_named_compile_time_arg_val("gather_reduce_dst_num_tiles"),
     };
 
@@ -648,6 +647,10 @@ void kernel_main() {
         .full_grid_mcast_num_dests = get_named_compile_time_arg_val("full_grid_mcast_num_dests"),
         .kv_cache_cur_pos_ready_semaphore_addr =
             get_named_compile_time_arg_val("kv_cache_cur_pos_ready_semaphore_addr"),
+        .num_rope_cores = get_named_compile_time_arg_val("num_rope_cores"),
+        .nope_core_x = get_named_compile_time_arg_val("nope_core_x"),
+        .nope_core_y = get_named_compile_time_arg_val("nope_core_y"),
+        .kv_cache_rope_ready_semaphore_addr = get_named_compile_time_arg_val("kv_cache_rope_ready_semaphore_addr"),
     };
 
     deepseek_b1_ops::FlashMLADecode::WriterArgs flash_mla_args;
@@ -929,8 +932,8 @@ void kernel_main() {
 
     // Gather reduce compute args
     deepseek_b1_ops::GatherReduce::ComputeArgs gather_reduce_args{
-        get_named_compile_time_arg_val("gather_reduce_half0_dst_cb"),
-        get_named_compile_time_arg_val("gather_reduce_half1_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_out_cb"),
         get_named_compile_time_arg_val("gather_reduce_dst_num_tiles"),
     };
 
@@ -1628,14 +1631,14 @@ void kernel_main() {
     constexpr size_t reduce_brisc_arg_start = get_named_compile_time_arg_val("reduce_brisc_rt_arg_base");
     if constexpr (Core::is_reduce_worker_core) {
         moe.routed.reduce_rt_args = deepseek_b1_ops::ReduceToOneB1::WorkerWriterArgs{
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 0),
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 1),
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 2),
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 3),
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 4),
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 5),
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 6),
-            get_arg_val<uint32_t>(reduce_brisc_arg_start + 7),
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 0),   // fabric_core_noc_x
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 1),   // fabric_core_noc_y
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 2),   // my_slot_idx
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 3),   // worker_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 4),   // dst_l1_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 5),   // dst_sem_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 6),   // output_base_addr
+            get_arg_val<uint32_t>(reduce_brisc_arg_start + 7),   // shard_idx
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 8),   // socket_config_addr
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 9),   // agg_sem_l1_addr
             get_arg_val<uint32_t>(reduce_brisc_arg_start + 10),  // agg_core_noc_x
