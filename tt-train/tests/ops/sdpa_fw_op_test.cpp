@@ -29,6 +29,7 @@
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "xtensor/generators/xbuilder.hpp"
+#include "core/system_utils.hpp"
 
 class SDPAForwardTest : public ::testing::Test {
 protected:

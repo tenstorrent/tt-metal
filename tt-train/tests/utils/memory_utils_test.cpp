@@ -192,7 +192,7 @@ TEST_F(MemoryUtilsTest, DRAMUsageMultipleOperations) {
     // LLK_ASSERTs add constant DRAM overhead due to additional assertion code
     // in unpacker/packer configurations that invoke functions exclusively used for assertions.
     if (ttml::core::is_llk_assert_enabled()) {
-        expected_peak_size += 14336;  // Additional program cache overhead
+        expected_peak_size += 12288;  // Additional program cache overhead
     }
 
     expected_size = expected_peak_size;

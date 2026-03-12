@@ -23,6 +23,8 @@
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
+#include "core/system_utils.hpp"
+
 class SDPABackwardTest : public ::testing::Test {
 protected:
     void SetUp() override {
