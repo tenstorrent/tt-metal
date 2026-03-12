@@ -11,7 +11,6 @@ from typing import Any, Optional
 import torch
 
 import ttnn
-
 from models.common.rmsnorm import RMSNorm
 from models.demos.glm4_moe_lite.tt.config import Glm4MoeLiteHParams
 from models.demos.glm4_moe_lite.tt.weights import LazyStateDict
@@ -140,7 +139,6 @@ def _env_sharded_mlp() -> bool:
     DeepSeek V3 pattern.
     """
     return os.environ.get("GLM4_MOE_LITE_SHARDED_MLP", "").strip() == "1"
-
 
 
 def _maybe_dram_shard_linear_weight(weight: ttnn.Tensor, device, force: bool = False) -> ttnn.Tensor:
@@ -409,12 +407,8 @@ def _prepare_fused_kv_branch_weights(
     spec_crs = ttnn.CoreRangeSet(
         {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(spec_grid[0] - 1, spec_grid[1] - 1))}
     )
-    rms_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))}
-    )
-    rope_crs = ttnn.CoreRangeSet(
-        {ttnn.CoreRange(ttnn.CoreCoord(4, 2), ttnn.CoreCoord(5, 2))}
-    )
+    rms_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+    rope_crs = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(4, 2), ttnn.CoreCoord(5, 2))})
 
     num_cores = spec_crs.num_cores()  # 18
     shard_width = kvpe_dim // num_cores  # 576/18 = 32
@@ -470,6 +464,7 @@ def _prepare_fused_kv_branch_weights(
 
     # ---- Trans_mat: WIDTH_SHARDED on rope cores ----
     from models.demos.deepseek_v3.tt.rope import get_rot_transformation_mat
+
     trans_mat_torch = get_rot_transformation_mat()  # [1, 1, 32, 32]
     num_rope_cores = rope_crs.num_cores()
     trans_mat_replicated = trans_mat_torch.repeat(1, 1, 1, num_rope_cores)  # [1, 1, 32, 32*num_rope_cores]
@@ -487,7 +482,9 @@ def _prepare_fused_kv_branch_weights(
 
     # ---- Pre-allocated nope output tensor on rmsnorm core ----
     nope_output_shard_spec = ttnn.ShardSpec(rms_crs, (1, kv_lora_rank), ttnn.ShardOrientation.ROW_MAJOR)
-    nope_output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, nope_output_shard_spec)
+    nope_output_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, nope_output_shard_spec
+    )
     nope_output_fused = ttnn.from_torch(
         torch.zeros((1, kv_lora_rank), dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
@@ -665,9 +662,7 @@ def convert_decoder_layer_weights(
         q_a_torch = state[f"model.layers.{layer_idx}.self_attn.q_a_proj.weight"]
         kv_a_torch = state[f"model.layers.{layer_idx}.self_attn.kv_a_proj_with_mqa.weight"]
         if q_a_torch.ndim != 2 or kv_a_torch.ndim != 2:
-            raise ValueError(
-                f"unexpected q_a/kv_a ranks: q_a={tuple(q_a_torch.shape)} kv_a={tuple(kv_a_torch.shape)}"
-            )
+            raise ValueError(f"unexpected q_a/kv_a ranks: q_a={tuple(q_a_torch.shape)} kv_a={tuple(kv_a_torch.shape)}")
         if int(q_a_torch.shape[1]) != int(kv_a_torch.shape[1]):
             raise ValueError(
                 f"q_a and kv_a must share input dim; got q_a_in={int(q_a_torch.shape[1])} kv_a_in={int(kv_a_torch.shape[1])}"
@@ -716,9 +711,7 @@ def convert_decoder_layer_weights(
     # Otherwise use attn_proj_mapper (replicated when ATTN_DP=1, TP-sharded on
     # kv_lora dim when ATTN_DP=0).
     head_parallel_kvb2 = (
-        os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "").strip() == "1"
-        and tp_enabled
-        and tp_size > 1
+        os.environ.get("GLM4_MOE_LITE_HEAD_PARALLEL_KVB2", "").strip() == "1" and tp_enabled and tp_size > 1
     )
     if head_parallel_kvb2:
         kvb2_mapper = _tp_mesh_mapper(device, shard_dim=1)  # shard heads across TP
@@ -734,7 +727,6 @@ def convert_decoder_layer_weights(
         mesh_mapper=kvb2_mapper,
     )
 
-    # w_o stays row-parallel even when ATTN_DP=1 (it MUST have all_reduce for correctness).
     w_o = _linear_weight_tt(
         device=device,
         torch_weight_out_in=state[f"model.layers.{layer_idx}.self_attn.o_proj.weight"],
@@ -772,9 +764,7 @@ def convert_decoder_layer_weights(
                 f"gate_proj={gate_shape} up_proj={up_shape}"
             )
         if int(down_shape[1]) % int(tp_size) != 0:
-            raise ValueError(
-                f"TP enabled but MLP in dim not divisible by tp_size={tp_size}: down_proj={down_shape}"
-            )
+            raise ValueError(f"TP enabled but MLP in dim not divisible by tp_size={tp_size}: down_proj={down_shape}")
         mlp_variant = f"tp{tp_size}"
         mlp_gate_mapper = _tp_mesh_mapper(device, shard_dim=3)
         mlp_down_mapper = _tp_mesh_mapper(device, shard_dim=2)
