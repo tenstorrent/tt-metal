@@ -30,6 +30,7 @@ from helpers.test_variant_parameters import (
     DEST_SYNC,
     NUM_FACES,
     TILE_COUNT,
+    TILE_DST_CT_OFFSET,
     generate_input_dim,
 )
 from helpers.utils import passed_test
@@ -50,9 +51,15 @@ from helpers.utils import passed_test
     #  TODO add DestSync::Full tests when we have a solution for the static_assert in _llk_pack_untilize_init_ that requires block_ct_dim to be less or equal to 8,
     #  which is currently a limitation for testing DestSync::Full with the Untilize blocks calculation algorithm.
     dest_sync=[DestSync.Half],
+    tile_dst_ct_offset=[0],  # Non-zero offsets are tracked in #1449
 )
 def test_pack_untilize(
-    formats, dest_acc, input_dimensions, dest_sync, workers_tensix_coordinates
+    formats,
+    dest_acc,
+    input_dimensions,
+    dest_sync,
+    tile_dst_ct_offset,
+    workers_tensix_coordinates,
 ):
     if TestConfig.WITH_COVERAGE and input_dimensions == [64, 512]:
         pytest.skip(
@@ -134,6 +141,7 @@ def test_pack_untilize(
                 block_ct_dim,
             ),
             DEST_SYNC(dest_sync),
+            TILE_DST_CT_OFFSET(tile_dst_ct_offset),
         ],
         runtimes=[TILE_COUNT(tile_cnt_A), NUM_FACES(4)],
         variant_stimuli=StimuliConfig(

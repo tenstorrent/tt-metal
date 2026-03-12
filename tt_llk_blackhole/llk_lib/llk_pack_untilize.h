@@ -31,8 +31,7 @@ block_ct_dim represents the number of input tiles in a block.
 dense is used with num_faces == 2 and even block_ct_dim, where two 16x32 (or smaller) tiles are packed in a single 32x32 tile region in dest.
 */
 template <std::uint32_t block_ct_dim, bool narrow_row = false, bool dense = false>
-inline void _llk_pack_untilize_mop_config_(
-    const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4, const std::uint32_t tile_dst_offset = 0)
+inline void _llk_pack_untilize_mop_config_(const std::uint32_t face_r_dim = FACE_R_DIM, const std::uint32_t num_faces = 4)
 {
     static_assert(!dense || (block_ct_dim % 2 == 0), "block_ct_dim must be even when dense");
     static_assert(!dense || (!narrow_row), "narrow_row must be false when dense");
@@ -85,10 +84,12 @@ inline void _llk_pack_untilize_mop_config_(
     Since there are two inner loop operations, the instruction set by set_last_inner_loop_instr
     will replace the second inner loop operation (in the last iteration, call the PACR instruction
     with the Last bit set to 1 instead of 0 to close the row).
-    Therefore, by setting the W counter to (15 + tile_dst_offset) % 16 as a start operation,
-    TT_OP_INCADCZW in the inner loop will set it to tile_dst_offset in the first iteration of the inner loop.
+    The W counter CR shadow (W_Cr) is established by TT_SETADC(...SET_W...) in _llk_pack_untilize_
+    before run() is called; the SETADCZW there only initializes Z.
+    ADDRCRZW with increment 0 resets W to the stored W_Cr value at the start of each outer loop
+    iteration (row), without needing tile_dst_offset baked into this MOP template.
     */
-    tmp.set_start_op(TT_OP_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, (15 + tile_dst_offset) & 0xF));
+    tmp.set_start_op(TT_OP_ADDRCRZW(p_setadc::PAC, 0, 0, 0, 0, 0b0010 /*CH0_W*/)); // W = W_Cr (restore W to start of block)
 
     const std::uint32_t replay_buf_len = 4;
     load_replay_buf(
@@ -132,8 +133,6 @@ inline void _llk_pack_untilize_mop_config_(
     tmp.program();
 }
 
-static std::uint32_t tile_dst_offset_state = 0;
-
 template <
     std::uint32_t block_ct_dim,
     std::uint32_t full_ct_dim    = block_ct_dim,
@@ -158,8 +157,7 @@ inline void _llk_pack_untilize_init_(
 
     _llk_pack_untilize_configure_addrmod_();
 
-    _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces, 0);
-    tile_dst_offset_state = 0;
+    _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces);
 
     // Set CH0 Zstride = 2x16x16 faces, .z_src = {.incr = 1} jumps 2 faces
     std::uint32_t x_stride       = (pack_src_format & 0x3) == to_underlying(DataFormat::Float32)   ? 4
@@ -222,17 +220,14 @@ inline void _llk_pack_untilize_(
     program_packer_destination(address);
     const std::uint32_t num_faces_per_rdim_tile = (num_faces > 2) ? 2 : 1;
 
-    TT_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0011); // reset ch0 zw counters
-    TT_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011); // reset ch0 xy counters
-
     const std::uint32_t tile_dst_offset = tile_dst_ct_offset + tile_dst_rt_offset;
-    // Needs to be revisited for perf impact with https://github.com/tenstorrent/tt-llk/issues/632
-    // If starting_tile_dst_offset is non-zero, reconfigure the template with the correct offset
-    if (tile_dst_offset != tile_dst_offset_state)
-    {
-        _llk_pack_untilize_mop_config_<block_ct_dim, narrow_row, dense>(face_r_dim, num_faces, tile_dst_offset);
-        tile_dst_offset_state = tile_dst_offset;
-    }
+    // Set W = (15 + tile_dst_offset) & 0xF, establishing the W_Cr shadow so that ADDRCRZW in the
+    // MOP START_OP resets W to this value at the start of each outer loop iteration (row).
+    // The first INCADCZW in the inner loop then advances W to tile_dst_offset for the first tile.
+    // SETADCZW's Ch0_W field is only 3 bits (0-7), so SETADC is used to carry the full 4-bit W value.
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0001);                                         // reset ch0 z counter
+    TT_SETADC(p_setadc::PAC, p_setadc::CH_0, p_setadc::SET_W, (15 + tile_dst_offset) & 0xF); // set ch0 w counter, establishing W_Cr
+    TTI_SETADCXY(p_setadc::PAC, 0, 0, 0, 0, 0b0011);                                         // reset ch0 xy counters
 
     // Iterate over top, then over bottom faces in the block (if num_faces > 2)
     for (std::uint32_t face = 0; face < num_faces_per_rdim_tile; face++)
