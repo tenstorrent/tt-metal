@@ -5,12 +5,9 @@
 #include "reduce_op_multi_core_h_program_factory.hpp"
 #include "ttnn/operations/reduction/generic/device/reduce_op.hpp"
 #include <tt-metalium/work_split.hpp>
-#include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 #include <cmath>
-
-using namespace tt::constants;
 
 namespace ttnn::prim {
 
@@ -22,9 +19,12 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     auto& output = tensor_return_value;
     const auto& shape = a.padded_shape();
     uint32_t W = shape[3], H = shape[2], NC = shape[1] * shape[0];
+    const uint32_t tile_height = a.tensor_spec().tile().get_height();
+    const uint32_t tile_width = a.tensor_spec().tile().get_width();
+    const uint32_t tile_hw = a.tensor_spec().tile().get_tile_hw();
 
-    uint32_t Wt = W / TILE_WIDTH;
-    uint32_t Ht = H / TILE_HEIGHT;
+    uint32_t Wt = W / tile_width;
+    uint32_t Ht = H / tile_height;
     uint32_t HtWt = Ht * Wt;
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
@@ -67,7 +67,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         num_cores = all_cores.num_cores();
         core_group_1 = all_cores;
         core_group_2 = CoreRangeSet();
-        num_cols_per_core_group_1 = NC * (a.shard_spec().value().shape[1] / TILE_WIDTH);
+        num_cols_per_core_group_1 = NC * (a.shard_spec().value().shape[1] / tile_width);
         num_cols_per_core_group_2 = 0;
     }
 
@@ -75,7 +75,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     uint32_t src1_cb_index = CBIndex::c_1;
     CBHandle cb_src1 = 0;
     if (use_width_sharding) {
-        uint32_t num_shard_tiles = a.shard_spec().value().numel() / TILE_HW;
+        uint32_t num_shard_tiles = a.shard_spec().value().numel() / tile_hw;
         uint32_t num_input_tiles = 2;
         tt_metal::CircularBufferConfig cb_src0_config =
             tt_metal::CircularBufferConfig(
@@ -107,7 +107,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     uint32_t output_cb_index = CBIndex::c_3;
     CBHandle cb_output = 0;
     if (use_width_sharding) {
-        uint32_t num_output_tiles = output.shard_spec().value().numel() / TILE_HW;
+        uint32_t num_output_tiles = output.shard_spec().value().numel() / tile_hw;
         tt_metal::CircularBufferConfig cb_output_config =
             tt_metal::CircularBufferConfig(
                 num_output_tiles * dst_single_tile_size, {{output_cb_index, dst_cb_data_format}})
