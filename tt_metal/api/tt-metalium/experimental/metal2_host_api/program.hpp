@@ -1,3 +1,22 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+
+namespace tt::tt_metal::experimental::metal2_host_api {
+
+// Experimental Metal 2.0 API for creating a Program from a ProgramSpec (Metal 2.0 host API).
+// This will become a constructor for the Program class.
+Program MakeProgramFromSpec(const ProgramSpec& spec);
+
+}  // namespace tt::tt_metal::experimental::metal2_host_api
+
+
+
 #if 0
 
 // Program object semantics

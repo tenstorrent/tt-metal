@@ -14,10 +14,19 @@ namespace tt::tt_metal {
 // Fwd declares
 struct ProgramDescriptor;
 class CircularBuffer;
+class Program;
 
 namespace detail {
 class ProgramImpl;
 }  // namespace detail
+
+namespace experimental::metal2_host_api {
+    struct ProgramSpec;
+
+    // Experimental Metal 2.0 API for creating a Program from a ProgramSpec (Metal 2.0 host API).
+    // This will become a constructor for the Program class.
+    Program MakeProgramFromSpec(const ProgramSpec& spec);
+}
 
 using ProgramId = std::uint64_t;
 
@@ -57,6 +66,12 @@ public:
 private:
     // The internal ProgramImpl may outlive the Program object if it's in-use by a command queue.
     std::shared_ptr<detail::ProgramImpl> internal_;
+
+    // Private constructor for wrapping an already-constructed impl.
+    // Used by experimental::metal2_host_api::MakeProgramFromSpec.
+    explicit Program(std::shared_ptr<detail::ProgramImpl> impl);
+    friend Program experimental::metal2_host_api::MakeProgramFromSpec(
+        const experimental::metal2_host_api::ProgramSpec& spec);
 };
 
 // Only Used in op_profiler, we might want to expose this via a tooling interface instead of through here.
