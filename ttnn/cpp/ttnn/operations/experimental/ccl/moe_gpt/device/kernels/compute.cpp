@@ -11,8 +11,6 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/fill.h"
 #include "api/compute/tile_move_copy.h"
-#include "api/debug/dprint_pages.h"
-#include "api/debug/dprint_tensix.h"
 #include "api/compute/eltwise_unary/eltwise_unary.h"
 
 // Need these headers for running SFPU on PACK thread
@@ -20,16 +18,6 @@
 #include "swiglu_sfpu.h"
 #endif
 
-inline void print_full_tile(uint32_t cb_id, uint32_t tile_id = 0, bool untilize = false) {
-    DPRINT << "======" << ENDL();
-    for (uint8_t r = 0; r < 32; ++r) {
-        SliceRange sr_left = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 0, .w1 = 16, .ws = 1};
-        SliceRange sr_right = SliceRange{.h0 = r, .h1 = (uint8_t)(r + 1), .hs = 1, .w0 = 17, .w1 = 32, .ws = 1};
-        DPRINT << (uint)r << ": " << TileSlice(cb_id, tile_id, sr_left, false, untilize) << " "
-               << TileSlice(cb_id, tile_id, sr_right, true, untilize) << ENDL();
-    }
-    DPRINT << "++++++" << ENDL();
-}
 void kernel_main() {
     constexpr uint32_t num_experts = get_named_compile_time_arg_val("num_experts");
     constexpr uint32_t layer_id = get_named_compile_time_arg_val("layer_id");
@@ -278,7 +266,6 @@ void kernel_main() {
                         /*ct_dim=*/4,
                         /*rt_dim=*/1,
                         /*kt_dim=*/1);
-                    // dprint_tensix_dest_reg(0);
                     k_tracker++;
                 }
                 if (k_tracker == num_w0_w1_tiles_h) {

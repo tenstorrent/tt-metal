@@ -81,33 +81,16 @@ def create_torch_b2(L, E, N):
 def create_torch_w0(L, E, K, N):
     """Create torch w0 weight tensor of shape (L, E, K, N)."""
     return torch.randn((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    # return torch.cat((torch.zeros((L, E, K, N-32), dtype=torch.bfloat16),torch.ones((L, E, K, 32), dtype=torch.bfloat16)/K), dim = 3 )
-    # temp = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    # indices = torch.arange(N, dtype=torch.bfloat16)
-    # # indices[-32:] = -1
-    # return (indices.view(1, 1, 1, N).expand_as(temp))/8192
 
 
 def create_torch_w1(L, E, K, N):
     """Create torch w1 weight tensor of shape (L, E, K, N)."""
     return torch.randn((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    # return torch.ones((L, E, K, N), dtype=torch.bfloat16) /2048
-    # return torch.cat((torch.zeros((L, E, K, N-32), dtype=torch.bfloat16),torch.ones((L, E, K, 32), dtype=torch.bfloat16)/K), dim = 3 )
-    # temp = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    # indices = torch.arange(N, dtype=torch.bfloat16)
-    # # indices[-32:] = -1
-    # return -1 * (indices.view(1, 1, 1, N).expand_as(temp))
 
 
 def create_torch_w2(L, E, N, K):
     """Create torch w2 weight tensor of shape (L, E, N, K)."""
     return torch.randn((L, E, K, N), dtype=torch.bfloat16) - 0.5
-    # return torch.ones((L, E, N, K), dtype=torch.bfloat16) /2048
-    # temp = torch.randn((L, E, N, K), dtype=torch.bfloat16) -0.5
-    # indices = torch.arange(K, dtype=torch.bfloat16)
-    # indices = tensor = torch.repeat_interleave(torch.arange(1, (K//32)+ 1, dtype=torch.bfloat16), repeats=32)
-    # # indices[-32:] = -1
-    # return  indices.view(1, 1, 1,K).expand_as(temp)
 
 
 def prepare_output_tensor(tt_output, E, M, K, ring2cores):
@@ -268,15 +251,6 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
             memory_config=w0_w1_mem_config,
         )
 
-        # torch.set_printoptions(profile="full")
-        # torch.set_printoptions(sci_mode=False)
-        # print(f"Extracted first shard")
-        # for k in range(0,4):
-        #     for i in range(0,2):
-        #         for j in range(0, 128):
-        # with open(f"tensor_shard_expert.txt", "w") as f:
-        #     f.write(str(torch_w0_b0_w1_b1_reordered[0,0,0,0,:,0]))
-
         # Prepare w2 tensor (padded and reordered)
         torch_w2_b2_reordered = prepare_w2_b2_tensor(torch_w2, torch_b2, L, E, N, K, ring2cores)
 
@@ -332,9 +306,7 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
         )
 
         # Output is produced in-place on the input tensor
-        print("post_moe")
         tt_raw_output = ttnn.to_torch(tt_input)
-        print("post_to_torch")
         tt_to_torch_output = prepare_output_tensor(tt_raw_output, E, M, K, ring2cores)
         all_outputs.append(tt_to_torch_output)
 
