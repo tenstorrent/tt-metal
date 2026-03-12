@@ -23,6 +23,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_expert_dispatch_table,
     create_fabric_router_config,
     extract_mesh_config,
+    get_combine_counter_mesh_mapper,
+    get_combine_output_mesh_composer,
+    get_dispatch_input_mesh_mapper,
     get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
@@ -191,24 +194,28 @@ def test_ttnn_dispatch_combine(
     logger.debug(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
 
     # x, weights, and indices: sharded across SP axis, replicated across EP ranks
-    mesh_mapper_replicated = ttnn.ShardTensor2dMesh(
-        mesh_device,
-        mesh_shape=mesh_device.shape,
-        dims=(sp_axis, None),  # Shard on sp_axis, replicate on other axis
-    )
+    mesh_mapper_dispatch_inputs = get_dispatch_input_mesh_mapper(mesh_device, sp_axis)
 
     tt_x = ttnn.from_torch(
-        x, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
+        x,
+        mesh_mapper=mesh_mapper_dispatch_inputs,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.bfloat16,
     )
     tt_weights = ttnn.from_torch(
         weights,
-        mesh_mapper=mesh_mapper_replicated,
+        mesh_mapper=mesh_mapper_dispatch_inputs,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         dtype=ttnn.bfloat16,
     )
     tt_indices = ttnn.from_torch(
-        indices, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.int32
+        indices,
+        mesh_mapper=mesh_mapper_dispatch_inputs,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.int32,
     )
 
     # Initialize TTNN dispatch module
@@ -291,15 +298,10 @@ def test_ttnn_dispatch_combine(
     torch_output = torch_combine_module(torch_dispatched_buffer, torch_dispatched_metadata, expert_token_counts)
 
     # Convert counter to TTNN tensor for combine module
-    # For 2D mesh, use dims=(1, 0) to shard across both axes
-    mesh_mapper_2d = ttnn.ShardTensor2dMesh(
-        mesh_device,
-        mesh_shape=mesh_device.shape,
-        dims=(1, 0),  # Shard tensor dim 1 across mesh rows, tensor dim 0 across mesh cols
-    )
+    mesh_mapper_combine_counter = get_combine_counter_mesh_mapper(mesh_device)
     tt_expert_token_counts = ttnn.from_torch(
         expert_token_counts,
-        mesh_mapper=mesh_mapper_2d,
+        mesh_mapper=mesh_mapper_combine_counter,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=mesh_device,
         dtype=ttnn.int32,
@@ -326,12 +328,7 @@ def test_ttnn_dispatch_combine(
     logger.info("Combine complete!")
 
     # Convert TTNN output back to torch
-    mesh_composer = ttnn.create_mesh_composer(
-        mesh_device,
-        ttnn.MeshComposerConfig(
-            dims=[1, 0],  # Axis 0: replicated; Axis 1: shard on tensor dim 0
-        ),
-    )
+    mesh_composer = get_combine_output_mesh_composer(mesh_device)
 
     y = ttnn.to_torch(tt_output, mesh_composer=mesh_composer, dtype=torch.bfloat16)
 

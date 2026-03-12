@@ -23,6 +23,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_expert_dispatch_table,
     create_fabric_router_config,
     extract_mesh_config,
+    get_combine_counter_mesh_mapper,
+    get_combine_output_mesh_composer,
     get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
@@ -237,11 +239,7 @@ def test_ttnn_combine(
         dispatched_metadata[r, :, :, :, 0] = dispatched_metadata[r, :, :, :, 0] * num_dispatch_groups + r
 
     # Use different sharding: shard both dimensions
-    mesh_mapper = ttnn.ShardTensor2dMesh(
-        mesh_device,
-        mesh_shape=mesh_device.shape,
-        dims=(1, 0),  # Shard tensor dim 1 across mesh rows, tensor dim 0 across mesh cols
-    )
+    mesh_mapper = get_combine_counter_mesh_mapper(mesh_device)
 
     tt_dispatched_buffer = ttnn.from_torch(
         dispatched_buffer,
@@ -299,12 +297,7 @@ def test_ttnn_combine(
     )
 
     # Step 6: Convert ttnn output to torch for comparison
-    mesh_composer = ttnn.create_mesh_composer(
-        mesh_device,
-        ttnn.MeshComposerConfig(
-            dims=[1, 0],  # Axis 0: replicated; Axis 1: shard on tensor dim 0
-        ),
-    )
+    mesh_composer = get_combine_output_mesh_composer(mesh_device)
 
     tt_output_torch = ttnn.to_torch(
         tt_output,
