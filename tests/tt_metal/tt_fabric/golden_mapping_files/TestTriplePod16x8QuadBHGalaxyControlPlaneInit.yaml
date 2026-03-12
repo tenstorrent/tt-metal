@@ -3,14 +3,14 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_0
       mesh:
         - mesh: 0
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 27
+                chip_id: 96
               asic_id: 4015139053881686263
             - umd_chip_id: 1
               asic_position:
@@ -18,7 +18,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 33
+                chip_id: 90
               asic_id: 4293754642479271510
             - umd_chip_id: 2
               asic_position:
@@ -26,7 +26,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 1
+                chip_id: 122
               asic_id: 4297198497990999668
             - umd_chip_id: 3
               asic_position:
@@ -34,7 +34,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 35
+                chip_id: 88
               asic_id: 5152878922918480065
             - umd_chip_id: 4
               asic_position:
@@ -42,7 +42,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 51
+                chip_id: 72
               asic_id: 5725456556045297322
             - umd_chip_id: 5
               asic_position:
@@ -50,7 +50,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 32
+                chip_id: 91
               asic_id: 5951117041131159388
             - umd_chip_id: 6
               asic_position:
@@ -58,7 +58,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 10
+                chip_id: 113
               asic_id: 5999584508252761467
             - umd_chip_id: 7
               asic_position:
@@ -66,7 +66,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 50
+                chip_id: 73
               asic_id: 6380569581715101503
             - umd_chip_id: 8
               asic_position:
@@ -74,7 +74,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 41
+                chip_id: 82
               asic_id: 7669057571733667651
             - umd_chip_id: 9
               asic_position:
@@ -82,7 +82,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 11
+                chip_id: 112
               asic_id: 8130813488093937279
             - umd_chip_id: 10
               asic_position:
@@ -90,7 +90,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 49
+                chip_id: 74
               asic_id: 8520042005742043698
             - umd_chip_id: 11
               asic_position:
@@ -98,7 +98,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 25
+                chip_id: 98
               asic_id: 9759511604032291291
             - umd_chip_id: 12
               asic_position:
@@ -106,7 +106,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 0
+                chip_id: 123
               asic_id: 9871626897429866173
             - umd_chip_id: 13
               asic_position:
@@ -114,7 +114,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 57
+                chip_id: 66
               asic_id: 10042118635050604804
             - umd_chip_id: 14
               asic_position:
@@ -122,7 +122,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 8
+                chip_id: 115
               asic_id: 11344327765109952640
             - umd_chip_id: 15
               asic_position:
@@ -130,7 +130,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 3
+                chip_id: 120
               asic_id: 12896014417745305665
             - umd_chip_id: 16
               asic_position:
@@ -138,7 +138,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 56
+                chip_id: 67
               asic_id: 13603147099094158770
             - umd_chip_id: 17
               asic_position:
@@ -146,7 +146,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 48
+                chip_id: 75
               asic_id: 13773051510894320610
             - umd_chip_id: 18
               asic_position:
@@ -154,7 +154,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 42
+                chip_id: 81
               asic_id: 14049621424350934141
             - umd_chip_id: 19
               asic_position:
@@ -162,7 +162,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 24
+                chip_id: 99
               asic_id: 14952301210084974370
             - umd_chip_id: 20
               asic_position:
@@ -170,7 +170,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 16
+                chip_id: 107
               asic_id: 15239431485920572942
             - umd_chip_id: 21
               asic_position:
@@ -178,7 +178,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 26
+                chip_id: 97
               asic_id: 15385024325187731614
             - umd_chip_id: 22
               asic_position:
@@ -186,7 +186,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 34
+                chip_id: 89
               asic_id: 15470236399078210826
             - umd_chip_id: 23
               asic_position:
@@ -194,7 +194,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 18
+                chip_id: 105
               asic_id: 15761518385204273539
             - umd_chip_id: 24
               asic_position:
@@ -202,7 +202,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 58
+                chip_id: 65
               asic_id: 16261424787273519591
             - umd_chip_id: 25
               asic_position:
@@ -210,7 +210,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 59
+                chip_id: 64
               asic_id: 16522223436016007978
             - umd_chip_id: 26
               asic_position:
@@ -218,7 +218,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 43
+                chip_id: 80
               asic_id: 16779929275816062523
             - umd_chip_id: 27
               asic_position:
@@ -226,7 +226,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 9
+                chip_id: 114
               asic_id: 17273024576962915557
             - umd_chip_id: 28
               asic_position:
@@ -234,7 +234,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 40
+                chip_id: 83
               asic_id: 17612074373475594817
             - umd_chip_id: 29
               asic_position:
@@ -242,7 +242,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 2
+                chip_id: 121
               asic_id: 18138467941411947868
             - umd_chip_id: 30
               asic_position:
@@ -250,7 +250,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 17
+                chip_id: 106
               asic_id: 18270253674144463298
             - umd_chip_id: 31
               asic_position:
@@ -258,19 +258,19 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 19
+                chip_id: 104
               asic_id: 18273080800459561610
     - hostname: g14glx03_1
       mesh:
         - mesh: 0
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 2
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 37
+                chip_id: 94
               asic_id: 650421544081505285
             - umd_chip_id: 1
               asic_position:
@@ -278,7 +278,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 62
+                chip_id: 69
               asic_id: 759674371012042681
             - umd_chip_id: 2
               asic_position:
@@ -286,7 +286,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 23
+                chip_id: 108
               asic_id: 1278618585946748323
             - umd_chip_id: 3
               asic_position:
@@ -294,7 +294,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 15
+                chip_id: 116
               asic_id: 1409910845107221465
             - umd_chip_id: 4
               asic_position:
@@ -302,7 +302,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 44
+                chip_id: 87
               asic_id: 2351850558927920447
             - umd_chip_id: 5
               asic_position:
@@ -310,7 +310,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 29
+                chip_id: 102
               asic_id: 3576129850696554714
             - umd_chip_id: 6
               asic_position:
@@ -318,7 +318,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 38
+                chip_id: 93
               asic_id: 4344505770102943653
             - umd_chip_id: 7
               asic_position:
@@ -326,7 +326,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 5
+                chip_id: 126
               asic_id: 4864024171382154771
             - umd_chip_id: 8
               asic_position:
@@ -334,7 +334,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 39
+                chip_id: 92
               asic_id: 5129755396355777844
             - umd_chip_id: 9
               asic_position:
@@ -342,7 +342,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 21
+                chip_id: 110
               asic_id: 5528852007837852788
             - umd_chip_id: 10
               asic_position:
@@ -350,7 +350,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 14
+                chip_id: 117
               asic_id: 6074070378446960422
             - umd_chip_id: 11
               asic_position:
@@ -358,7 +358,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 47
+                chip_id: 84
               asic_id: 6175938289485490640
             - umd_chip_id: 12
               asic_position:
@@ -366,7 +366,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 54
+                chip_id: 77
               asic_id: 6181842542226162421
             - umd_chip_id: 13
               asic_position:
@@ -374,7 +374,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 55
+                chip_id: 76
               asic_id: 6211188630195614173
             - umd_chip_id: 14
               asic_position:
@@ -382,7 +382,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 63
+                chip_id: 68
               asic_id: 6962610333654833890
             - umd_chip_id: 15
               asic_position:
@@ -390,7 +390,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 45
+                chip_id: 86
               asic_id: 8267573113037461913
             - umd_chip_id: 16
               asic_position:
@@ -398,7 +398,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 13
+                chip_id: 118
               asic_id: 8477064126247037115
             - umd_chip_id: 17
               asic_position:
@@ -406,7 +406,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 53
+                chip_id: 78
               asic_id: 8642605409265878512
             - umd_chip_id: 18
               asic_position:
@@ -414,7 +414,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 36
+                chip_id: 95
               asic_id: 8647625426668573486
             - umd_chip_id: 19
               asic_position:
@@ -422,7 +422,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 30
+                chip_id: 101
               asic_id: 9795820433025443632
             - umd_chip_id: 20
               asic_position:
@@ -430,7 +430,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 6
+                chip_id: 125
               asic_id: 10458279698815118660
             - umd_chip_id: 21
               asic_position:
@@ -438,7 +438,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 52
+                chip_id: 79
               asic_id: 10581738303983564604
             - umd_chip_id: 22
               asic_position:
@@ -446,7 +446,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 60
+                chip_id: 71
               asic_id: 10815534592467708593
             - umd_chip_id: 23
               asic_position:
@@ -454,7 +454,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 28
+                chip_id: 103
               asic_id: 13163416133340509915
             - umd_chip_id: 24
               asic_position:
@@ -462,7 +462,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 31
+                chip_id: 100
               asic_id: 13620522171604337071
             - umd_chip_id: 25
               asic_position:
@@ -470,7 +470,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 22
+                chip_id: 109
               asic_id: 13681428107587072560
             - umd_chip_id: 26
               asic_position:
@@ -478,7 +478,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 61
+                chip_id: 70
               asic_id: 13735393490658273438
             - umd_chip_id: 27
               asic_position:
@@ -486,7 +486,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 20
+                chip_id: 111
               asic_id: 15643852771242972941
             - umd_chip_id: 28
               asic_position:
@@ -494,7 +494,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 12
+                chip_id: 119
               asic_id: 15980092694121183966
             - umd_chip_id: 29
               asic_position:
@@ -502,7 +502,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 4
+                chip_id: 127
               asic_id: 16418791270080614156
             - umd_chip_id: 30
               asic_position:
@@ -510,7 +510,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 7
+                chip_id: 124
               asic_id: 17172097971703158368
             - umd_chip_id: 31
               asic_position:
@@ -518,19 +518,19 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 46
+                chip_id: 85
               asic_id: 17197675523627772381
     - hostname: g14glx03_10
       mesh:
         - mesh: 2
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 120
+                chip_id: 0
               asic_id: 197468663952634244
             - umd_chip_id: 1
               asic_position:
@@ -538,7 +538,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 90
+                chip_id: 34
               asic_id: 1086987861687725655
             - umd_chip_id: 2
               asic_position:
@@ -546,7 +546,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 104
+                chip_id: 16
               asic_id: 1187920713111955621
             - umd_chip_id: 3
               asic_position:
@@ -554,7 +554,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 115
+                chip_id: 11
               asic_id: 1232976452795385490
             - umd_chip_id: 4
               asic_position:
@@ -562,7 +562,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 98
+                chip_id: 26
               asic_id: 1912025995773248669
             - umd_chip_id: 5
               asic_position:
@@ -570,7 +570,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 88
+                chip_id: 32
               asic_id: 2602437750652483109
             - umd_chip_id: 6
               asic_position:
@@ -578,7 +578,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 107
+                chip_id: 19
               asic_id: 2903896019328413428
             - umd_chip_id: 7
               asic_position:
@@ -586,7 +586,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 73
+                chip_id: 49
               asic_id: 4096198785376844324
             - umd_chip_id: 8
               asic_position:
@@ -594,7 +594,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 81
+                chip_id: 41
               asic_id: 4794925271317126914
             - umd_chip_id: 9
               asic_position:
@@ -602,7 +602,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 105
+                chip_id: 17
               asic_id: 5297593223815294838
             - umd_chip_id: 10
               asic_position:
@@ -610,7 +610,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 113
+                chip_id: 9
               asic_id: 5601048583117393961
             - umd_chip_id: 11
               asic_position:
@@ -618,7 +618,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 74
+                chip_id: 50
               asic_id: 5719069549625100466
             - umd_chip_id: 12
               asic_position:
@@ -626,7 +626,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 80
+                chip_id: 40
               asic_id: 5947202412396994864
             - umd_chip_id: 13
               asic_position:
@@ -634,7 +634,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 67
+                chip_id: 59
               asic_id: 6527607274486664446
             - umd_chip_id: 14
               asic_position:
@@ -642,7 +642,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 91
+                chip_id: 35
               asic_id: 7268890212516397421
             - umd_chip_id: 15
               asic_position:
@@ -650,7 +650,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 121
+                chip_id: 1
               asic_id: 7786059809106022478
             - umd_chip_id: 16
               asic_position:
@@ -658,7 +658,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 106
+                chip_id: 18
               asic_id: 10058131354898496968
             - umd_chip_id: 17
               asic_position:
@@ -666,7 +666,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 96
+                chip_id: 24
               asic_id: 10149804791298296576
             - umd_chip_id: 18
               asic_position:
@@ -674,7 +674,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 83
+                chip_id: 43
               asic_id: 10408377191860480591
             - umd_chip_id: 19
               asic_position:
@@ -682,7 +682,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 122
+                chip_id: 2
               asic_id: 10715333813275498973
             - umd_chip_id: 20
               asic_position:
@@ -690,7 +690,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 112
+                chip_id: 8
               asic_id: 14109037723831527353
             - umd_chip_id: 21
               asic_position:
@@ -698,7 +698,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 72
+                chip_id: 48
               asic_id: 14876942779653792059
             - umd_chip_id: 22
               asic_position:
@@ -706,7 +706,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 65
+                chip_id: 57
               asic_id: 14973799011445449827
             - umd_chip_id: 23
               asic_position:
@@ -714,7 +714,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 99
+                chip_id: 27
               asic_id: 15008567385537848671
             - umd_chip_id: 24
               asic_position:
@@ -722,7 +722,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 82
+                chip_id: 42
               asic_id: 15086065383935546446
             - umd_chip_id: 25
               asic_position:
@@ -730,7 +730,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 75
+                chip_id: 51
               asic_id: 15319503556993772488
             - umd_chip_id: 26
               asic_position:
@@ -738,7 +738,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 89
+                chip_id: 33
               asic_id: 15339507431941252535
             - umd_chip_id: 27
               asic_position:
@@ -746,7 +746,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 123
+                chip_id: 3
               asic_id: 16053367472968657199
             - umd_chip_id: 28
               asic_position:
@@ -754,7 +754,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 66
+                chip_id: 58
               asic_id: 16568595157817333591
             - umd_chip_id: 29
               asic_position:
@@ -762,7 +762,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 97
+                chip_id: 25
               asic_id: 16714008278076805839
             - umd_chip_id: 30
               asic_position:
@@ -770,7 +770,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 114
+                chip_id: 10
               asic_id: 17532153612180104986
             - umd_chip_id: 31
               asic_position:
@@ -778,19 +778,19 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 64
+                chip_id: 56
               asic_id: 18341657909943303203
     - hostname: g14glx03_11
       mesh:
         - mesh: 2
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 1
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 103
+                chip_id: 31
               asic_id: 195308057091807238
             - umd_chip_id: 1
               asic_position:
@@ -798,7 +798,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 69
+                chip_id: 61
               asic_id: 945255577978710265
             - umd_chip_id: 2
               asic_position:
@@ -806,7 +806,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 71
+                chip_id: 63
               asic_id: 1411407633939357962
             - umd_chip_id: 3
               asic_position:
@@ -814,7 +814,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 119
+                chip_id: 15
               asic_id: 1709107717384368047
             - umd_chip_id: 4
               asic_position:
@@ -822,7 +822,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 108
+                chip_id: 20
               asic_id: 2787035040274527164
             - umd_chip_id: 5
               asic_position:
@@ -830,7 +830,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 109
+                chip_id: 21
               asic_id: 3675316405027865374
             - umd_chip_id: 6
               asic_position:
@@ -838,7 +838,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 78
+                chip_id: 54
               asic_id: 3741901233490588527
             - umd_chip_id: 7
               asic_position:
@@ -846,7 +846,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 116
+                chip_id: 12
               asic_id: 3943122621727183408
             - umd_chip_id: 8
               asic_position:
@@ -854,7 +854,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 118
+                chip_id: 14
               asic_id: 4608042486227494462
             - umd_chip_id: 9
               asic_position:
@@ -862,7 +862,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 94
+                chip_id: 38
               asic_id: 4791538091995535880
             - umd_chip_id: 10
               asic_position:
@@ -870,7 +870,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 124
+                chip_id: 4
               asic_id: 5009914433819933962
             - umd_chip_id: 11
               asic_position:
@@ -878,7 +878,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 117
+                chip_id: 13
               asic_id: 5361148472239625112
             - umd_chip_id: 12
               asic_position:
@@ -886,7 +886,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 77
+                chip_id: 53
               asic_id: 5499221671068672642
             - umd_chip_id: 13
               asic_position:
@@ -894,7 +894,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 126
+                chip_id: 6
               asic_id: 6605141782462754349
             - umd_chip_id: 14
               asic_position:
@@ -902,7 +902,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 84
+                chip_id: 44
               asic_id: 6765100866162462535
             - umd_chip_id: 15
               asic_position:
@@ -910,7 +910,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 68
+                chip_id: 60
               asic_id: 7031112321818087867
             - umd_chip_id: 16
               asic_position:
@@ -918,7 +918,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 70
+                chip_id: 62
               asic_id: 7352415451542637318
             - umd_chip_id: 17
               asic_position:
@@ -926,7 +926,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 100
+                chip_id: 28
               asic_id: 7394550454635953636
             - umd_chip_id: 18
               asic_position:
@@ -934,7 +934,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 85
+                chip_id: 45
               asic_id: 7728541326173384062
             - umd_chip_id: 19
               asic_position:
@@ -942,7 +942,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 92
+                chip_id: 36
               asic_id: 9865182973242261338
             - umd_chip_id: 20
               asic_position:
@@ -950,7 +950,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 79
+                chip_id: 55
               asic_id: 10339099764333831764
             - umd_chip_id: 21
               asic_position:
@@ -958,7 +958,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 125
+                chip_id: 5
               asic_id: 10457945736459173159
             - umd_chip_id: 22
               asic_position:
@@ -966,7 +966,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 110
+                chip_id: 22
               asic_id: 10749383400345587349
             - umd_chip_id: 23
               asic_position:
@@ -974,7 +974,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 95
+                chip_id: 39
               asic_id: 13011735586001350112
             - umd_chip_id: 24
               asic_position:
@@ -982,7 +982,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 87
+                chip_id: 47
               asic_id: 13168804039707101346
             - umd_chip_id: 25
               asic_position:
@@ -990,7 +990,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 102
+                chip_id: 30
               asic_id: 14061876452063645140
             - umd_chip_id: 26
               asic_position:
@@ -998,7 +998,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 101
+                chip_id: 29
               asic_id: 15344506449121069439
             - umd_chip_id: 27
               asic_position:
@@ -1006,7 +1006,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 76
+                chip_id: 52
               asic_id: 15733295501699882261
             - umd_chip_id: 28
               asic_position:
@@ -1014,7 +1014,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 93
+                chip_id: 37
               asic_id: 15829034409817453046
             - umd_chip_id: 29
               asic_position:
@@ -1022,7 +1022,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 86
+                chip_id: 46
               asic_id: 15993924898973950722
             - umd_chip_id: 30
               asic_position:
@@ -1030,7 +1030,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 111
+                chip_id: 23
               asic_id: 17801848000597240057
             - umd_chip_id: 31
               asic_position:
@@ -1038,19 +1038,19 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 127
+                chip_id: 7
               asic_id: 17923607448576730733
     - hostname: g14glx03_2
       mesh:
         - mesh: 0
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 66
+                chip_id: 57
               asic_id: 401337518907361871
             - umd_chip_id: 1
               asic_position:
@@ -1058,7 +1058,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 115
+                chip_id: 8
               asic_id: 430890185489928492
             - umd_chip_id: 2
               asic_position:
@@ -1066,7 +1066,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 104
+                chip_id: 19
               asic_id: 692690275524063637
             - umd_chip_id: 3
               asic_position:
@@ -1074,7 +1074,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 73
+                chip_id: 50
               asic_id: 1229998203186239511
             - umd_chip_id: 4
               asic_position:
@@ -1082,7 +1082,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 88
+                chip_id: 35
               asic_id: 1734830983127975496
             - umd_chip_id: 5
               asic_position:
@@ -1090,7 +1090,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 122
+                chip_id: 1
               asic_id: 1861863816036089619
             - umd_chip_id: 6
               asic_position:
@@ -1098,7 +1098,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 98
+                chip_id: 25
               asic_id: 2048868718786698021
             - umd_chip_id: 7
               asic_position:
@@ -1106,7 +1106,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 123
+                chip_id: 0
               asic_id: 2130883600670189900
             - umd_chip_id: 8
               asic_position:
@@ -1114,7 +1114,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 74
+                chip_id: 49
               asic_id: 2977020757321232977
             - umd_chip_id: 9
               asic_position:
@@ -1122,7 +1122,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 72
+                chip_id: 51
               asic_id: 4231210081009303848
             - umd_chip_id: 10
               asic_position:
@@ -1130,7 +1130,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 64
+                chip_id: 59
               asic_id: 4299649333528068871
             - umd_chip_id: 11
               asic_position:
@@ -1138,7 +1138,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 113
+                chip_id: 10
               asic_id: 5755846157507482580
             - umd_chip_id: 12
               asic_position:
@@ -1146,7 +1146,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 82
+                chip_id: 41
               asic_id: 5916400381259020946
             - umd_chip_id: 13
               asic_position:
@@ -1154,7 +1154,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 105
+                chip_id: 18
               asic_id: 6042747085481328621
             - umd_chip_id: 14
               asic_position:
@@ -1162,7 +1162,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 80
+                chip_id: 43
               asic_id: 6695964551700819526
             - umd_chip_id: 15
               asic_position:
@@ -1170,7 +1170,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 106
+                chip_id: 17
               asic_id: 9067060589648077241
             - umd_chip_id: 16
               asic_position:
@@ -1178,7 +1178,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 99
+                chip_id: 24
               asic_id: 9094166003275609369
             - umd_chip_id: 17
               asic_position:
@@ -1186,7 +1186,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 89
+                chip_id: 34
               asic_id: 9336878208705773747
             - umd_chip_id: 18
               asic_position:
@@ -1194,7 +1194,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 91
+                chip_id: 32
               asic_id: 9819222692007590233
             - umd_chip_id: 19
               asic_position:
@@ -1202,7 +1202,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 112
+                chip_id: 11
               asic_id: 9954665973819926719
             - umd_chip_id: 20
               asic_position:
@@ -1210,7 +1210,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 81
+                chip_id: 42
               asic_id: 11931033763845401760
             - umd_chip_id: 21
               asic_position:
@@ -1218,7 +1218,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 67
+                chip_id: 56
               asic_id: 14157380878147747328
             - umd_chip_id: 22
               asic_position:
@@ -1226,7 +1226,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 97
+                chip_id: 26
               asic_id: 14415420534742026726
             - umd_chip_id: 23
               asic_position:
@@ -1234,7 +1234,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 107
+                chip_id: 16
               asic_id: 14966567221657730258
             - umd_chip_id: 24
               asic_position:
@@ -1242,7 +1242,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 121
+                chip_id: 2
               asic_id: 14970797127470725332
             - umd_chip_id: 25
               asic_position:
@@ -1250,7 +1250,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 90
+                chip_id: 33
               asic_id: 15338193993411687817
             - umd_chip_id: 26
               asic_position:
@@ -1258,7 +1258,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 120
+                chip_id: 3
               asic_id: 15837661886381334628
             - umd_chip_id: 27
               asic_position:
@@ -1266,7 +1266,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 65
+                chip_id: 58
               asic_id: 16204851374915171406
             - umd_chip_id: 28
               asic_position:
@@ -1274,7 +1274,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 96
+                chip_id: 27
               asic_id: 16775659700169645334
             - umd_chip_id: 29
               asic_position:
@@ -1282,7 +1282,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 75
+                chip_id: 48
               asic_id: 16830661331005093014
             - umd_chip_id: 30
               asic_position:
@@ -1290,7 +1290,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 83
+                chip_id: 40
               asic_id: 17174932920519537227
             - umd_chip_id: 31
               asic_position:
@@ -1298,19 +1298,19 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 114
+                chip_id: 9
               asic_id: 17811904539885282606
     - hostname: g14glx03_3
       mesh:
         - mesh: 0
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 2
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 101
+                chip_id: 30
               asic_id: 313650361076034623
             - umd_chip_id: 1
               asic_position:
@@ -1318,7 +1318,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 110
+                chip_id: 21
               asic_id: 1316772005928213923
             - umd_chip_id: 2
               asic_position:
@@ -1326,7 +1326,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 103
+                chip_id: 28
               asic_id: 1408778462404599637
             - umd_chip_id: 3
               asic_position:
@@ -1334,7 +1334,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 76
+                chip_id: 55
               asic_id: 1790268702040388330
             - umd_chip_id: 4
               asic_position:
@@ -1342,7 +1342,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 68
+                chip_id: 63
               asic_id: 3371414299746441410
             - umd_chip_id: 5
               asic_position:
@@ -1350,7 +1350,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 108
+                chip_id: 23
               asic_id: 3841612461917036993
             - umd_chip_id: 6
               asic_position:
@@ -1358,7 +1358,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 78
+                chip_id: 53
               asic_id: 4050361119573817869
             - umd_chip_id: 7
               asic_position:
@@ -1366,7 +1366,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 86
+                chip_id: 45
               asic_id: 4626142204601111602
             - umd_chip_id: 8
               asic_position:
@@ -1374,7 +1374,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 70
+                chip_id: 61
               asic_id: 4940957888807637657
             - umd_chip_id: 9
               asic_position:
@@ -1382,7 +1382,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 127
+                chip_id: 4
               asic_id: 4965058465883733834
             - umd_chip_id: 10
               asic_position:
@@ -1390,7 +1390,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 69
+                chip_id: 62
               asic_id: 5060645188502771228
             - umd_chip_id: 11
               asic_position:
@@ -1398,7 +1398,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 95
+                chip_id: 36
               asic_id: 5113304306981078376
             - umd_chip_id: 12
               asic_position:
@@ -1406,7 +1406,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 87
+                chip_id: 44
               asic_id: 5295793135446783947
             - umd_chip_id: 13
               asic_position:
@@ -1414,7 +1414,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 84
+                chip_id: 47
               asic_id: 6051024940858745138
             - umd_chip_id: 14
               asic_position:
@@ -1422,7 +1422,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 102
+                chip_id: 29
               asic_id: 7410929570732062722
             - umd_chip_id: 15
               asic_position:
@@ -1430,7 +1430,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 124
+                chip_id: 7
               asic_id: 7582399015508169023
             - umd_chip_id: 16
               asic_position:
@@ -1438,7 +1438,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 85
+                chip_id: 46
               asic_id: 7830623694002473925
             - umd_chip_id: 17
               asic_position:
@@ -1446,7 +1446,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 126
+                chip_id: 5
               asic_id: 8421753656434672484
             - umd_chip_id: 18
               asic_position:
@@ -1454,7 +1454,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 79
+                chip_id: 52
               asic_id: 9716929175281449440
             - umd_chip_id: 19
               asic_position:
@@ -1462,7 +1462,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 94
+                chip_id: 37
               asic_id: 9922117238191143716
             - umd_chip_id: 20
               asic_position:
@@ -1470,7 +1470,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 71
+                chip_id: 60
               asic_id: 10054623275765501911
             - umd_chip_id: 21
               asic_position:
@@ -1478,7 +1478,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 92
+                chip_id: 39
               asic_id: 10281072969541577240
             - umd_chip_id: 22
               asic_position:
@@ -1486,7 +1486,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 119
+                chip_id: 12
               asic_id: 12512186430164155614
             - umd_chip_id: 23
               asic_position:
@@ -1494,7 +1494,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 117
+                chip_id: 14
               asic_id: 12546837450656722284
             - umd_chip_id: 24
               asic_position:
@@ -1502,7 +1502,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 77
+                chip_id: 54
               asic_id: 13567352836474075276
             - umd_chip_id: 25
               asic_position:
@@ -1510,7 +1510,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 109
+                chip_id: 22
               asic_id: 14427583256616748711
             - umd_chip_id: 26
               asic_position:
@@ -1518,7 +1518,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 93
+                chip_id: 38
               asic_id: 14764770483778850194
             - umd_chip_id: 27
               asic_position:
@@ -1526,7 +1526,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 125
+                chip_id: 6
               asic_id: 15230295758484287666
             - umd_chip_id: 28
               asic_position:
@@ -1534,7 +1534,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 116
+                chip_id: 15
               asic_id: 17184132379278075247
             - umd_chip_id: 29
               asic_position:
@@ -1542,7 +1542,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 118
+                chip_id: 13
               asic_id: 17303878229876237513
             - umd_chip_id: 30
               asic_position:
@@ -1550,7 +1550,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 100
+                chip_id: 31
               asic_id: 17659935727681795003
             - umd_chip_id: 31
               asic_position:
@@ -1558,12 +1558,12 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 0
-                chip_id: 111
+                chip_id: 20
               asic_id: 18242298208287120962
     - hostname: g14glx03_4
       mesh:
         - mesh: 1
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
@@ -1823,7 +1823,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_5
       mesh:
         - mesh: 1
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 1
@@ -2083,7 +2083,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_6
       mesh:
         - mesh: 1
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
@@ -2343,7 +2343,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_7
       mesh:
         - mesh: 1
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 1
@@ -2603,14 +2603,14 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_8
       mesh:
         - mesh: 2
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 1
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 50
+                chip_id: 74
               asic_id: 492763459023616699
             - umd_chip_id: 1
               asic_position:
@@ -2618,7 +2618,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 24
+                chip_id: 96
               asic_id: 536664177094017747
             - umd_chip_id: 2
               asic_position:
@@ -2626,7 +2626,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 26
+                chip_id: 98
               asic_id: 1078858907531564796
             - umd_chip_id: 3
               asic_position:
@@ -2634,7 +2634,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 43
+                chip_id: 83
               asic_id: 1355099305360322082
             - umd_chip_id: 4
               asic_position:
@@ -2642,7 +2642,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 49
+                chip_id: 73
               asic_id: 3065025539040543051
             - umd_chip_id: 5
               asic_position:
@@ -2650,7 +2650,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 40
+                chip_id: 80
               asic_id: 4702544096491458751
             - umd_chip_id: 6
               asic_position:
@@ -2658,7 +2658,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 0
+                chip_id: 120
               asic_id: 5473706354229566857
             - umd_chip_id: 7
               asic_position:
@@ -2666,7 +2666,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 10
+                chip_id: 114
               asic_id: 6456247632952416117
             - umd_chip_id: 8
               asic_position:
@@ -2674,7 +2674,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 11
+                chip_id: 115
               asic_id: 7537560044387901101
             - umd_chip_id: 9
               asic_position:
@@ -2682,7 +2682,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 34
+                chip_id: 90
               asic_id: 9901303292351571893
             - umd_chip_id: 10
               asic_position:
@@ -2690,7 +2690,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 32
+                chip_id: 88
               asic_id: 10662995904557543031
             - umd_chip_id: 11
               asic_position:
@@ -2698,7 +2698,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 33
+                chip_id: 89
               asic_id: 10803481948934264265
             - umd_chip_id: 12
               asic_position:
@@ -2706,7 +2706,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 8
+                chip_id: 112
               asic_id: 10812019948858947425
             - umd_chip_id: 13
               asic_position:
@@ -2714,7 +2714,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 57
+                chip_id: 65
               asic_id: 11170326373435842418
             - umd_chip_id: 14
               asic_position:
@@ -2722,7 +2722,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 19
+                chip_id: 107
               asic_id: 11399055221045989962
             - umd_chip_id: 15
               asic_position:
@@ -2730,7 +2730,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 35
+                chip_id: 91
               asic_id: 11674369234526420135
             - umd_chip_id: 16
               asic_position:
@@ -2738,7 +2738,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 16
+                chip_id: 104
               asic_id: 11846276170338109400
             - umd_chip_id: 17
               asic_position:
@@ -2746,7 +2746,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 51
+                chip_id: 75
               asic_id: 12501020322390995742
             - umd_chip_id: 18
               asic_position:
@@ -2754,7 +2754,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 9
+                chip_id: 113
               asic_id: 13537186716427640672
             - umd_chip_id: 19
               asic_position:
@@ -2762,7 +2762,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 42
+                chip_id: 82
               asic_id: 14464585141053056785
             - umd_chip_id: 20
               asic_position:
@@ -2770,7 +2770,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 1
+                chip_id: 121
               asic_id: 14500065526713955225
             - umd_chip_id: 21
               asic_position:
@@ -2778,7 +2778,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 3
+                chip_id: 123
               asic_id: 14789771907461833767
             - umd_chip_id: 22
               asic_position:
@@ -2786,7 +2786,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 27
+                chip_id: 99
               asic_id: 15024618777846130519
             - umd_chip_id: 23
               asic_position:
@@ -2794,7 +2794,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 48
+                chip_id: 72
               asic_id: 15392105978644876970
             - umd_chip_id: 24
               asic_position:
@@ -2802,7 +2802,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 41
+                chip_id: 81
               asic_id: 15450216134825953973
             - umd_chip_id: 25
               asic_position:
@@ -2810,7 +2810,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 17
+                chip_id: 105
               asic_id: 15472460742202767561
             - umd_chip_id: 26
               asic_position:
@@ -2818,7 +2818,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 2
+                chip_id: 122
               asic_id: 16352840292411502785
             - umd_chip_id: 27
               asic_position:
@@ -2826,7 +2826,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 56
+                chip_id: 64
               asic_id: 16672614114424695631
             - umd_chip_id: 28
               asic_position:
@@ -2834,7 +2834,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 59
+                chip_id: 67
               asic_id: 17670382299642222375
             - umd_chip_id: 29
               asic_position:
@@ -2842,7 +2842,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 25
+                chip_id: 97
               asic_id: 17852025782165668989
             - umd_chip_id: 30
               asic_position:
@@ -2850,7 +2850,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 18
+                chip_id: 106
               asic_id: 17918713379990625487
             - umd_chip_id: 31
               asic_position:
@@ -2858,19 +2858,19 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 58
+                chip_id: 66
               asic_id: 17937138559393544966
     - hostname: g14glx03_9
       mesh:
         - mesh: 2
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 36
+                chip_id: 92
               asic_id: 1682805777582747498
             - umd_chip_id: 1
               asic_position:
@@ -2878,7 +2878,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 20
+                chip_id: 108
               asic_id: 2470403212310760502
             - umd_chip_id: 2
               asic_position:
@@ -2886,7 +2886,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 54
+                chip_id: 78
               asic_id: 3249358350578765276
             - umd_chip_id: 3
               asic_position:
@@ -2894,7 +2894,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 30
+                chip_id: 102
               asic_id: 3622370045497745044
             - umd_chip_id: 4
               asic_position:
@@ -2902,7 +2902,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 63
+                chip_id: 71
               asic_id: 3695330779767014748
             - umd_chip_id: 5
               asic_position:
@@ -2910,7 +2910,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 14
+                chip_id: 118
               asic_id: 3948816841306020458
             - umd_chip_id: 6
               asic_position:
@@ -2918,7 +2918,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 6
+                chip_id: 126
               asic_id: 4831400076404632702
             - umd_chip_id: 7
               asic_position:
@@ -2926,7 +2926,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 61
+                chip_id: 69
               asic_id: 5301465850555666919
             - umd_chip_id: 8
               asic_position:
@@ -2934,7 +2934,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 22
+                chip_id: 110
               asic_id: 5626663687531772294
             - umd_chip_id: 9
               asic_position:
@@ -2942,7 +2942,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 60
+                chip_id: 68
               asic_id: 6649906444338240471
             - umd_chip_id: 10
               asic_position:
@@ -2950,7 +2950,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 28
+                chip_id: 100
               asic_id: 7427919874872352605
             - umd_chip_id: 11
               asic_position:
@@ -2958,7 +2958,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 15
+                chip_id: 119
               asic_id: 7953567718801385030
             - umd_chip_id: 12
               asic_position:
@@ -2966,7 +2966,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 45
+                chip_id: 85
               asic_id: 8348329883324857522
             - umd_chip_id: 13
               asic_position:
@@ -2974,7 +2974,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 38
+                chip_id: 94
               asic_id: 8619109787152887578
             - umd_chip_id: 14
               asic_position:
@@ -2982,7 +2982,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 4
+                chip_id: 124
               asic_id: 8972595501361115324
             - umd_chip_id: 15
               asic_position:
@@ -2990,7 +2990,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 37
+                chip_id: 93
               asic_id: 9895273023690817634
             - umd_chip_id: 16
               asic_position:
@@ -2998,7 +2998,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 5
+                chip_id: 125
               asic_id: 9962719115984184967
             - umd_chip_id: 17
               asic_position:
@@ -3006,7 +3006,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 8
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 29
+                chip_id: 101
               asic_id: 10225660490321808810
             - umd_chip_id: 18
               asic_position:
@@ -3014,7 +3014,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 52
+                chip_id: 76
               asic_id: 11770524605723734319
             - umd_chip_id: 19
               asic_position:
@@ -3022,7 +3022,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 55
+                chip_id: 79
               asic_id: 12452272133347377041
             - umd_chip_id: 20
               asic_position:
@@ -3030,7 +3030,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 21
+                chip_id: 109
               asic_id: 12585089844386370407
             - umd_chip_id: 21
               asic_position:
@@ -3038,7 +3038,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 5
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 62
+                chip_id: 70
               asic_id: 13032182017300592844
             - umd_chip_id: 22
               asic_position:
@@ -3046,7 +3046,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 31
+                chip_id: 103
               asic_id: 14153026973398356012
             - umd_chip_id: 23
               asic_position:
@@ -3054,7 +3054,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 2
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 12
+                chip_id: 116
               asic_id: 14254858806174095591
             - umd_chip_id: 24
               asic_position:
@@ -3062,7 +3062,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 4
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 39
+                chip_id: 95
               asic_id: 14665434087665225758
             - umd_chip_id: 25
               asic_position:
@@ -3070,7 +3070,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 7
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 46
+                chip_id: 86
               asic_id: 14712877572217574777
             - umd_chip_id: 26
               asic_position:
@@ -3078,7 +3078,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 44
+                chip_id: 84
               asic_id: 14892856024213472180
             - umd_chip_id: 27
               asic_position:
@@ -3086,7 +3086,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 23
+                chip_id: 111
               asic_id: 15018575129724853053
             - umd_chip_id: 28
               asic_position:
@@ -3094,7 +3094,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 13
+                chip_id: 117
               asic_id: 16112518473389540986
             - umd_chip_id: 29
               asic_position:
@@ -3102,7 +3102,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 1
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 7
+                chip_id: 127
               asic_id: 16167906551793054304
             - umd_chip_id: 30
               asic_position:
@@ -3110,7 +3110,7 @@ asic_to_fabric_node_mapping:
                 asic_location: 6
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 53
+                chip_id: 77
               asic_id: 16906573667280306646
             - umd_chip_id: 31
               asic_position:
@@ -3118,5 +3118,5 @@ asic_to_fabric_node_mapping:
                 asic_location: 3
               fabric_node_id:
                 mesh_id: 2
-                chip_id: 47
+                chip_id: 87
               asic_id: 17365671596747125669

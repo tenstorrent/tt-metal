@@ -90,7 +90,8 @@ target_sources(
             reshape_view/device/device/dataflow/writer_reshape_tiled.cpp
             reshape_view/device/device/rm_reshape_interleaved.cpp
             reshape_view/device/hostdevcommon/common.hpp
-            tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_interleaved.cpp
+            tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_singlecore.cpp
+            tilize/device/kernels/dataflow/reader_unary_stick_layout_split_rows_multicore.cpp
             untilize/device/kernels/dataflow/reader_unary_start_id.cpp
             untilize/device/kernels/dataflow/writer_unary_stick_layout_split_rows_multi_core.cpp
             untilize/device/kernels/compute/pack_untilize_variable_num_blocks.cpp
@@ -294,7 +295,7 @@ target_sources(
             tilize/device/tilize_device_operation.hpp
             tilize/device/tilize_device_operation_types.hpp
             tilize/device/tilize_multi_core_block_program_factory.hpp
-            tilize/device/tilize_multi_core_interleaved_program_factory.hpp
+            tilize/device/tilize_multi_core_default_program_factory.hpp
             tilize/device/tilize_multi_core_sharded_program_factory.hpp
             tilize/device/tilize_multi_core_width_sharded_program_factory.hpp
             tilize/device/tilize_single_core_program_factory.hpp
@@ -382,7 +383,6 @@ target_sources(
         fold/device/fold_device_op.cpp
         fold/device/fold_multi_core_dram_program_factory.cpp
         fold/device/fold_multi_core_program_factory.cpp
-        fold/device/fold_single_core_program_factory.cpp
         fold/fold.cpp
         indexed_fill/device/indexed_fill_device_operation.cpp
         indexed_fill/device/indexed_fill_program_factory.cpp
@@ -466,7 +466,7 @@ target_sources(
         squeeze/squeeze.cpp
         stack/stack.cpp
         tilize/device/tilize_device_operation.cpp
-        tilize/device/tilize_multi_core_interleaved_program_factory.cpp
+        tilize/device/tilize_multi_core_default_program_factory.cpp
         tilize/device/tilize_multi_core_block_program_factory.cpp
         tilize/device/tilize_single_core_program_factory.cpp
         tilize/device/tilize_multi_core_sharded_program_factory.cpp

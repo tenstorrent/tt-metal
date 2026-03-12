@@ -146,7 +146,6 @@ void kernel_main() {
         } else {
             // Read cur_pos from CB using mailbox-based synchronization (issue #27979)
             constexpr uint32_t cb_index_id = tt::CBIndex::c_8;
-
             cb_wait_front(cb_index_id, 1);
             cur_pos = read_tile_value(cb_index_id, 0, cur_batch / q_heads_parallel_factor);
             cb_pop_front(cb_index_id, 1);
@@ -412,7 +411,6 @@ void kernel_main() {
                  */
                 reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, vector_mode>(
                     cb_cur_max, cb_prev_max, Sk_chunk_t_dynamic, k_chunk > k_chunk_start);
-
                 /* QK -= cb_cur_max */
                 /* QK = exp(QK)*/
                 reconfig_data_format(cb_qk_im, cb_cur_max);
@@ -661,7 +659,6 @@ void kernel_main() {
             //   - cb_out_accumulate_im: O
             //   - cb_prev_sum: L
             //   - cb_prev_max: M
-
             // Move O to output CB
             move_block<true>(cb_out_accumulate_im, cb_out_o, out_chunk_tiles);
             // Move M to output CB

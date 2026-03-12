@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include <cstdint>
 #include <tt-metalium/core_coord.hpp>
 #include "erisc_datamover_builder.hpp"
@@ -113,7 +113,7 @@ void append_fabric_connection_rt_args(
     const bool is_2d_fabric = fabric_context.is_2D_routing_enabled();
 
     // Make an exception for TG gateway connections. TG gateways are on a different mesh compared to remote chips
-    // but the routing is simple and doesnt need any special inter-mesh handling
+    // but the routing is simple and doesn't need any special inter-mesh handling
     if (!is_2d_fabric && !is_TG_gateway_connection(src_fabric_node_id, dst_fabric_node_id)) {
         TT_FATAL(
             src_fabric_node_id.mesh_id == dst_fabric_node_id.mesh_id,

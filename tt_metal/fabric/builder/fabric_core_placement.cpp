@@ -80,7 +80,7 @@ void apply_core_placement_optimizations(
     size_t /*link_index*/) {
     bool enable_core_placement_opt = false;
     // currently is_galaxy is only being passed in through the fabric unit test, once we switch to fabric
-    // device init, will use proper cluster type to decide which machine it is. For the optimzation on noc
+    // device init, will use proper cluster type to decide which machine it is. For the optimization on noc
     // selection, we empirically optimize on 3/4 links for linear, and 4 links on ring, as less links caused
     // perf degradation, potentially caused by sw overhead of checking two nocs.
     if (ctx.is_galaxy) {
