@@ -91,7 +91,12 @@ Tensor _digamma(const Tensor& input_a, const std::optional<MemoryConfig>& output
 }
 
 Tensor _lgamma_fast(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    return ttnn::operations::unary::ExecuteUnary<unary::UnaryOpType::LGAMMA>::invoke(x, output_mem_config);
+    return operations::unary::detail::unary_impl(
+        x,
+        {operations::unary::UnaryWithParam{operations::unary::UnaryOpType::LGAMMA}},
+        output_mem_config,
+        std::nullopt,
+        std::nullopt);
 }
 
 // Existing implementation of lgamma.
@@ -179,13 +184,6 @@ Tensor _lgamma(const Tensor& x, const std::optional<MemoryConfig>& output_mem_co
         }
     }
     return result;
-}
-
-Tensor Lgamma::invoke(const Tensor& x, const std::optional<MemoryConfig>& output_mem_config) {
-    if (x.dtype() == DataType::BFLOAT16) {
-        return _lgamma_fast(x, output_mem_config);
-    }
-    return _lgamma(x, output_mem_config);
 }
 
 // multivariate log-gamma function
@@ -413,7 +411,7 @@ Tensor _glu(const Tensor& input_a, int32_t dim, const std::optional<MemoryConfig
         dim = 3;
     }
     std::vector<Tensor> ab = split_tensor_for_glu(input_a, dim, output_mem_config);
-    Tensor sigmoid_b = ttnn::sigmoid(ab[1], (int)VecMode::RC, Sigmoid::SigmoidMode::ACCURATE, output_mem_config);
+    Tensor sigmoid_b = ttnn::sigmoid(ab[1], (int)VecMode::RC, SigmoidMode::ACCURATE, output_mem_config);
     Tensor glu_result = ttnn::multiply(ab[0], sigmoid_b, std::nullopt, output_mem_config);
     return glu_result;
 }
@@ -547,3 +545,12 @@ Tensor _normalize_global(const Tensor& y, const std::optional<MemoryConfig>& out
 }
 
 }  // namespace ttnn::operations::unary
+
+namespace ttnn {
+Tensor lgamma(const Tensor& t, const std::optional<MemoryConfig>& m) {
+    if (t.dtype() == DataType::BFLOAT16) {
+        return ttnn::operations::unary::_lgamma_fast(t, m);
+    }
+    return ttnn::operations::unary::_lgamma(t, m);
+}
+}  // namespace ttnn
