@@ -84,6 +84,63 @@ namespace internal
 }
 
 /**
+ * @brief Copies data from src -> dest, blocking until the copy is completed.
+ * @note Addresses are marked volatile because it's assumed that this function is used for sync between threads.
+ * @param dst volatile destination address
+ * @param src volatile source address
+ * @param len number of bytes to copy
+ * @return pointer to the destination
+ */
+inline volatile void *memcpy_blocking(volatile void *dst, const volatile void *src, std::size_t len)
+{
+    // I'm prioritizing correctness and simplicity over complexity and performance at this point.
+    // Therefore this is definitely slow. I don't expect this to become a bottleneck, so we can optimize it later.
+
+    // https://github.com/tenstorrent/tt-isa-documentation/tree/main/WormholeB0/TensixTile/BabyRISCV/MemoryOrdering.md
+
+    // this code provides a blocking memcpy by doing the following:
+    // - issue a LOAD from src[i]
+    // - issue a STORE to dst[i]
+    //     - the STORE flushes the L0 (DCACHE) line, so the subsequent LOAD will read from L1
+    // - issue a LOAD from dst[i]
+    //     - this LOAD is ordered after the STORE to the same address
+    // - issue 7 NOPs after the final LOAD
+    //     - the retire-order queue has 8 slots; the final LOAD + 7 NOPs fill it completely
+    //     - the final LOAD only retires (frees its slot) once the read-response arrives from the memory subsystem arrives
+    //     - the final LOAD completes after the STORE, so once it retires, the memcpy is fully committed to memory
+    //     - until the LOAD retires, no new instruction can enter the retire-order queue
+    //     - subsequent LOADs/STOREs can't enter the LSQ and emit transactions because the retire-order queue is full
+    //     - this ensures that no memory transactions can be issued until the memcpy is fully committed to underlying memory
+    // - memory clobber
+    //     - prevents the COMPILER from reordering memory accesses across this boundary
+
+    volatile char *dstc       = reinterpret_cast<volatile char *>(dst);
+    const volatile char *srcc = reinterpret_cast<const volatile char *>(src);
+
+    for (std::size_t i = 0; i < len; i++)
+    {
+        dstc[i] = srcc[i];
+    }
+
+    for (std::size_t i = 0; i < len; i++)
+    {
+        (void)(dstc[i]);
+    }
+
+    asm volatile(
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t"
+        "nop\n\t" ::
+            : "memory");
+
+    return dst;
+}
+
+/**
  * @brief Issues a load transaction that will block the core until the transaction is completed.
  * @tparam T 32-bit type to load
  * @param ptr address to read from
