@@ -21,7 +21,7 @@ std::uint32_t math_sync_tile_dst_index = 0;
 #include "llk_unpack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
 #ifdef RUNTIME_FORMATS
     const volatile FormatConfig& formats = params->formats;
@@ -64,7 +64,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #include "llk_math_matmul.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
 #ifdef RUNTIME_FORMATS
     const volatile FormatConfig& formats = params->formats;
@@ -95,7 +95,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
 #include "llk_pack_common.h"
 #include "params.h"
 
-void run_kernel(const volatile struct RuntimeParams* params)
+void run_kernel(RUNTIME_PARAMETERS params)
 {
 #ifdef RUNTIME_FORMATS
     const volatile FormatConfig& formats = params->formats;
