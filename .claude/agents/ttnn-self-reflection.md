@@ -110,7 +110,7 @@ For each phase/agent, record:
 - **Debugging time**: sum of intervals between `hypothesis` and successful `fix_result` breadcrumbs
 - **Productive time**: wall duration - debugging time
 
-Fill in the Phase Timeline, Agent Duration Breakdown, Duration Visualization, and Time Distribution tables in the template.
+Fill in the Phase Timeline (including the **Total** row — calculated from earliest Phase 0 start to latest Phase 5 end), Agent Duration Breakdown, Duration Visualization, and Time Distribution tables in the template.
 
 ---
 
@@ -171,7 +171,42 @@ Assess whether the logs themselves were sufficient for this analysis:
 - Could you reconstruct what happened from the evidence?
 - Were timestamps present and consistent across breadcrumbs and git?
 
-### 3f. Cross-Reference with Known Issues
+### 3f. Helper Usage Audit (→ template Section 10)
+This section is **mandatory** in every report. Helpers are the preferred way to implement kernel phases — if a helper exists for an operation, it MUST be used.
+
+**Step 1: Inventory available helpers.**
+Read the helper library directory:
+```
+ttnn/cpp/ttnn/kernel_lib/*.hpp
+```
+Build a list of all available helpers and what they cover (tilize, untilize, reduce, binary ops, dest management, etc.).
+
+**Step 2: Read the design document's helper mappings.**
+In `{op_path}/op_design.md` Part 2, the architect maps each kernel phase to either a helper call or raw implementation. Extract:
+- Which phases were mapped to helpers (and which specific helpers)
+- Which phases were marked "NO HELPER" (and the architect's justification)
+
+**Step 3: Read the actual kernel code.**
+Glob for kernel files:
+```
+{op_path}/kernels/*.cpp
+```
+For each kernel file, check:
+- Which `#include "ttnn/cpp/ttnn/kernel_lib/*.hpp"` are present
+- Which helper functions are actually called (e.g., `tilize<>()`, `reduce<>()`, `add<>()`, `untilize<>()`)
+- Which phases use raw `cb_wait_front`/`cb_pop_front`/`tile_regs_acquire` etc. instead of helpers
+
+**Step 4: Cross-reference and classify.**
+For each kernel phase, determine:
+- **Helper used correctly**: Helper exists, design recommended it, kernel uses it. ✅
+- **Helper missed**: Helper exists that covers this operation, but raw code was written instead. ❌ — this is a bug.
+- **Raw code justified**: No helper exists for this operation, raw code is the correct approach. ✅
+- **Helper misused**: Helper used in wrong context (e.g., compute helper in dataflow kernel, redundant CB ops wrapping a helper). ❌
+
+**Step 5: Check for redundant CB operations around helpers.**
+Helpers handle their own `cb_reserve_back`, `cb_push_back`, `tile_regs_acquire/commit/wait/release`. If the kernel wraps helper calls with these operations, flag it — this causes deadlocks or double-waits. Note: `cb_wait_front` and `cb_pop_front` are sometimes legitimately needed alongside helpers (e.g., for inter-phase transitions or when the design explicitly requires them), so only flag these if they directly duplicate what the helper already does internally for the same CB.
+
+### 3g. Cross-Reference with Known Issues
 Read `.claude/pipeline-improvements.md` and check if this run encountered any listed issues.
 
 ---

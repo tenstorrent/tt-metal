@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
 """Score Function — Rate the success of an op generation pipeline run.
 
-Produces a score from 0 (worst) to 100 (best) based on weighted criteria:
-  1. Test success      — Did all TDD stages pass?
-  2. Execution time    — How long did overall and per-stage take?
-  3. Retry efficiency  — How many retries were needed?
-  4. Helper usage      — Does compute kernel use helpers or raw calls?
+Produces a score from 0 (worst) to 100 (best) in two stages:
+
+Stage 1 — Base score (additive, weights sum to 1.0):
+  1. Golden score      — Did the op pass real golden tests? (highest weight)
+  2. Test success      — Did TDD stages pass? (lower weight, tends to always pass)
+  3. Execution time    — How long did overall and per-stage take?
+  4. Retry efficiency  — How many retries were needed?
   5. Red flags         — Issues from self-reflection not covered above?
 
-Each criterion is scored 0–100, then combined with configurable multipliers
-that sum to 1.0.
+Stage 2 — Helper usage multiplier:
+  6. Helper usage      — Multiplies the base score.
+                         100% compliance = 1.0x, 0% compliance = 0.2x.
+                         Not using helpers when they exist tanks the entire grade.
 
 Usage:
     python3 .claude/scripts/tdd-pipeline/score.py <op_path> [--json] [--verbose]
-    python3 .claude/scripts/tdd-pipeline/score.py <op_path> --weights '{"test_success": 0.35}'
+    python3 .claude/scripts/tdd-pipeline/score.py <op_path> --golden-results path/to/golden_results.txt
+    python3 .claude/scripts/tdd-pipeline/score.py <op_path> --weights '{"golden_score": 0.40}'
 
-Called by: create-op skill (Phase 5/6), or standalone for evaluation.
-Reads: .tdd_state.json, self_reflection.md, op_design.md, kernels/*.cpp, git log
+Called by: run_eval.sh (with --golden-results), create-op skill (Phase 5/6), or standalone.
+Reads: .tdd_state.json, self_reflection.md, op_design.md, kernels/*.cpp, git log, golden_results.txt
 """
 
 import argparse
@@ -38,12 +43,14 @@ KERNEL_LIB_DIR = REPO_ROOT / "ttnn" / "cpp" / "ttnn" / "kernel_lib"
 # ---------------------------------------------------------------------------
 
 DEFAULT_WEIGHTS = {
-    "test_success": 0.35,  # Highest priority: does it work?
-    "execution_time": 0.25,  # Was the pipeline efficient? (2nd priority)
+    "golden_score": 0.35,  # Highest priority: does it pass real golden tests?
+    "test_success": 0.15,  # TDD stages (tend to always pass, lower weight)
+    "execution_time": 0.20,  # Was the pipeline efficient?
     "retry_efficiency": 0.15,  # How clean was the implementation?
-    "helper_usage": 0.13,  # Maintainability: helpers vs raw calls
-    "red_flags": 0.12,  # Catch-all from self-reflection
+    "red_flags": 0.15,  # Catch-all from self-reflection
 }
+# helper_usage is NOT in the additive weights — it acts as a multiplier on
+# the final score. 100% compliance = 1.0x, 0% compliance = 0.2x.
 
 # ---------------------------------------------------------------------------
 # Time Benchmarks (seconds) — used for execution_time scoring
@@ -84,7 +91,95 @@ class ScoreReport:
 
 
 # ---------------------------------------------------------------------------
-# Criterion 1: Test Success (0-100)
+# Criterion 1: Golden Score (0-100)
+# ---------------------------------------------------------------------------
+
+
+def score_golden_tests(golden_results_path: Optional[Path]) -> CriterionResult:
+    """Score based on golden test pass rate.
+
+    Golden tests are the ground truth — they test the generated operation
+    against a PyTorch reference across ~70 shapes, multiple modes, and
+    edge cases. This is the most important quality signal.
+
+    Scoring: (passed / total) * 100. If no golden results exist, score is 0.
+
+    Sources (in priority order):
+    1. golden_results.txt passed via --golden-results CLI arg
+    2. Falls back to 0 if not available
+    """
+    if golden_results_path is None or not golden_results_path.exists():
+        return CriterionResult(
+            name="golden_score",
+            raw_score=0.0,
+            weight=0.0,
+            weighted_score=0.0,
+            details="No golden test results found",
+        )
+
+    try:
+        content = golden_results_path.read_text()
+    except OSError:
+        return CriterionResult(
+            name="golden_score",
+            raw_score=0.0,
+            weight=0.0,
+            weighted_score=0.0,
+            details="Could not read golden results file",
+        )
+
+    # Parse: "PASSED=N FAILED=N ERRORS=N SKIPPED=N HANGS=N TOTAL=N"
+    def _extract(key: str) -> int:
+        m = re.search(rf"{key}=(\d+)", content)
+        return int(m.group(1)) if m else 0
+
+    passed = _extract("PASSED")
+    failed = _extract("FAILED")
+    errors = _extract("ERRORS")
+    skipped = _extract("SKIPPED")
+    hangs = _extract("HANGS")
+    total = _extract("TOTAL")
+
+    if total == 0:
+        return CriterionResult(
+            name="golden_score",
+            raw_score=0.0,
+            weight=0.0,
+            weighted_score=0.0,
+            details="Golden tests ran but produced 0 total tests",
+        )
+
+    raw_score = (passed / total) * 100.0
+
+    details = f"Golden: {passed}/{total} passed"
+    if failed > 0:
+        details += f", {failed} failed"
+    if errors > 0:
+        details += f", {errors} errors"
+    if hangs > 0:
+        details += f", {hangs} hangs"
+    if skipped > 0:
+        details += f", {skipped} skipped"
+
+    return CriterionResult(
+        name="golden_score",
+        raw_score=round(raw_score, 1),
+        weight=0.0,
+        weighted_score=0.0,
+        details=details,
+        sub_scores={
+            "passed": passed,
+            "failed": failed,
+            "errors": errors,
+            "skipped": skipped,
+            "hangs": hangs,
+            "total": total,
+        },
+    )
+
+
+# ---------------------------------------------------------------------------
+# Criterion 2: Test Success (0-100)
 # ---------------------------------------------------------------------------
 
 
@@ -259,10 +354,10 @@ def _parse_duration_str(duration_str: str) -> Optional[float]:
 def _get_durations_from_self_reflection(op_path: Path) -> dict:
     """Parse timing data from self_reflection.md tables.
 
-    Primary source: the '### Phase Timeline' table, which has per-phase
-    durations computed from breadcrumb timestamps. We sum phases 0-4
-    (discovery through TDD kernels) for the overall duration, excluding
-    phase 5+ (reporting/self-reflection).
+    Primary source: the '### Phase Timeline' table's **Total** row, which
+    is computed by the self-reflection agent as earliest Phase 0 start to
+    latest Phase 5 end. Falls back to summing phases 0-4 if the Total row
+    is missing.
 
     Secondary source: the TDD Stage table for per-stage durations.
 
@@ -301,10 +396,21 @@ def _get_durations_from_self_reflection(op_path: Path) -> dict:
         if dur:
             phase_durations[phase_num] = {"name": phase_name, "duration": dur}
 
-    # Overall = sum of phases 0 through 4 (exclude 5: Report, 6: Self-reflection)
-    production_durations = [v["duration"] for k, v in phase_durations.items() if k <= 4]
-    if production_durations:
-        result["overall"] = sum(production_durations)
+    # Overall: prefer the Total row from the Phase Timeline table (self-reflection
+    # agent computes this as earliest Phase 0 start → latest Phase 5 end).
+    # Fall back to summing phases 0-4 if the Total row is missing.
+    total_row_match = re.search(
+        r"\|\s*\*?\*?Total\*?\*?\s*\|.*?\|\s*\*?\*?(~?[\d]+m[\s\d]*s?)\*?\*?\s*\|",
+        phase_timeline_section,
+    )
+    if total_row_match:
+        total_dur = _parse_duration_str(total_row_match.group(1))
+        if total_dur:
+            result["overall"] = total_dur
+    if result["overall"] is None:
+        production_durations = [v["duration"] for k, v in phase_durations.items() if k <= 4]
+        if production_durations:
+            result["overall"] = sum(production_durations)
 
     # Store per-phase breakdown for reporting
     result["per_phase"] = {v["name"]: v["duration"] for k, v in phase_durations.items()}
@@ -614,8 +720,105 @@ def _get_helper_abstracted_ops() -> set:
     return abstracted
 
 
+def _get_helper_score_from_self_reflection(op_path: Path) -> Optional[CriterionResult]:
+    """Parse helper compliance data from self_reflection.md Section 10.
+
+    Looks for the Helper Compliance Summary table which contains:
+      - Total kernel phases
+      - Phases using helpers correctly (✅)
+      - Phases with justified raw code (✅)
+      - Phases with missed helpers (❌)
+      - Phases with misused helpers (❌)
+      - Helper compliance rate (%)
+
+    Returns a CriterionResult if the table is found, None otherwise.
+    """
+    reflection_path = op_path / "self_reflection.md"
+    if not reflection_path.exists():
+        return None
+
+    try:
+        content = reflection_path.read_text()
+    except OSError:
+        return None
+
+    # Extract the Helper Compliance Summary section
+    section_match = re.search(
+        r"###\s*Helper Compliance Summary\s*\n(.*?)(?=\n###|\n---|\n##)",
+        content,
+        re.DOTALL,
+    )
+    if not section_match:
+        return None
+
+    section = section_match.group(1)
+
+    # Parse table rows: "| Metric | Value |"
+    def _parse_int_from_row(label: str) -> Optional[int]:
+        m = re.search(rf"\|\s*{re.escape(label)}\s*\|\s*(\d+)", section)
+        return int(m.group(1)) if m else None
+
+    total_phases = _parse_int_from_row("Total kernel phases")
+    helpers_correct = _parse_int_from_row("Phases using helpers correctly")
+    raw_justified = _parse_int_from_row("Phases with justified raw code")
+    helpers_missed = _parse_int_from_row("Phases with missed helpers")
+    helpers_misused = _parse_int_from_row("Phases with misused helpers")
+
+    # Parse compliance rate: "| **Helper compliance rate** | **85%** |"
+    rate_match = re.search(
+        r"\|\s*\*?\*?Helper compliance rate\*?\*?\s*\|\s*\*?\*?(\d+)%?\*?\*?\s*\|",
+        section,
+    )
+    compliance_rate = int(rate_match.group(1)) if rate_match else None
+
+    # Need at least the compliance rate or enough data to compute a score
+    if compliance_rate is None and total_phases is None:
+        return None
+
+    # Use compliance rate directly as the raw score if available
+    if compliance_rate is not None:
+        raw_score = float(compliance_rate)
+    elif total_phases and total_phases > 0:
+        good = (helpers_correct or 0) + (raw_justified or 0)
+        raw_score = (good / total_phases) * 100.0
+    else:
+        return None
+
+    raw_score = round(min(100.0, max(0.0, raw_score)), 1)
+
+    # Build details string
+    details_parts = [f"Helper compliance: {raw_score:.0f}% (from self_reflection.md)"]
+    if helpers_missed and helpers_missed > 0:
+        details_parts.append(f"{helpers_missed} missed helper opportunities")
+    if helpers_misused and helpers_misused > 0:
+        details_parts.append(f"{helpers_misused} misused helpers")
+
+    return CriterionResult(
+        name="helper_usage",
+        raw_score=raw_score,
+        weight=0.0,
+        weighted_score=0.0,
+        details="; ".join(details_parts),
+        sub_scores={
+            "source": "self_reflection.md",
+            "total_phases": total_phases,
+            "helpers_correct": helpers_correct,
+            "raw_justified": raw_justified,
+            "helpers_missed": helpers_missed,
+            "helpers_misused": helpers_misused,
+            "compliance_rate": compliance_rate,
+        },
+    )
+
+
 def score_helper_usage(op_path: Path, state: dict) -> CriterionResult:
     """Score based on how much the compute kernel uses helpers vs raw calls.
+
+    Primary source: the Helper Compliance Summary table in self_reflection.md
+    (Section 10), which has a compliance rate computed by the self-reflection
+    agent after auditing all kernel phases against the helper library.
+
+    Fallback: direct kernel scanning (original approach).
 
     The pipeline strongly encourages using helpers from ttnn/cpp/ttnn/kernel_lib/.
     Raw compute calls (tile_regs_acquire, reduce_tile, pack_tile, etc.) in the
@@ -623,15 +826,14 @@ def score_helper_usage(op_path: Path, state: dict) -> CriterionResult:
     (cb_wait_front, cb_pop_front) are expected primitives — helpers don't fully
     abstract these because policies like NoWaitNoPop require manual management.
 
-    Scoring:
-    - 100: All compute phases use helpers (no raw tile/CB ops in compute kernel)
-    - 70: Partial helper usage (some phases use helpers, some use raw calls)
-    - 40: No helpers but functional raw implementation
-    - 0: No compute kernel found or empty stubs
-
     Also checks the design doc for helper mapping to see if the agent followed
     the architect's recommendations.
     """
+    # Try self_reflection.md first (most accurate — based on per-phase audit)
+    reflection_result = _get_helper_score_from_self_reflection(op_path)
+    if reflection_result is not None:
+        return reflection_result
+
     op_name = state.get("op_name", "")
     compute_kernel = op_path / "kernels" / f"{op_name}_compute.cpp"
 
@@ -981,13 +1183,19 @@ def compute_grade(score: float) -> str:
 # ---------------------------------------------------------------------------
 
 
-def score_pipeline_run(op_path: Path, weights: Optional[dict] = None) -> ScoreReport:
+def score_pipeline_run(
+    op_path: Path,
+    weights: Optional[dict] = None,
+    golden_results_path: Optional[Path] = None,
+) -> ScoreReport:
     """Compute the composite score for a pipeline run.
 
     Args:
         op_path: Path to the operation directory.
         weights: Optional override for criterion weights. Missing keys
                  use defaults. Must sum to 1.0.
+        golden_results_path: Optional path to golden_results.txt from
+                             eval_test_runner.sh.
 
     Returns:
         ScoreReport with total score, grade, and per-criterion breakdown.
@@ -1020,23 +1228,33 @@ def score_pipeline_run(op_path: Path, weights: Optional[dict] = None) -> ScoreRe
         state = json.load(f)
 
     # Score each criterion
-    criteria_results = [
+    additive_results = [
+        score_golden_tests(golden_results_path),
         score_test_success(state),
         score_execution_time(state, op_path),
         score_retry_efficiency(state),
-        score_helper_usage(op_path, state),
         score_red_flags(op_path, state),
     ]
+    helper_result = score_helper_usage(op_path, state)
 
-    # Apply weights
-    total_score = 0.0
-    for cr in criteria_results:
+    # Apply additive weights
+    base_score = 0.0
+    for cr in additive_results:
         cr.weight = w.get(cr.name, 0.0)
         cr.weighted_score = round(cr.raw_score * cr.weight, 2)
-        total_score += cr.weighted_score
+        base_score += cr.weighted_score
 
-    total_score = round(min(100.0, max(0.0, total_score)), 1)
+    # Apply helper_usage as a multiplier on the base score.
+    # 100% compliance → 1.0x (no penalty)
+    # 0% compliance   → 0.2x (floors the score at 20% of base)
+    helper_multiplier = 0.2 + 0.8 * (helper_result.raw_score / 100.0)
+    helper_result.weight = helper_multiplier
+    helper_result.weighted_score = round(helper_multiplier, 2)
+
+    total_score = round(min(100.0, max(0.0, base_score * helper_multiplier)), 1)
     grade = compute_grade(total_score)
+
+    criteria_results = additive_results + [helper_result]
 
     # Build summary
     op_name = state.get("op_name", op_path.name)
@@ -1070,12 +1288,21 @@ def print_report(report: ScoreReport, verbose: bool = False) -> None:
     print(f"  {'Criterion':<20} {'Raw':>6} {'Weight':>7} {'Weighted':>9}")
     print(f"  {'-'*20} {'-'*6} {'-'*7} {'-'*9}")
 
+    base_score = 0.0
     for cr in report.criteria:
         name = cr["name"].replace("_", " ").title()
         raw = f"{cr['raw_score']:.1f}"
-        weight = f"x{cr['weight']:.2f}"
-        weighted = f"{cr['weighted_score']:.1f}"
-        print(f"  {name:<20} {raw:>6} {weight:>7} {weighted:>9}")
+        if cr["name"] == "helper_usage":
+            # Helper usage is a multiplier, show differently
+            weight = f"{cr['weighted_score']:.2f}x"
+            print(f"  {'-'*20} {'-'*6} {'-'*7} {'-'*9}")
+            print(f"  {'Base Score':<20} {'':>6} {'':>7} {base_score:>8.1f}")
+            print(f"  {name:<20} {raw:>6} {'mult':>7} {weight:>9}")
+        else:
+            weight = f"x{cr['weight']:.2f}"
+            weighted = f"{cr['weighted_score']:.1f}"
+            base_score += cr["weighted_score"]
+            print(f"  {name:<20} {raw:>6} {weight:>7} {weighted:>9}")
 
     print(f"  {'-'*20} {'-'*6} {'-'*7} {'-'*9}")
     print(f"  {'TOTAL':<20} {'':>6} {'':>7} {report.total_score:>8.1f}\n")
@@ -1113,6 +1340,12 @@ def main():
         default=None,
         help="JSON string of weight overrides, e.g. '{\"test_success\": 0.40}'",
     )
+    parser.add_argument(
+        "--golden-results",
+        type=str,
+        default=None,
+        help="Path to golden_results.txt from eval_test_runner.sh",
+    )
 
     args = parser.parse_args()
     op_path = Path(args.op_path)
@@ -1129,7 +1362,9 @@ def main():
             print(f"ERROR: Invalid weights JSON: {e}", file=sys.stderr)
             sys.exit(1)
 
-    report = score_pipeline_run(op_path, weights)
+    golden_path = Path(args.golden_results) if args.golden_results else None
+
+    report = score_pipeline_run(op_path, weights, golden_results_path=golden_path)
 
     if args.json:
         print(json.dumps(asdict(report), indent=2))

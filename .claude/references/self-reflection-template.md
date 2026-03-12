@@ -34,6 +34,7 @@ Replace all `{placeholders}` with actual values.
 | 3: Build | ttnn-generic-op-builder | {duration} | {status} | {what happened} |
 | 4: TDD Kernels | ttnn-kernel-writer-tdd | {duration} | {status} | {what happened} |
 | 5: Report | orchestrator | {duration} | {status} | {what happened} |
+| **Total** | | **{total_duration}** | | {Sum of all phase durations. Calculate from earliest Phase 0 start to latest Phase 5 end.} |
 
 ### Agent Duration Breakdown
 
@@ -220,6 +221,7 @@ Rate each dimension (1-5):
 | Kernel implementation | {1-5} | {how smoothly did TDD go?} |
 | Inter-agent communication | {1-5} | {handoff quality} |
 | Logging/observability | {1-5} | {were logs sufficient for this analysis?} |
+| Helper usage compliance | {1-5} | {were helpers used when available? see Section 10} |
 
 ### Top 3 Things to Fix
 
@@ -230,3 +232,64 @@ Rate each dimension (1-5):
 ### What Worked Best
 
 {Summarize the single strongest aspect of this pipeline run — the item from Section 2 with the most impact.}
+
+---
+
+## 10. Helper Usage Audit
+
+{This section is MANDATORY. Every report must include a helper usage analysis. Helpers in `ttnn/cpp/ttnn/kernel_lib/` are the preferred implementation — if a helper exists for an operation, it MUST be used.}
+
+### Available Helpers
+
+{List all helpers found in `ttnn/cpp/ttnn/kernel_lib/` and what they cover.}
+
+| Helper Header | Functions Provided | Relevant to This Op? |
+|---------------|-------------------|----------------------|
+| `tilize_helpers.hpp` | `tilize<>()` | {YES/NO — why} |
+| `untilize_helpers.hpp` | `untilize<>()` | {YES/NO — why} |
+| `reduce_helpers_compute.hpp` | `reduce<Policy, Dim>()` | {YES/NO — why} |
+| `reduce_helpers_dataflow.hpp` | reduce scaler generation | {YES/NO — why} |
+| `binary_op_helpers.hpp` | `add<>()`, `sub<>()`, `mul<>()` | {YES/NO — why} |
+| `dest_helpers.hpp` | `DEST_AUTO_LIMIT` | {YES/NO — why} |
+| `copy_tile_helpers.hpp` | tile copy utilities | {YES/NO — why} |
+| `cb_helpers.hpp` | CB utility functions | {YES/NO — why} |
+| {other helpers found} | {functions} | {YES/NO — why} |
+
+### Per-Phase Helper Compliance
+
+{For each kernel phase, compare what the architect designed vs what was implemented.}
+
+| Kernel | Phase | Design Says | Actually Used | Status | Notes |
+|--------|-------|-------------|---------------|--------|-------|
+| {reader/compute/writer} | {phase name} | {helper name / "raw"} | {helper name / "raw"} | {✅ Correct / ❌ Helper Missed / ❌ Helper Misused / ✅ Raw Justified} | {explanation} |
+
+### Helper Compliance Summary
+
+| Metric | Value |
+|--------|-------|
+| Total kernel phases | {N} |
+| Phases using helpers correctly | {N} (✅) |
+| Phases with justified raw code | {N} (✅) |
+| Phases with missed helpers | {N} (❌) |
+| Phases with misused helpers | {N} (❌) |
+| **Helper compliance rate** | **{%}** |
+
+### Redundant CB Operations Around Helpers
+
+{Helpers handle their own `cb_reserve_back`, `cb_push_back`, `tile_regs_acquire/commit/wait/release`. Wrapping helpers with these operations is a bug that causes deadlocks or double-waits. Note: `cb_wait_front` and `cb_pop_front` are sometimes legitimately needed alongside helpers (e.g., inter-phase transitions), so only flag them if they directly duplicate what the helper already does internally for the same CB.}
+
+| Kernel File | Line(s) | Redundant Operation | Helper It Wraps | Risk |
+|-------------|---------|--------------------|-----------------|----- |
+| {file:line} | {line numbers} | {e.g., `cb_wait_front` before `tilize<>()`} | {helper name} | {deadlock / double-wait / benign} |
+
+{If no redundant operations found, state: "No redundant CB operations detected around helper calls."}
+
+### Missed Helper Opportunities
+
+{For each ❌ Helper Missed entry above, explain what should have been used and why it wasn't.}
+
+| Phase | Available Helper | What Was Written Instead | Likely Cause | Fix |
+|-------|-----------------|------------------------|--------------|-----|
+| {phase} | {helper function} | {raw code description} | {e.g., "agent didn't check helper library" / "design doc said raw" / "helper misunderstood"} | {which agent's instructions to update and how} |
+
+{If no missed opportunities, state: "All available helpers were used correctly. No missed opportunities."}

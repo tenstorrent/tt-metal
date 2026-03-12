@@ -446,7 +446,11 @@ WRAPPER
         done
         if [[ -n "$op_dir" ]]; then
             echo "[${prompt_name}:${run_id}] Running score.py on ${op_dir}..."
-            python3 "${clone_dir}/.claude/scripts/tdd-pipeline/score.py" "$op_dir" --json \
+            local score_args=("$op_dir" --json)
+            if [[ -f "${log_dir}/golden_results.txt" ]]; then
+                score_args+=(--golden-results "${log_dir}/golden_results.txt")
+            fi
+            python3 "${clone_dir}/.claude/scripts/tdd-pipeline/score.py" "${score_args[@]}" \
                 > "${log_dir}/score.json" 2>> "${log_dir}/score.log" || \
                 echo "[${prompt_name}:${run_id}] WARNING: score.py failed" >&2
         fi
