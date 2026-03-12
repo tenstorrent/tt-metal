@@ -248,12 +248,225 @@ No indexed compile-time args. Configuration is via `ComputeConfig`:
 - **Sharding support and constraints**: All three sharding modes (height, width, block) are supported for inputs and output independently. The program factory detects sharding from any of the three tensors (src0, src1, output) and configures globally-allocated circular buffers accordingly. A special writer kernel (`writer_unary_sharded_blocks_interleaved_start_id`) handles the case where inputs are block/width-sharded but output is interleaved.
 - **FP32 dest accumulation**: Enabled when the output data format is Float32, Int32, or UInt32 (via `fp32_dest_acc_en` in `ComputeConfig`). This keeps the DEST accumulator in full 32-bit precision.
 
+## SFPU Kernel Implementation
+
+This section provides a dedicated deep dive into the underlying SFPU kernel functions that the compute kernel dispatches to. The ADD operation has **two distinct SFPU paths**: a floating-point path (`add_binary_tile` using SFPI abstractions) and an integer path (`add_int_tile` using raw `TT_`/`TTI_` instructions).
+
+### SFPU Abstraction Layers
+
+**Floating-point path** (`add_binary_tile`):
+
+| Layer | File Path |
+|-------|-----------|
+| **API Header** | `tt_metal/hw/inc/api/compute/eltwise_binary_sfpu.h` |
+| **LLK Dispatch** | `tt_metal/hw/ckernels/{arch}/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_binop.h` |
+| **Core SFPU Implementation** | `tt_metal/third_party/tt_llk/tt_llk_{arch}/common/inc/sfpu/ckernel_sfpu_binary.h` |
+| **Parameters Dispatch** | `tt_metal/third_party/tt_llk/tt_llk_{arch}/llk_lib/llk_math_eltwise_binary_sfpu_params.h` |
+
+**Integer path** (`add_int_tile`):
+
+| Layer | File Path |
+|-------|-----------|
+| **API Header** | `tt_metal/hw/inc/api/compute/add_int_sfpu.h` |
+| **LLK Dispatch** | `tt_metal/hw/ckernels/{arch}/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_add_int.h` |
+| **Core SFPU Implementation** | `tt_metal/third_party/tt_llk/tt_llk_{arch}/common/inc/sfpu/ckernel_sfpu_add_int.h` |
+| **Parameters Dispatch** | `tt_metal/third_party/tt_llk/tt_llk_{arch}/llk_lib/llk_math_eltwise_binary_sfpu_params.h` (shared with float path) |
+
+### Call Chain
+
+**Floating-point path:**
+
+1. The compute kernel invokes `add_binary_tile_init()` and `add_binary_tile(i*2, i*2+1, i*2)` (via the `BINOP_INIT` and `BINARY_SFPU_OP` macros).
+2. `add_binary_tile_init()` calls `llk_math_eltwise_binary_sfpu_binop_init<APPROX, BinaryOp::ADD>()`, which calls `_llk_math_eltwise_binary_sfpu_init_<SfpuType::unused>()` (configures SFPU config reg, ADDR_MOD_7, resets counters) followed by `sfpu_binary_init<APPROX, BinaryOp::ADD>()` which calls `_sfpu_binary_init_<APPROX, BinaryOp::ADD>()`. For ADD, the init function is a no-op (no reciprocal or log initialization needed).
+3. `add_binary_tile(idst0, idst1, odst)` calls `llk_math_eltwise_binary_sfpu_binop<APPROX, BinaryOp::ADD>(idst0, idst1, odst)`, which calls `_llk_math_eltwise_binary_sfpu_params_<APPROX>(calculate_sfpu_binary<APPROX, BinaryOp::ADD, 8, false>, idst0, idst1, odst, VectorMode::RC)`.
+4. The params dispatch function calls `_llk_math_eltwise_binary_sfpu_start_` (sets DEST write address, stalls until SFPU ready), then iterates over 4 faces in RC mode, calling `calculate_sfpu_binary(...)` per face with `TTI_SETRWC` to advance the DEST pointer between faces.
+5. `calculate_sfpu_binary` is a thin wrapper that calls `_calculate_sfpu_binary_<APPROX, BinaryOp::ADD, 8>(idst0, idst1, odst)`, the core SFPU implementation.
+
+**Integer path:**
+
+1. The compute kernel invokes `add_int_tile_init()` and `add_int_tile<DataFormat::Int32>(i*2, i*2+1, i*2)` (via the `ADD_INT_INIT` and `BINARY_SFPU_OP` macros).
+2. `add_int_tile_init()` calls `llk_math_eltwise_binary_sfpu_add_int_init<APPROX>()`, which calls `llk_math_eltwise_binary_sfpu_init<SfpuType::unused, APPROX>()` (same init as the float path, no additional SFPU-specific init callback).
+3. `add_int_tile<DataFormat::Int32>(idst0, idst1, odst)` calls `llk_math_eltwise_binary_sfpu_add_int<APPROX, 8, DataFormat::Int32, false>(idst0, idst1, odst)`, which resolves `INSTRUCTION_MODE = InstrModLoadStore::INT32` and calls `_llk_math_eltwise_binary_sfpu_params_<APPROX>(_add_int_<APPROX, 8, INT32, false>, idst0, idst1, odst, VectorMode::RC)`.
+4. The params dispatch iterates over 4 faces identically to the float path, calling `_add_int_` per face.
+
+### Parameters Dispatch Summary
+
+The parameters dispatch function `_llk_math_eltwise_binary_sfpu_params_` is shared between the float and integer paths. It is identical on Wormhole and Blackhole.
+
+- **Vector mode**: `VectorMode::RC` (the default for both `add_binary_tile` and `add_int_tile`). In RC mode, all 4 faces of the 32x32 tile are processed. Each face is 16x16 = 256 elements, processed as 8 iterations of 32 SFPU lanes (4 rows x 8 columns per SFPU vector).
+- **Operation invocation**: The core SFPU function is called once per face, for a total of 4 calls per tile. Each call internally loops 8 iterations (`ITERATIONS=8`), processing 32 elements per iteration, totaling 256 elements per face and 1024 elements per tile.
+- **DEST address progression**: After each face, two `TTI_SETRWC(CLR_NONE, CR_D, 8, 0, 0, SET_D)` instructions advance the DEST read/write pointer by 8 rows each (total 16 rows = one face width in DEST). The SFPU function itself uses `dst_reg++` (float path) or explicit `ADDR_MOD_3` (integer path) to advance within the face between iterations. After all 4 faces, `_llk_math_eltwise_binary_sfpu_done_()` clears the DEST address.
+
+### Annotated SFPU Kernel Source
+
+This operation has two distinct SFPU kernels. Both use Style A annotation.
+
+#### Floating-Point Kernel (`_calculate_sfpu_binary_` with `BinaryOp::ADD`)
+
+```cpp
+// File: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary.h
+
+template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8>
+inline void _calculate_sfpu_binary_(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
+{ // APPROXIMATION_MODE=true, BINOP=BinaryOp::ADD, ITERATIONS=8
+    static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+        constexpr std::uint32_t dst_tile_size_sfpi = 32;
+        sfpi::vFloat in0                           = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi]; // load 32 lanes from DEST tile 0
+        sfpi::vFloat in1                           = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi]; // load 32 lanes from DEST tile 1
+        sfpi::vFloat result                        = 0.0f;
+
+        if constexpr (BINOP == BinaryOp::ADD)
+        {
+            result = in0 + in1; // SFPADD instruction: element-wise FP32 addition
+        }
+        // SUB, MUL, DIV, RSUB, POW, XLOGY branches omitted (not active for ADD)
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result; // store 32 lanes back to DEST output tile
+        sfpi::dst_reg++; // advance DEST pointer by 1 row (SFP_DESTREG_STRIDE=2 DEST rows)
+    }
+}
+```
+
+The `_sfpu_binary_init_` function for `BinaryOp::ADD` is a no-op -- the `constexpr if` only enters for `DIV`, `POW`, or `XLOGY`:
+
+```cpp
+// File: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary.h
+
+template <bool APPROXIMATION_MODE, BinaryOp BINOP>
+inline void _sfpu_binary_init_()
+{ // BINOP=BinaryOp::ADD -- no initialization needed
+    if constexpr (BINOP == BinaryOp::DIV || BINOP == BinaryOp::POW)
+    {
+        _init_sfpu_reciprocal_<false>(); // not taken for ADD
+    }
+    else if constexpr (BINOP == BinaryOp::XLOGY)
+    {
+        _init_log_<APPROXIMATION_MODE>(); // not taken for ADD
+    }
+}
+```
+
+#### Integer Kernel (`_add_int_`)
+
+The integer kernel uses raw `TT_`/`TTI_` instructions but has no condition code manipulation (no `SFPSETCC`, `SFPENCC`, or CC-modifying modifiers on `SFPIADD`). The `SFPIADD` instruction here uses `instr_mod=4` which maps to `CC_NONE`, explicitly disabling CC updates. This is Style A.
+
+```cpp
+// File: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_add_int.h
+
+template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore INSTRUCTION_MODE, bool SIGN_MAGNITUDE_FORMAT>
+inline void _add_int_(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
+{ // ITERATIONS=8, INSTRUCTION_MODE=INT32 (for Int32/UInt32) or LO16 (for UInt16), SIGN_MAGNITUDE_FORMAT=false
+    static_assert(is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
+
+    // sfpload_instr_mod: for non-sign-magnitude, equals INSTRUCTION_MODE directly (INT32=4 or LO16=8)
+    constexpr int sfpload_instr_mod = SIGN_MAGNITUDE_FORMAT ? INT32_2S_COMP : to_underlying(INSTRUCTION_MODE);
+
+    constexpr std::uint32_t dst_tile_size = 64; // each tile occupies 64 DEST rows
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        // Load operand A from DEST into LREG0 as integer
+        TT_SFPLOAD(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
+        // Load operand B from DEST into LREG1 as integer
+        TT_SFPLOAD(p_sfpu::LREG1, sfpload_instr_mod, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
+        // Integer add: LREG0 = LREG0 + LREG1; instr_mod=4 means CC_NONE (no CC update)
+        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
+        // Store result from LREG0 back to DEST
+        TT_SFPSTORE(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, dst_index_out * dst_tile_size);
+        sfpi::dst_reg++; // advance DEST pointer by 1 row
+    }
+}
+```
+
+### SFPU Instructions Used
+
+**Floating-point path (`_calculate_sfpu_binary_` with ADD):**
+
+| Instruction | SFPI Abstraction | Description |
+|---|---|---|
+| `SFPLOAD` | `dst_reg[offset]` (read) | Loads 32 FP32 lanes from DEST register into an SFPU LREG. Used twice per iteration to load `in0` and `in1` from their respective DEST tiles. |
+| `SFPADD` | `in0 + in1` | Performs element-wise FP32 addition across 32 SIMD lanes. This is the core compute instruction. Two-cycle latency. |
+| `SFPSTORE` | `dst_reg[offset] = result` (write) | Stores 32 FP32 lanes from an SFPU LREG back to the DEST register. Used once per iteration to write the result. |
+| `SETRWC` | `dst_reg++` (implicit via params dispatch) | Advances the DEST read/write counter. Used within the iteration loop (via `dst_reg++`) and between faces (via explicit `TTI_SETRWC` in the params dispatch). |
+
+**Integer path (`_add_int_`):**
+
+| Instruction | Raw Form | Description |
+|---|---|---|
+| `SFPLOAD` | `TT_SFPLOAD(LREG, instr_mod, ADDR_MOD_3, offset)` | Loads 32 integer lanes from DEST into an SFPU LREG. The `instr_mod` parameter selects the data format: `INT32` (value 4) for 32-bit integers, `LO16` (value 8) for 16-bit unsigned integers. |
+| `SFPIADD` | `TTI_SFPIADD(0, LREG1, LREG0, 4)` | Integer addition: `LREG0 = LREG0 + LREG1`. The `instr_mod=4` (`CC_NONE`) disables condition code side effects. The immediate operand (first arg) is 0, so this is purely register-to-register. |
+| `SFPSTORE` | `TT_SFPSTORE(LREG, instr_mod, ADDR_MOD_3, offset)` | Stores 32 integer lanes from an SFPU LREG back to DEST. Same `instr_mod` as SFPLOAD for format consistency. |
+| `SETRWC` | `dst_reg++` / `TTI_SETRWC` | Advances the DEST pointer between iterations and between faces. |
+
+### SFPU Register Usage
+
+**Floating-point path:**
+
+| Register | Usage |
+|---|---|
+| **DEST[idst0 * 32]** | Input tile A. Read by `dst_reg[dst_index_in0 * dst_tile_size_sfpi]` to load `in0`. Also serves as the output location when `odst == idst0` (which is always the case for ADD: `odst = i*2 = idst0`). |
+| **DEST[idst1 * 32]** | Input tile B. Read by `dst_reg[dst_index_in1 * dst_tile_size_sfpi]` to load `in1`. Not written to. |
+| **LREG0-LREG3** | Used implicitly by the SFPI compiler for `in0`, `in1`, `result`, and intermediate values. The SFPI abstraction manages LREG allocation transparently. |
+
+**Integer path:**
+
+| Register | Usage |
+|---|---|
+| **DEST[idst0 * 64]** | Input tile A. Loaded into LREG0 via `SFPLOAD`. Note the DEST tile size is 64 (not 32) because raw SFPLOAD uses physical DEST rows, while SFPI `dst_reg` uses logical rows with stride 2. |
+| **DEST[idst1 * 64]** | Input tile B. Loaded into LREG1 via `SFPLOAD`. |
+| **DEST[odst * 64]** | Output tile. Written from LREG0 via `SFPSTORE`. When `odst == idst0`, this overwrites the input A tile in-place. |
+| **LREG0** | Holds operand A, then accumulates the result of `LREG0 + LREG1`. Stored back to DEST. |
+| **LREG1** | Holds operand B. Read-only in the `SFPIADD` instruction (source operand). |
+
+### Address Mode Configuration
+
+**ADDR_MOD_7** (configured in `eltwise_binary_sfpu_configure_addrmod<SfpuType::unused>`):
+
+This is configured during the init phase (`_llk_math_eltwise_binary_sfpu_init_`). For `SfpuType::unused` (which is what ADD uses), only ADDR_MOD_7 is set:
+
+| Field | Value | Description |
+|---|---|---|
+| `srca.incr` | 0 | No auto-increment for source A |
+| `srcb.incr` | 0 | No auto-increment for source B |
+| `dest.incr` | 0 | No auto-increment for DEST |
+
+This is the same on both Wormhole and Blackhole. ADDR_MOD_7 is used by the params dispatch infrastructure (not directly by the core SFPU kernel). The zero-increment configuration means DEST addressing is managed explicitly through `TTI_SETRWC` calls between faces rather than auto-incrementing.
+
+The conditional ADDR_MOD_6 (with `dest.incr = 2`) is only configured for `mul_int32`, `mul_uint16`, `max`, `min`, and their int32/uint32 variants -- not for ADD.
+
+**ADDR_MOD_3** (used in `_add_int_`):
+
+ADDR_MOD_3 is referenced by the integer kernel's `TT_SFPLOAD` and `TT_SFPSTORE` instructions. This address mode is not explicitly configured by the binary SFPU init function. It relies on the default initialization state or prior configuration from `math::reset_counters(p_setrwc::SET_ABD_F)` called during init. In practice, ADDR_MOD_3 functions as a no-auto-increment mode for the integer SFPLOAD/SFPSTORE operations, with the DEST pointer advancement handled by `dst_reg++` between iterations and `TTI_SETRWC` between faces.
+
+**Wormhole vs Blackhole differences:**
+
+The ADDR_MOD configuration is identical between Wormhole and Blackhole for this operation. The only architectural difference is in `_llk_math_eltwise_binary_sfpu_done_()`:
+- **Wormhole**: Calls `math::clear_dst_reg_addr()`, then `TTI_STALLWAIT(STALL_CFG, WAIT_SFPU)`, then `math::clear_addr_mod_base()`.
+- **Blackhole**: Only calls `math::clear_dst_reg_addr()` (no stall wait, no addr_mod_base clear).
+
+Additionally, `_llk_math_eltwise_binary_sfpu_start_`:
+- **Wormhole**: Calls `set_dst_write_addr`, `set_addr_mod_base()`, then `TTI_STALLWAIT`.
+- **Blackhole**: Calls `set_dst_write_addr`, then `TTI_STALLWAIT` (no `set_addr_mod_base`).
+
 ## External Knowledge Sources
 
 ### DeepWiki Queries
 1. **Query**: "How does the binary eltwise SFPU program factory work? What kernels does it use for reader, compute, and writer? How does it differ from the FPU binary path?"
    **Reason**: Initial reconnaissance to understand the overall architecture of the SFPU binary path before reading source code.
    **Key Findings**: Confirmed the three kernels used (reader_binary_interleaved_start_id, eltwise_binary_sfpu_kernel, writer_unary_interleaved_start_id), the factory selection mechanism via `is_binary_sfpu_op`, and the fundamental difference: SFPU copies tiles to DEST then invokes SFPU functions, whereas FPU operates directly on tiles via matrix engine instructions.
+
+2. [SFPU] **Query**: "How does the add_binary_tile SFPU function work? What is the call chain from add_binary_tile through LLK layers down to the core ckernel SFPU implementation?"
+   **Reason**: Needed to trace the full call chain from the compute API `add_binary_tile` through the LLK dispatch layers to the core SFPU implementation.
+   **Key Findings**: Confirmed the call chain: `add_binary_tile` -> `llk_math_eltwise_binary_sfpu_binop<APPROX, BinaryOp::ADD>` -> `_llk_math_eltwise_binary_sfpu_params_` -> `calculate_sfpu_binary` -> `_calculate_sfpu_binary_`. Identified the init chain similarly. Located the API header at `eltwise_binary_sfpu.h`.
+
+3. [SFPU] **Query**: "How does add_binary_tile work in the LLK layer? What is the call chain from the compute API through llk_math_eltwise_binary_sfpu to the core ckernel_sfpu_add function? What SFPU instructions does the add binary operation use? Also explain add_int_tile."
+   **Reason**: Needed deeper detail on the LLK layer mechanics, especially for the integer path and SFPU instruction usage.
+   **Key Findings**: Confirmed that the float ADD path uses SFPADD instruction, that `_sfpu_binary_init_` is a no-op for ADD, and that the params dispatch uses `ADDR_MOD_7` with zero increments. Learned that the integer path follows a parallel call chain through `llk_math_eltwise_binary_sfpu_add_int` using `SFPLOAD`/`SFPIADD`/`SFPSTORE` raw instructions.
 
 ### Documentation References
 1. **Source**: `ttnn/cpp/ttnn/operations/eltwise/binary/device/binary_device_operation.cpp` (lines 22-66)
