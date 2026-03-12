@@ -533,12 +533,13 @@ def test_forward_pass_smoke(
     set_deterministic_env,
     state_dict,
 ):
-    """Single-layer decode smoke test (~30-40s). Catches topology, weight-loading, and basic
-    forward-pass issues before the full 5-layer suite runs."""
+    """Minimal decode smoke test. Catches topology, weight-loading, and basic
+    forward-pass issues before the full 5-layer suite runs.
+    Uses first_k_dense_replace + 1 layers so both dense (MLP) and MoE paths are exercised."""
     from copy import deepcopy
 
     hf_config_short = deepcopy(hf_config_short)
-    hf_config_short.num_hidden_layers = 1
+    hf_config_short.num_hidden_layers = hf_config_short.first_k_dense_replace + 1
 
     run_test_forward_pass_dpmodel(
         mode="decode",
