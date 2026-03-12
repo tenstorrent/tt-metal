@@ -1636,6 +1636,42 @@ jobs:
         run: echo "$REF_NAME"
 EOF
 
+# --- Check 52: Dynamic environment variable names ---
+
+assert_detects "check 52 flags dynamic env var names" "52" "dynamic environment variable names" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      env_name:
+        required: true
+      env_value:
+        required: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      ${{ inputs.env_name }}: ${{ inputs.env_value }}
+    steps:
+      - run: echo test
+EOF
+
+assert_clean "check 52 accepts static env var names" "52" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      env_value:
+        required: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      MY_STATIC_VAR: ${{ inputs.env_value }}
+    steps:
+      - run: echo test
+EOF
+
 echo ""
 echo "Results: $passed passed, $failed failed"
 
