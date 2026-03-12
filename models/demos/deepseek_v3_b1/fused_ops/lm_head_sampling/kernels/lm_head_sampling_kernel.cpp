@@ -60,6 +60,7 @@ struct Core {
     static constexpr uint32_t mesh_row = get_named_compile_time_arg_val("mesh_row");
     static constexpr uint32_t mesh_col = get_named_compile_time_arg_val("mesh_col");
     static_assert(input_socket_mode != 1, "lm_head_sampling input socket mode=1 is invalid");
+    static_assert(is_rmsnorm_core == is_input_core, "rmsnorm core must be the same as input core");
 };
 
 void kernel_main() {
@@ -173,14 +174,11 @@ void kernel_main() {
     // Setup sharded persistent buffers so BRISC/TRISC can access tensor data.
     // Sender core: register RMSNorm input CB backed by input_tensor (skip_ccl)
     // or intermediate_tensor (CCL mode, where broadcast placed the data)
-    if constexpr (Core::is_input_core) {
-        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
-        constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
-        // In skip_ccl + socket mode BRISC owns CB push for rmsnorm_input_cb.
-        if constexpr (!(Core::skip_ccl && Core::bcast_use_socket_input)) {
-            unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
-        }
-        constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
+    constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+    constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+    // In skip_ccl + socket mode BRISC owns CB push for rmsnorm_input_cb.
+    constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
+    if constexpr (Core::is_rmsnorm_core) {
         unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
     }
 
@@ -331,12 +329,11 @@ void kernel_main() {
         }
 
 #if defined(COMPILE_FOR_NCRISC)
-        if constexpr (Core::is_input_core && Core::persistent_mode) {
-            constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
-            constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
-            if (iteration_count > 1) {
-                unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
-            }
+        // in single device + socket mode, skip this push as BRISC will handle it
+        // in multi device mode (skip_ccl=False), NCRISC needs to broadcast the rmsnorm_input_cb to all devices, so we
+        // need to push it here after the broadcast
+        if constexpr (Core::is_input_core && (!Core::skip_ccl || !Core::bcast_use_socket_input)) {
+            unified_kernels::setup_sharded_buffer(rmsnorm_input_cb, rmsnorm_num_tiles);
         }
 #endif
 
