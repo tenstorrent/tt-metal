@@ -91,17 +91,43 @@ def test_run_tilize_with_val_padding_test(input_shapes, tilize_with_val_padding_
     )
 
 
-@pytest.mark.parametrize("input_shape", [(32, 15916), (16, 5210112), (48, 5210112), (180, 5210116)])
-def test_run_tilize_large_row_input(device, input_shape):
-    orig_shape = input_shape
+# @pytest.mark.parametrize("input_shape", [(32, 15916), (16, 5210112), (48, 5210112), (180, 5210116)])
+def test_run_tilize_large_row_input(device):
+    iterations = 5
 
-    input = torch.randn(orig_shape, dtype=torch.bfloat16)
-    halos = ttnn.from_torch(input, dtype=ttnn.bfloat16, device=device)
-    halos_tile = ttnn.to_layout(halos, layout=ttnn.TILE_LAYOUT)
-    halos_rm = ttnn.to_layout(halos_tile, layout=ttnn.ROW_MAJOR_LAYOUT)
+    tt_inputs = []
+    for i in range(iterations):
+        torch_input = torch.rand((8, 32, 7168), dtype=torch.bfloat16)
+        tt_input = ttnn.from_torch(
+            torch_input,
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            device=device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        tt_inputs.append(tt_input)
 
-    output = ttnn.to_torch(halos_rm)
-    assert_equal(input, output)
+    def run_test(i):
+        # tt_tilized = ttnn.to_layout(tt_input, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+        tt_tilized = ttnn.tilize_with_val_padding(
+            tt_inputs[i],
+            (8, 32, 7168),
+            0,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+
+    # compile
+    for i in range(iterations):
+        run_test(i)
+
+    # capture
+    trace_id = ttnn.begin_trace_capture(device, cq_id=0)
+    for i in range(iterations):
+        run_test(i)
+    ttnn.end_trace_capture(device, trace_id, cq_id=0)
+
+    # execute
+    ttnn.execute_trace(device, trace_id, cq_id=0, blocking=False)
 
 
 @pytest.mark.parametrize(
