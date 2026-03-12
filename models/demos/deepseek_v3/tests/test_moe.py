@@ -15,7 +15,7 @@ from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3MoE
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.model.row_batched_model import get_fabric_config
 from models.demos.deepseek_v3.tt.moe import MoE
-from models.demos.deepseek_v3.utils.config_helpers import dequantize, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -25,6 +25,7 @@ from models.demos.deepseek_v3.utils.test_utils import (
     load_reference_io_tensors_for_module,
     run_module_forward,
 )
+
 
 @pytest.fixture
 def reference_model(hf_config):
@@ -37,24 +38,6 @@ def reference_model(hf_config):
 
 def _clone_state_dict(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
     return {name: tensor.detach().clone() for name, tensor in state_dict.items()}
-
-
-def _dequantize_moe_state_dict(
-    state_dict: dict[str, torch.Tensor],
-    hf_config,
-) -> dict[str, torch.Tensor]:
-    dequantized_state_dict = {}
-    block_shape = hf_config.quantization_config["weight_block_size"]
-
-    for name in sorted(key for key in state_dict.keys() if not key.endswith("_scale_inv")):
-        tensor = state_dict[name]
-        scale_name = f"{name}_scale_inv"
-        if scale_name in state_dict:
-            dequantized_state_dict[name] = dequantize(tensor, state_dict[scale_name], block_shape).to(torch.bfloat16)
-        else:
-            dequantized_state_dict[name] = tensor.detach().clone()
-
-    return dequantized_state_dict
 
 
 def load_real_moe_input(mode: str, module_path: str, num_tokens: int) -> torch.Tensor:
@@ -104,7 +87,7 @@ def generate_reference_io(
         if not moe_state_dict:
             pytest.skip(f"Checkpoint does not contain routed MoE weights under '{module_path}'")
 
-        state_dict_out = _dequantize_moe_state_dict(moe_state_dict, hf_config)
+        state_dict_out = moe_state_dict
         reference_model.load_state_dict(state_dict_out)
         torch_input = load_real_moe_input(mode, module_path, num_tokens)
 
@@ -141,13 +124,7 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
         True,
     ],
 )
-@pytest.mark.parametrize(
-    "weight_type,module_path",
-    [
-        ("random", None),
-        ("real", REAL_MOE_MODULE_PATH),
-    ],
-)
+@pytest.mark.parametrize("weight_type", ["random", "real"])
 def test_forward_pass(
     device_params,
     mode,
@@ -161,11 +138,11 @@ def test_forward_pass(
     ccl,
     topk_fallback,
     weight_type,
-    module_path,
     force_recalculate_weight_config,
 ):
     """Test forward pass against reference model."""
 
+    module_path = "model.layers.3.mlp" if weight_type == "real" else None
     checkpoint_state_dict = request.getfixturevalue("state_dict") if weight_type == "real" else None
     state_dict, torch_input, reference_output = generate_reference_io(
         mode=mode,
