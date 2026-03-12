@@ -20,6 +20,9 @@ class AllCloseThresholds:
     atol: float
 
 
+# Poison value to ensure Welford's algorithm ignores padded elements (#31982)
+PAD_VALUE = -42
+
 allclose_thresholds = {
     # bfloat16 can accumulate a lot of error for fused ops. Rounding
     # error after a single operation will be 0.5 ULP in the worst case,
@@ -346,7 +349,19 @@ def test_large_layer_norm_with_legacy_reduction_and_rsqrt(device, h, w, legacy_r
     assert_with_pcc(torch_output_tensor, output_tensor, 0.97)
 
 
-@pytest.mark.parametrize("h, w", [(32, 2592), (32, 3232), (1024, 2880)])
+@pytest.mark.parametrize(
+    "h, w",
+    [
+        (32, 2592),
+        (32, 3232),
+        (1024, 2880),
+        # Unaligned shapes to test padding (Issue #31982)
+        (19, 2865),
+        (19, 4083),
+        (1001, 2865),
+        (1001, 4083),
+    ],
+)
 @pytest.mark.parametrize("use_welford", [True, False])
 @pytest.mark.parametrize("dtype", [torch.bfloat16, torch.float32])
 def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_welford, dtype):
@@ -361,6 +376,7 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
     )
 
     input_tensor = ttnn.from_torch(torch_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.fill_implicit_tile_padding(input_tensor, PAD_VALUE)
     residual_input_tensor = ttnn.from_torch(torch_residual_input_tensor, layout=ttnn.TILE_LAYOUT, device=device)
     weight = ttnn.from_torch(torch_weight, layout=ttnn.TILE_LAYOUT, device=device)
     bias = ttnn.from_torch(torch_bias, layout=ttnn.TILE_LAYOUT, device=device)
@@ -378,7 +394,7 @@ def test_large_layer_norm_with_weight_bias_and_residual_input(device, h, w, use_
     output_tensor = ttnn.from_device(output_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
 
-    if dtype == torch.float32 and use_welford and w == 3232:
+    if dtype == torch.float32 and use_welford:
         # Fallback to PCC, see https://github.com/tenstorrent/tt-metal/issues/33694
         assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
     else:
