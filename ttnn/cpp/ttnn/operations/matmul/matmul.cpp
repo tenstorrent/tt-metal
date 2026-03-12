@@ -265,8 +265,8 @@ static ttnn::Tensor bound_matmul(
     if (parameters.user_fused_activation.has_value() && !parameters.user_core_coord.has_value()) {
         const UnaryWithParam& activation = parameters.user_fused_activation.value();
 
-        output_tensor =
-            ttnn::unary_chain(output_tensor, {activation}, output_tensor.memory_config(), optional_output_tensor);
+        output_tensor = ttnn::operations::unary::Unary_chain::invoke(
+            output_tensor, {activation}, output_tensor.memory_config(), optional_output_tensor);
     }
 
     return output_tensor;

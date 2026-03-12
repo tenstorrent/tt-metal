@@ -271,7 +271,7 @@ TEST_P(EltwiseUnaryOpIfTest, Sigmoid) {
             device,
             input_spec,
             vectorMode,
-            ::ttnn::operations::unary::SigmoidMode::ACCURATE,
+            unary::Sigmoid::SigmoidMode::ACCURATE,
             output_spec.tensor_layout().get_memory_config());
 
         EXPECT_EQ(query.status, ttnn::graph::ExecutionStatus::Success);
