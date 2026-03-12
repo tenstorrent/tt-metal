@@ -640,20 +640,38 @@ static void sdpa_inner_loop_step(
     // Tile-level granularity: full subblocks + partial subblock for the tail.
     // V matmul narrowed to sub_exp'd width. Reduce narrowed to active_Sk via runtime LLK.
     const uint32_t active_Sk = (effective_Sk > 0) ? effective_Sk : Sk_chunk_t;
+
+    // Subblock split configuration: choose how to handle partial subblocks.
+    // When true: splits into even chunks (e.g., 10 tiles → 5+5 via largest_factor_le).
+    // When false: uses full/remainder split (e.g., 10 tiles → 8+2 using qkt_subblock_w).
+    // Even split eliminates partial subblocks and enables split-drain path for sbh==1.
+    constexpr bool ENABLE_EVEN_PARTIAL_SUBBLOCK_SPLIT = true;  // Set true for even/even, false for full/remainder
+
     // When active_Sk doesn't divide qkt_subblock_w evenly (e.g. 10 tiles with width 8
-    // gives 8+2), find a width that does (e.g. 5+5).  This eliminates the partial
+    // gives 8+2), optionally find a width that does (e.g. 5+5). This eliminates the partial
     // subblock and — for sbh==1 — enables the split-drain path in Phase 2.
-    const uint32_t actual_sbw = (active_Sk < Sk_chunk_t && active_Sk % qkt_subblock_w != 0)
-                                    ? largest_factor_le(active_Sk, qkt_subblock_w)
-                                    : qkt_subblock_w;
+    const uint32_t actual_sbw =
+        (ENABLE_EVEN_PARTIAL_SUBBLOCK_SPLIT && active_Sk < Sk_chunk_t && active_Sk % qkt_subblock_w != 0)
+            ? largest_factor_le(active_Sk, qkt_subblock_w)
+            : qkt_subblock_w;
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     const uint32_t kt_remainder = active_Sk % actual_sbw;
     const bool has_partial_subblock = (kt_remainder > 0);
-    // reduce_trigger: overlap max-reduce with last matmul subblock via HW semaphore.
-    // The unpack MOP is split into active_Sk/2 + active_Sk/2. The packer posts the
-    // semaphore after the last full subblock, letting reduce start before all tiles are ready.
-    // Requires: even active_Sk (MOP halves), >=2 subblocks, no partial tail subblock.
-    const bool reduce_trigger = !has_partial_subblock && (kt_num_full_subblocks > 1) && (active_Sk % 2 == 0);
+
+    // Reduce trigger configuration: choose which subblocks to apply the HW semaphore mechanism to.
+    // The trigger overlaps max-reduce with matmul by splitting the unpack MOP into halves
+    // with a semaphore wait in between. The packer posts the semaphore after the last subblock.
+    // Requirements: even active_Sk (for MOP halves), >=1 full subblock for non-partial trigger.
+    constexpr bool ENABLE_TRIGGER_ON_PARTIALS = true;      // Set true to trigger on partial subblocks
+    constexpr bool ENABLE_TRIGGER_ON_NON_PARTIALS = true;  // Set true to trigger on full (non-partial) subblocks
+
+    const bool reduce_trigger_partial =
+        ENABLE_TRIGGER_ON_PARTIALS && has_partial_subblock && (kt_num_full_subblocks >= 1) && (active_Sk % 2 == 0);
+    const bool reduce_trigger_non_partial =
+        ENABLE_TRIGGER_ON_NON_PARTIALS && !has_partial_subblock && (kt_num_full_subblocks > 1) && (active_Sk % 2 == 0);
+
+    // Combined trigger for reduce (either partial or non-partial triggers reduce to start early)
+    const bool reduce_trigger = reduce_trigger_partial || reduce_trigger_non_partial;
     constexpr uint32_t q_subblock_num_tiles = sbh * in0_block_w;
     constexpr uint32_t row_tiles = sbh * KT_stride;  // Use KT_stride for cb_qkt_im row width
 
@@ -722,8 +740,9 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
                 }
+                // Trigger on last full subblock only when non-partial trigger is enabled
                 bool kt_trigger_reduce =
-                    reduce_trigger && (kt_subblock == kt_num_full_subblocks - 1) && !has_partial_subblock;
+                    reduce_trigger_non_partial && (kt_subblock == kt_num_full_subblocks - 1) && !has_partial_subblock;
                 blocked_matmul_and_pack<true, KT_stride, KT_stride, true /*blocked_pack*/>(
                     cb_q_in,
                     cb_kt_in,
@@ -776,6 +795,7 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
                 }
+                // Trigger on partial subblock when partial trigger is enabled
                 blocked_matmul_and_pack<true, KT_stride, KT_stride, true /*blocked_pack*/>(
                     cb_q_in,
                     cb_kt_in,
@@ -786,7 +806,9 @@ static void sdpa_inner_loop_step(
                     kt_num_full_subblocks * actual_sbw,
                     kt_remainder,
                     sbh,
-                    in0_block_w);
+                    in0_block_w,
+                    0,
+                    reduce_trigger_partial);
                 }
             }
         }
