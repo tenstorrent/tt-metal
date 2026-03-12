@@ -37,21 +37,26 @@ ttnn::Tensor synchronize_tensor(const ttnn::Tensor& tensor, const ttsl::SmallVec
     return result;
 }
 
-void synchronize_gradients(const serialization::NamedParameters& parameters) {
-    if (!autograd::ctx().is_parallelism_context_initialized()) {
-        return;
-    }
-    const auto& pctx = autograd::ctx().get_parallelism_context();
-    ttsl::SmallVector<uint32_t> cluster_axes;
-    if (pctx.is_cp_enabled()) {
-        cluster_axes.push_back(pctx.get_cp_axis().value());
-    }
-    if (pctx.is_ddp_enabled()) {
-        cluster_axes.push_back(pctx.get_ddp_axis().value());
+void synchronize_gradients(
+    const serialization::NamedParameters& parameters, const std::optional<ttsl::SmallVector<uint32_t>>& cluster_axes) {
+    ttsl::SmallVector<uint32_t> cluster_axes_to_use;
+    if (cluster_axes.has_value()) {
+        cluster_axes_to_use = cluster_axes.value();
+    } else {
+        if (!autograd::ctx().is_parallelism_context_initialized()) {
+            return;
+        }
+        const auto& pctx = autograd::ctx().get_parallelism_context();
+        if (pctx.is_cp_enabled()) {
+            cluster_axes_to_use.push_back(pctx.get_cp_axis().value());
+        }
+        if (pctx.is_ddp_enabled()) {
+            cluster_axes_to_use.push_back(pctx.get_ddp_axis().value());
+        }
     }
     for (auto& [name, tensor] : parameters) {
         if (tensor->is_grad_initialized()) {
-            tensor->set_grad(synchronize_tensor(tensor->get_grad(), cluster_axes));
+            tensor->set_grad(synchronize_tensor(tensor->get_grad(), cluster_axes_to_use));
         }
     }
 }

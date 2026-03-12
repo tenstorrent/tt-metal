@@ -80,6 +80,58 @@ ttnn::ccl::Topology get_topology(const std::optional<uint32_t>& cluster_axis) {
     return is_cluster_axis_ring(cluster_axis.value()) ? ttnn::ccl::Topology::Ring : ttnn::ccl::Topology::Linear;
 }
 
+// Repair output tensor topology after a collective.
+// CCL ops don't propagate TensorTopology, so we must rewrite it to match
+// the semantic result of the collective (e.g. all_gather output is replicated
+// along the gather axis, reduce_scatter output is sharded, etc.).
+tt::tt_metal::Tensor repair_topology(
+    const tt::tt_metal::Tensor& input,
+    tt::tt_metal::Tensor output,
+    const std::optional<uint32_t> cluster_axis,
+    const tt::tt_metal::TensorTopology& new_topology) {
+    return output.with_tensor_topology(new_topology);
+}
+
+// Build a topology where the given cluster_axis is replicated (output of all_gather / all_reduce).
+tt::tt_metal::TensorTopology make_replicated_on_axis(
+    const tt::tt_metal::Tensor& input, const std::optional<uint32_t> cluster_axis) {
+    auto topo = input.tensor_topology();
+    auto placements = topo.placements();
+
+    if (cluster_axis.has_value()) {
+        uint32_t axis = cluster_axis.value();
+        if (axis < placements.size()) {
+            placements[axis] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+        }
+    } else {
+        for (auto& p : placements) {
+            p = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+        }
+    }
+
+    return tt::tt_metal::TensorTopology(topo.distribution_shape(), std::move(placements), topo.mesh_coords());
+}
+
+// Build a topology where the given cluster_axis is sharded on `dim` (output of reduce_scatter / scatter).
+tt::tt_metal::TensorTopology make_sharded_on_axis(
+    const tt::tt_metal::Tensor& input, int dim, const std::optional<uint32_t> cluster_axis) {
+    auto topo = input.tensor_topology();
+    auto placements = topo.placements();
+
+    if (cluster_axis.has_value()) {
+        uint32_t axis = cluster_axis.value();
+        if (axis < placements.size()) {
+            placements[axis] = tt::tt_metal::distributed::MeshMapperConfig::Shard{dim};
+        }
+    } else {
+        if (!placements.empty()) {
+            placements[0] = tt::tt_metal::distributed::MeshMapperConfig::Shard{dim};
+        }
+    }
+
+    return tt::tt_metal::TensorTopology(topo.distribution_shape(), std::move(placements), topo.mesh_coords());
+}
+
 }  // namespace
 
 tt::tt_metal::Tensor all_gather(
@@ -97,7 +149,7 @@ tt::tt_metal::Tensor all_gather(
 
     // Use cluster_axis overload for 2D mesh
     // Note: Pass topology (not hardcoded Ring) - Ring only works with proper TORUS fabric config
-    return ttnn::experimental::all_gather_async(
+    auto result = ttnn::experimental::all_gather_async(
         tensor,
         /* persistent_output_buffer */ std::nullopt,
         dim,
@@ -109,6 +161,10 @@ tt::tt_metal::Tensor all_gather(
         cluster_axis,
         /* use_optimal_ccl_for_llama */ false,
         /* barrier_semaphore */ ccl_resources.get_barrier_semaphore());
+
+    // all_gather produces a replicated tensor along the gather axis
+    auto new_topo = make_replicated_on_axis(tensor, cluster_axis);
+    return repair_topology(tensor, std::move(result), cluster_axis, new_topo);
 }
 
 tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, const std::optional<uint32_t> cluster_axis) {
@@ -133,10 +189,11 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, const std::o
     // Determine topology based on cluster axis configuration (Ring if torus, Linear otherwise)
     auto topology = get_topology(cluster_axis);
 
+    tt::tt_metal::Tensor result;
     if (cluster_axis.has_value()) {
         // Use cluster_axis overload for 2D mesh
         // Note: Pass topology (not hardcoded Ring) - Ring only works with proper TORUS fabric config
-        return ttnn::experimental::all_reduce_async(
+        result = ttnn::experimental::all_reduce_async(
             tensor,
             cluster_axis,
             *mesh_device,
@@ -150,7 +207,7 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, const std::o
             /* worker_subdevice_id_opt */ std::nullopt);
     } else {
         // Use original overload for 1D mesh
-        return ttnn::experimental::all_reduce_async(
+        result = ttnn::experimental::all_reduce_async(
             tensor,
             num_devices,
             all_reduce_barrier_semaphores,
@@ -161,6 +218,10 @@ tt::tt_metal::Tensor all_reduce(const tt::tt_metal::Tensor& tensor, const std::o
             topology,
             /* num_preferred_links */ num_links);
     }
+
+    // all_reduce produces a replicated tensor along the reduce axis
+    auto new_topo = make_replicated_on_axis(tensor, cluster_axis);
+    return repair_topology(tensor, std::move(result), cluster_axis, new_topo);
 }
 
 tt::tt_metal::Tensor reduce_scatter(
@@ -173,7 +234,7 @@ tt::tt_metal::Tensor reduce_scatter(
     auto topology = get_topology(cluster_axis);
 
     // Note: Pass topology (not hardcoded Ring) - Ring only works with proper TORUS fabric config
-    return ttnn::experimental::reduce_scatter_minimal_async(
+    auto result = ttnn::experimental::reduce_scatter_minimal_async(
         tensor,
         /* persistent_output_buffers */ std::nullopt,
         dim,
@@ -185,6 +246,10 @@ tt::tt_metal::Tensor reduce_scatter(
         topology,
         /* subdevice_id */ std::nullopt,
         /* cluster_axis */ cluster_axis);
+
+    // reduce_scatter produces a tensor sharded on `dim` along the scatter axis
+    auto new_topo = make_sharded_on_axis(tensor, dim, cluster_axis);
+    return repair_topology(tensor, std::move(result), cluster_axis, new_topo);
 }
 
 tt::tt_metal::Tensor ring_shift(

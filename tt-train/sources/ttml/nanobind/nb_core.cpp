@@ -139,6 +139,10 @@ void py_module(nb::module_& m) {
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none());
 
+        // Returns std::unique_ptr<TensorToMesh> for replicating tensor across mesh
+        py_distributed.def(
+            "replicate_tensor_to_mesh_mapper", &ttnn::distributed::replicate_tensor_to_mesh_mapper, nb::arg("device"));
+
         // Returns std::unique_ptr<MeshToTensor> - composer for combining distributed tensors
         py_distributed.def(
             "concat_mesh_to_tensor_composer",
@@ -164,7 +168,48 @@ void py_module(nb::module_& m) {
             nb::arg("mesh_shape_override"));
         // Synchronize gradients across devices for DDP
         py_distributed.def(
-            "synchronize_gradients", &ttml::core::distributed::synchronize_gradients, nb::arg("parameters"));
+            "synchronize_gradients",
+            [](const ttml::serialization::NamedParameters& parameters, std::optional<nb::list> cluster_axes_py) {
+                std::optional<ttsl::SmallVector<uint32_t>> cluster_axes;
+                if (cluster_axes_py.has_value()) {
+                    ttsl::SmallVector<uint32_t> axes;
+                    for (nb::handle h : cluster_axes_py.value()) {
+                        axes.push_back(nb::cast<uint32_t>(h));
+                    }
+                    cluster_axes = axes;
+                }
+                ttml::core::distributed::synchronize_gradients(parameters, cluster_axes);
+            },
+            nb::arg("parameters"),
+            nb::arg("cluster_axes") = nb::none());
+
+        // Set tensor topology placements on an autograd tensor
+        py_distributed.def(
+            "set_tensor_placements",
+            [](ttml::autograd::TensorPtr& tensor, nb::list placements_py) {
+                auto ttnn_tensor = tensor->get_value();
+                auto topo = ttnn_tensor.tensor_topology();
+                auto new_placements = topo.placements();
+
+                size_t idx = 0;
+                for (nb::handle h : placements_py) {
+                    if (idx >= new_placements.size())
+                        break;
+                    if (nb::hasattr(h, "dim")) {
+                        int dim = nb::cast<int>(h.attr("dim"));
+                        new_placements[idx] = tt::tt_metal::distributed::MeshMapperConfig::Shard{dim};
+                    } else {
+                        new_placements[idx] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
+                    }
+                    idx++;
+                }
+
+                auto new_topo = tt::tt_metal::TensorTopology(
+                    topo.distribution_shape(), std::move(new_placements), topo.mesh_coords());
+                tensor->set_value(ttnn_tensor.with_tensor_topology(new_topo));
+            },
+            nb::arg("tensor"),
+            nb::arg("placements"));
 
         // Bind DistributedContext methods
         using DistributedContext = tt::tt_metal::distributed::multihost::DistributedContext;
