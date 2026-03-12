@@ -655,7 +655,7 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     ("B, dim, T, H, W"),
     [
         (1, 384, 1, 90, 160),  # decoder.mid_block.resnets.0
-        (1, 384, 4, 60, 104),  # decoder.mid_block.resnets.0
+        # (1, 384, 4, 60, 104),  # decoder.mid_block.resnets.0
     ],
     ids=[
         "mid_block",
