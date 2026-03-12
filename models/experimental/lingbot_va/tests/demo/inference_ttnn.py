@@ -48,17 +48,18 @@ from reference.utils import (
     data_seq_to_patch,
     get_mesh_id,
     init_logger,
-    load_text_encoder,
     load_tokenizer,
     load_vae,
     logger,
     save_async,
 )
 
+import gc
+
 import ttnn
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
-from tt.utils import load_transformer as load_transformer_tt
+from tt.utils import load_text_encoder as load_text_encoder_tt, load_transformer as load_transformer_tt
 
 # Keys the server uses (va_robotwin_cfg.obs_cam_keys)
 OBS_CAM_HIGH = "observation.images.cam_high"
@@ -67,9 +68,12 @@ OBS_CAM_RIGHT_WRIST = "observation.images.cam_right_wrist"
 OBS_STATE = "observation.state"
 
 # Cache file for VAE encode output; if present, skip running the VAE encoder (saves a lot of time).
-VAE_ENC_CACHE_FILENAME = "vae_encoded_obs.pt"
+# Use a distinct name from inference_torch so the two scripts never share the same VAE cache.
+VAE_ENC_CACHE_FILENAME = "vae_encoded_obs_ttnn.pt"
 # Cache file for text (prompt) embeddings; if present and prompt matches, skip running the text encoder.
-TEXT_EMB_CACHE_FILENAME = "text_emb_cache.pt"
+# Must differ from inference_torch's filename: otherwise the torch script can load this (TTNN) cache and
+# use TTNN embeddings, so transformer outputs would match even though the cache files on disk differ later.
+TEXT_EMB_CACHE_FILENAME = "text_emb_cache_ttnn.pt"
 
 # Seed for reproducible inference (latents/actions init, etc.).
 REPRODUCIBLE_SEED = 42
@@ -209,8 +213,13 @@ def load_message_from_files(
 # -----------------------------------------------------------------------------
 
 
-def _load_models(config):
-    """Load VAE, tokenizer, text_encoder, transformer, schedulers. Returns models dict."""
+def _load_models_phase1(config):
+    """
+    Load VAE, tokenizer, TTNN text encoder, and open mesh device. No transformer.
+    Used so only one TT model (text encoder) is on device at a time; after encoding
+    the prompt and saving to cache, call _free_tt_model(models, "text_encoder") then
+    _load_transformer_into_models() to load the TT transformer and avoid OOM.
+    """
     init_logger()
     device = torch.device("cpu")
     dtype = config.param_dtype
@@ -226,12 +235,6 @@ def _load_models(config):
 
     tokenizer = load_tokenizer(os.path.join(ckpt, "tokenizer"))
 
-    text_encoder = load_text_encoder(
-        os.path.join(ckpt, "text_encoder"),
-        torch_dtype=dtype,
-        torch_device="cpu" if enable_offload else device,
-    )
-
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
     parallel_config = DiTParallelConfig(
         tensor_parallel=ParallelFactor(mesh_axis=1, factor=1),
@@ -239,15 +242,15 @@ def _load_models(config):
         cfg_parallel=None,
     )
     ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
-    transformer = load_transformer_tt(
-        os.path.join(ckpt, "transformer"),
+
+    # Load TTNN text encoder only (no transformer yet) to avoid OOM.
+    text_encoder = load_text_encoder_tt(
+        os.path.join(ckpt, "text_encoder"),
         mesh_device,
-        parallel_config,
         ccl_manager=ccl_manager,
-        is_fsdp=False,
         torch_dtype=dtype,
+        max_prompt_length=512,
     )
-    transformer = _TTTransformerAdapter(transformer)
 
     scheduler = FlowMatchScheduler(shift=config.snr_shift, sigma_min=0.0, extra_one_step=True)
     action_scheduler = FlowMatchScheduler(shift=config.action_snr_shift, sigma_min=0.0, extra_one_step=True)
@@ -268,7 +271,6 @@ def _load_models(config):
         "streaming_vae": streaming_vae,
         "tokenizer": tokenizer,
         "text_encoder": text_encoder,
-        "transformer": transformer,
         "streaming_vae_half": streaming_vae_half,
         "scheduler": scheduler,
         "action_scheduler": action_scheduler,
@@ -278,7 +280,32 @@ def _load_models(config):
         "config": config,
         "env_type": config.env_type,
         "transformer_is_tt": True,
+        "mesh_device": mesh_device,
+        "parallel_config": parallel_config,
+        "ccl_manager": ccl_manager,
     }
+
+
+def _free_tt_model(models: dict, key: str) -> None:
+    """Remove a TT model from the models dict and run gc to free device memory."""
+    if key in models:
+        del models[key]
+    gc.collect()
+
+
+def _load_transformer_into_models(models: dict, config) -> None:
+    """Load TTNN WanTransformer3DModel and set models['transformer']. Call after freeing text_encoder."""
+    ckpt = config.wan22_pretrained_model_name_or_path
+    dtype = models["dtype"]
+    transformer = load_transformer_tt(
+        os.path.join(ckpt, "transformer"),
+        models["mesh_device"],
+        models["parallel_config"],
+        ccl_manager=models["ccl_manager"],
+        is_fsdp=False,
+        torch_dtype=dtype,
+    )
+    models["transformer"] = _TTTransformerAdapter(transformer)
 
 
 def _get_t5_prompt_embeds(models, prompt, num_videos_per_prompt=1, max_sequence_length=512):
@@ -303,9 +330,24 @@ def _get_t5_prompt_embeds(models, prompt, num_videos_per_prompt=1, max_sequence_
     text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
     seq_lens = mask.gt(0).sum(dim=1).long()
 
-    text_encoder_device = next(text_encoder.parameters()).device
-    prompt_embeds = text_encoder(text_input_ids.to(text_encoder_device), mask.to(text_encoder_device)).last_hidden_state
-    prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
+    # TTNN text encoder (has mesh_device); run on device and convert output to torch.
+    if getattr(text_encoder, "mesh_device", None) is not None:
+        mesh_device = text_encoder.mesh_device
+        tt_input = ttnn.from_torch(text_input_ids, dtype=ttnn.uint32, device=mesh_device)
+        tt_mask = ttnn.from_torch(mask.float(), device=mesh_device)
+        tt_outputs = text_encoder(tt_input, attention_mask=tt_mask)
+        last_hidden = tt_outputs[-1]
+        prompt_embeds = ttnn.to_torch(last_hidden).float()
+        while prompt_embeds.dim() > 3:
+            prompt_embeds = prompt_embeds.squeeze(0)
+        prompt_embeds = prompt_embeds.to(device=device, dtype=dtype)
+    else:
+        text_encoder_device = next(text_encoder.parameters()).device
+        prompt_embeds = text_encoder(
+            text_input_ids.to(text_encoder_device), mask.to(text_encoder_device)
+        ).last_hidden_state
+        prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
+
     prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
     prompt_embeds = torch.stack(
         [torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))]) for u in prompt_embeds],
@@ -338,6 +380,11 @@ def _encode_prompt(models, state, prompt, do_classifier_free_guidance=True, max_
         except Exception as e:
             logger.warning("Failed to load text emb cache: %s", e)
 
+    if "text_encoder" not in models:
+        raise RuntimeError(
+            "Text encoder was freed after phase 1; text embeddings must be loaded from cache. "
+            "Ensure text_emb_cache_path exists and matches the current prompt, or run with cache populated first."
+        )
     prompt_embeds = _get_t5_prompt_embeds(
         models, prompt=prompt, num_videos_per_prompt=1, max_sequence_length=max_sequence_length
     )
@@ -873,9 +920,21 @@ def run_inference(
     config.vae_enc_cache_path = os.path.join(config.save_root, VAE_ENC_CACHE_FILENAME)
     config.text_emb_cache_path = os.path.join(config.save_root, TEXT_EMB_CACHE_FILENAME)
 
-    models = _load_models(config)
+    # Phase 1: load only TT text encoder (no transformer) to avoid OOM.
+    models = _load_models_phase1(config)
     state = {}
-    reset_message = build_reset_message(message.get("prompt", ""))
+    prompt = message.get("prompt", "")
+    _encode_prompt(
+        models,
+        state,
+        prompt,
+        do_classifier_free_guidance=(config.guidance_scale > 1),
+        max_sequence_length=512,
+    )
+    _free_tt_model(models, "text_encoder")
+    _load_transformer_into_models(models, config)
+
+    reset_message = build_reset_message(prompt)
     _infer_entry(models, state, reset_message)
     result = _infer_entry(models, state, message)
     return result
@@ -918,8 +977,19 @@ def run_generate(
     config.prompt = prompt
     config.num_chunks_to_infer = num_chunks
 
-    models = _load_models(config)
+    # Phase 1: load only TT text encoder (no transformer) to avoid OOM.
+    models = _load_models_phase1(config)
     state = {}
+    _encode_prompt(
+        models,
+        state,
+        prompt,
+        do_classifier_free_guidance=(config.guidance_scale > 1),
+        max_sequence_length=512,
+    )
+    _free_tt_model(models, "text_encoder")
+    _load_transformer_into_models(models, config)
+
     _reset_state(models, state, prompt)
     init_obs = _load_init_obs(config, config.input_img_path)
 
@@ -943,7 +1013,7 @@ def run_generate(
     del models["transformer"]
     if models.get("streaming_vae_half"):
         del models["streaming_vae_half"]
-    del models["text_encoder"]
+    models.pop("text_encoder", None)
 
     if getattr(config, "enable_offload", True):
         models["vae"] = models["vae"].to(models["device"]).to(models["dtype"])

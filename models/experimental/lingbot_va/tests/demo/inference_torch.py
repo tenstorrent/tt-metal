@@ -60,9 +60,11 @@ OBS_CAM_RIGHT_WRIST = "observation.images.cam_right_wrist"
 OBS_STATE = "observation.state"
 
 # Cache file for VAE encode output; if present, skip running the VAE encoder (saves a lot of time).
-VAE_ENC_CACHE_FILENAME = "vae_encoded_obs.pt"
+# Use a distinct name from inference_ttnn so the two scripts never share the same VAE cache.
+VAE_ENC_CACHE_FILENAME = "vae_encoded_obs_torch.pt"
 # Cache file for text (prompt) embeddings; if present and prompt matches, skip running the text encoder.
-TEXT_EMB_CACHE_FILENAME = "text_emb_cache.pt"
+# Use a distinct name from inference_ttnn so this script never loads TTNN embeddings (and vice versa).
+TEXT_EMB_CACHE_FILENAME = "text_emb_cache_torch.pt"
 
 # Seed for reproducible inference (latents/actions init, etc.).
 REPRODUCIBLE_SEED = 42

@@ -4,9 +4,9 @@
 """
 Utilities for loading TT-implemented Lingbot-VA models.
 
-Provides load_transformer and load_transformer_from_state_dict to instantiate the
-TTNN WanTransformer3DModel and load weights from the reference (PyTorch) checkpoint
-or from an existing state dict.
+Provides load_transformer, load_transformer_from_state_dict, and load_text_encoder
+to instantiate the TTNN WanTransformer3DModel and UMT5Encoder and load weights
+from the reference (PyTorch) checkpoints.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ from .transformer_wan import (
 )
 
 if TYPE_CHECKING:
-    from models.tt_dit.parallel.config import DiTParallelConfig
+    from models.tt_dit.parallel.config import DiTParallelConfig, EncoderParallelConfig
     from models.tt_dit.parallel.manager import CCLManager
 
 
@@ -157,8 +157,88 @@ def load_transformer_from_state_dict(
     return tt_model
 
 
+def load_text_encoder(
+    text_encoder_path: str | os.PathLike,
+    mesh_device: "ttnn.MeshDevice",
+    *,
+    ccl_manager: "CCLManager | None" = None,
+    parallel_config: "EncoderParallelConfig | None" = None,
+    torch_dtype: torch.dtype = torch.bfloat16,
+    max_prompt_length: int = 512,
+):
+    """
+    Build TTNN UMT5Encoder (from models.tt_dit.encoders.umt5.model_umt5) and load weights
+    from the HuggingFace UMT5EncoderModel checkpoint at text_encoder_path.
+
+    Same pattern as test_encoder_wan.py: load HF model to get config and state dict,
+    build UMT5Config and TTUMT5Encoder, then load_torch_state_dict.
+
+    Args:
+        text_encoder_path: Path to the HuggingFace UMT5EncoderModel checkpoint.
+        mesh_device: TTNN mesh device for the model.
+        ccl_manager: Optional CCL manager. If None, created for (1,1) mesh.
+        parallel_config: Optional encoder parallel config. If None, tensor_parallel factor=1.
+        torch_dtype: Dtype for loading the HF model (state dict is then applied to TT).
+        max_prompt_length: max_prompt_length for UMT5Config.
+
+    Returns:
+        TT UMT5Encoder with weights loaded.
+    """
+    import ttnn
+
+    from models.tt_dit.encoders.umt5.model_umt5 import UMT5Config, UMT5Encoder as TTUMT5Encoder
+    from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
+    from models.tt_dit.parallel.manager import CCLManager
+
+    from transformers import UMT5EncoderModel
+
+    hf_encoder = UMT5EncoderModel.from_pretrained(
+        _local_path(text_encoder_path),
+        torch_dtype=torch_dtype,
+        local_files_only=True,
+    ).to(device="cpu")
+    hf_encoder.eval()
+    text_weights = {k: v.cpu() for k, v in hf_encoder.state_dict().items()}
+    cfg = hf_encoder.config
+    del hf_encoder
+
+    umt5_config = UMT5Config(
+        vocab_size=cfg.vocab_size,
+        embed_dim=cfg.d_model,
+        ff_dim=cfg.d_ff,
+        kv_dim=cfg.d_kv,
+        num_heads=cfg.num_heads,
+        num_hidden_layers=cfg.num_layers,
+        max_prompt_length=max_prompt_length,
+        layer_norm_eps=cfg.layer_norm_epsilon,
+        relative_attention_num_buckets=cfg.relative_attention_num_buckets,
+        relative_attention_max_distance=cfg.relative_attention_max_distance,
+    )
+
+    if parallel_config is None:
+        parallel_config = EncoderParallelConfig(
+            tensor_parallel=ParallelFactor(factor=tuple(mesh_device.shape)[1], mesh_axis=1)
+        )
+    if ccl_manager is None:
+        ccl_manager = CCLManager(
+            mesh_device=mesh_device,
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+
+    tt_encoder = TTUMT5Encoder(
+        config=umt5_config,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+    )
+    tt_encoder.load_torch_state_dict(text_weights)
+    return tt_encoder
+
+
 __all__ = [
     "load_transformer",
     "load_transformer_from_state_dict",
+    "load_text_encoder",
     "_local_path",
 ]
