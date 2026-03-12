@@ -20,7 +20,7 @@ struct UnifiedSelectReduce {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id;
         tt::tt_metal::KernelHandle writer_kernel_id;
-        tt::tt_metal::CBHandle data_cb;
+        tt::tt_metal::CBHandle data_cb_handle;
         std::vector<CoreCoord> cores;
         const GlobalSemaphore init_semaphore;
         const GlobalSemaphore cross_device_semaphore;
