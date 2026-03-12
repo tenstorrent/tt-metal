@@ -60,7 +60,8 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
     const uint32_t num_heads,
     const std::optional<uint32_t> num_kv_heads,
     const bool transpose_key,
-    const std::optional<MemoryConfig>& memory_config) {
+    const std::optional<MemoryConfig>& memory_config,
+    const bool use_falcon7b_backend) {
     const auto& input_shape = input_tensor.logical_shape();
     const auto& padded_input_shape = input_tensor.padded_shape();
     TT_FATAL(input_shape.rank() == 3, "Invalid input tensor: expected 3 dimensions, but found {}.", input_shape.rank());
@@ -78,7 +79,11 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
     const uint32_t sequence_size = input_shape[1];
     const uint32_t sequence_size_padded = padded_input_shape[1];
 
-    if (num_kv_heads.has_value() && !input_tensor_kv.has_value()) {
+    if (use_falcon7b_backend) {
+        TT_FATAL(
+            num_kv_heads.has_value() && !input_tensor_kv.has_value(),
+            "Invalid configuration: use_falcon7b_backend requires num_kv_heads to be set and no separate KV tensor.");
+
         TT_FATAL(
             !transpose_key,
             "Invalid configuration: Transpose is set to true, but this is not supported when separate num_kv_heads is "
@@ -154,8 +159,12 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
         hidden_dim_padded = padded_input_shape[2];
     }
 
-    uint32_t head_size = hidden_dim / num_heads;
-    uint32_t padded_head_size = hidden_dim_padded / num_heads;
+    // For separate Q and KV tensors: hidden_dim is Q's dimension, so head_size = hidden_dim / num_heads
+    // For fused QKV tensor: hidden_dim contains Q+K+V, so head_size = hidden_dim / (num_heads + 2*num_kv_heads)
+    uint32_t head_size_divisor =
+        input_tensor_kv.has_value() ? num_heads : (num_heads + (2 * num_kv_heads.value_or(num_heads)));
+    uint32_t head_size = hidden_dim / head_size_divisor;
+    uint32_t padded_head_size = hidden_dim_padded / head_size_divisor;
     TT_FATAL(
         head_size % tt::constants::TILE_WIDTH == 0,
         "Invalid head size: {}. The head size must be a multiple of the tile width ({}). Please adjust the dimensions "
