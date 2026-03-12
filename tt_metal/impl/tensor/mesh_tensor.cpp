@@ -3,55 +3,33 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
-#include <tt-metalium/experimental/tensor/details/tensor_impl.hpp>
-#include <tt-metalium/experimental/tensor/details/storage.hpp>
 
 namespace tt::tt_metal {
 
-class MeshTensorImpl : public TensorImpl<DeviceStorage> {};
+// TODO: Implement once DeviceStorage is migrated (#37692)
+// MeshTensor::MeshTensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology)
 
-MeshTensor::MeshTensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-    impl(std::make_unique<MeshTensorImpl>()) {
-    impl->storage_ = std::move(storage);
-    impl->tensor_spec_ = std::move(tensor_spec);
-    impl->tensor_topology_ = std::move(tensor_topology);
-}
+// TODO: Implement once DeviceStorage is migrated (#37692)
+// bool MeshTensor::is_allocated() const
 
-bool MeshTensor::is_allocated() const { return mesh_buffer().has_value(); }
+// TODO: Implement once DeviceStorage is migrated (#37692)
+// std::shared_ptr<distributed::MeshBuffer> MeshTensor::mesh_buffer_invariant_breaking() const
 
-ttsl::optional_reference<distributed::MeshBuffer> MeshTensor::mesh_buffer() const {
-    if (auto ptr = mesh_buffer_invariant_breaking()) {
-        return (*ptr);
-    }
-    return std::nullopt;
-}
+// TODO: Implement once DeviceStorage is migrated (#37692)
+// const TensorSpec& MeshTensor::tensor_spec() const
 
-std::shared_ptr<distributed::MeshBuffer> MeshTensor::mesh_buffer_invariant_breaking() const {
-    TT_ASSERT(impl != nullptr, "MeshTensor is in default constructed state");
-    return impl->storage_.mesh_buffer;
-}
+// TODO: Implement once DeviceStorage is migrated (#37692)
+// const TensorTopology& MeshTensor::tensor_topology() const
 
-ttsl::optional_reference<distributed::MeshDevice> MeshTensor::get_device() const {
-    if (auto buffer = mesh_buffer()) {
-        return *buffer->device();
-    }
-    return std::nullopt;
-}
+// TODO: Implement once DeviceStorage is migrated (#37692)
+// const DeviceStorage& MeshTensor::get_legacy_device_storage() const
 
-const TensorSpec& MeshTensor::tensor_spec() const {
-    TT_ASSERT(impl != nullptr, "MeshTensor is in default constructed state");
-    return impl->tensor_spec_;
-}
+// TODO: Implement once DeviceStorage is migrated (#37692)
+// void MeshTensor::update_tensor_topology(TensorTopology tensor_topology)
 
-const TensorTopology& MeshTensor::tensor_topology() const {
-    TT_ASSERT(impl != nullptr, "MeshTensor is in default constructed state");
-    return impl->tensor_topology_;
-}
+distributed::MeshBuffer& MeshTensor::mesh_buffer() const { return *mesh_buffer_invariant_breaking(); }
 
-const DeviceStorage& MeshTensor::get_legacy_device_storage() const {
-    TT_ASSERT(impl != nullptr, "MeshTensor is in default constructed state");
-    return impl->storage_;
-}
+distributed::MeshDevice& MeshTensor::get_device() const { return *mesh_buffer().device(); }
 
 DataType MeshTensor::dtype() const { return tensor_spec().data_type(); }
 
@@ -88,10 +66,5 @@ std::size_t MeshTensor::element_size() const {
 }
 
 Strides MeshTensor::strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
-
-void MeshTensor::update_tensor_topology(TensorTopology tensor_topology) {
-    TT_ASSERT(impl != nullptr, "MeshTensor is in default constructed state");
-    impl->tensor_topology_ = std::move(tensor_topology);
-}
 
 }  // namespace tt::tt_metal

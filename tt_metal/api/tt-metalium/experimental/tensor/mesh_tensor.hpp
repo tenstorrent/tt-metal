@@ -110,11 +110,10 @@ public:
 
     /**
      * Return the underlying device storage MeshBuffer.
-     * empty optional when the device tensor is in deallocated state via deallocate().
      *
      * pre-condition: The device tensor must not be in a default constructed state.
      */
-    ttsl::optional_reference<distributed::MeshBuffer> mesh_buffer() const;
+    distributed::MeshBuffer& mesh_buffer() const;
 
     /**
      * Wider API compatible mesh_buffer() that returns a shared ownership to the underlying storage.
@@ -129,11 +128,10 @@ public:
 
     /**
      * Get the device the allocated device memory is on.
-     * Returns an empty optional when owned device memory is released via deallocate().
      *
      * pre-condition: The device tensor must not be in a default constructed state.
      */
-    ttsl::optional_reference<distributed::MeshDevice> get_device() const;
+    distributed::MeshDevice& get_device() const;
 
     // Getters:
 

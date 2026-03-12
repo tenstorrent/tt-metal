@@ -3,66 +3,41 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt-metalium/experimental/tensor/host_tensor.hpp>
-#include <tt-metalium/experimental/tensor/details/storage.hpp>
 
 namespace tt::tt_metal {
 
-class HostTensorImpl {
-public:
-    HostTensorImpl(HostStorage storage, TensorSpec spec, TensorTopology topology) :
-        storage_(std::move(storage)), tensor_spec_(std::move(spec)), tensor_topology_(std::move(topology)) {}
+// TODO: Implement once HostStorage is migrated (#37692)
+// HostTensor::HostTensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology)
 
-    HostStorage storage_;
-    TensorSpec tensor_spec_;
-    TensorTopology tensor_topology_;
-};
+// TODO: Implement once HostStorage is migrated (#37692)
+// HostTensor::HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topology)
 
-HostTensor::HostTensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-    impl(std::make_unique<HostTensorImpl>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {}
+// TODO: Implement once HostStorage is migrated (#37692)
+// HostTensor::HostTensor(const HostTensor& other)
 
-HostTensor::HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topology) :
-    impl(std::make_unique<HostTensorImpl>(HostStorage{std::move(buffer)}, std::move(spec), std::move(topology))) {}
+// TODO: Implement once HostStorage is migrated (#37692)
+// HostTensor& HostTensor::operator=(const HostTensor& other)
 
-HostTensor::HostTensor(const HostTensor& other) :
-    impl(other.impl ? std::make_unique<HostTensorImpl>(*other.impl) : nullptr) {}
+// TODO: Implement once HostStorage is migrated (#37692)
+// HostTensor::HostTensor(HostTensor&& other) noexcept
 
-HostTensor& HostTensor::operator=(const HostTensor& other) {
-    if (this == &other) {
-        return *this;
-    }
-    impl = other.impl ? std::make_unique<HostTensorImpl>(*other.impl) : nullptr;
-    return *this;
-}
+// TODO: Implement once HostStorage is migrated (#37692)
+// HostTensor& HostTensor::operator=(HostTensor&& other) noexcept
 
-HostTensor::HostTensor(HostTensor&& other) noexcept : impl(std::move(other.impl)) {}
+// TODO: Implement once HostStorage is migrated (#37692)
+// const TensorSpec& HostTensor::tensor_spec() const
 
-HostTensor& HostTensor::operator=(HostTensor&& other) noexcept {
-    if (this == &other) {
-        return *this;
-    }
-    impl = std::move(other.impl);
-    return *this;
-}
+// TODO: Implement once HostStorage is migrated (#37692)
+// const TensorTopology& HostTensor::tensor_topology() const
 
-const TensorSpec& HostTensor::tensor_spec() const {
-    TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state");
-    return impl->tensor_spec_;
-}
+// TODO: Implement once HostStorage is migrated (#37692)
+// const HostStorage& HostTensor::get_legacy_host_storage() const
 
-const TensorTopology& HostTensor::tensor_topology() const {
-    TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state");
-    return impl->tensor_topology_;
-}
+// TODO: Implement once HostStorage is migrated (#37692)
+// const DistributedHostBuffer& HostTensor::get_distributed_host_buffer() const
 
-const HostStorage& HostTensor::get_legacy_host_storage() const {
-    TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state");
-    return impl->storage_;
-}
-
-const DistributedHostBuffer& HostTensor::get_distributed_host_buffer() const {
-    TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state");
-    return impl->storage_.buffer();
-}
+// TODO: Implement once HostStorage is migrated (#37692)
+// void HostTensor::update_tensor_topology(TensorTopology tensor_topology)
 
 DataType HostTensor::dtype() const { return tensor_spec().tensor_layout().get_data_type(); }
 
@@ -99,10 +74,5 @@ std::size_t HostTensor::element_size() const {
 }
 
 Strides HostTensor::strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
-
-void HostTensor::update_tensor_topology(TensorTopology tensor_topology) {
-    TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state");
-    impl->tensor_topology_ = std::move(tensor_topology);
-}
 
 }  // namespace tt::tt_metal
