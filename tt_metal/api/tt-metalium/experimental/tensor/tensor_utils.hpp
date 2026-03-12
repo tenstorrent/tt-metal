@@ -13,7 +13,6 @@
 
 #include <tt_stl/assert.hpp>
 #include <tt_stl/span.hpp>
-#include <enchantum/enchantum.hpp>
 
 namespace tt::tt_metal {
 

@@ -19,7 +19,7 @@
 #include <tt-metalium/memory_pin.hpp>
 #include <tt-metalium/distributed_host_buffer.hpp>
 
-// It is intentional to not reflect the experimental status of this header in it's namespace,
+// It is intentional to not reflect the experimental status of this header in its namespace,
 // as most of the code movements are based on implementations in TTNN that are well tested and production ready for a
 // long time, it is expected for the implementation to graduate out of experimental really quickly.
 //
@@ -129,7 +129,7 @@ public:
     /**
      * Creates a `Tensor` with storage "borrowed" from the buffer of elements of type `T`.
      *
-     * We assume buffer is layed out in row-major order.
+     * We assume buffer is laid out in row-major order.
      * TODO(#38947): tile parameter should be removed.
      */
     template <typename T>
@@ -203,7 +203,7 @@ public:
 
     // Utils:
 
-    // Get the dataum's size in bytes
+    // Get the element size in bytes
     std::size_t element_size() const;
 
     Strides strides() const;

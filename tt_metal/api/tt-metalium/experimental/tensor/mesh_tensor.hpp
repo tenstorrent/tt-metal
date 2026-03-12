@@ -10,7 +10,7 @@
 
 #include <tt_stl/optional_reference.hpp>
 
-// It is intentional to not reflect the experimental status of this header in it's namespace,
+// It is intentional to not reflect the experimental status of this header in its namespace,
 // as most of the code movements are based on implementations in TTNN that are well tested and production ready for a
 // long time, it is expected for the implementation to graduate out of experimental really quickly.
 //
@@ -97,7 +97,7 @@ public:
      */
     MeshTensor& operator=(MeshTensor&& other) = default;
 
-    // End speical member functions
+    // End special member functions
 
     // Deallocation related:
 
