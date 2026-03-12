@@ -19,8 +19,8 @@ def get_image_resolution_from_model_config(model_config):
     Get the image resolution from a ModelOptimisations instance.
 
     Args:
-        model_config: A ModelOptimisations instance (either ModelOptimisations512x512 or
-            ModelOptimisations1024x1024).
+        model_config: A ModelOptimisations instance (either ModelOptimisations512x512,
+            ModelOptimisations1024x1024, or ModelOptimisations1024x1024BH).
 
     Returns:
         tuple: A tuple of (height, width) representing the image resolution.
@@ -37,10 +37,12 @@ def get_image_resolution_from_model_config(model_config):
         return (512, 512)
     elif isinstance(model_config, ModelOptimisations1024x1024):
         return (1024, 1024)
+    elif isinstance(model_config, ModelOptimisations1024x1024BH):
+        return (1024, 1024)
     else:
         raise ValueError(
             f"Unsupported model_config type: {type(model_config).__name__}. "
-            "Expected ModelOptimisations512x512 or ModelOptimisations1024x1024."
+            "Expected ModelOptimisations512x512, ModelOptimisations1024x1024, or ModelOptimisations1024x1024BH."
         )
 
 
