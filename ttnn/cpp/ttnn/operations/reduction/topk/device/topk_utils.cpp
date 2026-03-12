@@ -75,9 +75,10 @@ std::optional<TopKCoreConfig> find_topk_core_config(
     const uint32_t start_split_size =
         static_cast<uint32_t>(width / tile_width / largest_power_of_two(max_cores)) * tile_width;
 
-    // The transposed intermediate CB (c_2) uses bf16 when the input format is bfp8/bfp4 to
-    // avoid shared-exponent precision loss during sort.  Use the larger of the two tile sizes
-    // when estimating per-core local memory.
+    // The transposed intermediate CBs (c_2, c_4, c_6, and c_8 on local cores) all use bf16
+    // when the input format is bfp8/bfp4 to avoid shared-exponent precision loss during sort
+    // and inter-core transfer.  Use the larger of the two tile sizes for all value-holding
+    // CB cost estimates.
     const uint32_t bf16_tile_size = tt::tile_size(tt::DataFormat::Float16_b);
     const uint32_t transposed_tile_size = std::max(value_tile_size, bf16_tile_size);
 
@@ -89,8 +90,10 @@ std::optional<TopKCoreConfig> find_topk_core_config(
 
         // Gather cost: memory for collecting results from all cores.
         // Factor of 2 accounts for intermediate storage during gather phase.
-        // The gather (c_4/c_5) buffers use the original value_tile_size.
-        const uint32_t memory_cost_gather = 2 * num_cores * (value_tile_size + index_tile_size);
+        // c_4 (gathered values) is allocated with transposed_tile_size (bf16 when input is
+        // bfp8/bfp4) to avoid shared-exponent corruption on inter-core transfer; c_5
+        // (gathered indices) remains index_tile_size.
+        const uint32_t memory_cost_gather = 2 * num_cores * (transposed_tile_size + index_tile_size);
 
         // Local cost: memory each core needs for its width chunk.
         // Uses transposed_tile_size (bf16 when input is bfp8/bfp4) for the transposed CB.

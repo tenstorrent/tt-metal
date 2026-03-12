@@ -235,6 +235,84 @@ def test_topk_large_2d_shapes(N, C, H, W, dim, k, dtype, sorted, largest, device
     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids, pass_indices_tensor)
 
 
+def run_topk_bfloat8_inf_test(N, C, H, W, k, dim, sub_core_grids, device):
+    assert W % 32 == 0, "W must be a multiple of 32 to avoid the pad path"
+    assert H >= 2, "H must be >= 2 to have both finite and all-inf rows"
+
+    torch.manual_seed(2005)
+    shape = [N, C, H, W]
+    input_torch = torch.randn(shape, dtype=torch.bfloat16) * 0.9
+    # Set all rows except the first to +inf to trigger the shared-exponent bug
+    # on the intermediate transposed tiles.
+    input_torch[:, :, 1:, :] = float("inf")
+
+    pyt_values, _ = torch.topk(input_torch, k, dim=dim, largest=True, sorted=True)
+
+    ttnn_input = ttnn.from_torch(input_torch, ttnn.bfloat8_b, layout=ttnn.Layout.TILE, device=device)
+    ttnn_values, ttnn_indices = ttnn.topk(
+        ttnn_input, k, dim=dim, largest=True, sorted=True, sub_core_grids=sub_core_grids
+    )
+
+    desired_shape = list(shape)
+    desired_shape[dim] = k
+    assert list(ttnn_values.shape) == desired_shape
+    assert list(ttnn_indices.shape) == desired_shape
+
+    ttnn_values_torch = ttnn.to_torch(ttnn_values)
+    ttnn_indices_torch = ttnn.to_torch(ttnn_indices).to(torch.int64)
+
+    # Only compare the finite (H=0) rows; the all-inf rows are uninteresting and
+    # their exact ordering is undefined when all values are equal (+inf).
+    pyt_values_finite = pyt_values[:, :, :1, :]
+    ttnn_values_finite = ttnn_values_torch[:, :, :1, :]
+    ttnn_gather_finite = torch.gather(input_torch, dim, ttnn_indices_torch)[:, :, :1, :]
+
+    cosine = torch.nn.CosineSimilarity(dim=dim)
+    cosine_sim = torch.mean(cosine(pyt_values_finite, ttnn_gather_finite))
+    assert cosine_sim > 0.99, (
+        f"Cosine similarity between bfloat8_b topk values and gather-from-indices "
+        f"is {cosine_sim:.4f} (expected > 0.99).  "
+        f"This is the bfp8 shared-exponent/inf regression."
+    )
+
+    # bfloat8_b has limited precision; accept a small absolute difference.
+    # Cast to float32 first: pyt_values_finite is bfloat16, ttnn_values_finite is
+    # float32 (ttnn.to_torch upcasts bfloat8_b), and torch.allclose raises on
+    # dtype mismatch.
+    assert torch.allclose(pyt_values_finite.float(), ttnn_values_finite.float(), atol=0.5), (
+        f"bfloat8_b TopK values differ from PyTorch reference by more than 0.5:\n"
+        f"  PyTorch:  {pyt_values_finite}\n"
+        f"  TTNN:     {ttnn_values_finite}"
+    )
+
+
+@pytest.mark.parametrize(
+    "N, C, H, W, dim, k, sub_core_grids",
+    [
+        (1, 1, 32, 256, 3, 32, None),
+        (
+            1,
+            1,
+            32,
+            16 * 1024,
+            3,
+            32,
+            ttnn.CoreRangeSet(
+                [
+                    ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 7)),
+                ]
+            ),
+        ),
+    ],
+    ids=["single_core_bfp8_inf", "multi_core_bfp8_inf"],
+)
+def test_topk_bfloat8_with_inf(N, C, H, W, dim, k, sub_core_grids, device):
+    """bfloat8_b TopK correctness when an entire H-row contains +inf values."""
+    if dim == 0 or dim == 1:
+        pytest.skip("dim=0/1 not supported for bfloat8_b (transpose path requires bfloat16 or float32)")
+    run_topk_bfloat8_inf_test(N, C, H, W, k, dim, sub_core_grids, device)
+
+
 @pytest.mark.parametrize(
     "torch_input_tensor_dtype, ttnn_input_tensor_dtype",
     [
