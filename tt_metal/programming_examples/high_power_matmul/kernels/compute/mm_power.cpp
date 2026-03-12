@@ -23,7 +23,7 @@ void kernel_main() {
     for (uint32_t iter = 0; iter < num_iterations; iter++) {
         if (iter % 10 == 0) {
             // Only print from TRISC0, otherwise we'll get three identical prints
-            UNPACKER(DPRINT << "Iteration " << iter << " of " << num_iterations << ENDL();)
+            UNPACK((DPRINT << "Iteration " << iter << " of " << num_iterations << ENDL()));
         }
         for (uint32_t i = 0; i < num_output_tiles; i++) {
             // TRISC1 Acquires the tile registers
