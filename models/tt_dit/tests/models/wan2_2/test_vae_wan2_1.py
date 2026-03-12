@@ -1898,17 +1898,21 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_wan_decoder_perf_720p_81f(mesh_device, h_axis, w_axis, num_links):
-    """Performance test: WanDecoder, 720p, 81 output frames (21 latent frames), cached mode.
+    """Performance test: WanDecoder cached vs no-cache, 720p, 4×8 BH 2-links.
 
-    Runs once to warm up JIT, then times a second run end-to-end after device sync.
+    Cached mode supports any T; no-cache mode is limited by L1 (T=21 OOMs — T=6 is the max).
+    Comparison is made at T=6 (24 output frames). The cached T=21 (81 output frames) time is
+    also reported to show end-to-end production latency.
+
+    Warmup run triggers JIT compilation, then each mode is timed after device sync.
     No PyTorch reference check.
     """
     from diffusers.models.autoencoders.autoencoder_kl_wan import AutoencoderKLWan as TorchAutoencoderKLWan
 
     torch.manual_seed(0)
-    B, C, T, H, W = 1, 16, 21, 90, 160  # 21 latent frames → 81 output frames at 720p
     dtype = ttnn.DataType.BFLOAT16
     tt_input_dtype = ttnn.bfloat16
+    B, C, H, W = 1, 16, 90, 160  # 720p latent spatial dims
 
     base_dim = 96
     z_dim = 16
@@ -1953,7 +1957,7 @@ def test_wan_decoder_perf_720p_81f(mesh_device, h_axis, w_axis, num_links):
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
 
-    def make_input():
+    def make_input(T):
         torch_input = torch.randn(B, C, T, H, W, dtype=torch.float32)
         tt_input = torch_input.permute(0, 2, 3, 4, 1)
         tt_input = conv_pad_in_channels(tt_input)
@@ -1967,18 +1971,47 @@ def test_wan_decoder_perf_720p_81f(mesh_device, h_axis, w_axis, num_links):
         )
         return tt_input, logical_h
 
-    # Warmup run to trigger JIT compilation
-    logger.info("Warmup run (JIT compilation)...")
-    tt_input, logical_h = make_input()
-    tt_model(tt_input, logical_h)
+    # ── Warmup: both modes at T=6 to JIT-compile all kernels ──────────────────
+    logger.info("Warmup cached T=6 (JIT)...")
+    tt_input, logical_h = make_input(T=6)
+    tt_model(tt_input, logical_h, use_cache=True)
 
-    # Timed run
+    logger.info("Warmup no-cache T=6 (JIT)...")
+    tt_input, logical_h = make_input(T=6)
+    tt_model(tt_input, logical_h, use_cache=False)
+
+    # Also warm up cached T=21 (uses same kernels as T=6 cached, so minimal extra compile)
+    logger.info("Warmup cached T=21 (JIT)...")
+    tt_input, logical_h = make_input(T=21)
+    tt_model(tt_input, logical_h, use_cache=True)
+
+    # ── Timed runs ─────────────────────────────────────────────────────────────
     ttnn.synchronize_device(mesh_device)
-    logger.info("Starting timed run...")
+    logger.info("Timing cached T=6 (24 output frames)...")
     start = time.perf_counter()
-    tt_input, logical_h = make_input()
-    tt_model(tt_input, logical_h)
+    tt_input, logical_h = make_input(T=6)
+    tt_model(tt_input, logical_h, use_cache=True)
     ttnn.synchronize_device(mesh_device)
-    elapsed = time.perf_counter() - start
+    elapsed_cached_6 = time.perf_counter() - start
 
-    logger.info(f"WanDecoder 720p 81f cached: {elapsed:.3f}s")
+    ttnn.synchronize_device(mesh_device)
+    logger.info("Timing no-cache T=6 (24 output frames)...")
+    start = time.perf_counter()
+    tt_input, logical_h = make_input(T=6)
+    tt_model(tt_input, logical_h, use_cache=False)
+    ttnn.synchronize_device(mesh_device)
+    elapsed_no_cache_6 = time.perf_counter() - start
+
+    ttnn.synchronize_device(mesh_device)
+    logger.info("Timing cached T=21 (81 output frames)...")
+    start = time.perf_counter()
+    tt_input, logical_h = make_input(T=21)
+    tt_model(tt_input, logical_h, use_cache=True)
+    ttnn.synchronize_device(mesh_device)
+    elapsed_cached_21 = time.perf_counter() - start
+
+    logger.info("=" * 60)
+    logger.info(f"WanDecoder 720p T=6  (24 frames)   cached: {elapsed_cached_6:.3f}s")
+    logger.info(f"WanDecoder 720p T=6  (24 frames) no-cache: {elapsed_no_cache_6:.3f}s")
+    logger.info(f"WanDecoder 720p T=21 (81 frames)   cached: {elapsed_cached_21:.3f}s")
+    logger.info("=" * 60)
