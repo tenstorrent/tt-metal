@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "mesh_partition.hpp"
 
 namespace ttnn::operations::ccl {
@@ -39,24 +39,16 @@ void bind_mesh_partition(nb::module_& mod) {
                             memory_config=output_mem_config)
         )doc";
 
-    using OperationType = decltype(ttnn::mesh_partition);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"mesh_partition">(
         mod,
-        ttnn::mesh_partition,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               int32_t dim,
-               std::optional<uint32_t> cluster_axis,
-               const std::optional<ttnn::MemoryConfig>& memory_config) {
-                return self(input_tensor, dim, cluster_axis, memory_config);
-            },
+        ttnn::overload_t(
+            &ttnn::mesh_partition,
             nb::arg("input_tensor").noconvert(),
             nb::arg("dim"),
             nb::arg("cluster_axis") = nb::none(),
             nb::kw_only(),
-            nb::arg("memory_config") = nb::none()});
+            nb::arg("memory_config") = nb::none()));
 }
 
 }  // namespace ttnn::operations::ccl
