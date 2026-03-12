@@ -55,8 +55,6 @@ void set_or_update_runtime_arguments(
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(input_tensor.device()->arch(), operation_attributes.compute_kernel_config);
     const bool any_float32 =
         (tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()) == tt::DataFormat::Float32 ||
          tt::tt_metal::datatype_to_dataformat_converter(batch_mean_tensor.dtype()) == tt::DataFormat::Float32 ||
@@ -66,12 +64,11 @@ void set_or_update_runtime_arguments(
           tt::tt_metal::datatype_to_dataformat_converter(weight_tensor->dtype()) == tt::DataFormat::Float32) ||
          (bias_has_value &&
           tt::tt_metal::datatype_to_dataformat_converter(bias_tensor->dtype()) == tt::DataFormat::Float32));
-    const bool use_fp32_acc = fp32_dest_acc_en || any_float32;
 
     const uint32_t cHtWt = cHt * cWt;
     const auto scalar = eps;
     const auto packed_scalar_eps =
-        use_fp32_acc ? std::bit_cast<uint32_t>(scalar) : pack_two_bfloat16_into_uint32({scalar, scalar});
+        any_float32 ? std::bit_cast<uint32_t>(scalar) : pack_two_bfloat16_into_uint32({scalar, scalar});
 
     constexpr size_t num_reader_args = 11;
     constexpr size_t num_writer_args = 14;
@@ -257,7 +254,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
 
     // READER KERNEL
     std::map<std::string, std::string> reader_defines;
-    if (use_fp32_acc) {
+    if (any_float32) {
         reader_defines["FILL_EPS_FP32"] = "1";
     }
 
@@ -320,7 +317,7 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         program,
         fmt::format(
             "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/batch_norm_{}.cpp",
-            use_fp32_acc ? "sfpu_kernel" : "kernel"),
+            any_float32 ? "sfpu_kernel" : "kernel"),
         all_device_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
