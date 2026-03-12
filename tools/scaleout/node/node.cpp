@@ -11,6 +11,7 @@
 #include <enchantum/enchantum.hpp>
 #include <map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -572,24 +573,41 @@ tt::scaleout_tools::cabling_generator::proto::NodeDescriptor create_node_descrip
 }
 
 NodeType get_bh_glx_rev_from_system() {
-    std::vector<int> pci_devices = tt::umd::PCIDevice::enumerate_devices();
-    if (pci_devices.empty()) {
+    static std::optional<NodeType> cached;
+    if (cached.has_value()) {
+        return *cached;
+    }
+    uint64_t board_id;
+    try {
+        std::vector<int> pci_devices = tt::umd::PCIDevice::enumerate_devices();
+        if (pci_devices.empty()) {
+            log_warning(
+                tt::LogDistributed,
+                "PCIe device not accessible - cannot determine node type from system, defaulting to BH_GALAXY_REV_AB");
+            cached = NodeType::BH_GALAXY_REV_AB;
+            return *cached;
+        }
+        auto device = tt::umd::TTDevice::create(pci_devices[0]);
+        device->init_tt_device();
+        board_id = device->get_board_id();
+    } catch (const std::exception& e) {
         log_warning(
             tt::LogDistributed,
-            "PCIe device not accessible - cannot determine node type from system, defaulting to BH_GALAXY_REV_AB");
-        return NodeType::BH_GALAXY_REV_AB;
+            "Error accessing devices to determine BH Galaxy Rev ({}), defaulting to BH_GALAXY_REV_AB",
+            e.what());
+        cached = NodeType::BH_GALAXY_REV_AB;
+        return *cached;
     }
-    auto device = tt::umd::TTDevice::create(pci_devices[0]);
-    device->init_tt_device();
-    uint64_t board_id = device->get_board_id();
+
     uint32_t revision_bits = (board_id >> 32) & 0xF;  // bits [35:32]
     if (revision_bits >= 3) {
         log_info(tt::LogDistributed, "BH Galaxy Rev C detected, using in place of BH_GALAXY");
-        return NodeType::BH_GALAXY_REV_C;
+        cached = NodeType::BH_GALAXY_REV_C;
     } else {
         log_info(tt::LogDistributed, "BH Galaxy Rev AB detected, using in place of BH_GALAXY");
-        return NodeType::BH_GALAXY_REV_AB;
+        cached = NodeType::BH_GALAXY_REV_AB;
     }
+    return *cached;
 }
 
 // Helper function to get topology for a NodeType (uses virtual function from node instances)
