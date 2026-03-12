@@ -45,6 +45,8 @@
  * and monitoring counter remapper hardware registers. It supports arbitrary
  * mapping configurations between ClientL and ClientR.
  */
+namespace overlay {
+
 class RemapperAPI {
 private:
     tClientR_Config_Reg_u clientR_configs[REMAP_NUM_PAIRS]{};
@@ -870,5 +872,7 @@ public:
         return clientL_configs[0];
     }
 };
+
+}  // namespace overlay
 
 #endif  // __DM__REMAPPER_API_HPP__

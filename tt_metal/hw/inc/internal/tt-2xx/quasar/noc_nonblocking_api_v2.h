@@ -12,6 +12,7 @@
 #include "noc_overlay_parameters.h"
 #include "api/debug/assert.h"
 #include "internal/tt-2xx/quasar/overlay/rocc_instructions.hpp"
+#include "internal/tt-2xx/quasar/overlay/cmdbuff_api.hpp"
 
 #if !defined(COMPILE_FOR_DM)
 #error "NOC API V2 requires COMPILE_FOR_DM (uses RoCC custom instructions)"
@@ -44,16 +45,16 @@ constexpr uint32_t NOC_PCIE_MASK = 0x1000000F;
 constexpr uint32_t WRITE_RESPONSE_STATIC_VC = 14;
 constexpr uint32_t READ_RESPONSE_STATIC_VC = 12;
 
-// Overlay command buffer VC assignments (matching cmdbuff_api.hpp)
-constexpr uint32_t CMDBUF_RD_REQ_VC = 1;
-constexpr uint32_t CMDBUF_RD_RESP_VC = 12;
-constexpr uint32_t CMDBUF_WR_REQ_VC = 2;
-constexpr uint32_t CMDBUF_WR_RESP_VC = 13;
-constexpr uint32_t CMDBUF_MCAST_REQ_VC = 8;
-constexpr uint32_t CMDBUF_MCAST_RESP_VC = 14;
+// NOC V2 command buffer VC assignments (same HW values as overlay::CMDBUF_*_VC)
+constexpr uint32_t NOC_V2_RD_REQ_VC = 1;
+constexpr uint32_t NOC_V2_RD_RESP_VC = 12;
+constexpr uint32_t NOC_V2_WR_REQ_VC = 2;
+constexpr uint32_t NOC_V2_WR_RESP_VC = 13;
+constexpr uint32_t NOC_V2_MCAST_REQ_VC = 8;
+constexpr uint32_t NOC_V2_MCAST_RESP_VC = 14;
 
 // Static transaction ID used for all command buffers
-constexpr uint32_t CMDBUF_TRID_STATIC = 0;
+constexpr uint32_t NOC_V2_TRID_STATIC = 0;
 
 // ============================================================================
 // CMD_BUF_MISC Register Bit Definitions (TT_ROCC_CMD_BUF_MISC_reg_t)
@@ -283,15 +284,15 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET / 8, my_xy);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, CMDBUF_WR_REQ_VC);
+        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, NOC_V2_WR_REQ_VC);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_WR_RESP_VC);
+        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_V2_WR_RESP_VC);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_WR_SENT_TR_ID_REG_OFFSET / 8, CMDBUF_TRID_STATIC);
+        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_WR_SENT_TR_ID_REG_OFFSET / 8, NOC_V2_TRID_STATIC);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ACK_TR_ID_REG_OFFSET / 8, CMDBUF_TRID_STATIC);
+        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ACK_TR_ID_REG_OFFSET / 8, NOC_V2_TRID_STATIC);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, CMDBUF_TRID_STATIC);
+        OVERLAY_WR_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, NOC_V2_TRID_STATIC);
 
     // Read command buffer (CMDBUF_1): remote src → local dest
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
@@ -299,15 +300,15 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_COORD_REG_OFFSET / 8, my_xy);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, CMDBUF_RD_REQ_VC);
+        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, NOC_V2_RD_REQ_VC);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_RD_RESP_VC);
+        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_V2_RD_RESP_VC);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_WR_SENT_TR_ID_REG_OFFSET / 8, CMDBUF_TRID_STATIC);
+        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_WR_SENT_TR_ID_REG_OFFSET / 8, NOC_V2_TRID_STATIC);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ACK_TR_ID_REG_OFFSET / 8, CMDBUF_TRID_STATIC);
+        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ACK_TR_ID_REG_OFFSET / 8, NOC_V2_TRID_STATIC);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, CMDBUF_TRID_STATIC);
+        OVERLAY_RD_CMD_BUF, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, NOC_V2_TRID_STATIC);
 
     // Atomic command buffer (SCMDBUF): simple buffer for atomics and inline writes
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
@@ -315,7 +316,7 @@ inline __attribute__((always_inline)) void noc_init(uint32_t atomic_ret_val) {
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, atomic_ret_val);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_COORD_REG_OFFSET / 8, my_xy);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_WR_RESP_VC);
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_V2_WR_RESP_VC);
 }
 
 // set noc local memory state for a single kernel from the global state
@@ -353,7 +354,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_counters_init() {
 // Expects noc_init to have set on OVERLAY_RD_CMD_BUF:
 //   MISC      = CMD_BUF_MISC_READ
 //   DEST_COORD = my_xy (local core, read return destination)
-//   TR_ID / WR_SENT_TR_ID / TR_ACK_TR_ID = CMDBUF_TRID_STATIC
+//   TR_ID / WR_SENT_TR_ID / TR_ACK_TR_ID = NOC_V2_TRID_STATIC (0)
 template <uint8_t noc_mode = DM_DEDICATED_NOC>
 inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint32_t noc,
@@ -361,13 +362,13 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read(
     uint64_t src_addr,
     uint32_t dest_addr,
     uint32_t len_bytes,
-    uint32_t read_req_vc = CMDBUF_RD_REQ_VC) {
+    uint32_t read_req_vc = NOC_V2_RD_REQ_VC) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
 
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, read_req_vc);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_RD_RESP_VC);
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_V2_RD_RESP_VC);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, (uint32_t)src_addr);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
@@ -425,7 +426,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write(
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf,
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8,
-        mcast ? CMDBUF_MCAST_RESP_VC : CMDBUF_WR_RESP_VC);
+        mcast ? NOC_V2_MCAST_RESP_VC : NOC_V2_WR_RESP_VC);
 
     if constexpr (use_trid) {
         __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_TR_ID_REG_OFFSET / 8, trid);
@@ -477,7 +478,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_write_loopback_src(
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf,
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8,
-        mcast ? CMDBUF_MCAST_RESP_VC : CMDBUF_WR_RESP_VC);
+        mcast ? NOC_V2_MCAST_RESP_VC : NOC_V2_WR_RESP_VC);
 
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, src_addr);
@@ -531,7 +532,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_fast_read_any_len(
     uint64_t src_addr,
     uint32_t dest_addr,
     uint32_t len_bytes,
-    uint32_t read_req_vc = CMDBUF_RD_REQ_VC) {
+    uint32_t read_req_vc = NOC_V2_RD_REQ_VC) {
     static_assert(noc_mode != DM_DYNAMIC_NOC, "Quasar does not support DYNAMIC_NOC as it has only 1 NOC");
     // Overlay handles packetization via MAX_BYTES_IN_PACKET register; no software chunking needed.
     ncrisc_noc_fast_read<noc_mode>(noc, cmd_buf, src_addr, dest_addr, len_bytes, read_req_vc);
@@ -605,7 +606,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
 
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, static_vc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, mcast ? CMDBUF_MCAST_RESP_VC : CMDBUF_WR_RESP_VC);
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, mcast ? NOC_V2_MCAST_RESP_VC : NOC_V2_WR_RESP_VC);
 
     uint32_t be32 = be << (dest_addr & (NOC_WORD_BYTES - 1));
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_LEN_BYTES_REG_OFFSET / 8, be32);
@@ -643,7 +644,7 @@ inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_WR_RESP_VC);
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_V2_WR_RESP_VC);
     if constexpr (program_ret_addr) {
         __builtin_riscv_ttrocc_scmdbuf_wr_reg(
             TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_SRC_ADDR_REG_OFFSET / 8, atomic_ret_val);
@@ -686,7 +687,7 @@ inline __attribute__((always_inline)) void noc_fast_multicast_atomic_increment(
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_MCAST_RESP_VC);
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_V2_MCAST_RESP_VC);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, (uint32_t)(addr & 0xFFFFFFFF));
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
@@ -891,7 +892,7 @@ inline __attribute__((always_inline)) void ncrisc_noc_write_set_state(
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, vc);
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
-        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_WR_RESP_VC);
+        cmd_buf, TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_V2_WR_RESP_VC);
 
     // Set remote destination coordinate
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
@@ -1024,7 +1025,7 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline_set_state(
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_MISC_REG_OFFSET / 8, misc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_REQ_VC_REG_OFFSET / 8, static_vc);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
-        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, CMDBUF_WR_RESP_VC);
+        TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8, NOC_V2_WR_RESP_VC);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_DEST_ADDR_REG_OFFSET / 8, (uint32_t)dest_addr);
     __builtin_riscv_ttrocc_scmdbuf_wr_reg(
@@ -1314,7 +1315,7 @@ inline __attribute__((always_inline)) void noc_write_init_state(uint32_t noc, ui
     __builtin_riscv_ttrocc_cmdbuf_wr_reg(
         cmd_buf,
         TT_ROCC_ACCEL_TT_ROCC_CPU0_CMD_BUF_R_RESP_VC_REG_OFFSET / 8,
-        (cmd_flags & CQ_NOC_CMD_FLAG_MCAST) ? CMDBUF_MCAST_RESP_VC : CMDBUF_WR_RESP_VC);
+        (cmd_flags & CQ_NOC_CMD_FLAG_MCAST) ? NOC_V2_MCAST_RESP_VC : NOC_V2_WR_RESP_VC);
 }
 
 // clang-format off

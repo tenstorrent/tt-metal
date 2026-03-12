@@ -21,7 +21,7 @@
 // For kernels (NCRISC/BRISC/TRISC), provide a definition since they're compiled separately
 extern thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS];
 #ifndef COMPILE_FOR_TRISC
-extern RemapperAPI g_remapper_configurator;
+extern overlay::RemapperAPI g_remapper_configurator;
 #endif
 
 namespace experimental {
@@ -176,7 +176,7 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
             volatile dfb_initializer_per_risc_t* per_risc_ptr = per_risc_base + risc_index;
 
             if (per_risc_ptr->flags.is_producer) {
-                while (per_risc_ptr->flags.remapper_en && !RemapperAPI::is_remapper_enabled());
+                while (per_risc_ptr->flags.remapper_en && !overlay::RemapperAPI::is_remapper_enabled());
 
                 // Note: resetting tile counters does not reset the buffer capacity to 0
                 for (uint8_t tc = 0; tc < per_risc_ptr->num_tcs_and_init.num_tcs_to_rr; tc++) {
@@ -192,8 +192,8 @@ FORCE_INLINE void setup_local_dfb_interfaces(uint32_t tt_l1_ptr* dfb_config_base
                     // DPRINT << "dfb " << static_cast<uint32_t>(logical_dfb_id)
                     //         << " initializing tc tensix_id: " << static_cast<uint32_t>(tensix_id)
                     //         << " tc_id: " << static_cast<uint32_t>(tc_id) << ENDL();
-                    llk_intf_reset(tensix_id, tc_id);
-                    llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);
+                    overlay::llk_intf_reset(tensix_id, tc_id);
+                    overlay::llk_intf_set_capacity(tensix_id, tc_id, init_ptr->capacity);
                     // DPRINT << " capacity: "
                     //         << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id))
                     //         << " free space: " << static_cast<uint32_t>(llk_intf_get_free_space(tensix_id, tc_id)) << ENDL();
