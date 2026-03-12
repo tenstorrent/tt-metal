@@ -42,7 +42,12 @@
   2. Public `mesh/api.h` and `linear/api.h` no longer define `_single_packet` functions directly; they delegate to `detail::`
   3. Existing kernel code that called `_single_packet` APIs still compiles without modification (backward compat via include)
   4. All compile-only and silicon tests pass identically after the restructure (verified by rebuild + retest)
-**Plans**: TBD
+**Plans:** 3 plans
+
+Plans:
+- [ ] 03-01-PLAN.md -- Extract mesh _single_packet definitions to mesh/detail/api.h
+- [ ] 03-02-PLAN.md -- Extract linear _single_packet definitions to linear/detail/api.h
+- [ ] 03-03-PLAN.md -- Full rebuild and retest validation
 
 ### Phase 4: test-runner-consolidation
 **Goal**: `unicast_runner.cpp` and `multicast_runner.cpp` share a common utility header rather than duplicating payload/L1 helpers
@@ -81,7 +86,7 @@
 |-------|-----------|----------------|--------|-----------|
 | 1. fabric-auto-packetization | v1.0 | 8/8 | Complete | 2026-03-11 |
 | 2. silicon-data-transfer-validation | v1.1 | 3/3 | Complete | 2026-03-11 |
-| 3. api-detail-namespace | v1.2 | 0/? | Not started | - |
+| 3. api-detail-namespace | v1.2 | 0/3 | Planning complete | - |
 | 4. test-runner-consolidation | v1.2 | 0/? | Not started | - |
 | 5. device-kernel-consolidation | v1.2 | 0/? | Not started | - |
 | 6. test-case-deduplication | v1.2 | 0/? | Not started | - |
