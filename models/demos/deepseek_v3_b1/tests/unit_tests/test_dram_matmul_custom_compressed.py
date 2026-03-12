@@ -39,6 +39,7 @@ def _run_dram_matmul_custom_compressed(
     N,
     formats,
     subblock_k=None,
+    cores_per_bank=1,
     threshold=0.993,
     pcc_threshold=0.98,
 ):
@@ -51,18 +52,26 @@ def _run_dram_matmul_custom_compressed(
     tile_w = 32
 
     # Get DRAM bank grid and compute cores
-    compute_cores_list = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
-    num_cores = len(compute_cores_list)
-    num_banks = device.dram_grid_size().x
-    assert num_cores == num_banks, f"num_cores ({num_cores}) != num_banks ({num_banks})"
+    primary_cores_list = device.get_optimal_dram_bank_to_logical_worker_assignment(ttnn.NOC.NOC_0)
+    num_banks = len(primary_cores_list)
+    assert (
+        num_banks == device.dram_grid_size().x
+    ), f"num_banks ({num_banks}) != dram_grid_size ({device.dram_grid_size().x})"
 
-    # Pad N to align with DRAM banks
-    n_padded = pad_to_dram_banks(N, tile_w, tile_w * num_banks)
-    per_core_N = n_padded // num_banks
+    # Build expanded compute core list: primary + partner cores
+    compute_cores_list = []
+    for primary_core in primary_cores_list:
+        for offset in range(cores_per_bank):
+            compute_cores_list.append(ttnn.CoreCoord(primary_core.x + offset, primary_core.y))
+    num_cores = len(compute_cores_list)
+
+    # Pad N to align with DRAM banks (total N per bank must be divisible by cores_per_bank)
+    n_padded = pad_to_dram_banks(N, tile_w, tile_w * num_banks * cores_per_bank)
+    per_core_N = n_padded // (num_banks * cores_per_bank)
 
     logger.info(
         f"DRAM compressed matmul: M={M}, K={K}, N={N}, n_padded={n_padded}, "
-        f"per_core_N={per_core_N}, num_cores={num_cores}"
+        f"per_core_N={per_core_N}, num_cores={num_cores}, cores_per_bank={cores_per_bank}"
     )
 
     Kt = K // tile_w
@@ -110,7 +119,8 @@ def _run_dram_matmul_custom_compressed(
             )
         ]
     )
-    b_shard_spec = ttnn.ShardSpec(dram_grid, [K, per_core_N], ttnn.ShardOrientation.ROW_MAJOR)
+    total_N_per_bank = per_core_N * cores_per_bank
+    b_shard_spec = ttnn.ShardSpec(dram_grid, [K, total_N_per_bank], ttnn.ShardOrientation.ROW_MAJOR)
     b_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, b_shard_spec)
 
     ct = CompressedTensor.from_torch(torch_b_shuffled, assigner, device=device, memory_config=b_mem_config)
@@ -160,6 +170,7 @@ def _run_dram_matmul_custom_compressed(
         ct,
         ttnn_output,
         subblock_k=subblock_k,
+        cores_per_bank=cores_per_bank,
     )
 
     output_torch = ttnn.to_torch(ttnn_result)
@@ -208,3 +219,31 @@ def test_dram_matmul_compressed_mixed(device):
 def test_dram_matmul_compressed_reversed_shape(device):
     """[1, 2048] x [2048, 7168], bfp8+bfp4. Transposed DeepSeek shape."""
     _run_dram_matmul_custom_compressed(device, 1, 2048, 7168, formats=["bfp8", "bfp4"])
+
+
+# --- Multi-core per bank tests ---
+
+
+def test_dram_matmul_compressed_2cores_small_bfp8(device):
+    """[1, 64] x [64, N_padded], bfp8 only, 2 cores per bank."""
+    _run_dram_matmul_custom_compressed(device, 1, 64, 64, formats=["bfp8"], subblock_k=2, cores_per_bank=2)
+
+
+def test_dram_matmul_compressed_2cores_bfp4(device):
+    """[1, 7168] x [7168, 2048], bfp4 only, 2 cores per bank."""
+    _run_dram_matmul_custom_compressed(device, 1, 7168, 2048, formats=["bfp4"], cores_per_bank=2)
+
+
+def test_dram_matmul_compressed_2cores_mixed(device):
+    """[1, 7168] x [7168, 2048], mixed bfp4+bfp2, 2 cores per bank."""
+    _run_dram_matmul_custom_compressed(device, 1, 7168, 2048, formats=["bfp4", "bfp2"], cores_per_bank=2)
+
+
+def test_dram_matmul_compressed_4cores_bfp4(device):
+    """[1, 7168] x [7168, 2048], bfp4 only, 4 cores per bank."""
+    _run_dram_matmul_custom_compressed(device, 1, 7168, 2048, formats=["bfp4"], cores_per_bank=4)
+
+
+def test_dram_matmul_compressed_4cores_mixed(device):
+    """[1, 7168] x [7168, 2048], mixed bfp4+bfp2, 2 cores per bank."""
+    _run_dram_matmul_custom_compressed(device, 1, 7168, 2048, formats=["bfp4", "bfp2"], cores_per_bank=4)

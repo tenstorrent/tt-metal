@@ -11,11 +11,12 @@ Tiles are streamed from DRAM in variable-size subblocks.
 An L1 metadata tensor stores per-subblock byte sizes and an L1 format
 tensor stores per-tile packed pair info for compute-side format reconfig.
 
-Key differences from MatmulCustomCompressed (L1 version):
-  - B lives in DRAM, streamed in subblocks via NCRISC
-  - Variable-size DRAM reads: metadata tensor tells NCRISC how many bytes per subblock
-  - Subblock-K partial accumulation with finalize on last subblock
-  - Uses DRAM bank-to-worker core mapping
+Supports pipelined multi-core-per-bank mode (cores_per_bank > 1):
+  Each core reads its own portion of N columns directly from DRAM.
+  Cores sharing a bank read sequentially with semaphore handoff:
+  core 0 reads first, signals core 1 after last request is sent,
+  core 1 waits on semaphore then reads from its offset, etc.
+  BRISC: no-op. TRISC: compressed matmul (unchanged).
 """
 
 import numpy as np
@@ -84,6 +85,26 @@ def _compute_subblock_metadata(
     return block_sizes, tile_infos
 
 
+def _compute_dram_start_offset(
+    shard_assignment: np.ndarray,
+    subblock_k: int,
+    num_subblocks_k: int,
+    col_start: int,
+) -> int:
+    """Compute the byte offset into the DRAM shard where col_start begins.
+
+    Tiles are stored column-major: for each N column, K tiles are contiguous.
+    We sum up the byte sizes of all tiles in columns [0, col_start).
+    """
+    num_tiles_k = subblock_k * num_subblocks_k
+    offset = 0
+    for col in range(col_start):
+        for t in range(num_tiles_k):
+            fmt_idx = int(shard_assignment[col * num_tiles_k + t])
+            offset += _TILE_SIZES[fmt_idx]
+    return offset
+
+
 class DRAMStreamingMatmulCompressed:
     @staticmethod
     def op(
@@ -91,6 +112,7 @@ class DRAMStreamingMatmulCompressed:
         ct: CompressedTensor,
         output_tensor: ttnn.Tensor,
         subblock_k: int = None,
+        cores_per_bank: int = 1,
     ) -> ttnn.Tensor:
         """
         A [M, K] @ decompress(B_compressed [K, N]) = output [M, N].
@@ -102,18 +124,19 @@ class DRAMStreamingMatmulCompressed:
             ct: CompressedTensor with data in DRAM.
             output_tensor: Output tensor, WIDTH_SHARDED on compute cores.
             subblock_k: K subblock size in tiles. None means full K.
+            cores_per_bank: Number of compute cores per DRAM bank (1, 2, or 4).
+                When > 1, uses pipelined DRAM reads: each core reads its own
+                N columns directly, with semaphore handoff between cores sharing a bank.
         """
+        assert cores_per_bank in (1, 2, 4), f"cores_per_bank must be 1, 2, or 4, got {cores_per_bank}"
+
         device = input_a.device()
         data_tensor = ct.get_data_tensor()
 
-        # Get compute cores from DRAM bank assignment
+        # Get primary cores from DRAM bank assignment (1 per bank)
         in1_noc = ttnn.NOC.NOC_0
-        all_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(in1_noc)
-        num_cores = len(all_worker_cores)
-
-        compute_cores = ttnn.CoreRangeSet(
-            [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in all_worker_cores]
-        )
+        primary_worker_cores = device.get_optimal_dram_bank_to_logical_worker_assignment(in1_noc)
+        num_banks = len(primary_worker_cores)
 
         # Shapes from shard specs
         a_shard_shape = input_a.memory_config().shard_spec.shape
@@ -121,7 +144,12 @@ class DRAMStreamingMatmulCompressed:
         M = a_shard_shape[0]
         K = a_shard_shape[1]
         Kt = K // 32
+        # per_core_N is the N columns each core computes (from output shard)
         per_core_N = out_shard_shape[1] // 32
+        # total_N_per_bank is the total N columns per DRAM bank shard
+        total_N_per_bank = per_core_N * cores_per_bank
+
+        assert total_N_per_bank % cores_per_bank == 0
 
         if subblock_k is None:
             subblock_k = Kt
@@ -129,14 +157,29 @@ class DRAMStreamingMatmulCompressed:
         num_subblocks_k = Kt // subblock_k
         assert subblock_k % 2 == 0, f"subblock_k ({subblock_k}) must be even"
 
+        # Build expanded core grid: primary + partner cores
+        # Partner cores are at (primary.x + offset, primary.y)
+        all_compute_cores = []  # flat list: [primary0, partner0_1, ..., primary1, partner1_1, ...]
+        for bank_idx, primary_core in enumerate(primary_worker_cores):
+            for offset in range(cores_per_bank):
+                core = ttnn.CoreCoord(primary_core.x + offset, primary_core.y)
+                all_compute_cores.append(core)
+
+        num_total_cores = len(all_compute_cores)
+        compute_cores = ttnn.CoreRangeSet(
+            [ttnn.CoreRange(ttnn.CoreCoord(c.x, c.y), ttnn.CoreCoord(c.x, c.y)) for c in all_compute_cores]
+        )
+
         logger.debug(
             f"DRAMStreamingMatmulCompressed: M={M}, K={K}, Kt={Kt}, per_core_N={per_core_N}, "
-            f"subblock_k={subblock_k}, num_subblocks_k={num_subblocks_k}, num_cores={num_cores}"
+            f"total_N_per_bank={total_N_per_bank}, cores_per_bank={cores_per_bank}, "
+            f"subblock_k={subblock_k}, num_subblocks_k={num_subblocks_k}, "
+            f"num_banks={num_banks}, num_total_cores={num_total_cores}"
         )
 
         # CB indices
         cb_in0 = 0  # A tensor (HEIGHT_SHARDED, replicated)
-        cb_in1 = 1  # Working buffer for DRAM streaming
+        cb_in1 = 1  # Working buffer for streaming
         cb_out = 2  # Output tensor
 
         # CB0: A tensor — tensor-backed
@@ -165,59 +208,110 @@ class DRAMStreamingMatmulCompressed:
         # CB2: Output tensor — tensor-backed
         cb2_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out, output_tensor)
 
+        cbs = [cb0_desc, cb1_desc, cb2_desc]
+
         # Get DRAM buffer address
         in1_buffer_addr = data_tensor.buffer_address()
 
-        # Build per-core metadata (block sizes + format pairs) and upload to L1
-        num_dram_banks = len(all_worker_cores)
-        bank_id_core_values = []
-        vc_core_values = []
-        bank_ids = []
-
-        # DRAM cores from B tensor's shard grid (matches CompressedTensor's assignment keys)
+        # DRAM cores from B tensor's shard grid
         dram_cores = ttnn.corerange_to_cores(data_tensor.memory_config().shard_spec.grid)
 
-        # Metadata: block_sizes and fmt_pairs per core
-        all_block_sizes = []
-        all_fmt_pairs = []
+        # Semaphore for pipeline synchronization between cores sharing a bank
+        pipeline_sem_id = 0
+        semaphores = [
+            ttnn.SemaphoreDescriptor(
+                id=pipeline_sem_id,
+                core_ranges=compute_cores,
+                initial_value=0,
+            )
+        ]
 
-        for idx, core in enumerate(all_worker_cores):
-            # Bank ID and VC
-            bank_id = idx % num_dram_banks
+        # ====================================================================
+        # Build per-core metadata
+        # ====================================================================
+        per_core_block_sizes = {}  # core_idx → list of block sizes
+        per_core_fmt_pairs = {}  # core_idx → list of tile info uint32s
+
+        # Per-core compile-time arg values
+        bank_id_core_values = []
+        vc_core_values = []
+        per_core_n_core_values = []
+        dram_start_offset_core_values = []
+        core_in_bank_idx_core_values = []
+        next_core_noc_x_core_values = []
+        next_core_noc_y_core_values = []
+
+        bank_ids = []
+
+        for bank_idx, primary_core in enumerate(primary_worker_cores):
+            # Bank ID and VC for this bank
+            bank_id = bank_idx % num_banks
             vc = bank_id & 0x3
-            for j in range(idx):
-                prev_core = all_worker_cores[j]
-                if prev_core.y == core.y and (bank_ids[j] & 0x3) == (bank_id & 0x3):
+            for j in range(bank_idx):
+                prev_core = primary_worker_cores[j]
+                if prev_core.y == primary_core.y and (bank_ids[j] & 0x3) == (bank_id & 0x3):
                     vc = (vc + 1) & 0x3
                     break
             bank_ids.append(bank_id)
-            bank_id_core_values.append((core, bank_id))
-            vc_core_values.append((core, vc))
 
-            # Get this bank's shard assignment using DRAM core coords.
-            # The data was pre-shuffled to column-major by shuffle_tensor_tiles before
-            # CompressedTensor creation, so the assignment from get_assignment_per_shard
-            # is already in the physical DRAM read order (column-major: n-major, k-minor).
-            shard_assignment = ct.get_assignment_per_shard(dram_cores[idx])
+            # Get full shard assignment (all N columns for this bank)
+            shard_assignment = ct.get_assignment_per_shard(dram_cores[bank_idx])
 
-            # Compute metadata
-            block_sizes, fmt_pairs = _compute_subblock_metadata(
-                device, shard_assignment, subblock_k, per_core_N, num_subblocks_k
-            )
-            all_block_sizes.append(block_sizes)
-            all_fmt_pairs.append(fmt_pairs)
+            num_tiles_k = subblock_k * num_subblocks_k
 
-        # Upload block size metadata to L1 (HEIGHT_SHARDED, one shard per compute core)
-        # Each subblock has 1 uint32 entry: block_size_bytes
-        num_meta_entries = num_subblocks_k * per_core_N
+            for offset in range(cores_per_bank):
+                core_flat_idx = bank_idx * cores_per_bank + offset
+                core = all_compute_cores[core_flat_idx]
+                is_last = offset == cores_per_bank - 1
+
+                col_start = offset * per_core_N
+                col_end = col_start + per_core_N
+
+                # This core's slice of the shard assignment
+                core_assignment = np.concatenate(
+                    [shard_assignment[col * num_tiles_k : (col + 1) * num_tiles_k] for col in range(col_start, col_end)]
+                )
+
+                # Compute metadata for this core's columns
+                block_sizes, tile_infos = _compute_subblock_metadata(
+                    device, core_assignment, subblock_k, per_core_N, num_subblocks_k
+                )
+                per_core_block_sizes[core_flat_idx] = block_sizes
+                per_core_fmt_pairs[core_flat_idx] = tile_infos
+
+                # Compute DRAM byte offset to this core's first column
+                dram_offset = _compute_dram_start_offset(shard_assignment, subblock_k, num_subblocks_k, col_start)
+
+                bank_id_core_values.append((core, bank_id))
+                vc_core_values.append((core, vc))
+                per_core_n_core_values.append((core, per_core_N))
+                dram_start_offset_core_values.append((core, dram_offset))
+                core_in_bank_idx_core_values.append((core, offset))
+
+                # Next core NOC coords (for semaphore signal)
+                # Last core wraps back to first core in the bank group
+                if not is_last:
+                    next_core = all_compute_cores[core_flat_idx + 1]
+                else:
+                    next_core = all_compute_cores[bank_idx * cores_per_bank]
+                next_noc = device.worker_core_from_logical_core(next_core)
+                next_core_noc_x_core_values.append((core, next_noc.x))
+                next_core_noc_y_core_values.append((core, next_noc.y))
+
+        # ====================================================================
+        # Upload block size metadata to L1
+        # ====================================================================
+        meta_entries = per_core_N * num_subblocks_k  # same for all cores
+
         meta_flat = []
-        for core_sizes in all_block_sizes:
-            meta_flat.extend(core_sizes)
-        meta_torch = torch.tensor(meta_flat, dtype=torch.int32).reshape(num_cores, num_meta_entries)
-        meta_shard_spec = ttnn.ShardSpec(compute_cores, [1, num_meta_entries * 4], ttnn.ShardOrientation.ROW_MAJOR)
+        for core_idx in range(num_total_cores):
+            meta_flat.extend(per_core_block_sizes[core_idx])
+
+        meta_torch = torch.tensor(meta_flat, dtype=torch.int32).reshape(num_total_cores, meta_entries)
+        meta_shard_spec = ttnn.ShardSpec(compute_cores, [1, meta_entries * 4], ttnn.ShardOrientation.ROW_MAJOR)
         meta_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, meta_shard_spec)
         meta_tensor = ttnn.from_torch(
-            meta_torch.view(torch.uint8).reshape(num_cores, num_meta_entries * 4),
+            meta_torch.view(torch.uint8).reshape(num_total_cores, meta_entries * 4),
             dtype=ttnn.uint8,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
@@ -225,17 +319,19 @@ class DRAMStreamingMatmulCompressed:
         )
         meta_l1_addr = meta_tensor.buffer_address()
 
-        # Upload per-tile format metadata to L1 (HEIGHT_SHARDED)
-        # Each tile has one uint32: [relative_offset:24 | fmt:8]
+        # ====================================================================
+        # Upload per-tile format metadata to L1
+        # ====================================================================
         num_tile_entries = subblock_k * num_subblocks_k * per_core_N
         fmt_flat = []
-        for core_pairs in all_fmt_pairs:
-            fmt_flat.extend(core_pairs)
-        fmt_torch = torch.tensor(fmt_flat, dtype=torch.int32).reshape(num_cores, num_tile_entries)
+        for core_idx in range(num_total_cores):
+            fmt_flat.extend(per_core_fmt_pairs[core_idx])
+
+        fmt_torch = torch.tensor(fmt_flat, dtype=torch.int32).reshape(num_total_cores, num_tile_entries)
         fmt_shard_spec = ttnn.ShardSpec(compute_cores, [1, num_tile_entries * 4], ttnn.ShardOrientation.ROW_MAJOR)
         fmt_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, fmt_shard_spec)
         fmt_tensor = ttnn.from_torch(
-            fmt_torch.view(torch.uint8).reshape(num_cores, num_tile_entries * 4),
+            fmt_torch.view(torch.uint8).reshape(num_total_cores, num_tile_entries * 4),
             dtype=ttnn.uint8,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=device,
@@ -252,7 +348,10 @@ class DRAMStreamingMatmulCompressed:
         else:
             raise ValueError(f"Unsupported architecture: {arch}")
 
+        # ====================================================================
         # Compile-time args
+        # ====================================================================
+        # NCRISC args
         ncrisc_named_args = [
             ("cb_in0", cb_in0),
             ("cb_in1", cb_in1),
@@ -260,29 +359,23 @@ class DRAMStreamingMatmulCompressed:
             ("num_tiles_k", Kt),
             ("in1_tensor_addr", in1_buffer_addr),
             ("subblock_k", subblock_k),
-            ("per_core_n", per_core_N),
             ("out_num_tiles", per_core_N),
             ("num_subblocks_k", num_subblocks_k),
             ("meta_l1_addr", meta_l1_addr),
             ("cb_in1_size_bytes", cb_in1_total_bytes),
             ("noc_max_page_size", noc_max_page_size),
+            ("pipeline_sem_id", pipeline_sem_id),
         ]
 
+        # BRISC args — no-op, minimal
         brisc_named_args = [
             ("cb_in0", cb_in0),
             ("cb_in1", cb_in1),
             ("cb_out", cb_out),
             ("num_tiles_k", Kt),
-            ("in1_tensor_addr", in1_buffer_addr),
-            ("subblock_k", subblock_k),
-            ("per_core_n", per_core_N),
-            ("out_num_tiles", per_core_N),
-            ("num_subblocks_k", num_subblocks_k),
-            ("meta_l1_addr", meta_l1_addr),
-            ("cb_in1_size_bytes", cb_in1_total_bytes),
-            ("fmt_l1_addr", fmt_l1_addr),
         ]
 
+        # TRISC args
         trisc_named_args = [
             ("cb_in0", cb_in0),
             ("cb_in1", cb_in1),
@@ -295,6 +388,44 @@ class DRAMStreamingMatmulCompressed:
         ]
 
         KERNEL_PATH = "models/demos/deepseek_v3_b1/micro_ops/dram_streaming_matmul_compressed/kernels/dram_streaming_matmul_compressed_kernel.cpp"
+
+        per_core_descriptors = [
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="bank_id",
+                core_values=bank_id_core_values,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="vc",
+                core_values=vc_core_values,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="per_core_n",
+                core_values=per_core_n_core_values,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="dram_start_offset",
+                core_values=dram_start_offset_core_values,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="core_in_bank_idx",
+                core_values=core_in_bank_idx_core_values,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="next_core_noc_x",
+                core_values=next_core_noc_x_core_values,
+                other_value=0,
+            ),
+            PerCoreCompileTimeDescriptor(
+                named_compile_time_arg="next_core_noc_y",
+                core_values=next_core_noc_y_core_values,
+                other_value=0,
+            ),
+        ]
 
         unified_kernel = UnifiedKernelDescriptor(
             kernel_source=KERNEL_PATH,
@@ -316,26 +447,15 @@ class DRAMStreamingMatmulCompressed:
                     other_value=0,
                 ),
             ],
-            per_core_compile_time_descriptors=[
-                PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="bank_id",
-                    core_values=bank_id_core_values,
-                    other_value=0,
-                ),
-                PerCoreCompileTimeDescriptor(
-                    named_compile_time_arg="vc",
-                    core_values=vc_core_values,
-                    other_value=0,
-                ),
-            ],
+            per_core_compile_time_descriptors=per_core_descriptors,
         )
 
         kernel_descriptors = unified_kernel.get_kernel_descriptors()
 
         program_descriptor = ttnn.ProgramDescriptor(
             kernels=kernel_descriptors.kernels,
-            cbs=[cb0_desc, cb1_desc, cb2_desc],
-            semaphores=[],
+            cbs=cbs,
+            semaphores=semaphores,
         )
 
         io_tensors = [input_a, data_tensor, output_tensor, meta_tensor, fmt_tensor]
