@@ -35,24 +35,10 @@ import sys
 from pathlib import Path
 
 from eval import db
+from eval.ingest import _find_op_dir as find_op_dir
 
 REPO_ROOT = Path(__file__).parent.parent.resolve()
 SCORE_SCRIPT = REPO_ROOT / ".claude" / "scripts" / "tdd-pipeline" / "score.py"
-
-# Common locations where ops are generated
-OP_SEARCH_PATHS = [
-    "ttnn/ttnn/operations/{op_name}",
-    "ttnn/cpp/ttnn/operations/{op_name}",
-]
-
-
-def find_op_dir(clone_dir: Path, op_name: str) -> Path | None:
-    """Find the operation directory in a clone."""
-    for pattern in OP_SEARCH_PATHS:
-        candidate = clone_dir / pattern.format(op_name=op_name)
-        if candidate.is_dir():
-            return candidate
-    return None
 
 
 def find_runs_in_session(session_dir: Path) -> list[dict]:
@@ -110,6 +96,20 @@ def find_runs_in_session(session_dir: Path) -> list[dict]:
         if not op_name:
             continue
 
+        # Get created_branch from the clone's git state
+        created_branch = ""
+        try:
+            git_result = subprocess.run(
+                ["git", "rev-parse", "--abbrev-ref", "HEAD"],
+                capture_output=True,
+                text=True,
+                check=False,
+                cwd=str(clone_dir),
+            )
+            created_branch = git_result.stdout.strip()
+        except OSError:
+            pass
+
         runs.append(
             {
                 "prompt_name": prompt_name,
@@ -117,6 +117,7 @@ def find_runs_in_session(session_dir: Path) -> list[dict]:
                 "clone_dir": clone_dir,
                 "log_dir": log_dir,
                 "op_name": op_name,
+                "created_branch": created_branch,
             }
         )
 
@@ -146,7 +147,7 @@ def find_sessions(base_dir: Path, scan_all: bool = False) -> list[Path]:
     return sessions
 
 
-def re_reflect_run(run_info: dict, dry_run: bool = False) -> bool:
+def re_reflect_run(run_info: dict, db_conn=None, dry_run: bool = False) -> bool:
     """Re-run the self-reflection agent on a clone to regenerate self_reflection.md.
 
     This is needed when the self-reflection agent prompt or template has changed,
@@ -211,6 +212,20 @@ def re_reflect_run(run_info: dict, dry_run: bool = False) -> bool:
         print(f"  [REFLECT OK] {label}: self_reflection.md regenerated")
 
         # Update the artifact in DB if we have a connection
+        if db_conn:
+            new_content = reflection_path.read_text()
+            rows = db_conn.execute(
+                "SELECT id FROM runs WHERE prompt_name = ? AND run_number = ? AND created_branch = ?",
+                (run_info["prompt_name"], run_info["run_number"], run_info.get("created_branch", "")),
+            ).fetchall()
+            for row in rows:
+                run_id = row["id"]
+                db_conn.execute("DELETE FROM artifacts WHERE run_id = ? AND name = 'self_reflection'", (run_id,))
+                db.insert_artifact(db_conn, run_id, "self_reflection", new_content)
+            if rows:
+                db_conn.commit()
+                print(f"  [REFLECT DB] {label}: updated artifact in {len(rows)} DB row(s)")
+
         return True
     else:
         print(f"  [REFLECT WARN] {label}: self_reflection.md not produced (exit={result.returncode})")
@@ -279,27 +294,43 @@ def rescore_run(run_info: dict, db_conn, dry_run: bool = False) -> dict | None:
     new_grade = report.get("grade")
     criteria = report.get("criteria", [])
 
-    # Extract duration from execution_time criterion
+    # Extract duration from execution_time criterion and golden stats from golden_score
     duration_seconds = None
+    golden_passed = None
+    golden_total = None
     for c in criteria:
         if c.get("name") == "execution_time":
             sub = c.get("sub_scores", {})
             duration_seconds = sub.get("overall_duration_s")
-            break
+        elif c.get("name") == "golden_score":
+            sub = c.get("sub_scores", {})
+            if "passed" in sub and "total" in sub:
+                golden_passed = sub["passed"]
+                golden_total = sub["total"]
 
     # Find the run in the DB by matching prompt_name + run_number + created_branch
-    rows = db_conn.execute(
-        "SELECT id FROM runs WHERE prompt_name = ? AND run_number = ?",
-        (run_info["prompt_name"], run_info["run_number"]),
-    ).fetchall()
+    created_branch = run_info.get("created_branch", "")
+    if created_branch:
+        rows = db_conn.execute(
+            "SELECT id FROM runs WHERE prompt_name = ? AND run_number = ? AND created_branch = ?",
+            (run_info["prompt_name"], run_info["run_number"], created_branch),
+        ).fetchall()
+    else:
+        rows = db_conn.execute(
+            "SELECT id FROM runs WHERE prompt_name = ? AND run_number = ?",
+            (run_info["prompt_name"], run_info["run_number"]),
+        ).fetchall()
 
     if rows:
         for row in rows:
             run_id = row["id"]
-            # Update score
+            # Update score and golden stats
             db_conn.execute(
-                "UPDATE runs SET score_total = ?, score_grade = ?, duration_seconds = ? WHERE id = ?",
-                (new_score, new_grade, duration_seconds, run_id),
+                "UPDATE runs SET score_total = ?, score_grade = ?, duration_seconds = ?,"
+                " golden_passed = COALESCE(?, golden_passed),"
+                " golden_total = COALESCE(?, golden_total)"
+                " WHERE id = ?",
+                (new_score, new_grade, duration_seconds, golden_passed, golden_total, run_id),
             )
             # Delete old criteria and insert new
             db_conn.execute("DELETE FROM score_criteria WHERE run_id = ?", (run_id,))
@@ -375,7 +406,7 @@ def main():
                 sys.exit(1)
             for run_info in matching:
                 if args.re_reflect:
-                    re_reflect_run(run_info, dry_run=args.dry_run)
+                    re_reflect_run(run_info, db_conn=conn, dry_run=args.dry_run)
                 result = rescore_run(run_info, conn, dry_run=args.dry_run)
                 if result:
                     total_rescored += 1
@@ -402,7 +433,7 @@ def main():
 
             for run_info in runs:
                 if args.re_reflect:
-                    re_reflect_run(run_info, dry_run=args.dry_run)
+                    re_reflect_run(run_info, db_conn=conn, dry_run=args.dry_run)
                 result = rescore_run(run_info, conn, dry_run=args.dry_run)
                 if result:
                     total_rescored += 1

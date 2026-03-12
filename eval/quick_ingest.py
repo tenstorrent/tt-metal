@@ -27,7 +27,14 @@ from pathlib import Path
 
 from eval import db
 from eval.classify_failures import parse_junit_xml
-from eval.ingest import _collect_host_code, _collect_kernels, _collect_self_reflection, _find_op_dir
+from eval.ingest import (
+    _collect_breadcrumbs,
+    _collect_host_code,
+    _collect_kernels,
+    _collect_self_reflection,
+    _collect_tdd_state,
+    _find_op_dir,
+)
 
 
 def _git(cmd: str) -> str:
@@ -116,6 +123,14 @@ def quick_ingest(
         reflection = _collect_self_reflection(op_dir)
         if reflection:
             db.insert_artifact(conn, run_id, "self_reflection", reflection)
+
+        tdd_state = _collect_tdd_state(op_dir)
+        if tdd_state:
+            db.insert_tdd_state(conn, run_id, tdd_state)
+
+        breadcrumbs = _collect_breadcrumbs(op_dir)
+        if breadcrumbs:
+            db.insert_kw_breadcrumbs(conn, run_id, breadcrumbs)
 
     conn.commit()
     conn.close()
