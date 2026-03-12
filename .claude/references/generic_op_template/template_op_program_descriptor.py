@@ -97,11 +97,18 @@ def create_program_descriptor(
 
     # ========== 4. KERNEL DESCRIPTORS ==========
     # Reader kernel
-    reader_ct_args = ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args()
+    # CT arg layout: scalar args first, then TensorAccessorArgs at the END.
+    # For optional tensors, always append [0] placeholder when absent —
+    # never conditionally skip. The kernel declares all accessors unconditionally.
+    reader_ct_args = [num_pages]  # scalar CT args first
+    reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())  # required tensor
+    # reader_ct_args.extend(
+    #     ttnn.TensorAccessorArgs(optional_tensor).get_compile_time_args()
+    #     if optional_tensor is not None else [0]
+    # )  # optional tensor — [0] placeholder when absent
     reader_rt_args = ttnn.RuntimeArgs()
     reader_rt_args[core.x][core.y] = [
         input_tensor.buffer_address(),
-        num_pages,
         0,  # start_page_id
     ]
 
@@ -113,7 +120,7 @@ def create_program_descriptor(
         config=ttnn.ReaderConfigDescriptor(),
     )
 
-    # Writer kernel
+    # Writer kernel — scalar CT args first, TensorAccessorArgs at the end
     writer_ct_args = [cb_out]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
     writer_rt_args = ttnn.RuntimeArgs()

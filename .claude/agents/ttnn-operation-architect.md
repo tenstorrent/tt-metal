@@ -106,6 +106,7 @@ For Hybrid mode, also verify interface compatibility and resolve CB ID conflicts
 - Determine page counts per CB
 - Define work distribution: unit granularity, grid size, per-core workload, remainder strategy
 - Classify arguments as compile-time vs runtime
+- **TensorAccessorArgs layout rule**: In the CT arg list, put all scalar args first, then TensorAccessorArgs for every tensor slot (including optional ones) at the end. Always allocate a slot for optional tensors even when absent — the PD uses `[0]` as a placeholder and the kernel declares all accessors unconditionally. This keeps offsets stable regardless of which optional tensors are provided.
 
 #### Step 1.5: Verify Hardware Constraints
 

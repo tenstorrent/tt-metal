@@ -440,6 +440,25 @@ TT_METAL_DPRINT_CORES=0,0 TT_METAL_DPRINT_RISCVS=BR,TR0 scripts/tt-test.sh --dev
 
 Docs: `tech_reports/tensor_accessor/tensor_accessor.md` and `.claude/references/ttnn-cb-memory-fundamentals.md` (section "TensorAccessor Pattern"). The `TensorAccessorArgs<N>()` index must match the compile-time arg position in the program descriptor.
 
+**Multiple / optional tensors**: The PD always appends TensorAccessorArgs for every tensor slot (using `[0]` for absent ones). In the kernel, **declare ALL accessors unconditionally at the top** using `[[maybe_unused]]` and chain with `next_compile_time_args_offset()`. Never put `TensorAccessorArgs<N>()` inside `if constexpr` or `#if` — the static constexpr members trigger `get_compile_time_arg_val` at template instantiation, causing compile errors when the CT arg doesn't exist.
+
+```cpp
+// CORRECT — all accessors declared unconditionally, chained
+constexpr auto input_args = TensorAccessorArgs<5>();  // after 5 scalar CT args
+[[maybe_unused]] constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();
+
+if constexpr (has_gamma) {
+    // Only USAGE is guarded, not the declaration
+    const auto gamma_accessor = TensorAccessor(gamma_args, gamma_addr, gamma_page_size);
+    // ... read gamma ...
+}
+
+// WRONG — compile error when has_gamma=0 (CT arg index out of bounds)
+if constexpr (has_gamma) {
+    constexpr auto gamma_args = TensorAccessorArgs<input_args.next_compile_time_args_offset()>();  // BOOM
+}
+```
+
 ---
 
 ## GIT PROTOCOL

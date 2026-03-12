@@ -193,9 +193,16 @@ for core in all_cores:
 ```
 
 ### Tensor Accessor (for Reader/Writer)
+
+**Always put TensorAccessorArgs at the END of the compile-time args list**, after all scalar args. For optional tensors, always append a placeholder `[0]` when the tensor is absent — never conditionally skip. This keeps CT arg offsets stable so the kernel can unconditionally declare all accessors.
+
 ```python
-# Add to compile-time args for kernels that access tensor data
-compile_args.extend(ttnn.TensorAccessorArgs(tensor).get_compile_time_args())
+# Scalar CT args first, then TensorAccessorArgs at the end
+reader_ct_args = [stick_size, scaler_bits, eps_bits, Wt, has_gamma]
+# Required tensor — always present
+reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
+# Optional tensor — [0] placeholder when absent
+reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args() if has_gamma else [0])
 ```
 
 ## Implementation Workflow
