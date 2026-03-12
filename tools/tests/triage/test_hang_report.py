@@ -15,6 +15,9 @@ from pathlib import Path
 import pytest
 from defusedxml.ElementTree import parse as XMLParse
 
+if not os.environ.get("TT_METAL_HOME"):
+    pytest.skip("TT_METAL_HOME not set; skipping hang report tests", allow_module_level=True)
+
 METAL_HOME = Path(os.environ.get("TT_METAL_HOME"))
 HANG_APP = METAL_HOME / "build/tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang"
 TRIAGE_SCRIPT = METAL_HOME / "tools/tt-triage.py"

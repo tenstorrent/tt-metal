@@ -13,6 +13,7 @@ killed and pytest never finalizes its own XML.
 import os
 from datetime import datetime, timezone
 from html import escape
+from textwrap import dedent
 
 REPORT_DIR = "generated/test_reports"
 
@@ -32,29 +33,36 @@ def write_hang_junit_xml(triage_summary: str) -> None:
         test_name = "unknown"
 
     classname = filepath.replace("/", ".").removesuffix(".py")
-    timestamp = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S%z")
+    timestamp = datetime.now(timezone.utc).isoformat(timespec="seconds")
     hostname = os.environ.get("HOSTNAME", "unknown")
 
     failure_message = "[HANG DETECTED] Card hang detected during test execution. tt-triage was invoked."
 
-    xml_content = f"""\
-<?xml version="1.0" encoding="utf-8"?>
-<testsuites name="pytest tests">
-  <testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="0" timestamp="{timestamp}" hostname="{escape(hostname)}">
-    <testcase classname="{escape(classname)}" name="{escape(test_name)}" time="0">
-      <properties>
-        <property name="failure_type" value="hang"/>
-        <property name="start_timestamp" value="{timestamp}"/>
-        <property name="end_timestamp" value="{timestamp}"/>
-      </properties>
-      <failure message="{escape(failure_message)}">{escape(failure_message)}
+    xml_content = dedent("""\
+        <?xml version="1.0" encoding="utf-8"?>
+        <testsuites name="pytest tests">
+          <testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="0" timestamp="{timestamp}" hostname="{hostname}">
+            <testcase classname="{classname}" name="{test_name}" time="0">
+              <properties>
+                <property name="failure_type" value="hang"/>
+                <property name="start_timestamp" value="{timestamp}"/>
+                <property name="end_timestamp" value="{timestamp}"/>
+              </properties>
+              <failure message="{failure_message}">{failure_message}
 
-Triage summary:
-{escape(triage_summary)}
-      </failure>
-    </testcase>
-  </testsuite>
-</testsuites>"""
+        Triage summary:
+        {triage_summary}
+              </failure>
+            </testcase>
+          </testsuite>
+        </testsuites>""").format(
+        timestamp=timestamp,
+        hostname=escape(hostname),
+        classname=escape(classname),
+        test_name=escape(test_name),
+        failure_message=escape(failure_message),
+        triage_summary=escape(triage_summary),
+    )
 
     try:
         os.makedirs(REPORT_DIR, exist_ok=True)
