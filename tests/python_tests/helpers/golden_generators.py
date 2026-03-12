@@ -23,6 +23,8 @@ from helpers.pack import pack_mxfp8p, pack_mxfp8r
 from helpers.tilize_untilize import tilize_block, untilize_block
 from helpers.unpack import unpack_mxfp8p, unpack_mxfp8r
 
+from .tile_shape import construct_tile_shape
+
 # Tile and face dimension constants
 FACE_DIM = 16
 ELEMENTS_PER_FACE = 256  # 16x16 = 256 elements per face
@@ -1993,89 +1995,138 @@ class ReduceGolden:
         data_format,
         tile_cnt=1,
         reduce_to_one=False,
+        tile_shape=None,
     ):
+        if tile_shape is None:
+            tile_shape = construct_tile_shape()
+
         if reduce_dim not in self.dim_handlers:
             raise ValueError(f"Unsupported reduce dimension: {reduce_dim}")
 
         if reduce_to_one:
             # Accumulate all tiles into a single result
             return self._reduce_all_tiles(
-                operand, reduce_dim, pool_type, data_format, tile_cnt
+                operand, reduce_dim, pool_type, data_format, tile_cnt, tile_shape
             )
         else:
             # Process each tile independently
             return torch.cat(
                 [
                     self._process_tile(
-                        operand, reduce_dim, pool_type, data_format, tile
+                        operand, reduce_dim, pool_type, data_format, tile, tile_shape
                     )
                     for tile in range(tile_cnt)
                 ]
             )
 
-    def _reduce_all_tiles(self, operand, reduce_dim, pool_type, data_format, tile_cnt):
+    def _reduce_all_tiles(
+        self, operand, reduce_dim, pool_type, data_format, tile_cnt, tile_shape
+    ):
         """Accumulate reduction across all tiles into a single result."""
         accumulated = None
 
         for tile_idx in range(tile_cnt):
             tile_result = self._process_tile(
-                operand, reduce_dim, pool_type, data_format, tile_idx
+                operand, reduce_dim, pool_type, data_format, tile_idx, tile_shape
             )
 
             if accumulated is None:
-                # First tile - just store it
-                accumulated = tile_result
+                # First tile - store it in float32 for high precision accumulation
+                accumulated = tile_result.to(torch.float32)
             else:
-                # Subsequent tiles - pool with previous accumulation
+                # Subsequent tiles - pool with previous accumulation in float32
+                tile_result_f32 = tile_result.to(torch.float32)
                 if pool_type == ReducePool.Max:
-                    accumulated = torch.maximum(accumulated, tile_result)
+                    accumulated = torch.maximum(accumulated, tile_result_f32)
                 elif pool_type == ReducePool.Sum:
-                    accumulated = accumulated + tile_result
+                    accumulated = torch.add(accumulated, tile_result_f32)
                 elif pool_type == ReducePool.Average:
                     # Average reduce operation performs dest += avg(curr_tile) when reducing to populated dest locations.
                     # Result should simply be the accumulation of averages.
-                    accumulated = accumulated + tile_result
+                    accumulated = torch.add(accumulated, tile_result_f32)
                 else:
                     raise ValueError(f"Unsupported pool type: {pool_type}")
 
-        return accumulated
+        # Convert back to target data format at the end
+        target_dtype = format_dict[data_format]
+        return accumulated.to(target_dtype)
 
-    def _process_tile(self, operand, reduce_dim, pool_type, data_format, tile_idx):
-        tile_start = tile_idx * ELEMENTS_PER_TILE
-        tile_data = operand[tile_start : tile_start + ELEMENTS_PER_TILE]
+    def _process_tile(
+        self, operand, reduce_dim, pool_type, data_format, tile_idx, tile_shape
+    ):
+
+        tile_start = tile_idx * tile_shape.total_tile_size()
+        tile_data = operand[tile_start : tile_start + tile_shape.total_tile_size()]
 
         # Extract 4 faces as 16x16 matrices
-        faces = tile_data.view(FACES_PER_TILE, FACE_DIM, FACE_DIM)
-
-        return self.dim_handlers[reduce_dim](faces, pool_type, data_format)
-
-    def _reduce_column(self, faces, pool_type, data_format):
-        # Pool together f0+f2 (left cols) and f1+f3 (right cols) → row 0
-        left_half = torch.cat((faces[0], faces[2]), dim=0)  # 32x16
-        right_half = torch.cat((faces[1], faces[3]), dim=0)  # 32x16
-        result = torch.zeros(ELEMENTS_PER_TILE, dtype=format_dict[data_format])
-        result[:FACE_DIM] = self._apply_pooling(left_half, pool_type, dim=0)
-        result[ELEMENTS_PER_FACE : ELEMENTS_PER_FACE + FACE_DIM] = self._apply_pooling(
-            right_half, pool_type, dim=0
+        faces = tile_data.view(
+            tile_shape.total_num_faces(), tile_shape.face_r_dim, tile_shape.face_c_dim
         )
+
+        return self.dim_handlers[reduce_dim](faces, pool_type, data_format, tile_shape)
+
+    def _reduce_column(self, faces, pool_type, data_format, tile_shape):
+        # Pool together columns: reduce along rows (dim=0) for each column
+        result = torch.zeros(
+            tile_shape.total_tile_size(), dtype=format_dict[data_format]
+        )
+
+        # For each column of faces, concatenate vertically and pool along rows
+        for col_idx in range(tile_shape.num_faces_c_dim):
+            # Gather all faces in this column (vertically stacked)
+            face_indices = [
+                col_idx + row_idx * tile_shape.num_faces_c_dim
+                for row_idx in range(tile_shape.num_faces_r_dim)
+            ]
+            column_faces = torch.cat([faces[i] for i in face_indices], dim=0)
+
+            # Pool along rows (dim=0) to get one value per column
+            pooled_values = self._apply_pooling(column_faces, pool_type, dim=0)
+
+            # Place in the first row of this face column (in tilized layout)
+            # Face col_idx starts at position col_idx * face_r_dim * face_c_dim
+            result_start = col_idx * tile_shape.face_r_dim * tile_shape.face_c_dim
+            result[result_start : result_start + tile_shape.face_c_dim] = pooled_values
+
         return result
 
-    def _reduce_row(self, faces, pool_type, data_format):
-        # Pool together f0+f1 (upper rows) and f2+f3 (lower rows) → col 0
-        upper_half = torch.cat((faces[0], faces[1]), dim=1)  # 16x32
-        lower_half = torch.cat((faces[2], faces[3]), dim=1)  # 16x32
-        result = torch.zeros(ELEMENTS_PER_TILE, dtype=format_dict[data_format])
-        result[0:ELEMENTS_PER_FACE:FACE_DIM] = self._apply_pooling(
-            upper_half, pool_type, dim=1
+    def _reduce_row(self, faces, pool_type, data_format, tile_shape):
+        # Pool together rows: reduce along columns (dim=1) for each row
+        result = torch.zeros(
+            tile_shape.total_tile_size(), dtype=format_dict[data_format]
         )
-        result[2 * ELEMENTS_PER_FACE : 3 * ELEMENTS_PER_FACE : FACE_DIM] = (
-            self._apply_pooling(lower_half, pool_type, dim=1)
-        )
+
+        # For each row of faces, concatenate horizontally and pool along columns
+        for row_idx in range(tile_shape.num_faces_r_dim):
+            # Gather all faces in this row (horizontally stacked)
+            face_indices = [
+                row_idx * tile_shape.num_faces_c_dim + col_idx
+                for col_idx in range(tile_shape.num_faces_c_dim)
+            ]
+            row_faces = torch.cat([faces[i] for i in face_indices], dim=1)
+
+            # Pool along columns (dim=1) to get one value per row
+            pooled_values = self._apply_pooling(row_faces, pool_type, dim=1)
+
+            # Place in the first column of this face row (in tilized layout)
+            # Face row starts at position row_idx * num_faces_c_dim * face_r_dim * face_c_dim
+            # Within each face, we need to place values at the start of each row (stride = face_c_dim)
+            face_row_start = (
+                row_idx
+                * tile_shape.num_faces_c_dim
+                * tile_shape.face_r_dim
+                * tile_shape.face_c_dim
+            )
+            for i, val in enumerate(pooled_values):
+                result[face_row_start + i * tile_shape.face_c_dim] = val
+
         return result
 
-    def _reduce_scalar(self, faces, pool_type, data_format):
+    def _reduce_scalar(self, faces, pool_type, data_format, tile_shape):
         # Pool together all faces → single scalar at [0]
-        result = torch.zeros(ELEMENTS_PER_TILE, dtype=format_dict[data_format])
+        result = torch.zeros(
+            tile_shape.total_tile_size(), dtype=format_dict[data_format]
+        )
         result[0] = self._apply_pooling(faces.flatten(), pool_type, dim=0)
         return result
 

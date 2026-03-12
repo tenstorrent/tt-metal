@@ -27,8 +27,9 @@ static constexpr bool IS_REDUCE_ROW = (REDUCE_DIM == ckernel::ReduceDim::REDUCE_
 
 #ifdef LLK_TRISC_UNPACK
 
-#include "llk_unpack_AB.h"
+#include "llk_unpack_AB_reduce.h"
 #include "llk_unpack_common.h"
+#include "tensor_shape.h"
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
@@ -46,7 +47,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
             FACE_R_DIM,
             /* num_faces */ 4,
             /* num_faces */ 4);
-        _llk_unpack_AB_init_<>(DEFAULT_TENSOR_SHAPE, /* transpose */ IS_REDUCE_ROW);
+        _llk_unpack_AB_reduce_init_<POOL_TYPE, REDUCE_DIM>(DEFAULT_TENSOR_SHAPE);
         PROFILER_SYNC();
     }
     {
@@ -63,7 +64,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
         {
             for (std::uint32_t tile = 0; tile < params->TILE_CNT; tile++)
             {
-                _llk_unpack_AB_<>(PERF_ADDRESS(PERF_INPUT_A, tile), PERF_ADDRESS(PERF_INPUT_B, tile));
+                _llk_unpack_AB_reduce_<POOL_TYPE, REDUCE_DIM>(PERF_ADDRESS(PERF_INPUT_A, tile), PERF_ADDRESS(PERF_INPUT_B, tile));
             }
         }
         PROFILER_SYNC();
@@ -76,6 +77,7 @@ void run_kernel(const volatile struct RuntimeParams* params)
 
 #include "llk_math_common.h"
 #include "llk_math_reduce.h"
+#include "tensor_shape.h"
 
 void run_kernel(const volatile struct RuntimeParams* params)
 {
@@ -87,6 +89,10 @@ void run_kernel(const volatile struct RuntimeParams* params)
     // todo: INT32 reduce is not supported yet
     constexpr bool ENFORCE_FP32_ACC = false;
     constexpr bool IS_INT_FPU       = false;
+
+    // Create a default 32x32 tile with 4 faces of 16x16
+    const ckernel::TensorShape DEFAULT_TENSOR_SHAPE = {FACE_R_DIM, FACE_C_DIM, MAX_NUM_FACES_R_DIM, MAX_NUM_FACES_C_DIM};
+
     {
         ZONE_SCOPED("INIT")
         _llk_math_pack_sync_init_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
@@ -115,7 +121,8 @@ void run_kernel(const volatile struct RuntimeParams* params)
                     LLK_ASSERT(
                         (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "block_tile exceeds max dest tiles");
-                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU, ENFORCE_FP32_ACC>(block_tile);
+                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU, ENFORCE_FP32_ACC>(
+                        block_tile, DEFAULT_TENSOR_SHAPE);
                 }
             }
         }
@@ -131,7 +138,8 @@ void run_kernel(const volatile struct RuntimeParams* params)
                     LLK_ASSERT(
                         (block_tile < get_dest_max_tiles<DstSync::SyncHalf, is_fp32_dest_acc_en, DstTileShape::Tile32x32>()),
                         "block_tile exceeds max dest tiles");
-                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU, ENFORCE_FP32_ACC>(block_tile);
+                    _llk_math_reduce_<POOL_TYPE, REDUCE_DIM, is_fp32_dest_acc_en, MATH_FIDELITY, IS_INT_FPU, ENFORCE_FP32_ACC>(
+                        block_tile, DEFAULT_TENSOR_SHAPE);
                 }
                 _llk_math_dest_section_done_<DstSync::SyncHalf, is_fp32_dest_acc_en>();
             }

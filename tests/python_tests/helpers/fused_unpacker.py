@@ -332,14 +332,12 @@ class UnpackerAB(Unpacker):
                 "UnpackerAB does not support different values for transpose_faces and transpose_within_face"
             )
 
-        face_c_dim = operation.face_c_dim
-        num_faces_r_dim = operation.in0_tile_r_dim // face_r_dim
-        num_faces_c_dim = operation.in0_tile_c_dim // face_c_dim
+        tile_shape = operation.src_a.tile_shape
         transpose_value = "1" if compute_unit.unpack_transpose_faces.value else "0"
         shape_var = f"tensor_shape_stage_{operation.stage_id}"
         return (
             f"const ckernel::TensorShape {shape_var} = "
-            f"{{{face_r_dim}, {face_c_dim}, {num_faces_r_dim}, {num_faces_c_dim}}};\n"
+            f"{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}};\n"
             f"_llk_unpack_AB_init_<{broadcast_type}>({shape_var}, {transpose_value});\n"
         )
 
@@ -689,13 +687,18 @@ class ReduceUnpacker(Unpacker):
         compute_unit: "ComputeNode",
         block: "BlockData",
     ) -> str:
-        face_r_dim = operation.face_r_dim
-        num_faces = operation.num_faces
-
         reduce_dim = compute_unit.fpu.reduce_dim()
         pool_type = compute_unit.fpu.pool_type()
 
-        return f"_llk_unpack_AB_reduce_init_<{pool_type}, {reduce_dim}, false>({face_r_dim}, {num_faces});\n"
+        tile_shape = operation.src_a.tile_shape
+        tensor_shape_instantiation: str = (
+            f"ckernel::TensorShape{{{tile_shape.face_r_dim}, {tile_shape.face_c_dim}, {tile_shape.num_faces_r_dim}, {tile_shape.num_faces_c_dim}}}"
+        )
+
+        return (
+            f"_llk_unpack_AB_reduce_init_<{pool_type}, {reduce_dim}>(\n"
+            f"{tensor_shape_instantiation});\n"
+        )
 
     def unpack(
         self,

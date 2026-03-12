@@ -261,11 +261,7 @@ def passed_test(
                             row_values.append(
                                 f"{colour}{tile_data[row, col]:7.2f}{RESET}{' ' if col == tile_shape.face_c_dim - 1 else '' }"
                             )
-
                         tile_lines.append(f"{(row+1):02d}. {''.join(row_values)}")
-
-                        if row == (tile_shape.face_r_dim - 1):
-                            tile_lines.append("")
                     return tile_lines
 
                 formatted_error = []
