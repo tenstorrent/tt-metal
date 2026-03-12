@@ -147,6 +147,11 @@ class TtResnetBlock2D(LightweightModule):
             hidden_states = ttnn.to_layout(hidden_states, ttnn.ROW_MAJOR_LAYOUT)
 
         hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+
+        if is_blackhole() and "up_blocks.2.resnets.0" in self.module_path:
+            hidden_states = ttnn.to_memory_config(hidden_states, mem_cfg)
+            hidden_states = ttnn.move(hidden_states, memory_config=None)
+
         hidden_states = ttnn.group_norm(
             hidden_states,
             num_groups=self.norm_groups,
