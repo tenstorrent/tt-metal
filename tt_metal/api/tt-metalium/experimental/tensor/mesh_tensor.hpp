@@ -18,11 +18,11 @@
 // Using namespace tt::tt_metal avoids double namespace renaming for the refactoring effort.
 namespace tt::tt_metal {
 
-class MeshTensor;
-// To be removed after #37807
-namespace do_not_use {
-void do_not_use_update_mesh_tensor_storage(MeshTensor&, const DeviceStorage&);
-}
+// This will be brought in at #37692
+class DeviceStorage;
+
+// Implementation details for MeshTensor
+class MeshTensorImpl;
 
 namespace distributed {
 class MeshDevice;
@@ -50,12 +50,8 @@ class MeshDevice;
  * - Allocated: The device memory is allocated and **solely owned** by MeshTensor, user is able to get non-null
  *   pointers to the underlying storage and associated MeshDevice. Please note that this invariant isn't guaranteed
  *   currently, see: #38375
- * - Deallocated: The device memory is deallocated and the MeshTensor is in a default constructed state, pointer to
- *   Device and MeshBuffer will be null.
  */
 class MeshTensor {
-    using attribute_type = TensorImpl<DeviceStorage>;
-
 public:
     using volume_type = std::uint64_t;
 
@@ -69,9 +65,7 @@ public:
     // TODO(#38376), TODO(#38689):
     // This should be a private constructor, external user should not be able to construct a MeshTensor
     // directly. As this will lead to leaks of the MeshBuffer unique ownership.
-    explicit MeshTensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-        impl(std::make_unique<attribute_type>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
-    }
+    explicit MeshTensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
 
     /**
      * Release ownership of the underlying device memory.
@@ -109,20 +103,6 @@ public:
     // Deallocation related:
 
     /**
-     * Release ownership of the underlying device memory.
-     *
-     * pre-condition: The device tensor must not be in a default constructed state.
-     */
-    void deallocate() {
-        TT_ASSERT(impl != nullptr, "MeshTensor is in a default constructed state");
-        auto& device_storage = impl->storage_;
-        // This implicitly deallocates the root mesh buffer if we are the sole owner.
-        // An explicit deallocation call is not performed, as current day MeshBuffer could still be shared by other
-        // owners. See: #38375
-        device_storage.reset_root_mesh_buffer();
-    }
-
-    /**
      * Check if the device tensor owns any device memory.
      *
      * pre-condition: The device tensor must not be in a default constructed state.
@@ -151,12 +131,7 @@ public:
      *
      * See: #38691, #38375
      */
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_invariant_breaking() const {
-        if (const auto& mesh_buffer = get_legacy_device_storage().mesh_buffer; mesh_buffer != nullptr) {
-            return mesh_buffer;
-        }
-        return nullptr;
-    }
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_invariant_breaking() const;
 
     /**
      * Get the device the allocated device memory is on.
@@ -173,30 +148,18 @@ public:
 
     // Getters:
 
-    const TensorSpec& tensor_spec() const {
-        // Pre-condition
-        TT_ASSERT(impl != nullptr, "MeshTensor is in a default constructed state");
-        return impl->tensor_spec_;
-    }
+    const TensorSpec& tensor_spec() const;
 
     /**
      * Multi-device topology configuration - tracks how tensor is distributed across mesh devices
      *
      * pre-condition: The device tensor must not be in a default constructed state.
      */
-    const TensorTopology& tensor_topology() const {
-        // Pre-condition
-        TT_ASSERT(impl != nullptr, "MeshTensor is in a default constructed state");
-        return impl->tensor_topology_;
-    }
+    const TensorTopology& tensor_topology() const;
 
     // DeviceStorage is meant to bridge ttnn::Tensor and MeshTensor,
     // this should go away as part of refactoring, see: #38376
-    const DeviceStorage& get_legacy_device_storage() const {
-        // Pre-condition
-        TT_ASSERT(impl != nullptr, "MeshTensor is in a default constructed state");
-        return impl->storage_;
-    }
+    const DeviceStorage& get_legacy_device_storage() const;
 
     // Derivables:
 
@@ -238,22 +201,13 @@ public:
 
     Strides strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
 
-    // Questionables:
-
-    // TODO(#38693):
-    // This is a hack right now, because this allows multiple MeshTensor holding on to the same MeshBuffer,
-    // we need to find an alternative way to do this.
-    MeshTensor with_tensor_topology(TensorTopology tensor_topology) const {
-        return MeshTensor(get_legacy_device_storage(), tensor_spec(), std::move(tensor_topology));
-    }
+    void update_tensor_topology(TensorTopology tensor_topology);
 
 private:
     // impl could be a nullptr if MeshTensor is in a default constructed state.
     // Avoid using impl pointer directly, use the accessors instead.
     // Otherwise, please add manual TT_ASSERT checks for nullptr.
-    std::unique_ptr<attribute_type> impl;
-
-    friend void do_not_use::do_not_use_update_mesh_tensor_storage(MeshTensor&, const DeviceStorage&);
+    std::unique_ptr<MeshTensorImpl> impl;
 };
 
 }  // namespace tt::tt_metal

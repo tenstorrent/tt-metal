@@ -17,8 +17,7 @@
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/memory_pin.hpp>
-
-#include <tt-metalium/experimental/tensor/details/tensor_impl.hpp>
+#include <tt-metalium/distributed_host_buffer.hpp>
 
 // It is intentional to not reflect the experimental status of this header in it's namespace,
 // as most of the code movements are based on implementations in TTNN that are well tested and production ready for a
@@ -26,6 +25,12 @@
 //
 // Using namespace tt::tt_metal avoids double namespace renaming for the refactoring effort.
 namespace tt::tt_metal {
+
+// This will be brought in at #37692
+class HostStorage;
+
+// Implementation details for HostTensor
+class HostTensorImpl;
 
 /**
  * HostTensor represents a Tensor in host memory.
@@ -53,8 +58,6 @@ class HostTensor {
      *   manipulation.) In the existing Tensor, these are already duplicated as both methods and free functions.
      */
 
-    using attribute_type = TensorImpl<HostStorage>;
-
 public:
     using volume_type = std::uint64_t;
 
@@ -69,12 +72,9 @@ public:
     // These constructors should be hidden or go away.
     // External user should not be able to construct a HostTensor directly and opt to use the from_xxx static methods
     // instead, as the constructor does not perform invariant checks.
-    explicit HostTensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
-        impl(std::make_unique<attribute_type>(std::move(storage), std::move(tensor_spec), std::move(tensor_topology))) {
-    }
+    explicit HostTensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology);
 
-    explicit HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topology) :
-        impl(std::make_unique<attribute_type>(HostStorage(std::move(buffer)), std::move(spec), std::move(topology))) {}
+    explicit HostTensor(HostBuffer buffer, TensorSpec spec, TensorTopology topology);
 
     ~HostTensor() = default;
 
@@ -85,7 +85,7 @@ public:
      * - Tensor Spec and Topology are deep copied.
      * - Underlying data has the copy semantics of the HostBuffer
      */
-    HostTensor(const HostTensor& other) : impl(other.impl ? std::make_unique<attribute_type>(*other.impl) : nullptr) {}
+    HostTensor(const HostTensor& other);
 
     /**
      * Copy assignment operator.
@@ -98,7 +98,7 @@ public:
         if (this == &other) {
             return *this;
         }
-        impl = other.impl ? std::make_unique<attribute_type>(*other.impl) : nullptr;
+        impl = other.impl ? std::make_unique<HostTensorImpl>(*other.impl) : nullptr;
         return *this;
     }
 
@@ -176,40 +176,25 @@ public:
      *
      * pre-condition: The HostTensor must be engaged.
      */
-    const TensorSpec& tensor_spec() const {
-        // Pre-condition
-        TT_ASSERT(impl != nullptr, "HostTensor is in a default constructed state");
-        return impl->tensor_spec_;
-    }
+    const TensorSpec& tensor_spec() const;
 
     /**
      * Multi-device topology configuration - tracks how tensor is distributed across mesh devices
      *
      * pre-condition: The HostTensor must be engaged.
      */
-    const TensorTopology& tensor_topology() const {
-        // Pre-condition
-        TT_ASSERT(impl != nullptr, "HostTensor is in a default constructed state");
-        return impl->tensor_topology_;
-    }
+    const TensorTopology& tensor_topology() const;
 
     // DeviceStorage is meant to bridge ttnn::Tensor and HostTensor,
     // this should go away as part of refactoring, see: #38376
-    const HostStorage& get_legacy_host_storage() const {
-        // Pre-condition
-        TT_ASSERT(impl != nullptr, "HostTensor is in a default constructed state");
-        return impl->storage_;
-    }
-
-    // Use host_buffer::get_host_buffer instead.
-    // HostBuffer get_host_buffer() const;
+    const HostStorage& get_legacy_host_storage() const;
 
     /**
      * Returns the DistributedHostBuffer of the HostTensor.
      *
      * pre-condition: The HostTensor must be engaged.
      */
-    const DistributedHostBuffer& get_distributed_host_buffer() const { return get_legacy_host_storage().buffer(); }
+    const DistributedHostBuffer& get_distributed_host_buffer() const;
 
     // Derivables:
 
@@ -251,12 +236,10 @@ public:
 
     // Questionables:
 
-    HostTensor with_tensor_topology(TensorTopology tensor_topology) const {
-        return HostTensor(get_legacy_host_storage(), tensor_spec(), std::move(tensor_topology));
-    }
+    void update_tensor_topology(TensorTopology tensor_topology);
 
 private:
-    std::unique_ptr<attribute_type> impl;
+    std::unique_ptr<HostTensorImpl> impl;
 };
 
 }  // namespace tt::tt_metal
