@@ -115,7 +115,7 @@ void kernel_main() {
                                                                                      : (per_bank_bytes - offset);
         uint64_t mcast_addr = get_noc_multicast_addr(
             L1_BANK_NOC_X_START, L1_BANK_NOC_Y_START, L1_BANK_NOC_X_END, L1_BANK_NOC_Y_END, output_addr + offset);
-        noc_async_write_multicast(MEM_ZEROS_BASE, mcast_addr, chunk_size, NUM_L1_BANKS - 1);
+        noc_async_write_multicast_loopback_src(MEM_ZEROS_BASE, mcast_addr, chunk_size, NUM_L1_BANKS);
     }
     noc_async_write_barrier();
 #else
