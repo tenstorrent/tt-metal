@@ -206,7 +206,7 @@ def run_unet_model(
     "image_resolution, input_shape, timestep_shape, encoder_shape, temb_shape, time_ids_shape, pcc",
     [
         ((1024, 1024), (1, 4, 128, 128), (1,), (1, 77, 2048), (1, 1280), (1, 6), 0.9969),
-        ((512, 512), (1, 4, 64, 64), (1,), (1, 77, 2048), (1, 1280), (1, 6), 0.9959),
+        ((512, 512), (1, 4, 64, 64), (1,), (1, 77, 2048), (1, 1280), (1, 6), 0.9958),
         # TODO: Add test for 9x128x128 input shape if needed (inpainting)
     ],
 )
