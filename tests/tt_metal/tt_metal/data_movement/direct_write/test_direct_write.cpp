@@ -118,11 +118,7 @@ bool run_dm(
     std::string sender_kernel_filename;
 
     if (test_config.use_multicast) {
-        if (test_config.use_stateful_approach) {
-            sender_kernel_filename = "sender_mcast_stateful.cpp";  // not supporting this
-        } else {
-            sender_kernel_filename = "sender_mcast_non_stateful.cpp";
-        }
+        sender_kernel_filename = "sender_mcast_non_stateful.cpp";
     } else {
         if (test_config.use_stateful_approach) {
             sender_kernel_filename = "sender_stateful.cpp";
@@ -143,17 +139,7 @@ bool run_dm(
             .compile_args = sender_compile_args});
 
     // Assign unique id
-    log_info(
-        tt::LogTest,
-        "Running Direct Write Test ID: {}, Approach: {}, Posted: {}, Same Destination: {}, Same Value: {}, Writes : {}",
-        test_config.test_id,
-        test_config.use_stateful_approach ? "Stateful" : "Non-Stateful",
-        test_config.use_posted_writes ? "True" : "False",
-        test_config.same_destination ? "True" : "False",
-        test_config.same_value ? "True" : "False",
-        test_config.num_writes,
-        test_config.use_multicast ? "True" : "False",
-        test_config.num_subordinates);
+    log_info(LogTest, "Running Test ID: {}, Run ID: {}", test_config.test_id, unit_tests::dm::runtime_host_id);
     program.set_runtime_id(unit_tests::dm::runtime_host_id++);
 
     // Initialize receiver memory to known pattern
@@ -312,19 +298,17 @@ void multicast_test(
     };
 
     for (size_t config_idx = 0; config_idx < multicast_configs.size(); config_idx++) {
-        for (size_t i = 0; i < 1; i++) {
+        for (bool same_dest : {true, false}) {
             DirectWriteConfig test_config = {
                 .test_id = test_id,
                 .sender_core_coord = sender_core,
                 .receiver_core_coords = multicast_configs[config_idx],
                 .num_writes = 16,
-                .same_destination = i ? true : false,
+                .same_destination = same_dest,
                 .use_stateful_approach = false,
                 .same_value = false,
                 .use_multicast = true,
                 .num_subordinates = static_cast<uint32_t>(multicast_configs[config_idx].size())};
-
-            log_info(tt::LogTest, "Testing multicast to {} cores", multicast_configs[config_idx].size());
 
             EXPECT_TRUE(run_dm(mesh_device, test_config));
         }
