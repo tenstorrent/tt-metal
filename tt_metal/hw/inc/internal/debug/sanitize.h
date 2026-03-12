@@ -34,6 +34,10 @@
 #include "internal/circular_buffer_interface.h"
 #endif
 
+#if defined(ARCH_QUASAR)
+#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
+#endif
+
 // A couple defines for specifying read/write and multi/unicast
 #define DEBUG_SANITIZE_NOC_READ true
 #define DEBUG_SANITIZE_NOC_WRITE false
@@ -257,9 +261,9 @@ inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
 #endif  // !WATCHER_DISABLE_CB_SANITIZE && !COMPILE_FOR_ERISC
 
 // Note:
-//  - this isn't racy w/ the host so long as invalid is written last
+//  - this isn't racy w/ the host so long as return_code is written last
 //  - this isn't racy between riscvs so long as each gets their own noc_index as is the case on WH/BH
-//  - for Quasar, we have a single noc_index across all DMs so the writes need to be atomic
+//  - for Quasar, multiple DMs share one NOC so CAS is used; writes go to cached view then flush
 void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     uint8_t noc_id,
     uint64_t noc_addr,
@@ -274,28 +278,34 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     }
 
     debug_sanitize_addr_msg_t tt_l1_ptr* v = *GET_MAILBOX_ADDRESS_DEV(watcher.sanitize);
-    uint16_t expected = DebugSanitizeOK;
+    volatile debug_sanitize_addr_msg_t* san = &v[noc_id];
 
-#if defined(QUASAR)
-    uint16_t temp = 0xDEAD;
-    if (__atomic_compare_exchange_n(&v[noc_id].return_code, &expected, temp, false, __ATOMIC_ACQUIRE, __ATOMIC_RELAXED))
+#if defined(ARCH_QUASAR)
+    // TODO: Remove this check once mailbox is accessed via cached memory (see dm.cc UNCACHED_MEM_MAILBOX_BASE)
+    uintptr_t addr = reinterpret_cast<uintptr_t>(san);
+    if (addr >= MEM_L1_UNCACHED_BASE) {
+        san = reinterpret_cast<volatile debug_sanitize_addr_msg_t*>(addr - MEM_L1_UNCACHED_BASE);
+    }
+    uint16_t expected = DebugSanitizeOK;
+    if (__atomic_compare_exchange_n(
+            &san->return_code, &expected, DebugSanitizeWriteInProgress, false, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED))
 #else
-    if (v[noc_id].return_code == DebugSanitizeOK)
+    if (san->return_code == DebugSanitizeOK)
 #endif
     {
-        v[noc_id].noc_addr = noc_addr;
-        v[noc_id].l1_addr = l1_addr;
-        v[noc_id].len = len;
-        v[noc_id].which_risc = internal_::get_hw_thread_idx();
-        v[noc_id].is_multicast = (multicast == DEBUG_SANITIZE_NOC_MULTICAST);
-        v[noc_id].is_write = (dir == DEBUG_SANITIZE_NOC_WRITE);
-        v[noc_id].is_target = (which_core == DEBUG_SANITIZE_NOC_TARGET);
-#if defined(QUASAR)
-        // __ATOMIC_RELEASE ensures all writes above are visible before this
-        // for host to read
-        __atomic_store_n(&v[noc_id].return_code, return_code, __ATOMIC_RELEASE)
-#else
-        v[noc_id].return_code = return_code;
+        san->noc_addr = noc_addr;
+        san->l1_addr = l1_addr;
+        san->len = len;
+        san->which_risc = internal_::get_hw_thread_idx();
+        san->is_multicast = (multicast == DEBUG_SANITIZE_NOC_MULTICAST);
+        san->is_write = (dir == DEBUG_SANITIZE_NOC_WRITE);
+        san->is_target = (which_core == DEBUG_SANITIZE_NOC_TARGET);
+        san->return_code = return_code;
+#if defined(ARCH_QUASAR)
+        // TODO: Replace with flush_l2_cache_line() once PR #38124 is merged
+        volatile uint64_t* flush_reg = reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR);
+        *flush_reg = reinterpret_cast<uintptr_t>(san);
+        asm volatile("fence" ::: "memory");
 #endif
     }
 

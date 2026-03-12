@@ -11,7 +11,7 @@
 namespace tt {
 
 // Host MMIO reads/writes don't have alignment restrictions, so no need to check alignment here.
-// TODO: For Quasar, consider expanding this range if we do NOC reads/writes to L1 by passing the cache.
+// TODO: For Quasar, consider expanding this range if we do NOC reads/writes to L1 by passing the cache from host.
 // Uncached region probably needs to baked into HAL for this
 #define DEBUG_VALID_L1_ADDR(a, l) (((a) >= HAL_MEM_L1_BASE) && ((a) + (l) <= HAL_MEM_L1_BASE + HAL_MEM_L1_SIZE))
 

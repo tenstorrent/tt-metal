@@ -19,13 +19,27 @@
  * */
 void kernel_main() {
 #if defined(COMPILE_FOR_DM)
-    constexpr uint32_t dm_id = get_compile_time_arg_val(0);
     uint64_t cpu_index = 0;
     asm volatile("csrr %0, mhartid" : "=r"(cpu_index));
-    // On Quasar since all 8 kernels are launched: execute only the processor matching dm_id ; skip others
+
+#if defined(TEST_MULTI_DM_SANITIZE_RACE)
+    // Having explicit sync barrier helps stress test CAS in sanitize.h since
+    // testing showed DM0 (which wakes other DMs) most likely wins without a barrier
+    constexpr uint32_t num_dms = get_compile_time_arg_val(0);
+    constexpr uint32_t multi_dm_base_addr = get_compile_time_arg_val(1);
+    constexpr uint32_t multi_dm_base_size = get_compile_time_arg_val(2);
+    constexpr uint32_t l1_sync_addr = get_compile_time_arg_val(3);
+    uint64_t* l1_ptr = reinterpret_cast<uint64_t*>(l1_sync_addr);
+    __atomic_add_fetch(l1_ptr, 1, __ATOMIC_RELAXED);
+    while (__atomic_load_n(l1_ptr, __ATOMIC_ACQUIRE) != num_dms) {
+    }
+#else
+    // Single DM test: only specified dm_id executes, others exit early
+    constexpr uint32_t dm_id = get_compile_time_arg_val(0);
     if (cpu_index != dm_id) {
         return;
     }
+#endif
 #endif
     std::uint32_t local_buffer_addr = get_arg_val<uint32_t>(0);
 
@@ -38,6 +52,11 @@ void kernel_main() {
     std::uint32_t dst_noc_y = get_arg_val<uint32_t>(6);
 
     std::uint32_t buffer_size = get_arg_val<uint32_t>(7);
+
+#if defined(COMPILE_FOR_DM) && defined(TEST_MULTI_DM_SANITIZE_RACE)
+    buffer_dst_addr = (multi_dm_base_addr | static_cast<uint32_t>(cpu_index));
+    buffer_size = (multi_dm_base_size | static_cast<uint32_t>(cpu_index));
+#endif
 
     bool use_inline_dw_write = static_cast<bool>(get_arg_val<uint32_t>(8));
     bool bad_linked_transaction = static_cast<bool>(get_arg_val<uint32_t>(9));

@@ -15,6 +15,7 @@
 #include <functional>
 #include <map>
 #include <memory>
+#include <regex>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
@@ -99,13 +100,18 @@ void RunTestOnCore(
     bool is_eth_core,
     watcher_features_t feature,
     bool use_ncrisc = false,
-    bool is_idle_eth_core = false) {
+    bool is_idle_eth_core = false,
+    bool multi_dm_race = false) {
     const auto& hal = tt::tt_metal::MetalContext::instance().hal();
     bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
+
     // IDLE_ETH cores only support SD (FD not yet implemented)
     // TENSIX/ACTIVE_ETH cores: SD only used for Quasar watcher tests (TODO: Remove once FD enabled on Quasar)
     if (fixture->IsSlowDispatch() && !is_idle_eth_core && !is_quasar) {
         GTEST_SKIP() << "Slow Dispatch tests only run on Quasar or IDLE_ETH cores";
+    }
+    if (multi_dm_race && !is_quasar) {
+        GTEST_SKIP() << "Multi-DM race test only runs on Quasar";
     }
 
     const std::string kernel = "tests/tt_metal/tt_metal/test_kernels/dataflow/dram_copy_to_noc_coord.cpp";
@@ -120,6 +126,9 @@ void RunTestOnCore(
     auto& program_ = workload.get_programs().at(device_range);
     auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
+    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+    std::vector<uint32_t> init{0};
+    tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, init);
 
     CoreCoord virtual_core;
     if (is_eth_core) {
@@ -183,14 +192,19 @@ void RunTestOnCore(
         dram_copy_kernel = tt_metal::CreateKernel(program_, kernel, core, config);
     } else {
         if (is_quasar) {
-            // On Quasar, kernel runs on all 8 DMs but only dm_id executes the test;
-            // others exit early. This lets us verify NOC sanitizations works on select DM individually
-            dram_copy_kernel = tt::tt_metal::experimental::quasar::CreateKernel(
-                program_,
-                kernel,
-                core,
-                tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{
-                    .num_threads_per_cluster = 8, .compile_args = {dm_id}});
+            // Quasar: all DMs run kernel; multi_dm_race syncs them to race, else only dm_id executes
+            uint32_t num_dms =
+                MetalContext::instance().hal().get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);
+            tt::tt_metal::experimental::quasar::QuasarDataMovementConfig config{.num_threads_per_cluster = num_dms};
+            if (multi_dm_race) {
+                constexpr uint32_t multi_dm_base_addr = 0xFFFF0000;
+                constexpr uint32_t multi_dm_base_size = 0x1000;
+                config.compile_args = {num_dms, multi_dm_base_addr, multi_dm_base_size, l1_unreserved_base};
+                config.defines = {{"TEST_MULTI_DM_SANITIZE_RACE", "1"}};
+            } else {
+                config.compile_args = {dm_id};
+            }
+            dram_copy_kernel = tt::tt_metal::experimental::quasar::CreateKernel(program_, kernel, core, config);
         } else {
             tt_metal::DataMovementConfig config{
                 .processor =
@@ -241,13 +255,16 @@ void RunTestOnCore(
         case SanitizeEthSrcL1Overflow: eth_src_overflow_addr_words = 0xAAAAAAAA; break;
         case SanitizeEthDestL1Overflow: eth_dest_overflow_addr_words = 0xBBBBBBBB; break;
         case SanitizeNOCMulticastInvalidRange: {
-            // TODO: Enable this test once we have multi-cluster support enable for Quasar
-            if (is_quasar) {
-                GTEST_SKIP() << "Only single cluster runtime is enabled on quasar";
+            // This test requires at least 2 DRAM channels to create an invalid multicast range
+            if (device->num_dram_channels() < 2) {
+                log_info(
+                    LogTest,
+                    "Skipping SanitizeNOCMulticastInvalidRange: requires at least 2 DRAM channels, device has {}",
+                    device->num_dram_channels());
+                GTEST_SKIP();
             }
             // Use invalid multicast range with actual DRAM cores: start > end
             // Wrap-around is only allowed for Tensix cores, not DRAM
-            // Use actual Tensix worker cores with an invalid multicast range (start > end for NOC0).
             use_multicast_semaphore_inc = true;
 
             // Get actual DRAM NOC coordinates
@@ -323,6 +340,7 @@ void RunTestOnCore(
     if (is_eth_core) {
         core_name = is_idle_eth_core ? "idleth" : "acteth";
     }
+    // Note: for multi_dm_race, expected string is built but not used - verification uses regex instead
     switch (feature) {
         case SanitizeNOCAddress:
             expected = fmt::format(
@@ -513,13 +531,36 @@ void RunTestOnCore(
             break;
     }
 
-    log_info(LogTest, "Expected error: {}", expected);
+    if (!multi_dm_race) {
+        log_info(LogTest, "Expected error: {}", expected);
+    }
     std::string exception;
     do {
         exception = MetalContext::instance().watcher_server()->exception_message();
     } while (exception.empty());
     log_info(LogTest, "Reported error: {}", exception);
-    EXPECT_EQ(MetalContext::instance().watcher_server()->exception_message(), expected);
+
+    if (multi_dm_race) {
+        // Verify CAS atomicity: addr and size low bits must match (same DM wrote both)
+        std::regex addr_regex("addr=0x([0-9a-fA-F]+)");
+        std::regex size_regex("write ([0-9]+) bytes");
+        std::smatch addr_match, size_match;
+
+        ASSERT_TRUE(std::regex_search(exception, addr_match, addr_regex)) << "Could not find addr in error";
+        ASSERT_TRUE(std::regex_search(exception, size_match, size_regex)) << "Could not find size in error";
+
+        uint32_t reported_addr = std::stoul(addr_match[1].str(), nullptr, 16);
+        uint32_t reported_size = std::stoul(size_match[1].str());
+        uint32_t addr_dm_id = reported_addr & 0xF;
+        uint32_t size_dm_id = reported_size & 0xF;
+
+        EXPECT_EQ(addr_dm_id, size_dm_id)
+            << "CAS race corruption: addr dm_id=" << addr_dm_id << " but size dm_id=" << size_dm_id;
+        log_info(
+            LogTest, "Multi-DM race: DM{} won CAS with addr=0x{:x} size={}", addr_dm_id, reported_addr, reported_size);
+    } else {
+        EXPECT_EQ(exception, expected);
+    }
 }
 
 void RunTestEth(
@@ -732,6 +773,25 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastSemaphoreInc) {
         [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
             CoreCoord core{0, 0};
             RunTestOnCore(fixture, mesh_device, core, false, SanitizeNOCMulticastInvalidRange);
+        },
+        this->devices_[0]);
+}
+
+// Quasar multi-DM race test: all 8 DMs sync then race to trigger sanitize error
+// Each DM uses unique identifiable data (addr/size). Verifies CAS ensures consistent error reporting
+TEST_F(MeshWatcherFixture, QuasarTestWatcherSanitizeMultiDMRace) {
+    this->RunTestOnDevice(
+        [](MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
+            CoreCoord core{0, 0};
+            RunTestOnCore(
+                fixture,
+                mesh_device,
+                core,
+                false,
+                SanitizeNOCAddress,
+                false,
+                false /*is_idle_eth_core*/,
+                true /*multi_dm_race*/);
         },
         this->devices_[0]);
 }

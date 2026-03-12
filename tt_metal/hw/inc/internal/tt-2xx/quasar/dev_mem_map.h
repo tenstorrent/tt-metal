@@ -31,6 +31,8 @@
 // RISC-V Address map definition (hardware)
 #define MEM_L1_BASE 0x0
 #define MEM_L1_SIZE (4 * 1024 * 1024)
+// Note: using RISC-V CAS (LR/SC + AMO) atomics don't work with uncached L1
+// The reservation mechanism requires cache coherence tracking
 #define MEM_L1_UNCACHED_BASE (MEM_L1_BASE + MEM_L1_SIZE)  // upper 4MBs bypass cache
 
 #define MEM_ETH_BASE 0x0
