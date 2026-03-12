@@ -35,7 +35,7 @@ static inline Tensor move_impl(const Tensor& input_tensor, const std::optional<M
         return input_tensor;
     }
 
-    // TODO(#38697): Migrate to Tensor::deallocate(true)
+    // TODO(#38697): Migrate to Tensor::deallocate(/* force = */ false)
     input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
 
     if (mem_config) {

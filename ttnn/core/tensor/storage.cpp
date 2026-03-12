@@ -44,7 +44,7 @@ const distributed::MeshBuffer& DeviceStorage::get_mesh_buffer() const {
     return *mesh_buffer;
 }
 
-std::shared_ptr<distributed::MeshBuffer> DeviceStorage::get_mesh_buffer_leak_ownership() const {
+const std::shared_ptr<distributed::MeshBuffer>& DeviceStorage::get_mesh_buffer_leak_ownership() const {
     TT_FATAL(mesh_buffer != nullptr, "Buffer is not allocated");
     return mesh_buffer;
 }

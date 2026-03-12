@@ -53,9 +53,9 @@ public:
 
     Buffer* get_buffer() const;
     const distributed::MeshBuffer& get_mesh_buffer() const;
-    std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer_leak_ownership() const;
 
     // Begin internal functions:
+    const std::shared_ptr<distributed::MeshBuffer>& get_mesh_buffer_leak_ownership() const;
     //
     // These functions allows the use of the get_mesh_buffer as a view.
     // These are considered internal functions and are not part of the public API.
