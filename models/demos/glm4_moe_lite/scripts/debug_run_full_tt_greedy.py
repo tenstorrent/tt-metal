@@ -202,6 +202,18 @@ def main() -> int:
         ]
         page_table = _alloc_contiguous_page_table(batch=1, blocks_per_seq=blocks_per_seq)
 
+        # Pre-load all layer weights before the decode loop.  Lazy loading
+        # inside decode() can deadlock because ttnn.as_tensor (host->device DMA)
+        # contends with in-flight device compute ops dispatched earlier in the
+        # same decode call (embedding, reshape, etc.).
+        t_preload = time.perf_counter()
+        for li in range(runner.num_layers_to_run):
+            runner._ensure_layer_weights(li)
+        print(
+            f"Pre-loaded {runner.num_layers_to_run} layer(s) in {time.perf_counter() - t_preload:.1f}s",
+            flush=True,
+        )
+
         phase = str(args.phase)
 
         # -- Prefill phase --
