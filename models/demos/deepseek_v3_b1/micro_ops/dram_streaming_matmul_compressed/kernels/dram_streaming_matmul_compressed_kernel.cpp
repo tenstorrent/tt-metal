@@ -4,9 +4,11 @@
 // DRAM Streaming Matmul with Compressed Weights
 //
 // Combines DRAM streaming (variable-size reads) with per-tile BFP format reconfig.
-// NCRISC: Streams compressed tiles from DRAM with variable block sizes from L1 metadata.
-// BRISC: No-op.
-// TRISC: Compressed matmul with subblock-K partial accumulation.
+// Supports pipelined multi-core-per-bank mode (cores_per_bank > 1):
+//   Each core reads its own portion of N columns directly from DRAM.
+//   Cores sharing a bank read sequentially with semaphore handoff:
+//   core 0 reads first, signals core 1 after last request, core 1 waits then reads, etc.
+//   BRISC: no-op. TRISC: compressed matmul with subblock-K partial accumulation.
 
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
@@ -30,7 +32,12 @@ void kernel_main() {
         get_named_compile_time_arg_val("vc"),
         get_named_compile_time_arg_val("meta_l1_addr"),
         get_named_compile_time_arg_val("cb_in1_size_bytes"),
-        get_named_compile_time_arg_val("noc_max_page_size")>;
+        get_named_compile_time_arg_val("noc_max_page_size"),
+        get_named_compile_time_arg_val("dram_start_offset"),
+        get_named_compile_time_arg_val("core_in_bank_idx"),
+        get_named_compile_time_arg_val("pipeline_sem_id"),
+        get_named_compile_time_arg_val("next_core_noc_x"),
+        get_named_compile_time_arg_val("next_core_noc_y")>;
 
     constexpr uint32_t cb_in0 = get_named_compile_time_arg_val("cb_in0");
     constexpr uint32_t num_tiles_k = get_named_compile_time_arg_val("num_tiles_k");
