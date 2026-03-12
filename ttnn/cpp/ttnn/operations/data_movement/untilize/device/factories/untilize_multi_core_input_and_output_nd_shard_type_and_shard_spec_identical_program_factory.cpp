@@ -90,19 +90,27 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
         num_cores,
         num_shards_per_core);
 
-    // Input CB - don't back with buffer if we have uneven sharding to prevent out-of-bounds access
-    Buffer* cb_backing_buffer = (!has_uneven_sharding) ? src0_buffer : nullptr;
+    // Input CB
+    uint32_t input_cb_num_tiles;
+    Buffer* cb_backing_buffer = nullptr;
+    if (has_uneven_sharding) {
+        uint32_t total_blocks = num_blocks_per_shard * num_shards_per_core;
+        input_cb_num_tiles = (total_blocks == 1) ? num_tiles_per_block : num_tiles_per_block * 2;
+    } else {
+        input_cb_num_tiles = num_tiles_per_shard * num_shards_per_core;
+        cb_backing_buffer = src0_buffer;
+    }
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_0,
         program,
         grid,
         input_single_tile_size,
-        num_tiles_per_shard * num_shards_per_core,
+        input_cb_num_tiles,
         input_cb_data_format,
         cb_backing_buffer);
 
-    // Output CB - don't back with buffer if we have uneven sharding to prevent out-of-bounds access
-    Buffer* output_cb_backing_buffer = (!has_uneven_sharding) ? dst_buffer : nullptr;
+    // Output CB -- always backed by the output buffer; the writer (writer_unary_sharded)
+    // relies on the CB alias to deposit data into the output shard.
     auto [output_cb_index, cb_output] = create_cb(
         tt::CBIndex::c_16,
         program,
@@ -110,22 +118,23 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
         output_single_tile_size,
         num_tiles_per_shard * num_shards_per_core,
         output_cb_data_format,
-        output_cb_backing_buffer);
+        dst_buffer);
 
-    // Reader compile-time args
-    std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
-
-    // Reader kernel - use different kernel for uneven sharding
+    // Reader kernel
     KernelHandle unary_reader_kernel_id;
     if (has_uneven_sharding) {
-        // Use reader that copies from sharded buffer to CB for uneven sharding
+        std::vector<uint32_t> reader_compile_time_args = {
+            (uint32_t)src0_cb_index,
+            (uint32_t)num_tiles_per_block,
+        };
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
             program,
-            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/reader_unary_sharded_rm.cpp",
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+            "reader_unary_sharded_blocks.cpp",
             grid,
             tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
     } else {
-        // Use standard sharded reader for even sharding
+        std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
         unary_reader_kernel_id = tt::tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
@@ -200,8 +209,7 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
         // Reader run-time args
         std::vector<uint32_t> reader_run_time_args;
         if (has_uneven_sharding) {
-            // For uneven sharding, reader needs buffer address for L1-to-L1 copy
-            reader_run_time_args = {num_tiles_to_process, src0_buffer->address()};
+            reader_run_time_args = {src0_buffer->address(), num_blocks_to_process};
         } else {
             reader_run_time_args = {num_tiles_to_process};
         }

@@ -114,20 +114,24 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
     // Input CB
     uint32_t input_cb_num_tiles;
-    if (input_is_sharded) {
-        // Have compute core untilize the entire shard at once
+    if (input_is_sharded && has_uneven_sharding) {
+        // Uneven sharding: double-buffer blocks instead of holding the entire shard.
+        // The reader copies tiles block-by-block from the L1 shard into the CB.
+        if (num_input_blocks_per_full_core == 1) {
+            input_cb_num_tiles = num_tiles_per_input_block;
+        } else {
+            input_cb_num_tiles = num_tiles_per_input_block * 2;
+        }
+    } else if (input_is_sharded) {
+        // Even sharding: CB is backed by the sharded buffer (zero-copy)
         input_cb_num_tiles = num_tiles_per_input_block * num_input_blocks_per_full_core;
     } else {
         if (num_input_blocks_per_full_core == 1) {
-            // No need to double buffer if the core is only processing a single block
             input_cb_num_tiles = num_tiles_per_input_block;
         } else {
-            // Double buffer if the core is processing 2+ blocks
             input_cb_num_tiles = num_tiles_per_input_block * 2;
         }
     }
-    // Don't back CB with buffer if we have uneven sharding to prevent out-of-bounds access
-    // This fix applies to HEIGHT_SHARDED, WIDTH_SHARDED, and BLOCK_SHARDED equally
     Buffer* cb_backing_buffer = (input_is_sharded && !has_uneven_sharding) ? src0_buffer : nullptr;
     auto [src0_cb_index, cb_src0] = create_cb(
         tt::CBIndex::c_0,
@@ -157,24 +161,26 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
     // Reader compile-time args and kernel
     KernelHandle unary_reader_kernel_id;
-    if (input_is_sharded) {
+    if (input_is_sharded && has_uneven_sharding) {
+        // Uneven sharding: block-by-block reader copies from L1 shard into double-buffered CB
+        std::vector<uint32_t> reader_compile_time_args = {
+            (uint32_t)src0_cb_index,
+            (uint32_t)num_tiles_per_input_block,
+        };
+        unary_reader_kernel_id = CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/"
+            "reader_unary_sharded_blocks.cpp",
+            compute_core_range,
+            ReaderDataMovementConfig(reader_compile_time_args));
+    } else if (input_is_sharded) {
+        // Even sharding: CB is backed by the sharded buffer, reader just pushes
         std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
-        if (has_uneven_sharding) {
-            // Use reader that copies from sharded buffer to CB for uneven sharding
-            // This works for all sharding types as it respects num_tiles_to_read
-            unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/data_movement/untilize/device/kernels/dataflow/reader_unary_sharded_rm.cpp",
-                compute_core_range,
-                tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-        } else {
-            // Existing code for even sharding with CB backing
-            unary_reader_kernel_id = tt::tt_metal::CreateKernel(
-                program,
-                "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
-                compute_core_range,
-                tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
-        }
+        unary_reader_kernel_id = CreateKernel(
+            program,
+            "ttnn/cpp/ttnn/operations/eltwise/unary/device/kernels/dataflow/reader_unary_sharded.cpp",
+            compute_core_range,
+            ReaderDataMovementConfig(reader_compile_time_args));
     } else {
         // Interleaved input
         std::vector<uint32_t> reader_compile_time_args = {(uint32_t)src0_cb_index};
@@ -328,21 +334,14 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         // Reader run-time args
         uint32_t num_tiles_to_read = num_tiles_per_input_block * num_input_blocks_to_process;
         std::vector<uint32_t> reader_run_time_args;
-        if (input_is_sharded) {
-            if (has_uneven_sharding) {
-                // For uneven sharding, reader needs buffer address and tile count
-                // The existing num_tiles_to_read calculation already accounts for:
-                // - Reduced tiles for HEIGHT_SHARDED (via num_input_blocks_to_process)
-                // - Reduced tiles for WIDTH_SHARDED (handled in writer, reader gets full tiles)
-                // - Both reductions for BLOCK_SHARDED
-                reader_run_time_args = {
-                    num_tiles_to_read,
-                    src0_buffer->address()  // Pass buffer address for L1-to-L1 copy
-                };
-            } else {
-                // Existing code for even sharding
-                reader_run_time_args = {num_tiles_to_read};
-            }
+        if (input_is_sharded && has_uneven_sharding) {
+            // Block-by-block reader: pass buffer address and block count
+            reader_run_time_args = {
+                src0_buffer->address(),
+                num_input_blocks_to_process,
+            };
+        } else if (input_is_sharded) {
+            reader_run_time_args = {num_tiles_to_read};
         } else {
             // Interleaved input
             reader_run_time_args = {
@@ -433,7 +432,12 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
     return cached_program_t{
         std::move(program),
-        {unary_reader_kernel_id, unary_writer_kernel_id, cb_src0, cb_output, cores_with_run_time_args}};
+        {unary_reader_kernel_id,
+         unary_writer_kernel_id,
+         cb_src0,
+         cb_output,
+         cores_with_run_time_args,
+         has_uneven_sharding}};
 }
 
 void UntilizeMultiCoreProgramFactory::override_runtime_arguments(
@@ -451,16 +455,24 @@ void UntilizeMultiCoreProgramFactory::override_runtime_arguments(
     auto* dst_buffer = tensor_return_value.buffer();
 
     bool input_is_sharded = tensor_args.input.is_sharded();
+    bool has_uneven = cached_program.shared_variables.has_uneven_sharding;
 
     // Reader
-    if (input_is_sharded) {
-        // Sharded input
+    if (input_is_sharded && has_uneven) {
+        // Uneven sharding: update src_addr in reader runtime args
+        auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        for (const CoreCoord& core : cores_with_runtime_args) {
+            auto& runtime_args = reader_args_by_core[core.x][core.y];
+            runtime_args[0] = src_buffer->address();
+        }
+    } else if (input_is_sharded) {
+        // Even sharding: CB is backed by the sharded buffer
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
     } else {
         // Interleaved input
-        auto& runtime_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
+        auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
         for (const CoreCoord& core : cores_with_runtime_args) {
-            auto& runtime_args = runtime_args_by_core[core.x][core.y];
+            auto& runtime_args = reader_args_by_core[core.x][core.y];
             runtime_args[0] = src_buffer->address();
         }
     }
