@@ -243,9 +243,9 @@ bool verify_single_core_cost(const ttnn::Tensor& input_tensor, uint32_t k, bool 
     // Total memory cost: input/output buffers use value_tile_size, intermediate compute
     // buffers (transposed + result_prep) use compute_tile_size (may be larger).
     const uint32_t memory_cost_local =
-        input_cb_tile_count * (value_tile_size + index_tile_size) +
-        (transposed_cb_tile_count + result_prep_cb_tile_count) * (compute_tile_size + index_tile_size) +
-        output_cb_tile_count * (value_tile_size + index_tile_size);
+        (input_cb_tile_count * (value_tile_size + index_tile_size)) +
+        ((transposed_cb_tile_count + result_prep_cb_tile_count) * (compute_tile_size + index_tile_size)) +
+        (output_cb_tile_count * (value_tile_size + index_tile_size));
 
     // Verify that total memory requirement fits within single core's L1 cache
     return memory_cost_local < device->l1_size_per_core();
