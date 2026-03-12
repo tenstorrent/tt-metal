@@ -708,13 +708,14 @@ GroupNormShardedProgramFactory::cached_program_t GroupNormShardedProgramFactory:
     uint32_t output_cb_index = tt::CBIndex::c_16;
     CBHandle cb_in0;
     CBHandle cb_output;
+    uint32_t in0_cb_page_size = reader_repack_output ? a.buffer()->page_size() : in_single_tile_size;
     if (inplace) {
         std::map<uint8_t, tt::DataFormat> in0_out0_cb_data_format_spec{
             {in0_cb_index, in_data_format}, {output_cb_index, in_data_format}};
         CircularBufferConfig in0_out0_cb_config =
             tt::tt_metal::CircularBufferConfig(in0_CB_size, in0_out0_cb_data_format_spec)
-                .set_page_size(in0_cb_index, in_single_tile_size)
-                .set_page_size(output_cb_index, in_single_tile_size)
+                .set_page_size(in0_cb_index, in0_cb_page_size)
+                .set_page_size(output_cb_index, in0_cb_page_size)
                 .set_globally_allocated_address(*a.buffer());
 
         cb_in0 = tt::tt_metal::CreateCircularBuffer(program, all_cores, in0_out0_cb_config);

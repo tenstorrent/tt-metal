@@ -437,8 +437,7 @@ def generate_sdxl_test_inputs():
     inputs.append((1, 640, 16, 16))
     inputs.append((1, 1280, 16, 16))
     inputs.append((1, 2560, 16, 16))
-    # This test is removed to test_group_norm_DRAM because of the Issue #36408. To be added back after the issue is resolved.
-    # inputs.append((1, 1920, 16, 16))
+    inputs.append((1, 1920, 16, 16))
     inputs.append((1, 1920, 32, 32))
     inputs.append((1, 1280, 32, 32))
     inputs.append((1, 960, 32, 32))
