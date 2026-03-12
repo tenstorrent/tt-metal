@@ -32,6 +32,23 @@ Tensor ExecuteUnaryTSVariant<unary_op_type>::invoke(
 template struct ExecuteUnaryTSVariant<UnaryOpType::MINIMUM>;
 template struct ExecuteUnaryTSVariant<UnaryOpType::MAXIMUM>;
 
+template <UnaryOpType unary_op_type>
+Tensor ExecuteUnaryWithFloatParameter<unary_op_type>::invoke(
+    const Tensor& input_tensor,
+    const float parameter,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return detail::unary_impl(
+        input_tensor,
+        {UnaryWithParam{unary_op_type, static_cast<float>(parameter)}},
+        memory_config,
+        optional_output_tensor,
+        sub_core_grids);
+}
+
+template struct ExecuteUnaryWithFloatParameter<UnaryOpType::FMOD>;
+
 namespace detail {
 
 Tensor unary_impl(

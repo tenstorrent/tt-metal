@@ -38,6 +38,16 @@ struct ExecuteUnaryTSVariant {
         const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 };
 
+template <UnaryOpType unary_op_type>
+struct ExecuteUnaryWithFloatParameter {
+    static Tensor invoke(
+        const Tensor& input_tensor,
+        float parameter,
+        const std::optional<MemoryConfig>& memory_config = std::nullopt,
+        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+};
+
 }  // namespace operations::unary
 
 #define REGISTER_UNARY_OPERATION(op_name, op_type)                                                     \

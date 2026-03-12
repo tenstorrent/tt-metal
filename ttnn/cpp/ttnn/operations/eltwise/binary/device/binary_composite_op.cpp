@@ -656,7 +656,8 @@ Tensor ExecuteBinaryFmod::invoke(
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
-    return ttnn::fmod(input, scalar, output_mem_config);
+    return ttnn::operations::unary::ExecuteUnaryWithFloatParameter<ttnn::operations::unary::UnaryOpType::FMOD>::invoke(
+        input, scalar, output_mem_config);
 }
 
 Tensor _floor_div_overload(const Tensor& input_a, float value, const std::optional<MemoryConfig>& output_mem_config) {
