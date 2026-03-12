@@ -765,6 +765,16 @@ jobs:
       - run: echo hi
 EOF
 
+assert_detects "check 26 flags fromJSON with inputs on single-line on: workflow_dispatch" "26" "fromJSON() used with potentially attacker-controlled input" <<'EOF'
+name: test
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: ${{ fromJSON(inputs.runner-label) }}
+    steps:
+      - run: echo hi
+EOF
+
 assert_detects "check 27 flags dynamic expressions in uses:" "27" "Uses statement contains expression interpolation" <<'EOF'
 name: test
 on: workflow_dispatch
@@ -827,6 +837,18 @@ jobs:
       - uses: actions/upload-artifact@v4
         with:
           path: ./build/
+EOF
+
+assert_detects "check 29 flags artifact paths with single-line on: workflow_dispatch" "29" "Artifact path contains expression interpolation" <<'EOF'
+name: test
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/upload-artifact@v4
+        with:
+          path: ${{ inputs.artifact-path }}
 EOF
 
 assert_detects "check 30 flags curl with expression URLs" "30" "curl/wget command contains expression interpolation" <<'EOF'
@@ -1049,6 +1071,19 @@ jobs:
       - name: Build
         run: make build
         working-directory: ${{ github.workspace }}/src
+EOF
+
+assert_detects "check 36 flags working-directory with inputs on single-line on: workflow_dispatch" "36" "working-directory contains attacker-controlled expression" <<'EOF'
+name: test
+on: workflow_dispatch
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      - name: Build
+        run: make build
+        working-directory: ${{ inputs.build-dir }}
 EOF
 
 # --- Check 37: github-script with non-event attacker-controlled interpolation ---
@@ -1396,6 +1431,20 @@ jobs:
           printf '%s\n' "/opt/tools/bin" >> "$GITHUB_PATH"
 EOF
 
+assert_detects "check 44 flags env var written to GITHUB_PATH with single-line on: workflow_dispatch" "44" "Attacker-controlled env var is written to GITHUB_ENV/PATH/OUTPUT" <<'EOF'
+name: test
+on: workflow_dispatch
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          EXTRA_PATH: ${{ inputs.extra-path }}
+        run: echo "$EXTRA_PATH" >> "$GITHUB_PATH"
+EOF
+
 # --- Check 45: Expression injection in 'if:' conditions ---
 
 assert_detects "check 45 flags if condition with event data" "45" "if:' condition contains" <<'EOF'
@@ -1422,6 +1471,18 @@ jobs:
           PR_TITLE: ${{ github.event.pull_request.title }}
         if: contains(env.PR_TITLE, 'build')
         run: echo "This step runs conditionally"
+EOF
+
+assert_detects "check 45 flags if condition with inputs on single-line on: workflow_dispatch" "45" "if:' condition contains" <<'EOF'
+name: test
+on: workflow_dispatch
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Conditional step
+        if: contains('${{ inputs.deploy-target }}', 'prod')
+        run: echo "deploying"
 EOF
 
 # --- Check 46: Bracket notation bypass in expressions ---

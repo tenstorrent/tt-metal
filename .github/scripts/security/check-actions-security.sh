@@ -326,6 +326,26 @@ has_untrusted_trigger() {
     ' "${file}" 2>/dev/null
 }
 
+# Like has_untrusted_trigger(), but includes workflow_dispatch and
+# repository_dispatch -- appropriate for checks that care about whether
+# inputs.* / matrix.* can be user-controlled (even by collaborators).
+_has_untrusted_input_trigger() {
+    local file="$1"
+    awk '
+        /^on:/ || /^"on":/ || /^on :/ {
+            # Handle single-line: on: workflow_dispatch
+            if ($0 ~ /^on:[[:space:]]*(workflow_dispatch|repository_dispatch|pull_request|pull_request_target|issues|issue_comment)[[:space:]]*$/) {
+                found = 1; exit
+            }
+            in_on = 1; next
+        }
+        in_on && /^[a-z]/ && !/^[[:space:]]/ { in_on = 0 }
+        in_on && /^[[:space:]]*(workflow_dispatch|repository_dispatch|pull_request|pull_request_target|issues|issue_comment)[[:space:]]*:/ { found = 1; exit }
+        in_on && /^[[:space:]]*(workflow_dispatch|repository_dispatch|pull_request|pull_request_target|issues|issue_comment)[[:space:]]*$/ { found = 1; exit }
+        END { exit !found }
+    ' "${file}" 2>/dev/null
+}
+
 # =============================================================================
 # AWK Helper for Run Block Detection
 # =============================================================================
@@ -1230,17 +1250,6 @@ check_22() {
         return 0
     fi
 
-    # Skip if the workflow_run trigger only listens to specific named workflows
-    # (internal orchestration pattern - the triggering workflows are trusted)
-    if awk '
-        /^[[:space:]]*workflow_run:/ { in_wr = 1; next }
-        in_wr && /^[[:space:]]*workflows:/ { has_filter = 1 }
-        in_wr && /^[a-z]/ { exit }
-        END { exit !has_filter }
-    ' "${file}" 2>/dev/null; then
-        return 0
-    fi
-
     local artifact_hits
     artifact_hits=$(grep -nE 'github\.event\.workflow_run\.id|gh[[:space:]]+run[[:space:]]+download|dawidd6/action-download-artifact|/actions/artifacts|run_id:[[:space:]]*\$\{\{[[:space:]]*github\.event\.workflow_run\.id' "${file}" 2>/dev/null || true)
     if [[ -n "${artifact_hits}" ]] && \
@@ -1455,11 +1464,8 @@ check_26() {
         # workflow_call inputs come from trusted callers
         # workflow_dispatch inputs come from authorized repo collaborators
         # schedule has no external inputs
-        local has_untrusted_input=0
-        if grep -qE '^\s*(pull_request|pull_request_target|issues|issue_comment|repository_dispatch):' "${file}" 2>/dev/null; then
-            has_untrusted_input=1
-        fi
-        if [[ "${has_untrusted_input}" -eq 1 ]]; then
+        # shellcheck disable=SC2310
+        if _has_untrusted_input_trigger "${file}"; then
             risky_fromjson=$(grep -nE '\$\{\{.*fromJSON\([^)]*(inputs\.|matrix\.)' "${file}" 2>/dev/null || true)
         fi
     fi
@@ -1605,11 +1611,8 @@ check_29() {
     if [[ -z "${risky_artifact}" ]]; then
         # For inputs.*, only flag if the workflow has untrusted input triggers
         # Composite actions and workflow_call-only workflows receive inputs from trusted callers
-        local has_untrusted=0
-        if grep -qE '^\s*(workflow_dispatch|repository_dispatch|pull_request|pull_request_target|issues|issue_comment):' "${file}" 2>/dev/null; then
-            has_untrusted=1
-        fi
-        if [[ "${has_untrusted}" -eq 1 ]]; then
+        # shellcheck disable=SC2310
+        if _has_untrusted_input_trigger "${file}"; then
             risky_artifact=$(awk '
                 /^[[:space:]]*-[[:space:]]*uses:.*actions\/(upload|download)-artifact/ ||
                 /^[[:space:]]*uses:.*actions\/(upload|download)-artifact/ {
@@ -1900,7 +1903,7 @@ check_34() {
             match($0, /^[[:space:]]*/)
             conc_indent = RLENGTH
             # Check inline concurrency value
-            if ($0 ~ /concurrency:.*\$\{\{/ && $0 ~ /(github\.head_ref|github\.base_ref|github\.event\.[^}]*(title|body|head_branch))/) {
+            if ($0 ~ /concurrency:.*\$\{\{/ && $0 ~ /(github\.head_ref|github\.base_ref|inputs\.|github\.event\.[^}]*(title|body|head_branch))/) {
                 if (!($0 ~ /github\.event\.pull_request\.number/ && $0 !~ /github\.event\.pull_request\.(title|body|head_branch)/)) {
                     print NR
                 }
@@ -1915,7 +1918,7 @@ check_34() {
                 in_concurrency = 0
                 next
             }
-            if (/\$\{\{/ && /(github\.head_ref|github\.base_ref|github\.event\.[^}]*(title|body|head_branch))/) {
+            if (/\$\{\{/ && /(github\.head_ref|github\.base_ref|inputs\.|github\.event\.[^}]*(title|body|head_branch))/) {
                 if (!($0 ~ /github\.event\.pull_request\.number/ && $0 !~ /github\.event\.pull_request\.(title|body|head_branch)/)) {
                     print NR
                 }
@@ -2016,11 +2019,8 @@ check_36() {
     if [[ -z "${risky_workdir}" ]]; then
         # For inputs.*, only flag if the workflow has untrusted input triggers
         # Composite actions receive inputs from trusted callers
-        local has_untrusted=0
-        if grep -qE '^\s*(workflow_dispatch|repository_dispatch|pull_request|pull_request_target|issues|issue_comment):' "${file}" 2>/dev/null; then
-            has_untrusted=1
-        fi
-        if [[ "${has_untrusted}" -eq 1 ]]; then
+        # shellcheck disable=SC2310
+        if _has_untrusted_input_trigger "${file}"; then
             risky_workdir=$(grep -nE 'working-directory:.*\$\{\{.*inputs\.' "${file}" 2>/dev/null || true)
         fi
     fi
@@ -2456,11 +2456,8 @@ check_44() {
         has_untrusted_inputs=0
     else
         # Check if the file has any truly untrusted triggers
-        local has_dangerous_trigger=0
-        if grep -qE '^\s*(pull_request|pull_request_target|issues|issue_comment|repository_dispatch):' "${file}" 2>/dev/null; then
-            has_dangerous_trigger=1
-        fi
-        if [[ "${has_dangerous_trigger}" -eq 0 ]]; then
+        # shellcheck disable=SC2310
+        if ! _has_untrusted_input_trigger "${file}"; then
             has_untrusted_inputs=0
         fi
     fi
@@ -2626,8 +2623,8 @@ check_45() {
     inputs_in_if=$(grep -nE '^[[:space:]]*if:.*\$\{\{.*inputs\.' "${file}" 2>/dev/null || true)
     if [[ -n "${inputs_in_if}" ]]; then
         local has_untrusted_input_trigger
-        has_untrusted_input_trigger=$(grep -cE '^\s*(workflow_dispatch|repository_dispatch):' "${file}" 2>/dev/null || echo "0")
-        if [[ "${has_untrusted_input_trigger}" -gt 0 ]]; then
+        # shellcheck disable=SC2310
+        if _has_untrusted_input_trigger "${file}"; then
             log_issue "HIGH" "${file}" "'if:' condition contains attacker-controlled input expression interpolation - can manipulate workflow logic" "$(_extract_lines "${inputs_in_if}")"
             found=1
         fi
