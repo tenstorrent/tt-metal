@@ -48,13 +48,13 @@ def test_wn(device):
     tt_x = ttnn.from_torch(
         torch_x.to(torch.bfloat16).permute(0, 2, 1),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
     tt_g = ttnn.from_torch(
         torch_g.to(torch.bfloat16).permute(0, 2, 1),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
 

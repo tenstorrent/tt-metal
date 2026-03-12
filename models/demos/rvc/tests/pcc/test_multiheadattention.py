@@ -62,13 +62,13 @@ def test_multiheadattention(device, window_size):
     tt_input = ttnn.from_torch(
         torch_input.to(torch.bfloat16).permute(0, 2, 1),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
     tt_context = ttnn.from_torch(
         torch_context.to(torch.bfloat16).permute(0, 2, 1),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
 

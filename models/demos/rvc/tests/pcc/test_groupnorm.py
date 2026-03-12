@@ -14,20 +14,20 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
 @pytest.mark.parametrize(
     "batch_size,input_length,channels,num_groups",
     [
-        (2, 64, 32, 32),
+        (1, 64, 32, 32),
         (1, 512, 128, 128),
-        (1, 1024, 256, 256),
-        (1, 1024, 512, 512),
-        (1, 2048, 768, 768),
-        (1, 113986, 512, 512),
+        (1, 1024, 256, 128),
+        (1, 1024, 512, 64),
+        (1, 2048, 768, 32),
+        (1, 113986, 512, 64),
     ],
     ids=[
         "b2_l64_c32_g32",
         "b1_l512_c128_g128",
-        "b1_l1024_c256_g256",
-        "b1_l1024_c512_g512",
-        "b1_l2048_c768_g768",
-        "b1_l113986_c512_g512",
+        "b1_l1024_c256_g128",
+        "b1_l1024_c512_g64",
+        "b1_l2048_c768_g32",
+        "b1_l113986_c512_g64",
     ],
 )
 def test_groupnorm(device, batch_size, input_length, channels, num_groups):

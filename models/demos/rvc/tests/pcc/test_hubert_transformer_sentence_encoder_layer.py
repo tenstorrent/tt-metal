@@ -50,7 +50,7 @@ def test_hubert_transformer_sentence_encoder_layer(device, layer_norm_first):
     tt_x = ttnn.from_torch(
         torch_x.to(torch.bfloat16),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
 

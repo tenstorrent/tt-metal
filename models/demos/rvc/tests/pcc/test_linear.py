@@ -43,7 +43,7 @@ def test_linear(device, activation):
     tt_input = ttnn.from_torch(
         torch_input.to(torch.bfloat16),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
 

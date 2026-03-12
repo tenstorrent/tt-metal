@@ -16,15 +16,15 @@ def test_generator_nsf(device):
     torch.manual_seed(0)
 
     batch_size = 1
-    initial_channel = 8
-    input_length = 16
+    initial_channel = 64
+    input_length = 128
     resblock = "2"
     resblock_kernel_sizes = [3]
     resblock_dilation_sizes = [(1, 3)]
     upsample_rates = [2]
     upsample_initial_channel = 16
     upsample_kernel_sizes = [4]
-    gin_channels = 8
+    gin_channels = 32
     sr = 32000
 
     torch_generator = TorchGeneratorNSF(
@@ -56,7 +56,7 @@ def test_generator_nsf(device):
 
     torch_x = torch.randn(batch_size, initial_channel, input_length, dtype=torch.float32)
     torch_f0 = torch.rand(batch_size, input_length, dtype=torch.float32) * 300.0
-    torch_g = torch.randn(batch_size, gin_channels, 1, dtype=torch.float32)
+    torch_g = torch.randn(batch_size, gin_channels, 128, dtype=torch.float32)
 
     torch.manual_seed(1234)
     torch_output = torch_generator(torch_x, torch_f0, g=torch_g)
@@ -64,19 +64,19 @@ def test_generator_nsf(device):
     tt_x = ttnn.from_torch(
         torch_x.to(torch.bfloat16).permute(0, 2, 1),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
     tt_f0 = ttnn.from_torch(
         torch_f0.to(torch.bfloat16),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
     tt_g = ttnn.from_torch(
         torch_g.to(torch.bfloat16).permute(0, 2, 1),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
 

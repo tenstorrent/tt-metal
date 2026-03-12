@@ -86,33 +86,31 @@ def test_synthesizer_trn_ms_nsf(device):
     tt_phone = ttnn.from_torch(
         torch_phone,  # .permute(0, 2, 1),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
     tt_pitch = ttnn.from_torch(
         torch_pitch,
         dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
     tt_nsff0 = ttnn.from_torch(
         torch_nsff0.to(torch.bfloat16),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
     tt_speaker_id = ttnn.from_torch(
         torch_speaker_id,
         dtype=ttnn.uint32,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
 
     torch.manual_seed(1234)
     tt_output = tt_model(tt_phone, tt_pitch, tt_nsff0, tt_speaker_id)
     tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32).permute(0, 2, 1)
-    print(f"torch_output shape: {torch_output.shape}")
-    print(f"tt_output_torch shape: {tt_output_torch.shape}")
 
     assert tuple(tt_output_torch.shape) == tuple(torch_output.shape)
     assert_with_pcc(torch_output, tt_output_torch, pcc=0.9)

@@ -48,7 +48,7 @@ def test_hubert_convolution_module(device):
     tt_x = ttnn.from_torch(
         torch_x.to(torch.bfloat16),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
     tt_output = tt_module(tt_x)
