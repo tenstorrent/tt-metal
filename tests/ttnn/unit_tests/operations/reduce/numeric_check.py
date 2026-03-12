@@ -1,10 +1,11 @@
 import os
 import csv
+import json
 import math
 import torch
-from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose, assert_relative_frobenius, assert_with_ulp
+from tests.ttnn.utils_for_testing import assert_with_ulp
 from tests.ttnn.utils_for_testing import logger, _normalize_tensor, comp_relative_frobenius
-from models.common.utility_functions import comp_pcc, comp_allclose, comp_allclose_custom, comp_ulp
+from models.common.utility_functions import comp_pcc, comp_allclose_custom
 
 
 def _get_bool_env(env_var, default):
@@ -25,95 +26,113 @@ ALLCLOSE_RTOL = 1e-05  # Relative tolerance for allclose
 FROBENIUS_THRESHOLD = 0.01  # Threshold for relative Frobenius (1%)
 ULP_THRESHOLD = 10  # ULP threshold (not recommended for matmul)
 NEAR_ZERO_THRESHOLD = 0.0001
+FROBENIUS_GRID_SPLITS = 4  # Split each dim into N pieces → NxN tile grid
+FROBENIUS_TOP_K = 5  # Report the K worst tiles
 # # Padding validation configuration
 # USE_FILL_PAD = False  # Enable fill_implicit_tile_padding with TEST_PADDING_VALUE for validation
 # TEST_PADDING_VALUE = 0  # Value to fill implicit tile padding for validation
 
 
-# def assert_matmul_accuracy(
-#     expected,
-#     actual,
-#     test_name="",
-#     allclose_atol=ALLCLOSE_ATOL,
-#     allclose_rtol=ALLCLOSE_RTOL,
-#     frobenius_threshold=FROBENIUS_THRESHOLD,
-#     ulp_threshold=ULP_THRESHOLD,
-# ):
-#     """
-#     Apply configured accuracy metrics to matmul test results.
-#     Filters out near-zero values in expected for allclose and ULP to avoid division issues.
-#     Uses ATOL threshold to determine what counts as "near-zero".
+def _to_float_cpu_tensor(tensor):
+    tensor = _normalize_tensor(tensor)
+    if not isinstance(tensor, torch.Tensor):
+        tensor = torch.tensor(tensor)
+    return tensor.detach().cpu().to(torch.float32)
 
-#     Args:
-#         expected: Expected tensor (PyTorch or TTNN)
-#         actual: Actual tensor (PyTorch or TTNN)
-#         test_name: Optional test name for logging
-#         allclose_atol: Absolute tolerance for allclose (default: ALLCLOSE_ATOL)
-#         allclose_rtol: Relative tolerance for allclose (default: ALLCLOSE_RTOL)
-#         frobenius_threshold: Threshold for relative Frobenius (default: FROBENIUS_THRESHOLD)
-#         ulp_threshold: ULP threshold (default: ULP_THRESHOLD)
-#     """
-#     # Normalize tensors
-#     expected = _normalize_tensor(expected)
-#     actual = _normalize_tensor(actual)
 
-#     # Calculate statistics for near-zero values
-#     # Use ATOL as threshold: if |expected| < ATOL, it's effectively zero for RTOL/ULP purposes
-#     total_elements = expected.numel()
-#     near_zero_threshold = allclose_atol
-#     near_zero_mask_expected = torch.abs(expected) < near_zero_threshold
-#     near_zero_count_expected = near_zero_mask_expected.sum().item()
-#     near_zero_percentage = (near_zero_count_expected / total_elements * 100) if total_elements > 0 else 0
+def _reshape_to_2d(tensor):
+    """Reshape any tensor to 2D for grid-based analysis."""
+    if tensor.ndim == 0:
+        return tensor.reshape(1, 1)
+    if tensor.ndim == 1:
+        return tensor.reshape(1, -1)
+    if tensor.ndim == 2:
+        return tensor
+    return tensor.reshape(-1, tensor.shape[-1])
 
-#     if near_zero_percentage > 0:
-#         logger.info(f"{test_name}: {near_zero_percentage:.2f}% of values have |expected| < {near_zero_threshold}")
 
-#     # Apply PCC (if enabled) - works with all values including zeros
-#     if USE_PCC:
-#         assert_with_pcc(expected, actual, 0.999)
+def _compute_frobenius_error_clusters(
+    expected,
+    actual,
+    n_splits=FROBENIUS_GRID_SPLITS,
+    top_k=FROBENIUS_TOP_K,
+):
+    """
+    Divide the tensor into an NxN grid and call comp_relative_frobenius on
+    each tile.  Return tiles sorted worst-first.
 
-#     # Apply allclose (if enabled) - filter out positions where expected is near-zero
-#     if USE_ALLCLOSE:
-#         # Filter out positions where |expected| < ATOL (to avoid huge RTOL errors from small expected values)
-#         non_near_zero_mask = torch.abs(expected) >= near_zero_threshold
+    This is intentionally simple: no thresholds to tune, no flood-fill,
+    no allclose mixing.  Every tile uses the exact same Frobenius formula
+    as the global metric so the numbers are directly comparable.
 
-#         if non_near_zero_mask.any():
-#             expected_non_near_zero = expected[non_near_zero_mask]
-#             actual_non_near_zero = actual[non_near_zero_mask]
-#             assert_allclose(expected_non_near_zero, actual_non_near_zero, atol=allclose_atol, rtol=allclose_rtol)
+    Args:
+        expected: Expected tensor (PyTorch or TTNN).
+        actual:   Actual tensor (PyTorch or TTNN).
+        n_splits: Number of splits along each dimension (grid is n_splits x n_splits).
+        top_k:    How many worst tiles to keep in the output.
 
-#         # For positions where expected is near-zero, check using ATOL only
-#         if near_zero_mask_expected.any():
-#             expected_near_zero = expected[near_zero_mask_expected]
-#             actual_near_zero = actual[near_zero_mask_expected]
-#             # Check if actual is close to expected using ATOL
-#             abs_diff = torch.abs(actual_near_zero - expected_near_zero)
-#             max_atol_for_near_zeros = torch.max(abs_diff).item()
-#             if max_atol_for_near_zeros > allclose_atol:
-#                 raise AssertionError(
-#                     f"{test_name}: For positions where |expected| < {near_zero_threshold}, "
-#                     f"actual values exceed ATOL. Max |actual - expected|: {max_atol_for_near_zeros} > {allclose_atol}"
-#                 )
+    Returns:
+        dict with metadata and a ``tiles`` list (worst first, up to *top_k*).
+    """
+    expected = _to_float_cpu_tensor(expected)
+    actual = _to_float_cpu_tensor(actual)
 
-#     # Apply relative Frobenius (if enabled) - handles zeros automatically
-#     if USE_RELATIVE_FROBENIUS:
-#         assert_relative_frobenius(expected, actual, threshold=frobenius_threshold)
+    expected_2d = _reshape_to_2d(expected)
+    actual_2d = _reshape_to_2d(actual)
 
-#     # Apply ULP (if enabled) - filter out positions where expected is near-zero
-#     if USE_ULP:
-#         # Filter out positions where |expected| < ATOL (to avoid division by zero in ULP)
-#         non_near_zero_mask = torch.abs(expected) >= near_zero_threshold
+    rows, cols = expected_2d.shape
+    tile_h = max(1, math.ceil(rows / n_splits))
+    tile_w = max(1, math.ceil(cols / n_splits))
+    grid_rows = math.ceil(rows / tile_h)
+    grid_cols = math.ceil(cols / tile_w)
 
-#         if non_near_zero_mask.any():
-#             expected_non_near_zero = expected[non_near_zero_mask]
-#             actual_non_near_zero = actual[non_near_zero_mask]
-#             assert_with_ulp(expected_non_near_zero, actual_non_near_zero, ulp_threshold=ulp_threshold)
+    # Collect per-tile Frobenius + squared error (for error_share)
+    tiles = []
+    for gr in range(grid_rows):
+        r0, r1 = gr * tile_h, min(rows, (gr + 1) * tile_h)
+        for gc in range(grid_cols):
+            c0, c1 = gc * tile_w, min(cols, (gc + 1) * tile_w)
 
-#         # For positions where expected is near-zero, ULP doesn't make sense, skip
-#         if near_zero_mask_expected.any():
-#             logger.info(
-#                 f"{test_name}: Skipping ULP check for {near_zero_count_expected} positions where |expected| < {near_zero_threshold}"
-#             )
+            exp_tile = expected_2d[r0:r1, c0:c1]
+            act_tile = actual_2d[r0:r1, c0:c1]
+
+            tile_frob, tile_exp_zero = comp_relative_frobenius(exp_tile, act_tile)
+
+            err = act_tile - exp_tile
+            error_sq = float(torch.sum(err * err).item())
+            max_abs = float(torch.abs(err).max().item()) if exp_tile.numel() > 0 else 0.0
+
+            tiles.append(
+                {
+                    "grid_pos": [gr, gc],
+                    "bbox": [r0, r1, c0, c1],
+                    "elements": int(exp_tile.numel()),
+                    "frobenius_value": float(tile_frob),
+                    # "expected_norm_is_zero": bool(tile_exp_zero),
+                    # "error_sq": error_sq,
+                    # "max_abs_error": max_abs,
+                }
+            )
+
+    # Compute error_share now that we have the total
+    # total_error_sq = sum(t["error_sq"] for t in tiles)
+    # for t in tiles:
+    #     t["error_share"] = (t["error_sq"] / total_error_sq) if total_error_sq > 0 else 0.0
+
+    # Sort worst-first, then assign rank
+    tiles.sort(key=lambda t: t["frobenius_value"], reverse=True)
+    for rank, t in enumerate(tiles, 1):
+        t["rank"] = rank
+
+    return {
+        "original_shape": list(expected.shape),
+        # "matrix_shape": [rows, cols],
+        "tile_shape": [tile_h, tile_w],
+        "grid_shape": [grid_rows, grid_cols],
+        # "total_tiles": len(tiles),
+        "cluster_count": len(tiles),  # back-compat alias
+        "clusters": tiles[:top_k],  # back-compat alias (worst tiles)
+    }
 
 
 def collect_and_dump_numeric_metrics(
@@ -191,52 +210,58 @@ def collect_and_dump_numeric_metrics(
 
     # Relative Frobenius
     frob_val, frob_expected_zero = comp_relative_frobenius(expected, actual)
+    if isinstance(frob_expected_zero, torch.Tensor):
+        frob_expected_zero = bool(frob_expected_zero.item() if frob_expected_zero.numel() == 1 else frob_expected_zero)
+    frob_cluster_summary = _compute_frobenius_error_clusters(expected, actual)
+    # worst_tile = frob_cluster_summary["clusters"][0] if frob_cluster_summary["clusters"] else {}
+    # frob_cluster_count = frob_cluster_summary["total_tiles"]
+    # largest_frob_cluster_value = worst_tile.get("frobenius_value", 0.0)
+    # largest_frob_cluster_error_share = worst_tile.get("error_share", 0.0)
 
-    if 1:
-        # Filter out positions where |expected| < ATOL (to avoid division by zero in ULP)
-        near_zero_threshold = NEAR_ZERO_THRESHOLD
-        non_near_zero_mask = torch.abs(expected) >= near_zero_threshold
-        total_elems = expected.numel()
-        near_zero_count = (torch.abs(expected) < near_zero_threshold).sum().item()
-        near_zero_pct = (near_zero_count / total_elems * 100) if total_elems > 0 else 0
-        # near_zero_pct =5
+    # if worst_tile:
+    #     logger.info(
+    #         f"{test_name}: Frobenius grid {frob_cluster_summary['grid_shape']}, "
+    #         f"worst_tile_frob={largest_frob_cluster_value:.6e}, "
+    #         f"error_share={largest_frob_cluster_error_share:.2%}, "
+    #         f"bbox={worst_tile['bbox']}"
+    #     )
+    #############################################3333
+    # ulp
+    max_ulp = 0.0
+    avg_ulp = 0.0
+    near_zero_pct = 0.0
+    ulp_passed = False
 
-        if non_near_zero_mask.any():
-            expected_non_near_zero = expected[non_near_zero_mask]
-            actual_non_near_zero = actual[non_near_zero_mask]
-            ulp_passed, ulp_message = assert_with_ulp(
-                expected_non_near_zero, actual_non_near_zero, ulp_threshold=ulp_threshold
-            )
-            ulp_passed = bool(ulp_passed)
-            # max_ulp=float(ulp_message.split("Max ULP Delta: ")[1].split(" ")[0])
-            if "Max ULP Delta:" in ulp_message:
-                ulp_str = ulp_message.split("Max ULP Delta: ")[1].split(" ")[0]
-                # Handle tensor(...) format
-                if ulp_str.startswith("tensor("):
-                    ulp_str = ulp_str[len("tensor(") :].rstrip(")")
-                try:
-                    max_ulp = float(ulp_str)
-                except ValueError:
-                    max_ulp = float("nan")
+    # Filter out positions where |expected| < ATOL (to avoid division by zero in ULP)
+    near_zero_threshold = NEAR_ZERO_THRESHOLD
+    non_near_zero_mask = torch.abs(expected) >= near_zero_threshold
+    total_elems = expected.numel()
+    near_zero_count = (torch.abs(expected) < near_zero_threshold).sum().item()
+    near_zero_pct = (near_zero_count / total_elems * 100) if total_elems > 0 else 0
 
-            if "Avg ulp Delta:" in ulp_message:
-                avg_ulp = float(ulp_message.split("Avg ulp Delta: ")[1].split(",")[0])
-                # if avg_ulp.startswith("tensor("):
-                #     avg_ulp = ulp_str[len("tensor(") :].rstrip(")")
-                # try:
-                #     avg_ulp = float(avg_ulp)
-                # except ValueError:
-                #     avg_ulp = float("nan")
-        else:
-            avg_ulp = 0
-            max_ulp = 0
-            ulp_passed = False
-            # near_zero_pct=5
-        # # # For positions where expected is near-zero, ULP doesn't make sense, skip
-        # if near_zero_mask_expected.any():
-        #     logger.info(
-        #         f"{test_name}: Skipping ULP check for {near_zero_count_expected} positions where |expected| < {near_zero_threshold}"
-        #     )
+    if non_near_zero_mask.any():
+        expected_non_near_zero = expected[non_near_zero_mask]
+        actual_non_near_zero = actual[non_near_zero_mask]
+        ulp_passed, ulp_message = assert_with_ulp(
+            expected_non_near_zero, actual_non_near_zero, ulp_threshold=ulp_threshold
+        )
+        ulp_passed = bool(ulp_passed)
+        if "Max ULP Delta:" in ulp_message:
+            ulp_str = ulp_message.split("Max ULP Delta: ")[1].split(" ")[0]
+            # Handle tensor(...) format
+            if ulp_str.startswith("tensor("):
+                ulp_str = ulp_str[len("tensor(") :].rstrip(")")
+            try:
+                max_ulp = float(ulp_str)
+            except ValueError:
+                max_ulp = float("nan")
+
+        if "Avg ulp Delta:" in ulp_message:
+            avg_ulp = float(ulp_message.split("Avg ulp Delta: ")[1].split(",")[0])
+    else:
+        avg_ulp = 0
+        max_ulp = 0
+        ulp_passed = False
 
     # Prepare metrics dict
     metrics = {
@@ -249,6 +274,10 @@ def collect_and_dump_numeric_metrics(
         "mean_rtol": mean_rtol,
         "frobenius_value": frob_val,
         "frobenius_expected_zero": frob_expected_zero,
+        # "frobenius_cluster_count": frob_cluster_count,
+        # "frobenius_largest_cluster_value": largest_frob_cluster_value,
+        # "frobenius_largest_cluster_error_share": largest_frob_cluster_error_share,
+        "frobenius_cluster_summary": frob_cluster_summary,
         "ulp_passed": ulp_passed,
         "max_ulp": max_ulp,
         "avg_ulp": avg_ulp,
@@ -292,12 +321,16 @@ def collect_and_dump_numeric_metrics(
                         "mean_atol",
                         "max_rtol",
                         "mean_rtol",
-                        "frobenius_value",
-                        "frobenius_expected_zero",
                         "ulp_passed",
                         "max_ulp",
                         "avg_ulp",
                         "near_zero_pct",
+                        "frobenius_value",
+                        "frobenius_expected_zero",
+                        # "frobenius_cluster_count",
+                        # "frobenius_largest_cluster_value",
+                        # "frobenius_largest_cluster_error_share",
+                        "frobenius_cluster_summary",
                     ]
                 )
                 writer.writerow(header)
@@ -317,12 +350,16 @@ def collect_and_dump_numeric_metrics(
                     f"{mean_atol:.6e}",
                     f"{max_rtol:.6e}",
                     f"{mean_rtol:.6e}",
-                    f"{frob_val:.6e}",
-                    frob_expected_zero,
                     ulp_passed,
                     f"{max_ulp:.1f}" if not math.isnan(max_ulp) else "N/A",
                     f"{avg_ulp:.1f}" if not math.isnan(avg_ulp) else "N/A",
                     f"{near_zero_pct:.2f}",
+                    f"{frob_val:.6e}",
+                    frob_expected_zero,
+                    # frob_cluster_count,
+                    # f"{largest_frob_cluster_value:.6e}",
+                    # f"{largest_frob_cluster_error_share:.6e}",
+                    json.dumps(frob_cluster_summary, separators=(",", ":")),
                 ]
             )
             # print(row)
