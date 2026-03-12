@@ -151,12 +151,15 @@ class LogProbsCalculator:
     def set_num_logprobs(self, num_logprobs: int | list[int] = 0):
         """Set the number of logprobs to compute.
 
+        Primary validation (0-20 range, HTTP 400 for invalid) is done at the
+        API level. This method applies defensive clamping as a safety net.
+
         Args:
             num_logprobs: Number of top logprobs to return per token.
                 - 0 or None: disabled
                 - 1-20: number of logprobs to return
-                - >20: capped to 20
-                - <0: asserts (invalid)
+                - >20: clamped to 20 with warning
+                - <0: clamped to 0 with warning
                 Can also be a list (per-user); the max value is used for the batch.
         """
         if num_logprobs is None:
@@ -164,17 +167,21 @@ class LogProbsCalculator:
             return
 
         if isinstance(num_logprobs, list):
-            # Validate all individual values: no negatives allowed
+            # Clamp any negative values defensively (should be caught at API level)
             min_val = min(num_logprobs) if num_logprobs else 0
-            assert min_val >= 0, f"num_logprobs must be >= 0, got {min_val}"
-            # Use the max across users; the full batch runs with the same setting
-            max_num = max(num_logprobs) if num_logprobs else 0
+            if min_val < 0:
+                logger.warning(f"num_logprobs contains negative value {min_val}; negative values will be treated as 0")
+            # Use the max across users (clamped to >= 0); the full batch runs with the same setting
+            max_num = max(max(v, 0) for v in num_logprobs) if num_logprobs else 0
         else:
             max_num = num_logprobs
-            assert max_num >= 0, f"num_logprobs must be >= 0, got {max_num}"
+            if max_num < 0:
+                logger.warning(f"num_logprobs must be >= 0, got {max_num}; clamping to 0")
+                max_num = 0
 
-        # Cap at MAX_LOGPROBS
+        # Cap at MAX_LOGPROBS defensively (should be validated at API level)
         if max_num > MAX_LOGPROBS:
+            logger.warning(f"num_logprobs {max_num} exceeds MAX_LOGPROBS ({MAX_LOGPROBS}); clamping to {MAX_LOGPROBS}")
             max_num = MAX_LOGPROBS
 
         self.num_logprobs = max_num

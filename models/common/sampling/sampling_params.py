@@ -20,6 +20,7 @@ class SamplingParams:
     frequency_penalty: float | list[float] = 0.0
     repetition_penalty: float | list[float] = 1.0
     seed: int | list[int] | None = None
-    # Number of top log-probs to return per token (1-20), or 0/None to disable.
-    # Values above 20 are capped to 20. Values below 1 (except 0/None) will assert.
+    # Number of top log-probs to return per token (0-20), or None to disable.
+    # Validation (0-20 range, HTTP 400 for invalid) is done at the API level.
+    # The backend treats negative values as 0 and caps values > 20 defensively.
     num_logprobs: int | list[int] = 0

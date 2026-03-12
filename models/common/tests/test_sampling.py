@@ -490,12 +490,12 @@ def test_set_num_logprobs_validation():
     calc.set_num_logprobs([25, 10])
     assert calc.num_logprobs == 20  # capped
 
-    # Negative values should assert
-    with pytest.raises(AssertionError):
-        calc.set_num_logprobs(-1)
+    # Negative values should be clamped to 0 (not assert — validation is at API level)
+    calc.set_num_logprobs(-1)
+    assert calc.num_logprobs == 0
 
-    with pytest.raises(AssertionError):
-        calc.set_num_logprobs([-5, 3])
+    calc.set_num_logprobs([-5, 3])
+    assert calc.num_logprobs == 3  # max(clamp(-5,0), 3) = 3
 
 
 def test_top_k_log_probs_returns_none_when_disabled():

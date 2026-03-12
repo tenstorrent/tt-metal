@@ -36,8 +36,9 @@ class SamplingParams:
     frequency_penalty: float | list[float] = 0.0
     repetition_penalty: float | list[float] = 1.0
     seed: int | list[int] | None = None
-    # Number of top log-probs to return per token (1-20), or 0/None to disable.
-    # Values above 20 are capped to 20. Values below 1 (except 0/None) will assert.
+    # Number of top log-probs to return per token (0-20), or None to disable.
+    # Validation (0-20 range, HTTP 400 for invalid) is done at the API level.
+    # The backend treats negative values as 0 and caps values > 20 defensively.
     num_logprobs: int | list[int] = 0
 
 
@@ -437,11 +438,14 @@ def format_sampling_params(sampling_params, max_batch_size):
         if repetition_penalty[i] == 0:
             repetition_penalty[i] = defaults["repetition_penalty"]
 
-        # num_logprobs: cap at 20, assert on negative values
+        # num_logprobs: defensive clamping (primary validation is at the API level)
         if num_logprobs[i] is None:
             num_logprobs[i] = 0
-        assert num_logprobs[i] >= 0, f"num_logprobs must be >= 0, got {num_logprobs[i]}"
+        if num_logprobs[i] < 0:
+            logger.warning(f"num_logprobs must be >= 0, got {num_logprobs[i]}; clamping to 0")
+            num_logprobs[i] = 0
         if num_logprobs[i] > 20:
+            logger.warning(f"num_logprobs must be <= 20, got {num_logprobs[i]}; clamping to 20")
             num_logprobs[i] = 20
 
     return replace(
