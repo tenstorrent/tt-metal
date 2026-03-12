@@ -256,8 +256,10 @@ class TtDINO:
         backbone_num_heads: Tuple[int, ...] = (6, 12, 24, 48),
         window_size: int = 12,
         in_channels: Tuple[int, ...] = (192, 384, 768, 1536),
+        trace_mode: bool = False,
     ):
         self.device = device
+        self.trace_mode = trace_mode
         self.num_queries = num_queries
         self.num_classes = num_classes
         self.num_levels = num_levels
@@ -276,6 +278,7 @@ class TtDINO:
                 num_heads=backbone_num_heads,
                 window_size=window_size,
                 attn_masks=attn_masks,
+                trace_mode=trace_mode,
             )
 
         # --- Neck (optional) ---
@@ -292,6 +295,7 @@ class TtDINO:
             num_heads=num_heads,
             num_levels=num_levels,
             num_points=num_points,
+            trace_mode=trace_mode,
         )
 
         self.level_embed = encoder_params["level_embed"]
@@ -305,6 +309,7 @@ class TtDINO:
             num_heads=num_heads,
             num_levels=num_levels,
             num_points=num_points,
+            trace_mode=trace_mode,
         )
 
         pd = decoder_params["_torch_pre_decoder"]
@@ -324,6 +329,53 @@ class TtDINO:
         ]
 
         self._dram_cfg = ttnn.DRAM_MEMORY_CONFIG
+
+        # Precompute PE and trace metadata in __init__ (before trace capture) to avoid
+        # ttnn.arange/ttnn.full during traced forward (those trigger host-to-device writes).
+        self._pe_cache: List[ttnn.Tensor] = []
+        self._valid_ratios_tt = None
+        self._spatial_shapes_tt = None
+        if trace_mode:
+            from models.experimental.dino_5scale_swin_l.tt.tt_neck import DINO_NECK_LEVEL_SHAPES
+
+            for lvl in range(num_levels):
+                _, _, H, W = DINO_NECK_LEVEL_SHAPES[lvl]
+                pe = sine_positional_encoding_ttnn(
+                    device, H, W, num_feats=embed_dims // 2, temperature=pe_temperature, memory_config=self._dram_cfg
+                )
+                self._pe_cache.append(pe)
+            self._valid_ratios_tt = ttnn.full(
+                (1, num_levels, 2), 1.0, dtype=ttnn.bfloat16, device=device, memory_config=self._dram_cfg
+            )
+            rows = []
+            for lvl in range(num_levels):
+                _, _, H, W = DINO_NECK_LEVEL_SHAPES[lvl]
+                row = ttnn.stack(
+                    [
+                        ttnn.full((1,), float(H), dtype=ttnn.bfloat16, device=device, memory_config=self._dram_cfg),
+                        ttnn.full((1,), float(W), dtype=ttnn.bfloat16, device=device, memory_config=self._dram_cfg),
+                    ],
+                    dim=-1,
+                )
+                rows.append(row)
+            self._spatial_shapes_tt = ttnn.concat(rows, dim=0)
+            for r in rows:
+                ttnn.deallocate(r)
+
+            # Precompute encoder output proposals (avoids ttnn.arange/ttnn.full in pre_decoder)
+            hw_list = [[DINO_NECK_LEVEL_SHAPES[l][2], DINO_NECK_LEVEL_SHAPES[l][3]] for l in range(num_levels)]
+            spatial_shapes = torch.tensor(hw_list, dtype=torch.long)
+            N = sum(DINO_NECK_LEVEL_SHAPES[l][2] * DINO_NECK_LEVEL_SHAPES[l][3] for l in range(num_levels))
+            dummy_mem = ttnn.from_torch(
+                torch.zeros(1, N, embed_dims, dtype=torch.bfloat16),
+                device=device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self._dram_cfg,
+            )
+            self._output_proposals_cache, self._output_proposals_valid_cache = gen_encoder_output_proposals_ttnn(
+                device, dummy_mem, spatial_shapes, 1, memory_config=self._dram_cfg
+            )
+            ttnn.deallocate(dummy_mem)
 
     def pre_transformer_tt(
         self,
@@ -360,40 +412,37 @@ class TtDINO:
             feat_flat_tt = ttnn.reshape(feat_tt, (B, hw, C))
             if padded_hw > hw:
                 pad_count = padded_hw - hw
-                zeros_tt = ttnn.zeros(
-                    (B, pad_count, C),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    device=self.device,
+                feat_flat_tt = ttnn.pad(
+                    feat_flat_tt,
+                    padding=[(0, 0), (0, pad_count), (0, 0)],
+                    value=0.0,
                     memory_config=self._dram_cfg,
                 )
-                feat_flat_tt = ttnn.concat([feat_flat_tt, zeros_tt], dim=1)
-                ttnn.deallocate(zeros_tt)
             feat_flat_tt = ttnn.to_layout(feat_flat_tt, ttnn.TILE_LAYOUT)
             feat_padded_list.append(feat_flat_tt)
 
             # PE on device: [1, H*W, 256] + level_embed, then pad and expand to B
-            pos_tt = sine_positional_encoding_ttnn(
-                self.device,
-                int(H),
-                int(W),
-                num_feats=self.embed_dims // 2,
-                temperature=self.pe_temperature,
-                memory_config=self._dram_cfg,
-            )
+            if self.trace_mode and self._pe_cache:
+                pos_tt = self._pe_cache[lvl]
+            else:
+                pos_tt = sine_positional_encoding_ttnn(
+                    self.device,
+                    int(H),
+                    int(W),
+                    num_feats=self.embed_dims // 2,
+                    temperature=self.pe_temperature,
+                    memory_config=self._dram_cfg,
+                )
             level_slice = self.level_embed[lvl : lvl + 1, :]  # [1, 256]
             pos_tt = ttnn.add(pos_tt, level_slice, memory_config=self._dram_cfg)
             if padded_hw > hw:
                 pad_count = padded_hw - hw
-                zeros_pos = ttnn.zeros(
-                    (1, pad_count, C),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.TILE_LAYOUT,
-                    device=self.device,
+                pos_tt = ttnn.pad(
+                    pos_tt,
+                    padding=[(0, 0), (0, pad_count), (0, 0)],
+                    value=0.0,
                     memory_config=self._dram_cfg,
                 )
-                pos_tt = ttnn.concat([pos_tt, zeros_pos], dim=1)
-                ttnn.deallocate(zeros_pos)
             pos_tt = ttnn.repeat(pos_tt, (B, 1, 1))
             pos_tt = ttnn.to_layout(pos_tt, ttnn.TILE_LAYOUT)
             pos_padded_list.append(pos_tt)
@@ -439,14 +488,26 @@ class TtDINO:
         )
         valid_ratios = torch.ones(B, len(mlvl_feats_tt), 2, dtype=torch.float32)
 
+        # For trace_mode: use precomputed cached tensors (created in __init__ before trace)
+        valid_ratios_tt = None
+        spatial_shapes_tt = None
+        if self.trace_mode and self._valid_ratios_tt is not None and self._spatial_shapes_tt is not None:
+            valid_ratios_tt = ttnn.repeat(self._valid_ratios_tt, (B, 1, 1)) if B > 1 else self._valid_ratios_tt
+            spatial_shapes_tt = self._spatial_shapes_tt
+
         logger.info(f"Pre-transformer (TT): feat_flatten [B={B}, N={N}], " f"spatial_shapes {spatial_shapes.tolist()}")
-        return {
+        out = {
             "feat_flatten": feat_flatten_tt,
             "feat_pos": feat_pos_tt,
             "spatial_shapes": spatial_shapes,
             "level_start_index": level_start_index,
             "valid_ratios": valid_ratios,
         }
+        if valid_ratios_tt is not None:
+            out["valid_ratios_tt"] = valid_ratios_tt
+        if spatial_shapes_tt is not None:
+            out["spatial_shapes_tt"] = spatial_shapes_tt
+        return out
 
     def pre_transformer(
         self,
@@ -630,24 +691,38 @@ class TtDINO:
             else memory_tt
         )
 
-        proposals_host, valid_host = gen_encoder_output_proposals(torch.zeros(B, N, self.embed_dims), spatial_shapes)
-        output_proposals = ttnn.from_torch(
-            proposals_host.to(torch.bfloat16),
-            device=self.device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self._dram_cfg,
-        )
-        output_proposals_valid = ttnn.from_torch(
-            valid_host.to(torch.bfloat16),
-            device=self.device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self._dram_cfg,
-        )
-
-        zeros_mem = ttnn.zeros_like(mem, memory_config=self._dram_cfg)
-        output_memory = ttnn.where(output_proposals_valid, mem, zeros_mem)
-        ttnn.deallocate(zeros_mem)
-        ttnn.deallocate(output_proposals_valid)
+        if self.trace_mode:
+            # Use precomputed proposals (avoids ttnn.arange/ttnn.full during trace)
+            output_proposals = self._output_proposals_cache
+            output_proposals_valid = self._output_proposals_valid_cache
+            if B > 1:
+                output_proposals = ttnn.repeat(output_proposals, (B, 1, 1), memory_config=self._dram_cfg)
+                output_proposals_valid = ttnn.repeat(output_proposals_valid, (B, 1, 1), memory_config=self._dram_cfg)
+            zeros_mem = ttnn.multiply(mem, 0, memory_config=self._dram_cfg)
+            output_memory = ttnn.where(output_proposals_valid, mem, zeros_mem)
+            ttnn.deallocate(zeros_mem)
+            if B > 1:
+                ttnn.deallocate(output_proposals_valid)
+        else:
+            proposals_host, valid_host = gen_encoder_output_proposals(
+                torch.zeros(B, N, self.embed_dims), spatial_shapes
+            )
+            output_proposals = ttnn.from_torch(
+                proposals_host.to(torch.bfloat16),
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self._dram_cfg,
+            )
+            output_proposals_valid = ttnn.from_torch(
+                valid_host.to(torch.bfloat16),
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self._dram_cfg,
+            )
+            zeros_mem = ttnn.zeros_like(mem, memory_config=self._dram_cfg)
+            output_memory = ttnn.where(output_proposals_valid, mem, zeros_mem)
+            ttnn.deallocate(zeros_mem)
+            ttnn.deallocate(output_proposals_valid)
 
         mfc = self._decoder_params["memory_trans_fc"]
         output_memory = ttnn.linear(
@@ -679,27 +754,49 @@ class TtDINO:
             if i < len(reg6) - 1:
                 reg_out = ttnn.relu(reg_out)
         enc_coords_unact = ttnn.add(reg_out, output_proposals)
-        ttnn.deallocate(output_proposals)
+        if not (self.trace_mode and B == 1):
+            ttnn.deallocate(output_proposals)
         ttnn.deallocate(reg_out)
 
-        enc_cls_t = ttnn.to_torch(enc_cls).float()[:, :N, :]
-        ttnn.deallocate(enc_cls)
-        output_memory_t = ttnn.to_torch(output_memory).float()[:, :N, :]
-        ttnn.deallocate(output_memory)
-
-        coarse_cls = torch.nn.functional.linear(output_memory_t, self.cls_enc_w_torch, self.cls_enc_b_torch)
-        topk_indices = torch.topk(coarse_cls.max(-1)[0], k=self.num_queries, dim=1)[1]
-
-        enc_coords_t = ttnn.to_torch(enc_coords_unact).float()[:, :N, :]
-        ttnn.deallocate(enc_coords_unact)
-        topk_coords_unact = torch.gather(enc_coords_t, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 4))
-        reference_points = topk_coords_unact.sigmoid()
-        reference_points_tt = ttnn.from_torch(
-            reference_points.to(torch.bfloat16),
-            device=self.device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=self._dram_cfg,
-        )
+        if self.trace_mode:
+            # Device-only topk and gather
+            enc_cls_sliced = ttnn.slice(enc_cls, [0, 0, 0], [B, N, self.num_classes], memory_config=self._dram_cfg)
+            coarse_cls_max = ttnn.max(enc_cls_sliced, dim=-1, memory_config=self._dram_cfg)
+            ttnn.deallocate(enc_cls_sliced)
+            ttnn.deallocate(enc_cls)
+            ttnn.deallocate(output_memory)
+            topk_values, topk_indices_tt = ttnn.topk(
+                coarse_cls_max, k=self.num_queries, dim=1, largest=True, sorted=True
+            )
+            ttnn.deallocate(topk_values)
+            ttnn.deallocate(coarse_cls_max)
+            enc_coords_sliced = ttnn.slice(enc_coords_unact, [0, 0, 0], [B, N, 4], memory_config=self._dram_cfg)
+            topk_indices_expanded = ttnn.reshape(topk_indices_tt, (B, self.num_queries, 1))
+            topk_indices_expanded = ttnn.repeat(topk_indices_expanded, (1, 1, 4))
+            topk_coords_unact = ttnn.gather(enc_coords_sliced, dim=1, index=topk_indices_expanded)
+            ttnn.deallocate(enc_coords_sliced)
+            ttnn.deallocate(enc_coords_unact)
+            ttnn.deallocate(topk_indices_expanded)
+            reference_points_tt = ttnn.sigmoid(topk_coords_unact)
+            ttnn.deallocate(topk_coords_unact)
+            topk_indices = None  # Not needed for trace; decoder uses reference_points
+        else:
+            enc_cls_t = ttnn.to_torch(enc_cls).float()[:, :N, :]
+            ttnn.deallocate(enc_cls)
+            output_memory_t = ttnn.to_torch(output_memory).float()[:, :N, :]
+            ttnn.deallocate(output_memory)
+            coarse_cls = torch.nn.functional.linear(output_memory_t, self.cls_enc_w_torch, self.cls_enc_b_torch)
+            topk_indices = torch.topk(coarse_cls.max(-1)[0], k=self.num_queries, dim=1)[1]
+            enc_coords_t = ttnn.to_torch(enc_coords_unact).float()[:, :N, :]
+            ttnn.deallocate(enc_coords_unact)
+            topk_coords_unact = torch.gather(enc_coords_t, 1, topk_indices.unsqueeze(-1).repeat(1, 1, 4))
+            reference_points = topk_coords_unact.sigmoid()
+            reference_points_tt = ttnn.from_torch(
+                reference_points.to(torch.bfloat16),
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=self._dram_cfg,
+            )
 
         qemb = self._decoder_params["query_embedding"]
         qemb = ttnn.reshape(qemb, (1, self.num_queries, self.embed_dims))
@@ -719,7 +816,8 @@ class TtDINO:
         self,
         hidden_states: List[ttnn.Tensor],
         references: List[torch.Tensor | ttnn.Tensor],
-    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        return_device_tensors: bool = False,
+    ) -> Tuple[torch.Tensor, torch.Tensor] | Tuple[ttnn.Tensor, ttnn.Tensor]:
         """
         Apply classification and regression heads to decoder outputs.
         All head computation (cls linear, reg branch, inverse_sigmoid, add, sigmoid)
@@ -728,10 +826,11 @@ class TtDINO:
         Args:
             hidden_states: list of 6 ttnn [B, num_queries, 256] (normed decoder outputs)
             references: list of 7 [B, num_queries, 4]: references[0] torch, references[1:] ttnn
+            return_device_tensors: if True, return device tensors (no host read). Use for trace capture.
 
         Returns:
-            all_cls: [num_layers, B, num_queries, num_classes] float32
-            all_coords: [num_layers, B, num_queries, 4] float32 (sigmoid coords)
+            all_cls: [num_layers, B, num_queries, num_classes] float32 or ttnn.Tensor
+            all_coords: [num_layers, B, num_queries, 4] float32 or ttnn.Tensor (sigmoid coords)
         """
         logger.info("Detection heads: computing class logits and bbox coords on device...")
         all_cls_tt: List[ttnn.Tensor] = []
@@ -781,6 +880,12 @@ class TtDINO:
         for t in all_coords_tt:
             ttnn.deallocate(t)
 
+        if return_device_tensors:
+            # Return device tensors without host read (for trace capture).
+            # Return stacked tensors directly; do not deallocate (caller uses them).
+            logger.info(f"Detection heads done: cls {stacked_cls_tt.shape}, coords {stacked_coords_tt.shape}")
+            return stacked_cls_tt, stacked_coords_tt
+
         # Single host transfer and convert to float32
         _cls_t: torch.Tensor = ttnn.to_torch(stacked_cls_tt)
         all_cls = _cls_t.float()[:, :, : self.num_queries, :]
@@ -823,21 +928,25 @@ class TtDINO:
         # )
 
         logger.info("Running encoder...")
-        memory_tt = self.encoder(
-            feat=pre_trans["feat_flatten"],
-            feat_pos=pre_trans["feat_pos"],
-            feat_mask=None,
-            spatial_shapes=pre_trans["spatial_shapes"],
-            level_start_index=pre_trans["level_start_index"],
-            valid_ratios=pre_trans["valid_ratios"],
-        )
+        enc_kw = {
+            "feat": pre_trans["feat_flatten"],
+            "feat_pos": pre_trans["feat_pos"],
+            "feat_mask": None,
+            "spatial_shapes": pre_trans["spatial_shapes"],
+            "level_start_index": pre_trans["level_start_index"],
+            "valid_ratios": pre_trans["valid_ratios"],
+        }
+        if self.trace_mode:
+            enc_kw["valid_ratios_tt"] = pre_trans.get("valid_ratios_tt")
+            enc_kw["spatial_shapes_tt"] = pre_trans.get("spatial_shapes_tt")
+        memory_tt = self.encoder(**enc_kw)
         ttnn.deallocate(pre_trans["feat_flatten"])
         ttnn.deallocate(pre_trans["feat_pos"])
 
         pre_dec = self.pre_decoder_ttnn(memory_tt, pre_trans["spatial_shapes"])
 
         logger.info("Running decoder...")
-        hidden_states, references = self.decoder(
+        dec_kw = dict(
             query=pre_dec["query"],
             value=memory_tt,
             key_padding_mask=None,
@@ -847,6 +956,11 @@ class TtDINO:
             level_start_index=pre_trans["level_start_index"],
             valid_ratios=pre_trans["valid_ratios"],
         )
+        if self.trace_mode and "valid_ratios_tt" in pre_trans:
+            dec_kw["valid_ratios_tt"] = pre_trans["valid_ratios_tt"]
+        if self.trace_mode and "spatial_shapes_tt" in pre_trans:
+            dec_kw["spatial_shapes_tt"] = pre_trans["spatial_shapes_tt"]
+        hidden_states, references = self.decoder(**dec_kw)
 
         all_cls, all_coords = self.forward_heads(hidden_states, references)
 
@@ -927,14 +1041,18 @@ class TtDINO:
         feat_pos_tt = pre_trans["feat_pos"]
 
         logger.info("Running encoder...")
-        memory_tt = self.encoder(
-            feat=feat_tt,
-            feat_pos=feat_pos_tt,
-            feat_mask=None,
-            spatial_shapes=pre_trans["spatial_shapes"],
-            level_start_index=pre_trans["level_start_index"],
-            valid_ratios=pre_trans["valid_ratios"],
-        )
+        enc_kw = {
+            "feat": feat_tt,
+            "feat_pos": feat_pos_tt,
+            "feat_mask": None,
+            "spatial_shapes": pre_trans["spatial_shapes"],
+            "level_start_index": pre_trans["level_start_index"],
+            "valid_ratios": pre_trans["valid_ratios"],
+        }
+        if self.trace_mode:
+            enc_kw["valid_ratios_tt"] = pre_trans.get("valid_ratios_tt")
+            enc_kw["spatial_shapes_tt"] = pre_trans.get("spatial_shapes_tt")
+        memory_tt = self.encoder(**enc_kw)
         ttnn.deallocate(feat_tt)
         ttnn.deallocate(feat_pos_tt)
         ttnn.synchronize_device(self.device)
@@ -949,7 +1067,7 @@ class TtDINO:
         pre_dec = self.pre_decoder_ttnn(memory_tt, pre_trans["spatial_shapes"])
 
         logger.info("Running decoder...")
-        hidden_states, references = self.decoder(
+        dec_kw = dict(
             query=pre_dec["query"],
             value=memory_tt,
             key_padding_mask=None,
@@ -959,6 +1077,11 @@ class TtDINO:
             level_start_index=pre_trans["level_start_index"],
             valid_ratios=pre_trans["valid_ratios"],
         )
+        if self.trace_mode and "valid_ratios_tt" in pre_trans:
+            dec_kw["valid_ratios_tt"] = pre_trans["valid_ratios_tt"]
+        if self.trace_mode and "spatial_shapes_tt" in pre_trans:
+            dec_kw["spatial_shapes_tt"] = pre_trans["spatial_shapes_tt"]
+        hidden_states, references = self.decoder(**dec_kw)
 
         ttnn.synchronize_device(self.device)
         if profile_mode:
