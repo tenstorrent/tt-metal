@@ -79,26 +79,26 @@ if [ ! -f "${TT_SMI_VENV}/bin/activate" ]; then
 else
     source "${TT_SMI_VENV}/bin/activate"
 
-    DEVICE_INFO=$(tt-smi -s --snapshot_no_tty 2>/dev/null | python3 -c "
+    DEVICE_INFO=$(tt-smi -s --snapshot_no_tty 2>/dev/null | python3 -c '
 import sys, json
 try:
     data = json.load(sys.stdin)
-    # Count ALL devices — both PCIe-attached (n300 L) and remote (n300 R).
-    # On a LoudBox, 4 n300 boards each have an L (PCIe) and R (ethernet) chip = 8 total.
-    # The R chips have bus_id='N/A' but are still valid TT devices.
-    devices = data.get('device_info', [])
-    ids = ','.join(str(i) for i in range(len(devices)))
-    print(f'{len(devices)}:{ids}')
+    # Count ALL devices: PCIe-attached (n300 L) and remote (n300 R).
+    # On a LoudBox, 4 n300 boards each have L (PCIe) + R (ethernet) chip = 8 total.
+    # The R chips have bus_id="N/A" but are still valid TT devices.
+    devices = data.get("device_info", [])
+    ids = ",".join(str(i) for i in range(len(devices)))
+    print(f"{len(devices)}:{ids}")
     for i, dev in enumerate(devices):
-        board_info = dev.get('board_info', {})
-        bus = board_info.get('bus_id', 'N/A')
-        btype = board_info.get('board_type', 'Unknown')
-        loc = '(PCIe)' if bus != 'N/A' else '(remote)'
-        print(f'  Device {i}: {btype} {loc} bus={bus}', file=sys.stderr)
+        board_info = dev.get("board_info", {})
+        bus = board_info.get("bus_id", "N/A")
+        btype = board_info.get("board_type", "Unknown")
+        loc = "(PCIe)" if bus != "N/A" else "(remote)"
+        print(f"  Device {i}: {btype} {loc} bus={bus}", file=sys.stderr)
 except Exception as e:
-    print(f'0:', file=sys.stdout)
-    print(f'  Error: {e}', file=sys.stderr)
-" 2>/tmp/tt_device_info_$$.txt)
+    print(f"0:", file=sys.stdout)
+    print(f"  Error: {e}", file=sys.stderr)
+' 2>/tmp/tt_device_info_$$.txt)
 
     cat /tmp/tt_device_info_$$.txt  # Print device list to stdout
     rm -f /tmp/tt_device_info_$$.txt
