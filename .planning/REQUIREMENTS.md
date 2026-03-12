@@ -49,25 +49,25 @@ None -- this is a cleanup milestone.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| API-01 | — | Pending |
-| API-02 | — | Pending |
-| API-03 | — | Pending |
-| API-04 | — | Pending |
-| TEST-01 | — | Pending |
-| TEST-02 | — | Pending |
-| TEST-03 | — | Pending |
-| KERN-01 | — | Pending |
-| KERN-02 | — | Pending |
-| KERN-03 | — | Pending |
-| KERN-04 | — | Pending |
-| TCASE-01 | — | Pending |
-| TCASE-02 | — | Pending |
+| API-01 | Phase 3 | Pending |
+| API-02 | Phase 3 | Pending |
+| API-03 | Phase 3 | Pending |
+| API-04 | Phase 3 | Pending |
+| TEST-01 | Phase 4 | Pending |
+| TEST-02 | Phase 4 | Pending |
+| TEST-03 | Phase 4 | Pending |
+| KERN-01 | Phase 5 | Pending |
+| KERN-02 | Phase 5 | Pending |
+| KERN-03 | Phase 5 | Pending |
+| KERN-04 | Phase 5 | Pending |
+| TCASE-01 | Phase 6 | Pending |
+| TCASE-02 | Phase 6 | Pending |
 
 **Coverage:**
 - v1.2 requirements: 13 total
-- Mapped to phases: 0
-- Unmapped: 13 ⚠️
+- Mapped to phases: 13
+- Unmapped: 0 -- all requirements covered
 
 ---
 *Requirements defined: 2026-03-11*
-*Last updated: 2026-03-11 after initial definition*
+*Last updated: 2026-03-11 after roadmap creation (traceability complete)*
