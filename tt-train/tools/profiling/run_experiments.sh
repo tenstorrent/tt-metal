@@ -25,7 +25,12 @@ set -euo pipefail
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── Defaults ──
-: "${TT_METAL_RUNTIME_ROOT:=/data/philei/tt-metal}"
+# Infer TT_METAL_RUNTIME_ROOT from script location if not set:
+# this script lives at <TT_METAL_RUNTIME_ROOT>/tt-train/tools/profiling/
+if [ -z "${TT_METAL_RUNTIME_ROOT:-}" ]; then
+    TT_METAL_RUNTIME_ROOT="$(realpath "${SCRIPT_DIR}/../../..")"
+    echo "WARNING: TT_METAL_RUNTIME_ROOT not set. Inferred from script location: ${TT_METAL_RUNTIME_ROOT}" >&2
+fi
 PARTITION="bh_pod_4x32_B45"
 NODELIST=""
 NODES_MULTI=""

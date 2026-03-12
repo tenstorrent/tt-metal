@@ -258,7 +258,7 @@ def main():
     parser.add_argument(
         "--hardware",
         default="bh_glx",
-        help="Hardware config for roofline tool (default: p100)",
+        help="Hardware config for roofline tool (default: bh_glx)",
     )
     parser.add_argument(
         "--peak-tflops",
