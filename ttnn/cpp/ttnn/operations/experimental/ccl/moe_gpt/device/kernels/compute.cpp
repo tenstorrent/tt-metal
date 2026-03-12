@@ -13,6 +13,7 @@
 #include "api/compute/tile_move_copy.h"
 #include "api/debug/dprint_pages.h"
 #include "api/debug/dprint_tensix.h"
+#include "api/compute/eltwise_unary/eltwise_unary.h"
 
 // Need these headers for running SFPU on PACK thread
 #ifdef TRISC_PACK
@@ -108,15 +109,8 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Compute
     //-------------------------------------------------------------------------
-    // Pack is always configured to Float16_b
-    pack_reconfig_data_format(cb_s2c_in2);
 
-    // Unpacker B is for input/activation and eltwise inputs, so Float16_b
-    reconfig_data_format_srcb(cb_s2c_in);
-
-    // Unpacker A is for W0,W1 and W2, so Bf4_b
-    reconfig_data_format_srca(cb_r2c_w0_w1);
-
+    unary_op_init_common(cb_c2c_ones_tile, cb_c2c_ones_tile);
     tile_regs_acquire();
 
     fill_tile_init();
@@ -129,6 +123,14 @@ void kernel_main() {
     pack_tile(dst0, cb_c2c_ones_tile);
     tile_regs_release();
     cb_push_back(cb_c2c_ones_tile, 1);
+    // Pack is always configured to Float16_b
+    pack_reconfig_data_format(cb_s2c_in2);
+
+    // Unpacker B is for input/activation and eltwise inputs, so Float16_b
+    reconfig_data_format_srcb(cb_s2c_in);
+
+    // Unpacker A is for W0,W1 and W2, so Bf4_b
+    reconfig_data_format_srca(cb_r2c_w0_w1);
     // Initialize matmul for W0
     mm_block_init(cb_s2c_in, cb_r2c_w0_w1, cb_s2c_in2, /*transpose=*/false, /*ct_dim=*/4, /*rt_dim=*/1, /*kt_dim=*/1);
 
@@ -165,12 +167,6 @@ void kernel_main() {
             // clean up 13 later 91/7 = 13
             for (uint32_t block_id = 0; block_id < 13; ++block_id) {
                 cb_wait_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
-                // if(block_id == 0){
-                //     UNPACK(DPRINT << "dram_bank_id: " << dram_bank_id << ENDL());
-                //     UNPACK(DPRINT << "tile_id: " << tile_id << ENDL());
-                //     UNPACK(print_full_tile(cb_r2c_w0_w1, 0, true));
-                //     UNPACK(print_full_tile(cb_r2c_w0_w1, 2, true));
-                // }
                 uint32_t last_k_index = 0;
                 for (uint32_t k = 0; k < w0_w1_tiles_per_block; k += 4) {
                     if (k_tracker == num_w0_w1_tiles_h) {
@@ -192,16 +188,16 @@ void kernel_main() {
                 if (k_tracker == num_w0_w1_tiles_h) {
                     // add matmul bias logic here
 
-                    // matmul_block(
-                    //     cb_c2c_ones_tile,
-                    //     cb_r2c_w0_w1,
-                    //     0,
-                    //     /*in1_index=*/last_k_index,
-                    //     /*idst=*/0,
-                    //     /*transpose=*/false,
-                    //     /*ct_dim=*/4,
-                    //     /*rt_dim=*/1,
-                    //     /*kt_dim=*/1);
+                    matmul_block(
+                        cb_c2c_ones_tile,
+                        cb_r2c_w0_w1,
+                        0,
+                        /*in1_index=*/last_k_index,
+                        /*idst=*/0,
+                        /*transpose=*/false,
+                        /*ct_dim=*/4,
+                        /*rt_dim=*/1,
+                        /*kt_dim=*/1);
                 }
                 cb_pop_front(cb_r2c_w0_w1, w0_w1_tiles_per_block);
             }
@@ -216,17 +212,17 @@ void kernel_main() {
                 p_stall::STALL_ON_ZERO));
             //
             // // Make SFPU access the appropriate half of the destination registers
-            // PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
-            //
-            // //---------------------------------------------------------------------
-            // // Apply GPT-OSS SwiGLU activation
-            // // SwiGLU: (clamp(up)+1) * clamp(gate) * sigmoid(alpha * clamp(gate))
-            // // Dest layout: [gate0, up0, gate1, up1] at tile indices [0, 1, 2, 3]
-            // //---------------------------------------------------------------------
-            // PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(0, 1, 0)));
-            // PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(2, 3, 2)));
-            //
-            // PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
+            PACK(TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, ckernel::packer::get_packer_dest_offset()));
+
+            //---------------------------------------------------------------------
+            // Apply GPT-OSS SwiGLU activation
+            // SwiGLU: (clamp(up)+1) * clamp(gate) * sigmoid(alpha * clamp(gate))
+            // Dest layout: [gate0, up0, gate1, up1] at tile indices [0, 1, 2, 3]
+            //---------------------------------------------------------------------
+            PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(0, 1, 0)));
+            PACK((llk_math_eltwise_binary_sfpu_swiglu<true, false>(2, 3, 2)));
+
+            PACK(TTI_STALLWAIT(p_stall::STALL_PACK, p_stall::WAIT_SFPU));
 
             pack_tile</*out_of_order_output=*/true>(0, cb_s2c_in2, /*output_tile_index=*/tile_id);
             pack_tile</*out_of_order_output=*/true>(2, cb_s2c_in2, /*output_tile_index=*/tile_id + 1);
@@ -271,10 +267,6 @@ void kernel_main() {
                         in2_offset += 8;
                         in2_index = in2_offset;
                     }
-                    // UNPACK(DPRINT << k/4<< ENDL());
-                    // UNPACK(print_full_tile(cb_s2c_in2, in2_index++, true));
-                    // copy_tile(cb_s2c_in2, in2_index++, 0);
-                    // dprint_tensix_dest_reg(0);
                     dm1_tiles_remaining--;
                     matmul_block(
                         cb_s2c_in2,
@@ -286,21 +278,21 @@ void kernel_main() {
                         /*ct_dim=*/4,
                         /*rt_dim=*/1,
                         /*kt_dim=*/1);
-                    dprint_tensix_dest_reg(0);
+                    // dprint_tensix_dest_reg(0);
                     k_tracker++;
                 }
                 if (k_tracker == num_w0_w1_tiles_h) {
                     // add matmul bias logic here
-                    // matmul_block(
-                    //     cb_c2c_ones_tile,
-                    //     cb_r2c_w2,
-                    //     0,
-                    //     /*in1_index=*/last_k_index,
-                    //     /*idst=*/0,
-                    //     /*transpose=*/false,
-                    //     /*ct_dim=*/4,
-                    //     /*rt_dim=*/1,
-                    //     /*kt_dim=*/1);
+                    matmul_block(
+                        cb_c2c_ones_tile,
+                        cb_r2c_w2,
+                        0,
+                        /*in1_index=*/last_k_index,
+                        /*idst=*/0,
+                        /*transpose=*/false,
+                        /*ct_dim=*/4,
+                        /*rt_dim=*/1,
+                        /*kt_dim=*/1);
                 }
                 cb_pop_front(cb_r2c_w2, w2_tiles_per_block);
             }

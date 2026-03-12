@@ -121,7 +121,7 @@ MoEGPTProgramFactory::cached_program_t MoEGPTProgramFactory::create(
             .fp32_dest_acc_en = false,
             .dst_full_sync_en = false,
             .bfp8_pack_precise = false,
-            .math_approx_mode = true,
+            .math_approx_mode = false,
             .compile_args = compile_args,
             .named_compile_args = named_compile_time_args});
 

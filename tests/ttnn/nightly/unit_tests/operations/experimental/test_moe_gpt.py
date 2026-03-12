@@ -30,7 +30,7 @@ import torch
 import ttnn
 from loguru import logger
 
-from models.common.utility_functions import comp_pcc, comp_allclose
+from models.common.utility_functions import comp_pcc, comp_allclose, comp_ulp
 from models.demos.gpt_oss.tt.experts_throughput.weights import (
     _FUSED_MAX_TILES_PER_CORE as MAX_W0_W1_TILES_PER_CORE,
     _FUSED_PAD_CORES as PAD_CORES,
@@ -80,7 +80,7 @@ def create_torch_b2(L, E, N):
 
 def create_torch_w0(L, E, K, N):
     """Create torch w0 weight tensor of shape (L, E, K, N)."""
-    return (torch.randn((L, E, K, N), dtype=torch.bfloat16) - 0.5) / 2
+    return torch.randn((L, E, K, N), dtype=torch.bfloat16) - 0.5
     # return torch.cat((torch.zeros((L, E, K, N-32), dtype=torch.bfloat16),torch.ones((L, E, K, 32), dtype=torch.bfloat16)/K), dim = 3 )
     # temp = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
     # indices = torch.arange(N, dtype=torch.bfloat16)
@@ -90,7 +90,7 @@ def create_torch_w0(L, E, K, N):
 
 def create_torch_w1(L, E, K, N):
     """Create torch w1 weight tensor of shape (L, E, K, N)."""
-    return (torch.randn((L, E, K, N), dtype=torch.bfloat16) - 0.5) / 2
+    return torch.randn((L, E, K, N), dtype=torch.bfloat16) - 0.5
     # return torch.ones((L, E, K, N), dtype=torch.bfloat16) /2048
     # return torch.cat((torch.zeros((L, E, K, N-32), dtype=torch.bfloat16),torch.ones((L, E, K, 32), dtype=torch.bfloat16)/K), dim = 3 )
     # temp = torch.rand((L, E, K, N), dtype=torch.bfloat16) - 0.5
@@ -101,7 +101,7 @@ def create_torch_w1(L, E, K, N):
 
 def create_torch_w2(L, E, N, K):
     """Create torch w2 weight tensor of shape (L, E, N, K)."""
-    return (torch.randn((L, E, K, N), dtype=torch.bfloat16) - 0.5) / 2
+    return torch.randn((L, E, K, N), dtype=torch.bfloat16) - 0.5
     # return torch.ones((L, E, N, K), dtype=torch.bfloat16) /2048
     # temp = torch.randn((L, E, N, K), dtype=torch.bfloat16) -0.5
     # indices = torch.arange(K, dtype=torch.bfloat16)
@@ -129,11 +129,13 @@ def prepare_output_tensor(tt_output, E, M, K, ring2cores):
 
 def get_accuracy_metrics(torch_output, tt_output):
     _pcc_passed, pcc_val = comp_pcc(torch_output, tt_output)
+    _ulp_passed, ulp_val = comp_ulp(torch_output, tt_output, 0)
     std = torch_output.std().item()
     relative_rmse_val = (torch.nn.functional.mse_loss(torch_output, tt_output).sqrt().item() / std) if std != 0 else 0.0
     allclose_passed, allclose_val = comp_allclose(torch_output, tt_output)
     return {
         "pcc": pcc_val,
+        "ulp": ulp_val,
         "relative_rmse": relative_rmse_val,
         "allclose": allclose_passed,
         "allclose_val": allclose_val,
@@ -345,16 +347,16 @@ def run_test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
 
             # W0 and W1 projections
             # (L, E, M, K) @ (L, E, K, N) -> (L, E, M, N)
-            torch_w0_output_ref = torch_input_ref @ torch_w0
-            torch_w1_output_ref = torch_input_ref @ torch_w1
+            torch_w0_output_ref = (torch_input_ref @ torch_w0) + torch_b0
+            torch_w1_output_ref = (torch_input_ref @ torch_w1) + torch_b1
 
             # SwiGLU activation: gate=W0 output, up=W1 output
-            # torch_intermediate_ref = swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)
+            torch_intermediate_ref = swiglu_reference(torch_w0_output_ref, torch_w1_output_ref)
 
-            torch_intermediate_ref = torch_w0_output_ref
+            # torch_intermediate_ref = torch_w0_output_ref
             # W2 projection
             # (L, E, M, N) @ (L, E, N, K) -> (L, E, M, K)
-            torch_output_ref = torch_intermediate_ref @ torch_w2
+            torch_output_ref = (torch_intermediate_ref @ torch_w2) + torch_b2
 
         # Calculate accuracy metrics for each layer and expert
         for layer_id, expert_id in itertools.product(range(L), range(E)):
@@ -427,6 +429,7 @@ def test_moe_gpt(device, M, K, N, E, L, check_accuracy, dump_outputs):
         else:
             logger.info(f"Layer {layer_id}, Expert {expert_id}: PCC={metrics['pcc']:.6f} (Passed)")
 
+        logger.info(f"Layer {layer_id}, Expert {expert_id}: ULP={metrics['ulp']} (Passed)")
     assert passing, "Some experts in some layers did not pass the PCC check"
 
 

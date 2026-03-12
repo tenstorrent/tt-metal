@@ -446,13 +446,6 @@ def _prepare_w2_b2_tensor(
 
     Nt = N // ttnn.TILE_SIZE
     N_grouped = all_groups_per_bank.view(num_cores, L, E, 2, Nt, ttnn.TILE_SIZE, 4 * ttnn.TILE_SIZE)
-    torch.set_printoptions(profile="full")
-    torch.set_printoptions(sci_mode=False)
-    print(N_grouped.shape)
-
-    with open("FIRST_w_2_b2_swizz.txt", "w") as f:
-        f.write(str(N_grouped[0, 0, 0, 0, :, :, 0]))
-    print("done_printing first_w2_b2_swizzle")
 
     core_chunk_order = torch.tensor(list(reversed(range(num_cores)))).roll(1)
     chunk_sizes = [_tiles_for_core(i) for i in range(num_cores)]
@@ -477,15 +470,6 @@ def _prepare_w2_b2_tensor(
         core_chunk_order = core_chunk_order.roll(1)
 
     N_reordered = torch.stack(each_shard).view(num_cores, L, E, 2, -1, 4 * ttnn.TILE_SIZE)
-    torch.set_printoptions(profile="full")
-    torch.set_printoptions(sci_mode=False)
-    print(N_reordered.shape)
-
-    with open("w_2_b2_swizz.txt", "w") as f:
-        f.write(str(N_reordered[0, 0, 0, 0, :, 0]))
-    print("done_printing w2_b2_swizzle")
-    with open("w_2_b2_swizz_2.txt", "w") as f:
-        f.write(str(N_reordered[1, 0, 0, 0, :, 0]))
 
     return N_reordered
 
@@ -559,15 +543,6 @@ def _prepare_w2_b2_tensor_old(
         core_chunk_order = core_chunk_order.roll(1)
 
     N_reordered = torch.stack(each_shard).view(num_cores, L, E, 2, -1, 4 * ttnn.TILE_SIZE)
-    torch.set_printoptions(profile="full")
-    torch.set_printoptions(sci_mode=False)
-    print(N_reordered.shape)
-
-    with open("OG_w_2_b2_swizz.txt", "w") as f:
-        f.write(str(N_reordered[0, 0, 0, 0, :, 0]))
-    print("done_printing w2_b2_swizzle")
-    with open("OG_w_2_b2_swizz_2.txt", "w") as f:
-        f.write(str(N_reordered[1, 0, 0, 0, :, 0]))
     return N_reordered
 
 
