@@ -129,7 +129,7 @@ python3 tt-train/tools/profiling/results_json/extract_results.py \
   --csv /path/to/ops_perf_results.csv
 ```
 
-Key flags: `--seq-len <n>` (default 2048), `--device-clock-ghz <f>` (default 1.35 for Blackhole).
+Important flag: `--seq-len <n>` (default 2048).
 
 ## Step 3 (Optional): Roofline Analysis
 

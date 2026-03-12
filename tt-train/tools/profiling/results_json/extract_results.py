@@ -21,8 +21,6 @@ from pathlib import Path
 import pandas as pd
 
 MARKERS_PER_CALL = 10
-DEFAULT_DEVICE_CLOCK_GHZ = 1.35
-DEVICE_CLOCK_GHZ = DEFAULT_DEVICE_CLOCK_GHZ
 
 PHASE_MAP = {
     ("dataloader_step_done", "forward_pass_done"): "forward_ms",
@@ -753,16 +751,7 @@ def main():
         default=2048,
         help="Sequence length for throughput calculation (default: 2048)",
     )
-    parser.add_argument(
-        "--device-clock-ghz",
-        type=float,
-        default=DEFAULT_DEVICE_CLOCK_GHZ,
-        help=f"Device clock speed in GHz for cycle→time conversion (default: {DEFAULT_DEVICE_CLOCK_GHZ})",
-    )
     args = parser.parse_args()
-
-    global DEVICE_CLOCK_GHZ
-    DEVICE_CLOCK_GHZ = args.device_clock_ghz
 
     if args.csv:
         main_csv(Path(args.csv))
