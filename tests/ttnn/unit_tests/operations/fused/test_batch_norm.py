@@ -447,7 +447,7 @@ def test_batch_norm_output_Default(input_shapes, device):
 )
 def test_batch_norm_compute_config(input_shapes, training, weight, bias, device):
     N, H, W, C = input_shapes
-    d_type = "float32"
+    d_type = "bfloat16"
     torch.manual_seed(0)
 
     # Generate the inputs
