@@ -142,23 +142,42 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = ct_args_ncrisc});
 
-    // --- Per-core runtime args ---
+    // --- Per-core runtime args (tree reduction) ---
     for (uint32_t i = 0; i < all_cores_vec.size(); i++) {
         uint32_t page_offset = i * shard_height;
-        bool is_coll = (all_cores_vec[i] == collector_core);
 
-        std::vector<uint32_t> rt_brisc = {src_buffer->address(), dst_buffer->address(), page_offset, is_coll ? 1u : 0u};
-
-        if (is_coll) {
-            for (uint32_t j = 0; j < all_cores_vec.size(); j++) {
-                if (j == i) {
-                    continue;
-                }
-                auto noc = device->worker_core_from_logical_core(all_cores_vec[j]);
-                rt_brisc.push_back(noc.x);
-                rt_brisc.push_back(noc.y);
+        // Tree structure: core i receives from children at consecutive levels,
+        // then signals its parent. Children at level L: core i + 2^L.
+        std::vector<uint32_t> children_noc;
+        uint32_t num_receive = 0;
+        for (uint32_t L = 0; (1u << L) < num_cores; L++) {
+            uint32_t stride = 1u << L;
+            uint32_t group = stride << 1;
+            if ((i % group) == 0 && (i + stride) < num_cores) {
+                auto child_noc = device->worker_core_from_logical_core(all_cores_vec[i + stride]);
+                children_noc.push_back(child_noc.x);
+                children_noc.push_back(child_noc.y);
+                num_receive++;
+            } else {
+                break;
             }
         }
+
+        // Parent: the core that reads from us. For i > 0, clear lowest set bit.
+        uint32_t parent_noc_x = 0xFFFFFFFF;
+        uint32_t parent_noc_y = 0xFFFFFFFF;
+        if (i > 0) {
+            uint32_t lowest_bit = i & (~i + 1);
+            uint32_t parent_idx = i ^ lowest_bit;
+            auto p_noc = device->worker_core_from_logical_core(all_cores_vec[parent_idx]);
+            parent_noc_x = p_noc.x;
+            parent_noc_y = p_noc.y;
+        }
+
+        // rt_args: [src, dst, page_offset, num_receive, parent_noc_x, parent_noc_y, child0_x, child0_y, ...]
+        std::vector<uint32_t> rt_brisc = {
+            src_buffer->address(), dst_buffer->address(), page_offset, num_receive, parent_noc_x, parent_noc_y};
+        rt_brisc.insert(rt_brisc.end(), children_noc.begin(), children_noc.end());
 
         tt::tt_metal::SetRuntimeArgs(program, kernel_id_brisc, all_cores_vec[i], rt_brisc);
         tt::tt_metal::SetRuntimeArgs(
