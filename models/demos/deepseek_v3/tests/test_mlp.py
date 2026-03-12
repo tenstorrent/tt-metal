@@ -16,7 +16,7 @@ from models.demos.deepseek_v3.tt.mlp.mlp import MLP
 from models.demos.deepseek_v3.tt.mlp.mlp_dequant import MLPDequant
 from models.demos.deepseek_v3.tt.mlp.non_expert import NonExpert
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
-from models.demos.deepseek_v3.utils.config_helpers import dequantize, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config, load_weight
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -62,6 +62,10 @@ def test_convert_weights_for_dequantized_mlps(MLPClass, module_path, hf_config, 
             "Skipping test for mesh device shape 8x8 due to known issue https://github.com/tenstorrent/tt-metal/issues/35375"
         )
     state_dict = sub_state_dict(state_dict, module_path + ".")
+    reference_w1 = state_dict["gate_proj.weight"]
+    assert (
+        reference_w1.dtype == torch.bfloat16
+    ), f"Expected already-dequantized bfloat16 gate_proj.weight, got {reference_w1.dtype}"
     run_weight_conversion_test(
         MLPClass=MLPClass,
         hf_config=hf_config,
@@ -69,11 +73,7 @@ def test_convert_weights_for_dequantized_mlps(MLPClass, module_path, hf_config, 
         tmp_path=tmp_path
         / "mesh_8x8",  # TODO: dummy mesh shape required until convert_weights no longer relies on this for parsing the absolutem filepaths
         mesh_device=mesh_device,
-        reference_w1=dequantize(
-            state_dict["gate_proj.weight"],
-            state_dict["gate_proj.weight_scale_inv"],
-            block_shape=hf_config.quantization_config["weight_block_size"],
-        ),
+        reference_w1=reference_w1,
     )
 
 

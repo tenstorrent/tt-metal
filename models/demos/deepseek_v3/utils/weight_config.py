@@ -138,6 +138,10 @@ def get_weight_config(
     if mesh_device is None:
         raise ValueError("mesh_device must be provided")
 
+    weight_cache_path = weight_cache_path.expanduser()
+    if not weight_cache_path.is_absolute():
+        weight_cache_path = weight_cache_path.resolve()
+
     weight_cache_path = (
         weight_cache_path
         / f"{hf_config.num_hidden_layers}_layers"

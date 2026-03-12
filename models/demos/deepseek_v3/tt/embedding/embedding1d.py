@@ -16,7 +16,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MeshDeviceStub,
     TypecastConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import even_int_div, shard_and_save
+from models.demos.deepseek_v3.utils.config_helpers import even_int_div, get_dequantized_tensor, shard_and_save
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -44,7 +44,7 @@ class Embedding1D(AbstractModule):
         (state_dict,) = state_dicts
 
         # Get the embedding weight from the state dict (in the full model: model.embed_tokens.weight)
-        torch_weight = state_dict["weight"]
+        torch_weight = get_dequantized_tensor(state_dict, "weight")
 
         # Split the last dim in 2 so that it can be sharded across the mesh
         assert (

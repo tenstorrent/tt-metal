@@ -21,9 +21,17 @@ Tokenizer (full‑model mode): expect one of `tokenizer.model`, `tokenizer.json`
 ### 1) Full model with local safetensors
 Use this when you have a local DeepSeek‑V3 model (config, tokenizer, and `.safetensors`).
 
+If you only have the original fp8 Hugging Face checkpoint, export a bf16 checkpoint first:
+
+```bash
+python models/demos/deepseek_v3/scripts/dequantize_hf_checkpoint.py \
+  /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528 \
+  --output-model-path /proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528-dequantized
+```
+
 ```bash
 # Point to a local HF model directory (contains tokenizer + .safetensors)
-export DEEPSEEK_V3_HF_MODEL=/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+export DEEPSEEK_V3_HF_MODEL=/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528-dequantized
 # Where to store converted TTNN weights
 export DEEPSEEK_V3_CACHE=/proj_sw/user_dev/deepseek_ttnn_cache_all_61_layers
 # What system type are we running on? (Can be TG, DUAL, QUAD)
@@ -41,7 +49,7 @@ Runs a minimal single‑layer pipeline with randomly initialized weights. This d
 
 ```bash
 # Point to a local HF model directory (contains tokenizer + .safetensors)
-export DEEPSEEK_V3_HF_MODEL=/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528
+export DEEPSEEK_V3_HF_MODEL=/proj_sw/user_dev/deepseek-ai/DeepSeek-R1-0528-dequantized
 # What system type are we running on? (Can be TG, DUAL, QUAD)
 export MESH_DEVICE=DUAL
 
