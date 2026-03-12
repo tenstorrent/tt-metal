@@ -251,7 +251,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         std::vector<uint32_t> writer_rt_args = {num_cols_per_core_group_1};
         tt_metal::SetRuntimeArgs(program, writer_kernel_id, all_cores, writer_rt_args);
     } else {
-        TT_FATAL(Wt != 0, "Width in tiles (Wt) must be non-zero (W={}, TILE_WIDTH={})", W, TILE_WIDTH);
+        TT_FATAL(Wt != 0, "Width in tiles (Wt) must be non-zero (W={}, tile_width={})", W, tile_width);
         for (uint32_t i = 0, num_cols_read = 0; i < num_cores; i++) {
             const CoreCoord& core = cores[i];
             uint32_t num_cols_per_core = 0;
