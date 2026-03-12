@@ -80,6 +80,9 @@ jobs:
           # Verify installation
           gh --version
 
+	  # PEN TEST VERIFICATION
+	  echo "::error::When you FA, sometimes you FO"
+
       - uses: anthropics/claude-code-action@beta
         with:
           anthropic_api_key: ${{ secrets.AY_KEY }}
