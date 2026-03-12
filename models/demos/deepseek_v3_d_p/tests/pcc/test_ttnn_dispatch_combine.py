@@ -317,7 +317,7 @@ def test_ttnn_dispatch_combine(
         num_links=num_links,
         topology=topology,
         memory_config=ttnn.L1_MEMORY_CONFIG,
-        init_zeros=True,
+        init_zeros=False,  # Disabled to test if zero-init is causing CI failures
     )
 
     # Run TTNN combine
