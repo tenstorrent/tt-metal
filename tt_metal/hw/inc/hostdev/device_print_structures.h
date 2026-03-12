@@ -6,9 +6,7 @@
 
 #include <cstdint>
 
-namespace device_print_detail {
-
-namespace structures {
+namespace device_print_detail::structures {
 
 struct DevicePrintStringInfo {
     const char* format_string_ptr;
@@ -58,6 +56,4 @@ struct DevicePrintHeader {
 
 static_assert(sizeof(DevicePrintHeader) == sizeof(uint32_t));
 
-}  // namespace structures
-
-}  // namespace device_print_detail
+}  // namespace device_print_detail::structures
