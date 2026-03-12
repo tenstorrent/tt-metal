@@ -263,7 +263,8 @@ inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
 // Note:
 //  - this isn't racy w/ the host so long as return_code is written last
 //  - this isn't racy between riscvs so long as each gets their own noc_index as is the case on WH/BH
-//  - for Quasar, multiple DMs share one NOC so CAS is used; writes go to cached view then flush
+//  - for Quasar, multiple DMs share one NOC so CAS is used; address is remapped from uncached to
+//    cached L1 (LR/SC requires cache coherence), then flushed to make writes visible to host
 void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     uint8_t noc_id,
     uint64_t noc_addr,
@@ -302,7 +303,8 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
         san->is_target = (which_core == DEBUG_SANITIZE_NOC_TARGET);
         san->return_code = return_code;
 #if defined(ARCH_QUASAR)
-        // TODO: Replace with flush_l2_cache_line() once PR #38124 is merged
+        // Flush 64B cache line to L1 so host sees all fields via NOC; fence ensures completion
+        // TODO: Replace with flush_l2_cache_line() once available
         volatile uint64_t* flush_reg = reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR);
         *flush_reg = reinterpret_cast<uintptr_t>(san);
         asm volatile("fence" ::: "memory");
@@ -396,24 +398,13 @@ uint32_t debug_sanitize_noc_addr(
 
         // Only check wrap-around for Tensix-to-Tensix multicasts
         if (both_cores_tensix) {
-            if (is_virtual_coord && is_virtual_coord_end) {
-                // Virtual coordinates: noc0 and noc1 endpoints are identical in virtual space,
-                // but coordinate ordering differs between noc0 and noc1.
-                //
-                // NoC torus architectures (WH/BH) support wrap-around multicasts where end < start.
-                // Non-torus architectures (Quasar) require start <= end.
+            // NoC torus architectures (WH/BH) support wrap-around multicasts where end < start.
+            // Quasar is non-torus with 1 NOC, so start <= end is required regardless of coord type.
 #ifdef ARCH_QUASAR
-                if (x > x_end || y > y_end) {
-                    return_code = DebugSanitizeNocMulticastInvalidRange;
-                }
-#endif
-            } else {
-#ifdef ARCH_QUASAR
-                if (x > x_end || y > y_end) {
-                    return_code = DebugSanitizeNocMulticastInvalidRange;
-                }
-#endif
+            if (x > x_end || y > y_end) {
+                return_code = DebugSanitizeNocMulticastInvalidRange;
             }
+#endif
         } else {
             // For non-Tensix multicasts, enforce start <= end on all architectures
             if (is_virtual_coord && is_virtual_coord_end) {
@@ -625,10 +616,6 @@ void debug_sanitize_eth(uint32_t src_addr, uint32_t dst_addr, uint32_t len) {
     }
 #endif
 }
-
-#if defined(ARCH_QUASAR) && !defined(NOC_AT_LEN_BE)
-#define NOC_AT_LEN_BE NOC_AT_LEN
-#endif
 
 // TODO: Clean these up with #7453
 #define DEBUG_SANITIZE_NOC_READ_TRANSACTION_FROM_STATE(noc_id, read_cmd_buf)                                       \

@@ -126,9 +126,6 @@ void RunTestOnCore(
     auto& program_ = workload.get_programs().at(device_range);
     auto* device = mesh_device->get_devices()[0];
     auto& cq = mesh_device->mesh_command_queue();
-    uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
-    std::vector<uint32_t> init{0};
-    tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, init);
 
     CoreCoord virtual_core;
     if (is_eth_core) {
@@ -199,6 +196,9 @@ void RunTestOnCore(
             if (multi_dm_race) {
                 constexpr uint32_t multi_dm_base_addr = 0xFFFF0000;
                 constexpr uint32_t multi_dm_base_size = 0x1000;
+                uint32_t l1_unreserved_base = device->allocator()->get_base_allocator_addr(HalMemType::L1);
+                std::vector<uint32_t> init{0, 0};  // 8 bytes: Quasar barrier uses 64-bit atomics
+                tt::tt_metal::detail::WriteToDeviceL1(device, core, l1_unreserved_base, init);
                 config.compile_args = {num_dms, multi_dm_base_addr, multi_dm_base_size, l1_unreserved_base};
                 config.defines = {{"TEST_MULTI_DM_SANITIZE_RACE", "1"}};
             } else {
@@ -777,7 +777,7 @@ TEST_F(MeshWatcherFixture, TensixTestWatcherSanitizeMulticastSemaphoreInc) {
         this->devices_[0]);
 }
 
-// Quasar multi-DM race test: all 8 DMs sync then race to trigger sanitize error
+// Quasar multi-DM race test: all DMs sync then race to trigger sanitize error
 // Each DM uses unique identifiable data (addr/size). Verifies CAS ensures consistent error reporting
 TEST_F(MeshWatcherFixture, QuasarTestWatcherSanitizeMultiDMRace) {
     this->RunTestOnDevice(

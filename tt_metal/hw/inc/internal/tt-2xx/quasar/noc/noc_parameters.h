@@ -63,6 +63,7 @@
 #define NOC_BRCST_LO (NOC_REGS_START_ADDR + 0x20)
 #define NOC_BRCST_HI (NOC_REGS_START_ADDR + 0x24)
 #define NOC_AT_LEN (NOC_REGS_START_ADDR + 0x28)
+#define NOC_AT_LEN_BE NOC_AT_LEN  // No separate byte-enable reg on Quasar; alias for WH/BH compat
 #define NOC_L1_ACC_AT_INSTRN (NOC_REGS_START_ADDR + 0x2C)
 #define NOC_SEC_CTRL (NOC_REGS_START_ADDR + 0x30)
 #define NOC_AT_DATA (NOC_REGS_START_ADDR + 0x34)
@@ -454,6 +455,8 @@
 #define NOC_XY_PCIE_ENCODING(x, y) \
     ((uint64_t(NOC_XY_ENCODING(x, y)) << (NOC_ADDR_LOCAL_BITS - NOC_COORD_REG_OFFSET)) | 0x1000000000000000)
 
+// Same as BH: uses 36-bit address encoding followed by coordinates, but PCIe transactions require bit 60 to
+// be set, so we mask out the xy-coordinate. When NOC_ADDR_LOCAL_BITS is 64 then NOC_LOCAL_ADDR_OFFSET can be used
 #define NOC_LOCAL_ADDR(addr) ((addr) & 0x1000000FFFFFFFFF)
 
 // TODO review these alignment restrictions
