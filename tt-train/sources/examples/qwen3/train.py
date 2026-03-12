@@ -682,6 +682,16 @@ def main():
         trainable_params = all_params
         print(f"\nAll {len(trainable_params)} params are trainable")
 
+    """
+    non_trainable_params = {
+        name: param for name, param in all_params.items() if name not in trainable_params
+    }
+    for name, weight in non_trainable_params.items():
+        weight.tensor.set_requires_grad(False)
+    if non_trainable_params:
+        print(f"Set requires_grad=False for {len(non_trainable_params)} non-trainable params")
+    """
+
     print("Setting up optimizer...")
     adamw_config = ttml.optimizers.AdamWConfig.make(
         args.lr,
@@ -690,7 +700,7 @@ def main():
         args.eps,
         args.weight_decay,
     )
-    optimizer = ttml.optimizers.MorehAdamW(trainable_params, adamw_config)
+    optimizer = ttml.optimizers.AdamW(trainable_params, adamw_config)
 
     # Memory snapshot after optimizer creation
     if args.track_memory:
