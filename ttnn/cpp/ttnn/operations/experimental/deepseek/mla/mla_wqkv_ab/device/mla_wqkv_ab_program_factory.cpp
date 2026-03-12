@@ -41,6 +41,7 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
         | cb_s2c_out(sh) | CBIndex::c_4  | Float16_b  | true  |    6     |      12288      |
         | cb_c2w_x2      | CBIndex::c_5  | Float16_b  | true  |    2     |      4096       |
         | cb_w2c_x2      | CBIndex::c_6  | Float16_b  | true  |    2     |      4096       |
+        | cb_c2c_out_qb  | CBIndex::c_7  | Float16_b  | true  |    8     |      16384      |
         ------------------------------------------------------------------------------------
     */
 
@@ -51,6 +52,7 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
         {"cb_r2c_rope", tt::CBIndex::c_3, tt::DataFormat::Float16_b, true, 1},
         {"cb_c2w_x2", tt::CBIndex::c_5, tt::DataFormat::Float16_b, true, 2},
         {"cb_w2c_x2", tt::CBIndex::c_6, tt::DataFormat::Float16_b, true, 2},
+        {"cb_c2c_out_qb", tt::CBIndex::c_7, tt::DataFormat::Float16_b, true, 8},
     };
 
     [[maybe_unused]] std::map<std::string, tt::tt_metal::CBHandle> cb_handles, cb_handles_sharded;

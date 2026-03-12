@@ -44,6 +44,7 @@ void kernel_main() {
     constexpr auto cb_s2c_out = tt::CBIndex::c_4;
     constexpr auto cb_c2w_x2 = tt::CBIndex::c_5;
     constexpr auto cb_w2c_x2 = tt::CBIndex::c_6;
+    constexpr auto cb_c2c_out_qb = tt::CBIndex::c_7;
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);

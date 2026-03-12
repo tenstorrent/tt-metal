@@ -47,6 +47,7 @@ void kernel_main() {
     constexpr auto cb_s2c_out = tt::CBIndex::c_4;
     constexpr auto cb_c2w_x2 = tt::CBIndex::c_5;
     constexpr auto cb_w2c_x2 = tt::CBIndex::c_6;
+    constexpr auto cb_c2c_out_qb = tt::CBIndex::c_7;
 
     // Constants for MLA WqkvAb
     constexpr uint32_t w_a_k_tiles = 7168 / tt::constants::TILE_WIDTH;
@@ -77,21 +78,24 @@ void kernel_main() {
 
     //-------------------------------------------------------------------------
     // Constants for MLA q_nope
+    constexpr uint32_t q_nope_heads_per_core = 2;
     constexpr uint32_t q_nope_k_tiles = 4;
-    constexpr uint32_t q_nope_n_tiles_this_core = 16 * 2;
-    constexpr uint32_t num_q_nope_tiles = q_nope_k_tiles * q_nope_n_tiles_this_core;
+    constexpr uint32_t q_nope_n_tiles_per_head = 16;
+    constexpr uint32_t q_nope_n_tiles_this_core = q_nope_n_tiles_per_head * q_nope_heads_per_core;
+    constexpr uint32_t q_nope_valid_tiles_per_block = q_nope_n_tiles_per_head * q_nope_k_tiles;
+    constexpr uint32_t q_nope_num_tiles = q_nope_k_tiles * q_nope_n_tiles_this_core;
 
     // Each head has 16 tiles in N dimension, so we use ct_dim = 8 and run twice
     constexpr uint32_t q_nope_n_tiles_per_block = 8;
+    constexpr uint32_t q_nope_blocks_per_head = q_nope_n_tiles_per_head / q_nope_n_tiles_per_block;
 
     //-------------------------------------------------------------------------
     // q_nope reading constants
     //-------------------------------------------------------------------------
     constexpr uint32_t q_nope_txns_per_block = 5;
     constexpr uint32_t q_nope_tiles_per_txn = 7;
-    constexpr uint32_t q_nope_tiles_per_block = q_nope_tiles_per_txn * q_nope_txns_per_block;
-    constexpr uint32_t q_nope_num_blocks = 1 + (num_q_nope_tiles / q_nope_tiles_per_block);  // 1 for ceil
-    constexpr uint32_t q_nope_num_blocks_per_batch = q_nope_num_blocks / 2;
+    constexpr uint32_t q_nope_read_tiles_per_block = q_nope_tiles_per_txn * q_nope_txns_per_block;
+    constexpr uint32_t q_nope_num_blocks = 1 + (q_nope_num_tiles / q_nope_read_tiles_per_block);  // 1 for ceil
 
     //-------------------------------------------------------------------------
     // Compute configuration
@@ -295,34 +299,60 @@ void kernel_main() {
     }
 
     tile_regs_commit();
-    tile_regs_wait();
-    tile_regs_release();
 
+    cb_reserve_back(cb_c2c_out_qb, wq_b_n_tiles_this_core);
+    tile_regs_wait();
+    pack_tile_block(0, cb_c2c_out_qb, wq_b_n_tiles_this_core);
+    tile_regs_release();
+    cb_push_back(cb_c2c_out_qb, wq_b_n_tiles_this_core);
+
+    cb_wait_front(cb_c2c_out_qb, wq_b_n_tiles_this_core);
     //-------------------------------------------------------------------------
     // Apply RoPE transformation for q_pe RoPE output
     //-------------------------------------------------------------------------
     if (dram_bank_id >= 8) {
         // Configure unpacker A to Float16_b
-        // reconfig_data_format_srca(cb_r2c_rope);
+        reconfig_data_format_srca(cb_r2c_rope);
 
-        // TODO: We have data in all 8 tiles, so need some gymnastics
-        // to process 4 at once because we need scratch space and space for the rope tensor
+        // Each rope operates on 2 tiles, so we just run it blindly 4 times
+        for (uint32_t tile_idx = 0; tile_idx < wq_b_n_tiles_this_core; tile_idx += 2) {
+            tile_regs_acquire();
+            // Get the rope tensor
+            copy_tile_init(cb_r2c_rope);
+            copy_tile(cb_r2c_rope, 0, 2);
+
+            // Get the input tensor
+            copy_tile_init(cb_c2c_out_qb);
+            copy_tile(cb_c2c_out_qb, tile_idx, 0);
+            copy_tile(cb_c2c_out_qb, tile_idx + 1, 1);
+
+            // Apply RoPE transformation
+            rope_tile_init();
+            rope_tile(0);
+
+            tile_regs_commit();
+
+            tile_regs_wait();
+            tile_regs_release();
+        }
     }
+    cb_pop_front(cb_r2c_rope, 1);
 
     //-------------------------------------------------------------------------
     // Apply q_nope matmul
     //-------------------------------------------------------------------------
     if (dram_bank_id < 8) {
         tile_regs_acquire();
-        in0_index = 0;
 
-        for (uint32_t batch_id = 0; batch_id < 2; ++batch_id) {
-            for (uint32_t block_id = 0; block_id < q_nope_num_blocks_per_batch; ++block_id) {
+        for (uint32_t head_id = 0; head_id < q_nope_heads_per_core; ++head_id) {
+            for (uint32_t block_id = 0; block_id < q_nope_blocks_per_head; ++block_id) {
+                in0_index = head_id * q_nope_k_tiles;
+
                 cb_wait_front(cb_r2c_w, wq_b_tiles_per_block);
 
-                for (uint32_t k = 0; k < 2; k += q_nope_n_tiles_per_block) {
+                for (uint32_t k = 0; k < q_nope_valid_tiles_per_block; k += q_nope_n_tiles_per_block) {
                     matmul_block(
-                        cb_s2c_in,
+                        cb_c2c_out_qb,
                         cb_r2c_w,
                         /*in0_index=*/in0_index++,
                         /*in1_tile_index=*/k,
@@ -342,7 +372,7 @@ void kernel_main() {
         tile_regs_release();
     }
 
-    cb_pop_front(cb_r2c_rope, 1);
+    cb_pop_front(cb_c2c_out_qb, wq_b_n_tiles_this_core);
 
     // We have one extra slot reserved, which we won't use, drain it.
     cb_wait_front(cb_r2c_w, wq_b_tiles_per_block);

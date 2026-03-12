@@ -61,6 +61,7 @@ void kernel_main() {
     constexpr auto cb_s2c_out = tt::CBIndex::c_4;
     constexpr auto cb_c2w_x2 = tt::CBIndex::c_5;
     constexpr auto cb_w2c_x2 = tt::CBIndex::c_6;
+    constexpr auto cb_c2c_out_qb = tt::CBIndex::c_7;
 
     // Tile sizes
     constexpr uint32_t in_tile_size = get_tile_size(cb_s2c_in);
@@ -97,21 +98,24 @@ void kernel_main() {
 
     //-------------------------------------------------------------------------
     // Constants for MLA q_nope
+    constexpr uint32_t q_nope_heads_per_core = 2;
     constexpr uint32_t q_nope_k_tiles = 4;
-    constexpr uint32_t q_nope_n_tiles_this_core = 16 * 2;
-    constexpr uint32_t num_q_nope_tiles = q_nope_k_tiles * q_nope_n_tiles_this_core;
+    constexpr uint32_t q_nope_n_tiles_per_head = 16;
+    constexpr uint32_t q_nope_n_tiles_this_core = q_nope_n_tiles_per_head * q_nope_heads_per_core;
+    constexpr uint32_t q_nope_valid_tiles_per_block = q_nope_n_tiles_per_head * q_nope_k_tiles;
+    constexpr uint32_t q_nope_num_tiles = q_nope_k_tiles * q_nope_n_tiles_this_core;
 
     // Each head has 16 tiles in N dimension, so we use ct_dim = 8 and run twice
     constexpr uint32_t q_nope_n_tiles_per_block = 8;
+    constexpr uint32_t q_nope_blocks_per_head = q_nope_n_tiles_per_head / q_nope_n_tiles_per_block;
 
     //-------------------------------------------------------------------------
     // q_nope reading constants
     //-------------------------------------------------------------------------
     constexpr uint32_t q_nope_txns_per_block = 5;
     constexpr uint32_t q_nope_tiles_per_txn = 7;
-    constexpr uint32_t q_nope_tiles_per_block = q_nope_tiles_per_txn * q_nope_txns_per_block;
-    constexpr uint32_t q_nope_num_blocks = 1 + (num_q_nope_tiles / q_nope_tiles_per_block);  // 1 for ceil
-    constexpr uint32_t q_nope_num_blocks_per_batch = q_nope_num_blocks / 2;
+    constexpr uint32_t q_nope_read_tiles_per_block = q_nope_tiles_per_txn * q_nope_txns_per_block;
+    constexpr uint32_t q_nope_num_blocks = 1 + (q_nope_num_tiles / q_nope_read_tiles_per_block);  // 1 for ceil
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants
@@ -122,7 +126,7 @@ void kernel_main() {
     constexpr uint32_t wq_b_bytes_per_block = wq_b_tiles_per_block * w_a_tile_size;
     constexpr uint32_t wq_b_bytes_per_txn = wq_b_tiles_per_txn * w_a_tile_size;
 
-    constexpr uint32_t q_nope_bytes_per_block = q_nope_tiles_per_block * w_a_tile_size;
+    constexpr uint32_t q_nope_bytes_per_block = q_nope_read_tiles_per_block * w_a_tile_size;
     constexpr uint32_t q_nope_bytes_per_txn = q_nope_tiles_per_txn * w_a_tile_size;
 
     // We read 35 tiles, but only consume 32 tiles. So stride is different for this case.

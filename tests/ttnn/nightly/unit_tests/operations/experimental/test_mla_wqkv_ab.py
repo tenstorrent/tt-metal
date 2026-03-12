@@ -660,7 +660,7 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
 
 
 SHAPE2TIME = {
-    (32, 7168, 2112, 1, 0): 96,
+    (32, 7168, 2112, 1, 0): 97,
 }
 
 
