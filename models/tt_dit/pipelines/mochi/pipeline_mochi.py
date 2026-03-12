@@ -297,7 +297,7 @@ class MochiPipeline(DiffusionPipeline):
         them being overwritten during trace execution.
         """
         logger.info("Pipeline allocation run...")
-        self.run_single_prompt(prompt="", num_inference_steps=2, seed=0, traced=False)
+        self.run_single_prompt(prompt="", num_inference_steps=2, num_frames=168, seed=0, traced=False)
 
     @staticmethod
     def create_pipeline(
@@ -776,7 +776,9 @@ class MochiPipeline(DiffusionPipeline):
                 parallel_config=self.parallel_config,
                 is_fsdp=True,
             )
-            self._transformer_tracer = Tracer(self.transformer.forward, device=self.mesh_device, prep_run=False)
+            self._transformer_tracer = Tracer(
+                self.transformer.forward, device=self.mesh_device, prep_run=True, clone_prep_inputs=False
+            )
 
             # Load state dict into TT transformer
             logger.info("Loading MochiTransformer3DModel state_dict")
