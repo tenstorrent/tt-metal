@@ -101,6 +101,7 @@ jobs:
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: amd64
+      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
 
   asan-build:
     if: github.event.action != 'destroyed' && (github.event_name != 'pull_request' || !github.event.pull_request.draft)

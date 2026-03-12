@@ -846,7 +846,10 @@ Conv2dShardedProgramFactory::cached_program_t Conv2dShardedProgramFactory::creat
         reader_compile_time_args.push_back(conv_reader_indices_storage.get_buffer()->page_size());
         tt::tt_metal::TensorAccessorArgs(conv_reader_indices_storage.get_buffer()).append_to(reader_compile_time_args);
     } else {
-        // Put enough 0s so that the offsets of activation reuse args are the same
+        // Put enough 0s so that the offsets of activation reuse args are the same.
+        // TensorAccessorArgs appends 2 CT args (is_dram + aligned_page_size), so we need 4 zeros total
+        // (address + page_size + 2 TensorAccessorArgs) to match the DRAM path.
+        reader_compile_time_args.push_back(0);
         reader_compile_time_args.push_back(0);
         reader_compile_time_args.push_back(0);
         reader_compile_time_args.push_back(0);

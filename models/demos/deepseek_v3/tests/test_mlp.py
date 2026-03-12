@@ -151,6 +151,7 @@ _prefill_seq_len = int(_max_seq_len_env) if _max_seq_len_env is not None else DE
     ],
 )
 def test_forward_pass(
+    device_params,
     MLPClass,
     module_path,
     mode,
@@ -193,7 +194,7 @@ def test_forward_pass(
         real_weights=module_path is not None,
         layer_id=module_path,
     )
-    model_config = get_model_config(MLPClass, mode, hf_config, mesh_device)
+    model_config = get_model_config(MLPClass, mode, hf_config, mesh_device, device_params["fabric_config"])
     model_state = MLPClass.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)
 
@@ -207,9 +208,7 @@ def test_forward_pass(
         layout=ttnn.TILE_LAYOUT,
     )
 
-    # TTNN forward pass - collective operations handled inside forward functions
-    # SharedExpert needs handle_tensor_parallel=True for standalone testing to enable CCLs
-    # NonExpert and MLP don't have this parameter and handle CCLs internally
+    # TTNN forward pass
     if MLPClass.__name__ == "SharedExpert":
         tt_output = run_module_forward(MLPClass, mode, tt_input, run_config, handle_tensor_parallel=True)
     else:

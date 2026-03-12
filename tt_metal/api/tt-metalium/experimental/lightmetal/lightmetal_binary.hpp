@@ -19,11 +19,11 @@ private:
     std::vector<uint8_t> data_;
 
 public:
-    // Defalt constructor, and constructor from raw data vector.
+    // Default constructor, and constructor from raw data vector.
     LightMetalBinary() = default;
     explicit LightMetalBinary(std::vector<uint8_t> data) : data_(std::move(data)) {}
 
-    // Public accesors for the binary data
+    // Public accessors for the binary data
     const std::vector<uint8_t>& get_data() const { return data_; }
     void set_data(std::vector<uint8_t> data) { data_ = std::move(data); }
     size_t size() const { return data_.size(); }

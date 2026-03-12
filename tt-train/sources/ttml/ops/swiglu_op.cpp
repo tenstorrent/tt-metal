@@ -4,7 +4,6 @@
 
 #include "swiglu_op.hpp"
 
-#include <core/ttnn_all_includes.hpp>
 #include <ttnn/operations/eltwise/binary/binary.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -13,6 +12,10 @@
 #include "metal/operations.hpp"
 #include "ops/binary_ops.hpp"
 #include "ops/unary_ops.hpp"
+#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 
 namespace ttml::ops {
@@ -78,8 +81,7 @@ autograd::TensorPtr swiglu(
         w3->add_grad(ttnn::sum(dL_dW3, 0, true));
     };
 
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, w1, w2, w3));
 
     return out;
 }

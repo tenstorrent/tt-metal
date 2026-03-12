@@ -105,7 +105,7 @@ class Llama(AbstractModuleBase):
         self.tok_emb = Embedding(vocab_size_divisible_by_32, config.hidden_size)
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
-            self.tok_emb.weight = self.fc.get_weight()
+            self.tok_emb.weight = self.fc.weight.tensor
 
         head_dim = config.hidden_size // config.num_attention_heads
 
@@ -197,6 +197,8 @@ from _ttml.models.llama import (
     create_cpp_llama_model,
 )
 
+from .safetensors_loader import load_from_safetensors
+
 __all__ = [
     # C++ bindings
     "CppLlama",
@@ -206,4 +208,5 @@ __all__ = [
     "Llama",
     "LlamaConfig",
     "LlamaRopeScalingConfig",
+    "load_from_safetensors",
 ]

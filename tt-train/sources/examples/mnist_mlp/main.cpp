@@ -6,7 +6,6 @@
 
 #include <CLI/CLI.hpp>
 #include <chrono>
-#include <core/ttnn_all_includes.hpp>
 #include <cstdint>
 #include <functional>
 #include <memory>

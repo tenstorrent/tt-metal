@@ -71,8 +71,8 @@ More information on available configuration options can be found in the [configs
 
 ### Nightly only tests
 If CI fails, but local tests pass as expected, please consider changing the
-is_nigthly_tt_train_tests_enabled in the nano_gpt_test.cpp
-TT-Train nightly tests are all tests with "NIGTHLY_" in the name.
+is_nightly_tt_train_tests_enabled in the nano_gpt_test.cpp
+TT-Train nightly tests are all tests with "NIGHTLY_" in the name.
 To run it in github please search for `Nightly tt-metal L2 tests`.
 
 ### wandb support

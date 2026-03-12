@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -24,10 +24,6 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
     config.batch_size = training_config["batch_size"].as<uint32_t>();
     config.num_epochs = training_config["num_epochs"].as<uint32_t>();
     config.max_steps = training_config["max_steps"].as<uint32_t>();
-    config.learning_rate = training_config["lr"].as<float>();
-    config.weight_decay = training_config["weight_decay"].as<float>();
-    config.use_moreh_adamw = training_config["use_moreh_adamw"].as<bool>(config.use_moreh_adamw);
-    config.use_kahan_summation = training_config["use_kahan_summation"].as<bool>(config.use_kahan_summation);
     config.gradient_accumulation_steps =
         training_config["gradient_accumulation_steps"].as<uint32_t>(config.gradient_accumulation_steps);
     config.model_path = training_config["model_path"].as<std::string>("");
@@ -77,8 +73,6 @@ std::vector<int> get_workers_and_aggregator_ranks(uint32_t workers) {
 }
 
 std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const TrainingConfig &config) {
-
-
     auto sequence_length = std::visit(
         [&](auto &&arg) {
             if constexpr (requires { arg.max_sequence_length; }) {
@@ -109,22 +103,20 @@ std::pair<uint32_t, uint32_t> get_steps_per_dataset_and_vocab_size(const Trainin
     auto create_dataset =
         [](const auto &data_source, const auto seq_len, const auto &tokenizer_type, auto &train_config) {
             if (tokenizer_type == "char") {
-                auto [dataset, tokenizer] = ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
-                    std::get<std::string>(data_source), seq_len);
+                auto [dataset, tokenizer] =
+                    ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
+                        std::get<std::string>(data_source), seq_len);
 
                 return std::make_tuple(dataset, tokenizer->get_vocab_size());
-            }
-            else if (tokenizer_type == "bpe") {
-
-                auto& yaml_node = std::get<YAML::Node>(data_source);
+            } else if (tokenizer_type == "bpe") {
+                auto &yaml_node = std::get<YAML::Node>(data_source);
 
                 auto dataset = ttml::datasets::create_token_dataset_from_yaml(yaml_node);
 
                 uint32_t vocab_size = yaml_node["tokenizer_vocab_size"].template as<uint32_t>();
 
                 return std::make_tuple(dataset, vocab_size);
-            }
-            else {
+            } else {
                 throw std::runtime_error("Unknown tokenizer type: " + tokenizer_type);
             }
         };
