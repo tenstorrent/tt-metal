@@ -507,6 +507,12 @@ def run_test_sdpa_decode_single_iter(
             memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
         )
 
+    tt_back_shape = list(tt_back.shape)
+    assert tt_back_shape[2] == nh, (
+        f"SDPA decode output logical head dim should be {nh} (unpadded), got {tt_back_shape[2]}. "
+        f"SDPA decode should preserve the logical head dimension regardless of tensor layout."
+    )
+
     tt_back = ttnn.to_torch(tt_back)
     tt_back = tt_back[:, :, :nh, :]
 
