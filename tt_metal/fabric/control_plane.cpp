@@ -997,8 +997,8 @@ void ControlPlane::order_ethernet_channels() {
                     return translated_coords_a.x < translated_coords_b.x;
                 });
             } else if (neighbor_asic_id.has_value()) {
-                // Find the physical chip ID for the neighbor AsicID (must be in local cluster)
-                std::optional<ChipId> neighbor_phys_chip_id;
+                // Find the physical chip ID for the neighbor AsicID
+                ChipId neighbor_phys_chip_id = 0;
                 const auto& chip_unique_ids = this->cluster_.get().get_unique_chip_ids();
                 for (const auto& [physical_chip_id, unique_id] : chip_unique_ids) {
                     if (tt::tt_metal::AsicID{unique_id} == neighbor_asic_id.value()) {
@@ -1006,12 +1006,8 @@ void ControlPlane::order_ethernet_channels() {
                         break;
                     }
                 }
-                // Skip ordering if neighbor is on a remote rank (not in our local cluster)
-                if (!neighbor_phys_chip_id.has_value()) {
-                    continue;
-                }
                 // Get the soc_desc for the neighbor chip
-                const auto& neighbor_soc_desc = this->cluster_.get().get_soc_desc(*neighbor_phys_chip_id);
+                const auto& neighbor_soc_desc = this->cluster_.get().get_soc_desc(neighbor_phys_chip_id);
                 std::sort(
                     eth_connections.begin(), eth_connections.end(), [&neighbor_soc_desc](const auto& a, const auto& b) {
                         auto translated_coords_a =
