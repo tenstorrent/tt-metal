@@ -440,7 +440,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     auto [h_mcast_forward_args, h_mcast_backward_args] = ::ttnn::ccl::get_forward_backward_line_mcast_configuration(
         mesh_coordinate, forward_coord, backward_coord, num_targets_forward, num_targets_backward, mesh_device);
 
-    // KERNEL CREATION — Consolidated: 6 kernels per device (down from ~280)
+    // KERNEL CREATION — Consolidated: 6 kernels per device
     // Each logical role (H reader, H writer, local reader, local writer, W reader, W writer)
     // uses a single kernel on a CoreRangeSet. Per-core variation (direction, routing) is
     // handled via runtime args instead of separate compile-time-arg kernels.
