@@ -20,6 +20,7 @@ from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_LOFI,
     SEQ_LEN_CHUNK_SIZE,
     even_int_div,
+    get_dequantized_tensor,
     shard_and_save,
 )
 from models.demos.deepseek_v3.utils.run_config import (
@@ -62,7 +63,7 @@ class LMHead1D(AbstractModule):
 
         hidden_dim, vocab_size = cls._get_model_dims_from_cfg(hf_config)
 
-        weight_tensor = state_dict["weight"].permute(
+        weight_tensor = get_dequantized_tensor(state_dict, "weight").permute(
             1, 0
         )  # In torch the weights are in (out_features, in_features) format
         assert weight_tensor.shape == (hidden_dim, vocab_size)

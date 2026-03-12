@@ -141,6 +141,7 @@ void kernel_main() {
     index_h_offset = 0;
     tile_regs_acquire();
     for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
+        tensix_sync();
         reduce_tile(cb_x2, cb_scaler, w + index_h_offset, scaler0, dst0);
     }
 
