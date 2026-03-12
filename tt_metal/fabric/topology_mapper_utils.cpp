@@ -1105,19 +1105,12 @@ void add_rank_binding_constraints(
         }
 
         // -----------------------------------------------------------------------
-        // Device pool for UNSET hosts (hosts with no explicit rank binding)
+        // UNSET hosts: no pre-assignment of ranks. Solver picks assignment.
         // -----------------------------------------------------------------------
-        // UNSET hosts form a "device pool" that we assign to unclaimed ranks.
-        // Two strategies to preserve same-host same-rank:
-        //
-        // 1. Multi-ASIC hosts: Assign the entire host to one unclaimed rank.
-        //    All ASICs on that host go to the same rank's pool, so the solver
-        //    cannot split them across ranks.
-        //
-        // 2. Single-ASIC hosts: Add to a shared pool available to ALL unclaimed ranks.
-        //    The solver picks which rank gets each ASIC while satisfying connectivity.
-        //    Flexibility is needed when e.g. only rank 1 is explicitly bound and we
-        //    have 3 single-ASIC hosts for ranks 0, 2, 3.
+        // Constraint: each host's ASICs must all map to fabric nodes of the same rank
+        // (same-host same-rank). We add UNSET ASICs to all unclaimed ranks' pools and
+        // set a same-rank-groups constraint so the solver rejects splits during DFS.
+        // If large meshes hit DFS limits, consider pruning (e.g., host↔rank matching).
         // -----------------------------------------------------------------------
         if (!unset_hosts.empty()) {
             std::vector<MeshHostRankId> unclaimed_ranks;
@@ -1133,25 +1126,20 @@ void add_rank_binding_constraints(
                     unset_hosts.size());
             }
 
-            std::set<tt::tt_metal::AsicID> single_asic_pool;  // Shared pool for single-ASIC UNSET hosts
-            size_t multi_idx = 0;
-            for (const auto& host_asics : unset_hosts) {
-                if (host_asics.size() > 1) {
-                    // Multi-ASIC: assign whole host to one unclaimed rank (round-robin).
-                    MeshHostRankId r = unclaimed_ranks[multi_idx++ % unclaimed_ranks.size()];
-                    for (const auto& asic_id : host_asics) {
-                        rank_to_asics[r].insert(asic_id);
-                    }
-                } else {
-                    // Single-ASIC: add to shared pool. Will be added to all unclaimed ranks below.
-                    single_asic_pool.insert(host_asics.begin(), host_asics.end());
-                }
-            }
             for (const auto& r : unclaimed_ranks) {
-                for (const auto& asic_id : single_asic_pool) {
-                    rank_to_asics[r].insert(asic_id);
+                for (const auto& host_asics : unset_hosts) {
+                    rank_to_asics[r].insert(host_asics.begin(), host_asics.end());
                 }
             }
+
+            // Same-group: target_groups = one set of fabric nodes per rank; global_groups = one set per UNSET host
+            std::vector<std::set<FabricNodeId>> target_groups;
+            target_groups.reserve(rank_to_fabric_nodes.size());
+            for (const auto& [rank, fabric_nodes] : rank_to_fabric_nodes) {
+                target_groups.push_back(fabric_nodes);
+            }
+            std::vector<std::set<tt::tt_metal::AsicID>> global_groups(unset_hosts.begin(), unset_hosts.end());
+            intra_mesh_constraints.set_same_rank_groups_constraint(target_groups, global_groups);
         }
     }
 
