@@ -21,7 +21,7 @@ FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
 CURRENT_CHECK=""
-MAX_CHECK_NUM=44
+MAX_CHECK_NUM=49
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -94,6 +94,11 @@ Checks:
  42  Shell command execution from variables (HIGH)
  43  Remote script execution variants beyond pipes (HIGH)
  44  Attacker-controlled env vars written to GITHUB_ENV/PATH/OUTPUT (HIGH)
+ 45  Expression injection in 'if:' conditions (HIGH)
+ 46  Bracket notation bypass in expressions (HIGH)
+ 47  Additional attacker-controlled event contexts (HIGH)
+ 48  Export statements with direct interpolation (HIGH)
+ 49  Dynamic 'shell:' property expressions (MEDIUM)
 EOF
     exit 0
 }
@@ -2069,6 +2074,209 @@ check_44() {
     ' "$file" 2>/dev/null)
     if [[ -n "$unsafe_usage" ]]; then
         log_issue "HIGH" "$file" "Attacker-controlled env var is written to GITHUB_ENV/PATH/OUTPUT - newline injection can create unintended entries"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 45: Expression injection in 'if:' conditions
+# =============================================================================
+check_45_description="expression injection in 'if:' conditions"
+check_45_severity="HIGH"
+
+example_check_45() {
+    cat <<'EOF'
+# BEFORE (unsafe - attacker-controlled data in conditional logic):
+  if: contains('${{ github.event.pull_request.title }}', 'build')
+  run: echo "This step runs conditionally"
+# AFTER (safe - avoid direct interpolation in if conditions):
+  env:
+    PR_TITLE: ${{ github.event.pull_request.title }}
+  if: contains(env.PR_TITLE, 'build')
+  run: echo "This step runs conditionally"
+EOF
+}
+
+check_45() {
+    local file="$1"
+    local found=0
+
+    # Check for if: conditions with attacker-controlled expressions
+    # Look for if: containing ${{ with github.event or inputs contexts
+    local dangerous_if
+    dangerous_if=$(grep -nE '^[[:space:]]*if:.*\$\{\{.*(github\.event\.(pull_request|issue|comment|discussion|review|release)|inputs\.|client_payload|github\.head_ref|github\.base_ref)' "$file" 2>/dev/null || true)
+
+    if [[ -n "$dangerous_if" ]]; then
+        log_issue "HIGH" "$file" "'if:' condition contains attacker-controlled expression interpolation - can manipulate workflow logic"
+        found=1
+    fi
+
+    [[ $found -eq 0 ]]
+}
+
+# =============================================================================
+# Check 46: Bracket notation bypass in expressions
+# =============================================================================
+check_46_description="bracket notation bypass in expressions"
+check_46_severity="HIGH"
+
+example_check_46() {
+    cat <<'EOF'
+# BEFORE (unsafe - bracket notation bypasses dot-notation detection):
+  run: echo "${{ inputs['user-command'] }}"
+  run: echo "${{ github.event['pull_request']['title'] }}"
+# AFTER (safe - use env var for all interpolation):
+  env:
+    USER_CMD: ${{ inputs['user-command'] }}
+    PR_TITLE: ${{ github.event['pull_request']['title'] }}
+  run: |
+    echo "$USER_CMD"
+    echo "$PR_TITLE"
+EOF
+}
+
+check_46() {
+    local file="$1"
+    # Detect bracket notation with ${{} in run blocks
+    # First extract run block content, then check for bracket notation
+
+    local unsafe_usage
+    unsafe_usage=$(awk '
+        BEGIN { in_run_block = 0; run_indent = 0; content = "" }
+        /^[[:space:]]*(-[[:space:]]+)?run:[[:space:]]*\|/ {
+            match($0, /^[[:space:]]*/); run_indent = RLENGTH; in_run_block = 1; next
+        }
+        /^[[:space:]]*(-[[:space:]]+)?run:/ {
+            if (/\$\{\{/) {
+                print
+            }
+            next
+        }
+        in_run_block {
+            if ($0 ~ /^[[:space:]]*-[[:space:]]/) { in_run_block = 0; next }
+            match($0, /^[[:space:]]*/); curr_indent = RLENGTH
+            if (curr_indent <= run_indent && $0 ~ /^[[:space:]]*[a-z_-]+:/) { in_run_block = 0; next }
+            print
+        }
+    ' "$file" 2>/dev/null | grep -E '\$\{\{[^}]*\[' || true)
+
+    if [[ -n "$unsafe_usage" ]]; then
+        log_issue "HIGH" "$file" "Uses bracket notation for expression in run block - can bypass dot-notation detection"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 47: Additional attacker-controlled event contexts
+# =============================================================================
+check_47_description="additional attacker-controlled event contexts"
+check_47_severity="HIGH"
+
+example_check_47() {
+    cat <<'EOF'
+# BEFORE (unsafe - additional event fields not covered by check 16):
+  run: echo "${{ github.event.release.body }}"
+  run: echo "${{ github.event.inputs.command }}"
+  run: echo "${{ github.event.client_payload.data }}"
+# AFTER (safe - use env var for all event data):
+  env:
+    RELEASE_BODY: ${{ github.event.release.body }}
+    INPUT_CMD: ${{ github.event.inputs.command }}
+    PAYLOAD: ${{ github.event.client_payload.data }}
+  run: |
+    echo "$RELEASE_BODY"
+    echo "$INPUT_CMD"
+    echo "$PAYLOAD"
+EOF
+}
+
+check_47() {
+    local file="$1"
+    # Additional event fields not covered by check 16
+    local additional_fields='github\.event\.(release\.(name|body|tag_name|target_commitish|draft|prerelease|author\.(login|name))|inputs\.|client_payload\.|schedule|ref_type|pusher\.(name|email)|forced|created|deleted|pages\[|forkee\.|action|number)'
+
+    if grep -qE "$additional_fields" "$file" 2>/dev/null; then
+        local unsafe_usage
+        unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /github\.event\.(release\.(name|body|tag_name|target_commitish|draft|prerelease|author\.(login|name))|inputs\.|client_payload\.|schedule|ref_type|pusher\.(name|email)|forced|created|deleted|pages\[|forkee\.|action|number)/ { print; next }
+            in_run_block && /github\.event\.(release\.(name|body|tag_name|target_commitish|draft|prerelease|author\.(login|name))|inputs\.|client_payload\.|schedule|ref_type|pusher\.(name|email)|forced|created|deleted|pages\[|forkee\.|action|number)/ { print }
+        ' "$file" 2>/dev/null)
+        if [[ -n "$unsafe_usage" ]]; then
+            log_issue "HIGH" "$file" "Contains additional attacker-controlled github.event field directly in run: block - use env var instead"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 48: Export statements with direct interpolation
+# =============================================================================
+check_48_description="export statements with direct interpolation"
+check_48_severity="HIGH"
+
+example_check_48() {
+    cat <<'EOF'
+# BEFORE (unsafe - export creates env var from attacker input that propagates):
+  run: |
+    export BUILD_DIR="${{ inputs.build-dir }}"
+    cd "$BUILD_DIR" && make
+# AFTER (safe - validate inputs before export, or use env: block):
+  env:
+    BUILD_DIR: ${{ inputs.build-dir }}
+  run: |
+    [[ "$BUILD_DIR" =~ ^[a-zA-Z0-9_/-]+$ ]] || exit 1
+    cd "$BUILD_DIR" && make
+EOF
+}
+
+check_48() {
+    local file="$1"
+    # Pattern to detect export statements with interpolation
+    local export_pattern='export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*=.*\$\{\{'
+
+    local unsafe_usage
+    unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
+        /^[[:space:]]*(-[[:space:]]+)?run:/ && /export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*=.*\$\{\{/ { print; next }
+        in_run_block && /export[[:space:]]+[A-Za-z_][A-Za-z0-9_]*=.*\$\{\{/ { print }
+    ' "$file" 2>/dev/null)
+
+    if [[ -n "$unsafe_usage" ]]; then
+        log_issue "HIGH" "$file" "Export statement contains direct \${{ }} interpolation - exported variable propagates to child processes"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 49: Dynamic 'shell:' property expressions
+# =============================================================================
+check_49_description="dynamic 'shell:' property expressions"
+check_49_severity="MEDIUM"
+
+example_check_49() {
+    cat <<'EOF'
+# BEFORE (unsafe - shell property controlled by attacker input):
+  run: echo "hello"
+  shell: ${{ inputs.custom_shell }}
+# AFTER (safe - hardcode shell or validate against allowlist):
+  run: echo "hello"
+  shell: bash
+EOF
+}
+
+check_49() {
+    local file="$1"
+    # Pattern to detect shell: with expression interpolation
+    local shell_pattern='^[[:space:]]*shell:.*\$\{\{'
+
+    local unsafe_usage
+    unsafe_usage=$(grep -nE "$shell_pattern" "$file" 2>/dev/null || true)
+
+    if [[ -n "$unsafe_usage" ]]; then
+        log_issue "MEDIUM" "$file" "'shell:' property contains expression interpolation - can execute arbitrary shell commands"
         return 1
     fi
     return 0

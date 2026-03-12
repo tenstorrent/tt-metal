@@ -1372,6 +1372,205 @@ jobs:
           printf '%s\n' "/opt/tools/bin" >> "$GITHUB_PATH"
 EOF
 
+# --- Check 45: Expression injection in 'if:' conditions ---
+
+assert_detects "check 45 flags if condition with event data" "45" "if:' condition contains" <<'EOF'
+name: test
+on: pull_request
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Conditional step
+        if: contains('${{ github.event.pull_request.title }}', 'build')
+        run: echo "This step runs conditionally"
+EOF
+
+assert_clean "check 45 accepts safe if condition" "45" <<'EOF'
+name: test
+on: pull_request
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Safe conditional
+        env:
+          PR_TITLE: ${{ github.event.pull_request.title }}
+        if: contains(env.PR_TITLE, 'build')
+        run: echo "This step runs conditionally"
+EOF
+
+# --- Check 46: Bracket notation bypass in expressions ---
+
+assert_detects "check 46 flags bracket notation in run block" "46" "bracket notation" <<'EOF'
+name: test
+on: pull_request
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Bracket notation
+        run: echo "${{ inputs['user-command'] }}"
+EOF
+
+assert_detects "check 46 flags bracket notation for github.event" "46" "bracket notation" <<'EOF'
+name: test
+on: pull_request
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Bracket notation event
+        run: echo "${{ github.event['pull_request']['title'] }}"
+EOF
+
+assert_clean "check 46 accepts bracket notation via env var" "46" <<'EOF'
+name: test
+on: pull_request
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Safe bracket notation
+        env:
+          USER_CMD: ${{ inputs['user-command'] }}
+        run: echo "$USER_CMD"
+EOF
+
+# --- Check 47: Additional attacker-controlled event contexts ---
+
+assert_detects "check 47 flags release body in run block" "47" "additional attacker-controlled github.event" <<'EOF'
+name: test
+on: release
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Release body
+        run: echo "${{ github.event.release.body }}"
+EOF
+
+assert_detects "check 47 flags workflow_dispatch inputs in run block" "47" "additional attacker-controlled github.event" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      command:
+        required: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Input command
+        run: ${{ github.event.inputs.command }}
+EOF
+
+assert_clean "check 47 accepts safe event fields via env" "47" <<'EOF'
+name: test
+on: release
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Safe release body
+        env:
+          BODY: ${{ github.event.release.body }}
+        run: echo "$BODY"
+EOF
+
+# --- Check 48: Export statements with direct interpolation ---
+
+assert_detects "check 48 flags export with input interpolation" "48" "Export statement contains" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      build-dir:
+        required: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Export build dir
+        run: |
+          export BUILD_DIR="${{ inputs.build-dir }}"
+          cd "$BUILD_DIR" && make
+EOF
+
+assert_detects "check 48 flags export with event data" "48" "Export statement contains" <<'EOF'
+name: test
+on: pull_request
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Export PR title
+        run: |
+          export PR_TITLE="${{ github.event.pull_request.title }}"
+          echo "$PR_TITLE"
+EOF
+
+assert_clean "check 48 accepts export of env var" "48" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      build-dir:
+        required: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    env:
+      BUILD_DIR: ${{ inputs.build-dir }}
+    steps:
+      - name: Export from env
+        run: |
+          export DIR="$BUILD_DIR"
+          echo "$DIR"
+EOF
+
+# --- Check 49: Dynamic 'shell:' property expressions ---
+
+assert_detects "check 49 flags shell property with inputs" "49" "'shell:' property contains" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      custom_shell:
+        required: true
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dynamic shell
+        run: echo "hello"
+        shell: ${{ inputs.custom_shell }}
+EOF
+
+assert_detects "check 49 flags shell property with event data" "49" "'shell:' property contains" <<'EOF'
+name: test
+on: issue_comment
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Shell from comment
+        run: echo "hello"
+        shell: ${{ github.event.comment.body }}
+EOF
+
+assert_clean "check 49 accepts hardcoded shell" "49" <<'EOF'
+name: test
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Hardcoded shell
+        run: echo "hello"
+        shell: bash
+EOF
+
 echo ""
 echo "Results: $passed passed, $failed failed"
 
