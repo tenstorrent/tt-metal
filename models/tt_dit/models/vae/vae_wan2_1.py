@@ -155,6 +155,18 @@ class WanAttentionBlock(Module):
             x_BTHWC = x_BTHWC[:, :, :logical_h, :, :]
         B, T, H, W, C = x_BTHWC.shape
         x_TNC = ttnn.reshape(x_BTHWC, (B * T, H * W, C))
+
+        # Split T (batch) across axis-1 devices to reduce redundant SDPA compute.
+        # SDPA batch elements are independent, so they can be trivially partitioned.
+        axis1_factor = tuple(self.mesh_device.shape)[1]
+        BT = B * T
+        split_t = axis1_factor > 1 and T > 1
+        if split_t:
+            padded_BT = ((BT + axis1_factor - 1) // axis1_factor) * axis1_factor
+            if padded_BT > BT:
+                x_TNC = ttnn.pad(x_TNC, [(0, padded_BT - BT), (0, 0), (0, 0)], value=0.0)
+            x_TNC = ttnn.mesh_partition(x_TNC, dim=0, cluster_axis=1)
+
         x_TNC = ttnn.to_layout(x_TNC, ttnn.TILE_LAYOUT)
         x_TNC = self.norm(x_TNC, compute_kernel_config=self.hifi4_compute_kernel_config)
         default_block_size = (2, 2, 2) if x_TNC.dtype == ttnn.float32 else (8, 8, 8)
@@ -177,6 +189,13 @@ class WanAttentionBlock(Module):
         out_TND = self.proj(
             out_TNC, compute_kernel_config=self.mm_compute_kernel_config, default_block_size=default_block_size
         )
+
+        # Gather T back before layout conversion (all-gather requires TILE)
+        if split_t:
+            out_TND = self.ccl_manager.all_gather_persistent_buffer(out_TND, dim=0, mesh_axis=1)
+            if padded_BT > BT:
+                out_TND = out_TND[:BT, :, :]
+
         out_TND = ttnn.to_layout(out_TND, ttnn.ROW_MAJOR_LAYOUT)
 
         if padded_h > logical_h:
