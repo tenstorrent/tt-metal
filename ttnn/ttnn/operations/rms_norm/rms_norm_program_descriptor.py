@@ -159,8 +159,11 @@ def create_program_descriptor(
         )
     )
 
-    # c_2: cb_scaler - Reduce scaler (1/W), ALWAYS bfloat16 regardless of input dtype
-    scaler_tile_size = ttnn.tile_size(ttnn.bfloat16)
+    # c_2: cb_scaler - Reduce scaler (1/W), matches input dtype
+    # Must match input dtype so compute_kernel_hw_startup sees uniform formats
+    # for srcA and srcB; a bfloat16 srcB with fp32 srcA leaves HW state that
+    # corrupts pack_untilize faces 2/3 after fast_tilize for fp32+Wt>1.
+    scaler_tile_size = tile_size
     cbs.append(
         ttnn.CBDescriptor(
             total_size=1 * scaler_tile_size,
@@ -168,7 +171,7 @@ def create_program_descriptor(
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
                     buffer_index=CB_SCALER,
-                    data_format=ttnn.bfloat16,
+                    data_format=input_dtype,
                     page_size=scaler_tile_size,
                 )
             ],
