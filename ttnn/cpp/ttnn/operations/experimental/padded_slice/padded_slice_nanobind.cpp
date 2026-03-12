@@ -10,9 +10,10 @@
 #include <nanobind/stl/optional.h>
 
 #include "padded_slice.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/small_vector_caster.hpp"
 #include "ttnn/tensor/types.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::experimental::padded_slice {
 
@@ -43,36 +44,24 @@ void bind_padded_slice(nb::module_& mod) {
 
     // TODO: implementing the array version and overloading the nanobind with all the possible array sizes is better
     // than a vector with a fixed size default value
-    using OperationType = decltype(ttnn::experimental::padded_slice);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"padded_slice", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::padded_slice,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::SmallVector<int>& padded_slice_start,
-               const ttnn::SmallVector<int>& padded_slice_end,
-               const std::optional<ttnn::SmallVector<int>>& step,
-               const MemoryConfig& memory_config,
-               const std::optional<Tensor>& optional_output_tensor,
-               const std::optional<float>& /*pad_value*/) {
-                const auto step_value = step.value_or(ttnn::SmallVector<int>(padded_slice_end.size(), 1));
-                return self(
-                    input_tensor,
-                    padded_slice_start,
-                    padded_slice_end,
-                    step_value,
-                    memory_config,
-                    optional_output_tensor);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("padded_slice_start"),
-            nb::arg("padded_slice_end"),
-            nb::arg("padded_slice_step") = nb::none(),  // should consider a better default value
-            nb::kw_only(),
-            nb::arg("memory_config"),
-            nb::arg("output_tensor") = nb::none(),
-            nb::arg("pad_value") = nb::none()});
+        static_cast<ttnn::Tensor (*)(
+            const ttnn::Tensor&,
+            const ttnn::SmallVector<int>&,
+            const ttnn::SmallVector<int>&,
+            const std::optional<ttnn::SmallVector<int>>&,
+            const MemoryConfig&,
+            const std::optional<ttnn::Tensor>&,
+            const std::optional<float>&)>(&ttnn::experimental::padded_slice<int>),
+        nb::arg("input_tensor"),
+        nb::arg("padded_slice_start"),
+        nb::arg("padded_slice_end"),
+        nb::arg("padded_slice_step") = nb::none(),  // should consider a better default value
+        nb::kw_only(),
+        nb::arg("memory_config"),
+        nb::arg("output_tensor") = nb::none(),
+        nb::arg("pad_value") = nb::none());
 }
 }  // namespace ttnn::operations::experimental::padded_slice
