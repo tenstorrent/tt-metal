@@ -33,8 +33,6 @@ std::array<ttnn::Tensor, 2> ExecuteDispatch::invoke(
     auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
-    // TT_FATAL(sd_id == tt::tt_metal::SubDeviceId{0}, "Currently only subdevice 0 is supported");
-
     // Validate fabric configuration - only tested values are supported
     TT_FATAL(
         cluster_axis.value_or(0) == 0,
@@ -44,10 +42,13 @@ std::array<ttnn::Tensor, 2> ExecuteDispatch::invoke(
         num_links.value_or(1) == 1,
         "num_links must be 1 (current value: {}). Other values are not tested.",
         num_links.value_or(1));
+    auto topology_ = topology.value_or(tt::tt_fabric::Topology::Linear);
+    TT_FATAL(
+        topology_ == tt::tt_fabric::Topology::Linear || topology_ == tt::tt_fabric::Topology::Ring,
+        "topology must be Linear or Ring. 2D topologies are not supported.");
 
     std::optional<uint32_t> axis = cluster_axis;
     uint32_t num_links_ = num_links.value_or(ccl::common::get_num_links(*mesh_device, axis));
-    auto topology_ = topology.value_or(tt::tt_fabric::Topology::Linear);
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(input_tensor, topology_, axis);
 
     log_debug(tt::LogOp, "num_links={} axis={} topology={}", num_links_, axis, usable_topology);

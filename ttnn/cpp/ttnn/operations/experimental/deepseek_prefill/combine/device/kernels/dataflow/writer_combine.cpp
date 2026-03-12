@@ -8,6 +8,7 @@
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
+#include "api/debug/assert.h"
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
 #include "tt_metal/fabric/hw/inc/edm_fabric/fabric_connection_manager.hpp"
 #include "ttnn/operations/ccl/common/kernels/moe_utils.hpp"
@@ -152,8 +153,10 @@ void kernel_main() {
 
     // Wait for local reader to complete zero-init (or signal if INIT_ZEROS=0)
     DPRINT_COMBINE << "Waiting for local reader zero-init..." << ENDL();
-    noc_semaphore_wait((uint32_t*)zero_init_semaphore_address, 1);
-    noc_semaphore_set((uint32_t*)zero_init_semaphore_address, 0);
+    volatile tt_l1_ptr uint32_t* zero_init_sem_ptr =
+        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(zero_init_semaphore_address);
+    noc_semaphore_wait(zero_init_sem_ptr, 1);
+    noc_semaphore_set(zero_init_sem_ptr, 0);
     DPRINT_COMBINE << "Local reader zero-init done" << ENDL();
 
     // Send init semaphore to all devices (fabric aand zeros completed)
@@ -170,8 +173,9 @@ void kernel_main() {
 
     // Wait for all devices to complete fabric initialization
     DPRINT_COMBINE << "Waiting for all devices to complete fabric init..." << ENDL();
-    noc_semaphore_wait((uint32_t*)init_semaphore_address, dispatch_devices - 1);
-    noc_semaphore_set((uint32_t*)init_semaphore_address, 0);
+    volatile tt_l1_ptr uint32_t* init_sem_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
+    noc_semaphore_wait(init_sem_ptr, dispatch_devices - 1);
+    noc_semaphore_set(init_sem_ptr, 0);
 
     DPRINT_COMBINE << "Fabric and zero-init setup complete" << ENDL();
 #endif
@@ -211,7 +215,7 @@ void kernel_main() {
                 // DPRINT_COMBINE << "    Token" << dst_token_idx << " is local to this chip." << ENDL();
                 // Local write - direct NOC write to DRAM
                 noc_async_write_page(output_page_idx, output_addr_gen, buffer_cb_addr);
-                noc_async_write_barrier();
+                noc_async_writes_flushed();
             } else {
                 // Remote write via fabric
                 // DPRINT_COMBINE << "    Token" << dst_token_idx << " is remote to this chip. Destination chip: "
@@ -232,13 +236,44 @@ void kernel_main() {
                         output_page_idx,
                         (int)aligned_output_page_size,
                         l1_alignment);
+                } else {
+                    // Not implemented
+                    DPRINT << "Error: 2D topology fabric not implemented." << ENDL();
+                    ASSERT(false, "2D topology fabric not implemented");
+                    return;
                 }
 #endif
             }
 
+            noc_async_write_barrier();
+
             cb_pop_front(cb_dispatched_buffer_id, 1);
             cb_pop_front(cb_dispatched_metadata_id, 1);
         }
+    }
+
+    {
+        // Send exit semaphore to all devices
+        const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_address);
+        DPRINT_COMBINE << "Sending exit semaphore to configured targets..." << ENDL();
+        send_init_semaphore_to_configured_targets<
+            linearized_mesh_coord,
+            topology,
+            src_chip_id,
+            mesh_rows,
+            mesh_cols,
+            axis,
+            num_devices>(
+            fabric_connections, unicast_packet_header, dest_chip_ids, dest_mesh_ids, init_noc_semaphore_addr);
+
+        // Wait for all devices to complete fabric initialization
+        DPRINT_COMBINE << "Waiting for all devices to complete fabric transfers..." << ENDL();
+        volatile tt_l1_ptr uint32_t* init_sem_ptr =
+            reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_address);
+        noc_semaphore_wait(init_sem_ptr, dispatch_devices - 1);
+        noc_semaphore_set(init_sem_ptr, 0);
+
+        DPRINT_COMBINE << "Fabric transfers complete" << ENDL();
     }
 
 #ifdef DEST_CHIP_ID

@@ -307,10 +307,12 @@ CombineDeviceOperation::CombineProgramFactory::create_at(
         CoreCoord noc_start = mesh_device->virtual_core_from_logical_core(logical_start, tt::CoreType::WORKER);
         CoreCoord noc_end = mesh_device->virtual_core_from_logical_core(logical_end, tt::CoreType::WORKER);
 
-        // Calculate bytes per bank (total buffer size / num_banks, rounded up)
-        uint32_t total_output_bytes =
-            detail::get_num_pages(output_tensor) * detail::get_aligned_page_size(output_tensor);
-        uint32_t bytes_per_bank = (total_output_bytes + num_l1_banks - 1) / num_l1_banks;
+        // Calculate bytes per bank based on lock-step allocator behavior:
+        // Each bank reserves space for ceil(num_pages / num_banks) pages
+        uint32_t num_pages = detail::get_num_pages(output_tensor);
+        uint32_t aligned_page_size = detail::get_aligned_page_size(output_tensor);
+        uint32_t pages_per_bank = (num_pages + num_l1_banks - 1) / num_l1_banks;
+        uint32_t bytes_per_bank = pages_per_bank * aligned_page_size;
 
         reader_defines["NUM_L1_BANKS"] = std::to_string(num_l1_banks);
         reader_defines["OUTPUT_BYTES_PER_BANK"] = std::to_string(bytes_per_bank);

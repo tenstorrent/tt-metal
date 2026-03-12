@@ -40,10 +40,13 @@ ttnn::Tensor ExecuteCombine::invoke(
         num_links.value_or(1) == 1,
         "num_links must be 1 (current value: {}). Other values are not tested.",
         num_links.value_or(1));
+    auto topology_ = topology.value_or(tt::tt_fabric::Topology::Linear);
+    TT_FATAL(
+        topology_ == tt::tt_fabric::Topology::Linear || topology_ == tt::tt_fabric::Topology::Ring,
+        "topology must be Linear or Ring. 2D topologies are not supported.");
 
     std::optional<uint32_t> axis = cluster_axis;
     uint32_t num_links_ = num_links.value_or(ccl::common::get_num_links(*mesh_device, axis));
-    auto topology_ = topology.value_or(tt::tt_fabric::Topology::Linear);
     tt::tt_fabric::Topology usable_topology = ::ttnn::ccl::get_usable_topology(dispatched_buffer, topology_, axis);
 
     log_debug(tt::LogOp, "num_links={} axis={} topology={}", num_links_, axis, usable_topology);
