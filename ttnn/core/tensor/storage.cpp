@@ -34,11 +34,13 @@ DeviceStorage::DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffe
     std::copy(coord_range.begin(), coord_range.end(), std::back_inserter(coords));
 }
 
-DeviceStorage::DeviceStorage(
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
-    std::vector<distributed::MeshCoordinate> coords_,
-    std::shared_ptr<distributed::MeshBuffer> root_buffer_) :
-    coords(std::move(coords_)), mesh_buffer(std::move(mesh_buffer_)), root_mesh_buffer(std::move(root_buffer_)) {}
+DeviceStorage::DeviceStorage(DeviceStorage other, std::shared_ptr<distributed::MeshBuffer> surface_buffer) :
+    coords(std::move(other.coords)),
+    mesh_buffer(std::move(surface_buffer)),
+    root_mesh_buffer(other.root_mesh_buffer ? std::move(other.root_mesh_buffer) : std::move(other.mesh_buffer)) {
+    TT_FATAL(root_mesh_buffer != nullptr, "Source storage must be allocated");
+    TT_FATAL(root_mesh_buffer->is_allocated(), "Source storage must be allocated");
+}
 
 Buffer* DeviceStorage::get_buffer() const {
     if (this->mesh_buffer != nullptr) {
