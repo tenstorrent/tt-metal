@@ -141,6 +141,9 @@ std::pair<KernelHandle, KernelHandle> add_reader_writer_kernels(
 
     auto& program = workload.get_programs().at(device_range);
 
+    KernelHandle unary_reader_kernel;
+    KernelHandle unary_writer_kernel;
+
     switch (test_config.reduce_dim) {
         case ReduceDim::H: {
             bfloat16 bfloat_scaler_value = bfloat16(scaler);
@@ -150,11 +153,13 @@ std::pair<KernelHandle, KernelHandle> add_reader_writer_kernels(
             reader_compile_args.push_back(packed_scaler_value);
             std::map<std::string, std::string> reader_defines = {{"REDUCE_SCALER", "1"}};
 
-            auto unary_reader_kernel = 0;
-            auto unary_writer_kernel = 0;
-
             if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-                TT_THROW("Unsupported test for QSR!");
+                unary_reader_kernel = tt_metal::experimental::quasar::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_transpose_wh_interleaved.cpp",
+                    logical_core,
+                    tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                        .num_threads_per_cluster = 1, .compile_args = reader_compile_args, .defines = reader_defines});
             } else {
                 unary_reader_kernel = tt_metal::CreateKernel(
                     program,
@@ -171,7 +176,12 @@ std::pair<KernelHandle, KernelHandle> add_reader_writer_kernels(
             tt_metal::TensorAccessorArgs(dst_dram_buffer).append_to(writer_compile_args);
 
             if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-                TT_THROW("Unsupported test for QSR!");
+                unary_writer_kernel = tt_metal::experimental::quasar::CreateKernel(
+                    program,
+                    "tests/tt_metal/tt_metal/test_kernels/dataflow/writer_unary_8bank.cpp",
+                    logical_core,
+                    tt_metal::experimental::quasar::QuasarDataMovementConfig{
+                        .num_threads_per_cluster = 1, .compile_args = writer_compile_args});
             } else {
                 unary_writer_kernel = tt_metal::CreateKernel(
                     program,
@@ -202,16 +212,11 @@ std::pair<KernelHandle, KernelHandle> add_reader_writer_kernels(
         }
         case ReduceDim::HW: {
             scaler = std::sqrt(scaler);
-            if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
-                TT_THROW("Unsupported test for QSR!");
-            }
         }  // Needed because AVG pool multiplies twice by the scaler
         case ReduceDim::W: {
             std::vector<uint32_t> reader_compile_args = {};
             tt_metal::TensorAccessorArgs(src_dram_buffer).append_to(reader_compile_args);
 
-            KernelHandle unary_reader_kernel;
-            KernelHandle unary_writer_kernel;
             if (MetalContext::instance().get_cluster().arch() == ARCH::QUASAR) {
                 unary_reader_kernel = tt_metal::experimental::quasar::CreateKernel(
                     program,
@@ -589,7 +594,7 @@ void run_single_core_reduce_program(
 using namespace unit_tests::compute::reduce;
 
 TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
-    if (this->arch_ != tt::ARCH::BLACKHOLE) {
+    if (this->arch_ != tt::ARCH::BLACKHOLE && this->arch_ != tt::ARCH::QUASAR) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
     }
@@ -619,6 +624,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
                         .math_fidelity = MathFidelity(math_fid),
                     };
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    return;
                 }
             }
         }
@@ -671,7 +677,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHW) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 // Currently fp32 dest unsupported with reduce scalar
-                if (fp32_dest_acc_en) {
+                if (fp32_dest_acc_en && this->arch_ != tt::ARCH::QUASAR) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
@@ -690,6 +696,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHW) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    return;
                 }
             }
         }
@@ -697,7 +704,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHW) {
 }
 
 TEST_F(MeshDeviceFixture, TensixComputeReduceHMathOnly) {
-    if (this->arch_ != tt::ARCH::BLACKHOLE) {
+    if (this->arch_ != tt::ARCH::BLACKHOLE && this->arch_ != tt::ARCH::QUASAR) {
         // (issue #10181: disabling due to sporadic failures in slow dispatch mode)
         GTEST_SKIP();
     }
@@ -727,6 +734,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHMathOnly) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    return;
                 }
             }
         }
@@ -760,6 +768,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceWMathOnly) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    return;
                 }
             }
         }
@@ -777,7 +786,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHWMathOnly) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 // Currently fp32 dest unsupported with reduce scalar
-                if (fp32_dest_acc_en) {
+                if (fp32_dest_acc_en && this->arch_ != tt::ARCH::QUASAR) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
@@ -797,6 +806,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHWMathOnly) {
                         .dst_full_sync_en = dst_full_sync_en,
                         .math_fidelity = MathFidelity(math_fid)};
                     run_single_core_reduce_program(this->devices_.at(0), test_config);
+                    return;
                 }
             }
         }
