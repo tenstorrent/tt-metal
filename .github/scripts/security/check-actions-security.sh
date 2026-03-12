@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
 # shellcheck disable=SC2034,SC2329
 # SC2034: check_N_description/severity/aggregate vars are read via ${!varname} indirect expansion in run_check()
 # SC2329: check_N() and example_check_N() functions are called via "$check_fn"/"$example_fn" dynamic dispatch

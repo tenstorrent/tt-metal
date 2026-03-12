@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
 # Centralized Input Validation Library for GitHub Actions
 # Usage: source .github/scripts/security/input-validation.sh
 #

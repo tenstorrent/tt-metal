@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
+# SPDX-License-Identifier: Apache-2.0
 # Parallel wrapper for GitHub Actions Security Linting
 # Runs per-file checks in parallel batches, then aggregate checks once.
 #
