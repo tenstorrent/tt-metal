@@ -14,7 +14,7 @@
       "fid_valid_range_full_dataset": [23.01085758, 23.95007626],
       "clip_valid_range_full_dataset": [31.68631873, 31.81331801],
       "clip_valid_range_100": [31.70502465208177, 32.094664207879916],
-      "fid_valid_range_100": [182.78657778059338, 183.9511842650918]
+      "fid_valid_range_100": [181.3623, 188.162]
     },
     "clip_score_thresholds": {
       "error": 19,
@@ -33,10 +33,10 @@
       "target":     6.25
     },
     "accuracy": {
-      "fid_valid_range_full_dataset": [39.93630404436355, 41.04755341596031],
-      "clip_valid_range_full_dataset": [31.208422499810794, 31.53588599031795],
-      "clip_valid_range_100": [31.133804321593956, 31.523443877392097],
-      "fid_valid_range_100": [185.03820965247064, 186.2028161369691]
+      "fid_valid_range_full_dataset": [40.0173, 43.0173],
+      "clip_valid_range_full_dataset": [31.00179, 31.4179],
+      "clip_valid_range_100": [31.0, 31.5],
+      "fid_valid_range_100": [183.0, 189.0]
     },
     "clip_score_thresholds": {
       "error": 19.5,
@@ -55,8 +55,8 @@
       "target":     6.25
     },
     "accuracy": {
-      "clip_valid_range_full_dataset": [0.10591032491223887, 0.11191032491223887],
-      "clip_valid_range_100": [0.10662800920195876, 0.11662800920195877]
+      "clip_valid_range_full_dataset": [0.106, 0.114],
+      "clip_valid_range_100": [0.111, 0.1188]
     }
   },
   "sdxl-base-refiner": {
@@ -72,9 +72,9 @@
     },
     "accuracy": {
       "fid_valid_range_full_dataset": [23.950398397445078, 24.889617077445074],
-      "clip_valid_range_full_dataset": [31.421054738390314, 31.548054018390314],
+      "clip_valid_range_full_dataset": [31.47201, 31.67201],
       "clip_valid_range_100": [31.402317434854226, 31.791956990652366],
-      "fid_valid_range_100": [182.1495582317798, 183.31416471627819]
+      "fid_valid_range_100": [180.87129, 187.87129]
     },
     "clip_score_thresholds": {
       "error": 19.5,
@@ -93,10 +93,10 @@
       "target":     6.25
     },
     "accuracy": {
-      "fid_valid_range_full_dataset": [158.15, 162.15],
-      "clip_valid_range_full_dataset": [35.1, 35.3],
-      "clip_valid_range_100": [35.0188, 35.8188],
-      "fid_valid_range_100": [276.0, 284.0]
+      "fid_valid_range_full_dataset": [120.8443, 160.8443],
+      "clip_valid_range_full_dataset": [34.4303, 35.2303],
+      "clip_valid_range_100": [34.6343, 35.4343],
+      "fid_valid_range_100": [264.3848, 280.3848]
     },
     "clip_score_thresholds": {
       "error": 20,
