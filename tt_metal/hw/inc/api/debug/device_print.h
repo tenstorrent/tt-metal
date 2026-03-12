@@ -1037,15 +1037,13 @@ bool acquire_lock() {
         // Write risc_id to lock to attempt to acquire it
         *lock_ptr = PROCESSOR_INDEX + 1;  // Use 1-based index to avoid writing 0 which is the free state
 
-        // Loop here to ensure the write has propagated and other riscs see the updated value.
-        for (uint32_t i = 0; i < DevicePrintMemoryLayout::PROCESSOR_COUNT; ++i) {
-            invalidate_l1_cache();
-            if (*lock_ptr != PROCESSOR_INDEX + 1) {
-                goto again;
-            }
+        // Make sure the write has propagated and other riscs see the updated value.
+        invalidate_l1_cache();
+        if (*lock_ptr != PROCESSOR_INDEX + 1) {
+            goto again;
         }
 
-        // If after several checks the lock value is still what we set, we have successfully acquired the lock.
+        // One last check that we have successfully acquired the lock.
         invalidate_l1_cache();
         if (*lock_ptr == PROCESSOR_INDEX + 1) {
             break;  // Successfully acquired lock
