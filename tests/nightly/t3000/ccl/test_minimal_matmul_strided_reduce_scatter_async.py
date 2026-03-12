@@ -195,6 +195,15 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
         subblock_w=subblock_w,
         compute_with_storage_grid_size=ttnn.CoreCoord(compute_grid_size.x, compute_grid_size.y),
     )
+    # Same grid as fused mode — for direct perf comparison against fused.
+    matmul_config_comparison = ttnn.MinimalMatmulConfig(
+        M_block_size=mm_block_m // TILE_SIZE,
+        K_block_size=mm_block_k // TILE_SIZE,
+        N_block_size=mm_block_n // TILE_SIZE,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+        compute_with_storage_grid_size=mm_core_grid,
+    )
 
     def run_op(i):
         if rs_mode == "fused":
@@ -224,14 +233,15 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             return tt_mm_out, tt_rs_out
         else:
             # Non-fused: run matmul to completion, then reduce-scatter sequentially.
+            mm_cfg = matmul_config_comparison if rs_mode == "comparison" else matmul_config_separate
             tt_mm_out = ttnn.experimental.minimal_matmul(
                 input_tensor_mesh_list[i],
                 weight_tensor_mesh_list[i],
                 compute_kernel_config=compute_config,
-                config=matmul_config_separate,
+                config=mm_cfg,
             )
 
-            if rs_mode == "separate_strided":
+            if rs_mode in ("separate_strided", "comparison"):
                 # Strided reduce-scatter on the materialized matmul output.
                 # Tests the strided access pattern independently from fusion.
                 tt_rs_out_tensor = ttnn.experimental.strided_reduce_scatter_async(
@@ -252,7 +262,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                     mm_N_full_block_wt=N // TILE_SIZE // mm_core_grid.x,
                     chunk_width_in_mm_blocks=chunk_width_in_mm_blocks,
                 )
-            elif rs_mode == "separate":
+            elif rs_mode in ("separate", "original"):
                 # Standard (non-strided) reduce-scatter on the materialized matmul output.
                 # Baseline reference that doesn't depend on strided access at all.
                 tt_rs_out_tensor = ttnn.experimental.reduce_scatter_minimal_async(
@@ -269,7 +279,9 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
                     num_buffers_per_channel=num_buffers_per_channel,
                 )
             else:
-                raise ValueError(f"Unknown rs_mode: {rs_mode!r}. Expected 'fused', 'separate_strided', or 'separate'.")
+                raise ValueError(
+                    f"Unknown rs_mode: {rs_mode!r}. Expected 'fused', 'separate_strided', 'comparison', 'separate', or 'original'."
+                )
 
             return tt_mm_out, tt_rs_out_tensor
 

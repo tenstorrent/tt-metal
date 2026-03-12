@@ -225,6 +225,8 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
                 mm_core_grid=ttnn.CoreCoord(12, 8),
                 chunk_width_in_mm_blocks=1,
                 num_workers_per_link=5,
+                subblock_h=2,
+                subblock_w=1,
             ),
             id="bh_xlarge_9472_3456_5120_x12_y8_cwimb1_rs5",
         ),
@@ -251,6 +253,9 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
     "rs_mode",
     [
         "fused",
+        "separate_strided",
+        "comparison",
+        "original",
     ],
 )
 @pytest.mark.parametrize(
@@ -284,8 +289,8 @@ def test_minimal_matmul_strided_reduce_scatter_async(
 ):
     cfg = test_config
 
-    if is_blackhole() and cluster_axis == 0:
-        pytest.skip("cluster_axis=0 not tested on blackhole")
+    # if is_blackhole() and cluster_axis == 0:
+    #     pytest.skip("cluster_axis=0 not tested on blackhole")
     if is_wormhole_b0() and (cfg.mm_core_grid.x > 8 or cfg.mm_core_grid.y > 8):
         pytest.skip("core grid exceeds wormhole_b0 compute grid (8x8), blackhole-only config (BH grid is 12x10)")
     if mesh_device.shape[cluster_axis] == 1:
