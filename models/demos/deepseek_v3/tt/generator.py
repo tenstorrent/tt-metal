@@ -941,6 +941,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         return logits.squeeze(0).squeeze(0)  # [B, V]
 
     def _sample_greedy(self, logits: torch.Tensor) -> torch.Tensor:
+        while logits.dim() > 2 and logits.shape[0] == 1:
+            logits = logits.squeeze(0)
         return torch.argmax(logits, dim=-1)  # [B]
 
     def _sample_greedy_on_host(self, logits: torch.Tensor) -> torch.Tensor:
