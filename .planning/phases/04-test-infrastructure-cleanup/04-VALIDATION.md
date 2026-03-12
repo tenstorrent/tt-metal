@@ -1,8 +1,8 @@
 ---
 phase: 04
 slug: test-infrastructure-cleanup
-status: draft
-nyquist_compliant: false
+status: resolved
+nyquist_compliant: true
 wave_0_complete: false
 created: 2026-03-12
 ---
@@ -43,7 +43,7 @@ created: 2026-03-12
 | 04-02-T1 | 02 | 1 | TEST-03 | structural | `grep -c "make_tx_pattern" tests/.../test_common.hpp` (expect ≥1) | ✅ green |
 | 04-02-T2 | 02 | 1 | TEST-02 | structural | `grep -c "run_silicon_family_test" tests/.../test_auto_packetization.cpp` (expect 17) | ✅ green |
 | 04-03-T1 | 03 | 2 | TEST-01/02/03 | build | `cd build_Release && ninja fabric_unit_tests` (exit 0) | ✅ green |
-| 04-03-T2 | 03 | 2 | TEST-01/02/03 | hardware | Silicon test run (manual — see Manual-Only below) | ⬜ pending |
+| 04-03-T2 | 03 | 2 | TEST-01/02/03 | hardware | Silicon test run (manual — see Manual-Only below) | ✅ green (18 PASSED + 1 SKIPPED) |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -69,7 +69,7 @@ Existing infrastructure covers all phase requirements. Phase 04 is a refactoring
 - [x] All tasks have `<automated>` verify or are hardware-gated (documented above)
 - [x] Sampling continuity: build check (ninja) applies after every task
 - [x] Wave 0: existing infrastructure sufficient — no new stubs needed
-- [ ] Hardware silicon run confirmed: 18 PASSED + 1 SKIPPED
-- [ ] `nyquist_compliant: true` set (pending hardware confirmation)
+- [x] Hardware silicon run confirmed: 18 PASSED + 1 SKIPPED (2026-03-12)
+- [x] All manual-only items verified on hardware
 
-**Approval:** pending hardware validation (04-03 Task 2)
+**Approval:** approved 2026-03-12
