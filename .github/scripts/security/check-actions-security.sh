@@ -25,10 +25,10 @@ SKIP_AGGREGATE=false
 FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
-    CURRENT_CHECK=""
-    MAX_CHECK_NUM=52
+CURRENT_CHECK=""
+MAX_CHECK_NUM=52
 
-    RED='\033[0;31m'
+RED='\033[0;31m'
 YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
@@ -105,8 +105,8 @@ Checks:
  48  Export statements with direct interpolation (HIGH)
  49  Dynamic 'shell:' property expressions (MEDIUM)
  50  env.* context interpolation in run blocks (HIGH)
-  51  github.ref/github.ref_name interpolation in run blocks (HIGH)
-  52  Dynamic environment variable names (HIGH)
+ 51  github.ref/github.ref_name interpolation in run blocks (HIGH)
+ 52  Dynamic environment variable names (HIGH)
 EOF
     exit 0
 }
@@ -119,6 +119,7 @@ parse_checks() {
     local input="$1"
     local -a result=()
 
+    input="${input%,}"
     IFS=',' read -ra parts <<< "${input}"
     for part in "${parts[@]}"; do
         part="${part// /}"  # Remove whitespace
@@ -126,14 +127,14 @@ parse_checks() {
             local start="${BASH_REMATCH[1]}"
             local end="${BASH_REMATCH[2]}"
             if [[ ${start} -gt ${end} ]]; then
-                echo "Error: Invalid range ${part} (start > end)" >&2
+                printf 'Error: Invalid range %s (start > end)\n' "${part}" >&2
                 exit 1
             fi
             for ((i=start; i<=end; i++)); do
                 if [[ ${i} -ge 1 && ${i} -le ${MAX_CHECK_NUM} ]]; then
                     result+=("${i}")
                 else
-                    echo "Error: Check ${i} is out of range (valid: 1-${MAX_CHECK_NUM})" >&2
+                    printf 'Error: Check %s is out of range (valid: 1-%s)\n' "${i}" "${MAX_CHECK_NUM}" >&2
                     exit 1
                 fi
             done
@@ -141,11 +142,11 @@ parse_checks() {
             if [[ ${part} -ge 1 && ${part} -le ${MAX_CHECK_NUM} ]]; then
                 result+=("${part}")
             else
-                echo "Error: Check ${part} is out of range (valid: 1-${MAX_CHECK_NUM})" >&2
+                printf 'Error: Check %s is out of range (valid: 1-%s)\n' "${part}" "${MAX_CHECK_NUM}" >&2
                 exit 1
             fi
         else
-            echo "Error: Invalid check specification: ${part}" >&2
+            printf 'Error: Invalid check specification: %s\n' "${part}" >&2
             exit 1
         fi
     done
@@ -165,7 +166,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         -c|--checks)
             if [[ -z "${2:-}" ]]; then
-                echo "Error: --checks requires an argument" >&2
+                printf 'Error: --checks requires an argument\n' >&2
                 exit 1
             fi
             parse_checks "$2"
@@ -185,7 +186,7 @@ while [[ $# -gt 0 ]]; do
             ;;
         --format-results)
             if [[ -z "${2:-}" ]]; then
-                echo "Error: --format-results requires a file argument" >&2
+                printf 'Error: --format-results requires a file argument\n' >&2
                 exit 1
             fi
             FORMAT_RESULTS_FILE="$2"
@@ -220,9 +221,9 @@ log_issue() {
         if [[ "${severity}" == "CRITICAL" ]] || [[ "${severity}" == "HIGH" ]]; then
             color="${RED}"
         fi
-        echo -e "${color}[${severity}]${NC} ${file}: ${message}"
+        printf '%b[%s]%b %s: %s\n' "${color}" "${severity}" "${NC}" "${file}" "${message}"
     fi
-    ((ISSUES_FOUND++)) || true
+    ISSUES_FOUND=$((ISSUES_FOUND + 1))
 }
 
 # Prints a fix example for a check class (only once per class).
@@ -231,14 +232,14 @@ log_fix_example() {
     local class="$1"
     local example="$2"
 
-    if [[ "${shown_examples[${class}]:-}" == "true" ]]; then
+    if [[ "${shown_examples["${class}"]:-}" == "true" ]]; then
         return
     fi
-    shown_examples[${class}]=true
+    shown_examples["${class}"]=true
 
-    echo -e "${CYAN}  Fix example:${NC}"
+    printf '%b  Fix example:%b\n' "${CYAN}" "${NC}"
     while IFS= read -r line; do
-        echo -e "    ${DIM}${line}${NC}"
+        printf '    %b%s%b\n' "${DIM}" "${line}" "${NC}"
     done <<< "${example}"
     echo ""
 }
@@ -439,7 +440,7 @@ check_5() {
         ' "${file}" 2>/dev/null)
         count="${count:-0}"
         if [[ "${count}" =~ ^[0-9]+$ ]]; then
-            ((external_unpinned += count)) || true
+            external_unpinned=$((external_unpinned + count))
         fi
     done
     external_unpinned="${external_unpinned:-0}"
@@ -473,7 +474,7 @@ check_6() {
     local secrets_inherit_count=0
     for file in "$@"; do
         if grep -qE 'secrets:\s*inherit' "${file}" 2>/dev/null; then
-            ((secrets_inherit_count++)) || true
+            secrets_inherit_count=$((secrets_inherit_count + 1))
         fi
     done
     if [[ "${secrets_inherit_count}" -gt 50 ]]; then
@@ -1059,12 +1060,11 @@ EOF
 
 check_23() {
     local file="$1"
-    local trigger_found
-    set +e
-    has_untrusted_trigger "${file}"
-    trigger_found=$?
-    set -e
-    if [[ ${trigger_found} -eq 0 ]] && grep -qE 'self-hosted' "${file}" 2>/dev/null; then
+    # SC2310: has_untrusted_trigger returns 0/1 for match/no-match; errors are
+    # already silenced by 2>/dev/null inside it.  set -e suppression here is
+    # intentional — a grep "error" should be treated as "no match", not abort.
+    # shellcheck disable=SC2310
+    if has_untrusted_trigger "${file}" && grep -qE 'self-hosted' "${file}" 2>/dev/null; then
         log_issue "HIGH" "${file}" "Untrusted trigger targets a self-hosted runner - isolate self-hosted runners from public-input workflows"
         return 1
     fi
@@ -1094,14 +1094,10 @@ EOF
 check_24() {
     local file="$1"
     local scoped_write
-    local trigger_found
-    set +e
-    has_untrusted_trigger "${file}"
-    trigger_found=$?
-    set -e
-    if [[ ${trigger_found} -ne 0 ]]; then
-        return 0
-    fi
+    # SC2310: same rationale as check_23 — false return means "no match", not a
+    # fatal error.  Separate invocation would re-introduce the set +e toggle.
+    # shellcheck disable=SC2310
+    has_untrusted_trigger "${file}" || return 0
 
     scoped_write=$(awk '
         /^[[:space:]]*permissions:[[:space:]]*.*write/ { print; next }
@@ -1521,7 +1517,7 @@ check_33() {
         fi
         # Check for top-level permissions key
         if ! grep -qE '^permissions:' "${file}" 2>/dev/null; then
-            ((missing_count++)) || true
+            missing_count=$((missing_count + 1))
         fi
     done
     if [[ "${missing_count}" -gt 0 ]]; then
@@ -2438,7 +2434,7 @@ run_check() {
 
     # Only print status in normal mode
     if [[ "${MACHINE_OUTPUT}" != "true" ]]; then
-        echo "Checking for ${!desc_var}..."
+        printf 'Checking for %s...\n' "${!desc_var}"
     fi
 
     if [[ "${!agg_var:-}" == "true" ]]; then
@@ -2456,7 +2452,7 @@ run_check() {
     # Only print examples in normal mode
     if [[ ${found} -eq 1 && "${MACHINE_OUTPUT}" != "true" ]]; then
         local example_output
-        example_output=$(${example_fn})
+        example_output=$( "${example_fn}" )
         log_fix_example "check_${check_num}" "${example_output}"
     fi
 }
@@ -2471,22 +2467,31 @@ format_results() {
     local total_issues=0
 
     if [[ ! -f "${results_file}" ]]; then
-        echo "Error: Results file not found: ${results_file}" >&2
+        printf 'Error: Results file not found: %s\n' "${results_file}" >&2
         exit 1
     fi
 
     # First pass: print all issues, track which checks had failures
-    while IFS=$'\t' read -r check severity file message; do
+    # Read each line whole (IFS=) then split on tab via parameter expansion to
+    # avoid the IFS=$'\t' corner case where read silently drops empty fields.
+    while IFS= read -r _line; do
+        [[ -z "${_line}" ]] && continue
+        check="${_line%%$'\t'*}"
+        _rest="${_line#*$'\t'}"
+        severity="${_rest%%$'\t'*}"
+        _rest="${_rest#*$'\t'}"
+        file="${_rest%%$'\t'*}"
+        message="${_rest#*$'\t'}"
         [[ -z "${check}" ]] && continue
 
         local color="${YELLOW}"
         if [[ "${severity}" == "CRITICAL" ]] || [[ "${severity}" == "HIGH" ]]; then
             color="${RED}"
         fi
-        echo -e "${color}[${severity}]${NC} ${file}: ${message}"
+        printf '%b[%s]%b %s: %s\n' "${color}" "${severity}" "${NC}" "${file}" "${message}"
 
-        checks_with_issues[${check}]=1
-        ((total_issues++)) || true
+        checks_with_issues["${check}"]=1
+        total_issues=$((total_issues + 1))
     done < "${results_file}"
 
     # Second pass: print one example per unique failed check
@@ -2494,7 +2499,7 @@ format_results() {
         local example_fn="example_check_${check_num}"
         if declare -f "${example_fn}" > /dev/null 2>&1; then
             local example_output
-            example_output=$(${example_fn})
+            example_output=$( "${example_fn}" )
             log_fix_example "check_${check_num}" "${example_output}"
         fi
     done
@@ -2506,10 +2511,10 @@ format_results() {
     echo ""
 
     if [[ ${total_issues} -eq 0 ]]; then
-        echo -e "${GREEN}No security issues found!${NC}"
+        printf '%bNo security issues found!%b\n' "${GREEN}" "${NC}"
         echo ""
     else
-        echo -e "${YELLOW}Found ${total_issues} potential security issues${NC}"
+        printf '%bFound %s potential security issues%b\n' "${YELLOW}" "${total_issues}" "${NC}"
         echo ""
         echo "Remediation guidance:"
         echo "  - CRITICAL: Fix immediately - allows arbitrary code execution or secret exfiltration"
@@ -2561,11 +2566,11 @@ if [[ "${MACHINE_OUTPUT}" != "true" ]]; then
     echo ""
 
     if [[ ${ISSUES_FOUND} -eq 0 ]]; then
-        echo -e "${GREEN}No security issues found!${NC}"
+        printf '%bNo security issues found!%b\n' "${GREEN}" "${NC}"
         echo ""
         exit 0
     else
-        echo -e "${YELLOW}Found ${ISSUES_FOUND} potential security issues${NC}"
+        printf '%bFound %s potential security issues%b\n' "${YELLOW}" "${ISSUES_FOUND}" "${NC}"
         echo ""
         echo "Remediation guidance:"
         echo "  - CRITICAL: Fix immediately - allows arbitrary code execution or secret exfiltration"
