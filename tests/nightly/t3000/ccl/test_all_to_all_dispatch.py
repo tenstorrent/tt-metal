@@ -1156,7 +1156,7 @@ def test_all_to_all_dispatch_skew(
     )
 
 
-@pytest.mark.skip(reason="UInt16/Short dtype mismatch - https://github.com/tenstorrent/tt-metal/issues/39633")
+@pytest.mark.xfail(reason="UInt16/Short dtype mismatch - https://github.com/tenstorrent/tt-metal/issues/39633")
 @pytest.mark.parametrize(
     "device_params",
     [
