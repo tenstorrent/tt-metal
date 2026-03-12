@@ -2,13 +2,9 @@ rank_bindings:
   - rank: 0
     mesh_id: 0
     env_overrides:
-      # First 8x2 mesh: 16 chips (adjust these IDs based on your physical layout)
-      TT_VISIBLE_DEVICES: "0,1,2,3,4,5,6,7,16,17,18,19,20,21,22,23"
-
+      TT_VISIBLE_DEVICES: 0,16,4,20,8,24,12,28,14,30,10,26,6,22,2,18
   - rank: 1
     mesh_id: 1
     env_overrides:
-      # Second 8x2 mesh: 16 chips (adjust these IDs based on your physical layout)
-      TT_VISIBLE_DEVICES: "8,9,10,11,12,13,14,15,24,25,26,27,28,29,30,31"
-
-mesh_graph_desc_path: "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_8x2_mesh_graph_descriptor.textproto"
+      TT_VISIBLE_DEVICES: 19,3,23,7,27,11,31,15,29,13,25,9,21,5,17,1
+mesh_graph_desc_path: /home/rsong/dev/tt-metal/tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_8x2_mesh_graph_descriptor.textproto
