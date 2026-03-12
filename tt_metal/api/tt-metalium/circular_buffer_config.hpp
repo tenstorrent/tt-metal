@@ -16,6 +16,7 @@
 #include <tt-metalium/tile.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <tt-metalium/program_descriptors.hpp>
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 
 namespace tt {
 enum class DataFormat : uint8_t;
@@ -61,6 +62,9 @@ public:
     CircularBufferConfig& set_total_size(uint32_t total_size);
 
     CircularBufferConfig& set_globally_allocated_address(const Buffer& buffer);
+    CircularBufferConfig& set_globally_allocated_address(const MeshTensor& tensor) {
+        return set_globally_allocated_address(*tensor.mesh_buffer()->get_reference_buffer());
+    }
 
     CircularBufferConfig& set_globally_allocated_address_and_total_size(const Buffer& buffer, uint32_t total_size);
 

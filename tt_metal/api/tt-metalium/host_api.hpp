@@ -292,6 +292,12 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
 
+inline void UpdateDynamicCircularBufferAddressAndTotalSize(
+    Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size) {
+    UpdateDynamicCircularBufferAddressAndTotalSize(
+        program, cb_handle, *tensor.mesh_buffer()->get_reference_buffer(), total_size);
+}
+
 [[deprecated(
     "tt::tt_metal::CreateSemaphore(Program& program, const std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t "
     "initial_value, CoreType core_type) is deprecated. Use tt::tt_metal::CreateSemaphore(Program& program, const "

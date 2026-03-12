@@ -278,10 +278,7 @@ void set_runtime_args(
         uint32_t cb0_num_input_tiles =
             a.legacy_shard_spec().value().numel() / TILE_HW;  // Should be full MtKt and C should be 1
         UpdateDynamicCircularBufferAddressAndTotalSize(
-            program,
-            shared_vars.cb_src0,
-            *a.mesh_buffer()->get_reference_buffer(),
-            cb0_num_input_tiles * shared_vars.in0_single_tile_size);
+            program, shared_vars.cb_src0, a, cb0_num_input_tiles * shared_vars.in0_single_tile_size);
     } else {
         uint32_t cb0_num_input_tiles =
             in0_block_w;  // TODO: Generalize; double buffer and add blocking along ineer dim if we have Mt > 1
@@ -296,10 +293,7 @@ void set_runtime_args(
         uint32_t cb2_num_input_tiles =
             b.legacy_shard_spec().value().numel() / TILE_HW;  // Should be full CKtNt and batch must be 32
         UpdateDynamicCircularBufferAddressAndTotalSize(
-            program,
-            shared_vars.cb_src2,
-            *b.mesh_buffer()->get_reference_buffer(),
-            cb2_num_input_tiles * shared_vars.in1_single_tile_size);
+            program, shared_vars.cb_src2, b, cb2_num_input_tiles * shared_vars.in1_single_tile_size);
     }
 
     UpdateCircularBufferTotalSize(program, shared_vars.cb_interm1, MtNt * shared_vars.interm_single_tile_size);
@@ -308,10 +302,7 @@ void set_runtime_args(
         uint32_t num_output_tiles =
             output.legacy_shard_spec().value().numel() / TILE_HW;  // Should be full MtNt and C should be 1
         UpdateDynamicCircularBufferAddressAndTotalSize(
-            program,
-            shared_vars.cb_output,
-            *output.mesh_buffer()->get_reference_buffer(),
-            num_output_tiles * shared_vars.output_single_tile_size);
+            program, shared_vars.cb_output, output, num_output_tiles * shared_vars.output_single_tile_size);
     } else {
         uint32_t num_output_tiles =
             MtNt;  // TODO: Should be MtNt if Mt > 1? Or, produce one Nt at a time and double buffer?
@@ -440,7 +431,7 @@ GroupAttnMatmulProgramFactory::cached_program_t GroupAttnMatmulProgramFactory::c
             tt::tt_metal::CircularBufferConfig(
                 cb0_num_input_tiles * in0_single_tile_size, {{src0_cb_index, in0_data_format}})
                 .set_page_size(src0_cb_index, in0_single_tile_size)
-                .set_globally_allocated_address(*a.mesh_buffer()->get_reference_buffer());
+                .set_globally_allocated_address(a);
         cb_src0 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, src0_cb_config);
     } else {
         uint32_t cb0_num_input_tiles =
@@ -472,7 +463,7 @@ GroupAttnMatmulProgramFactory::cached_program_t GroupAttnMatmulProgramFactory::c
             tt::tt_metal::CircularBufferConfig(
                 cb2_num_input_tiles * in1_single_tile_size, {{src2_cb_index, in1_data_format}})
                 .set_page_size(src2_cb_index, in1_single_tile_size)
-                .set_globally_allocated_address(*b.mesh_buffer()->get_reference_buffer());
+                .set_globally_allocated_address(b);
         cb_src2 = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_src2_config);
     }
 
@@ -502,7 +493,7 @@ GroupAttnMatmulProgramFactory::cached_program_t GroupAttnMatmulProgramFactory::c
             tt::tt_metal::CircularBufferConfig(
                 num_output_tiles * output_single_tile_size, {{output_cb_index, output_data_format}})
                 .set_page_size(output_cb_index, output_single_tile_size)
-                .set_globally_allocated_address(*output.mesh_buffer()->get_reference_buffer());
+                .set_globally_allocated_address(output);
         cb_output = tt::tt_metal::CreateCircularBuffer(program, all_device_cores, cb_output_config);
     } else {
         uint32_t num_output_tiles =
