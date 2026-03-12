@@ -75,21 +75,21 @@ NUM_HEADS = 128
     ],
     indirect=True,
 )
-@pytest.mark.parametrize("in0_x, in0_y, in0_z, in0_w, in0_sp_sharded, in0_tp_sharded, in0_tp_shard_dim, in0_dtype, in1_x, in1_y, in1_z, in1_w, in1_tp_sharded, in1_tp_shard_dim, in1_dtype, out_dtype, prog_config",
+@pytest.mark.parametrize("in0_x, in0_y, in0_z, in0_w, in0_sp_sharded, in0_tp_sharded, in0_tp_shard_dim, in0_dtype, in1_x, in1_y, in1_z, in1_w, in1_tp_sharded, in1_tp_shard_dim, in1_dtype, out_dtype, prog_config, act_mem_config, out_mem_config",
     [
-        (1, 1, SEQ_LEN, HIDDEN_SIZE, True, True, 3, ttnn.bfloat16, 1, 1, HIDDEN_SIZE, 1536, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, None),
-        (1, 1, SEQ_LEN, 1536, True, False, None, ttnn.bfloat16, 1, 1, 1536, 24576, True, 3, ttnn.bfloat8_b, ttnn.bfloat16, None),
-        (1, NUM_HEADS, SEQ_LEN, 128, True, True, 1, ttnn.bfloat16, 1, NUM_HEADS, 128, 512, True, 1, ttnn.bfloat8_b, ttnn.bfloat16, None),
-        (1, 1, SEQ_LEN, HIDDEN_SIZE, True, True, 3, ttnn.bfloat16, 1, 1, HIDDEN_SIZE, 576, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, prog_config_mm3_bh),
-        (1, NUM_HEADS, SEQ_LEN, 512, True, True, 1, ttnn.bfloat16, 1, NUM_HEADS, 512, 128, True, 1, ttnn.bfloat8_b, ttnn.bfloat8_b, prog_config_mm4_bh),
-        (1, 1, SEQ_LEN, 16384, True, True, 3, ttnn.bfloat16, 1, 1, 16384, 7168, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, prog_config_mm5_bh),
+        (1, 1, SEQ_LEN, HIDDEN_SIZE, True, True, 3, ttnn.bfloat16, 1, 1, HIDDEN_SIZE, 1536, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, None, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (1, 1, SEQ_LEN, 1536, True, False, None, ttnn.bfloat16, 1, 1, 1536, 24576, True, 3, ttnn.bfloat8_b, ttnn.bfloat16, None, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (1, NUM_HEADS, SEQ_LEN, 128, True, True, 1, ttnn.bfloat16, 1, NUM_HEADS, 128, 512, True, 1, ttnn.bfloat8_b, ttnn.bfloat16, None, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (1, 1, SEQ_LEN, HIDDEN_SIZE, True, True, 3, ttnn.bfloat16, 1, 1, HIDDEN_SIZE, 576, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, prog_config_mm3_bh, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (1, NUM_HEADS, SEQ_LEN, 512, True, True, 1, ttnn.bfloat16, 1, NUM_HEADS, 512, 128, True, 1, ttnn.bfloat8_b, ttnn.bfloat8_b, prog_config_mm4_bh, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (1, 1, SEQ_LEN, 16384, True, True, 3, ttnn.bfloat16, 1, 1, 16384, 7168, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, prog_config_mm5_bh, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG), 
     ]
 )
 @pytest.mark.parametrize(
     "skip_host_comparison",
     [False],
 )
-def test_mla_mm(request, mesh_device, in0_x, in0_y, in0_z, in0_w, in0_sp_sharded, in0_tp_sharded, in0_tp_shard_dim, in0_dtype, in1_x, in1_y, in1_z, in1_w, in1_tp_sharded, in1_tp_shard_dim, in1_dtype, out_dtype, prog_config,skip_host_comparison):
+def test_mla_mm(request, mesh_device, in0_x, in0_y, in0_z, in0_w, in0_sp_sharded, in0_tp_sharded, in0_tp_shard_dim, in0_dtype, in1_x, in1_y, in1_z, in1_w, in1_tp_sharded, in1_tp_shard_dim, in1_dtype, out_dtype, prog_config, act_mem_config, out_mem_config, skip_host_comparison):
     torch.manual_seed(42)
     hidden_states = torch.randn(in0_x, in0_y, in0_z, in0_w, dtype=torch.bfloat16)
     weight = torch.randn(in1_x, in1_y, in1_z, in1_w, dtype=torch.bfloat16) * 0.02
@@ -118,7 +118,7 @@ def test_mla_mm(request, mesh_device, in0_x, in0_y, in0_z, in0_w, in0_sp_sharded
         device=mesh_device,
         dtype=in0_dtype,
         layout=ttnn.TILE_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=act_mem_config,
         mesh_mapper=in0_mesh_mapper,
     )
 
@@ -156,7 +156,7 @@ def test_mla_mm(request, mesh_device, in0_x, in0_y, in0_z, in0_w, in0_sp_sharded
     tt_output = ttnn.linear(
         tt_input,
         tt_weight,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=out_mem_config,
         compute_kernel_config=compute_kernel_config,
         dtype=out_dtype,
         program_config=prog_config,
