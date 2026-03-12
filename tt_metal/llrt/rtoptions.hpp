@@ -321,6 +321,9 @@ class RunTimeOptions {
     // Dump JIT build commands to stdout for debugging
     bool dump_build_commands = false;
 
+    // Disable use of pre-compiled firmware and fall back to JIT compilation.
+    bool disable_precompiled_fw = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -498,11 +501,7 @@ public:
     // Returns the string representation for hash computation.
     std::string get_feature_hash_string(RunTimeDebugFeatures feature) const {
         switch (feature) {
-            case RunTimeDebugFeatureDprint: {
-                std::string hash_str = std::to_string(get_feature_enabled(feature));
-                hash_str += std::to_string(get_feature_all_chips(feature));
-                return hash_str;
-            }
+            case RunTimeDebugFeatureDprint: return std::to_string(get_feature_enabled(feature));
             case RunTimeDebugFeatureReadDebugDelay:
             case RunTimeDebugFeatureWriteDebugDelay:
             case RunTimeDebugFeatureAtomicDebugDelay:
@@ -723,6 +722,9 @@ public:
     bool get_disable_xip_dump() const { return disable_xip_dump; }
 
     bool get_dump_build_commands() const { return dump_build_commands; }
+
+    bool get_disable_precompiled_fw() const { return disable_precompiled_fw; }
+    void set_disable_precompiled_fw(bool disable) { disable_precompiled_fw = disable; }
 
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
