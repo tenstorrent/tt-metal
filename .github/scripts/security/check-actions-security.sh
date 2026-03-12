@@ -21,7 +21,7 @@ FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
 CURRENT_CHECK=""
-MAX_CHECK_NUM=36
+MAX_CHECK_NUM=41
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -86,6 +86,11 @@ Checks:
  34  Concurrency group with attacker-controlled data (MEDIUM)
  35  issue_comment trigger without authorization gate (MEDIUM)
  36  working-directory with attacker-controlled expressions (MEDIUM)
+ 37  github-script with inputs/outputs/secrets interpolation (HIGH)
+ 38  github-script dynamic code execution primitives (HIGH)
+ 39  Inline interpreter eval/exec patterns in run blocks (HIGH)
+ 40  github-script command execution APIs (HIGH)
+ 41  Inline interpreter command execution APIs (HIGH)
 EOF
     exit 0
 }
@@ -1613,6 +1618,267 @@ check_36() {
 
     if [[ -n "$risky_workdir" ]]; then
         log_issue "MEDIUM" "$file" "working-directory contains attacker-controlled expression interpolation - can influence which directory code runs in"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 37: actions/github-script with non-event attacker-controlled interpolation
+# =============================================================================
+check_37_description="github-script with inputs/outputs/secrets interpolation"
+check_37_severity="HIGH"
+
+example_check_37() {
+    cat <<'EOF'
+# BEFORE (unsafe - attacker-controlled input becomes JavaScript source):
+  uses: actions/github-script@v7
+  with:
+    script: |
+      const body = "${{ inputs.user-script }}";
+      console.log(body);
+# AFTER (safe - pass through env and read from process.env):
+  uses: actions/github-script@v7
+  env:
+    USER_SCRIPT: ${{ inputs.user-script }}
+  with:
+    script: |
+      const body = process.env.USER_SCRIPT;
+      console.log(body);
+EOF
+}
+
+check_37() {
+    local file="$1"
+    local attacker_controlled_js='(inputs\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.|matrix\.|secrets\.|github\.head_ref|github\.base_ref)'
+    if grep -qE 'actions/github-script' "$file" 2>/dev/null; then
+        local unsafe_usage
+        unsafe_usage=$(awk -v pattern="$attacker_controlled_js" '
+            BEGIN { in_action = 0; in_script = 0; script_indent = 0 }
+            /uses:.*actions\/github-script/ { in_action = 1; next }
+            in_action && /^[[:space:]]*script:[[:space:]]*\|/ {
+                match($0, /^[[:space:]]*/); script_indent = RLENGTH; in_script = 1; next
+            }
+            in_action && /^[[:space:]]*script:/ && $0 ~ pattern { print; next }
+            in_script {
+                if ($0 ~ /^[[:space:]]*-[[:space:]]/) { in_script = 0; in_action = 0; next }
+                match($0, /^[[:space:]]*/); curr_indent = RLENGTH
+                if (curr_indent <= script_indent && $0 ~ /^[[:space:]]*[a-z_-]+:/) { in_script = 0; in_action = 0; next }
+            }
+            in_script && $0 ~ pattern { print }
+        ' "$file" 2>/dev/null)
+        if [[ -n "$unsafe_usage" ]]; then
+            log_issue "HIGH" "$file" "actions/github-script contains attacker-controlled \${{ inputs.* }}, outputs, matrix, secrets, or ref data in script body - JavaScript injection risk"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 38: actions/github-script dynamic code execution primitives
+# =============================================================================
+check_38_description="github-script dynamic code execution primitives"
+check_38_severity="HIGH"
+
+example_check_38() {
+    cat <<'EOF'
+# BEFORE (unsafe - runtime input is executed as JavaScript):
+  uses: actions/github-script@v7
+  with:
+    script: |
+      const dynamic = core.getInput('payload');
+      return new Function(dynamic)();
+# AFTER (safe - treat input as data, not code):
+  uses: actions/github-script@v7
+  with:
+    script: |
+      const payload = core.getInput('payload');
+      console.log(payload);
+EOF
+}
+
+check_38() {
+    local file="$1"
+    if grep -qE 'actions/github-script' "$file" 2>/dev/null; then
+        local unsafe_usage
+        unsafe_usage=$(awk '
+            BEGIN { in_action = 0; in_script = 0; script_indent = 0 }
+            /uses:.*actions\/github-script/ { in_action = 1; next }
+            in_action && /^[[:space:]]*script:[[:space:]]*\|/ {
+                match($0, /^[[:space:]]*/); script_indent = RLENGTH; in_script = 1; next
+            }
+            function is_dynamic_js() {
+                return $0 ~ /eval[[:space:]]*\(/ ||
+                       $0 ~ /new[[:space:]]+Function[[:space:]]*\(/ ||
+                       $0 ~ /vm\.(runInNewContext|runInThisContext|Script)[[:space:]]*\(/
+            }
+            in_action && /^[[:space:]]*script:/ && is_dynamic_js() { print; next }
+            in_script {
+                if ($0 ~ /^[[:space:]]*-[[:space:]]/) { in_script = 0; in_action = 0; next }
+                match($0, /^[[:space:]]*/); curr_indent = RLENGTH
+                if (curr_indent <= script_indent && $0 ~ /^[[:space:]]*[a-z_-]+:/) { in_script = 0; in_action = 0; next }
+            }
+            in_script && is_dynamic_js() { print }
+        ' "$file" 2>/dev/null)
+        if [[ -n "$unsafe_usage" ]]; then
+            log_issue "HIGH" "$file" "actions/github-script uses eval/new Function/vm dynamic code execution in script body - treat inputs and env data as data, not code"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 39: Inline interpreter eval/exec patterns in run blocks
+# =============================================================================
+check_39_description="inline interpreter eval/exec patterns in run blocks"
+check_39_severity="HIGH"
+
+example_check_39() {
+    cat <<'EOF'
+# BEFORE (unsafe - env/input is re-executed by Node.js):
+  env:
+    USER_SCRIPT: ${{ inputs.payload }}
+  run: node -e "eval(process.env.USER_SCRIPT)"
+# AFTER (safe - consume as data without dynamic evaluation):
+  env:
+    USER_SCRIPT: ${{ inputs.payload }}
+  run: node -e "console.log(process.env.USER_SCRIPT)"
+EOF
+}
+
+check_39() {
+    local file="$1"
+    local unsafe_usage
+    unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
+        function check_line() {
+            if ($0 ~ /node([^[:alnum:]_]|$)/ && $0 ~ /-e/ && $0 ~ /(eval[[:space:]]*\(|new[[:space:]]+Function[[:space:]]*\(|vm\.(runInNewContext|runInThisContext|Script)[[:space:]]*\()/) { print; return }
+            if ($0 ~ /python3?([^[:alnum:]_]|$)/ && $0 ~ /-c/ && $0 ~ /(^|[^[:alnum:]_])(eval|exec)[[:space:]]*\(/) { print; return }
+            if ($0 ~ /perl([^[:alnum:]_]|$)/ && $0 ~ /-e/ && $0 ~ /(^|[^[:alnum:]_])eval([^[:alnum:]_]|$)/) { print; return }
+            if ($0 ~ /ruby([^[:alnum:]_]|$)/ && $0 ~ /-e/ && $0 ~ /(^|[^[:alnum:]_])eval[[:space:]]*\(/) { print; return }
+            if ($0 ~ /php([^[:alnum:]_]|$)/ && $0 ~ /-r/ && $0 ~ /(^|[^[:alnum:]_])eval[[:space:]]*\(/) { print; return }
+            if ($0 ~ /(pwsh|powershell)([^[:alnum:]_]|$)/ && $0 ~ /(-Command|-c)/ && $0 ~ /Invoke-Expression/) { print; return }
+        }
+        /^[[:space:]]*(-[[:space:]]+)?run:/ { check_line(); next }
+        in_run_block { check_line() }
+    ' "$file" 2>/dev/null)
+    if [[ -n "$unsafe_usage" ]]; then
+        log_issue "HIGH" "$file" "Inline interpreter command uses eval/exec-style dynamic code execution in run: block - avoid executing constructed code"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 40: actions/github-script command execution APIs
+# =============================================================================
+check_40_description="github-script command execution APIs"
+check_40_severity="HIGH"
+
+example_check_40() {
+    cat <<'EOF'
+# BEFORE (unsafe - runtime input is executed as a shell command):
+  uses: actions/github-script@v7
+  with:
+    script: |
+      const { execSync } = require('child_process');
+      const cmd = core.getInput('payload');
+      execSync(cmd, { shell: true });
+# AFTER (safe - avoid runtime shell execution from inputs):
+  uses: actions/github-script@v7
+  with:
+    script: |
+      const payload = core.getInput('payload');
+      console.log(payload);
+EOF
+}
+
+check_40() {
+    local file="$1"
+    if grep -qE 'actions/github-script' "$file" 2>/dev/null; then
+        local unsafe_usage
+        unsafe_usage=$(awk '
+            BEGIN { in_action = 0; in_script = 0; script_indent = 0; has_runtime_source = 0; has_command_exec = 0 }
+            function flush_script() {
+                if (in_script && has_runtime_source && has_command_exec) {
+                    print "unsafe"
+                }
+                has_runtime_source = 0
+                has_command_exec = 0
+            }
+            /uses:.*actions\/github-script/ {
+                flush_script()
+                in_action = 1
+                in_script = 0
+                next
+            }
+            in_action && /^[[:space:]]*script:[[:space:]]*\|/ {
+                match($0, /^[[:space:]]*/); script_indent = RLENGTH; in_script = 1; next
+            }
+            in_action && /^[[:space:]]*script:/ {
+                if ($0 ~ /core\.getInput[[:space:]]*\(|process\.env[[:space:]]*[\[.]/) has_runtime_source = 1
+                if ($0 ~ /(execSync|exec|spawnSync|spawn|execFileSync|execFile)[[:space:]]*\(/ || $0 ~ /shell:[[:space:]]*true/) has_command_exec = 1
+                if (has_runtime_source && has_command_exec) print "unsafe"
+                next
+            }
+            in_script {
+                if ($0 ~ /^[[:space:]]*-[[:space:]]/) {
+                    flush_script()
+                    in_script = 0
+                    in_action = 0
+                    next
+                }
+                match($0, /^[[:space:]]*/); curr_indent = RLENGTH
+                if (curr_indent <= script_indent && $0 ~ /^[[:space:]]*[a-z_-]+:/) {
+                    flush_script()
+                    in_script = 0
+                    in_action = 0
+                    next
+                }
+                if ($0 ~ /core\.getInput[[:space:]]*\(|process\.env[[:space:]]*[\[.]/) has_runtime_source = 1
+                if ($0 ~ /(execSync|exec|spawnSync|spawn|execFileSync|execFile)[[:space:]]*\(/ || $0 ~ /shell:[[:space:]]*true/) has_command_exec = 1
+            }
+            END { flush_script() }
+        ' "$file" 2>/dev/null)
+        if [[ -n "$unsafe_usage" ]]; then
+            log_issue "HIGH" "$file" "actions/github-script combines runtime input/env data with child_process command execution APIs - command injection risk"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 41: Inline interpreter command execution APIs
+# =============================================================================
+check_41_description="inline interpreter command execution APIs"
+check_41_severity="HIGH"
+
+example_check_41() {
+    cat <<'EOF'
+# BEFORE (unsafe - env/input is executed through a shell):
+  env:
+    USER_CMD: ${{ inputs.payload }}
+  run: python -c "import os, subprocess; subprocess.run(os.environ['USER_CMD'], shell=True, check=True)"
+# AFTER (safe - avoid shell execution of runtime input):
+  env:
+    USER_CMD: ${{ inputs.payload }}
+  run: python -c "import os; print(os.environ['USER_CMD'])"
+EOF
+}
+
+check_41() {
+    local file="$1"
+    local unsafe_usage
+    unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
+        /^[[:space:]]*(-[[:space:]]+)?run:/ { print; next }
+        in_run_block { print }
+    ' "$file" 2>/dev/null | grep -E \
+        'node([^[:alnum:]_]|$).*-e.*(execSync|exec|spawnSync|spawn|execFileSync|execFile)[[:space:]]*\(|python3?([^[:alnum:]_]|$).*-c.*(subprocess\..*shell=True|os\.system\()|ruby([^[:alnum:]_]|$).*-e.*(^|[^[:alnum:]_])(system|exec|spawn|Open3\.capture2e|Open3\.capture3)[[:space:]]*\(|perl([^[:alnum:]_]|$).*-e.*(^|[^[:alnum:]_])(system|exec)([^[:alnum:]_]|$)|php([^[:alnum:]_]|$).*-r.*(shell_exec|exec|system|passthru|proc_open)[[:space:]]*\(' \
+        || true)
+    if [[ -n "$unsafe_usage" ]]; then
+        log_issue "HIGH" "$file" "Inline interpreter command uses shell/process execution APIs in run: block - avoid executing runtime data as commands"
         return 1
     fi
     return 0

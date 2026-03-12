@@ -1027,6 +1027,232 @@ jobs:
         working-directory: ${{ github.workspace }}/src
 EOF
 
+# --- Check 37: github-script with non-event attacker-controlled interpolation ---
+
+assert_detects "check 37 flags github-script with inputs interpolation" "37" "JavaScript injection risk" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      user_script:
+        required: true
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          script: |
+            const body = "${{ inputs.user_script }}";
+            console.log(body);
+EOF
+
+assert_clean "check 37 accepts github-script with process.env for inputs" "37" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      user_script:
+        required: true
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        env:
+          USER_SCRIPT: ${{ inputs.user_script }}
+        with:
+          script: |
+            const body = process.env.USER_SCRIPT;
+            console.log(body);
+EOF
+
+# --- Check 38: github-script dynamic code execution primitives ---
+
+assert_detects "check 38 flags github-script dynamic code execution" "38" "dynamic code execution" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        required: true
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          script: |
+            const dynamic = core.getInput('payload');
+            return new Function(dynamic)();
+EOF
+
+assert_detects "check 38 flags github-script eval with process.env" "38" "dynamic code execution" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        required: true
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        env:
+          USER_SCRIPT: ${{ inputs.payload }}
+        with:
+          script: |
+            eval(process.env.USER_SCRIPT)
+EOF
+
+assert_clean "check 38 accepts github-script treating input as data" "38" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        required: true
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          script: |
+            const payload = core.getInput('payload');
+            console.log(payload);
+EOF
+
+# --- Check 39: Inline interpreter eval/exec patterns in run blocks ---
+
+assert_detects "check 39 flags node -e eval with env data" "39" "Inline interpreter command uses eval/exec-style dynamic code execution" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        required: true
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          USER_SCRIPT: ${{ inputs.payload }}
+        run: node -e "eval(process.env.USER_SCRIPT)"
+EOF
+
+assert_clean "check 39 accepts inline interpreter without eval" "39" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        required: true
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          USER_SCRIPT: ${{ inputs.payload }}
+        run: node -e "console.log(process.env.USER_SCRIPT)"
+EOF
+
+# --- Check 40: github-script command execution APIs ---
+
+assert_detects "check 40 flags github-script child_process execution with input" "40" "command injection risk" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        required: true
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          script: |
+            const { execSync } = require('child_process');
+            const cmd = core.getInput('payload');
+            execSync(cmd, { shell: true });
+EOF
+
+assert_clean "check 40 accepts github-script without command execution" "40" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        required: true
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/github-script@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          script: |
+            const payload = core.getInput('payload');
+            console.log(payload);
+EOF
+
+# --- Check 41: Inline interpreter command execution APIs ---
+
+assert_detects "check 41 flags python subprocess shell execution" "41" "shell/process execution APIs" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        required: true
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          USER_CMD: ${{ inputs.payload }}
+        run: python -c "import os, subprocess; subprocess.run(os.environ['USER_CMD'], shell=True, check=True)"
+EOF
+
+assert_clean "check 41 accepts inline interpreter without shell execution" "41" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        required: true
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          USER_CMD: ${{ inputs.payload }}
+        run: python -c "import os; print(os.environ['USER_CMD'])"
+EOF
+
 echo ""
 echo "Results: $passed passed, $failed failed"
 
