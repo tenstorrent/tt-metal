@@ -679,13 +679,21 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
 
         # Validate and resolve mock cluster rank binding configuration paths
         resolved_mock_bindings: Dict[int, Path] = {}
-        for rank_str, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
-            # Convert rank to int (YAML may parse numeric keys as strings)
-            rank = int(rank_str)
-            resolved_path = resolve_path(
-                path, description=f"Mock cluster descriptor for rank {rank}", must_be_file=True
-            )
-            resolved_mock_bindings[rank] = resolved_path
+
+        # Check if this is a mapping file (has rank_to_cluster_mock_cluster_desc key) or a cluster descriptor file
+        # Check the key in the YAML data, not the filename
+        if mock_data and isinstance(mock_data, dict) and "rank_to_cluster_mock_cluster_desc" in mock_data:
+            # Mapping format: rank -> cluster descriptor path
+            for rank_str, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
+                # Convert rank to int (YAML may parse numeric keys as strings)
+                rank = int(rank_str)
+                resolved_path = resolve_path(
+                    path, description=f"Mock cluster descriptor for rank {rank}", must_be_file=True
+                )
+                resolved_mock_bindings[rank] = resolved_path
+        else:
+            # Cluster descriptor format: treat as single entry with rank 0
+            resolved_mock_bindings[0] = resolved_mock_path
 
         config.mock_cluster_rank_binding = resolved_mock_bindings
 
@@ -1346,11 +1354,19 @@ def new_mode_flow(
             mock_data = yaml.safe_load(f)
 
         mock_rank_to_desc = {}
-        for rank, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
-            resolved_path = resolve_path(
-                path, description=f"Mock cluster descriptor for rank {rank}", must_be_file=True
-            )
-            mock_rank_to_desc[int(rank)] = resolved_path
+
+        # Check if this is a mapping file (has rank_to_cluster_mock_cluster_desc key) or a cluster descriptor file
+        # Check the key in the YAML data, not the filename
+        if mock_data and isinstance(mock_data, dict) and "rank_to_cluster_mock_cluster_desc" in mock_data:
+            # Mapping format: rank -> cluster descriptor path
+            for rank, path in mock_data["rank_to_cluster_mock_cluster_desc"].items():
+                resolved_path = resolve_path(
+                    path, description=f"Mock cluster descriptor for rank {rank}", must_be_file=True
+                )
+                mock_rank_to_desc[int(rank)] = resolved_path
+        else:
+            # Cluster descriptor format: treat as single entry with rank 0
+            mock_rank_to_desc[0] = resolved_mock_path
 
         if verbose:
             logger.info(f"{TT_RUN_PREFIX} Mock cluster: {len(mock_rank_to_desc)} ranks")

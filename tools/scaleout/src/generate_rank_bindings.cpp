@@ -222,7 +222,7 @@ TopologyMappingResult run_topology_mapping(
     // Configure topology mapping
     TopologyMappingConfig config;
     config.strict_mode = true;
-    config.disable_rank_bindings = true;  // Do not pass rank bindings at all
+    config.disable_rank_bindings = false;  // Pass the rank bindings to make sure there isn't host rank boundary issues
 
     // Provide hostname_to_asics from PSD so same-host constraint is applied (all ASICs on a host map to one rank)
     for (const auto& [asic_id, desc] : psd.get_asic_descriptors()) {
@@ -266,9 +266,27 @@ TopologyMappingResult run_topology_mapping(
         log_info(tt::LogFabric, "Inter-mesh validation mode: STRICT");
     }
 
-    // Run mapping without rank bindings (empty maps)
-    log_info(tt::LogFabric, "Running topology mapping...");
-    TopologyMappingResult result = map_multi_mesh_to_physical(logical_graph, physical_graph, config);
+    // Build logical rank bindings from mesh graph: each fabric node gets its mesh_host_rank from the mesh graph
+    std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>> fabric_node_id_to_mesh_rank;
+    for (const auto& mesh_id : mesh_graph.get_all_mesh_ids()) {
+        const auto& chip_ids = mesh_graph.get_chip_ids(mesh_id);
+        for (const auto& [coord, chip_id] : chip_ids) {
+            FabricNodeId fabric_node_id(mesh_id, chip_id);
+            auto mesh_host_rank = mesh_graph.get_host_rank_for_chip(mesh_id, chip_id);
+            if (mesh_host_rank.has_value()) {
+                fabric_node_id_to_mesh_rank[mesh_id][fabric_node_id] = mesh_host_rank.value();
+            }
+        }
+    }
+
+    // Physical rank bindings: all ASICs set to UNSET - let topology mapper assign physical ASICs to hosts
+    // Build asic_id_to_mesh_rank from physical graph mesh IDs to match the physical graph structure
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank = {};
+
+    // Run mapping with logical rank bindings from mesh graph
+    log_info(tt::LogFabric, "Running topology mapping with mesh graph rank bindings...");
+    TopologyMappingResult result = map_multi_mesh_to_physical(
+        logical_graph, physical_graph, config, asic_id_to_mesh_rank, fabric_node_id_to_mesh_rank);
 
     return result;
 }

@@ -166,6 +166,46 @@ AdjacencyGraph<uint32_t> build_mgd_mesh_instance_adjacency(
     return result;
 }
 
+// Helper function to build adjacency graph from MGD switch instance
+// Similar to build_mgd_mesh_instance_adjacency - builds row-major mesh graph from device_topology
+AdjacencyGraph<uint32_t> build_mgd_switch_instance_adjacency(
+    const MeshGraphDescriptor& mesh_graph_descriptor, GlobalNodeId switch_instance_id) {
+    const auto& switch_instance = mesh_graph_descriptor.get_instance(switch_instance_id);
+    TT_FATAL(
+        switch_instance.kind == NodeKind::Switch, "build_mgd_switch_instance_adjacency called on non-switch instance");
+
+    const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(switch_instance.desc);
+    TT_FATAL(switch_desc != nullptr, "Switch descriptor is null");
+
+    // Get device topology dimensions (represents ASIC-level layout)
+    const auto& device_topology = switch_desc->device_topology();
+    std::vector<int32_t> device_dims(device_topology.dims().begin(), device_topology.dims().end());
+
+    if (device_dims.empty()) {
+        // No device topology - return empty graph
+        return AdjacencyGraph<uint32_t>();
+    }
+
+    // Calculate number of ASICs
+    int32_t num_asics = 1;
+    for (int32_t dim : device_dims) {
+        num_asics *= dim;
+    }
+
+    // Create abstract ASIC node IDs (0, 1, 2, ..., num_asics-1)
+    std::vector<uint32_t> asic_ids;
+    asic_ids.reserve(num_asics);
+    for (uint32_t i = 0; i < static_cast<uint32_t>(num_asics); ++i) {
+        asic_ids.push_back(i);
+    }
+
+    // Build row-major mesh graph representing ASIC-level topology
+    // Always uses LINE connectivity (no wrap-around) and 1 connection per edge
+    auto result = build_row_major_mesh_graph(asic_ids, device_dims, "", 1);
+
+    return result;
+}
+
 // Helper function to build adjacency graph from MGD graph instance
 // The graph instance's sub_instances become nodes, and connections between them become edges
 // Ensures no duplicate connections and all connections are bidirectional
@@ -244,6 +284,15 @@ PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(const MeshGraphDescri
         required_asics_map[mesh_instance.type][mesh_instance.name] = required_chips;
     }
 
+    // Step 1a: Calculate required ASICs for all switch instances (bottom level)
+    // Switches are treated as MESH type for grouping purposes
+    for (GlobalNodeId switch_id : mesh_graph_descriptor.all_switches()) {
+        const auto& switch_instance = mesh_graph_descriptor.get_instance(switch_id);
+        uint32_t required_chips = mesh_graph_descriptor.get_switch_chip_count(switch_id);
+        // Store switches under MESH type (switches are treated as MESH type)
+        required_asics_map["MESH"][switch_instance.name] = required_chips;
+    }
+
     // Step 1b: Calculate required ASICs for graph instances bottom-up (children before parents)
     // Process graphs in topological order by iterating until all are processed
     std::unordered_set<GlobalNodeId> processed_graphs;
@@ -268,8 +317,12 @@ PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(const MeshGraphDescri
             for (GlobalNodeId sub_id : graph_instance.sub_instances) {
                 const auto& sub_instance = mesh_graph_descriptor.get_instance(sub_id);
 
+                // Switches are treated as MESH type for grouping purposes
+                // Use "MESH" type for switches, otherwise use the sub_instance's actual type
+                std::string lookup_type = (sub_instance.kind == NodeKind::Switch) ? "MESH" : sub_instance.type;
+
                 // Check if this sub-instance's required_asics is already calculated
-                auto sub_type_it = required_asics_map.find(sub_instance.type);
+                auto sub_type_it = required_asics_map.find(lookup_type);
                 if (sub_type_it == required_asics_map.end()) {
                     all_sub_instances_ready = false;
                     break;
@@ -354,6 +407,55 @@ PhysicalGroupingDescriptor::build_mgd_to_grouping_info_map(const MeshGraphDescri
 
         // Store keyed by mesh definition name (not instance key)
         mgd_grouping_infos[mesh_type][mesh_name] = std::move(grouping_info);
+    }
+
+    // Process switch instances
+    // Switches are treated as MESH type for grouping purposes
+    // Store only one entry per switch definition name (SW0, SW1), not per instance (SW0_0, SW0_1, etc.)
+    std::set<std::string> processed_switch_definitions;
+    for (GlobalNodeId switch_id : mesh_graph_descriptor.all_switches()) {
+        const auto& switch_instance = mesh_graph_descriptor.get_instance(switch_id);
+        const std::string& switch_name = switch_instance.name;
+
+        // Skip if we've already processed this switch definition
+        if (processed_switch_definitions.contains(switch_name)) {
+            continue;
+        }
+        processed_switch_definitions.insert(switch_name);
+
+        // Build adjacency graph for this switch instance (use first instance of this switch definition)
+        AdjacencyGraph<uint32_t> adjacency_graph =
+            build_mgd_switch_instance_adjacency(mesh_graph_descriptor, switch_id);
+
+        // Get required ASIC count (calculated above, stored under MESH type)
+        uint32_t asic_count = required_asics_map.at("MESH").at(switch_name);
+
+        // Get device topology dimensions for corner orientation assignment
+        const auto* switch_desc = std::get<const proto::SwitchDescriptor*>(switch_instance.desc);
+        TT_FATAL(switch_desc != nullptr, "Switch descriptor is null");
+        const auto& device_topology = switch_desc->device_topology();
+        std::vector<int32_t> device_dims(device_topology.dims().begin(), device_topology.dims().end());
+
+        // Create GroupingInfo
+        GroupingInfo grouping_info;
+        grouping_info.name = switch_name;  // Keep original name for matching
+        grouping_info.type = "MESH";       // Switches are treated as MESH type
+        grouping_info.asic_count = asic_count;
+        grouping_info.adjacency_graph = std::move(adjacency_graph);
+
+        // Create a single item representing the switch (for corner orientation assignment)
+        // The item represents the entire switch as a single unit
+        GroupingItemInfo switch_item;
+        switch_item.type = GroupingItemInfo::ItemType::GROUPING_REF;
+        switch_item.grouping_name = switch_name;
+        grouping_info.items.push_back(std::move(switch_item));
+
+        // Assign corner orientations based on switch dimensions
+        // For switch instances with a single item, the helper function will assign corners appropriately
+        PhysicalGroupingDescriptor::assign_corner_orientations_to_grouping(grouping_info, device_dims);
+
+        // Store keyed by MESH type (switches are treated as MESH type)
+        mgd_grouping_infos["MESH"][switch_name] = std::move(grouping_info);
     }
 
     // Process graph instances
@@ -739,6 +841,9 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
     MappingConstraints<uint32_t, AsicID> initial_constraints = {}) {
     MappingConstraints<uint32_t, AsicID> constraints = std::move(initial_constraints);
+
+    // Set quiet mode to suppress verbose constraint validation messages during PGD solving
+    constraints.set_quiet_mode(true);
 
     // Build trait maps: graph nodes are 0..n-1, items[i] is the item for node i
     std::map<uint32_t, TrayID> target_tray_traits;

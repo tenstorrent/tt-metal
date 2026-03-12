@@ -431,8 +431,12 @@ bool MappingConstraints<TargetNode, GlobalNode>::validate(
         oss << "  Target nodes with valid mappings: " << (valid_mappings_.size() - conflicted_targets.size()) << "\n";
         oss << "  Overconstrained target nodes: " << conflicted_targets.size() << "\n";
 
-        // Log info message instead of throwing
-        log_info(tt::LogFabric, "{}", oss.str());
+        // Log message - use debug level in quiet mode, info level otherwise
+        if (quiet_mode_) {
+            log_debug(tt::LogFabric, "{}", oss.str());
+        } else {
+            log_info(tt::LogFabric, "{}", oss.str());
+        }
         return false;
     }
 
@@ -445,6 +449,11 @@ bool MappingConstraints<TargetNode, GlobalNode>::validate(
     }
 
     return true;
+}
+
+template <typename TargetNode, typename GlobalNode>
+void MappingConstraints<TargetNode, GlobalNode>::set_quiet_mode(bool quiet_mode) const {
+    quiet_mode_ = quiet_mode;
 }
 
 template <typename TargetNode, typename GlobalNode>
@@ -758,6 +767,9 @@ MappingResult<TargetNode, GlobalNode> solve_topology_mapping(
     using namespace tt::tt_fabric::detail;
 
     auto start_time = std::chrono::steady_clock::now();
+
+    // Set quiet mode on constraints to suppress verbose validation messages
+    constraints.set_quiet_mode(quiet_mode);
 
     // Build indexed graph representation
     GraphIndexData<TargetNode, GlobalNode> graph_data(target_graph, global_graph);
