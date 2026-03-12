@@ -141,7 +141,8 @@ def _make_action_grid_id(
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        pytest.param((1, 2), (1, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, False, id="1x1_single_device"),
+        # pytest.param((1, 2), (1, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, False, id="1x1_single_device"),
+        pytest.param((1, 1), (1, 1), 0, 0, 1, line_params, ttnn.Topology.Linear, False, id="1x1_single_device"),
     ],
     indirect=["mesh_device", "device_params"],
 )
@@ -280,7 +281,8 @@ F_ACTION = 8
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
-        pytest.param((1, 2), (1, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, False, id="1x1_single_device"),
+        # pytest.param((1, 2), (1, 1), 0, 1, 1, line_params, ttnn.Topology.Linear, False, id="1x1_single_device"),
+        pytest.param((1, 1), (1, 1), 0, 0, 1, line_params, ttnn.Topology.Linear, False, id="1x1_single_device"),
     ],
     indirect=["mesh_device", "device_params"],
 )

@@ -154,5 +154,6 @@ models/experimental/petr/resources/*.pth
 
 # Lingbot-VA checkpoints
 models/experimental/lingbot_va/reference/checkpoints/
+models/experimental/lingbot_va/reference/checkpoints_robotwin/
 *.safetensors
 *.ckpt

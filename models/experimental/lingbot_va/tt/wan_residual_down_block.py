@@ -59,7 +59,7 @@ class WanResidualDownBlock(Module):
             x = resnet(x, logical_h=x.shape[2], feat_cache=feat_cache, feat_idx=feat_idx)
         if self.downsampler is not None:
             x, logical_h = self.downsampler(x, logical_h=x.shape[2], feat_cache=feat_cache, feat_idx=feat_idx)
-
+        x_copy = ttnn.to_layout(x_copy, ttnn.ROW_MAJOR_LAYOUT)
         avg_shortcut_out = self.avg_shortcut(x_copy)
-
+        avg_shortcut_out = ttnn.to_layout(avg_shortcut_out, ttnn.TILE_LAYOUT)
         return x + avg_shortcut_out

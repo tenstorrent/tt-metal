@@ -4,19 +4,19 @@ import ttnn
 # import pytest
 from diffusers import AutoencoderKLWan
 from diffusers.models.autoencoders.autoencoder_kl_wan import WanResidualDownBlock
-from models.experimental.lingbot_va.tt.residual_down_block import WanResidualDownBlock as WanResidualDownBlockTTNN
+from models.experimental.lingbot_va.tt.wan_residual_down_block import WanResidualDownBlock as WanResidualDownBlockTTNN
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.parallel.config import VaeHWParallelConfig, ParallelFactor
 from models.common.metrics import compute_pcc
 
 
 # Test configuration constants
-CHECKPOINT_PATH = "models/experimental/lingbot_va/reference/checkpoints/vae"
+CHECKPOINT_PATH = "models/experimental/lingbot_va/reference/checkpoints_robotwin/vae"
 BATCH_SIZE = 1
 PCC_THRESHOLD = 0.99
-H = 256  # Height
-W = 320  # Width
-T = 4  # Frames
+H = 128  # Height
+W = 160  # Width
+T = 1  # Frames
 
 
 def load_autoencoder_klwan(checkpoint_path):
@@ -31,11 +31,11 @@ def load_autoencoder_klwan(checkpoint_path):
 
 def test_wan_res_down_block():
     autoencoder_klwan = load_autoencoder_klwan(CHECKPOINT_PATH)
-    wan_res_down_block_weights = autoencoder_klwan.encoder.down_blocks[0].state_dict()
+    wan_res_down_block_weights = autoencoder_klwan.encoder.down_blocks[1].state_dict()
 
     in_dim = 160
-    out_dim = 160
-    temperal_downsample = False
+    out_dim = 320
+    temperal_downsample = True
     down_flag = True
     wan_res_down_block_torch = WanResidualDownBlock(
         in_dim=in_dim,
@@ -50,10 +50,11 @@ def test_wan_res_down_block():
 
     # Create input tensor in (B, C, T, H, W) format
     input_tensor = torch.randn(BATCH_SIZE, in_dim, T, H, W, dtype=torch.float32)
+    feat_cache = [torch.randn(1, 12, 1, 128, 160) for _ in range(26)]
     input_tensor = input_tensor * 2.0 - 1.0  # Normalize to [-1, 1]
     print("Running WanResidualDownBlock forward pass...")
     with torch.no_grad():
-        wan_res_down_block_out = wan_res_down_block_torch(input_tensor)
+        wan_res_down_block_out = wan_res_down_block_torch(input_tensor, feat_cache, feat_idx=[1])
     print("WanResidualDownBlock output shape:", wan_res_down_block_out.shape)
     mesh_device = None
 
@@ -84,8 +85,12 @@ def test_wan_res_down_block():
             input_tensor, dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT
         )
 
+        tt_feat_cache = [
+            ttnn.from_torch(feat, dtype=ttnn.bfloat16, device=mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT)
+            for feat in feat_cache
+        ]
         # Run TTNN forward pass
-        tt_output = wan_res_block_ttnn(tt_input_tensor)
+        tt_output = wan_res_block_ttnn(tt_input_tensor, tt_feat_cache, feat_idx=[1])
 
         tt_output = ttnn.permute(tt_output, (0, 4, 1, 2, 3))  # (B, C, T, H, W)
         print("WanResidualDownBlock TTNN output shape:", tt_output.shape)
