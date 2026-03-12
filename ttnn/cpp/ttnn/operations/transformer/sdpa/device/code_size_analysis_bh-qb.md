@@ -11,15 +11,17 @@ and the impact of removing `__attribute__((noinline, noclone))` and `#pragma GCC
 from the 4 hot functions in `compute_streaming.hpp`. The baseline code is main: all 4
 attributes and all 4 unroll pragmas are present.
 
-Three levels of analysis:
+Four levels of analysis:
 1. **Baseline code size** across all 12 q/k chunk permutations (2 seq_lens x 3 q_chunks x 2 k_chunks).
 2. **All-or-nothing removal** of attrs and unroll pragmas on the worst-case config (q256/k256).
 3. **Per-function removal** — each of the 4 functions' `noinline,noclone` removed individually,
    with code size and math utilization measured on two reference configs (q224/k512, q288/k512).
+4. **noinline vs noclone** — isolating the contribution of each attribute on the two reference configs.
 
-**Conclusion**: Remove all `noinline,noclone` attributes. The ~5 KB code size increase (worst
-case ~62.5 KB) is well within device limits, and yields +1.0–1.1pp math utilization.
-`sub_exp_block_bcast_cols` accounts for ~92% of the code growth and ~70–80% of the perf gain.
+**Conclusion**: Use `__attribute__((noinline))` only (drop `noclone`). This gives nearly all
+the perf benefit of removing both attributes (+0.8–1.0pp math utilization) while keeping code
+size comparable to the no-attrs case (~59–60 KB grand total, well within device limits).
+`noclone` alone is the worst option: largest code (+7.4 KB) with weakest perf (+0.5–0.6pp).
 Removing `#pragma GCC unroll 1` adds code size with no perf benefit — keep them.
 
 ## Current State (Baseline)
@@ -174,12 +176,56 @@ Code size measured with CCLs enabled (accuracy test). Perf measured with CCLs co
   and dead code, reducing the binary. This is a pure win.
 - **No-attrs total (+4.9 KB, +1.0–1.1pp)** is roughly the sum of `sub_exp_block_bcast_cols` +
   `blocked_matmul_and_pack`, partially offset by the `apply_lightweight_mask_streaming` shrinkage.
-- **Recommendation**: Remove all `noinline,noclone` attributes. The marginal cost of going
-  from "only `sub_exp_block_bcast_cols`" to "all removed" is ~360 bytes for +0.3pp — cheap
-  because `apply_lightweight_mask_streaming` shrinks the binary by ~0.8 KB, offsetting
-  growth from the other two. Worst-case config (q256/k256, ~57.5 KB baseline) lands at
-  ~62.5 KB with all attrs removed, well under the 70,656 byte T3000/Mochi limit. Simpler
-  code with no attributes to maintain, and no perf left on the table.
+- **Recommendation**: Remove all `noinline,noclone` attributes (or use `noinline` only — see
+  next section). The marginal cost of going from "only `sub_exp_block_bcast_cols`" to "all
+  removed" is ~360 bytes for +0.3pp — cheap because `apply_lightweight_mask_streaming` shrinks
+  the binary by ~0.8 KB, offsetting growth from the other two. Worst-case config (q256/k256,
+  ~57.5 KB baseline) lands at ~62.5 KB with all attrs removed, well under the 70,656 byte
+  T3000/Mochi limit. Simpler code with no attributes to maintain, and no perf left on the table.
+
+## noinline vs noclone Isolation
+
+Each row applies a single attribute to all 4 functions, isolating the contribution of `noinline`
+vs `noclone`. Measured on the two reference configs (code size with CCLs enabled, perf with CCLs
+commented out).
+
+### s=2240, q224/k512
+
+| Variant | trisc0 | trisc1 | trisc2 | brisc | ncrisc | Compute | Grand | Delta | Math Util |
+|---------|-------:|-------:|-------:|------:|-------:|--------:|------:|------:|----------:|
+| Baseline (noinline, noclone) | 16,972 | 11,648 | 15,320 | 6,084 | 4,644 | 43,940 | 54,668 | — | 61.1% |
+| noinline only | 18,064 | 11,736 | 18,760 | 6,084 | 4,644 | 48,560 | 59,288 | +4,620 | 61.9% |
+| noclone only | 18,684 | 13,164 | 19,452 | 6,084 | 4,644 | 51,300 | 62,028 | +7,360 | 61.7% |
+| No attrs | 18,220 | 11,388 | 19,216 | 6,084 | 4,644 | 48,824 | 59,552 | +4,884 | 62.2% |
+
+### s=8544, q288/k512
+
+| Variant | trisc0 | trisc1 | trisc2 | brisc | ncrisc | Compute | Grand | Delta | Math Util |
+|---------|-------:|-------:|-------:|------:|-------:|--------:|------:|------:|----------:|
+| Baseline (noinline, noclone) | 17,116 | 11,760 | 15,496 | 6,080 | 4,536 | 44,372 | 54,988 | — | 63.5% |
+| noinline only | 18,224 | 11,840 | 18,860 | 6,080 | 4,536 | 48,924 | 59,540 | +4,552 | 64.5% |
+| noclone only | 18,848 | 13,456 | 19,528 | 6,080 | 4,536 | 51,832 | 62,448 | +7,460 | 64.0% |
+| No attrs | 18,364 | 11,616 | 19,352 | 6,080 | 4,536 | 49,332 | 59,948 | +4,960 | 64.4% |
+
+### Analysis
+
+- **noclone only is the worst of both worlds**: largest code (+7.4 KB) with weakest perf gain
+  (+0.5–0.6pp). Allowing inlining (no `noinline`) without cloning control causes GCC to inline
+  the large template functions at all 5 call sites, bloating all three trisc cores. trisc1 (MATH)
+  jumps by +1.4–1.7 KB vs baseline — a pattern not seen in any other variant — because
+  `blocked_matmul_and_pack` gets inlined into every caller.
+- **noinline only is the sweet spot**: +4.5–4.6 KB code (comparable to no-attrs), with nearly
+  the same perf as no-attrs (+0.8–1.0pp). Dropping `noclone` lets GCC's IPA-CP pass create
+  specialized clones of the template functions without inlining them. These clones are compact
+  (shared across call sites with the same constant args) and produce better code than full
+  inlining.
+- **noinline only is actually smaller than no-attrs** on s=8544 (59,540 vs 59,948) and nearly
+  identical on s=2240 (59,288 vs 59,552). The `noinline` attribute prevents the compiler from
+  inlining on top of cloning, avoiding redundant code expansion.
+- **Recommendation**: Use `__attribute__((noinline))` only (drop `noclone`) on all 4 functions.
+  This delivers ~90% of the perf benefit at equal or lower code size compared to removing both
+  attributes. For T3000/Mochi where headroom is tight (~4 KB with no-attrs), the noinline-only
+  approach should be measured separately as it may save critical bytes.
 
 ## How to Measure Code Size
 
