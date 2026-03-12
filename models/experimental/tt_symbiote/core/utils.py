@@ -80,13 +80,16 @@ def compare_fn_outputs(torch_output, ttnn_output, func_name):
                 ttnn_output_tensors.append(item.to_torch)
 
     passed = True
-    for t_tensor, n_tensor in zip(torch_output_tensors, ttnn_output_tensors):
+    for idx, (t_tensor, n_tensor) in enumerate(zip(torch_output_tensors, ttnn_output_tensors)):
         # calculate PCC between t_tensor and n_tensor
         t_tensor = t_tensor.to(torch.float32)
         n_tensor = n_tensor.to(torch.float32)
         assert t_tensor.shape == n_tensor.shape, "Mismatched output shapes between TTNN and Torch."
         pcc = torch.corrcoef(torch.stack([t_tensor.flatten(), n_tensor.flatten()]))[0, 1]
         diff = torch.abs(t_tensor - n_tensor)
+        # Only print PCC for the first output (idx == 0), skip state
+        if idx == 0:
+            print(f"{func_name} output PCC: {pcc.item():.6f}")
         if pcc < 0.999 or (torch.median(diff) > torch.mean(diff) and torch.max(diff).item() > 1):
             passed = False
             print(
