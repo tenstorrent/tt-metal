@@ -21,7 +21,7 @@ FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
 CURRENT_CHECK=""
-MAX_CHECK_NUM=41
+MAX_CHECK_NUM=44
 
 RED='\033[0;31m'
 YELLOW='\033[1;33m'
@@ -91,6 +91,9 @@ Checks:
  39  Inline interpreter eval/exec patterns in run blocks (HIGH)
  40  github-script command execution APIs (HIGH)
  41  Inline interpreter command execution APIs (HIGH)
+ 42  Shell command execution from variables (HIGH)
+ 43  Remote script execution variants beyond pipes (HIGH)
+ 44  Attacker-controlled env vars written to GITHUB_ENV/PATH/OUTPUT (HIGH)
 EOF
     exit 0
 }
@@ -1879,6 +1882,193 @@ check_41() {
         || true)
     if [[ -n "$unsafe_usage" ]]; then
         log_issue "HIGH" "$file" "Inline interpreter command uses shell/process execution APIs in run: block - avoid executing runtime data as commands"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 42: Shell command execution from variables
+# =============================================================================
+check_42_description="shell command execution from variables"
+check_42_severity="HIGH"
+
+example_check_42() {
+    cat <<'EOF'
+# BEFORE (unsafe - variable contents are executed as shell code):
+  env:
+    USER_CMD: ${{ inputs.payload }}
+  run: bash -c "$USER_CMD"
+# AFTER (safe - do not execute runtime data as code):
+  env:
+    USER_CMD: ${{ inputs.payload }}
+  run: printf '%s\n' "$USER_CMD"
+EOF
+}
+
+check_42() {
+    local file="$1"
+    local unsafe_usage
+    unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
+        /^[[:space:]]*(-[[:space:]]+)?run:/ { print; next }
+        in_run_block { print }
+    ' "$file" 2>/dev/null | grep -E \
+        '(^|[[:space:]])(ba)?sh[[:space:]]+-c[[:space:]]+["'\'']?\$[A-Za-z_][A-Za-z0-9_]*|(^|[[:space:]])(zsh|dash|ksh)[[:space:]]+-c[[:space:]]+["'\'']?\$[A-Za-z_][A-Za-z0-9_]*|(^|[[:space:]])(pwsh|powershell)[[:space:]]+(-Command|-c)[[:space:]]+["'\'']?\$env:[A-Za-z_][A-Za-z0-9_]*' \
+        || true)
+    if [[ -n "$unsafe_usage" ]]; then
+        log_issue "HIGH" "$file" "Shell command is executed from a variable via *sh -c or PowerShell -Command - this treats runtime data as code"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 43: Remote script execution variants beyond curl | bash
+# =============================================================================
+check_43_description="remote script execution variants beyond pipes"
+check_43_severity="HIGH"
+
+example_check_43() {
+    cat <<'EOF'
+# BEFORE (unsafe - remote script executed via process substitution / IEX):
+  run: bash <(curl -sSL https://example.com/install.sh)
+  # or
+  run: pwsh -Command "iex (irm https://example.com/install.ps1)"
+# AFTER (safer - download, verify, and inspect before executing):
+  run: |
+    curl -sSL -o install.sh https://example.com/install.sh
+    sha256sum -c <<< "expected_hash  install.sh"
+    bash install.sh
+EOF
+}
+
+check_43() {
+    local file="$1"
+    local unsafe_usage
+    unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
+        /^[[:space:]]*(-[[:space:]]+)?run:/ { print; next }
+        in_run_block { print }
+    ' "$file" 2>/dev/null | grep -E \
+        '(bash|sh|zsh|ksh)[[:space:]]+<\([[:space:]]*(curl|wget)[^)]*\)|(^|[[:space:]])(\.|source)[[:space:]]+<\([[:space:]]*(curl|wget)[^)]*\)|(pwsh|powershell).*((-Command|-c).*)?(iex|Invoke-Expression)[[:space:]]*\((irm|iwr|Invoke-RestMethod|Invoke-WebRequest)[[:space:]]+' \
+        || true)
+    if [[ -n "$unsafe_usage" ]]; then
+        log_issue "HIGH" "$file" "Remote content is executed directly via process substitution or PowerShell IEX/IRM - download and verify first"
+        return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 44: Attacker-controlled env vars written to GITHUB_ENV/PATH/OUTPUT
+# =============================================================================
+check_44_description="attacker-controlled env vars written to GITHUB_ENV/PATH/OUTPUT"
+check_44_severity="HIGH"
+
+example_check_44() {
+    cat <<'EOF'
+# BEFORE (unsafe - attacker-controlled value can inject extra env/path/output entries):
+  env:
+    EXTRA_PATH: ${{ inputs.extra-path }}
+  run: echo "$EXTRA_PATH" >> "$GITHUB_PATH"
+# AFTER (safer - validate before writing, or use a trusted constant):
+  env:
+    EXTRA_PATH: ${{ inputs.extra-path }}
+  run: |
+    [[ "$EXTRA_PATH" == /opt/tools/* ]] || exit 1
+    printf '%s\n' "$EXTRA_PATH" >> "$GITHUB_PATH"
+EOF
+}
+
+check_44() {
+    local file="$1"
+    local unsafe_usage
+    unsafe_usage=$(awk '
+        BEGIN {
+            in_step = 0
+            step_indent = -1
+            in_env = 0
+            env_indent = -1
+            in_run_block = 0
+            run_indent = -1
+        }
+        function clear_env_vars(    k) {
+            for (k in dangerous_env) {
+                delete dangerous_env[k]
+            }
+        }
+        function reset_step() {
+            in_step = 0
+            step_indent = -1
+            in_env = 0
+            env_indent = -1
+            in_run_block = 0
+            run_indent = -1
+            clear_env_vars()
+        }
+        function line_uses_dangerous_var(line,    k, pat1, pat2) {
+            for (k in dangerous_env) {
+                pat1 = "\\$" k "([^A-Za-z0-9_]|$)"
+                pat2 = "\\$\\{" k "\\}"
+                if (line ~ pat1 || line ~ pat2) {
+                    return 1
+                }
+            }
+            return 0
+        }
+        {
+            match($0, /^[[:space:]]*/)
+            curr_indent = RLENGTH
+        }
+        /^[[:space:]]*-[[:space:]]/ {
+            reset_step()
+            in_step = 1
+            step_indent = curr_indent
+        }
+        in_step && curr_indent <= step_indent && $0 !~ /^[[:space:]]*-[[:space:]]/ && $0 ~ /^[[:space:]]*[A-Za-z_-]+:/ {
+            reset_step()
+        }
+        in_step && /^[[:space:]]*(-[[:space:]]+)?env:[[:space:]]*$/ {
+            in_env = 1
+            env_indent = curr_indent
+            next
+        }
+        in_env {
+            if (curr_indent <= env_indent && $0 ~ /^[[:space:]]*[A-Za-z_-]+:/) {
+                in_env = 0
+            } else if ($0 ~ /^[[:space:]]*[A-Za-z_][A-Za-z0-9_]*:[[:space:]]*\$\{\{.*(inputs\.|github\.event\.|github\.head_ref|github\.base_ref|matrix\.|steps\.[^}]+\.outputs\.|needs\.[^}]+\.outputs\.|secrets\.)/) {
+                line = $0
+                sub(/^[[:space:]]*/, "", line)
+                split(line, parts, ":")
+                dangerous_env[parts[1]] = 1
+            }
+        }
+        in_step && /^[[:space:]]*run:[[:space:]]*\|/ {
+            in_run_block = 1
+            run_indent = curr_indent
+            next
+        }
+        in_step && /^[[:space:]]*run:/ {
+            if ($0 ~ /GITHUB_(ENV|PATH|OUTPUT)/ && line_uses_dangerous_var($0)) {
+                print
+            }
+            next
+        }
+        in_run_block {
+            if ($0 ~ /^[[:space:]]*-[[:space:]]/) {
+                in_run_block = 0
+                next
+            }
+            if (curr_indent <= run_indent && $0 ~ /^[[:space:]]*[A-Za-z_-]+:/) {
+                in_run_block = 0
+                next
+            }
+            if ($0 ~ /GITHUB_(ENV|PATH|OUTPUT)/ && line_uses_dangerous_var($0)) {
+                print
+            }
+        }
+    ' "$file" 2>/dev/null)
+    if [[ -n "$unsafe_usage" ]]; then
+        log_issue "HIGH" "$file" "Attacker-controlled env var is written to GITHUB_ENV/PATH/OUTPUT - newline injection can create unintended entries"
         return 1
     fi
     return 0

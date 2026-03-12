@@ -1253,6 +1253,125 @@ jobs:
         run: python -c "import os; print(os.environ['USER_CMD'])"
 EOF
 
+# --- Check 42: Shell command execution from variables ---
+
+assert_detects "check 42 flags bash -c executing variable contents" "42" "executed from a variable" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        required: true
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          USER_CMD: ${{ inputs.payload }}
+        run: bash -c "$USER_CMD"
+EOF
+
+assert_clean "check 42 accepts shell variable treated as data" "42" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      payload:
+        required: true
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          USER_CMD: ${{ inputs.payload }}
+        run: printf '%s\n' "$USER_CMD"
+EOF
+
+# --- Check 43: Remote script execution variants beyond pipes ---
+
+assert_detects "check 43 flags bash process substitution from curl" "43" "Remote content is executed directly" <<'EOF'
+name: test
+on: push
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: bash <(curl -sSL https://example.com/install.sh)
+EOF
+
+assert_detects "check 43 flags PowerShell iex irm pattern" "43" "Remote content is executed directly" <<'EOF'
+name: test
+on: push
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: windows-latest
+    steps:
+      - run: pwsh -Command "iex (irm https://example.com/install.ps1)"
+EOF
+
+assert_clean "check 43 accepts download then verify pattern" "43" <<'EOF'
+name: test
+on: push
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -sSL -o install.sh https://example.com/install.sh
+          sha256sum -c <<< "expected_hash  install.sh"
+          bash install.sh
+EOF
+
+# --- Check 44: Attacker-controlled env vars written to GITHUB_ENV/PATH/OUTPUT ---
+
+assert_detects "check 44 flags attacker-controlled env var written to GITHUB_PATH" "44" "Attacker-controlled env var is written to GITHUB_ENV/PATH/OUTPUT" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      extra-path:
+        required: true
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          EXTRA_PATH: ${{ inputs.extra-path }}
+        run: echo "$EXTRA_PATH" >> "$GITHUB_PATH"
+EOF
+
+assert_clean "check 44 accepts validated path before GITHUB_PATH write" "44" <<'EOF'
+name: test
+on:
+  workflow_dispatch:
+    inputs:
+      extra-path:
+        required: true
+permissions:
+  contents: read
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - env:
+          EXTRA_PATH: ${{ inputs.extra-path }}
+        run: |
+          [[ "$EXTRA_PATH" == /opt/tools/* ]] || exit 1
+          printf '%s\n' "/opt/tools/bin" >> "$GITHUB_PATH"
+EOF
+
 echo ""
 echo "Results: $passed passed, $failed failed"
 
