@@ -4,7 +4,6 @@
 
 import inspect
 from dataclasses import dataclass
-from typing import Optional
 
 import torch
 from loguru import logger
@@ -22,21 +21,20 @@ DEVICE_TOP_K = 32
 class LogProbsResult:
     """Result of log-probs calculation for a batch.
 
-    Contains the sampled token's logprob and the top-K logprobs with their global indices.
-    The top-K logprobs are computed from the gathered top-k values across all devices.
+    Contains logprobs and global indices for the gathered top-k tokens across all
+    devices.  The sampled token is always part of the gathered top-k (it was selected
+    from them by ttnn.sampling), so its logprob can be looked up by matching its
+    index in ``top_k_indices``.
 
     Attributes:
-        sampled_token_logprob: Tensor of shape (1,1,1,batch_size) containing the logprob
-            of each sampled token.
-        top_k_logprobs: Tensor of shape (1,1,batch_size, num_gathered_topk) containing
-            logprobs for the gathered top-k tokens. None if top-k logprobs were not requested.
-        top_k_indices: Tensor of shape (1,1,batch_size, num_gathered_topk) containing
-            global vocabulary indices for the gathered top-k tokens. None if not requested.
+        top_k_logprobs: Tensor of shape (1, 1, batch_size, num_gathered_topk)
+            containing logprobs for the gathered top-k tokens.
+        top_k_indices: Tensor of shape (1, 1, batch_size, num_gathered_topk)
+            containing global vocabulary indices for the gathered top-k tokens.
     """
 
-    sampled_token_logprob: ttnn.Tensor
-    top_k_logprobs: Optional[ttnn.Tensor] = None
-    top_k_indices: Optional[ttnn.Tensor] = None
+    top_k_logprobs: ttnn.Tensor
+    top_k_indices: ttnn.Tensor
 
 
 class LogProbsCalculator:
@@ -434,16 +432,18 @@ class LogProbsCalculator:
         logits_tensor: ttnn.Tensor,
         topk_values: ttnn.Tensor,
         topk_global_indices: ttnn.Tensor,
-        sampled_indices: ttnn.Tensor,
     ) -> LogProbsResult | None:
-        """Calculate logprobs for both the sampled token and the gathered top-k tokens.
+        """Calculate logprobs for the gathered top-k tokens in a single pass.
 
-        This method computes:
-        1. The logprob of the sampled token (using the existing gather-based approach)
-        2. Logprobs for all gathered top-k tokens (using the raw top-k logit values)
+        The sampled token is always part of the gathered top-k (it was selected
+        from them by ttnn.sampling), so there is no need to compute its logprob
+        separately — the caller can look it up by matching its token ID in
+        ``top_k_indices``.
 
-        Both computations share the same global statistics (max, sum-exp) computed once
-        from the full logits tensor.
+        Steps:
+        1. Compute global statistics (max, sum-exp) from the full sharded logits.
+        2. Apply the log-softmax formula to the gathered top-k raw logit values:
+           logprob = logit - global_max - log(global_exp_sum)
 
         Args:
             logits_tensor: Full logits tensor, sharded across devices.
@@ -452,12 +452,10 @@ class LogProbsCalculator:
                 Shape: (1, 1, batch_size, num_devices * max_top_k). Raw logit values.
             topk_global_indices: Global vocabulary indices for the gathered top-k tokens.
                 Shape: (1, 1, batch_size, num_devices * max_top_k). Int32.
-            sampled_indices: Indices of sampled tokens.
-                Shape varies by caller, typically (1, 1, 1, batch_size) or similar.
 
         Returns:
-            LogProbsResult containing sampled token logprob and top-k logprobs/indices,
-            or None if logprobs are not enabled or device is not supported.
+            LogProbsResult with top-k logprobs and indices, or None if logprobs
+            are not enabled or the device configuration is unsupported.
         """
         if not self.enable_log_probs:
             return None
@@ -469,28 +467,19 @@ class LogProbsCalculator:
         if logits_tensor.dtype == ttnn.bfloat8_b:
             logits_tensor = ttnn.typecast(logits_tensor, ttnn.bfloat16, **self.common_args)
 
-        # Compute global max and global sum-exp from full logits (shared by both computations)
+        # Compute global max and global sum-exp from full logits
         self._compute_global_stats(logits_tensor)
 
-        # 1. Compute sampled token logprob (existing approach: gather + log-softmax)
-        relevant_logits = self._prepare_relevant_logits(logits_tensor, sampled_indices)
-        self._calculate_log_probs(relevant_logits)
+        # Ensure topk_values is bfloat16 for consistent computation
+        if topk_values.dtype != ttnn.bfloat16:
+            topk_values = ttnn.typecast(topk_values, ttnn.bfloat16, **self.common_args)
 
-        # 2. Compute top-k logprobs from gathered top-k values if any user requested them
-        top_k_logprobs = None
-        top_k_indices = None
-        if self.top_k_logprobs_needed:
-            # Ensure topk_values is bfloat16 for consistent computation
-            if topk_values.dtype != ttnn.bfloat16:
-                topk_values = ttnn.typecast(topk_values, ttnn.bfloat16, **self.common_args)
-
-            top_k_logprobs = self._calculate_top_k_log_probs_from_values(topk_values)
-            top_k_indices = topk_global_indices
+        # Single-pass logprob computation for all gathered top-k tokens
+        top_k_logprobs = self._calculate_top_k_log_probs_from_values(topk_values)
 
         return LogProbsResult(
-            sampled_token_logprob=self.output_tensor,
             top_k_logprobs=top_k_logprobs,
-            top_k_indices=top_k_indices,
+            top_k_indices=topk_global_indices,
         )
 
     def get_host_results(
@@ -502,8 +491,10 @@ class LogProbsCalculator:
     ) -> list[dict]:
         """Convert device tensors to structured per-user result dicts on the host.
 
-        Transfers logprobs data from device to host and trims each user's top logprobs
-        to their requested count. Returns the OpenAI-compatible response structure.
+        Transfers top-k logprobs data from device to host.  The sampled token's
+        logprob is found by matching its ID in the top-k indices (the sampled
+        token is always part of the gathered top-k).  Each user's top logprobs
+        are sorted descending and trimmed to the requested count.
 
         Args:
             log_probs_result: LogProbsResult from calculate_top_k_log_probs.
@@ -526,33 +517,20 @@ class LogProbsCalculator:
         if num_logprobs_per_user is None:
             num_logprobs_per_user = self.num_logprobs
 
-        # Transfer sampled token logprob to host
-        sampled_logprob_host = ttnn.to_torch(
-            log_probs_result.sampled_token_logprob,
+        # Transfer top-k logprobs and indices to host
+        top_k_logprobs_host = ttnn.to_torch(
+            log_probs_result.top_k_logprobs,
             mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3),
         )
-        # Slice to (1,1,1,batch_size) → extract first replica
-        sampled_logprob_host = sampled_logprob_host[:, :, :1, : self.batch_size].squeeze()
+        K = log_probs_result.top_k_logprobs.shape[-1]
+        top_k_logprobs_host = top_k_logprobs_host[:, :, : self.batch_size, :K].squeeze(0).squeeze(0)
 
-        # Transfer top-k logprobs and indices to host if available
-        top_k_logprobs_host = None
-        top_k_indices_host = None
-        if log_probs_result.top_k_logprobs is not None:
-            top_k_logprobs_host = ttnn.to_torch(
-                log_probs_result.top_k_logprobs,
-                mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3),
-            )
-            # Shape after compose: (1,1,batch_size, K*num_replicas) → slice to actual K
-            K = log_probs_result.top_k_logprobs.shape[-1]
-            top_k_logprobs_host = top_k_logprobs_host[:, :, : self.batch_size, :K].squeeze(0).squeeze(0)
-
-        if log_probs_result.top_k_indices is not None:
-            top_k_indices_host = ttnn.to_torch(
-                log_probs_result.top_k_indices,
-                mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3),
-            )
-            K = log_probs_result.top_k_indices.shape[-1]
-            top_k_indices_host = top_k_indices_host[:, :, : self.batch_size, :K].squeeze(0).squeeze(0)
+        top_k_indices_host = ttnn.to_torch(
+            log_probs_result.top_k_indices,
+            mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3),
+        )
+        K = log_probs_result.top_k_indices.shape[-1]
+        top_k_indices_host = top_k_indices_host[:, :, : self.batch_size, :K].squeeze(0).squeeze(0)
 
         results = []
         for user_idx in range(self.batch_size):
@@ -560,10 +538,22 @@ class LogProbsCalculator:
                 results.append(None)
                 continue
 
+            sampled_id = int(sampled_token_ids[user_idx].item())
+            user_topk_logprobs = top_k_logprobs_host[user_idx]
+            user_topk_indices = top_k_indices_host[user_idx].int()
+
+            # Look up the sampled token's logprob from the top-k array
+            match_mask = user_topk_indices == sampled_id
+            if match_mask.any():
+                sampled_logprob = float(user_topk_logprobs[match_mask][0].item())
+            else:
+                # Should not happen — sampled token is always in gathered top-k
+                sampled_logprob = float("nan")
+
             user_result = {
                 "returned_token": {
-                    "token_idx": int(sampled_token_ids[user_idx].item()),
-                    "logprob": float(sampled_logprob_host[user_idx].item()),
+                    "token_idx": sampled_id,
+                    "logprob": sampled_logprob,
                 },
                 "top_logprobs": {
                     "token_indices": [],
@@ -571,16 +561,14 @@ class LogProbsCalculator:
                 },
             }
 
-            # Populate top logprobs if requested and available
+            # Populate top logprobs if requested
             n = num_logprobs_per_user[user_idx] if user_idx < len(num_logprobs_per_user) else 0
-            if n > 0 and top_k_logprobs_host is not None and top_k_indices_host is not None:
-                user_topk_logprobs = top_k_logprobs_host[user_idx]
-                user_topk_indices = top_k_indices_host[user_idx]
+            if n > 0:
                 # Sort by logprob descending and take top-N
                 sorted_order = torch.argsort(user_topk_logprobs, descending=True)
                 top_n = min(n, len(sorted_order))
                 selected = sorted_order[:top_n]
-                user_result["top_logprobs"]["token_indices"] = user_topk_indices[selected].int().tolist()
+                user_result["top_logprobs"]["token_indices"] = user_topk_indices[selected].tolist()
                 user_result["top_logprobs"]["logprobs"] = user_topk_logprobs[selected].float().tolist()
 
             results.append(user_result)

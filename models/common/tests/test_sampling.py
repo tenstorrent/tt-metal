@@ -303,7 +303,6 @@ def test_top_k_log_probs_on_t3k(shape, mesh_device):
 
     # Get sampled indices (argmax for this test)
     argmax_tensor = torch.argmax(torch_tensor, dim=-1, keepdim=True)
-    sampled_indices = argmax_tensor.reshape(1, 1, argmax_tensor.shape[-1], argmax_tensor.shape[-2])
 
     # Push tensors to device
     logits_tensor = ttnn.from_torch(
@@ -330,15 +329,6 @@ def test_top_k_log_probs_on_t3k(shape, mesh_device):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    sampled_indices_tt = ttnn.from_torch(
-        sampled_indices,
-        device=mesh_device,
-        dtype=ttnn.int32,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
     # Enable top-K logprobs (num_logprobs=5 for all users)
     enable_log_probs = [True] * batch_size
     num_logprobs_list = [5] * batch_size
@@ -346,27 +336,37 @@ def test_top_k_log_probs_on_t3k(shape, mesh_device):
     assert log_probs_calculator.top_k_logprobs_needed, "top_k_logprobs_needed should be True"
 
     # Calculate top-K logprobs on device
-    result = log_probs_calculator.calculate_top_k_log_probs(
-        logits_tensor, topk_values_tt, topk_indices_tt, sampled_indices_tt
-    )
+    result = log_probs_calculator.calculate_top_k_log_probs(logits_tensor, topk_values_tt, topk_indices_tt)
 
     assert result is not None, "Expected LogProbsResult, got None"
     assert isinstance(result, LogProbsResult), f"Expected LogProbsResult, got {type(result)}"
     assert result.top_k_logprobs is not None, "top_k_logprobs should not be None when requested"
     assert result.top_k_indices is not None, "top_k_indices should not be None when requested"
 
-    # 1. Verify sampled token logprob (existing check)
-    sampled_logprob_host = ttnn.to_torch(
-        result.sampled_token_logprob, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3)
+    # 1. Verify sampled token logprob by looking it up from top-k arrays
+    topk_logprobs_host_all = ttnn.to_torch(
+        result.top_k_logprobs, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3)
     )
-    sampled_logprob_host = sampled_logprob_host[:, :, :1, :batch_size]
+    topk_indices_host_all = ttnn.to_torch(
+        result.top_k_indices, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3)
+    )
+    K = result.top_k_logprobs.shape[-1]
+    topk_logprobs_for_lookup = topk_logprobs_host_all[:, :, :batch_size, :K].squeeze(0).squeeze(0)
+    topk_indices_for_lookup = topk_indices_host_all[:, :, :batch_size, :K].squeeze(0).squeeze(0)
 
     torch_sampled_logprob = torch.gather(log_probs_torch, dim=-1, index=argmax_tensor)
-    torch_sampled_logprob = torch.reshape(torch_sampled_logprob, (1, 1, 1, batch_size))
+    torch_sampled_logprob = torch.reshape(torch_sampled_logprob, (batch_size,))
 
-    passing, pcc = comp_pcc(torch_sampled_logprob, sampled_logprob_host, pcc=0.99)
-    print(f"Sampled token logprob PCC={pcc}")
-    assert passing, f"Sampled token logprob PCC failed: {pcc}"
+    for user_idx in range(batch_size):
+        sampled_token_id = argmax_tensor[0, 0, user_idx, 0].item()
+        match_mask = topk_indices_for_lookup[user_idx] == sampled_token_id
+        assert match_mask.any(), f"User {user_idx}: sampled token {sampled_token_id} not found in top-k indices"
+        device_sampled_lp = topk_logprobs_for_lookup[user_idx][match_mask][0].item()
+        torch_sampled_lp = torch_sampled_logprob[user_idx].item()
+        assert abs(device_sampled_lp - torch_sampled_lp) < 0.05, (
+            f"User {user_idx} sampled token logprob mismatch: device={device_sampled_lp:.6f}, "
+            f"torch={torch_sampled_lp:.6f}"
+        )
 
     # 2. Verify top-K logprobs match PyTorch for the same token indices
     topk_logprobs_host = ttnn.to_torch(result.top_k_logprobs, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
@@ -437,7 +437,6 @@ def test_top_k_log_probs_on_galaxy(shape, mesh_device):
     gathered_values, gathered_indices = _simulate_gathered_topk(torch_tensor, num_devices, top_k)
 
     argmax_tensor = torch.argmax(torch_tensor, dim=-1, keepdim=True)
-    sampled_indices = argmax_tensor.reshape(1, 1, argmax_tensor.shape[-1], argmax_tensor.shape[-2])
 
     if mesh_device.get_num_devices() == 32:
         logits_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=(-1, None), mesh_shape=list(mesh_device.shape))
@@ -468,37 +467,39 @@ def test_top_k_log_probs_on_galaxy(shape, mesh_device):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    sampled_indices_tt = ttnn.from_torch(
-        sampled_indices,
-        device=mesh_device,
-        dtype=ttnn.int32,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
     enable_log_probs = [True] * batch_size
     num_logprobs_list = [10] * batch_size
     log_probs_calculator.set_log_probs_mode(enable_log_probs, num_logprobs=num_logprobs_list)
 
-    result = log_probs_calculator.calculate_top_k_log_probs(
-        logits_tensor, topk_values_tt, topk_indices_tt, sampled_indices_tt
-    )
+    result = log_probs_calculator.calculate_top_k_log_probs(logits_tensor, topk_values_tt, topk_indices_tt)
 
     assert result is not None, "Expected LogProbsResult, got None"
     assert result.top_k_logprobs is not None, "top_k_logprobs should not be None"
 
-    # Verify sampled token logprob
-    sampled_logprob_host = ttnn.to_torch(
-        result.sampled_token_logprob, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3)
+    # Verify sampled token logprob by looking it up from top-k arrays
+    topk_logprobs_host_all = ttnn.to_torch(
+        result.top_k_logprobs, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3)
     )
-    sampled_logprob_host = sampled_logprob_host[:, :, :1, :batch_size]
-    torch_sampled_logprob = torch.gather(log_probs_torch, dim=-1, index=argmax_tensor)
-    torch_sampled_logprob = torch.reshape(torch_sampled_logprob, (1, 1, 1, batch_size))
+    topk_indices_host_all = ttnn.to_torch(
+        result.top_k_indices, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3)
+    )
+    K = result.top_k_logprobs.shape[-1]
+    topk_logprobs_for_lookup = topk_logprobs_host_all[:, :, :batch_size, :K].squeeze(0).squeeze(0)
+    topk_indices_for_lookup = topk_indices_host_all[:, :, :batch_size, :K].squeeze(0).squeeze(0)
 
-    passing, pcc = comp_pcc(torch_sampled_logprob, sampled_logprob_host, pcc=0.99)
-    print(f"Galaxy sampled token logprob PCC={pcc}")
-    assert passing, f"Galaxy sampled token logprob PCC failed: {pcc}"
+    torch_sampled_logprob = torch.gather(log_probs_torch, dim=-1, index=argmax_tensor)
+    torch_sampled_logprob = torch.reshape(torch_sampled_logprob, (batch_size,))
+
+    for user_idx in range(batch_size):
+        sampled_token_id = argmax_tensor[0, 0, user_idx, 0].item()
+        match_mask = topk_indices_for_lookup[user_idx] == sampled_token_id
+        assert match_mask.any(), f"User {user_idx}: sampled token {sampled_token_id} not found in top-k indices"
+        device_sampled_lp = topk_logprobs_for_lookup[user_idx][match_mask][0].item()
+        torch_sampled_lp = torch_sampled_logprob[user_idx].item()
+        assert abs(device_sampled_lp - torch_sampled_lp) < 0.05, (
+            f"User {user_idx} sampled token logprob mismatch: device={device_sampled_lp:.6f}, "
+            f"torch={torch_sampled_lp:.6f}"
+        )
 
     # Verify top-K logprobs
     topk_logprobs_host = ttnn.to_torch(result.top_k_logprobs, mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=3))
@@ -539,7 +540,6 @@ def test_top_k_log_probs_returns_none_when_not_needed(shape, mesh_device):
     torch_tensor = torch.randn(shape)
     gathered_values, gathered_indices = _simulate_gathered_topk(torch_tensor, 8, 32)
     argmax_tensor = torch.argmax(torch_tensor, dim=-1, keepdim=True)
-    sampled_indices = argmax_tensor.reshape(1, 1, argmax_tensor.shape[-1], argmax_tensor.shape[-2])
 
     logits_tensor = ttnn.from_torch(
         torch_tensor,
@@ -565,31 +565,17 @@ def test_top_k_log_probs_returns_none_when_not_needed(shape, mesh_device):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    sampled_indices_tt = ttnn.from_torch(
-        sampled_indices,
-        device=mesh_device,
-        dtype=ttnn.int32,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
     # Case 1: logprobs disabled entirely → should return None
     log_probs_calculator.set_log_probs_mode(False, num_logprobs=0)
-    result = log_probs_calculator.calculate_top_k_log_probs(
-        logits_tensor, topk_values_tt, topk_indices_tt, sampled_indices_tt
-    )
+    result = log_probs_calculator.calculate_top_k_log_probs(logits_tensor, topk_values_tt, topk_indices_tt)
     assert result is None, "Expected None when logprobs disabled"
 
     # Case 2: logprobs enabled but num_logprobs=0 for all users → sampled token only
     log_probs_calculator.set_log_probs_mode(True, num_logprobs=0)
     assert not log_probs_calculator.top_k_logprobs_needed, "top_k_logprobs_needed should be False"
-    result = log_probs_calculator.calculate_top_k_log_probs(
-        logits_tensor, topk_values_tt, topk_indices_tt, sampled_indices_tt
-    )
+    result = log_probs_calculator.calculate_top_k_log_probs(logits_tensor, topk_values_tt, topk_indices_tt)
     # With top_k_logprobs_needed=False, this still returns a result with top_k=None
     assert result is not None, "Expected LogProbsResult when logprobs enabled"
-    assert result.sampled_token_logprob is not None, "sampled_token_logprob should be present"
     assert result.top_k_logprobs is None, "top_k_logprobs should be None when num_logprobs=0"
     assert result.top_k_indices is None, "top_k_indices should be None when num_logprobs=0"
 
@@ -627,7 +613,6 @@ def test_per_user_logprobs_enabled(shape, mesh_device):
 
     gathered_values, gathered_indices = _simulate_gathered_topk(torch_tensor, 8, 32)
     argmax_tensor = torch.argmax(torch_tensor, dim=-1, keepdim=True)
-    sampled_indices = argmax_tensor.reshape(1, 1, argmax_tensor.shape[-1], argmax_tensor.shape[-2])
 
     logits_tensor = ttnn.from_torch(
         torch_tensor,
@@ -653,15 +638,6 @@ def test_per_user_logprobs_enabled(shape, mesh_device):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    sampled_indices_tt = ttnn.from_torch(
-        sampled_indices,
-        device=mesh_device,
-        dtype=ttnn.int32,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
     # Enable logprobs for only half the users (even indices), with varying num_logprobs
     enable_log_probs = [i % 2 == 0 for i in range(batch_size)]
     num_logprobs_list = [5 if i % 2 == 0 else 0 for i in range(batch_size)]
@@ -671,9 +647,7 @@ def test_per_user_logprobs_enabled(shape, mesh_device):
     assert log_probs_calculator.top_k_logprobs_needed, "top_k_logprobs_needed should be True"
     assert log_probs_calculator.logprobs_enabled == enable_log_probs, "Per-user logprobs_enabled mismatch"
 
-    result = log_probs_calculator.calculate_top_k_log_probs(
-        logits_tensor, topk_values_tt, topk_indices_tt, sampled_indices_tt
-    )
+    result = log_probs_calculator.calculate_top_k_log_probs(logits_tensor, topk_values_tt, topk_indices_tt)
     assert result is not None, "Expected LogProbsResult"
 
     # Verify get_host_results returns None for disabled users
@@ -728,7 +702,6 @@ def test_get_host_results_response_format(shape, mesh_device):
 
     gathered_values, gathered_indices = _simulate_gathered_topk(torch_tensor, 8, 32)
     argmax_tensor = torch.argmax(torch_tensor, dim=-1, keepdim=True)
-    sampled_indices = argmax_tensor.reshape(1, 1, argmax_tensor.shape[-1], argmax_tensor.shape[-2])
 
     logits_tensor = ttnn.from_torch(
         torch_tensor,
@@ -754,23 +727,12 @@ def test_get_host_results_response_format(shape, mesh_device):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    sampled_indices_tt = ttnn.from_torch(
-        sampled_indices,
-        device=mesh_device,
-        dtype=ttnn.int32,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
     # Request different num_logprobs per user
     num_logprobs_list = [(i % MAX_TOP_LOGPROBS) + 1 for i in range(batch_size)]  # 1 to 20
     enable_log_probs = [True] * batch_size
     log_probs_calculator.set_log_probs_mode(enable_log_probs, num_logprobs=num_logprobs_list)
 
-    result = log_probs_calculator.calculate_top_k_log_probs(
-        logits_tensor, topk_values_tt, topk_indices_tt, sampled_indices_tt
-    )
+    result = log_probs_calculator.calculate_top_k_log_probs(logits_tensor, topk_values_tt, topk_indices_tt)
     assert result is not None
 
     sampled_ids = argmax_tensor.squeeze()
@@ -954,7 +916,6 @@ def test_top_k_logprobs_pcc_host_vs_device_20_logprobs(shape, mesh_device):
 
     # Sampled token indices (argmax)
     argmax_tensor = torch.argmax(torch_tensor, dim=-1, keepdim=True)
-    sampled_indices = argmax_tensor.reshape(1, 1, argmax_tensor.shape[-1], argmax_tensor.shape[-2])
 
     # Push tensors to device
     logits_tensor = ttnn.from_torch(
@@ -981,24 +942,13 @@ def test_top_k_logprobs_pcc_host_vs_device_20_logprobs(shape, mesh_device):
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    sampled_indices_tt = ttnn.from_torch(
-        sampled_indices,
-        device=mesh_device,
-        dtype=ttnn.int32,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-    )
-
     # All users request 20 logprobs
     enable_log_probs = [True] * batch_size
     num_logprobs_list = [requested_logprobs] * batch_size
     log_probs_calculator.set_log_probs_mode(enable_log_probs, num_logprobs=num_logprobs_list)
 
     # Run device computation
-    result = log_probs_calculator.calculate_top_k_log_probs(
-        logits_tensor, topk_values_tt, topk_indices_tt, sampled_indices_tt
-    )
+    result = log_probs_calculator.calculate_top_k_log_probs(logits_tensor, topk_values_tt, topk_indices_tt)
     assert result is not None, "Expected LogProbsResult"
 
     # Get structured host results (sorted, trimmed to 20 per user)

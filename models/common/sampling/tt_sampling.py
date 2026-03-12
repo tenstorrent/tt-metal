@@ -11,7 +11,7 @@ from loguru import logger
 import ttnn
 from models.common.lightweightmodule import LightweightModule
 from models.common.sampling._utils import is_default_value, is_power_of_2, upper_power_of_2
-from models.common.sampling.tt_log_probs import LogProbsCalculator, LogProbsResult
+from models.common.sampling.tt_log_probs import LogProbsCalculator
 
 
 class TTSampling(LightweightModule):
@@ -419,17 +419,10 @@ class TTSampling(LightweightModule):
                 keepdim=False,
                 use_multicore=True,
             )
-            # Calculate sampled token logprob only for argmax path
-            # (top-k logprobs not available since there's no top-k selection in this path)
-            sampled_logprob = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
-            if sampled_logprob is not None:
-                self.tt_log_probs = LogProbsResult(
-                    sampled_token_logprob=sampled_logprob,
-                    top_k_logprobs=None,
-                    top_k_indices=None,
-                )
-            else:
-                self.tt_log_probs = None
+            # Argmax path: no top-k selection, so return the raw sampled-token
+            # logprob tensor directly (not wrapped in LogProbsResult).
+            # The vllm host side handles both raw tensors and LogProbsResult.
+            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
             return tt_out_tok, self.tt_log_probs
 
         # Convert to bfloat16 for top-k operations (typecast is no-op if already bfloat16)
@@ -576,18 +569,17 @@ class TTSampling(LightweightModule):
         )
 
         # Calculate logprobs before deallocating gathered topk tensors.
-        # If top-k logprobs are needed, use calculate_top_k_log_probs which computes
-        # logprobs for both the sampled token and the gathered top-k tokens.
-        # Otherwise, fall back to the original calculate_log_probs for sampled token only.
-        if self.log_probs_calculator.enable_log_probs and self.log_probs_calculator.top_k_logprobs_needed:
+        # Logprobs are computed once for all gathered top-k tokens. The sampled
+        # token is always part of the gathered top-k, so its logprob can be
+        # looked up by the caller using its index in top_k_indices.
+        if self.log_probs_calculator.enable_log_probs:
             self.tt_log_probs = self.log_probs_calculator.calculate_top_k_log_probs(
                 logits_tensor=x,
                 topk_values=topk_values_gathered_bf16_interleaved,
                 topk_global_indices=topk_global_indices,
-                sampled_indices=tt_out_tok,
             )
         else:
-            self.tt_log_probs = self.log_probs_calculator.calculate_log_probs(x, tt_out_tok)
+            self.tt_log_probs = None
 
         ttnn.deallocate(topk_values_gathered_bf16_interleaved)
         ttnn.deallocate(topk_global_indices_interleaved_untilised)
