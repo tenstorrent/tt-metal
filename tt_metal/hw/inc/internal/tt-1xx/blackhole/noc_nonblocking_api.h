@@ -1079,6 +1079,34 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     }
 }
 
+template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool flush = true>
+inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint32_t val,
+    uint64_t dest_addr,
+    uint32_t be,
+    uint32_t static_vc,
+    bool mcast,
+    bool posted = false,
+    uint32_t customized_src_addr = 0,
+    uint32_t num_dests = 1) {
+    if constexpr (dst_type == InlineWriteDst::DEFAULT) {
+        if ((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR) {
+            noc_fast_default_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
+        } else {
+            noc_fast_spoof_write_dw_inline<noc_mode, flush>(
+                noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr);
+        }
+    } else if constexpr (dst_type == InlineWriteDst::L1) {
+        noc_fast_spoof_write_dw_inline<noc_mode, flush>(
+            noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr);
+    } else {
+        ASSERT((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR);
+        noc_fast_default_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
+    }
+}
+
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool program_ret_addr = false>
 inline __attribute__((always_inline)) void noc_fast_atomic_increment(
     uint32_t noc,

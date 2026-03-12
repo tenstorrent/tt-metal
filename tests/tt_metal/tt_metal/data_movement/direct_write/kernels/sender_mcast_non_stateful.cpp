@@ -1,3 +1,7 @@
+// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
 #include "api/dataflow/dataflow_api.h"
 #include "hw/inc/api/debug/dprint.h"
 
@@ -27,13 +31,13 @@ void kernel_main() {
             for (uint32_t i = 0; i < num_writes; i++) {
                 uint32_t write_value = write_value_base + i;
                 noc_inline_mcast_dw_write<InlineWriteDst::DEFAULT, true, true>(
-                    dst_noc_addr_multicast, write_value, 0xF, noc_index, NOC_MULTICAST_WRITE_VC, num_subordinates);
+                    dst_noc_addr_multicast, write_value, 0xF, noc_index, NOC_MULTICAST_WRITE_VC, 0, num_subordinates);
             }
         } else {
             for (uint32_t i = 0; i < num_writes; i++) {
                 uint32_t write_value = write_value_base + i;
                 noc_inline_mcast_dw_write<InlineWriteDst::DEFAULT, true, true>(
-                    dst_noc_addr_multicast, write_value, 0xF, noc_index, NOC_MULTICAST_WRITE_VC, num_subordinates);
+                    dst_noc_addr_multicast, write_value, 0xF, noc_index, NOC_MULTICAST_WRITE_VC, 0, num_subordinates);
                 dst_noc_addr_multicast += addr_stride;
             }
         }
@@ -48,5 +52,5 @@ void kernel_main() {
     DeviceTimestampedData("Number of transactions", num_writes);
     DeviceTimestampedData("Transaction size in bytes", 32);
     DeviceTimestampedData("Multicast", 1);
-    DeviceTimestampedData("NoC Index", noc_id);
+    DeviceTimestampedData("NoC Index", noc_index);
 }
