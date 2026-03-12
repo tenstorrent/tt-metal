@@ -203,7 +203,7 @@ jobs:
       # name clashes.
       build-type: ${{ (inputs.build-type == 'Release' && 'Debug') || 'Release' }}
       build-wheel: true
-      publish-artifact: false
+      publish-artifact: true
       skip-tt-train: false
       distributed: false
       ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
