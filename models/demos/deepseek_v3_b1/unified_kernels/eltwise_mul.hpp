@@ -82,7 +82,8 @@ struct EltwiseMul {
         uint32_t cb_in1_wait_tiles_,
         uint32_t cb_scalar_,
         uint32_t fp32_dest_acc_en_ = 0,
-        uint32_t enable_scalar_ = 1>
+        uint32_t enable_scalar_ = 1,
+        uint32_t cb_in1_tile_offset_ = 0>
     struct ComputeCTArgs {
         static constexpr uint32_t cb_in0 = cb_in0_;
         static constexpr uint32_t cb_in1 = cb_in1_;
@@ -95,6 +96,9 @@ struct EltwiseMul {
         static constexpr uint32_t cb_scalar = cb_scalar_;
         static constexpr bool fp32_dest_acc_en = fp32_dest_acc_en_ == 1;
         static constexpr bool enable_scalar = enable_scalar_ == 1;
+        // Tile offset for in1 when in0 and in1 share the same CB.
+        // Enables coalesced CB patterns: mul_tiles(cb, cb, i, i+offset, i)
+        static constexpr uint32_t cb_in1_tile_offset = cb_in1_tile_offset_;
     };
 
     // ========================================================================
@@ -153,8 +157,12 @@ struct EltwiseMul {
 
             // Wait for both inputs
             // cb_in0_wait/cb_in1_wait allow waiting on different CBs (for CB aliasing)
+            // When inputs are coalesced (same CB), a single wait suffices —
+            // SDF analysis guarantees all tiles are produced before this op fires.
             cb_wait_front(CTArgs::cb_in0_wait, CTArgs::cb_in0_wait_tiles);
-            cb_wait_front(CTArgs::cb_in1_wait, CTArgs::cb_in1_wait_tiles);
+            if constexpr (CTArgs::cb_in0_wait != CTArgs::cb_in1_wait) {
+                cb_wait_front(CTArgs::cb_in1_wait, CTArgs::cb_in1_wait_tiles);
+            }
 
             // Reserve output space
             cb_reserve_back(CTArgs::cb_out, num_tiles);
@@ -185,6 +193,9 @@ struct EltwiseMul {
                 }
             } else {
                 // ---- Simple binary multiply: in0 * in1 -> dest ----
+                // cb_in1_tile_offset: when in0 and in1 share a CB (coalesced),
+                // in1 tiles start at this offset. E.g., offset=1 gives
+                // mul_tiles(cb, cb, 0, 1, 0) matching hand-fused patterns.
                 reconfig_data_format<false, true>(CTArgs::cb_in0, CTArgs::cb_in1);
                 pack_reconfig_data_format<true>(CTArgs::cb_out);
                 mul_tiles_init(CTArgs::cb_in0, CTArgs::cb_in1);
@@ -192,7 +203,7 @@ struct EltwiseMul {
                 tile_regs_acquire();
 
                 for (uint32_t i = 0; i < num_tiles; i++) {
-                    mul_tiles(CTArgs::cb_in0, CTArgs::cb_in1, i, i, i);
+                    mul_tiles(CTArgs::cb_in0, CTArgs::cb_in1, i, i + CTArgs::cb_in1_tile_offset, i);
                 }
             }
 
@@ -208,7 +219,10 @@ struct EltwiseMul {
             // Pop from cb_in0_wait (not cb_in0) since that's where tiles were pushed
             if constexpr (PopInputs) {
                 cb_pop_front(CTArgs::cb_in0_wait, CTArgs::cb_in0_wait_tiles);
-                cb_pop_front(CTArgs::cb_in1_wait, CTArgs::cb_in1_wait_tiles);
+                // When inputs are coalesced (same CB), in0_wait already pops all tiles
+                if constexpr (CTArgs::cb_in0_wait != CTArgs::cb_in1_wait) {
+                    cb_pop_front(CTArgs::cb_in1_wait, CTArgs::cb_in1_wait_tiles);
+                }
                 if constexpr (CTArgs::enable_scalar) {
                     cb_pop_front(CTArgs::cb_scalar, 1);
                 }
