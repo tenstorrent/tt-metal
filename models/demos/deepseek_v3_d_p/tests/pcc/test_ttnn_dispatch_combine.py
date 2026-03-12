@@ -16,6 +16,8 @@ from loguru import logger
 from tracy import signpost
 
 import ttnn
+from models.demos.deepseek_v3_d_p.reference.moe.combine import TorchCombineModule
+from models.demos.deepseek_v3_d_p.reference.moe.dispatch import TorchDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     create_expert_dispatch_table,
@@ -29,6 +31,7 @@ from models.demos.deepseek_v3_d_p.tt.moe.tt_combine import TtCombineModule
 from models.demos.deepseek_v3_d_p.tt.moe.tt_dispatch import TtDispatchModule
 from models.demos.deepseek_v3_d_p.tt.moe.validation_helpers import (
     log_combine_mismatch_details,
+    validate_combine_output,
     validate_roundtrip_output,
 )
 from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert_dispatch_table, log_validation_results
@@ -257,6 +260,36 @@ def test_ttnn_dispatch_combine(
     ttnn.synchronize_device(mesh_device)
     logger.info("Dispatch complete!")
 
+    # --- Torch reference for verbose validation ---
+    torch_dispatch_module = TorchDispatchModule(
+        dispatch_group_size=dispatch_group_size,
+        experts_per_chip=experts_per_chip,
+        num_routed_experts=num_routed_experts,
+        num_experts_per_tok=num_experts_per_tok,
+        metadata_len=metadata_len,
+        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        seq_len_per_chip=seq_len_per_chip,
+        hidden_dim=hidden_dim,
+        num_dispatch_groups=num_dispatch_groups,
+        expert_dispatch_table=expert_dispatch_table,
+    )
+
+    torch_dispatched_buffer, torch_dispatched_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
+
+    # Transform logical chip IDs to linearized coords (same as test_prefill_combine.py)
+    for r in range(num_dispatch_groups):
+        torch_dispatched_metadata[r, :, :, :, 0] = torch_dispatched_metadata[r, :, :, :, 0] * num_dispatch_groups + r
+
+    torch_combine_module = TorchCombineModule(
+        dispatch_group_size=dispatch_group_size,
+        experts_per_chip=experts_per_chip,
+        num_experts_per_tok=num_experts_per_tok,
+        seq_len_per_chip=seq_len_per_chip,
+        num_dispatch_groups=num_dispatch_groups,
+    )
+
+    torch_output = torch_combine_module(torch_dispatched_buffer, torch_dispatched_metadata, expert_token_counts)
+
     # Convert counter to TTNN tensor for combine module
     # For 2D mesh, use dims=(1, 0) to shard across both axes
     mesh_mapper_2d = ttnn.ShardTensor2dMesh(
@@ -304,6 +337,26 @@ def test_ttnn_dispatch_combine(
 
     # Host-side reduction: remove extra dimension added for 2D mesh composition
     y = y.squeeze(-4)
+
+    # Verbose combine validation (compare torch combine vs TTNN combine)
+    combine_result = validate_combine_output(
+        torch_output,
+        y,
+        indices,
+        num_dispatch_groups,
+        num_routed_experts,
+        verbose=True,
+        expert_dispatch_table=expert_dispatch_table,
+        expert_token_counts=expert_token_counts,
+        experts_per_chip=experts_per_chip,
+    )
+
+    log_validation_results(
+        results=[combine_result],
+        num_dispatch_groups=num_dispatch_groups,
+        dispatch_group_size=dispatch_group_size,
+        title="Combine Validation Results (verbose)",
+    )
 
     # Verify round-trip correctness
     # NOTE: Current combine kernel does NOT all-reduce across EP ranks.
