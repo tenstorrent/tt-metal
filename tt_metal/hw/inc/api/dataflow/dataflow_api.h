@@ -86,6 +86,33 @@ inline uint8_t get_relative_logical_y() {
     return my_relative_y_;
 }
 
+#ifdef ARCH_QUASAR
+#include "internal/tt-2xx/quasar/kernel_thread_globals.h"
+// clang-format off
+/**
+ * Returns the number of threads (processors) in the kernel that this processor belongs to.
+ * Set by Quasar firmware from kernel_config before the kernel runs. Valid only on ARCH_QUASAR.
+ *
+ * Return value: Number of kernel threads (num_processors_per_cluster for this kernel).
+ */
+// clang-format on
+inline uint32_t get_num_threads() {
+    return num_sw_threads;
+}
+
+// clang-format off
+/**
+ * Returns this processor's thread ID within its kernel (0 to get_num_threads() - 1).
+ * Set by Quasar firmware from kernel_config before the kernel runs. Valid only on ARCH_QUASAR.
+ *
+ * Return value: Thread ID for this processor.
+ */
+// clang-format on
+inline uint32_t get_my_thread_id() {
+    return my_thread_id;
+}
+#endif
+
 // clang-format off
 /**
  * Helper function to check if an address is in L1 memory space (not register space).
