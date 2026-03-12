@@ -27,17 +27,11 @@ void kernel_main() {
                                               ? get_noc_multicast_addr(start_x, start_y, end_x, end_y, sub_base_addr)
                                               : get_noc_multicast_addr(end_x, end_y, start_x, start_y, sub_base_addr);
 
-        if constexpr (same_destination) {
-            for (uint32_t i = 0; i < num_writes; i++) {
-                uint32_t write_value = write_value_base + i;
-                noc_inline_mcast_dw_write<InlineWriteDst::DEFAULT, true, true>(
-                    dst_noc_addr_multicast, write_value, 0xF, noc_index, NOC_MULTICAST_WRITE_VC, 0, num_subordinates);
-            }
-        } else {
-            for (uint32_t i = 0; i < num_writes; i++) {
-                uint32_t write_value = write_value_base + i;
-                noc_inline_mcast_dw_write<InlineWriteDst::DEFAULT, true, true>(
-                    dst_noc_addr_multicast, write_value, 0xF, noc_index, NOC_MULTICAST_WRITE_VC, 0, num_subordinates);
+        for (uint32_t i = 0; i < num_writes; i++) {
+            uint32_t write_value = write_value_base + i;
+            noc_inline_mcast_dw_write<InlineWriteDst::DEFAULT, true, true>(
+                dst_noc_addr_multicast, write_value, 0xF, noc_index, NOC_MULTICAST_WRITE_VC, 0, num_subordinates);
+            if constexpr (!same_destination) {
                 dst_noc_addr_multicast += addr_stride;
             }
         }
