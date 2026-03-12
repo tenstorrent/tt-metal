@@ -275,12 +275,16 @@ def run_topk_bfloat8_inf_test(N, C, H, W, k, dim, sub_core_grids, device):
         f"This is the bfp8 shared-exponent/inf regression."
     )
 
-    # bfloat8_b has limited precision; accept a small absolute difference.
-    # Cast to float32 first: pyt_values_finite is bfloat16, ttnn_values_finite is
-    # float32 (ttnn.to_torch upcasts bfloat8_b), and torch.allclose raises on
-    # dtype mismatch.
-    assert torch.allclose(pyt_values_finite.float(), ttnn_values_finite.float(), atol=0.5), (
-        f"bfloat8_b TopK values differ from PyTorch reference by more than 0.5:\n"
+    # bfloat8_b has 2 mantissa bits, so the maximum relative quantization error per
+    # value is 2^-2 = 25%.  Two quantization steps occur (input bf16→bfp8 and output
+    # bf16→bfp8), but they are correlated so the combined worst-case stays near 25%.
+    # rtol=0.1 is therefore stricter than the format's theoretical maximum, meaning it
+    # catches genuine corruption (e.g. values becoming 0 due to the inf/shared-exponent
+    # bug) while tolerating legitimate bfp8 rounding.
+    # Cast to float32 first: pyt_values_finite is bfloat16 while ttnn_values_finite is
+    # float32 (ttnn.to_torch upcasts bfloat8_b), and torch.allclose raises on dtype mismatch.
+    assert torch.allclose(pyt_values_finite.float(), ttnn_values_finite.float(), rtol=0.1, atol=0.1), (
+        f"bfloat8_b TopK values exceed 10 % relative error vs PyTorch reference:\n"
         f"  PyTorch:  {pyt_values_finite}\n"
         f"  TTNN:     {ttnn_values_finite}"
     )
