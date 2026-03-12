@@ -417,6 +417,8 @@ inline void fabric_send_noc_unicast(
 
         tt::tt_fabric::linear::to_noc_unicast_write(
             align(curr_packet_size, alignment), packet_header, noc_page, addrgen, offset);
+        // Compiler barrier: ensure header writes are complete before NOC reads the buffer
+        asm volatile("" ::: "memory");
         perform_payload_send<true, true, SenderType>(
             fabric_connection, payload_l1_address, curr_packet_size, packet_header);
 
@@ -495,6 +497,9 @@ inline void l1_only_fabric_send_noc_unicast_with_semaphore(
                 tt::tt_fabric::NocUnicastCommandHeader{noc_payload_write_address}, align(curr_packet_size, alignment));
         }
 
+        // Compiler barrier: ensure header writes are complete before NOC reads the buffer
+        asm volatile("" ::: "memory");
+
         // Send payload followed by header over the fabric.
         fabric_connection.wait_for_empty_write_slot();
         fabric_connection.send_payload_without_header_non_blocking_from_address(payload_l1_address, curr_packet_size);
@@ -536,6 +541,9 @@ inline void fabric_send_noc_unicast_with_semaphore(
             tt::tt_fabric::linear::to_noc_unicast_write(
                 align(curr_packet_size, alignment), packet_header, payload_page_id, addrgen, offset);
         }
+
+        // Compiler barrier: ensure header writes are complete before NOC reads the buffer
+        asm volatile("" ::: "memory");
 
         // Send payload followed by header over the fabric.
         perform_payload_send<true>(fabric_connection, payload_l1_address, curr_packet_size, packet_header);
