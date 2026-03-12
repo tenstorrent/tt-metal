@@ -206,7 +206,8 @@ ALWI void mm_init_short(
 ALWI void mm_init_short_with_dt(
     uint32_t in0_cb_id, uint32_t in1_cb_id, uint32_t c_in_old_srca, const uint32_t transpose = 0) {
 #ifndef ARCH_QUASAR
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, false, p_dim_stride_target::FACE_ROW_MAJOR>(
+        c_in_old_srca, in1_cb_id)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(c_in_old_srca, in1_cb_id)));
     mm_init_short(in0_cb_id, in1_cb_id, transpose);
 #endif  // TODO: AM; add Quasar implementation
@@ -366,7 +367,8 @@ ALWI void mm_block_init_short_with_dt(
     uint32_t call_line = __builtin_LINE()) {
 #ifndef ARCH_QUASAR
     state_configure(in1_cb_id, in0_cb_id, call_line);
-    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id)));
+    UNPACK((llk_unpack_reconfig_data_format_srca<DST_ACCUM_MODE, false, p_dim_stride_target::FACE_ROW_MAJOR>(
+        old_in1_cb_id, in1_cb_id)));
     MATH((llk_math_reconfig_data_format_srca<DST_ACCUM_MODE>(old_in1_cb_id, in1_cb_id)));
     mm_block_init_short(in0_cb_id, in1_cb_id, transpose, ct_dim, rt_dim, kt_dim);
 #endif  // TODO: AM; add Quasar implementation

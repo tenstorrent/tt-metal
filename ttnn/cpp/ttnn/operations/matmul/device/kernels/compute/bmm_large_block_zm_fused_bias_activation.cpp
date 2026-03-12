@@ -279,7 +279,7 @@ void kernel_main() {
                             uint32_t in0_index = in0_index_subblock_offset;  // offset into in0 block
                             uint32_t in1_index = in1_index_subblock_offset;  // offset into in1 block
                             // inner dim that we accumulate is the inner dim of in0/in1, which is in0_block_w
-                            reconfig_data_format(in1_cb_id, in0_cb_id);
+                            reconfig_data_format<false, true>(in1_cb_id, in0_cb_id);
                             for (uint32_t inner_dim_idx = 0; inner_dim_idx < in0_block_w; ++inner_dim_idx) {
                                 // matmul outer product of (out_subblock_h x out_subblock_w) tiles that fill dst
                                 // accumulation is done by iterating matmul_block across inner dim
