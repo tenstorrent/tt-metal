@@ -82,6 +82,11 @@ def _is_infrastructure_key(key: str) -> bool:
     # output_memory_config is handled separately by most sweep tests
     if key == "output_memory_config":
         return True
+    # memory_config from traced kwargs should not leak into op_kwargs.
+    # It is handled via the output_memory_config parameter in sweep module run() functions.
+    # Passing it through causes "incompatible function arguments" for ops that don't accept it.
+    if key == "memory_config":
+        return True
     # Any key ending with _tensor_placement is tensor placement metadata
     if key.endswith("_tensor_placement"):
         return True
@@ -185,20 +190,19 @@ def build_op_kwargs(
     """Extract actual op kwargs from the full test vector kwargs.
 
     Filters out infrastructure keys, positional tensor params, named tensor kwargs,
-    output_memory_config, and ``__ABSENT__`` sentinel values.  Parses dict values
-    into ttnn objects.
+    output_memory_config, memory_config, and ``__ABSENT__`` sentinel values.
+    Parses dict values into ttnn objects.
 
-    The ``output_memory_config`` parameter (typically from the run() function
-    signature) is used as a **fallback** for ``memory_config`` in the returned
-    dict.  If the traced config already provides ``memory_config`` via kwargs it
-    takes precedence; otherwise ``output_memory_config`` is used.
+    Note: ``memory_config`` is filtered out by default because most ops either
+    don't accept it or handle it via separate positional parameters.  Sweep
+    modules that need ``memory_config`` in op kwargs should add it explicitly
+    after calling this function.
 
     Args:
         kwargs: The **kwargs from the run() function (everything not in named params)
         exclude: Additional keys to exclude (op-specific, e.g., keys already handled)
         include_only: If set, only include these specific keys (overrides default filtering)
-        output_memory_config: Fallback value for ``memory_config`` when not present
-            in kwargs.  Pass the ``output_memory_config`` parameter from run().
+        output_memory_config: Unused, kept for backward compatibility.
 
     Returns:
         Dict of parsed op kwargs ready to pass as **op_kwargs to the ttnn op.
@@ -234,12 +238,6 @@ def build_op_kwargs(
         parsed = parse_dict_value(key, value)
         if parsed is not None:
             op_kwargs[key] = parsed
-
-    # Use output_memory_config as fallback for memory_config
-    if "memory_config" not in op_kwargs and output_memory_config is not None:
-        parsed_mem = parse_dict_value("memory_config", output_memory_config)
-        if parsed_mem is not None:
-            op_kwargs["memory_config"] = parsed_mem
 
     return op_kwargs
 
