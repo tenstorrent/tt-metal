@@ -56,17 +56,10 @@ def test_hubert_model(device, layer_norm_first):
     output_layer = cfg["encoder_layers"]
 
     torch_source = torch.randn(batch_size, input_length, dtype=torch.float32)
-    tt_source = ttnn.from_torch(torch_source.unsqueeze(-1), dtype=ttnn.bfloat16, device=device)
+    tt_source = ttnn.from_torch(torch_source.unsqueeze(-1), dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
 
     torch_output = torch_model(torch_source, output_layer=output_layer)
     tt_output = tt_model(tt_source, output_layer=output_layer)
-
-    for _ in range(16):
-        profiler.start("tt_model_run")
-        tt_model(tt_source, output_layer=output_layer)
-        profiler.end("tt_model_run")
-
-    print(f"Average tt_Model run time over 4 runs: {profiler.get('tt_model_run') * 1000:.3f}ms")
 
     assert tuple(tt_output.shape) == tuple(torch_output.shape)
     assert_with_pcc(torch_output, tt_output, pcc=0.99)

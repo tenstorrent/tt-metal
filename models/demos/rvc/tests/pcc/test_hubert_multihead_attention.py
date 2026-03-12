@@ -42,7 +42,7 @@ def test_hubert_multihead_attention(device):
     tt_query = ttnn.from_torch(
         torch_query.to(torch.bfloat16),
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.TILE_LAYOUT,
         device=device,
     )
 
