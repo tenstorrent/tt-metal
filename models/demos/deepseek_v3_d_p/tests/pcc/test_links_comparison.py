@@ -635,3 +635,157 @@ def test_smoke_all_ops(
     logger.info(f"Combined dispatch done. Buffer shape: {tt_combined_buffer.shape}")
 
     logger.info("All operations completed successfully.")
+
+
+_topology_matrix_results: dict[str, dict[str, float]] = {}
+
+
+def _print_topology_matrix():
+    """Print side-by-side comparison table for topology matrix results."""
+    if len(_topology_matrix_results) < 2:
+        return
+
+    variants = sorted(_topology_matrix_results.keys())
+
+    header = f"{'metric':<20}"
+    for v in variants:
+        header += f"  {v:>20s}"
+
+    rows = []
+    for metric in ("dispatch_us",):
+        label = metric.replace("_us", "").capitalize()
+        row = f"{label + ' (us)':<20}"
+        vals = [_topology_matrix_results[v].get(metric, 0.0) for v in variants]
+        for val in vals:
+            row += f"  {val:>20.2f}"
+        rows.append(row)
+
+    sep = "=" * len(header)
+    table = "\n".join([sep, header, "-" * len(header)] + rows + [sep])
+    logger.info(f"\n{table}")
+
+
+@pytest.mark.parametrize(
+    "seq_len_per_chip, hidden_dim, n_routed_experts, num_experts_per_tok, capacity_factor",
+    [
+        pytest.param(3200, 7168, 16, 2, 2, id="3200tok-2exp-7168dim"),
+        pytest.param(3200, 1792, 16, 8, 2, id="3200tok-8exp-1792dim"),
+    ],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params, num_links, topology",
+    [
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=15232),
+            },
+            2,
+            ttnn.Topology.Linear,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="linear"),
+            id="8chip-line",
+        ),
+        pytest.param(
+            (8, 1),
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+                "fabric_router_config": create_fabric_router_config(max_payload_size=15232),
+            },
+            2,
+            ttnn.Topology.Ring,
+            marks=pytest.mark.requires_mesh_topology(mesh_shape=(8, 1), topology="ring"),
+            id="8chip-ring",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_topology_matrix(
+    mesh_device,
+    seq_len_per_chip,
+    hidden_dim,
+    n_routed_experts,
+    num_experts_per_tok,
+    capacity_factor,
+    num_links,
+    topology,
+):
+    """Compare combined dispatch across topology (line vs ring) and workload configurations."""
+
+    num_devices = num_chips = mesh_device.get_num_devices()
+    topo_name = "ring" if topology == ttnn.Topology.Ring else "line"
+    variant_key = f"{topo_name}-{seq_len_per_chip}t-{num_experts_per_tok}e-{hidden_dim}d"
+
+    logger.info(f"=== Topology matrix: {variant_key}  mesh={mesh_device.shape}  devices={num_devices} ===")
+    ttnn.visualize_mesh_device(mesh_device)
+
+    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
+        seq_len_per_chip, n_routed_experts, num_experts_per_tok, num_chips, capacity_factor
+    )
+    logger.info(
+        f"  experts_per_chip={experts_per_chip}  metadata_len={metadata_len}  "
+        f"max_dispatched_tokens_per_expert={max_dispatched_tokens_per_expert}"
+    )
+
+    x, weights, indices = initialize_predictable_test_inputs(
+        num_chips=num_chips,
+        seq_len_per_chip=seq_len_per_chip,
+        hidden_dim=hidden_dim,
+        n_routed_experts=n_routed_experts,
+        num_experts_per_tok=num_experts_per_tok,
+        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+    )
+
+    mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=(0, None))
+
+    tt_x = ttnn.from_torch(
+        x, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
+    )
+    tt_weights = ttnn.from_torch(
+        weights, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
+    )
+    tt_indices = ttnn.from_torch(
+        indices, mesh_mapper=mesh_mapper, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.int32
+    )
+
+    tt_dispatch_combined_module = TtDispatchCombinedModule(
+        mesh_device=mesh_device,
+        num_chips=num_chips,
+        experts_per_chip=experts_per_chip,
+        n_routed_experts=n_routed_experts,
+        num_experts_per_tok=num_experts_per_tok,
+        metadata_len=metadata_len,
+        max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
+        seq_len_per_chip=seq_len_per_chip,
+        hidden_dim=hidden_dim,
+        cluster_axis=0,
+        num_links=num_links,
+        topology=topology,
+    )
+
+    # Warmup
+    for _ in range(NUM_WARMUP):
+        tt_dispatch_combined_module(tt_x, tt_weights, tt_indices)
+    ttnn.synchronize_device(mesh_device)
+
+    # Measure
+    t_wall_start = time.perf_counter()
+    for _ in range(NUM_ITERATIONS):
+        tt_dispatch_combined_module(tt_x, tt_weights, tt_indices)
+        ttnn.synchronize_device(mesh_device)
+    wall_ns = int((time.perf_counter() - t_wall_start) * 1e9)
+
+    durations = _extract_dispatch_only_profiler_durations(mesh_device)
+
+    if durations:
+        avg_us = sum(durations) / len(durations) / 1e3
+        source = "profiler"
+    else:
+        avg_us = wall_ns / NUM_ITERATIONS / 1e3
+        source = "wall"
+        logger.warning("Device profiler unavailable, reporting wall-clock")
+
+    logger.info(f"  {variant_key}: dispatch={avg_us:.2f} us  ({source})")
+
+    _topology_matrix_results[variant_key] = {"dispatch_us": avg_us}
+    _print_topology_matrix()
