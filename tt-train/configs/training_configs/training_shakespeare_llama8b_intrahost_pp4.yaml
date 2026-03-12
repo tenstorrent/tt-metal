@@ -6,16 +6,21 @@ training_config:
   batch_size: 1
   num_epochs: 1
   max_steps: 5000
-  learning_rate: 0.0003
-  weight_decay: 0.01
-  use_moreh_adamw: true
-  use_kahan_summation: false
   use_clip_grad_norm: false
   clip_grad_norm_max_norm: 1.0
   tokenizer_path: "data/tinyllama-tokenizer.json"
   tokenizer_type: "bpe"
-  model_config: "model_configs/llama8b.yaml"
-  multihost_config: multihost_configs/4worker_32block_pp_fabric.yaml
+  model_config: "configs/model_configs/llama8b.yaml"
+  multihost_config: "configs/multihost_configs/4worker_32block_pp_fabric.yaml"
+  optimizer:
+    type: AdamW
+    lr: 0.0003
+    beta1: 0.9
+    beta2: 0.999
+    epsilon: 1.0e-8
+    weight_decay: 0.01
+    amsgrad: false
+    stochastic_rounding: false
 
 eval_config:
   repetition_penalty: 1.0
@@ -25,4 +30,4 @@ eval_config:
 
 device_config:
   enable_tp: true
-  mesh_shape: [4, 8]
+  mesh_shape: [1, 8]
