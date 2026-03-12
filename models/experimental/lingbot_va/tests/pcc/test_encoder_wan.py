@@ -23,7 +23,7 @@ from models.common.metrics import compute_pcc
 CHECKPOINT_PATH = "models/experimental/lingbot_va/reference/checkpoints/text_encoder"
 PCC_THRESHOLD = 0.99
 BATCH_SIZE = 1
-SEQ_LEN = 64  # adjust to your typical prompt length
+SEQ_LEN = 512  # adjust to your typical prompt length
 
 
 # ─────────────────────────────────────────────
@@ -53,11 +53,12 @@ def test_umt5_encoder_comparison():
         size=(BATCH_SIZE, SEQ_LEN),
         dtype=torch.long,
     )
+    attention_mask = torch.ones((BATCH_SIZE, SEQ_LEN), dtype=torch.long)
 
     # ── 3. UMT5EncoderModel forward ──
     print("Running UMT5EncoderModel forward pass...")
     with torch.no_grad():
-        text_out = text_encoder(input_ids=input_ids)
+        text_out = text_encoder(input_ids=input_ids, attention_mask=attention_mask)
     text_embed = text_out.last_hidden_state.float()  # [B, seq, d_model]
 
     # ── 4. Open TT-Metal mesh device ──
@@ -104,7 +105,12 @@ def test_umt5_encoder_comparison():
             dtype=ttnn.uint32,
             device=mesh_device,
         )
-        tt_out = tt_encoder(tt_input)  # returns ttnn.Tensor [B, seq, d_model]
+        tt_mask = ttnn.from_torch(
+            attention_mask,
+            dtype=ttnn.uint32,
+            device=mesh_device,
+        )
+        tt_out = tt_encoder(tt_input, attention_mask=tt_mask)  # returns ttnn.Tensor [B, seq, d_model]
         # import pdb; pdb.set_trace()
         # ── 9. Convert TTNN output to torch, fix shape ──
         tt_out = tt_out[-1]
