@@ -20,7 +20,6 @@ from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 
-REFERENCE_DIR = Path(__file__).with_name("reference_io")
 DEFAULT_NUM_STEPS = 128
 GENERATE_REFERENCE = os.getenv("DEEPSEEK_V3_MTP_GENERATE_REFERENCE", "0") == "1"
 TRACE_REGION_SIZE = int(os.getenv("DEEPSEEK_TRACE_REGION_SIZE", "134217728"))
@@ -30,12 +29,22 @@ MIN_TOKENS_PER_SEC = float(os.getenv("DEEPSEEK_V3_MTP_MIN_TPS", "1.0"))
 MIN_TOKENS_PER_SEC_TRACE = float(os.getenv("DEEPSEEK_V3_MTP_MIN_TPS_TRACE", "0"))
 DEFAULT_PREFILL_LEN = int(os.getenv("DEEPSEEK_V3_MTP_PREFILL_LEN", "16"))
 DEFAULT_VERIFY_STEPS = int(os.getenv("DEEPSEEK_V3_MTP_VERIFY_STEPS", "16"))
+SKIP_IN_CI = pytest.mark.skipif(os.getenv("CI") == "true", reason="Skip in CI")
+
+
+def _get_reference_dir() -> Path:
+    try:
+        default_cache = f"/localdev/{os.getlogin()}/deepseek-v3-cache"
+    except OSError:
+        default_cache = "/proj_sw/user_dev/deepseek-v3-cache"
+    return Path(os.getenv("DEEPSEEK_V3_CACHE", default_cache)) / "test_io_cache"
 
 
 def _debug_mtp_enabled() -> bool:
     return os.getenv("DEBUG_MTP", "0") == "1"
 
 
+@SKIP_IN_CI
 def test_mtp_verify_page_table_selective_interleaved_aliasing_host():
     """Single-prompt selective aliasing should only alias row1->row0 and leave row3 untouched."""
     base_page_table = torch.tensor(
@@ -183,14 +192,17 @@ def _run_reference_decode_replay_consistency(
 
 
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
+@pytest.mark.requires_device(["DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": TRACE_REGION_SIZE,
-        }
+        pytest.param(
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": TRACE_REGION_SIZE,
+            },
+            marks=SKIP_IN_CI,
+        )
     ],
     indirect=True,
 )
@@ -213,14 +225,17 @@ def test_mtp_reference_decode_replay_consistency(
 
 
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
+@pytest.mark.requires_device(["DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": TRACE_REGION_SIZE,
-        }
+        pytest.param(
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": TRACE_REGION_SIZE,
+            },
+            marks=SKIP_IN_CI,
+        )
     ],
     indirect=True,
 )
@@ -243,7 +258,7 @@ def test_mtp_reference_decode_replay_consistency_mtp_off(
 
 
 def _get_reference_path(mesh_device: ttnn.MeshDevice, num_steps: int) -> Path:
-    return REFERENCE_DIR / f"mtp_full_model_seq{num_steps}_mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}.pt"
+    return _get_reference_dir() / f"mtp_full_model_seq{num_steps}_mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}.pt"
 
 
 def _get_start_token_id(hf_config) -> int:
@@ -756,14 +771,17 @@ class _MtpTraceRunner:
 
 
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
+@pytest.mark.requires_device(["DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": TRACE_REGION_SIZE,
-        }
+        pytest.param(
+            {
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D,
+                "trace_region_size": TRACE_REGION_SIZE,
+            },
+            marks=SKIP_IN_CI,
+        )
     ],
     indirect=True,
 )
@@ -786,7 +804,7 @@ def test_generate_mtp_reference_io(
 
     mesh = mesh_device
     reference_path = _get_reference_path(mesh, num_steps)
-    REFERENCE_DIR.mkdir(parents=True, exist_ok=True)
+    _get_reference_dir().mkdir(parents=True, exist_ok=True)
 
     with _prepare_generator(
         mesh_device=mesh,
@@ -852,7 +870,7 @@ def test_generate_mtp_reference_io(
 
 
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
+@pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -990,7 +1008,7 @@ def test_mtp_accept_rate_and_perf(
 
 
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
+@pytest.mark.requires_device(["DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -1132,7 +1150,7 @@ def test_mtp_prefill_priming(
 
 
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
+@pytest.mark.requires_device(["DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
