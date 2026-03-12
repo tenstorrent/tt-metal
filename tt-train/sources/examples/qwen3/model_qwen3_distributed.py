@@ -80,7 +80,6 @@ from utils.tensor_utils import (
     make_replicated_weight,
 )
 from utils.distributed_ops import (
-    AllGatherFwdScatterBwd,
     all_gather_fwd_scatter_bwd,
     _vocab_parallel_embedding,
 )
@@ -289,9 +288,14 @@ class DistributedQwen3Attention(AbstractModuleBase):
                 self.layer_idx, key_heads, value_heads
             )
 
-        attn = ttml.ops.attention.scaled_dot_product_attention(
-            query_heads, key_heads, value_heads, attention_mask
+        q_seq = query_heads.shape()[2]
+        k_seq = key_heads.shape()[2]
+        sdpa_fn = (
+            ttml.ops.attention.scaled_dot_product_attention
+            if q_seq == k_seq
+            else ttml.ops.attention.scaled_dot_product_attention_composite
         )
+        attn = sdpa_fn(query_heads, key_heads, value_heads, attention_mask)
 
         return self.o_proj(ttml.ops.multi_head_utils.heads_fusion(attn))
 
