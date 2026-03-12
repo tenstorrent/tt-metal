@@ -65,7 +65,7 @@ def test_qwen3_coder_next(mesh_device):
         add_generation_prompt=True,
         tokenize=False,
     )
-    inputs = tokenizer([text], return_tensors="pt").to(model.device).to(torch.bfloat16)
+    inputs = tokenizer([text], return_tensors="pt").to(model.device)
 
     modules1 = register_module_replacement_dict(model, nn_to_ttnn, model_config=None)
     modules2 = register_module_replacement_dict(model, nn_to_ttnn2, model_config=None)
