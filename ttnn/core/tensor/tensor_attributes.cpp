@@ -16,8 +16,9 @@ TensorAttributes::TensorAttributes(Storage storage, TensorSpec tensor_spec, Tens
 const Storage& TensorAttributes::get_storage() const { return storage_; }
 Storage& TensorAttributes::get_storage() { return storage_; }
 const TensorSpec& TensorAttributes::get_tensor_spec() const {
-    const auto* device_storage = std::get_if<DeviceStorage>(&storage_);
-    TT_FATAL(device_storage->is_allocated(), "Boom!");
+    if (const auto* device_storage = std::get_if<DeviceStorage>(&storage_); device_storage != nullptr) {
+        TT_FATAL(device_storage->is_allocated(), "Boom!");
+    }
     return tensor_spec_;
 }
 
