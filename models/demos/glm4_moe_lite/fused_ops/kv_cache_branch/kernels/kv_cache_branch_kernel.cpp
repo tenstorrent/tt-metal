@@ -39,33 +39,23 @@ void kernel_main() {
         get_named_compile_time_arg_val("dkv_gather_dest_noc_x"),
         get_named_compile_time_arg_val("dkv_gather_dest_noc_y"),
         get_named_compile_time_arg_val("dkv_gather_data_size_bytes"),
-        get_named_compile_time_arg_val("dkv_gather_receiver_semaphore_id"),
+        get_semaphore(get_named_compile_time_arg_val("dkv_gather_receiver_semaphore_id")),
         get_named_compile_time_arg_val("dkv_gather_src_cb"),
         get_named_compile_time_arg_val("dkv_gather_src_num_pages"),
-        get_named_compile_time_arg_val("dkv_gather_sender_grid_start_x"),
-        get_named_compile_time_arg_val("dkv_gather_sender_grid_start_y"),
-        get_named_compile_time_arg_val("dkv_gather_sender_grid_end_x"),
-        get_named_compile_time_arg_val("dkv_gather_sender_grid_end_y"),
-        get_named_compile_time_arg_val("dkv_gather_row_major"),
+        0,  // sender_grid_start_x (unused with UsePerCoreSenderIdx=true)
+        0,  // sender_grid_start_y
+        0,  // sender_grid_end_x
+        0,  // sender_grid_end_y
+        1,  // row_major (unused with UsePerCoreSenderIdx=true)
         get_write_ptr(get_named_compile_time_arg_val("dkv_gather_dst_cb")),
+        get_named_compile_time_arg_val("dkv_gather_sender_idx"),
     };
 
     // RMSNorm reader args (runtime — scaler/eps values passed at dispatch time)
     using KV_RMSNormCTArgs = glm4_rmsnorm::RMSNorm::ReaderCTArgs;
 
-    using K_RopeCTArgs =
-        deepseek_b1_ops::Rope::ReaderCTArgs<get_named_compile_time_arg_val("Wt"), get_named_compile_time_arg_val("Ht")>;
-    constexpr uint32_t k_rope_input_cb = get_named_compile_time_arg_val("in_cb");
-    constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
-    constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
-    constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
-
-    deepseek_b1_ops::Rope::ReaderArgs k_rope_args{
-        .in_cb = k_rope_input_cb,
-        .cos_cb = cos_cb,
-        .sin_cb = sin_cb,
-        .trans_mat_cb = trans_mat_cb,
-    };
+    // No RoPE NCRISC declarations needed: cos/sin/trans_mat are sharded
+    // (already in L1). The NCRISC RoPE reader is skipped in Phase 4.
 
 // ============================================================================
 // BRISC (Writer)
@@ -78,8 +68,8 @@ void kernel_main() {
     deepseek_b1_ops::Gather::ReceiverArgs dkv_gather_args{
         get_named_compile_time_arg_val("dkv_gather_noc0_num_senders"),
         get_named_compile_time_arg_val("dkv_gather_noc1_num_senders"),
-        get_named_compile_time_arg_val("dkv_gather_noc0_receiver_semaphore_id"),
-        get_named_compile_time_arg_val("dkv_gather_noc1_receiver_semaphore_id"),
+        get_semaphore(get_named_compile_time_arg_val("dkv_gather_noc0_receiver_semaphore_id")),
+        get_semaphore(get_named_compile_time_arg_val("dkv_gather_noc1_receiver_semaphore_id")),
         get_named_compile_time_arg_val("dkv_gather_dst_cb"),
         get_named_compile_time_arg_val("dkv_gather_dst_num_pages"),
     };
@@ -133,24 +123,24 @@ void kernel_main() {
     };
 #endif
 
-    // RMSNorm runtime args (same struct on all RISCs, populated from runtime args)
+    // RMSNorm runtime args (same struct on all RISCs, populated from common runtime args)
     glm4_rmsnorm::RMSNorm::RTArgs kv_rmsnorm_args{};
 #if defined(COMPILE_FOR_NCRISC)
     kv_rmsnorm_args = {
-        get_arg_val<uint32_t>(0),  // cb_scaler
-        get_arg_val<uint32_t>(1),  // cb_eps
-        get_arg_val<uint32_t>(2),  // scaler_packed (bf16 as uint16)
-        get_arg_val<uint32_t>(3),  // eps_packed (bf16 as uint16)
+        get_common_arg_val<uint32_t>(0),  // cb_scaler
+        get_common_arg_val<uint32_t>(1),  // cb_eps
+        get_common_arg_val<uint32_t>(2),  // scaler_packed (bf16 as uint16)
+        get_common_arg_val<uint32_t>(3),  // eps_packed (bf16 as uint16)
     };
 #elif defined(COMPILE_FOR_TRISC)
     kv_rmsnorm_args = {
-        get_arg_val<uint32_t>(0),  // input_cb (gather dst = rmsnorm input)
-        get_arg_val<uint32_t>(1),  // gamma_cb
-        get_arg_val<uint32_t>(2),  // output_cb (nope output tensor)
-        get_arg_val<uint32_t>(3),  // cb_x2
-        get_arg_val<uint32_t>(4),  // cb_var
-        get_arg_val<uint32_t>(5),  // cb_scaler
-        get_arg_val<uint32_t>(6),  // cb_eps
+        get_common_arg_val<uint32_t>(0),  // input_cb (gather dst = rmsnorm input)
+        get_common_arg_val<uint32_t>(1),  // gamma_cb
+        get_common_arg_val<uint32_t>(2),  // output_cb (nope output tensor)
+        get_common_arg_val<uint32_t>(3),  // cb_x2
+        get_common_arg_val<uint32_t>(4),  // cb_var
+        get_common_arg_val<uint32_t>(5),  // cb_scaler
+        get_common_arg_val<uint32_t>(6),  // cb_eps
     };
 #endif
 
@@ -196,7 +186,7 @@ void kernel_main() {
     // ========================================================================
     {
         DeviceZoneScopedN("DKV_GATHER");
-        deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true> dkv_gather;
+        deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true, true> dkv_gather;
         dkv_gather(dkv_gather_args);
     }
 
@@ -213,11 +203,19 @@ void kernel_main() {
 
     // ========================================================================
     // Phase 4: RoPE on k_rope data (on rope cores only)
+    //
+    // NCRISC is skipped: cos/sin/trans_mat are already in L1 as sharded
+    // buffers (populated by setup_sharded_buffer above). The generic
+    // Rope::Op NCRISC reader would try to re-read them from DRAM using
+    // uninitialized addresses (cos_tensor_address=0, position_ids=0),
+    // causing a NOC hang on an invalid DRAM read.
     // ========================================================================
     {
         DeviceZoneScopedN("K_ROPE");
+#if !defined(COMPILE_FOR_NCRISC)
         deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> k_rope;
         k_rope(k_rope_args);
+#endif
     }
 
     // Output: RMSNorm'd nope in nope_output_cb (on rmsnorm core)
