@@ -6,4 +6,4 @@ mesh_descriptors {
   channels { count: 2 policy: RELAXED }
 }
 # --- Instantiation ----------------------------------------------------------
-top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }0
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
