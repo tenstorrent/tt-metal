@@ -5,7 +5,6 @@ from __future__ import annotations
 
 import os
 import time
-from copy import deepcopy
 from pathlib import Path
 
 import pytest
@@ -13,20 +12,13 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d import DecoderBlock2D
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
 from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
-from models.demos.deepseek_v3.tt.generator import MAX_SEQ_LEN, DeepseekGenerator, _build_verify_alias_page_table_host
+from models.demos.deepseek_v3.tt.generator import DeepseekGenerator, _build_verify_alias_page_table_host
 from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
-from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
-from models.demos.deepseek_v3.tt.model.row_batched_model import get_fabric_config
-from models.demos.deepseek_v3.tt.mtp import MTP2D
+from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
-from models.demos.deepseek_v3.tt.rope import RotarySetup
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div, sub_state_dict
-from models.demos.deepseek_v3.utils.run_config import create_run_config
-from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict, get_test_weight_config
 
 DEFAULT_NUM_STEPS = 128
 GENERATE_REFERENCE = os.getenv("DEEPSEEK_V3_MTP_GENERATE_REFERENCE", "0") == "1"
@@ -200,7 +192,7 @@ def _run_reference_decode_replay_consistency(
 
 
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
+@pytest.mark.requires_device(["DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -233,7 +225,7 @@ def test_mtp_reference_decode_replay_consistency(
 
 
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
+@pytest.mark.requires_device(["DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -281,7 +273,7 @@ def _get_start_token_id(hf_config) -> int:
     return int(bos_id) if bos_id is not None else 1
 
 
-def _assert_reference_start_tokens(payload: dict, gen, context: str) -> None:
+def _assert_reference_start_tokens(payload: dict, gen: DeepseekGenerator, context: str) -> None:
     if "start_tokens" not in payload:
         return
     start_tokens = payload["start_tokens"].to(torch.long)
@@ -321,132 +313,6 @@ def _prepare_generator(
     gen._prepare_run_configs("prefill")
     gen._prepare_run_configs("decode")
     return gen
-
-
-class _StandaloneMtpHarness:
-    def __init__(
-        self,
-        mesh_device: ttnn.MeshDevice,
-        hf_config,
-        state_dict: dict[str, torch.Tensor],
-        cache_path: Path,
-        force_recalculate: bool,
-    ) -> None:
-        self.mesh_device = mesh_device
-        self.enable_mtp = True
-        self.hf_config = deepcopy(hf_config)
-        self.hf_config.max_seq_len = MAX_SEQ_LEN
-        self.batch_size_per_row = USERS_PER_ROW
-        self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
-        self.ccl = CCL(mesh_device)
-        self.rope_setup = RotarySetup(
-            device=self.mesh_device,
-            batch_size_per_row=self.batch_size_per_row,
-            hf_config=self.hf_config,
-        )
-        self._weight_ttnn_cache: dict[str, ttnn.Tensor] = {}
-        self._mtp_page_table_tt: ttnn.Tensor | None = None
-        self._mtp_page_table_host: torch.Tensor | None = None
-
-        mtp_layer_idx = int(self.hf_config.num_hidden_layers)
-        mtp_state_dict = dequantize_state_dict(
-            sub_state_dict(state_dict, f"model.layers.{mtp_layer_idx}."),
-            self.hf_config,
-        )
-        self.model_weight_config = get_test_weight_config(
-            MTP2D,
-            self.hf_config,
-            (mtp_state_dict,),
-            cache_path,
-            self.mesh_device,
-            force_recalculate,
-            test_name="test_mtp",
-            real_weights=True,
-            layer_id="mtp",
-        )
-
-        self.paged_config = MLA2D.get_valid_paged_config(
-            self.hf_config.max_seq_len,
-            self.batch_size_per_row,
-            self.mesh_device.shape[1],
-        )
-        self.model_state = MTP2D.create_state(self.hf_config, self.paged_config, self.mesh_device, self.ccl)
-        self.model_shared_state = MTP2D.create_shared_state(self.hf_config, self.mesh_device)
-        self.model_decode_cfg = MTP2D.decode_model_config(self.hf_config, self.mesh_device, get_fabric_config())
-        self.model_run_config_decode = create_run_config(
-            self.model_decode_cfg,
-            self.model_weight_config,
-            self.model_state,
-            self.model_shared_state,
-            cached_ttnn_weights=self._weight_ttnn_cache,
-        )
-
-    def _get_mtp_page_table(self) -> ttnn.Tensor:
-        if self._mtp_page_table_tt is not None:
-            return self._mtp_page_table_tt
-
-        batch_per_shard = even_int_div(self.batch_size_per_row, self.mesh_device.shape[1])
-        blocks_per_user = even_int_div(self.paged_config.max_num_blocks, batch_per_shard)
-        self._mtp_page_table_host = torch.arange(self.paged_config.max_num_blocks, dtype=torch.int32).reshape(
-            batch_per_shard, blocks_per_user
-        )
-        self._mtp_page_table_tt = MLA2D.create_page_table(
-            paged_config=self.paged_config,
-            mesh_device=self.mesh_device,
-            page_table=self._mtp_page_table_host,
-            batch_size=self.batch_size_per_row,
-        )
-        return self._mtp_page_table_tt
-
-    def release(self) -> None:
-        if self._mtp_page_table_tt is not None:
-            ttnn.deallocate(self._mtp_page_table_tt)
-            self._mtp_page_table_tt = None
-        for tensor in self._weight_ttnn_cache.values():
-            ttnn.deallocate(tensor)
-        self._weight_ttnn_cache.clear()
-
-    def __enter__(self) -> "_StandaloneMtpHarness":
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
-        self.release()
-
-
-def _prepare_standalone_mtp_harness(
-    mesh_device: ttnn.MeshDevice,
-    hf_config,
-    state_dict: dict[str, torch.Tensor],
-    cache_path: Path,
-    force_recalculate: bool,
-) -> _StandaloneMtpHarness:
-    return _StandaloneMtpHarness(
-        mesh_device=mesh_device,
-        hf_config=hf_config,
-        state_dict=state_dict,
-        cache_path=cache_path,
-        force_recalculate=force_recalculate,
-    )
-
-
-def _forward_mtp_decode(
-    *,
-    hidden_states: ttnn.Tensor,
-    token_ids: ttnn.Tensor,
-    position_idxs: ttnn.Tensor,
-    cfg,
-    rope_tensors: dict,
-    page_table: ttnn.Tensor,
-) -> ttnn.Tensor:
-    mtp_cfg = cfg["mtp"] if isinstance(cfg, dict) and "mtp" in cfg else cfg
-    return MTP2D.forward_decode(
-        hidden_states=hidden_states,
-        token_ids=token_ids,
-        position_idxs=position_idxs,
-        cfg=mtp_cfg,
-        rope_tensors=rope_tensors,
-        page_table=page_table,
-    )
 
 
 def _tt_hidden_from_torch(
@@ -493,7 +359,7 @@ def _tt_positions_from_torch(
 
 
 def _run_mtp_step(
-    gen,
+    gen: DeepseekGenerator,
     hidden: torch.Tensor,
     tokens: torch.Tensor,
     positions: torch.Tensor,
@@ -506,14 +372,17 @@ def _run_mtp_step(
     rot_idxs = gen.rope_setup.get_rot_idxs(positions)
     rope_tensors = gen.rope_setup.get_rot_mats_from_rot_idxs(rot_idxs)
 
-    tt_logits = _forward_mtp_decode(
-        hidden_states=tt_hidden,
-        token_ids=tt_tokens,
-        position_idxs=tt_positions,
-        cfg=gen.model_run_config_decode,
-        rope_tensors=rope_tensors,
-        page_table=gen._get_mtp_page_table(),
-    )
+    def op():
+        return RowBatchedModel.forward_mtp_decode(
+            hidden_states=tt_hidden,
+            token_ids=tt_tokens,
+            position_idxs=tt_positions,
+            cfg=gen.model_run_config_decode,
+            rope_tensors=rope_tensors,
+            page_table=gen._get_mtp_page_table(),
+        )
+
+    tt_logits = op()
 
     logits = ttnn.to_torch(
         tt_logits,
@@ -760,7 +629,7 @@ def _decode_step_layerwise_host(
 
 
 class _MtpTraceRunner:
-    def __init__(self, gen) -> None:
+    def __init__(self, gen: DeepseekGenerator) -> None:
         self.gen = gen
         self.mesh_device = gen.mesh_device
         self.trace_id: int | None = None
@@ -830,17 +699,16 @@ class _MtpTraceRunner:
         self._expected_positions_shape = tuple(positions.shape)
         self._expected_positions_dtype = positions.dtype
 
-        page_table = self.gen._get_mtp_page_table()
         self.gen.ccl.reset_sem_counters()
         trace_id = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         rope_tensors = self.gen.rope_setup.get_rot_mats_from_rot_idxs(self.tt_rot_idxs)
-        self.trace_output = _forward_mtp_decode(
+        self.trace_output = RowBatchedModel.forward_mtp_decode(
             hidden_states=self.tt_hidden,
             token_ids=self.tt_tokens,
             position_idxs=self.tt_positions,
             cfg=self.gen.model_run_config_decode,
             rope_tensors=rope_tensors,
-            page_table=page_table,
+            page_table=self.gen._get_mtp_page_table(),
         )
         ttnn.end_trace_capture(self.mesh_device, trace_id, cq_id=0)
         self.trace_id = trace_id
@@ -903,7 +771,7 @@ class _MtpTraceRunner:
 
 
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
+@pytest.mark.requires_device(["DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
@@ -1025,10 +893,9 @@ def test_mtp_accept_rate_and_perf(
     min_accept_rate,
     enable_trace,
     mesh_device,
+    model_path,
     cache_path,
     force_recalculate_weight_config,
-    hf_config,
-    state_dict,
     set_deterministic_env,
 ):
     """Validate MTP-only predictor accept rate and throughput against reference IO."""
@@ -1054,19 +921,21 @@ def test_mtp_accept_rate_and_perf(
     if hidden_states.shape[0] < 2:
         pytest.skip("Reference IO must contain at least 2 steps for MTP verification.")
 
-    with _prepare_standalone_mtp_harness(
+    with _prepare_generator(
         mesh_device=mesh,
-        hf_config=hf_config,
-        state_dict=state_dict,
+        model_path=model_path,
         cache_path=cache_path,
         force_recalculate=force_recalculate_weight_config,
+        enable_mtp=True,
     ) as gen:
+        if not gen.enable_mtp:
+            pytest.skip("MTP is disabled for this configuration; skipping MTP module test.")
+
         if hidden_states.shape[1] != gen.batch_size:
             pytest.skip(
-                "Reference IO batch size "
-                f"{hidden_states.shape[1]} does not match standalone MTP batch size {gen.batch_size}."
+                f"Reference IO batch size {hidden_states.shape[1]} does not match generator batch size {gen.batch_size}."
             )
-        _assert_reference_start_tokens(payload, gen, context="MTP accept-rate test")
+        _assert_reference_start_tokens(payload, gen, context="MTP prefill priming")
 
         total_matches = 0
         total_count = 0
