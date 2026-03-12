@@ -19,6 +19,7 @@ void kernel_main() {
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w_a_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto wq_b_args = TensorAccessorArgs<w_a_args.next_compile_time_args_offset()>();
+    constexpr auto q_nope_args = TensorAccessorArgs<wq_b_args.next_compile_time_args_offset()>();
     constexpr auto rope_args = TensorAccessorArgs<wq_b_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<rope_args.next_compile_time_args_offset()>();
 
@@ -30,6 +31,7 @@ void kernel_main() {
     const auto in_addr = get_arg_val<uint32_t>(argidx++);
     const auto w_a_addr = get_arg_val<uint32_t>(argidx++);
     const auto wq_b_addr = get_arg_val<uint32_t>(argidx++);
+    const auto q_nope_addr = get_arg_val<uint32_t>(argidx++);
     const auto rope_addr = get_arg_val<uint32_t>(argidx++);
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
     const auto pos = get_arg_val<uint32_t>(argidx++);

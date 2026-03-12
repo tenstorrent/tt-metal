@@ -31,6 +31,7 @@ MlaWqkvAbDeviceOperation::invoke(
     const Tensor& input_tensor,
     const Tensor& w_a_tensor,
     const Tensor& wq_b_tensor,
+    const Tensor& q_nope_tensor,
     const Tensor& rope_tensor,
     const Tensor& output_tensor,
     const uint32_t layer_id,
@@ -41,6 +42,7 @@ MlaWqkvAbDeviceOperation::invoke(
             .input_tensor = input_tensor,
             .w_a_tensor = w_a_tensor,
             .wq_b_tensor = wq_b_tensor,
+            .q_nope_tensor = q_nope_tensor,
             .rope_tensor = rope_tensor,
             .output_tensor = output_tensor}};
 }

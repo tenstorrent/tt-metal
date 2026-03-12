@@ -20,6 +20,7 @@ void bind_mla_wqkv_ab(nb::module_& mod) {
             input_tensor: Input tensor (sharded)
             w_a_tensor: Original weight tensor
             wq_b_tensor: Additional Wq-b weight tensor
+            q_nope_tensor: Additional q_nope weight tensor
             rope_tensor: Fused sin/cos RoPE tensor in DRAM
             output_tensor: Output tensor (sharded)
             layer_id: The layer for which the MLA WqkvAb operation is being performed
@@ -30,6 +31,7 @@ void bind_mla_wqkv_ab(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("w_a_tensor"),
             nb::arg("wq_b_tensor"),
+            nb::arg("q_nope_tensor"),
             nb::arg("rope_tensor"),
             nb::arg("output_tensor"),
             nb::arg("layer_id"),

@@ -32,6 +32,7 @@ struct MlaWqkvAbDeviceOperation {
         const Tensor& input_tensor,
         const Tensor& w_a_tensor,
         const Tensor& wq_b_tensor,
+        const Tensor& q_nope_tensor,
         const Tensor& rope_tensor,
         const Tensor& output_tensor,
         uint32_t layer_id,

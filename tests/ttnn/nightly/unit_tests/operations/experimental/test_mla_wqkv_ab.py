@@ -25,6 +25,10 @@ WQ_B_N = 16 * 192
 WQ_B_K_TILES_PER_TXN = 7
 WQ_B_N_TILES_PER_GROUP = 4
 
+NUM_HEADS = 16
+Q_NOPE_K = 128
+Q_NOPE_N = 512
+
 """
 # SMALL_N_TILES_PER_CORE and LARGE_N_TILES_PER_CORE explain core groupings used for splitting the N dimension
 #
@@ -78,6 +82,23 @@ def create_torch_w(L, K, N):
     """
     torch_w = torch.rand((L, K, N), dtype=torch.bfloat16) - 0.5
     return torch_w
+
+
+def create_torch_q_nope(L, NUM_HEADS, Q_NOPE_K, Q_NOPE_N):
+    """
+    Create torch q_nope tensor with random values.
+
+    Args:
+        L: Number of layers
+        NUM_HEADS: Number of heads
+        Q_NOPE_K: Hidden dimension
+        Q_NOPE_N: Output dimension
+
+    Returns:
+        torch_q_nope: Tensor of shape (L, NUM_HEADS, Q_NOPE_K, Q_NOPE_N)
+    """
+    torch_q_nope = torch.rand((L, NUM_HEADS, Q_NOPE_K, Q_NOPE_N), dtype=torch.bfloat16) - 0.5
+    return torch_q_nope
 
 
 def create_torch_rope(hf_config):
@@ -261,6 +282,45 @@ def prepare_wq_b_tensor(torch_wq_b, L, K, N, num_dram_banks):
     return torch.stack(each_shard, dim=1)
 
 
+def prepare_q_nope_tensor(torch_q_nope, L, NUM_HEADS, Q_NOPE_K, Q_NOPE_N, num_dram_banks):
+    """
+    Prepare q_nope tensor shards for 4x8 (KxN/2 tiles) read order.
+    Args:
+        torch_q_nope: Weight tensor of shape (L, NUM_HEADS, Q_NOPE_K, Q_NOPE_N)
+        L: Number of layers
+        NUM_HEADS: Number of heads
+        Q_NOPE_K: Number of q_nope keys
+        Q_NOPE_N: Number of q_nope values
+        num_dram_banks: Number of DRAM banks / worker cores
+
+    Returns:
+        Tensor of shape (num_dram_banks, L, H, W), where:
+          - W = 8 tiles (128)
+          - H = (N_tiles_per_core/8) * padded_K_tiles * 32
+        and padded_K_tiles is K padded up to a multiple of 7 tiles.
+    """
+    Kt, Nt = math.ceil(Q_NOPE_K / ttnn.TILE_SIZE), math.ceil(Q_NOPE_N / ttnn.TILE_SIZE)
+    heads_per_core = NUM_HEADS // 8
+
+    each_shard = []
+    current_head_idx = 0
+    for _ in range(8):
+        this_core_tiles = torch_q_nope[:, current_head_idx : current_head_idx + heads_per_core, :, :]
+        half_width_view = this_core_tiles.reshape(L, heads_per_core, Kt, ttnn.TILE_SIZE, Nt // 8, 8 * ttnn.TILE_SIZE)
+
+        # [L, 2, Kt, 32, Nt // 2, 8 * 32] -> [L, 2, Nt // 2, 32, Kt, 8 * 32]
+        this_core_tiles_kfirst = half_width_view.permute(0, 1, 4, 2, 3, 5)
+        each_shard.append(this_core_tiles_kfirst.reshape(L, -1, 8 * 32))
+
+        current_head_idx += heads_per_core
+
+    # Pad for the other banks
+    for _ in range(num_dram_banks - 8):
+        each_shard.append(torch.zeros(each_shard[-1].shape, dtype=torch_q_nope.dtype))
+
+    return torch.stack(each_shard, dim=1)
+
+
 def prepare_output_tensor(tt_output, num_dram_banks):
     """
     Prepare output by extracting the valid 5/6 N tiles per core.
@@ -365,6 +425,19 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
     wq_b_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, wq_b_shard_spec)
 
     # ------------------------------------------------------------------------
+    # Create DRAM shard spec for q_nope
+    # Tensor shape: (L, K, N) -> sharded over cores with fixed max shard shape.
+    # ------------------------------------------------------------------------
+    q_nope_shard_height = 2 * (NUM_HEADS // 8) * Q_NOPE_K
+    q_nope_shard_width = Q_NOPE_N // 2
+    q_nope_shard_spec = ttnn.ShardSpec(
+        dram_core_range_set, (q_nope_shard_height, q_nope_shard_width), ttnn.ShardOrientation.ROW_MAJOR
+    )
+    q_nope_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, q_nope_shard_spec
+    )
+
+    # ------------------------------------------------------------------------
     # Create DRAM shard spec for rope table.
     # Tensor shape: (max_seq_len, 128) -> replicated over 12 DRAM banks
     # ------------------------------------------------------------------------
@@ -412,11 +485,12 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
         torch_input = create_torch_input(L, in0_num_cores, M, K)
         torch_w_a = create_torch_w(L, K, N)
         torch_wq_b = create_torch_w(L, WQ_B_K, WQ_B_N)
-
+        torch_q_nope = create_torch_q_nope(L, NUM_HEADS, Q_NOPE_K, Q_NOPE_N)
         # ------------------------------------------------------------------------
         # Prepare w tensor (padded, and reordered)
         torch_w_a_reordered = prepare_w_tensor(torch_w_a, L, K, N, num_dram_banks)
         torch_wq_b_reordered = prepare_wq_b_tensor(torch_wq_b, L, WQ_B_K, WQ_B_N, num_dram_banks)
+        torch_q_nope_reordered = prepare_q_nope_tensor(torch_q_nope, L, NUM_HEADS, Q_NOPE_K, Q_NOPE_N, num_dram_banks)
 
         tt_w_a = ttnn.from_torch(
             torch_w_a_reordered,
@@ -431,6 +505,13 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
             device=device,
             layout=ttnn.TILE_LAYOUT,
             memory_config=wq_b_mem_config,
+        )
+        tt_q_nope = ttnn.from_torch(
+            torch_q_nope_reordered,
+            dtype=w_dtype,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=q_nope_mem_config,
         )
 
         # ------------------------------------------------------------------------
@@ -473,6 +554,13 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
             layout=ttnn.TILE_LAYOUT,
             memory_config=wq_b_mem_config,
         )
+        tt_q_nope = ttnn.empty(
+            (num_dram_banks, L, wq_b_shard_height, wq_b_shard_width),
+            dtype=w_dtype,
+            device=device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=q_nope_mem_config,
+        )
         tt_rope = ttnn.empty(
             (num_dram_banks, rope_shard_height, rope_shard_width),
             dtype=rope_dtype,
@@ -502,6 +590,7 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
             tt_input,
             w_a_tensor=tt_w_a,
             wq_b_tensor=tt_wq_b,
+            q_nope_tensor=tt_q_nope,
             rope_tensor=tt_rope,
             output_tensor=tt_output,
             layer_id=layer_id,
@@ -571,7 +660,7 @@ def run_test_mla_wqkv_ab(device, M, K, N, L, pos, check_accuracy, dump_outputs):
 
 
 SHAPE2TIME = {
-    (32, 7168, 2112, 1, 0): 95,
+    (32, 7168, 2112, 1, 0): 96,
 }
 
 

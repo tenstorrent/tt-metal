@@ -34,7 +34,7 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
         ------------------------------------------------------------------------------------
         |     Name       |   CB Index    |   Dtype    | Tile? | Tiles/CB |  Total size (B) |
         ------------------------------------------------------------------------------------
-        | cb_r2c_w       | CBIndex::c_0  | Bfp8_b     | true  |    42*3  |      137088     |
+        | cb_r2c_w       | CBIndex::c_0  | Bfp8_b     | true  |    56*3  |      182784     |
         | cb_s2c_in(sh)  | CBIndex::c_1  | Float16_b  | true  |    224   |      458752     |
         | cb_c2w_rdy     | CBIndex::c_2  | Float32    | false |    1     |      4          |
         | cb_r2c_rope    | CBIndex::c_3  | Float16_b  | true  |    1     |      2048       |
@@ -46,7 +46,7 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
 
     // Define the CB configuration as a tuple: name, CBIndex, DataFormat, tiles_per_cb
     const std::vector<std::tuple<std::string, tt::CBIndex, tt::DataFormat, bool, uint32_t>> cb_specs0 = {
-        {"cb_r2c_w", tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, true, 42 * 3},
+        {"cb_r2c_w", tt::CBIndex::c_0, tt::DataFormat::Bfp8_b, true, 56 * 3},
         {"cb_c2w_rdy", tt::CBIndex::c_2, tt::DataFormat::Float32, false, 1},
         {"cb_r2c_rope", tt::CBIndex::c_3, tt::DataFormat::Float16_b, true, 1},
         {"cb_c2w_x2", tt::CBIndex::c_5, tt::DataFormat::Float16_b, true, 2},
@@ -84,6 +84,7 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
         &tensor_args.input_tensor,
         &tensor_args.w_a_tensor,
         &tensor_args.wq_b_tensor,
+        &tensor_args.q_nope_tensor,
         &tensor_args.rope_tensor,
         &tensor_args.output_tensor};
 
@@ -188,7 +189,7 @@ MlaWqkvAbProgramFactory::cached_program_t MlaWqkvAbProgramFactory::create(
         runtime_args[0] = dram_bank;
         runtime_args[1] = vchannel;
         runtime_args[2] = (uint32_t)((core.x == collector_core.x) && (core.y == collector_core.y));
-        // runtime_args[3-7] are already set to tensor addresses and runtime_args[8] stores pos
+        // runtime_args[3-8] are already set to tensor addresses and runtime_args[9] stores pos
 
         tt::tt_metal::SetRuntimeArgs(program, dm0_kernel_handle, core, runtime_args);
         tt::tt_metal::SetRuntimeArgs(program, dm1_kernel_handle, core, runtime_args);
@@ -221,15 +222,16 @@ void MlaWqkvAbProgramFactory::override_runtime_arguments(
 
     // Update runtime args for all kernels with new tensor addresses/position.
     // Runtime args layout:
-    // [3] = input_tensor address, [4] = w_a_tensor address, [5] = wq_b_tensor address, [6] = rope_tensor address,
-    // [7] = output_tensor address, [8] = pos
+    // [3] = input_tensor address, [4] = w_a_tensor address, [5] = wq_b_tensor address, [6] = q_nope_tensor address, [7]
+    // = rope_tensor address, [8] = output_tensor address, [9] = pos
     for (const auto& core : shared_variables.worker_cores) {
         for (const auto& kernel_handle : shared_variables.kernel_handles) {
             auto& runtime_args = tt::tt_metal::GetRuntimeArgs(program, kernel_handle, core);
             runtime_args[4] = tensor_args.w_a_tensor.buffer()->address();
             runtime_args[5] = tensor_args.wq_b_tensor.buffer()->address();
-            runtime_args[6] = tensor_args.rope_tensor.buffer()->address();
-            runtime_args[8] = operation_attributes.pos;
+            runtime_args[6] = tensor_args.q_nope_tensor.buffer()->address();
+            runtime_args[7] = tensor_args.rope_tensor.buffer()->address();
+            runtime_args[9] = operation_attributes.pos;
         }
     }
 }

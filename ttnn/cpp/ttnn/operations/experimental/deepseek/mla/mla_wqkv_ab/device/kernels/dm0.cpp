@@ -36,6 +36,7 @@ void kernel_main() {
     constexpr auto in_args = TensorAccessorArgs<0>();
     constexpr auto w_a_args = TensorAccessorArgs<in_args.next_compile_time_args_offset()>();
     constexpr auto wq_b_args = TensorAccessorArgs<w_a_args.next_compile_time_args_offset()>();
+    constexpr auto q_nope_args = TensorAccessorArgs<wq_b_args.next_compile_time_args_offset()>();
     constexpr auto rope_args = TensorAccessorArgs<wq_b_args.next_compile_time_args_offset()>();
     constexpr auto out_args = TensorAccessorArgs<rope_args.next_compile_time_args_offset()>();
 
@@ -47,6 +48,7 @@ void kernel_main() {
     const auto in_addr = get_arg_val<uint32_t>(argidx++);
     const auto w_a_addr = get_arg_val<uint32_t>(argidx++);
     const auto wq_b_addr = get_arg_val<uint32_t>(argidx++);
+    const auto q_nope_addr = get_arg_val<uint32_t>(argidx++);
     const auto rope_addr = get_arg_val<uint32_t>(argidx++);
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
     const auto pos = get_arg_val<uint32_t>(argidx++);
@@ -84,13 +86,32 @@ void kernel_main() {
     constexpr uint32_t wq_b_k_tiles = 49;
     constexpr uint32_t wq_b_n_tiles_this_core = 8;
     constexpr uint32_t num_wq_b_tiles = wq_b_k_tiles * wq_b_n_tiles_this_core;
+
     //-------------------------------------------------------------------------
     // Wq-b reading constants
     //-------------------------------------------------------------------------
-    constexpr uint32_t wq_b_txns_per_block = 4;
+    constexpr uint32_t wq_b_txns_per_block = 8;
     constexpr uint32_t wq_b_tiles_per_txn = 7;
     constexpr uint32_t wq_b_tiles_per_block = wq_b_tiles_per_txn * wq_b_txns_per_block;
     constexpr uint32_t wq_b_num_blocks = num_wq_b_tiles / wq_b_tiles_per_block;
+
+    //-------------------------------------------------------------------------
+    // Constants for MLA q_nope
+    constexpr uint32_t q_nope_k_tiles = 4;
+    constexpr uint32_t q_nope_n_tiles_this_core = 16 * 2;
+    constexpr uint32_t num_q_nope_tiles = q_nope_k_tiles * q_nope_n_tiles_this_core;
+
+    // Each head has 16 tiles in N dimension, so we use ct_dim = 8 and run twice
+    constexpr uint32_t q_nope_n_tiles_per_block = 8;
+
+    //-------------------------------------------------------------------------
+    // q_nope reading constants
+    //-------------------------------------------------------------------------
+    constexpr uint32_t q_nope_txns_per_block = 5;
+    constexpr uint32_t q_nope_tiles_per_txn = 7;
+    constexpr uint32_t q_nope_tiles_per_block = q_nope_tiles_per_txn * q_nope_txns_per_block;
+    constexpr uint32_t q_nope_num_blocks = 1 + (num_q_nope_tiles / q_nope_tiles_per_block);  // 1 for ceil
+    constexpr uint32_t q_nope_num_blocks_per_batch = q_nope_num_blocks / 2;
 
     //-------------------------------------------------------------------------
     // DRAM Reading constants
@@ -101,6 +122,12 @@ void kernel_main() {
     constexpr uint32_t wq_b_bytes_per_block = wq_b_tiles_per_block * w_a_tile_size;
     constexpr uint32_t wq_b_bytes_per_txn = wq_b_tiles_per_txn * w_a_tile_size;
 
+    constexpr uint32_t q_nope_bytes_per_block = q_nope_tiles_per_block * w_a_tile_size;
+    constexpr uint32_t q_nope_bytes_per_txn = q_nope_tiles_per_txn * w_a_tile_size;
+
+    // We read 35 tiles, but only consume 32 tiles. So stride is different for this case.
+    constexpr uint32_t q_nope_stride_overshoot = 3 * w_a_tile_size;
+
     // DRAM bank's base NOC address
     const uint64_t w_a_noc_addr =
         get_noc_addr_from_bank_id</*DRAM=*/true>(dram_bank_id, /*bank_address_offset=*/w_a_addr);
@@ -108,6 +135,8 @@ void kernel_main() {
         get_noc_addr_from_bank_id</*DRAM=*/true>(dram_bank_id, /*bank_address_offset=*/rope_addr);
     const uint64_t wq_b_noc_addr =
         get_noc_addr_from_bank_id</*DRAM=*/true>(dram_bank_id, /*bank_address_offset=*/wq_b_addr);
+    const uint64_t q_nope_noc_addr =
+        get_noc_addr_from_bank_id</*DRAM=*/true>(dram_bank_id, /*bank_address_offset=*/q_nope_addr);
 
     //-------------------------------------------------------------------------
     // Rope reading constants
@@ -132,13 +161,13 @@ void kernel_main() {
 
     // Precompute slot addresses (avoid multiply in hot loop)
     // Each slot holds txns_per_block tiles
-    uint32_t slot_addr[NUM_SLOTS][w_a_txns_per_block];
+    uint32_t slot_addr[NUM_SLOTS][wq_b_txns_per_block];
 
     uint32_t slot_addr_offset = 0;
     for (uint32_t i = 0; i < NUM_SLOTS; ++i) {
-        for (uint32_t j = 0; j < w_a_txns_per_block; ++j) {
+        for (uint32_t j = 0; j < wq_b_txns_per_block; ++j) {
             slot_addr[i][j] = w_cb_base_addr + slot_addr_offset;
-            slot_addr_offset += w_a_bytes_per_txn;
+            slot_addr_offset += wq_b_bytes_per_txn;
         }
     }
 
@@ -155,7 +184,7 @@ void kernel_main() {
     bool txns_in_flight = false;
 
     // We reserve one to kick start the pipeline, and then it is steady state
-    cb_reserve_back(cb_r2c_w, w_a_tiles_per_block);
+    cb_reserve_back(cb_r2c_w, wq_b_tiles_per_block);
 
     //-------------------------------------------------------------------------
     // Pipelined reading of W
@@ -177,14 +206,14 @@ void kernel_main() {
         // Only when we first start the pipeline, we don't have any txns in flight
         if (txns_in_flight) {
             noc_async_read_barrier_with_trid(trid_to_wait);
-            cb_push_back(cb_r2c_w, w_a_tiles_per_block);
+            cb_push_back(cb_r2c_w, wq_b_tiles_per_block);
 
             ADVANCE_TRID(trid_to_wait);
 
             // Reserve for next block
             // Reserve back is not incremental, so to reserve one more, we need to reserve 2
             // This accounts for the one we already have reserved (for in-flight read)
-            cb_reserve_back(cb_r2c_w, w_a_tiles_per_block * 2);
+            cb_reserve_back(cb_r2c_w, wq_b_tiles_per_block * 2);
         }
         txns_in_flight = true;
     }
@@ -203,11 +232,11 @@ void kernel_main() {
     ADVANCE_TRID(trid_to_issue);
 
     noc_async_read_barrier_with_trid(trid_to_wait);
-    cb_push_back(cb_r2c_w, w_a_tiles_per_block);
+    cb_push_back(cb_r2c_w, wq_b_tiles_per_block);
 
     ADVANCE_TRID(trid_to_wait);
 
-    cb_reserve_back(cb_r2c_w, w_a_tiles_per_block * 2);
+    cb_reserve_back(cb_r2c_w, wq_b_tiles_per_block * 2);
 
     //-------------------------------------------------------------------------
     // Pipelined reading of Wq_b
@@ -232,7 +261,7 @@ void kernel_main() {
         ADVANCE_TRID(trid_to_issue);
 
         noc_async_read_barrier_with_trid(trid_to_wait);
-        cb_push_back(wq_b_push_to_rope ? cb_r2c_rope : cb_r2c_w, wq_b_push_to_rope ? 1 : w_a_tiles_per_block);
+        cb_push_back(wq_b_push_to_rope ? cb_r2c_rope : cb_r2c_w, wq_b_push_to_rope ? 1 : wq_b_tiles_per_block);
 
         ADVANCE_TRID(trid_to_wait);
 
@@ -240,18 +269,49 @@ void kernel_main() {
         // Reserve back is not incremental, so to reserve one more, we need to reserve 2
         // This accounts for the one we already have reserved (for in-flight read)
         if (!wq_b_push_to_rope) {
-            cb_reserve_back(cb_r2c_w, w_a_tiles_per_block * 2);
+            cb_reserve_back(cb_r2c_w, wq_b_tiles_per_block * 2);
         }
         wq_b_push_to_rope = false;
     }
 
+    //-------------------------------------------------------------------------
+    // Pipelined reading of q_nope
+    //-------------------------------------------------------------------------
+    if (dram_bank_id < 8) {
+        uint32_t q_nope_dram_read_offset = 0;
+
+        noc_async_read_one_packet_set_state<true>(q_nope_noc_addr, q_nope_bytes_per_txn, vchannel);
+
+        for (uint32_t block_id = 0; block_id < q_nope_num_blocks; ++block_id) {
+            // Issue reads with current trid
+            noc_async_read_set_trid(trid_to_issue);
+            for (uint32_t txn_id = 0; txn_id < q_nope_txns_per_block; ++txn_id) {
+                noc_async_read_one_packet_with_state_with_trid</*skip_ptr_update=*/false, /*skip_cmdbuf_chk=*/true>(
+                    q_nope_noc_addr, q_nope_dram_read_offset, slot_addr[slot_to_issue][txn_id], trid_to_issue);
+                q_nope_dram_read_offset += q_nope_bytes_per_txn;
+            }
+
+            q_nope_dram_read_offset -= q_nope_stride_overshoot;
+
+            ADVANCE_SLOT(slot_to_issue);
+            ADVANCE_TRID(trid_to_issue);
+
+            noc_async_read_barrier_with_trid(trid_to_wait);
+            cb_push_back(cb_r2c_w, wq_b_tiles_per_block);
+
+            ADVANCE_TRID(trid_to_wait);
+
+            cb_reserve_back(cb_r2c_w, wq_b_tiles_per_block * 2);
+        }
+    }
+
     // Drain the pipeline - the last txn in flight
     noc_async_read_barrier_with_trid(trid_to_wait);
-    cb_push_back(cb_r2c_w, w_a_tiles_per_block);
+    cb_push_back(cb_r2c_w, wq_b_tiles_per_block);
 
     // We have one extra slot reserved, which we won't use.
     // For CB hygiene, we can push it back.
-    cb_push_back(cb_r2c_w, w_a_tiles_per_block);
+    cb_push_back(cb_r2c_w, wq_b_tiles_per_block);
 }
 
 #undef ADVANCE_TRID

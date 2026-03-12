@@ -34,6 +34,7 @@ void kernel_main() {
     const auto in_addr = get_arg_val<uint32_t>(argidx++);
     const auto w_a_addr = get_arg_val<uint32_t>(argidx++);
     const auto wq_b_addr = get_arg_val<uint32_t>(argidx++);
+    const auto q_nope_addr = get_arg_val<uint32_t>(argidx++);
     const auto rope_addr = get_arg_val<uint32_t>(argidx++);
     const auto out_addr = get_arg_val<uint32_t>(argidx++);
     const auto pos = get_arg_val<uint32_t>(argidx++);
@@ -65,13 +66,32 @@ void kernel_main() {
     constexpr uint32_t wq_b_k_tiles = 49;
     constexpr uint32_t wq_b_n_tiles_this_core = 8;
     constexpr uint32_t num_wq_b_tiles = wq_b_k_tiles * wq_b_n_tiles_this_core;
+
     //-------------------------------------------------------------------------
     // Wq-b reading constants
     //-------------------------------------------------------------------------
-    constexpr uint32_t wq_b_txns_per_block = 4;
+    constexpr uint32_t wq_b_txns_per_block = 8;
     constexpr uint32_t wq_b_tiles_per_txn = 7;
     constexpr uint32_t wq_b_tiles_per_block = wq_b_tiles_per_txn * wq_b_txns_per_block;
     constexpr uint32_t wq_b_num_blocks = num_wq_b_tiles / wq_b_tiles_per_block;
+
+    //-------------------------------------------------------------------------
+    // Constants for MLA q_nope
+    constexpr uint32_t q_nope_k_tiles = 4;
+    constexpr uint32_t q_nope_n_tiles_this_core = 16 * 2;
+    constexpr uint32_t num_q_nope_tiles = q_nope_k_tiles * q_nope_n_tiles_this_core;
+
+    // Each head has 16 tiles in N dimension, so we use ct_dim = 8 and run twice
+    constexpr uint32_t q_nope_n_tiles_per_block = 8;
+
+    //-------------------------------------------------------------------------
+    // q_nope reading constants
+    //-------------------------------------------------------------------------
+    constexpr uint32_t q_nope_txns_per_block = 5;
+    constexpr uint32_t q_nope_tiles_per_txn = 7;
+    constexpr uint32_t q_nope_tiles_per_block = q_nope_tiles_per_txn * q_nope_txns_per_block;
+    constexpr uint32_t q_nope_num_blocks = 1 + (num_q_nope_tiles / q_nope_tiles_per_block);  // 1 for ceil
+    constexpr uint32_t q_nope_num_blocks_per_batch = q_nope_num_blocks / 2;
 
     //-------------------------------------------------------------------------
     // Compute configuration
@@ -97,7 +117,7 @@ void kernel_main() {
     uint32_t in0_index = 0;
 
     for (uint32_t block_id = 0; block_id < w_a_num_blocks; ++block_id) {
-        cb_wait_front(cb_r2c_w, w_a_tiles_per_block);
+        cb_wait_front(cb_r2c_w, wq_b_tiles_per_block);
 
         // Process each block in ct_dim chunks, similar to matmul_wo.
         for (uint32_t k = 0; k < w_a_tiles_per_block; k += n_tiles_this_core) {
@@ -113,7 +133,7 @@ void kernel_main() {
                 /*kt_dim=*/1);
         }
 
-        cb_pop_front(cb_r2c_w, w_a_tiles_per_block);
+        cb_pop_front(cb_r2c_w, wq_b_tiles_per_block);
     }
 
     //-------------------------------------------------------------------------
@@ -161,7 +181,6 @@ void kernel_main() {
         // This is the first tile with k_pe output
         rope_tile(n_tiles_this_core - 2);
     }
-    cb_pop_front(cb_r2c_rope, 1);
 
     //-------------------------------------------------------------------------
     tile_regs_commit();
@@ -240,12 +259,92 @@ void kernel_main() {
     //-------------------------------------------------------------------------
     // Compute: input @ wq_b -> output
     //-------------------------------------------------------------------------
+    // Unpacker A is for weight, so Bfp8_b
+    reconfig_data_format_srca(cb_r2c_w);
+
+    // Initialize matmul: input @ weight -> output
+    mm_block_init(
+        cb_s2c_in,
+        cb_r2c_w,
+        cb_s2c_out,
+        /*transpose=*/false,
+        /*ct_dim=*/wq_b_n_tiles_this_core,
+        /*rt_dim=*/1,
+        /*kt_dim=*/1);
+
+    tile_regs_acquire();
+    in0_index = 0;
+
     for (uint32_t block_id = 0; block_id < wq_b_num_blocks; ++block_id) {
-        cb_wait_front(cb_r2c_w, w_a_tiles_per_block);
-        cb_pop_front(cb_r2c_w, w_a_tiles_per_block);
+        cb_wait_front(cb_r2c_w, wq_b_tiles_per_block);
+
+        for (uint32_t k = 0; k < wq_b_tiles_per_block; k += wq_b_n_tiles_this_core) {
+            matmul_block(
+                cb_s2c_in,
+                cb_r2c_w,
+                /*in0_index=*/in0_index++,
+                /*in1_tile_index=*/k,
+                /*idst=*/0,
+                /*transpose=*/false,
+                /*ct_dim=*/wq_b_n_tiles_this_core,
+                /*rt_dim=*/1,
+                /*kt_dim=*/1);
+        }
+
+        cb_pop_front(cb_r2c_w, wq_b_tiles_per_block);
     }
 
+    tile_regs_commit();
+    tile_regs_wait();
+    tile_regs_release();
+
+    //-------------------------------------------------------------------------
+    // Apply RoPE transformation for q_pe RoPE output
+    //-------------------------------------------------------------------------
+    if (dram_bank_id >= 8) {
+        // Configure unpacker A to Float16_b
+        // reconfig_data_format_srca(cb_r2c_rope);
+
+        // TODO: We have data in all 8 tiles, so need some gymnastics
+        // to process 4 at once because we need scratch space and space for the rope tensor
+    }
+
+    //-------------------------------------------------------------------------
+    // Apply q_nope matmul
+    //-------------------------------------------------------------------------
+    if (dram_bank_id < 8) {
+        tile_regs_acquire();
+        in0_index = 0;
+
+        for (uint32_t batch_id = 0; batch_id < 2; ++batch_id) {
+            for (uint32_t block_id = 0; block_id < q_nope_num_blocks_per_batch; ++block_id) {
+                cb_wait_front(cb_r2c_w, wq_b_tiles_per_block);
+
+                for (uint32_t k = 0; k < 2; k += q_nope_n_tiles_per_block) {
+                    matmul_block(
+                        cb_s2c_in,
+                        cb_r2c_w,
+                        /*in0_index=*/in0_index++,
+                        /*in1_tile_index=*/k,
+                        /*idst=*/0,
+                        /*transpose=*/false,
+                        /*ct_dim=*/q_nope_n_tiles_per_block,
+                        /*rt_dim=*/1,
+                        /*kt_dim=*/1);
+                }
+
+                cb_pop_front(cb_r2c_w, wq_b_tiles_per_block);
+            }
+        }
+
+        tile_regs_commit();
+        tile_regs_wait();
+        tile_regs_release();
+    }
+
+    cb_pop_front(cb_r2c_rope, 1);
+
     // We have one extra slot reserved, which we won't use, drain it.
-    cb_wait_front(cb_r2c_w, w_a_tiles_per_block);
-    cb_pop_front(cb_r2c_w, w_a_tiles_per_block);
+    cb_wait_front(cb_r2c_w, wq_b_tiles_per_block);
+    cb_pop_front(cb_r2c_w, wq_b_tiles_per_block);
 }
