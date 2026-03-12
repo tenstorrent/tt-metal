@@ -19,10 +19,6 @@
 using namespace tt::tt_fabric::common::experimental;
 namespace tt::tt_fabric::linear::experimental {
 
-// Type trait to detect if a type is an addrgen (has get_noc_addr method)
-// Defined in detail:: namespace; exposed here for public use.
-using detail::is_addrgen;
-
 static FORCE_INLINE void fabric_set_unicast_route(
     tt::tt_fabric::RoutingPlaneConnectionManager& connection_manager,
     volatile PACKET_HEADER_TYPE* packet_header,
@@ -66,9 +62,15 @@ static FORCE_INLINE void fabric_set_mcast_route(
 #endif
 }
 
+}  // namespace tt::tt_fabric::linear::experimental
+
+// Include detail API after route helpers are defined so detail:: functions can call them.
 #include "tt_metal/fabric/hw/inc/linear/detail/api.h"
 
+namespace tt::tt_fabric::linear::experimental {
 
+// Re-export detail::is_addrgen into the public namespace for use in addrgen overload SFINAE
+using detail::is_addrgen;
 
 // clang-format off
 /**
