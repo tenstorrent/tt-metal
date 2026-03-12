@@ -6,6 +6,7 @@
 
 #include "tt-metalium/work_split.hpp"
 #include "tt_stl/assert.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
@@ -250,11 +251,12 @@ std::vector<Tensor> topk(
     // but for now we simply match its behavior).
     if (rank == 0 && (k == 1 || k == 0)) {
         // Caller requested top 1 elements from a scalar tensor.
-        // We need to return the input tensor as is (that is the 1 top element), and a scalar tensor
-        // containing a single 0 as the index (matches what PyTorch does).
+        // We need to return a copy of the input tensor as is (that is the 1 top element), and
+        // a scalar tensor containing a single 0 as the index (matches what PyTorch does).
         if (!preallocated_output_tensors.has_value()) {
             return {
-                input_tensor,
+                ttnn::clone(
+                    input_tensor, /*dtype=*/std::nullopt, memory_config, /*compute_kernel_config=*/std::nullopt),
                 ttnn::full(
                     desired_final_shape,
                     0,

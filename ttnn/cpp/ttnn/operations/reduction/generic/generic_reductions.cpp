@@ -63,6 +63,8 @@ std::pair<ttnn::SmallVector<int>, ttnn::SmallVector<int>> split_height_width_dim
 }
 
 float get_pad_value(reduction_common::ReduceType reduce_type) {
+    // Prod reduction is handled separately in prod.cpp.
+    TT_FATAL(reduce_type != reduction_common::ReduceType::Prod, "Prod reduction is not supported");
     return reduce_type == reduction_common::ReduceType::Max
                ? -std::numeric_limits<float>::infinity()
                : (reduce_type == reduction_common::ReduceType::Min ? std::numeric_limits<float>::infinity() : 0);

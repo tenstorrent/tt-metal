@@ -22,7 +22,7 @@ static Tensor zero_volume_argmax(
     if (!optional_output_tensor.has_value()) {
         return ttnn::full(
             output_shape,
-            NAN,
+            0,  // fill_value doesn't matter for zero-volume tensor.
             tt::tt_metal::DataType::UINT32,
             input_tensor.layout(),
             *input_tensor.device(),

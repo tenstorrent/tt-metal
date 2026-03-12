@@ -36,8 +36,7 @@ ttnn::SmallVector<int> generate_reduce_dim(
                 dim_as_int64 <= std::numeric_limits<int>::max(),
                 "Dimension cannot be greater than {}",
                 std::numeric_limits<int>::max());
-            auto dim_as_int = static_cast<int>(dim_as_int64);
-            dim = ttnn::SmallVector<int>({static_cast<int>(dim_as_int)});
+            dim = ttnn::SmallVector<int>({static_cast<int>(dim_as_int64)});
         } else {
             dim = std::get<ttnn::SmallVector<int>>(dim_arg.value());
         }
@@ -52,12 +51,18 @@ ttnn::SmallVector<int> generate_reduce_dim(
     }
 
     for (int i = 0; i < dim.size(); i++) {
-        if (dim[i] < 0) {
-            dim[i] += rank;
+        int& dim_i = dim[i];
+        if (dim_i < 0) {
+            dim_i += rank;
+            if (rank == 0 && dim_i == -1) {
+                // Special case for rank 0 tensor (scalar) with dim=-1.
+                // While scalar technically has no dimensions, set dim to 0 because
+                // that's the cleanest way to make ttnn compatible with PyTorch.
+                dim_i = 0;
+            }
         }
-        int dim_i = dim[i];
         TT_FATAL(
-            (dim_i >= 0 && dim_i < rank) || (rank == 0 && (dim_i == 0 || dim_i == -1)),
+            (dim_i >= 0 && dim_i < rank) || (rank == 0 && dim_i == 0),
             "Unsupported dim {} at index {}. After possible adjustment, needs to be at least 0 and less than rank {}, "
             "or exactly 0 for a rank 0 tensor.",
             dim_i,

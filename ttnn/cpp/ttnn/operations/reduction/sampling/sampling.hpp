@@ -21,6 +21,6 @@ Tensor sampling(
     const Tensor& temp,
     const std::optional<uint32_t>& seed = std::nullopt,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids = std::nullopt,
-    const std::optional<Tensor>& output_tensor = std::nullopt);
+    std::optional<Tensor> output_tensor = std::nullopt);
 
 }  // namespace ttnn

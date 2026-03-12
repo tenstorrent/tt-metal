@@ -16,7 +16,7 @@ Tensor moe(
     const Tensor& topk_mask_tensor,
     uint16_t k,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config,
-    const std::optional<Tensor>& output_tensor) {
+    std::optional<Tensor> output_tensor) {
     const auto& input_shape = input_tensor.logical_shape();
 
     // Zero-volume input: return zero-volume tensor with correct output shape
@@ -35,6 +35,16 @@ Tensor moe(
                 *input_tensor.device(),
                 memory_config.value_or(input_tensor.memory_config()));
         }
+
+        Tensor& preallocated_tensor = output_tensor.value();
+        TT_FATAL(is_device_tensor(preallocated_tensor), "Preallocated output tensor must be on device");
+
+        TT_FATAL(
+            preallocated_tensor.logical_shape() == desired_output_shape,
+            "Preallocated output tensor has incorrect shape! Got : {}, expected: {}",
+            preallocated_tensor.logical_shape(),
+            desired_output_shape);
+
         return output_tensor.value();
     }
 
