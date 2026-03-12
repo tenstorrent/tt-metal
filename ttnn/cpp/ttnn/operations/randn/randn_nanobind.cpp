@@ -47,7 +47,6 @@ void bind_randn_operation(nb::module_& mod) {
 
         Memory Support:
             - Interleaved: DRAM and L1
-            - Height, Width, Block, and ND Sharded: DRAM and L1
         )doc";
 
     using OperationType = decltype(ttnn::randn);
