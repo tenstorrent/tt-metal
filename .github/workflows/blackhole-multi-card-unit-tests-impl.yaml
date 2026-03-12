@@ -61,8 +61,8 @@ jobs:
           - name: cpp fast unit tests (eth, single erisc)
             cmd: |
               ./build/test/tt_metal/unit_tests_eth
-              TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_eth
-              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests '--gtest_filter=Fabric1D*Fixture.*'
+              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_eth
+              TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests '--gtest_filter=Fabric1D*Fixture.*'
               TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_eth
               TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=DPrintMeshFixture.ActiveEthTestPrint
               TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TensixTestWatcherPause
