@@ -492,12 +492,12 @@ class LogProbsCalculator:
             # 2D mesh (TG Galaxy): concat along TP axis and last dim
             return ttnn.ConcatMesh2dToTensor(
                 self.mesh_device,
-                dims=(1, 3),
+                dims=(0, 1),
                 mesh_shape=self.cluster_shape,
             )
         else:
             # 1D mesh (T3K): concat along last dim
-            return ttnn.ConcatMeshToTensor(self.mesh_device, dim=3)
+            return ttnn.ConcatMeshToTensor(self.mesh_device, dim=0)
 
     def transfer_logprobs_to_host(
         self,
@@ -547,11 +547,9 @@ class LogProbsCalculator:
             log_probs_result.top_k_indices,
             mesh_composer=mesh_composer,
         )
-
-        K = log_probs_result.top_k_logprobs.shape[-1]
-        # Slice to (batch_size, K) — discard padding / replicas
-        top_k_logprobs_host = top_k_logprobs_host[:, :, : self.batch_size, :K].squeeze(0).squeeze(0)
-        top_k_indices_host = top_k_indices_host[:, :, : self.batch_size, :K].squeeze(0).squeeze(0).int()
+        # Remove replicas from top-k logprobs and indices
+        top_k_logprobs_host = top_k_logprobs_host[0, 0, ...]
+        top_k_indices_host = top_k_indices_host[0, 0, ...]
 
         # Sort each user's top-k by logprob descending (per-device chunks are
         # sorted locally but not globally after all-gather concatenation)
