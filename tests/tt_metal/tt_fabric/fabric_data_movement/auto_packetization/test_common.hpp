@@ -41,28 +41,51 @@ struct RawTestParams {
     bool use_dram_dst = false;
 };
 
+// TX_OP_* values mirroring tx_kernel_common.h device constants.
+// Passed as the send_op RT arg to the unified unicast/multicast kernels.
+static constexpr uint32_t TX_OP_WRITE                   = 0;
+static constexpr uint32_t TX_OP_SCATTER_WRITE            = 1;
+static constexpr uint32_t TX_OP_FUSED_ATOMIC_INC         = 2;
+static constexpr uint32_t TX_OP_FUSED_SCATTER_ATOMIC_INC = 3;
+
+// Maps each AutoPacketFamily to its TX_OP_* dispatch value.
+// SparseMulticast has its own kernel and does not use send_op.
+inline uint32_t family_tx_op(AutoPacketFamily family) {
+    switch (family) {
+        case AutoPacketFamily::UnicastWrite:
+        case AutoPacketFamily::MulticastWrite:
+            return TX_OP_WRITE;
+        case AutoPacketFamily::UnicastScatter:
+        case AutoPacketFamily::MulticastScatter:
+            return TX_OP_SCATTER_WRITE;
+        case AutoPacketFamily::UnicastFusedAtomicInc:
+        case AutoPacketFamily::MulticastFusedAtomicInc:
+            return TX_OP_FUSED_ATOMIC_INC;
+        case AutoPacketFamily::UnicastFusedScatterAtomicInc:
+        case AutoPacketFamily::MulticastFusedScatterAtomicInc:
+            return TX_OP_FUSED_SCATTER_ATOMIC_INC;
+        default:
+            return TX_OP_WRITE;
+    }
+}
+
 // Maps each AutoPacketFamily to its device kernel .cpp path.
 // Paths are relative to project root (as used by CreateKernel).
-// Note: multicast/sparse kernel files are created by Plan 02 and may not exist on disk yet.
+// All unicast variants share unicast_tx_writer_raw.cpp (dispatches via send_op).
+// All multicast variants share multicast_tx_writer_raw.cpp (dispatches via send_op).
 inline std::string family_kernel_path(AutoPacketFamily family) {
     const std::string base = "tests/tt_metal/tt_fabric/fabric_data_movement/auto_packetization/kernels/";
     switch (family) {
         case AutoPacketFamily::UnicastWrite:
-            return base + "unicast_tx_writer_raw.cpp";
         case AutoPacketFamily::UnicastScatter:
-            return base + "scatter_unicast_tx_writer_raw.cpp";
         case AutoPacketFamily::UnicastFusedAtomicInc:
-            return base + "fused_atomic_inc_unicast_tx_writer_raw.cpp";
         case AutoPacketFamily::UnicastFusedScatterAtomicInc:
-            return base + "fused_scatter_atomic_inc_unicast_tx_writer_raw.cpp";
+            return base + "unicast_tx_writer_raw.cpp";
         case AutoPacketFamily::MulticastWrite:
-            return base + "multicast_tx_writer_raw.cpp";
         case AutoPacketFamily::MulticastScatter:
-            return base + "scatter_multicast_tx_writer_raw.cpp";
         case AutoPacketFamily::MulticastFusedAtomicInc:
-            return base + "fused_atomic_inc_multicast_tx_writer_raw.cpp";
         case AutoPacketFamily::MulticastFusedScatterAtomicInc:
-            return base + "fused_scatter_atomic_inc_multicast_tx_writer_raw.cpp";
+            return base + "multicast_tx_writer_raw.cpp";
         case AutoPacketFamily::SparseMulticast:
             return base + "sparse_multicast_tx_writer_raw.cpp";
     }

@@ -4,44 +4,18 @@
 
 // Shared boilerplate header for all auto-packetization TX (sender) kernels.
 //
-// Included by all 9 TX kernels:
-//   - unicast_tx_writer_raw.cpp
-//   - scatter_unicast_tx_writer_raw.cpp
-//   - fused_atomic_inc_unicast_tx_writer_raw.cpp
-//   - fused_scatter_atomic_inc_unicast_tx_writer_raw.cpp
-//   - multicast_tx_writer_raw.cpp
-//   - scatter_multicast_tx_writer_raw.cpp
-//   - fused_atomic_inc_multicast_tx_writer_raw.cpp
-//   - fused_scatter_atomic_inc_multicast_tx_writer_raw.cpp
+// Included by 3 TX kernels:
+//   - unicast_tx_writer_raw.cpp      (dispatches all 4 unicast variants via TX_OP_*)
+//   - multicast_tx_writer_raw.cpp    (dispatches all 4 multicast variants via TX_OP_*)
 //   - sparse_multicast_tx_writer_raw.cpp
 //
 // Provides:
 //   1. Common #include block (7 headers + FABRIC_2D-conditional mesh/api.h + linear/api.h)
 //   2. Namespace declarations (tt::tt_fabric + FABRIC_2D-conditional mesh/linear experimental)
-//   3. TX_KERNEL_PARSE_UNICAST_ARGS(idx) -- RT arg parsing for the 4 unicast kernels
-//   4. TX_KERNEL_SETUP(idx)              -- build sender, allocate header, open sender
-//   5. TX_KERNEL_TEARDOWN()              -- close sender
-//
-// Usage for unicast (non-scatter) kernels:
-//   void kernel_main() {
-//       size_t idx = 0;
-//       TX_KERNEL_PARSE_UNICAST_ARGS(idx)
-//       TX_KERNEL_SETUP(idx)
-//       // unique API calls ...
-//       TX_KERNEL_TEARDOWN()
-//   }
-//
-// Usage for scatter unicast kernels (scatter_offset after common args, before SETUP):
-//   void kernel_main() {
-//       size_t idx = 0;
-//       TX_KERNEL_PARSE_UNICAST_ARGS(idx)
-//       const uint32_t scatter_offset = get_arg_val<uint32_t>(idx++);
-//       TX_KERNEL_SETUP(idx)
-//       // unique API calls ...
-//       TX_KERNEL_TEARDOWN()
-//   }
-//
-// Usage for multicast/sparse_multicast kernels: include header only; keep kernel_main() intact.
+//   3. TX_OP_* constants -- send operation dispatch values (passed as RT arg by host)
+//   4. TX_KERNEL_PARSE_UNICAST_ARGS(idx) -- RT arg parsing for the unicast kernel
+//   5. TX_KERNEL_SETUP(idx)              -- build sender, allocate header, open sender
+//   6. TX_KERNEL_TEARDOWN()              -- close sender
 
 #pragma once
 
@@ -98,6 +72,13 @@ using namespace tt::tt_fabric::linear::experimental;
     const uint32_t sem_l1_addr   = get_arg_val<uint32_t>((idx)++);                             \
     const uint8_t  num_hops      = static_cast<uint8_t>(get_arg_val<uint32_t>((idx)++));
 #endif
+
+// TX_OP_* -- send operation type passed as a runtime arg by the host runner.
+// Both unicast_tx_writer_raw.cpp and multicast_tx_writer_raw.cpp dispatch on this value.
+static constexpr uint32_t TX_OP_WRITE                    = 0;
+static constexpr uint32_t TX_OP_SCATTER_WRITE             = 1;
+static constexpr uint32_t TX_OP_FUSED_ATOMIC_INC          = 2;
+static constexpr uint32_t TX_OP_FUSED_SCATTER_ATOMIC_INC  = 3;
 
 // TX_KERNEL_SETUP(idx)
 //

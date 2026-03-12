@@ -205,11 +205,11 @@ void run_raw_multicast_write_test(BaseFabricFixture* fixture, const RawTestParam
         const uint32_t dir_mask =
             (w_hops ? 1u : 0u) | (e_hops ? 2u : 0u) | (n_hops ? 4u : 0u) | (s_hops ? 8u : 0u);
 
-        // Common prefix
-        writer_rt = {src_l1_addr, p.tensor_bytes, dst_l1_addr, rx_xy.x, rx_xy.y, sem_l1_addr, dir_mask};
-        if (is_scatter) {
-            writer_rt.push_back(scatter_offset);
-        }
+        // Common prefix: scatter_offset and send_op always present before dir_mask
+        writer_rt = {
+            src_l1_addr, p.tensor_bytes, dst_l1_addr, rx_xy.x, rx_xy.y, sem_l1_addr,
+            scatter_offset, family_tx_op(p.family),
+            dir_mask};
 
         // Per-direction fabric connections (W, E, N, S)
         auto find_receiver_at = [&](int row, int col) -> tt::tt_fabric::FabricNodeId {
@@ -256,12 +256,11 @@ void run_raw_multicast_write_test(BaseFabricFixture* fixture, const RawTestParam
         const uint8_t start_distance = 1;
         const uint8_t range = static_cast<uint8_t>(receivers.size());
 
-        writer_rt = {src_l1_addr, p.tensor_bytes, dst_l1_addr, rx_xy.x, rx_xy.y, sem_l1_addr};
-        writer_rt.push_back(static_cast<uint32_t>(start_distance));
-        writer_rt.push_back(static_cast<uint32_t>(range));
-        if (is_scatter) {
-            writer_rt.push_back(scatter_offset);
-        }
+        // scatter_offset and send_op always present before start_distance/range
+        writer_rt = {
+            src_l1_addr, p.tensor_bytes, dst_l1_addr, rx_xy.x, rx_xy.y, sem_l1_addr,
+            scatter_offset, family_tx_op(p.family),
+            static_cast<uint32_t>(start_distance), static_cast<uint32_t>(range)};
 
         // Find a direct neighbor of src to use as the fabric connection target.
         // In 1D, append_fabric_connection_rt_args requires the dst to be a direct neighbor.

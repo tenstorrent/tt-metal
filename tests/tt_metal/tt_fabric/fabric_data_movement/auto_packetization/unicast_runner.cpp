@@ -157,14 +157,13 @@ void run_raw_unicast_write_test(BaseFabricFixture* fixture, const RawTestParams&
     writer_rt.push_back(gsem.address());
 
     if (!is_2d_fabric) {
-        // Linear mode: num_hops after sem_addr (before fabric connection args)
-        // For linear unicast, num_hops = 1 (single-hop between adjacent devices)
+        // Linear mode: num_hops after sem_addr (before scatter_offset/send_op)
         writer_rt.push_back(1u);
     }
 
-    if (is_scatter) {
-        writer_rt.push_back(scatter_offset);
-    }
+    // scatter_offset and send_op always present (scatter_offset=0 for non-scatter ops)
+    writer_rt.push_back(scatter_offset);
+    writer_rt.push_back(family_tx_op(p.family));
 
     // Append fabric connection runtime args
     auto forwarding_links = tt::tt_fabric::get_forwarding_link_indices(src, dst);
