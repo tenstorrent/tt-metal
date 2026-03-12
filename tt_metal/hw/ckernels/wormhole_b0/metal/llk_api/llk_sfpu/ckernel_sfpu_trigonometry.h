@@ -126,7 +126,7 @@ inline void calculate_tangent() {
         // j = round(v / (PI/2))
         // j = v * (2/PI) + 1.5*2**23 shifts the mantissa bits to give round-to-nearest-even.
         // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
-        rounding_bias.get() = __builtin_rvtt_sfpxloadi(0x4b40, 0);
+        rounding_bias.get() = __builtin_rvtt_sfploadi(0x4b40, SFPLOADI_MOD0_FLOATB);
         j.get() = __builtin_rvtt_sfpmad(v.get(), inv_pio2.get(), rounding_bias.get(), sfpi::SFPMAD_MOD1_OFFSET_NONE);
 
         // We need the LSB of the integer later, to determine the sign of the result.
@@ -185,7 +185,7 @@ inline void calculate_sine() {
 
         // Workaround for SFPI's insistence on generating SFPADDI+SFPMUL instead of SFPLOADI+SFPMAD here.
         sfpi::vFloat rounding_bias;
-        rounding_bias.get() = __builtin_rvtt_sfpxloadi(0x4b40, 0);  // 1.5*2^23
+        rounding_bias.get() = __builtin_rvtt_sfploadi(0x4b40, SFPLOADI_MOD0_FLOATB);  // 1.5*2^23
         __rvtt_vec_t inv_pi = __builtin_rvtt_sfpreadlreg(sfpi::vConstFloatPrgm2.get());
 
         // Compute j = round(v / PI).
@@ -263,7 +263,7 @@ inline void calculate_cosine() {
 
         // Force v * (1/PI) + 0.5 to compile as a single SFPMAD sequence for consistent instruction scheduling.
         sfpi::vFloat half;
-        half.get() = __builtin_rvtt_sfpxloadi(0x3f00, 0);  // 0.5
+        half.get() = __builtin_rvtt_sfploadi(0x3f00, SFPLOADI_MOD0_FLOATB);  // 0.5
         __rvtt_vec_t inv_pi = __builtin_rvtt_sfpreadlreg(sfpi::vConstFloatPrgm2.get());
         __rvtt_vec_t one = __builtin_rvtt_sfpreadlreg(sfpi::vConst1.get());
         __rvtt_vec_t neg_one = __builtin_rvtt_sfpreadlreg(sfpi::vConstNeg1.get());
@@ -274,7 +274,7 @@ inline void calculate_cosine() {
         j.get() = __builtin_rvtt_sfpmad(v.get(), inv_pi, half.get(), SFPMAD_MOD1_OFFSET_NONE);
 
         // sfpi::vFloat rounding_bias;
-        // rounding_bias.get() = __builtin_rvtt_sfpxloadi(0x4b40, 0);  // 1.5*2^23
+        // rounding_bias.get() = __builtin_rvtt_sfploadi(0x4b40, SFPLOADI_MOD0_FLOATB);  // 1.5*2^23
         // j.get() = __builtin_rvtt_sfpmad(v.get(), one, rounding_bias.get(), SFPMAD_MOD1_OFFSET_NONE);
 
         j = j + ROUNDING_BIAS;
@@ -286,7 +286,7 @@ inline void calculate_cosine() {
         j = j + NEG_ROUNDING_BIAS;
 
         sfpi::vFloat two;
-        two.get() = __builtin_rvtt_sfpxloadi(0x4000, 0);  // 2.0
+        two.get() = __builtin_rvtt_sfploadi(0x4000, SFPLOADI_MOD0_FLOATB);  // 2.0
         j.get() = __builtin_rvtt_sfpmad(j.get(), two.get(), neg_one, SFPMAD_MOD1_OFFSET_NONE);
 
         // Four-stage Cody-Waite reduction; a = v + j * -PI / 2.

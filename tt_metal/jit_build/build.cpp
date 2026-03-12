@@ -474,7 +474,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     string defines = this->defines_;
 
     if (env_.get_rtoptions().get_build_map_enabled()) {
-        cmd += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
+        cmd += "-v -save-temps=obj -fdump-tree-all -fdump-rtl-all ";
     }
 
     if (settings) {
@@ -591,7 +591,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     string lflags = this->lflags_;
     if (env_.get_rtoptions().get_build_map_enabled()) {
         lflags += "-Wl,-Map=" + out_dir + this->target_name_ + ".map ";
-        lflags += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
+        lflags += "-v -save-temps=obj -fdump-tree-all -fdump-rtl-all ";
     }
 
     // Append user args
