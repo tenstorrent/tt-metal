@@ -5,6 +5,7 @@
 #pragma once
 #include "llk_unpack_A.h"
 #include "llk_unpack_common_api.h"
+#include "api/debug/assert.h"
 
 /*************************************************************************
  * LLK UNPACK A

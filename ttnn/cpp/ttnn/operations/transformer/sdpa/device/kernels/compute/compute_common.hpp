@@ -1711,6 +1711,7 @@ void sdpa_inner_loop(
              *
              * matmul_blocks internally waits on both inputs
              */
+            reconfig_data_format(cb_k_in, cb_q_in);
             pack_reconfig_data_format(cb_qk_im);
             matmul_blocks(
                 cb_q_in,
@@ -1806,6 +1807,10 @@ void sdpa_inner_loop(
                 alias_cur_max, alias_cur_sum, Sk_chunk_t);
 
             /* OUT_IM = QK @ V_CHUNK */
+            // Reconfigure unpackers: srcA (context 0) = cb_v_in, srcB (context 1) = cb_qk_im (operands are swapped in
+            // matmul)
+            reconfig_data_format(cb_v_in, cb_qk_im);
+            pack_reconfig_data_format(alias_mm2_cur_out);
             matmul_blocks(
                 cb_qk_im,
                 cb_v_in,
