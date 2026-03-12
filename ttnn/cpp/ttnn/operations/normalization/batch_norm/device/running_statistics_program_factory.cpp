@@ -55,8 +55,6 @@ void set_or_update_runtime_arguments(
 
     auto cores = grid_to_cores(num_cores_total, num_cores_x, num_cores_y, row_major);
 
-    auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(batch_mean_tensor.device()->arch(), operation_attributes.compute_kernel_config);
     const bool any_float32 =
         (tt::tt_metal::datatype_to_dataformat_converter(batch_mean_tensor.dtype()) == tt::DataFormat::Float32 ||
          tt::tt_metal::datatype_to_dataformat_converter(batch_var_tensor.dtype()) == tt::DataFormat::Float32 ||
@@ -65,12 +63,11 @@ void set_or_update_runtime_arguments(
           tt::tt_metal::datatype_to_dataformat_converter(running_mean_tensor->dtype()) == tt::DataFormat::Float32) ||
          (running_var_has_value &&
           tt::tt_metal::datatype_to_dataformat_converter(running_var_tensor->dtype()) == tt::DataFormat::Float32));
-    const bool use_fp32_acc = fp32_dest_acc_en || any_float32;
 
     const uint32_t cHtWt = cHt * cWt;
     const auto scalar = momentum;
     const auto packed_scalar_momentum =
-        use_fp32_acc ? std::bit_cast<uint32_t>(scalar) : pack_two_bfloat16_into_uint32({scalar, scalar});
+        any_float32 ? std::bit_cast<uint32_t>(scalar) : pack_two_bfloat16_into_uint32({scalar, scalar});
 
     constexpr size_t num_reader_args = 11;
     constexpr size_t num_writer_args = 13;
@@ -232,20 +229,23 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         interm_single_tile_size,
         b_num_tiles_per_cb,
         interm_data_format);  // to store 1
+    // Updated running mean/var CBs use intermediate format so the compute kernel
+    // can pack without switching the packer's data format mid-computation.
+    // The writer kernel handles the final conversion to the tensor's native format.
     auto [updated_m_cb, updated_m_cb_handle] = create_cb(
         tt::CBIndex::c_7,
         program,
         all_device_cores,
-        d_single_tile_size,
+        interm_single_tile_size,
         b_num_tiles_per_cb,
-        d_data_format);  // updated running mean
+        interm_data_format);  // updated running mean
     auto [updated_v_cb, updated_v_cb_handle] = create_cb(
         tt::CBIndex::c_8,
         program,
         all_device_cores,
-        e_single_tile_size,
+        interm_single_tile_size,
         b_num_tiles_per_cb,
-        e_data_format);  // updated running var
+        interm_data_format);  // updated running var
 
     // Intermediate buffers required for updation of running stats
     auto [tmp1_cb, tmp1_cb_handle] = create_cb(
@@ -283,7 +283,7 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
 
     // READER KERNEL
     std::map<std::string, std::string> reader_defines;
-    if (use_fp32_acc) {
+    if (any_float32) {
         reader_defines["FILL_MOMENTUM_FP32"] = "1";
     }
     auto reader_kernel_id = tt_metal::CreateKernel(
@@ -299,6 +299,12 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
     }
     if (e_data_format == DataFormat::Float32) {
         writer_defines["OLD_VAR_IS_FP32"] = "1";
+    }
+    if (interm_data_format == DataFormat::Float32 && d_data_format != DataFormat::Float32) {
+        writer_defines["CONVERT_UPDATED_MEAN_TO_BF16"] = "1";
+    }
+    if (interm_data_format == DataFormat::Float32 && e_data_format != DataFormat::Float32) {
+        writer_defines["CONVERT_UPDATED_VAR_TO_BF16"] = "1";
     }
     auto writer_kernel_id = tt_metal::CreateKernel(
         program,
@@ -345,7 +351,7 @@ RunningStatistics::RunningStatisticsProgramFactory::create(
         program,
         fmt::format(
             "ttnn/cpp/ttnn/operations/normalization/batch_norm/device/kernels/compute/running_statistics_{}.cpp",
-            use_fp32_acc ? "sfpu_kernel" : "kernel"),
+            any_float32 ? "sfpu_kernel" : "kernel"),
         all_device_cores,
         tt_metal::ComputeConfig{
             .math_fidelity = math_fidelity,
