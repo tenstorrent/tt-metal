@@ -219,7 +219,6 @@ std::map<MeshId, LogicalAdjacencyMap> build_adjacency_map_logical(const ::tt::tt
     return result;
 }
 
-// FIXME: Add Z direction support for physical adjacency map
 std::map<MeshId, PhysicalAdjacencyMap> build_adjacency_map_physical(
     tt::tt_metal::ClusterType cluster_type,
     const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
@@ -356,6 +355,96 @@ compute_intermesh_assign_z_direction_from_connections(
                 uint32_t connection_count = static_cast<uint32_t>(port_list.size());
                 intermesh_assign_z_direction[src_mesh_id][dst_mesh_id] += connection_count;
                 intermesh_assign_z_direction[dst_mesh_id][src_mesh_id] += connection_count;
+            }
+        }
+    }
+
+    return intermesh_assign_z_direction;
+}
+
+// Compute intermesh_assign_z_direction from physical graph by checking channels 8 and 9.
+// Channels 8 and 9 are used for BLACKHOLE intermesh connections and should use Z direction.
+std::unordered_map<::tt::tt_fabric::MeshId, std::unordered_map<::tt::tt_fabric::MeshId, uint32_t>>
+compute_intermesh_assign_z_direction_from_physical_graph(
+    const tt::tt_metal::PhysicalSystemDescriptor& physical_system_descriptor,
+    const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
+    std::unordered_map<::tt::tt_fabric::MeshId, std::unordered_map<::tt::tt_fabric::MeshId, uint32_t>>
+        intermesh_assign_z_direction;
+
+    // Build a map from AsicID to MeshId for quick lookup
+    std::unordered_map<tt::tt_metal::AsicID, MeshId> asic_id_to_mesh_id;
+    for (const auto& [mesh_id, asic_map] : asic_id_to_mesh_rank) {
+        for (const auto& [asic_id, _] : asic_map) {
+            asic_id_to_mesh_id[asic_id] = mesh_id;
+        }
+    }
+
+    // First pass: Build a set of ASICs that have 5 or more unique neighbors
+    std::unordered_set<tt::tt_metal::AsicID> asics_with_many_neighbors;
+    for (const auto& host_name : physical_system_descriptor.get_all_hostnames()) {
+        for (const auto& [src_asic_id, asic_connections] : physical_system_descriptor.get_asic_topology(host_name)) {
+            // Count unique ASIC neighbors for this ASIC
+            std::unordered_set<tt::tt_metal::AsicID> unique_neighbors;
+            for (const auto& asic_connection : asic_connections) {
+                auto dst_asic_id = asic_connection.first;
+                // Skip self-connections
+                if (src_asic_id != dst_asic_id) {
+                    unique_neighbors.insert(dst_asic_id);
+                }
+            }
+
+            // If this ASIC has more than 4 unique neighbors (i.e., 5+), add it to the set
+            if (unique_neighbors.size() > 4) {
+                asics_with_many_neighbors.insert(src_asic_id);
+            }
+        }
+    }
+
+    // Second pass: Only mark connections as Z-direction if both source and destination ASICs have 5+ neighbors
+    for (const auto& host_name : physical_system_descriptor.get_all_hostnames()) {
+        for (const auto& [src_asic_id, asic_connections] : physical_system_descriptor.get_asic_topology(host_name)) {
+            auto src_mesh_id_it = asic_id_to_mesh_id.find(src_asic_id);
+            if (src_mesh_id_it == asic_id_to_mesh_id.end()) {
+                continue;
+            }
+            MeshId src_mesh_id = src_mesh_id_it->second;
+
+            // Only process if source ASIC has 5+ neighbors
+            if (!asics_with_many_neighbors.contains(src_asic_id)) {
+                continue;
+            }
+
+            for (const auto& asic_connection : asic_connections) {
+                auto dst_asic_id = asic_connection.first;
+
+                // Skip self-connections
+                if (src_asic_id == dst_asic_id) {
+                    continue;
+                }
+
+                // Only mark as Z-direction if destination ASIC also has 5+ neighbors
+                if (!asics_with_many_neighbors.contains(dst_asic_id)) {
+                    continue;
+                }
+
+                auto dst_mesh_id_it = asic_id_to_mesh_id.find(dst_asic_id);
+                if (dst_mesh_id_it == asic_id_to_mesh_id.end()) {
+                    continue;
+                }
+                MeshId dst_mesh_id = dst_mesh_id_it->second;
+
+                // Only process intermesh connections
+                if (src_mesh_id == dst_mesh_id) {
+                    continue;
+                }
+
+                // Count total number of ethernet connections between these two ASICs
+                const auto& eth_connections = asic_connection.second;
+                uint32_t total_eth_connections = eth_connections.size();
+
+                // Count each connection (bidirectional)
+                intermesh_assign_z_direction[src_mesh_id][dst_mesh_id] += total_eth_connections;
+                intermesh_assign_z_direction[dst_mesh_id][src_mesh_id] += total_eth_connections;
             }
         }
     }
@@ -617,6 +706,19 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
     result = build_hierarchical_from_flat_graph(flat_graph, all_mesh_groupings);
 
+    // Build asic_id_to_mesh_rank from mesh groupings for computing intermesh_assign_z_direction
+    std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>> asic_id_to_mesh_rank;
+    for (size_t i = 0; i < all_mesh_groupings.size(); ++i) {
+        MeshId mesh_id{static_cast<uint32_t>(i)};
+        for (const auto& asic_id : all_mesh_groupings[i]) {
+            asic_id_to_mesh_rank[mesh_id][asic_id] = MeshHostRankId{0};
+        }
+    }
+
+    // Populate intermesh_assign_z_direction from physical graph only (channels 8 and 9)
+    result.intermesh_assign_z_direction_ =
+        compute_intermesh_assign_z_direction_from_physical_graph(physical_system_descriptor, asic_id_to_mesh_rank);
+
     return result;
 }
 
@@ -643,7 +745,14 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
 
     // Convert to AdjacencyGraph and use the common algorithm
     AdjacencyGraph<tt::tt_metal::AsicID> flat_graph(flat_adj);
-    return build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
+    PhysicalMultiMeshGraph result = build_hierarchical_from_flat_graph(flat_graph, mesh_groupings);
+
+    // Populate intermesh_assign_z_direction from physical graph (channels 8 and 9)
+    auto intermesh_assign_z_direction_from_physical =
+        compute_intermesh_assign_z_direction_from_physical_graph(physical_system_descriptor, asic_id_to_mesh_rank);
+    result.intermesh_assign_z_direction_ = intermesh_assign_z_direction_from_physical;
+
+    return result;
 }
 
 PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
@@ -751,9 +860,101 @@ PhysicalMultiMeshGraph build_hierarchical_from_flat_graph(
 }
 
 namespace {
+// Helper function to add Z-direction constraints
+// Logical meshes that need Z connections can only be mapped to physical meshes that have Z connections
+void add_z_direction_constraints(
+    ::tt::tt_fabric::MappingConstraints<MeshId, MeshId>& inter_mesh_constraints,
+    const LogicalMultiMeshGraph& adjacency_map_logical,
+    const PhysicalMultiMeshGraph& adjacency_map_physical,
+    bool rank_bindings_enabled) {
+    const auto& logical_z_info = adjacency_map_logical.intermesh_assign_z_direction_;
+    const auto& physical_z_info = adjacency_map_physical.intermesh_assign_z_direction_;
+
+    // Find all physical meshes that have Z connections (to any other physical mesh)
+    std::set<MeshId> physical_meshes_with_z;
+    for (const auto& [src_phys_mesh, dst_map] : physical_z_info) {
+        if (!dst_map.empty()) {
+            physical_meshes_with_z.insert(src_phys_mesh);
+            for (const auto& [dst_phys_mesh, _] : dst_map) {
+                physical_meshes_with_z.insert(dst_phys_mesh);
+            }
+        }
+    }
+
+    // Find all logical meshes that need Z connections (to any other logical mesh)
+    std::set<MeshId> logical_meshes_with_z;
+    for (const auto& [src_log_mesh, dst_map] : logical_z_info) {
+        if (!dst_map.empty()) {
+            logical_meshes_with_z.insert(src_log_mesh);
+            for (const auto& [dst_log_mesh, _] : dst_map) {
+                logical_meshes_with_z.insert(dst_log_mesh);
+            }
+        }
+    }
+
+    // If rank bindings are enabled, check if they're compatible with Z-direction requirements
+    if (rank_bindings_enabled && !logical_meshes_with_z.empty()) {
+        // Rank bindings enforce 1:1 mapping (logical mesh X -> physical mesh X)
+        // Check if logical meshes with Z connections are being mapped to physical meshes without Z connections
+        std::vector<MeshId> incompatible_meshes;
+        for (const auto& logical_mesh_with_z : logical_meshes_with_z) {
+            // Check if this logical mesh is already constrained to a physical mesh without Z
+            // We can't directly query the constraints, so we check if the corresponding physical mesh has Z
+            if (!physical_meshes_with_z.contains(logical_mesh_with_z)) {
+                incompatible_meshes.push_back(logical_mesh_with_z);
+            }
+        }
+        if (!incompatible_meshes.empty()) {
+            TT_THROW(
+                "Z-direction constraint conflict with rank bindings: Logical mesh(es) {} require Z-direction "
+                "connections "
+                "but are constrained by rank bindings to map to physical mesh(es) {} which do not have Z-direction "
+                "connections. "
+                "Rank bindings enforce 1:1 mapping (logical mesh X -> physical mesh X), which conflicts with "
+                "Z-direction requirements.",
+                incompatible_meshes.size(),
+                incompatible_meshes.size());
+        }
+        // If all logical meshes with Z are already constrained to physical meshes with Z via rank bindings,
+        // no additional constraints are needed
+        log_info(
+            tt::LogFabric,
+            "Z-direction constraints: {} logical mesh(es) with Z connections are already constrained by rank bindings "
+            "to physical meshes with Z connections",
+            logical_meshes_with_z.size());
+        return;
+    }
+
+    // Add constraints: logical meshes with Z connections can only map to physical meshes with Z connections
+    if (!logical_meshes_with_z.empty() && !physical_meshes_with_z.empty()) {
+        log_info(
+            tt::LogFabric,
+            "Z-direction constraints: {} logical mesh(es) with Z connections can only map to {} physical mesh(es) with "
+            "Z connections",
+            logical_meshes_with_z.size(),
+            physical_meshes_with_z.size());
+        if (!inter_mesh_constraints.add_required_constraint(logical_meshes_with_z, physical_meshes_with_z)) {
+            TT_THROW(
+                "Failed to add Z-direction constraint - {} logical mesh(es) with Z connections cannot be mapped to {} "
+                "physical mesh(es) with Z connections. "
+                "This indicates insufficient physical Z connections to satisfy logical Z connection requirements.",
+                logical_meshes_with_z.size(),
+                physical_meshes_with_z.size());
+        }
+    } else if (!logical_meshes_with_z.empty() && physical_meshes_with_z.empty()) {
+        // Error if logical meshes need Z connections but no physical meshes have Z connections
+        TT_THROW(
+            "Logical meshes require Z-direction connections but no physical meshes have Z-direction connections. "
+            "Cannot satisfy Z-direction requirements.");
+    }
+}
+
 // Helper function to build inter-mesh constraints
 ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> build_inter_mesh_constraints(
-    const ::tt::tt_fabric::AdjacencyGraph<MeshId>& mesh_physical_graph, const TopologyMappingConfig& config) {
+    const ::tt::tt_fabric::AdjacencyGraph<MeshId>& mesh_physical_graph,
+    const TopologyMappingConfig& config,
+    const LogicalMultiMeshGraph& adjacency_map_logical,
+    const PhysicalMultiMeshGraph& adjacency_map_physical) {
     ::tt::tt_fabric::MappingConstraints<MeshId, MeshId> inter_mesh_constraints;
 
     // Only add required constraints when rank bindings are enabled
@@ -766,6 +967,11 @@ namespace {
             }
         }
     }
+
+    // Add Z-direction constraints (skip if rank bindings already enforce compatible constraints)
+    add_z_direction_constraints(
+        inter_mesh_constraints, adjacency_map_logical, adjacency_map_physical, !config.disable_rank_bindings);
+
     return inter_mesh_constraints;
 }
 
@@ -1250,8 +1456,14 @@ TopologyMappingResult map_multi_mesh_to_physical(
     const auto& mesh_logical_graph = adjacency_map_logical.mesh_level_graph_;
     const auto& mesh_physical_graph = adjacency_map_physical.mesh_level_graph_;
 
+    // Print the logical z information
+    log_info(tt::LogFabric, "Logical z information: {}", adjacency_map_logical.intermesh_assign_z_direction_);
+    // Print the physical z information
+    log_info(tt::LogFabric, "Physical z information: {}", adjacency_map_physical.intermesh_assign_z_direction_);
+
     // Build inter-mesh constraints and determine validation mode
-    auto inter_mesh_constraints = build_inter_mesh_constraints(mesh_physical_graph, config);
+    auto inter_mesh_constraints =
+        build_inter_mesh_constraints(mesh_physical_graph, config, adjacency_map_logical, adjacency_map_physical);
     auto inter_mesh_validation_mode = determine_inter_mesh_validation_mode(config);
 
     // Track statistics for error reporting
@@ -1318,8 +1530,6 @@ TopologyMappingResult map_multi_mesh_to_physical(
         if (!failed_mesh_pairs.empty()) {
             log_debug(tt::LogFabric, "Failed mesh pairs from previous attempts: {}", failed_mesh_pairs.size());
         }
-
-        // FIXME: Add z direction constraints for intermesh mapping please
 
         // Perform inter-mesh mapping
         auto solver_result = ::tt::tt_fabric::solve_topology_mapping(
