@@ -67,16 +67,6 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
         has_uneven_sharding = (height_remainder != 0) || (width_remainder != 0);
     }
 
-    // Detect if ND sharding is uneven
-    uint32_t tensor_width = a.padded_shape()[-1];
-    uint32_t tensor_height = a.physical_volume() / tensor_width;
-    bool has_uneven_sharding = false;
-    {
-        uint32_t height_remainder = tensor_height % shard_height;
-        uint32_t width_remainder = tensor_width % shard_width;
-        has_uneven_sharding = (height_remainder != 0) || (width_remainder != 0);
-    }
-
     const auto& distribution_spec = a.buffer()->buffer_distribution_spec().value();
 
     uint32_t total_shards = distribution_spec.num_shards();
