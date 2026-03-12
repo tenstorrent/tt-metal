@@ -56,29 +56,14 @@ void read_prev_output_and_lse(
     cb_push_back(cb_lse_in, Sq_chunk_t);
 }
 
-// Deferred-norm reader: restores raw (un-normalized) accumulators from DRAM for multi-Q-chunk.
-// Reads output, running max, and running sum — the full online-softmax state needed to continue
-// accumulation from a previous ring iteration.
-// Pushes into: cb_prev_out (c_7), cb_max_in (c_6), cb_sum_in (c_11).
+// Issue restore reads for accumulators — non-blocking.
+// Reserves CB space and issues NOC async reads for output, max, and sum.
+// Call complete_restore() later to barrier and push.
 //
-// @param cat_out_generator   Address generator for the output DRAM tensor (local or joint)
-// @param stats_writer        TensorAccessor for the stats DRAM tensor
-// @param stats_tile_logical  Tile shape of the stats tensor
-// @param nb                  Batch index
-// @param nq                  Head index
-// @param Sq_chunk_t          Q chunk size in tiles
-// @param out_slice           Row/col tile range in the output tensor for this Q chunk
-// @param end_seq_tile        Last valid sequence tile (for padding-aware reads)
-// @param stats_seq_start_tile  First tile row in stats tensor for this Q chunk's max/sum
-// @param stats_seq_end_tile    One-past-last tile row (clamped to sequence bounds)
-// @param sum_offset          Row offset into stats tensor where sum tiles start (= local_padded_Nt + Lt)
-// @param cb_prev_out         CB for previous output tiles (c_7)
-// @param cb_max_in           CB for previous max tiles (c_6)
-// @param cb_sum_in           CB for previous sum tiles (c_11)
-// @param tile_bytes          Output tile size in bytes
-// @param stats_tile_bytes    Stats tile size in bytes
+// Split from the original read_prev_accumulators to enable prefetch: issue reads for Q[q+1]
+// while Q[q]'s save is draining, hiding DRAM read latency behind compute.
 template <typename ReaderType, typename TensorAccessorType>
-void read_prev_accumulators(
+void issue_restore_reads(
     const PaddedAddrGenerator<ReaderType>& cat_out_generator,
     const TensorAccessorType& stats_writer,
     const TensorTileShape& stats_tile_logical,
@@ -95,59 +80,87 @@ void read_prev_accumulators(
     const uint32_t cb_sum_in,
     const uint32_t tile_bytes,
     const uint32_t stats_tile_bytes) {
-    // Read previous output
-    read_block(cat_out_generator, out_slice, end_seq_tile, cb_prev_out, tile_bytes, false);
+    // Issue output reads (reserve + async reads, no barrier)
+    const uint32_t out_rows = out_slice.get_d2_size();
+    const uint32_t out_cols = out_slice.get_d3_size();
+    const uint32_t out_num_tiles = out_rows * out_cols;
+    cb_reserve_back(cb_prev_out, out_num_tiles);
+    const uint32_t out_base_ptr = get_write_ptr(cb_prev_out);
+    for (uint32_t row = 0; row < out_rows; ++row) {
+        uint32_t write_ptr = out_base_ptr + row * out_cols * tile_bytes;
+        for (uint32_t col = 0; col < out_cols; ++col) {
+            cat_out_generator.maybe_read_tile(
+                out_slice.d0,
+                out_slice.d1,
+                out_slice.d2_start + row,
+                out_slice.d3_start + col,
+                end_seq_tile,
+                write_ptr);
+            write_ptr += tile_bytes;
+        }
+    }
 
-    // Read max from stats DRAM (first half)
+    // Issue max reads
     cb_reserve_back(cb_max_in, Sq_chunk_t);
     uint32_t max_addr = get_write_ptr(cb_max_in);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
         noc_async_read_tile(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, max_addr);
         max_addr += stats_tile_bytes;
     }
-    noc_async_read_barrier();
-    cb_push_back(cb_max_in, Sq_chunk_t);
 
-    // Read sum from stats DRAM (second half, offset by sum_offset)
+    // Issue sum reads
     cb_reserve_back(cb_sum_in, Sq_chunk_t);
     uint32_t sum_addr = get_write_ptr(cb_sum_in);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
         noc_async_read_tile(stats_tile_logical.id_of(nb, nq, sum_offset + i, 0), stats_writer, sum_addr);
         sum_addr += stats_tile_bytes;
     }
+    // NO barrier, NO push — caller must call complete_restore()
+}
+
+// Complete a previously issued restore — single barrier for all 3 CBs, then push.
+void complete_restore(
+    const uint32_t cb_prev_out,
+    const uint32_t out_num_tiles,
+    const uint32_t cb_max_in,
+    const uint32_t cb_sum_in,
+    const uint32_t Sq_chunk_t) {
     noc_async_read_barrier();
+    cb_push_back(cb_prev_out, out_num_tiles);
+    cb_push_back(cb_max_in, Sq_chunk_t);
     cb_push_back(cb_sum_in, Sq_chunk_t);
 }
 
-// Deferred-norm writer: saves raw accumulators to DRAM for multi-Q-chunk between ring iterations.
-// Drains output, running max, and running sum from compute CBs to the DRAM tensors.
-// Reads from: cb_out (c_16), cb_max_out (c_17), cb_sum_out (c_10).
-//
-// @param cat_out_generator   Address generator for the output DRAM tensor (local or joint)
-// @param stats_writer        TensorAccessor for the stats DRAM tensor
-// @param stats_tile_logical  Tile shape of the stats tensor
-// @param nb                  Batch index
-// @param nq                  Head index
-// @param Sq_chunk_t          Q chunk size in tiles
-// @param out_slice           Row/col tile range in the output tensor for this Q chunk
-// @param end_seq_tile        Last valid sequence tile
-// @param stats_seq_start_tile  First tile row in stats tensor for this Q chunk's max/sum
-// @param stats_seq_end_tile    One-past-last tile row (clamped to sequence bounds)
-// @param sum_offset          Row offset into stats tensor where sum tiles start (= local_padded_Nt + Lt)
-// @param cb_out              CB to drain output tiles from (c_16, pushed by compute)
-// @param cb_max_out          CB to drain max tiles from (c_17, pushed by compute)
-// @param cb_sum_out          CB to drain sum tiles from (c_10, pushed by compute)
-// @param tile_bytes          Output tile size in bytes
-// @param stats_tile_bytes    Stats tile size in bytes
+// Wait for compute to push all save CBs (output, max, sum).
+// Returns after all three cb_wait_fronts succeed — at this point compute has finished the K-loop
+// for this Q chunk, and the restore CBs (cb_prev_out, cb_max_in, cb_sum_in) are free.
+// This is the ideal time to issue prefetch reads for the next Q chunk.
+void wait_for_save_cbs(
+    const uint32_t Sq_chunk_t,
+    const Slice& out_slice,
+    const uint32_t cb_out,
+    const uint32_t cb_max_out,
+    const uint32_t cb_sum_out) {
+    const uint32_t out_num_tiles = out_slice.get_d2_size() * out_slice.get_d3_size();
+    cb_wait_front(cb_out, out_num_tiles);
+    cb_wait_front(cb_max_out, Sq_chunk_t);
+    cb_wait_front(cb_sum_out, Sq_chunk_t);
+}
+
+// Drain save CBs to DRAM after wait_for_save_cbs + any prefetch reads have been issued.
+// Uses writes_flushed (not write_barrier) — sufficient because restore of Q[q+1] reads a
+// different DRAM address than save of Q[q], so no RAW hazard within a ring iteration.
+// The write_barrier at the end of each ring iteration ensures all saves land before the next
+// iteration reads them back.
 template <typename ReaderType, typename TensorAccessorType>
-void write_accumulators(
+void drain_save_cbs(
     const PaddedAddrGenerator<ReaderType>& cat_out_generator,
     const TensorAccessorType& stats_writer,
     const TensorTileShape& stats_tile_logical,
     const uint32_t nb,
     const uint32_t nq,
     const uint32_t Sq_chunk_t,
-    const Slice out_slice,
+    const Slice& out_slice,
     const uint32_t end_seq_tile,
     const uint32_t stats_seq_start_tile,
     const uint32_t stats_seq_end_tile,
@@ -157,27 +170,38 @@ void write_accumulators(
     const uint32_t cb_sum_out,
     const uint32_t tile_bytes,
     const uint32_t stats_tile_bytes) {
-    // Write output
-    write_block(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
+    // Write output to DRAM
+    const uint32_t out_rows = out_slice.get_d2_size();
+    const uint32_t out_cols = out_slice.get_d3_size();
+    const uint32_t out_num_tiles = out_rows * out_cols;
+    const uint32_t out_base_ptr = get_read_ptr(cb_out);
+    for (uint32_t row = 0; row < out_rows; ++row) {
+        uint32_t read_ptr = out_base_ptr + row * out_cols * tile_bytes;
+        for (uint32_t col = 0; col < out_cols; ++col) {
+            cat_out_generator.maybe_write_tile(
+                out_slice.d0, out_slice.d1, out_slice.d2_start + row, out_slice.d3_start + col, end_seq_tile, read_ptr);
+            read_ptr += tile_bytes;
+        }
+    }
 
-    // Write max to stats DRAM (first half)
-    cb_wait_front(cb_max_out, Sq_chunk_t);
+    // Write max to stats DRAM
     uint32_t max_write_addr = get_read_ptr(cb_max_out);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
         noc_async_write_tile(stats_tile_logical.id_of(nb, nq, i, 0), stats_writer, max_write_addr);
         max_write_addr += stats_tile_bytes;
     }
-    noc_async_writes_flushed();
-    cb_pop_front(cb_max_out, Sq_chunk_t);
 
     // Write sum to stats DRAM (second half, offset by sum_offset)
-    cb_wait_front(cb_sum_out, Sq_chunk_t);
     uint32_t sum_write_addr = get_read_ptr(cb_sum_out);
     for (uint32_t i = stats_seq_start_tile; i < stats_seq_end_tile; i++) {
         noc_async_write_tile(stats_tile_logical.id_of(nb, nq, sum_offset + i, 0), stats_writer, sum_write_addr);
         sum_write_addr += stats_tile_bytes;
     }
+
+    // Flush: DMA has finished reading L1 source data — safe to free all save CBs.
     noc_async_writes_flushed();
+    cb_pop_front(cb_out, out_num_tiles);
+    cb_pop_front(cb_max_out, Sq_chunk_t);
     cb_pop_front(cb_sum_out, Sq_chunk_t);
 }
 
@@ -423,8 +447,21 @@ void kernel_main() {
             // Deferred norm: accumulates across ring iterations with exponential rescaling.
             // Single Q-chunk: accumulators persist in L1, write final output on last ring_iter.
             // Multi Q-chunk: raw accumulators round-trip through DRAM between ring iterations.
+            //
+            // Prefetch optimization: issue restore reads for Q[q+1] right after completing
+            // Q[q]'s restore. cb_reserve_back blocks until compute pops Q[q]'s data, then
+            // reads are issued and fly during Q[q]'s ENTIRE K-loop. This also works across
+            // ring iteration boundaries: after Q[N-1]'s save drain, we prefetch Q[0] for the
+            // next ring iteration. The reads fly during the write_barrier + ring sync + mask
+            // setup, so Q[0]'s restore on the next iteration is instant.
             const bool is_last_ring_iter = (ring_iter == last_active_ring_iter);
             const bool single_q_chunk = (global_q_end - global_q_start == 1);
+            constexpr uint32_t sum_offset = local_padded_Nt + Lt;
+            constexpr uint32_t out_num_tiles = Sq_chunk_t * DHt;
+            // For accumulator restore, all tiles are valid (we wrote them), so end_seq_tile
+            // doesn't matter. Use a large value to bypass maybe_read_tile's padding logic.
+            // This decouples restore prefetch from ring_id, enabling cross-ring-iteration prefetch.
+            constexpr uint32_t restore_end_seq_tile = 0xFFFFFFFF;
 
             for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
@@ -434,27 +471,54 @@ void kernel_main() {
                 const auto qi = get_q_chunk_info(
                     q_chunk, nb, nq, ring_id, num_local_q_chunks, Sq_chunk_t, DHt, Lt, local_padded_Nt);
 
-                constexpr uint32_t sum_offset = local_padded_Nt + Lt;
-
                 if (!single_q_chunk && ring_iter > 0) {
-                    read_prev_accumulators(
-                        qi.is_joint_q ? joint_out_generator : out_generator,
-                        stats_writer,
-                        stats_tile_logical,
-                        nb,
-                        nq,
-                        Sq_chunk_t,
-                        qi.out_slice,
-                        qi.end_seq_tile,
-                        qi.stats_seq_start_tile,
-                        qi.stats_seq_end_tile,
-                        sum_offset,
-                        cb_prev_out,
-                        cb_max_in,
-                        cb_sum_in,
-                        tile_bytes,
-                        stats_tile_bytes);
+                    // Complete previously issued restore (barrier + push).
+                    // Reads were prefetched during Q[q-1]'s K-loop (or during the prior
+                    // ring iteration's tail for Q[0]) — should be instant.
+                    complete_restore(cb_prev_out, out_num_tiles, cb_max_in, cb_sum_in, Sq_chunk_t);
+
+                    // Prefetch: issue restore reads for Q[q+1].
+                    // cb_reserve_back blocks until compute pops Q[q]'s restore data
+                    // (via copy_block at the start of the K-loop). Once unblocked,
+                    // reads are issued and fly during Q[q]'s entire K-loop.
+                    const uint32_t next_q = global_q_chunk + 1;
+                    if (next_q < global_q_end) {
+                        const uint32_t nb_next = next_q / (NH * num_q_chunks);
+                        const uint32_t nq_next = (next_q % (NH * num_q_chunks)) / num_q_chunks;
+                        const uint32_t qc_next = next_q % num_q_chunks;
+                        const auto qi_next = get_q_chunk_info(
+                            qc_next,
+                            nb_next,
+                            nq_next,
+                            ring_id,
+                            num_local_q_chunks,
+                            Sq_chunk_t,
+                            DHt,
+                            Lt,
+                            local_padded_Nt);
+                        issue_restore_reads(
+                            qi_next.is_joint_q ? joint_out_generator : out_generator,
+                            stats_writer,
+                            stats_tile_logical,
+                            nb_next,
+                            nq_next,
+                            Sq_chunk_t,
+                            qi_next.out_slice,
+                            restore_end_seq_tile,
+                            qi_next.stats_seq_start_tile,
+                            qi_next.stats_seq_end_tile,
+                            sum_offset,
+                            cb_prev_out,
+                            cb_max_in,
+                            cb_sum_in,
+                            tile_bytes,
+                            stats_tile_bytes);
+                    }
                 }
+
+                // === Compute runs K-loop for this Q chunk ===
+                // Prefetch reads for Q[q+1] are flying in parallel.
+                // Writer blocks on cb_wait_front until compute pushes save/output data.
 
                 if (is_last_ring_iter) {
                     write_block(
@@ -464,7 +528,8 @@ void kernel_main() {
                         cb_out,
                         tile_bytes);
                 } else if (!single_q_chunk) {
-                    write_accumulators(
+                    wait_for_save_cbs(Sq_chunk_t, qi.out_slice, cb_out, cb_max_out, cb_sum_out);
+                    drain_save_cbs(
                         qi.is_joint_q ? joint_out_generator : out_generator,
                         stats_writer,
                         stats_tile_logical,
@@ -483,7 +548,42 @@ void kernel_main() {
                         stats_tile_bytes);
                 }
             }
-            noc_async_write_barrier();
+
+            // Cross-ring-iteration prefetch: after Q[N-1]'s save, issue restore reads
+            // for Q[0] of the NEXT ring iteration. Reads fly during the write_barrier,
+            // ring sync, and mask setup — so Q[0]'s complete_restore is instant.
+            // On ring_iter 0 the restore CBs were never used, so cb_reserve_back succeeds
+            // immediately. On ring_iter > 0, compute has popped Q[N-1]'s restore data.
+            // Q[0]'s save data is guaranteed in DRAM: it was written early in this ring
+            // iteration and writes_flushed long ago (N-1 full Q cycles have elapsed).
+            if (!single_q_chunk && !is_last_ring_iter) {
+                noc_async_write_barrier();
+                const uint32_t gq0 = global_q_start;
+                const uint32_t nb0 = gq0 / (NH * num_q_chunks);
+                const uint32_t nq0 = (gq0 % (NH * num_q_chunks)) / num_q_chunks;
+                const uint32_t qc0 = gq0 % num_q_chunks;
+                const auto qi0 = get_q_chunk_info(
+                    qc0, nb0, nq0, 0 /*unused*/, num_local_q_chunks, Sq_chunk_t, DHt, Lt, local_padded_Nt);
+                issue_restore_reads(
+                    qi0.is_joint_q ? joint_out_generator : out_generator,
+                    stats_writer,
+                    stats_tile_logical,
+                    nb0,
+                    nq0,
+                    Sq_chunk_t,
+                    qi0.out_slice,
+                    restore_end_seq_tile,
+                    qi0.stats_seq_start_tile,
+                    qi0.stats_seq_end_tile,
+                    sum_offset,
+                    cb_prev_out,
+                    cb_max_in,
+                    cb_sum_in,
+                    tile_bytes,
+                    stats_tile_bytes);
+            } else {
+                noc_async_write_barrier();
+            }
         } else {
             for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
                 // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
