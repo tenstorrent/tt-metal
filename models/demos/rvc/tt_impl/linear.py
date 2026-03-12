@@ -47,7 +47,7 @@ class Linear:
         self.weight_tensor = ttnn.from_torch(
             wt,
             dtype=ttnn.bfloat16,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
+            layout=ttnn.TILE_LAYOUT,
             device=self.device,
         )
 
@@ -56,35 +56,22 @@ class Linear:
             self.bias_tensor = ttnn.from_torch(
                 parameters[bias_key].reshape(1, 1, self.out_features),
                 dtype=ttnn.bfloat16,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
+                layout=ttnn.TILE_LAYOUT,
                 device=self.device,
             )
 
     def __call__(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
-        if self.weight_tensor is None:
-            raise ValueError("weight_tensor is not set. Provide it in __init__ or call load_parameters().")
-
-        if not ttnn.is_tensor_storage_on_device(self.weight_tensor):
-            self.weight_tensor = ttnn.to_device(self.weight_tensor, self.device)
-        if self.bias_tensor is not None and not ttnn.is_tensor_storage_on_device(self.bias_tensor):
-            self.bias_tensor = ttnn.to_device(self.bias_tensor, self.device)
-
-        a = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
-        b = ttnn.to_layout(self.weight_tensor, ttnn.TILE_LAYOUT)
-        bias = None if self.bias_tensor is None else ttnn.to_layout(self.bias_tensor, ttnn.TILE_LAYOUT)
-
+        input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT)
         out = ttnn.linear(
-            a,
-            b,
-            bias=bias,
+            input_tensor,
+            self.weight_tensor,
+            bias=self.bias_tensor,
             # memory_config=self.memory_config,
             dtype=self.dtype,
             activation=self.activation,
             compute_kernel_config=self.compute_config,
         )
-        _w = self.weight_tensor
-        self.weight_tensor = ttnn.to_memory_config(_w, ttnn.DRAM_MEMORY_CONFIG)
-        return ttnn.to_layout(out, ttnn.ROW_MAJOR_LAYOUT)
+        return out
 
     def deallocate(self):
         ttnn.deallocate(self.weight_tensor)
