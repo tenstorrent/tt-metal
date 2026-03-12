@@ -266,27 +266,6 @@ jobs:
       runner: ${{ matrix.platform }}
       product: tt-nn
 
-  tt-train-tests:
-    needs: [build, find-changed-files]
-    if: ${{
-        github.ref_name == 'main' ||
-        needs.find-changed-files.outputs.tt-train-changed == 'true'
-      }}
-    strategy:
-      fail-fast: false
-      matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N150 },
-        ]
-    uses: ./.github/workflows/tt-train-post-commit.yaml
-    secrets: inherit
-    with:
-      arch: ${{ matrix.test-group.arch }}
-      runner-label: ${{ matrix.test-group.runner-label }}
-      docker-image: ${{ needs.build.outputs.dev-docker-image }}
-      build-artifact-name: ${{ needs.build.outputs.build-artifact-name }}
-      ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || '' }}
-
   ttsim-integration-tests:
     needs: [ build ]
     if: >-
