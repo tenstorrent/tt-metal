@@ -24,10 +24,6 @@
 
 namespace tt::tt_fabric {
 
-namespace fabric_tests {
-    struct SenderKernelTrafficConfig;
-}
-
 /*
  * The WorkerToFabricEdmSenderImpl acts as an adapter between the worker and the EDM, it hides details
  * of the communication between worker and EDM to provide flexibility for the implementation to change
@@ -584,18 +580,9 @@ struct WorkerToFabricEdmSenderBase {
         this->advance_buffer_slot_write_index();
     }
 
-    friend struct fabric_tests::SenderKernelTrafficConfig;
-
-protected:
-    // One-time setup for stateful NOC credit updates.
-    // Call this once before using update_edm_buffer_free_slots<true>.
-    FORCE_INLINE void setup_credit_update_noc_state(uint8_t noc = get_fabric_worker_noc()) const {
-        auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
-        const uint64_t noc_sem_addr =
-            get_noc_addr(this->edm_noc_x, this->edm_noc_y, this->edm_buffer_remote_free_slots_update_addr, noc);
-        noc_inline_dw_write_set_state<false /*posted*/, true /*set_val*/>(
-            noc_sem_addr, packed_val, 0xf, this->sync_noc_cmd_buf, noc);
-    }
+    template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS>
+    friend void fabric_tests::detail::setup_credit_update_noc_state(
+        const WorkerToFabricEdmSenderImpl<I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, EDM_NUM_BUFFER_SLOTS>&, uint8_t);
 
 private:
 
@@ -634,5 +621,20 @@ using WorkerToFabricEdmSenderImpl =
 
 using WorkerToFabricEdmSender = WorkerToFabricEdmSenderImpl<false, 0>;
 
+namespace fabric_tests::detail {
+    // Definition of setup_credit_update_noc_state
+    // Call this once before using update_edm_buffer_free_slots<true>
+    // Specialized to fabric tests
+    template <bool I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, uint8_t EDM_NUM_BUFFER_SLOTS>
+    FORCE_INLINE void setup_credit_update_noc_state(
+        const WorkerToFabricEdmSenderImpl<I_USE_STREAM_REG_FOR_CREDIT_RECEIVE, EDM_NUM_BUFFER_SLOTS>& adapter,
+        uint8_t noc) {
+        auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
+        const uint64_t noc_sem_addr =
+            get_noc_addr(adapter.edm_noc_x, adapter.edm_noc_y, adapter.edm_buffer_remote_free_slots_update_addr, noc);
+        noc_inline_dw_write_set_state<false /*posted*/, true /*set_val*/>(
+            noc_sem_addr, packed_val, 0xf, adapter.sync_noc_cmd_buf, noc);
+    }
+}  // namespace fabric_tests::detail
 
 }  // namespace tt::tt_fabric

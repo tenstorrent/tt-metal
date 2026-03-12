@@ -1039,7 +1039,7 @@ struct SenderKernelTrafficConfig {
             this->template send_one_packet<BENCHMARK_MODE, false>();
         }
 
-        conn->setup_credit_update_noc_state();
+        fabric_tests::detail::setup_credit_update_noc_state(*conn);
 
         // Phase 2: Steady state — credit-only sends with stateful NOC
         for (uint32_t pkt = warmup_end; pkt < num_packets; pkt++) {
