@@ -7,6 +7,30 @@ See: .planning/PROJECT.md (updated 2026-03-12)
 **Core value:** Each PR is self-contained, correct, and independently reviewable
 **Current focus:** Phase 1 — Host Receiver Per-VC (In Progress)
 
+## Phase Validation Procedure
+
+Every phase must pass before moving to the next:
+
+**1. Build:**
+```bash
+./build_metal.sh -c -e --build-tests
+```
+
+**2. Sanity test (must NOT hang):**
+```bash
+build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \
+  --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
+```
+
+**Emergency reset if test hangs:**
+```bash
+tt-smi -r
+```
+
+Note: The sanity test does NOT hang on `main`. Any hang is a regression introduced by this phase.
+
+---
+
 ## Current Phase
 
 **Phase 1: Host Receiver Per-VC**
