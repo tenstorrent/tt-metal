@@ -51,8 +51,14 @@ def load_model_uninitialized(model_path: str = os.path.dirname(os.path.dirname(_
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count())
 
 
-def load_model_weights(
-    model_path: str, thread_pool_executor: concurrent.futures.ThreadPoolExecutor | None = None
+def index_model_weights(model_path: str | Path) -> Mapping[str, torch.Tensor]:
+    from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
+
+    return LazyStateDict(Path(model_path))
+
+
+def materialize_model_weights(
+    model_path: str | Path, thread_pool_executor: concurrent.futures.ThreadPoolExecutor | None = None
 ) -> dict[str, torch.Tensor]:
     safetensors_filepaths = sorted(glob(f"{model_path}/*.safetensors"))
     weights_dict = {}
@@ -331,7 +337,9 @@ def apply_with_names(
         )
 
 
-def load_weight_from_weights_dict(weights_dict: dict[str, torch.Tensor]) -> Callable[[str, torch.Tensor], torch.Tensor]:
+def load_weight_from_weights_dict(
+    weights_dict: Mapping[str, torch.Tensor]
+) -> Callable[[str, torch.Tensor], torch.Tensor]:
     @torch.no_grad()
     def load_weight(name: str, tensor: torch.Tensor) -> torch.Tensor:
         print(f"Loading weight: {name}" + " " * 50, end="\r")
@@ -353,13 +361,16 @@ def load_weight_from_weights_dict(weights_dict: dict[str, torch.Tensor]) -> Call
 
 
 def unload_weight_from_weights_dict(
-    weights_dict: dict[str, torch.Tensor],
+    weights_dict: Mapping[str, torch.Tensor],
 ) -> Callable[[str, torch.Tensor], torch.Tensor]:
     @torch.no_grad()
     def unload_weight(name: str, tensor: torch.Tensor) -> torch.Tensor:
         if name not in weights_dict:
             return tensor
         tensor.data = torch.empty(0, dtype=tensor.dtype)
+        evict_fn = getattr(weights_dict, "evict", None)
+        if callable(evict_fn):
+            evict_fn(name)
         return tensor
 
     return unload_weight
@@ -367,7 +378,7 @@ def unload_weight_from_weights_dict(
 
 def add_dynamic_weight_loading_hooks(
     module: torch.nn.Module,
-    weights_dict: dict[str, torch.Tensor],
+    weights_dict: Mapping[str, torch.Tensor],
     lazy_modules: list[str] = ["DeepseekV3Attention", "DeepseekV3MLP"],
     model_name: str = "",
     thread_pool_executor: concurrent.futures.ThreadPoolExecutor | None = None,
@@ -517,9 +528,7 @@ def prepare_model_state_dict(
         if model_path is None:
             raise ValueError("model_path must be provided when random_weights is False")
         logger.info(f"Indexing HF weights from {model_path} for lazy loading...")
-        from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
-
-        model_state = LazyStateDict(Path(model_path))
+        model_state = index_model_weights(model_path)
         logger.info("HF weights indexed lazily")
 
         if "lm_head.weight" not in model_state:
