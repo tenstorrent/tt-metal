@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# shellcheck disable=SC2034,SC2329
+# SC2034: check_N_description/severity/aggregate vars are read via ${!varname} indirect expansion in run_check()
+# SC2329: check_N() and example_check_N() functions are called via "$check_fn"/"$example_fn" dynamic dispatch
 # GitHub Actions Security Linting Script
 # Detects common shell injection and security anti-patterns in workflows/actions
 #
@@ -195,7 +198,7 @@ done
 
 # Default to all checks if none specified
 if [[ ${#CHECKS_TO_RUN[@]} -eq 0 ]]; then
-    CHECKS_TO_RUN=($(seq 1 "$MAX_CHECK_NUM"))
+    mapfile -t CHECKS_TO_RUN < <(seq 1 "$MAX_CHECK_NUM")
 fi
 
 # =============================================================================
@@ -247,6 +250,7 @@ has_untrusted_trigger() {
 # AWK Helper for Run Block Detection
 # =============================================================================
 
+# shellcheck disable=SC2016
 AWK_RUN_BLOCK_DETECT='
     BEGIN { in_run_block = 0; run_indent = 0 }
     /^[[:space:]]*(-[[:space:]]+)?run:[[:space:]]*\|/ {
@@ -1919,6 +1923,7 @@ EOF
 check_42() {
     local file="$1"
     local unsafe_usage
+    # shellcheck disable=SC2016
     unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
         /^[[:space:]]*(-[[:space:]]+)?run:/ { print; next }
         in_run_block { print }
