@@ -573,9 +573,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 **cfg["quad_ring_moe_compute"],
             )
 
-            ttnn.deallocate(dispatch_output_sparse_buffer)
-            ttnn.deallocate(dispatch_output_expert_indices)
-            ttnn.deallocate(dispatch_output_expert_scores)
+            # NOTE: can't deallocate dispatch output tensors as they are preallocated and reused across layers
 
             combine_output = ttnn.experimental.selective_reduce_combine(
                 compute_output,
