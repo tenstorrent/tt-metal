@@ -18,6 +18,6 @@ Tensor moe(
     const Tensor& topk_mask_tensor,
     uint16_t k,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& output_tensor = std::nullopt);
+    std::optional<Tensor> output_tensor = std::nullopt);
 
 }  // namespace ttnn

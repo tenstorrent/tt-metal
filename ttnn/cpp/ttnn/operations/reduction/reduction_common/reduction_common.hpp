@@ -73,6 +73,8 @@ ttnn::Tensor zero_volume_reduce(
 
     // min/max is unsupported when reduction dim is zero
     if constexpr (reduce_type == ReduceType::Max || reduce_type == ReduceType::Min) {
+        TT_FATAL(input_shape.rank() != 0, "Input tensor cannot be a scalar (rank 0)");
+
         // Check the shape of the reduction dims
         for (auto red_dim : dim) {
             if (input_shape[red_dim] == 0) {

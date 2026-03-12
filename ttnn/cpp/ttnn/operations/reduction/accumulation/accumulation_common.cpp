@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "accumulation_common.hpp"
+#include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 
@@ -97,7 +98,8 @@ Tensor accumulation_invoke(
 
     if (input_rank == 0 || input_tensor.logical_volume() == 0) {
         if (!optional_out.has_value()) {
-            return input_tensor;
+            return ttnn::clone(
+                input_tensor, /*dtype=*/std::nullopt, memory_config, /*compute_kernel_config=*/std::nullopt);
         }
 
         Tensor& preallocated_tensor = optional_out.value();
