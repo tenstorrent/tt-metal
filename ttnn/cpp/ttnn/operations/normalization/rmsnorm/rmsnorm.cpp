@@ -4,15 +4,12 @@
 
 #include "rmsnorm.hpp"
 
-#include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
 #include "ttnn/device.hpp"
-
-namespace ttnn::operations::normalization {}  // namespace ttnn::operations::normalization
 
 namespace ttnn {
 
@@ -33,6 +30,10 @@ Tensor rms_norm(
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().size();
+
+    TT_FATAL(
+        input_tensor.layout() != Layout::ROW_MAJOR,
+        "ttnn::rms_norm does not support ROW_MAJOR input tensors. Use TILE layout.");
 
     // For 0V tensors
     if (input_tensor.logical_volume() == 0) [[unlikely]] {
@@ -63,7 +64,10 @@ Tensor rms_norm(
         bias,
         residual_input_tensor,
         output_memory_config,
-        program_config.value_or(ttnn::prim::create_layernorm_program_config(input_tensor.shard_spec())),
+        program_config.value_or(ttnn::prim::create_layernorm_program_config(
+            input_tensor.shard_spec(),
+            input_tensor.tensor_spec().tile().get_height(),
+            input_tensor.tensor_spec().tile().get_width())),
         kernel_config_val,
         std::nullopt,  // dtype
         prim::LayerNormType::RMSNORM);

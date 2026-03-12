@@ -47,6 +47,12 @@ struct LatencyResult {
     std::string ftype;
     std::string ntype;
     std::string topology;
+    uint32_t sender_device_id{};
+    uint32_t responder_device_id{};
+    uint32_t sender_core_x{};
+    uint32_t sender_core_y{};
+    uint32_t responder_core_x{};
+    uint32_t responder_core_y{};
     uint32_t num_devices{};
     uint32_t num_links{};
     uint32_t num_samples{};
@@ -82,6 +88,12 @@ struct LatencyResultSummary {
     std::string ftype;
     std::string ntype;
     std::string topology;
+    uint32_t sender_device_id{};
+    uint32_t sender_core_x{};
+    uint32_t sender_core_y{};
+    uint32_t responder_device_id{};
+    uint32_t responder_core_x{};
+    uint32_t responder_core_y{};
     uint32_t num_devices{};
     uint32_t num_links{};
     uint32_t num_samples{};
@@ -173,6 +185,7 @@ public:
     void initialize_results_csv_file(bool telemetry_enabled_) override;
     void load_golden_csv() override;
     void write_summary_csv_to_file(const std::filesystem::path& csv_path, bool include_upload_columns) override;
+    void append_to_csv(const TestConfig& config, const LatencyResult& result);
     void compare_latency_results_with_golden();
     void generate_latency_summary();
     void setup_ci_artifacts();

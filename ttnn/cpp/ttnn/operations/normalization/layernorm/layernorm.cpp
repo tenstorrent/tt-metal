@@ -5,14 +5,10 @@
 #include "layernorm.hpp"
 #include <optional>
 
-#include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/data_movement/clone/clone.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "device/layernorm_device_operation.hpp"
 #include "device/layernorm_common.hpp"
 #include "ttnn/device.hpp"
-namespace ttnn::operations::normalization {}  // namespace ttnn::operations::normalization
 
 namespace ttnn {
 
@@ -54,7 +50,10 @@ Tensor layer_norm(
         bias,
         residual_input_tensor,
         output_memory_config,
-        program_config.value_or(ttnn::prim::create_layernorm_program_config(input_tensor.shard_spec())),
+        program_config.value_or(ttnn::prim::create_layernorm_program_config(
+            input_tensor.shard_spec(),
+            input_tensor.tensor_spec().tile().get_height(),
+            input_tensor.tensor_spec().tile().get_width())),
         kernel_config_val,
         std::nullopt,                                      // dtype
         prim::LayerNormType::LAYERNORM,                    // norm_type

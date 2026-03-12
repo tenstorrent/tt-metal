@@ -43,6 +43,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
     ttnn::operations::compute_throttle_utils::ThrottleLevel throttle_level,
     uint32_t in0_block_w,
     uint32_t in0_last_ktile_w,
+    uint32_t in0_last_ktile_h,
     uint32_t out_subblock_h,
     uint32_t out_subblock_w,
     uint32_t out_block_h,
@@ -364,6 +365,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
             (std::uint32_t)in0_block_num_tiles,                         // in0_block_num_tiles
             (std::uint32_t)in0_block_num_tiles * in0_single_tile_size,  // in0_block_size_bytes
             (std::uint32_t)in0_last_ktile_w,
+            (std::uint32_t)in0_last_ktile_h,
 
             // in0/in1 common args
             (std::uint32_t)num_blocks,  // num_blocks
@@ -396,6 +398,7 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
             (std::uint32_t)in0_block_h,          // in0_block_h
             (std::uint32_t)in0_block_num_tiles,  // in0_block_num_tiles
             (std::uint32_t)in0_last_ktile_w,
+            (std::uint32_t)in0_last_ktile_h,
 
             (std::uint32_t)false,                      // extract_shard_sub_blocks (not used for interleaved)
             (std::uint32_t)in0_shard_width_in_tiles,   // shard_width_in_tiles (not used for interleaved)
@@ -666,7 +669,12 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
                 .compile_args = in0_sender_compile_time_args,
-                .defines = mm_kernel_in0_sender_sharded_defines});
+                .defines = mm_kernel_in0_sender_sharded_defines,
+                .named_compile_args = {
+                    {"cb_in0", tt::CBIndex::c_0},
+                    {"cb_in0_sharded", tt::CBIndex::c_2},
+                    {"cb_l1_array", tt::CBIndex::c_6},
+                }});
         if (in0_mcast_cores_without_work_and_not_in_receiver_grid.has_value()) {
             in0_sender_compile_time_args[0] = 0;  // core_has_output_block_work
             in0_sender_compile_time_args[1] = 0;  // core_in_in0_receiver_mcast_grid
@@ -679,7 +687,12 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                     .processor = tt_metal::DataMovementProcessor::RISCV_1,
                     .noc = in0_noc,
                     .compile_args = in0_sender_compile_time_args,
-                    .defines = mm_kernel_in0_sender_sharded_defines});
+                    .defines = mm_kernel_in0_sender_sharded_defines,
+                    .named_compile_args = {
+                        {"cb_in0", tt::CBIndex::c_0},
+                        {"cb_in0_sharded", tt::CBIndex::c_2},
+                        {"cb_l1_array", tt::CBIndex::c_6},
+                    }});
         }
     } else {
         if (fuse_op) {
@@ -701,7 +714,13 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
                 .compile_args = in0_sender_compile_time_args,
-                .defines = mm_kernel_in0_sender_interleaved_defines});
+                .defines = mm_kernel_in0_sender_interleaved_defines,
+                .named_compile_args = {
+                    {"cb_in0", tt::CBIndex::c_0},
+                    {"cb_in0_sharded", tt::CBIndex::c_2},
+                    {"cb_sparsity", tt::CBIndex::c_6},
+                    {"cb_in0_intermediate", tt::CBIndex::c_8},
+                }});
     }
 
     auto mm_kernel_in1_sender_writer_id = tt_metal::CreateKernel(
@@ -712,7 +731,14 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
             .processor = tt_metal::DataMovementProcessor::RISCV_0,
             .noc = in1_noc,
             .compile_args = in1_sender_writer_compile_time_args,
-            .defines = mm_kernel_in1_sender_writer_defines});
+            .defines = mm_kernel_in1_sender_writer_defines,
+            .named_compile_args = {
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_sparsity", tt::CBIndex::c_7},
+                {"cb_in1_intermediate", tt::CBIndex::c_9},
+            }});
 
     tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_id = 0;
     if (in1_receiver.num_cores() > 0) {
@@ -726,7 +752,12 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in1_noc,
                 .compile_args = in1_receiver_writer_compile_time_args,
-                .defines = mm_kernel_in1_receiver_writer_defines});
+                .defines = mm_kernel_in1_receiver_writer_defines,
+                .named_compile_args = {
+                    {"cb_in1", tt::CBIndex::c_1},
+                    {"cb_bias", tt::CBIndex::c_3},
+                    {"cb_out", tt::CBIndex::c_4},
+                }});
     }
 
     tt::tt_metal::KernelHandle mm_kernel_in0_receiver_id = 0;
@@ -739,7 +770,10 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_noc,
-                .compile_args = in0_receiver_compile_time_args});
+                .compile_args = in0_receiver_compile_time_args,
+                .named_compile_args = {
+                    {"cb_in0", tt::CBIndex::c_0},
+                }});
     }
 
     tt::tt_metal::KernelHandle mm_kernel_in1_receiver_writer_other_noc_setup_id = mm_kernel_in1_receiver_writer_id;
@@ -755,7 +789,12 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
                 .processor = tt_metal::DataMovementProcessor::RISCV_0,
                 .noc = in1_split_noc,
                 .compile_args = in1_receiver_writer_compile_time_args,
-                .defines = mm_kernel_in1_receiver_writer_other_noc_setup_defines});
+                .defines = mm_kernel_in1_receiver_writer_other_noc_setup_defines,
+                .named_compile_args = {
+                    {"cb_in1", tt::CBIndex::c_1},
+                    {"cb_bias", tt::CBIndex::c_3},
+                    {"cb_out", tt::CBIndex::c_4},
+                }});
 
         mm_kernel_in0_receiver_other_noc_setup_id = tt_metal::CreateKernel(
             program,
@@ -764,7 +803,10 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
             tt_metal::DataMovementConfig{
                 .processor = tt_metal::DataMovementProcessor::RISCV_1,
                 .noc = in0_split_noc,
-                .compile_args = in0_receiver_compile_time_args});
+                .compile_args = in0_receiver_compile_time_args,
+                .named_compile_args = {
+                    {"cb_in0", tt::CBIndex::c_0},
+                }});
     }
 
     // Compute kernel compile time args
@@ -815,7 +857,17 @@ MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t create_program_mcast
             .fp32_dest_acc_en = fp32_dest_acc_en,
             .math_approx_mode = math_approx_mode,
             .compile_args = compute_kernel_args,
-            .defines = mm_kernel_defines});
+            .defines = mm_kernel_defines,
+            .named_compile_args = {
+                {"cb_in0", tt::CBIndex::c_0},
+                {"cb_in1", tt::CBIndex::c_1},
+                {"cb_bias", tt::CBIndex::c_3},
+                {"cb_out", tt::CBIndex::c_4},
+                {"cb_intermed0", tt::CBIndex::c_5},
+                {"cb_in0_intermediate", tt::CBIndex::c_8},
+                {"cb_in1_intermediate", tt::CBIndex::c_9},
+                {"cb_in0_transposed", tt::CBIndex::c_10},
+            }});
 
     // Create circular buffers
     uint32_t src0_cb_index = tt::CBIndex::c_0;
@@ -1537,7 +1589,17 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());  // output
 
     const auto& a_shape_logical = get_matmul_tensor_logical_shape(a, transpose_a);
-    const auto in0_last_ktile_w = a_shape_logical[-1] % in0_tile.get_width();
+    // When transpose_a is true, the K dimension maps to the row dimension of the raw tile,
+    // which is already zero-padded during tile layout conversion. pad_last_ktile operates on
+    // columns, so applying it would incorrectly zero valid data that becomes output rows
+    // after the compute kernel transposes the tile.
+    const auto in0_last_ktile_w = transpose_a ? 0 : a_shape_logical[-1] % in0_tile.get_width();
+    const auto in0_last_ktile_h = transpose_a ? a_shape_logical[-1] % in0_tile.get_width() : 0;
+    TT_FATAL(
+        in0_last_ktile_w == 0 || in0_last_ktile_h == 0,
+        "At most one of in0_last_ktile_w ({}) and in0_last_ktile_h ({}) can be non-zero",
+        in0_last_ktile_w,
+        in0_last_ktile_h);
 
     tt_metal::Buffer* bias_buffer = nullptr;
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;  // bias; doesn't matter if bias=nullptr
@@ -1673,6 +1735,7 @@ static MatmulMultiCoreReuseMcast2DProgramFactory::cached_program_t matmul_multi_
         ttnn::get_throttle_level(compute_kernel_config),
         in0_block_w,
         in0_last_ktile_w,
+        in0_last_ktile_h,
         out_subblock_h,
         out_subblock_w,
         out_block_h,

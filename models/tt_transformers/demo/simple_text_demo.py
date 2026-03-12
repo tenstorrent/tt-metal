@@ -16,6 +16,7 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.sampling import SamplingParams
 from models.common.utility_functions import is_wormhole_b0
 from models.demos.utils.llm_demo_utils import create_benchmark_data, verify_perf
 from models.perf.benchmarking_utils import BenchmarkProfiler
@@ -25,7 +26,7 @@ from models.tt_transformers.tt.common import (
     preprocess_inputs_prefill,
     sample_host,
 )
-from models.tt_transformers.tt.generator import Generator, SamplingParams, create_submeshes
+from models.tt_transformers.tt.generator import Generator, create_submeshes
 from models.tt_transformers.tt.model_config import DecodersPrecision, determine_device_name, parse_decoder_json
 from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
 
@@ -163,7 +164,7 @@ def load_inputs(user_input, batch, instruct):
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # The demo supports a custom prompt file, where the context is provided by a link to a book from the gutenberg project
-    # It clips the excerpt to the max length provided to allow testing different long context lengthts
+    # It clips the excerpt to the max length provided to allow testing different long context lengths
     for i in range(len(user_input)):
         prompt = user_input[i]["prompt"]
         if "context" in user_input[i]:
@@ -211,6 +212,7 @@ def prepare_generator_args(
     paged_attention,
     num_layers,
     use_prefetcher,
+    use_hf_rope,
 ):
     submesh_devices = create_submeshes(mesh_device, data_parallel)
     state_dict = None
@@ -241,6 +243,7 @@ def prepare_generator_args(
             state_dict=state_dict,
             num_layers=num_layers,
             use_prefetcher=use_prefetcher,
+            use_hf_rope=use_hf_rope,
         )
         model_args.append(model_args_i)
         model.append(model_i)
@@ -621,7 +624,7 @@ def prepare_generator_args(
             None,  # num_layers, if None -> defaults to all layers
             "full",  # performs both prefill and decode
         ),
-        (  # CI Batch-1 run - Measures token matching accuracy of a single user over 500 iterations
+        (  # ci-token-matching run - Measures token matching accuracy of a single user over 500 iterations
             "models/tt_transformers/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             False,  # instruct mode
             1,  # repeat_batches
@@ -742,7 +745,7 @@ def prepare_generator_args(
         "device-perf",  # Device perf
     ],
 )
-# NOTE: Please do not add new pytest parameters bewteen optimizations and the demo parameters above, certain tests ids depend on the order of the parameters.
+# NOTE: Please do not add new pytest parameters between optimizations and the demo parameters above, certain tests ids depend on the order of the parameters.
 @pytest.mark.parametrize(
     "optimizations",
     [
@@ -808,6 +811,7 @@ def test_demo_text(
     """
     Simple demo with limited dependence on reference code.
     """
+    hf_dir = os.getenv("HF_MODEL", "")
     num_devices = mesh_device.get_num_devices() if isinstance(mesh_device, ttnn.MeshDevice) else 1
     test_id = request.node.callspec.id
     if is_ci_env:
@@ -842,12 +846,16 @@ def test_demo_text(
     json_config_file = request.config.getoption("--decoder_config_file")
     token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
     stress_test = request.config.getoption("--stress_test") or stress_test
-    enable_trace = request.config.getoption("--enable_trace") or enable_trace
+    arg_enable_trace = request.config.getoption("--enable_trace")
+    enable_trace = arg_enable_trace if arg_enable_trace is not None else enable_trace
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
     use_prefetcher = request.config.getoption("--use_prefetcher") or use_prefetcher
-    use_prefetcher = use_prefetcher and is_prefetcher_supported(num_devices)
+    use_prefetcher = (
+        use_prefetcher and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
+    )
     global_batch_size = batch_size * data_parallel  # input batch_size is interpreted as size per DP group
+    use_hf_rope = request.config.getoption("--use_hf_rope")
 
     if stress_test and token_accuracy:
         pytest.skip("Stress test cannot be run with token accuracy mode")
@@ -863,7 +871,6 @@ def test_demo_text(
     ]:  # If the flag is provided, use it. Take an int instead of bool due to parser limitations
         stop_at_eos = request.config.getoption("--stop_at_eos")
 
-    hf_dir = os.getenv("HF_MODEL", "")
     if "phi-3-mini-128k-instruct" in hf_dir.lower():
         max_context_supported = 32 * 1024 * num_devices
         # This condition is present since Phi3 mini has a limit of context length 32k for N150
@@ -939,6 +946,7 @@ def test_demo_text(
         paged_attention=paged_attention,
         num_layers=num_layers,
         use_prefetcher=use_prefetcher,
+        use_hf_rope=use_hf_rope,
     )
 
     # Skip ci-eval tests on P100 devices
@@ -1067,7 +1075,7 @@ def test_demo_text(
                 prompt_lens=decoding_pos,
                 sampling_params=prefill_sampling_params,
             )
-            if prefill_sampling_params is not None:
+            if prefill_sampling_params is not None and isinstance(prefill_out, tuple):
                 prefilled_token, prefill_log_probs = prefill_out
             else:
                 logits = prefill_out
@@ -1126,7 +1134,7 @@ def test_demo_text(
                 out_tok[0] = token_acc.collect_predicted_tokens(out_tok[0].item())
 
             # Run decode forward
-            logits, log_probs = generator.decode_forward_text(
+            logits, log_probs = generator.decode_forward(
                 out_tok,
                 current_pos,
                 enable_trace=enable_trace,
@@ -1503,7 +1511,7 @@ def test_demo_text(
                 "N150_Llama-3.2-1B": 25,
                 "N150_Llama-3.2-3B": 62,
                 "N150_Llama-3.1-8B": 120,
-                "N150_Mistral-7B": 106,
+                "N150_Mistral-7B": 40,  # Updated from 106; observed ~37.5ms in CI (issue #39581)
                 # N300 targets
                 # Faster-than-expected TTFT observed in CI; lower target and widen tolerance to avoid false failures.
                 "N300_Qwen2.5-7B": (90, 1.25),  # (value, high_tolerance_ratio)

@@ -25,12 +25,11 @@
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/buffer_types.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include "debug_tools_fixture.hpp"
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 // Do we really want to expose Hal like this?
 // This looks like an API level test
 #include "impl/context/metal_context.hpp"
@@ -229,14 +228,29 @@ void RunTestOnCore(
         case SanitizeL1Overflow: l1_overflow_addr = 0xDDDDDDDD; break;
         case SanitizeEthSrcL1Overflow: eth_src_overflow_addr_words = 0xAAAAAAAA; break;
         case SanitizeEthDestL1Overflow: eth_dest_overflow_addr_words = 0xBBBBBBBB; break;
-        case SanitizeNOCMulticastInvalidRange:
-            // Use invalid multicast range: start > end (for NOC0, this is invalid)
+        case SanitizeNOCMulticastInvalidRange: {
+            // Use invalid multicast range with actual DRAM cores: start > end
+            // Wrap-around is only allowed for Tensix cores, not DRAM
             use_multicast_semaphore_inc = true;
-            output_buf_noc_xy.x = 5;  // start_x
-            output_buf_noc_xy.y = 5;  // start_y
-            mcast_dst_end_x = 2;      // end_x < start_x (invalid for NOC0)
-            mcast_dst_end_y = 2;      // end_y < start_y (invalid for NOC0)
+
+            // Get actual DRAM NOC coordinates
+            auto dram_logical_0 = device->logical_core_from_dram_channel(0);
+            auto dram_logical_1 = device->logical_core_from_dram_channel(1);
+            auto dram_noc_0 = device->virtual_core_from_logical_core(dram_logical_0, CoreType::DRAM);
+            auto dram_noc_1 = device->virtual_core_from_logical_core(dram_logical_1, CoreType::DRAM);
+
+            // Ensure start > end to trigger wrap-around check (which should fail for DRAM)
+            if (dram_noc_0.x > dram_noc_1.x || dram_noc_0.y > dram_noc_1.y) {
+                output_buf_noc_xy = dram_noc_0;
+                mcast_dst_end_x = dram_noc_1.x;
+                mcast_dst_end_y = dram_noc_1.y;
+            } else {
+                output_buf_noc_xy = dram_noc_1;
+                mcast_dst_end_x = dram_noc_0.x;
+                mcast_dst_end_y = dram_noc_0.y;
+            }
             break;
+        }
         default:
             log_warning(LogTest, "Unrecognized feature to test ({}), skipping...", feature);
             GTEST_SKIP();
@@ -421,7 +435,7 @@ void RunTestOnCore(
                 virtual_core.x,
                 virtual_core.y,
                 risc_name,
-                l1_overflow_addr + sizeof(std::uint32_t),
+                l1_overflow_addr,
                 sizeof(std::uint32_t));
         } break;
         case SanitizeEthSrcL1Overflow: {
@@ -449,8 +463,6 @@ void RunTestOnCore(
                 (eth_dest_overflow_addr_words << 4));
         } break;
         case SanitizeNOCMulticastInvalidRange: {
-            // For multicast, the error message format is different - it shows a range
-            // The start coords are output_buf_noc_xy (5,5), end coords are mcast_dst_end (2,2)
             expected = fmt::format(
                 "Device {} {} core(x={:2},y={:2}) virtual(x={:2},y={:2}): {} using noc{} tried to multicast write 4 "
                 "bytes from local L1[{:#08x}] to DRAM core range w/ virtual coords (x={},y={})-(x={},y={}) "

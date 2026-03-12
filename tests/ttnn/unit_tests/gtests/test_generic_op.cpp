@@ -18,6 +18,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include "hostdevcommon/fabric_common.h"
 #include "ttnn_test_fixtures.hpp"
+#include "tt_metal/api/tt-metalium/cluster.hpp"
 #include "tt_metal/tt_metal/common/multi_device_fixture.hpp"
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
@@ -562,7 +563,8 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
     };
 
     uint32_t last_ktile_w = input_tensor_a.logical_shape()[-1] % tt::constants::TILE_WIDTH;
-    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {last_ktile_w};
+    uint32_t last_ktile_h = 0;
+    KernelDescriptor::CompileTimeArgs reader_compile_time_args = {last_ktile_w, last_ktile_h};
     TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
     TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
 
@@ -619,6 +621,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
             "ttnn/cpp/ttnn/operations/matmul/device/kernels/dataflow/reader_bmm_8bank_output_tiles_partitioned.cpp",
         .core_ranges = all_device_cores_set,
         .compile_time_args = reader_compile_time_args,
+        .named_compile_time_args = {{"cb_in0", src0_cb_index}, {"cb_in1", src1_cb_index}},
         .runtime_args = reader_rt_args_per_core,
         .common_runtime_args = {},
         .config = tt::tt_metal::ReaderConfigDescriptor{},
@@ -647,10 +650,13 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         num_output_tiles_per_core_group_2  // Nt
     };
     log_info(tt::LogTest, "core_group_1: {}, core_group_2: {}", core_group_1.ranges(), core_group_2.ranges());
+    KernelDescriptor::NamedCompileTimeArgs compute_named_args = {
+        {"cb_in0", src0_cb_index}, {"cb_in1", src1_cb_index}, {"cb_out", output_cb_index}};
     tt::tt_metal::KernelDescriptor compute_kernel_descriptor_1 = {
         .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         .core_ranges = core_group_1,
         .compile_time_args = compute_ct_args_group_1,
+        .named_compile_time_args = compute_named_args,
         .defines = {},
         .runtime_args = {{{}}},
         .common_runtime_args = {},
@@ -660,6 +666,7 @@ TEST_F(TTNNFixtureWithDevice, TestGenericOpMatmul) {
         .kernel_source = "ttnn/cpp/ttnn/operations/matmul/device/kernels/compute/bmm.cpp",
         .core_ranges = core_group_2,
         .compile_time_args = compute_ct_args_group_2,
+        .named_compile_time_args = compute_named_args,
         .defines = {},
         .runtime_args = {{{}}},
         .common_runtime_args = {},
@@ -1326,6 +1333,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
                 "ttnn/cpp/ttnn/operations/experimental/ccl/all_gather_async/device/kernels/minimal_default_writer.cpp",
             .core_ranges = worker_cores,
             .compile_time_args = writer_ct_args,
+            .defines = {{"USE_WORKER_MUX", "1"}},
             .runtime_args = {{worker_fwd_core, fwd_writer_rt}, {worker_bwd_core, bwd_writer_rt}},
             .config = tt::tt_metal::WriterConfigDescriptor{},
         });

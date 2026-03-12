@@ -13,6 +13,7 @@
 #include "stream_io_map.h"
 #include "noc_nonblocking_api.h"
 #include "internal/firmware_common.h"
+#include "internal/hw_thread.h"
 #include "api/dataflow/dataflow_api.h"
 #include "tools/profiler/kernel_profiler.hpp"
 #include "internal/debug/stack_usage.h"
@@ -33,9 +34,8 @@ uint32_t _start() {
     while (c_tensix_core::read_wall_clock() < end_time);
 #endif
 #else
-    // TODO: initilaize globals and bss
-    std::uint64_t hartid;
-    asm volatile("csrr %0, mhartid" : "=r"(hartid));
+    // TODO: initialize globals and bss
+    uint32_t hartid = internal_::get_hw_thread_idx();
     extern uint32_t __tdata_lma[];
     // for now this works for legacy kernels, we need to revisit this for new kernels
     // if (hartid == /* leading core */ 0) {
@@ -46,7 +46,9 @@ uint32_t _start() {
     do_thread_crt1(__tdata_lma);
 
     if constexpr (NOC_MODE == DM_DEDICATED_NOC) {
-        // noc_local_state_init(NOC_INDEX); //TODO revisit this
+#if defined(NOC_API_V2)
+        noc_init(MEM_NOC_ATOMIC_RET_VAL_ADDR);
+#endif
     }
 #ifdef ALIGN_LOCAL_CBS_TO_REMOTE_CBS
     ALIGN_LOCAL_CBS_TO_REMOTE_CBS

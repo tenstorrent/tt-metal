@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/transformer/sdpa/device/sdpa_program_factory.hpp"
+#include "ttnn/operations/transformer/sdpa/device/sdpa_perf_model.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/device.hpp"
@@ -14,10 +15,6 @@
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
-
-SDPAOperation::program_factory_t SDPAOperation::select_program_factory(const SDPAParams&, const SDPAInputs&) {
-    return SDPAProgramFactory{};
-}
 
 void SDPAOperation::validate_on_program_cache_miss(const SDPAParams& attrs, const SDPAInputs& tensors) {
     const bool use_mla = attrs.use_mla;
@@ -380,7 +377,7 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attr
 
     const Tensor& q = tensors.q;
     const Tensor& k = tensors.k;
-    const Tensor& v = attrs.use_mla ? tensors.k : tensors.v.value_or(tensors.k);
+    const Tensor& v = tensors.v.value_or(tensors.k);
 
     const std::optional<Tensor> page_table_for_hash = flexible_chunked ? std::nullopt : tensors.page_table;
     operation::Hash hash = operation::hash_operation<SDPAOperation>(
@@ -398,7 +395,8 @@ tt::stl::hash::hash_t SDPAOperation::compute_program_hash(const SDPAParams& attr
         v,
         tensors.attn_mask,
         page_table_for_hash,
-        tensors.attention_sink);
+        tensors.attention_sink,
+        attrs.use_mla);
     return hash;
 }
 
@@ -407,20 +405,22 @@ SDPAOperation::create_op_performance_model(
     const SDPAParams& args, const SDPAInputs& tensor_args, Tensor& output_tensor) {
     const auto& input_tensor_q = tensor_args.q;
     const auto& input_tensor_k = tensor_args.k;
-    const auto& input_tensor_v = args.use_mla ? tensor_args.k : tensor_args.v.value();
+    const bool has_v = tensor_args.v.has_value();
+    const auto& input_tensor_v = tensor_args.v.value_or(tensor_args.k);
 
     if (output_tensor.storage_type() != StorageType::DEVICE) {
         log_warning(tt::LogOp, "Output tensor not on DEVICE?!");
     }
 
-    // calculate arch specific parameters
-    MathFidelity math_fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
-    auto arch = output_tensor.storage_type() == StorageType::DEVICE ? output_tensor.device()->arch()
-                                                                    : ttnn::GetDefaultDevice()->arch();
+    // Build input tensors list
     Tensors input_tensors = {tensor_args.q, tensor_args.k};
     if (tensor_args.v.has_value()) {
         input_tensors.emplace_back(tensor_args.v.value());
     }
+
+    // Calculate arch specific parameters
+    auto arch = output_tensor.storage_type() == StorageType::DEVICE ? output_tensor.device()->arch()
+                                                                    : ttnn::GetDefaultDevice()->arch();
     if (arch != tt::ARCH::WORMHOLE_B0 && arch != tt::ARCH::BLACKHOLE) {
         log_warning(tt::LogOp, "SDPA perf model does not support tt::arch '{}'", enchantum::to_string(arch));
         return operation::OpPerformanceModelGeneral<SDPAOperation::tensor_return_value_t>(
@@ -439,59 +439,44 @@ SDPAOperation::create_op_performance_model(
 
     bool is_chunked_prefill = args.chunk_start_idx.has_value() || args.chunk_start_idx_tensor.has_value();
 
-    uint32_t batch_size_q = q_shape[0];
-    uint32_t batch_size_k = k_shape[0];
-    // NB: number of Q heads determines the shape of first matmul; K is broadcast to match Q's shape
+    uint32_t batch_size = q_shape[0];
     uint32_t num_heads_q = q_shape[1];
+    const uint32_t Sq = q_shape[2];
+    const uint32_t DH = q_shape[3];
 
-    const auto Sq = q_shape[2];
-    const auto Sk = (is_chunked_prefill) ? (args.chunk_start_idx.has_value()
-                                                ? q_shape[2] + args.chunk_start_idx.value()
-                                                : k_shape[2])  // flexible: use K length as upper bound for perf model
-                                         : k_shape[2];
-    const auto DH = q_shape[3];
+    // Compute Sk based on chunked mode
+    const uint32_t Sk = (is_chunked_prefill)
+                            ? (args.chunk_start_idx.has_value() ? q_shape[2] + args.chunk_start_idx.value()
+                                                                : k_shape[2])  // flexible: use K length as upper bound
+                            : k_shape[2];
 
-    uint32_t Sv, DV;
-    if (args.use_mla) {
-        Sv = k_shape[2];
-        DV = k_shape[3];
-    } else {
-        Sv = v_shape[3];
-        DV = v_shape[2];
-    }
+    // Compute DV based on MLA mode
+    // Note: For MLA without V, use K's head dimension; otherwise use V's head dimension
+    const uint32_t DV = (args.use_mla && !has_v) ? k_shape[3] : v_shape[3];
 
-    TT_ASSERT(batch_size_q == batch_size_k, "ScaledDotProductAttention perf model: Q and K have unequal batch size!");
+    TT_ASSERT(q_shape[0] == k_shape[0], "ScaledDotProductAttention perf model: Q and K have unequal batch size!");
     TT_ASSERT(q_shape[3] == k_shape[3], "ScaledDotProductAttention perf model: Q and K have unequal hidden dim!");
 
-    // Compute number of FLOPS for the two main matmuls
-    constexpr int64_t FLOPS_PER_FMA = 2;  // each FMA is 2 FLOPS
-    int64_t num_mul_adds = 0;
-    // Q * K matmul for raw attention scores
-    num_mul_adds += FLOPS_PER_FMA * DH * Sq * Sk * num_heads_q * batch_size_q;
-    // attention scores * V matmul
-    num_mul_adds += FLOPS_PER_FMA * DV * Sq * Sv * num_heads_q * batch_size_q;
+    CoreCoord compute_grid_dims = args.program_config.has_value()
+                                      ? args.program_config->compute_with_storage_grid_size
+                                      : output_tensor.device()->compute_with_storage_grid_size();
+    MathFidelity math_fidelity = ttnn::get_math_fidelity(args.compute_kernel_config);
 
-    // if causal, only half of the FMAs are actually performed
-    if (args.is_causal) {
-        num_mul_adds /= 2;
-    }
-
-    CoreCoord compute_grid_dims = output_tensor.device()->compute_with_storage_grid_size();
-    int num_cores = compute_grid_dims.x * compute_grid_dims.y;
-
-    // wormhole and blackhole have identical matmul throughput per cycle
-    const int tensix_mul_adds_per_cycle_lofi = 4096;
-
-    // ideal total cycles is ESTIMATED_FLOPS / IDEAL_THROUGHPUT
-    int ideal_dev_clock_cycles = std::ceil(
-        ((float)num_mul_adds / (float)(num_cores * tensix_mul_adds_per_cycle_lofi)) *
-        (float)operation::OpPerformanceModel::fidelity_multiplier(math_fidelity));
+    int ideal_dev_clock_cycles = operations::transformer::sdpa::compute_sdpa_ideal_cycles(
+        batch_size,
+        num_heads_q,
+        Sq,
+        Sk,
+        DH,
+        DV,
+        args.is_causal,
+        math_fidelity,
+        compute_grid_dims.x * compute_grid_dims.y);
 
     // TODO: somehow account for overhead of fused masking and softmax?
 
-    operation::OpPerformanceModelGeneral<SDPAOperation::tensor_return_value_t> result(
+    return operation::OpPerformanceModelGeneral<SDPAOperation::tensor_return_value_t>(
         input_tensors, output_tensor, ideal_dev_clock_cycles);
-    return result;
 }
 
 }  // namespace ttnn::prim

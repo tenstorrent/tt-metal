@@ -9,11 +9,6 @@
 
 namespace ttnn::operations::rand {
 
-RandDeviceOperation::program_factory_t RandDeviceOperation::select_program_factory(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {
-    return ProgramFactory{};
-}
-
 void RandDeviceOperation::validate_inputs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     TT_FATAL(operation_attributes.from < operation_attributes.to, "Rand: `from` argument must be < `to` argument");
@@ -47,10 +42,12 @@ RandDeviceOperation::tensor_return_value_t RandDeviceOperation::create_output_te
 }
 
 tt::stl::hash::hash_t RandDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto cached_operation_attributes = operation_attributes;
-    cached_operation_attributes.seed = 0;
-    return tt::stl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
+    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    return tt::tt_metal::operation::hash_operation<RandDeviceOperation>(
+        operation_attributes.shape,
+        operation_attributes.dtype,
+        operation_attributes.layout,
+        operation_attributes.memory_config);
 }
 
 }  // namespace ttnn::operations::rand

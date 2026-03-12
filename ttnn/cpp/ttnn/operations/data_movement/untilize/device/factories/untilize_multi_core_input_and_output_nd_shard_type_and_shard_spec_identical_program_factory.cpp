@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/reflection.hpp>
 #include "ttnn/operations/cb_utils.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/common/constants.hpp"
@@ -56,13 +57,7 @@ UntilizeMultiCoreInputAndOutputNDShardTypeAndShardSpecIdenticalProgramFactory::c
     uint32_t num_blocks_per_shard = (shard_height / tile_height) * (shard_vol / (shard_height * shard_width));
     uint32_t num_tiles_per_shard = num_tiles_per_block * num_blocks_per_shard;
 
-    auto distribution_spec = BufferDistributionSpec::from_shard_spec(
-        a.padded_shape(),
-        nd_shard_spec.shard_shape,
-        tile_shape,
-        nd_shard_spec.grid,
-        nd_shard_spec.orientation,
-        nd_shard_spec.shard_distribution_strategy);
+    const auto& distribution_spec = a.buffer()->buffer_distribution_spec().value();
 
     uint32_t total_shards = distribution_spec.num_shards();
     uint32_t num_cores = grid.num_cores();

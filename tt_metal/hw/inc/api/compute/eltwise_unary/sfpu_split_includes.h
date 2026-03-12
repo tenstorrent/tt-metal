@@ -12,8 +12,8 @@
 #include "api/compute/eltwise_unary/erf_erfc.h"
 #endif
 
-#if SFPU_OP_LOGICAL_NOT_NOTI_INCLUDE
-#include "api/compute/eltwise_unary/logical_not_noti.h"
+#if SFPU_OP_LOGICAL_NOT_INCLUDE
+#include "api/compute/eltwise_unary/logical_not.h"
 #endif
 
 #if SFPU_OP_EXP_INCLUDE
@@ -34,6 +34,10 @@
 
 #if SFPU_OP_RECIP_INCLUDE
 #include "api/compute/eltwise_unary/recip.h"
+#endif
+
+#if SFPU_OP_CBRT_INCLUDE
+#include "api/compute/eltwise_unary/cbrt.h"
 #endif
 
 #if SFPU_OP_RELU_FAMILY_INCLUDE
@@ -120,6 +124,10 @@
 #include "api/compute/eltwise_unary/softplus.h"
 #endif
 
+#if SFPU_OP_XIELU_INCLUDE
+#include "api/compute/eltwise_unary/xielu.h"
+#endif
+
 #if SFPU_OP_LOGSIGMOID_INCLUDE
 #include "api/compute/logsigmoid.h"
 #endif
@@ -174,6 +182,10 @@
 
 #if SFPU_OP_HARDMISH_INCLUDE
 #include "api/compute/eltwise_unary/hardmish.h"
+#endif
+
+#if SFPU_OP_LGAMMA_INCLUDE
+#include "api/compute/eltwise_unary/lgamma.h"
 #endif
 
 #if SFPU_OP_COMPUTE_KERNEL_API_INCLUDE

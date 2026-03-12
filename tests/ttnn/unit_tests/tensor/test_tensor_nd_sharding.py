@@ -7,7 +7,11 @@ pytestmark = pytest.mark.use_module_device
 
 import torch
 import ttnn
-from tests.ttnn.utils_for_testing import tt_dtype_to_torch_dtype, assert_with_pcc
+from tests.ttnn.utils_for_testing import (
+    tt_dtype_to_torch_dtype,
+    assert_with_pcc,
+    TORCH_INTEGER_DTYPES,
+)
 
 
 @pytest.mark.parametrize(
@@ -70,7 +74,7 @@ def test_tensor_nd_sharding_loopback(tensor_shape, shard_shape, layout, buffer_t
 
     dtype = tt_dtype_to_torch_dtype[tt_dtype]
 
-    if dtype in {torch.uint8, torch.int16, torch.int32}:
+    if dtype in TORCH_INTEGER_DTYPES:
         py_tensor = torch.randint(torch.iinfo(dtype).min, torch.iinfo(dtype).max, tensor_shape, dtype=dtype)
     else:
         py_tensor = torch.rand(tensor_shape, dtype=dtype)
@@ -94,3 +98,31 @@ def test_tensor_nd_sharding_loopback(tensor_shape, shard_shape, layout, buffer_t
         assert_with_pcc(py_tensor, py_tensor_after_round_trip, 0.95)
     else:
         assert torch.allclose(py_tensor, py_tensor_after_round_trip)
+
+
+@pytest.mark.parametrize(
+    "torch_tensor, shard_shape",
+    [
+        (torch.tensor(7, dtype=torch.int32), [2]),
+        (torch.arange(8, dtype=torch.int32), [8]),
+        (torch.arange(12, dtype=torch.int32).reshape(3, 4), [3, 4]),
+        (torch.arange(1 * 1 * 5 * 96, dtype=torch.int32).reshape(1, 1, 5, 96), [1, 1, 5, 96]),
+    ],
+    ids=["scalar", "1d", "2d", "nd"],
+)
+def test_nd_shardspec_construction_across_tensor_ranks(device, torch_tensor, shard_shape):
+    """Constructing NdShardSpecs should succeed for scalar through higher-rank tensors."""
+    shard_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    nd_shard_spec = ttnn.NdShardSpec(shard_shape, shard_grid)
+    memory_config = ttnn.MemoryConfig(ttnn.BufferType.L1, nd_shard_spec)
+
+    tt_tensor = ttnn.from_torch(
+        torch_tensor,
+        dtype=ttnn.int32,
+        device=device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=memory_config,
+    )
+
+    assert tt_tensor.memory_config().is_sharded()
+    assert tt_tensor.memory_config().nd_shard_spec is not None

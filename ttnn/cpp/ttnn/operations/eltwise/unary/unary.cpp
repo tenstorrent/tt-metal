@@ -125,6 +125,7 @@ template struct ExecuteUnary<UnaryOpType::HARDSIGMOID>;
 template struct ExecuteUnary<UnaryOpType::HARDSWISH>;
 template struct ExecuteUnary<UnaryOpType::SOFTSIGN>;
 template struct ExecuteUnary<UnaryOpType::CBRT>;
+template struct ExecuteUnary<UnaryOpType::LGAMMA>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFastAndApproximateMode<unary_op_type>::invoke(
@@ -151,6 +152,7 @@ template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG2>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::LOG1P>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::RSQRT>;
 template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::SQRT>;
+template struct ExecuteUnaryWithFastAndApproximateMode<UnaryOpType::MISH>;
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithVectorAndFastAndApproximateMode<unary_op_type>::invoke(
@@ -167,6 +169,32 @@ Tensor ExecuteUnaryWithVectorAndFastAndApproximateMode<unary_op_type>::invoke(
 }
 
 template struct ExecuteUnaryWithVectorAndFastAndApproximateMode<UnaryOpType::SIGMOID>;
+
+Tensor Sigmoid::invoke(
+    const Tensor& input,
+    const int vector_mode,
+    const SigmoidMode mode,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        input,
+        [&mode, &vector_mode]() -> std::vector<EltwiseUnaryWithParam> {
+            switch (mode) {
+                case SigmoidMode::FAST_APPROXIMATE:
+                    return {UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(vector_mode), 1.0f})};
+                case SigmoidMode::ACCURATE_FAST_EXP:
+                    return {
+                        UnaryWithParam(UnaryOpType::NEG),
+                        UnaryWithParam(UnaryOpType::EXP, 1.0f),
+                        UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
+                        UnaryWithParam(UnaryOpType::RECIP)};
+                case SigmoidMode::ACCURATE: [[fallthrough]];
+                default: return {UnaryWithParam(UnaryOpType::SIGMOID, {static_cast<float>(vector_mode), 0.0f})};
+            }
+        }(),
+        memory_config,
+        optional_output_tensor);
+}
 
 template <UnaryOpType unary_op_type>
 Tensor ExecuteUnaryWithFloatParameter<unary_op_type>::invoke(
@@ -245,10 +273,11 @@ Tensor Sigmoid_accurate::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
         input,
-        {UnaryWithParam(UnaryOpType::NEG),
-         UnaryWithParam(UnaryOpType::EXP, fast_and_approximate_mode ? 1.0f : 0.0f),
-         UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f),
-         UnaryWithParam(UnaryOpType::RECIP)},
+        fast_and_approximate_mode
+            ? std::vector<
+                  EltwiseUnaryWithParam>{UnaryWithParam(UnaryOpType::NEG), UnaryWithParam(UnaryOpType::EXP, 1.0f), UnaryWithParam(UnaryOpType::ADD_UNARY_SFPU, 1.0f), UnaryWithParam(UnaryOpType::RECIP)}
+            : std::vector<EltwiseUnaryWithParam>{UnaryWithParam(
+                  UnaryOpType::SIGMOID, {static_cast<float>(VecMode::RC), 0.0f})},
         memory_config,
         optional_output_tensor);
 }
@@ -311,6 +340,20 @@ Tensor Softplus::invoke(
         input, {UnaryWithParam{UnaryOpType::SOFTPLUS, {beta, threshold}}}, memory_config, optional_output_tensor);
 }
 
+// xIELU (Expanded Integral of the Exponential Linear Unit)
+// With beta = 0.5 and eps = -1e-6:
+//     x > 0 :  alpha_p * x^2 + beta * x
+//     x <= 0:  alpha_n * (expm1(minimum(x, eps))) - (alpha_n * x) + 0.5 * x
+Tensor Xielu::invoke(
+    const Tensor& input,
+    const float alpha_p,
+    const float alpha_n,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor) {
+    return detail::unary_impl(
+        input, {UnaryWithParam{UnaryOpType::XIELU, {alpha_p, alpha_n}}}, memory_config, optional_output_tensor);
+}
+
 // tanh[x] = (exp[2x] - 1) / (exp[2x] + 1)
 Tensor Tanh::invoke(
     const Tensor& input_tensor,
@@ -354,15 +397,6 @@ Tensor Abs::invoke(
 
 Tensor Abs::invoke(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_config) {
     return ttnn::hypot(input_tensor[0], input_tensor[1], output_mem_config);
-}
-
-Tensor Mish::invoke(
-    const Tensor& input_tensor,
-    const std::optional<MemoryConfig>& memory_config,
-    const std::optional<Tensor>& optional_output_tensor) {
-    UnaryOpType op_type = UnaryOpType::MISH;
-
-    return detail::unary_impl(input_tensor, {UnaryWithParam{op_type}}, memory_config, optional_output_tensor);
 }
 
 Tensor LogSigmoid::invoke(
@@ -443,10 +477,7 @@ Tensor Clamp::invoke(
     const std::optional<Tensor>& optional_output_tensor) {
     UnaryOpType op_type = UnaryOpType::CLAMP_TSS;
     return detail::unary_impl(
-        input_tensor,
-        {EltwiseUnaryWithParam{op_type, {min_val, max_val}}},
-        memory_config,
-        optional_output_tensor);
+        input_tensor, {EltwiseUnaryWithParam{op_type, {min_val, max_val}}}, memory_config, optional_output_tensor);
 }
 
 Tensor Rdiv::invoke(
@@ -570,10 +601,7 @@ Tensor ExecuteUnaryWithIntegerParameter<unary_op_type, T>::invoke(
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& optional_output_tensor) {
     return detail::unary_impl(
-        input_tensor,
-        {EltwiseUnaryWithParam{unary_op_type, parameter}},
-        memory_config,
-        optional_output_tensor);
+        input_tensor, {EltwiseUnaryWithParam{unary_op_type, parameter}}, memory_config, optional_output_tensor);
 }
 
 Tensor Swish::invoke(

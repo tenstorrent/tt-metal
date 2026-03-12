@@ -9,7 +9,7 @@
 #include <vector>
 
 #include "core_coord.hpp"
-#include "data_types.hpp"
+#include <tt-metalium/kernel_types.hpp>
 #include "dispatch_core_common.hpp"
 #include "dispatch_core_manager.hpp"
 #include <umd/device/types/xy_pair.hpp>
@@ -51,6 +51,7 @@ private:
     DispatchCoreConfig dispatch_core_config_;  // The config this object was initialized with, need to store it so we
                                                // know when to reset if it changes.
     // Store the list of dispatch cores on user exposed chips. Expected to be identical across chips.
+    // Made mutable so it can be refreshed dynamically when dispatch mode changes (SD<->FD)
     std::vector<CoreCoord> logical_dispatch_cores_on_user_chips_;
     // Make this mutable, since this is JIT populated
     // through a const instance when queried

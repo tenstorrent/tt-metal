@@ -14,7 +14,7 @@
 #include <utility>
 #include <vector>
 
-#include "env_lib.hpp"
+#include "common/env_lib.hpp"
 #include "hal_types.hpp"
 #include "impl/context/metal_context.hpp"
 #include "memcpy.hpp"
@@ -75,6 +75,13 @@ public:
         uint32_t offset_idx = 0);
 
     void add_prefetch_relay_linear_packed(
+        uint32_t noc_xy_addr,
+        uint32_t total_length,
+        const std::vector<CQPrefetchRelayLinearPackedSubCmd>& sub_cmds,
+        uint16_t num_sub_cmds,
+        uint32_t offset_idx = 0);
+
+    void add_prefetch_relay_linear_packed_h(
         uint32_t noc_xy_addr,
         uint32_t total_length,
         const std::vector<CQPrefetchRelayLinearPackedSubCmd>& sub_cmds,

@@ -24,7 +24,6 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "df/float32.hpp"
 #include <tt-logger/tt-logger.hpp>
@@ -36,6 +35,7 @@
 #include <umd/device/types/xy_pair.hpp>
 #include <tt-metalium/distributed.hpp>
 #include "common/tt_backend_api_types.hpp"
+#include "impl/kernels/kernel.hpp"
 
 using namespace tt;
 using namespace tt::test_utils;

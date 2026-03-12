@@ -9,6 +9,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
+#include "ttnn/operation.hpp"
 
 #include "ring_distributed_sdpa_device_operation_types.hpp"
 #include "ring_distributed_sdpa_program_factory.hpp"
@@ -24,9 +25,6 @@ struct RingDistributedSdpaDeviceOperation {
     using program_factory_t = std::variant<RingDistributedSdpaMeshWorkloadFactory>;
     using shared_variables_t = RingDistributedSdpaMeshWorkloadFactory::shared_variables_t;
 
-    static program_factory_t select_program_factory(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
-
     static void validate_on_program_cache_miss(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 
@@ -35,6 +33,9 @@ struct RingDistributedSdpaDeviceOperation {
 
     static tensor_return_value_t create_output_tensors(
         const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
+
+    static tt::tt_metal::operation::OpPerformanceModelGeneral<tensor_return_value_t> create_op_performance_model(
+        const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output_tensor);
 };
 
 Tensor ring_distributed_sdpa(

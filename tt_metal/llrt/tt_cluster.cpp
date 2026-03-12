@@ -2,10 +2,12 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/fmt.hpp>
 #include "tt_cluster.hpp"
 #include "llrt/rtoptions.hpp"
 
 #include <core_coord.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-logger/tt-logger.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
 #include <algorithm>
@@ -343,7 +345,7 @@ void Cluster::assign_mem_channels_to_devices(
     ChipId mmio_device_id, const std::unordered_set<ChipId>& controlled_device_ids) {
     // g_MAX_HOST_MEM_CHANNELS (4) is defined in tt::umd::Cluster and denotes the max number of host memory channels per
     // MMIO device Metal currently assigns 1 channel per device. See https://github.com/tenstorrent/tt-metal/issues/4087
-    // One WH gateway should have 8 remote deivces in its control group.
+    // One WH gateway should have 8 remote devices in its control group.
     TT_ASSERT(controlled_device_ids.size() <= 9, "Unable to assign each device to its own host memory channel!");
     uint16_t channel = 0;
     this->device_to_host_mem_channel_[mmio_device_id] = channel++;
@@ -950,8 +952,8 @@ std::unique_ptr<tt::umd::SysmemBuffer> Cluster::map_sysmem_buffer(
 
 void Cluster::verify_sw_fw_versions(
     int device_id, std::uint32_t sw_version, std::vector<std::uint32_t>& fw_versions) const {
-    umd::semver_t sw(umd::semver_t::from_eth_fw_tag(sw_version)),
-        fw_first_eth_core(umd::semver_t::from_eth_fw_tag(fw_versions.at(0)));
+    umd::semver_t sw(umd::semver_t::from_wormhole_eth_firmware_tag(sw_version)),
+        fw_first_eth_core(umd::semver_t::from_wormhole_eth_firmware_tag(fw_versions.at(0)));
     log_info(
         tt::LogDevice,
         "Software version {}, Ethernet FW version {} (Device {})",
@@ -959,7 +961,7 @@ void Cluster::verify_sw_fw_versions(
         fw_first_eth_core.to_string(),
         device_id);
     for (std::uint32_t& fw_version : fw_versions) {
-        umd::semver_t fw(umd::semver_t::from_eth_fw_tag(fw_version));
+        umd::semver_t fw(umd::semver_t::from_wormhole_eth_firmware_tag(fw_version));
 
         TT_FATAL(fw == fw_first_eth_core, "FW versions are not the same across different ethernet cores");
         TT_FATAL(sw.major == fw.major, "SW/FW major version number out of sync");
@@ -1174,7 +1176,7 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
     }
 
     std::set<std::pair<ChipId, ChipId>> pairs_done;
-    // to reserve specified number of cores, ensure that the same are avaialble on connected chip id as well
+    // to reserve specified number of cores, ensure that the same are available on connected chip id as well
     for (const auto& chip_id : this->driver_->get_target_device_ids()) {
         const auto& connected_chips_and_cores = this->get_ethernet_cores_grouped_by_connected_chips(chip_id);
         for (const auto& [connected_chip_id, cores] : connected_chips_and_cores) {
@@ -1205,7 +1207,7 @@ void Cluster::reserve_ethernet_cores_for_fabric_routers(uint8_t num_routing_plan
                 const auto connected_core =
                     std::get<1>(this->get_connected_ethernet_core(std::make_tuple(chip_id, eth_core)));
                 if (this->device_eth_routing_info_.at(chip_id).at(eth_core) == EthRouterMode::FABRIC_ROUTER) {
-                    // already reserved for fabric, potenially by the connected chip id
+                    // already reserved for fabric, potentially by the connected chip id
                     num_reserved_cores++;
                     continue;
                 }
@@ -1466,6 +1468,16 @@ uint32_t Cluster::get_alignment_requirements(ChipId chip_id, uint32_t size_in_by
         return this->hal_->get_dma_alignment();
     }
     return 1;
+}
+
+umd::ClusterDescriptor* Cluster::get_cluster_desc() const {
+    TT_FATAL(this->cluster_desc_ != nullptr, "Cluster descriptor is not initialized.");
+    return this->cluster_desc_;
+}
+
+const std::unique_ptr<tt::umd::Cluster>& Cluster::get_driver() const {
+    TT_FATAL(driver_ != nullptr, "UMD driver is not initialized.");
+    return driver_;
 }
 
 }  // namespace tt

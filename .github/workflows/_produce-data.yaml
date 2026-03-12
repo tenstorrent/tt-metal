@@ -34,10 +34,9 @@ on:
         type: boolean
   workflow_run:
     workflows:
-      - "All post-commit tests"
-      - "PR - All post-commit tests"
-      - "apc nightly debug run"
-      - "apc nightly debug run with watcher"
+      - "Sanity tests"
+      - "PR - Sanity tests"
+      - "Sanity tests nightly debug run"
       - "(Single-card) Model perf tests"
       - "(Single-card) Device perf regressions"
       - "(Single-card) Demo tests"
@@ -58,10 +57,8 @@ on:
       - "ttnn - Run sweeps"
       - "ttnn stress tests"
       - "Blackhole post-commit tests"
-      - "(Blackhole) Blackhole nightly tests"
+      - "(Blackhole) e2e tests"
       - "(Blackhole) Demo tests"
-      - "(Blackhole) Multi-card Demo tests"
-      - "(Blackhole) Multi-card unit tests"
       - "PR Gate"
       - "Merge Gate"
       - "Nightly tt-metal L2 tests"
@@ -87,6 +84,7 @@ on:
       - "Profiler CI"
       - "Git bisect dispatch"
       - "Custom test dispatch"
+      - "Validate installation step from instructions"
     types:
       - completed
 

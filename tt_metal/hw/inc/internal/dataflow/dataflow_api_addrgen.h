@@ -99,18 +99,26 @@ FORCE_INLINE constexpr static std::uint32_t MUL_WITH_TILE_SIZE(uint format, uint
                                                      : 6;
     switch (format & 0x1F) {
         case ((uint8_t)DataFormat::UInt8): return (index << datum_shift);
+#ifndef ARCH_QUASAR
         case ((uint8_t)DataFormat::UInt16):
+#endif
         case ((uint8_t)DataFormat::Float16):
         case ((uint8_t)DataFormat::Float16_b): return (index << (datum_shift + 1));
         case ((uint8_t)DataFormat::Int32):
+#ifndef ARCH_QUASAR
         case ((uint8_t)DataFormat::UInt32):
+#else
+        case ((uint8_t)DataFormat::Tf32):
+#endif
         case ((uint8_t)DataFormat::Float32): return (index << (datum_shift + 2));
+#ifndef ARCH_QUASAR
         case ((uint8_t)DataFormat::Bfp2):
         case ((uint8_t)DataFormat::Bfp2_b): return ((index << (datum_shift - 2)) + (index << (exp_shift)));
         case ((uint8_t)DataFormat::Bfp4):
         case ((uint8_t)DataFormat::Bfp4_b): return ((index << (datum_shift - 1)) + (index << (exp_shift)));
         case ((uint8_t)DataFormat::Bfp8):
         case ((uint8_t)DataFormat::Bfp8_b):
+#endif
         // Keep default as Bfp8?
         default: return ((index << datum_shift) + (index << (exp_shift)));
     };
@@ -133,6 +141,14 @@ inline constexpr bool has_page_size_v = false;
 template <typename T>
 inline constexpr bool has_page_size_v<T, std::void_t<decltype(std::declval<T>().page_size)>> = true;
 
+// Check for get_aligned_page_size() method
+template <typename, typename = void>
+inline constexpr bool has_get_aligned_page_size_v = false;
+
+template <typename T>
+inline constexpr bool has_get_aligned_page_size_v<T, std::void_t<decltype(std::declval<T>().get_aligned_page_size())>> =
+    true;
+
 // Check for log_base_2_of_page_size member variable
 template <typename, typename = void>
 inline constexpr bool has_log_base_2_of_page_size_v = false;
@@ -144,7 +160,8 @@ inline constexpr bool
 // Combined addrgen traits
 template <typename T>
 inline constexpr bool has_required_addrgen_traits_v =
-    has_get_noc_addr_v<T> and (has_page_size_v<T> or has_log_base_2_of_page_size_v<T>);
+    has_get_noc_addr_v<T> and
+    (has_get_aligned_page_size_v<T> or has_page_size_v<T> or has_log_base_2_of_page_size_v<T>);
 
 // clang-format off
 /**
@@ -152,14 +169,14 @@ inline constexpr bool has_required_addrgen_traits_v =
  *
  * Return value: uint64_t
  *
- * | Argument    | Description                             | Data type | Valid range        | required |
- * |-------------|-----------------------------------------|-----------|--------------------|----------|
- * | noc_x_start | Physical x coordinate of the start core | uint32_t  | WH: 0-9, BH: 0-16  | True     |
- * | noc_y_start | Physical y coordinate of the start core | uint32_t  | WH: 0-11, BH: 0-11 | True     |
- * | noc_x_end   | Physical x coordinate of the end core   | uint32_t  | WH: 0-9, BH: 0-16  | True     |
- * | noc_y_end   | Physical y coordinate of the end core   | uint32_t  | WH: 0-11, BH: 0-11 | True     |
- * | addr        | Address in local L1 memory              | uint32_t  | 0..1MB             | True     |
- * | noc         | Which NOC to use for the transaction    | uint8_t   | 0 or 1             | False    |
+ * | Argument    | Description                                            | Data type | Valid range        | required |
+ * |-------------|--------------------------------------------------------|-----------|--------------------|----------|
+ * | noc_x_start | Physical x coordinate of the start core                | uint32_t  | WH: 0-9, BH: 0-16  | True     |
+ * | noc_y_start | Physical y coordinate of the start core                | uint32_t  | WH: 0-11, BH: 0-11 | True     |
+ * | noc_x_end   | Physical x coordinate of the end core                  | uint32_t  | WH: 0-9, BH: 0-16  | True     |
+ * | noc_y_end   | Physical y coordinate of the end core                  | uint32_t  | WH: 0-11, BH: 0-11 | True     |
+ * | addr        | L1 memory write address local to the destination core. | uint32_t  | 0..1MB             | True     |
+ * | noc         | Which NOC to use for the transaction                   | uint8_t   | 0 or 1             | False    |
  */
 // clang-format on
 FORCE_INLINE

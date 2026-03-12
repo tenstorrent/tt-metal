@@ -468,6 +468,11 @@ template DebugPrinter operator<< <BF16>(DebugPrinter, BF16 val);
 template DebugPrinter operator<< <F32>(DebugPrinter, F32 val);
 template DebugPrinter operator<< <U32>(DebugPrinter, U32 val);
 
+// bool has no DebugPrintTypeToId specialization; cast to uint8_t (0 or 1) and reuse that path.
+inline DebugPrinter operator<<(DebugPrinter dp, bool val) {
+    return dp << static_cast<uint8_t>(val);
+}
+
 // This allows printing of any (non char) pointer types as uint32_t
 template <typename T, typename = std::enable_if_t<!std::is_same_v<std::remove_cv_t<T>, char>>>
 DebugPrinter operator<<(DebugPrinter dp, T* val) {

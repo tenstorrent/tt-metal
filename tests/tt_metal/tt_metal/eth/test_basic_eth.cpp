@@ -21,13 +21,12 @@
 #include <tt-metalium/buffer_types.hpp>
 #include "command_queue_fixture.hpp"
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include "mesh_dispatch_fixture.hpp"
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include "multi_device_fixture.hpp"
@@ -305,6 +304,7 @@ bool noc_reader_and_writer_kernels(
 
     workload.add_program(device_range, std::move(program));
     distributed::EnqueueMeshWorkload(cq, workload, false);
+    distributed::Finish(cq);
 
     auto eth_readback_vec = tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         device->id(), eth_noc_xy, eth_dst_l1_address, byte_size);

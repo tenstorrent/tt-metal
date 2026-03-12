@@ -4,6 +4,7 @@
 #pragma once
 
 #include "kernel_op_api.hpp"
+#include "kernel_utils.hpp"
 
 #if defined(COMPILE_FOR_BRISC)
 #include "api/dataflow/dataflow_api.h"
@@ -66,12 +67,13 @@ struct KNSlicedMatmul {
 
     // Compute args (TRISC)
     struct ComputeArgs {
-        uint32_t act_cb;           // activation CB (full shared buffer)
-        uint32_t weights_cb;       // weights CB (per-core K-slice)
-        uint32_t out_cb;           // output CB (out_w tiles)
-        uint32_t k_offset;         // tile offset into act_cb
-        uint32_t k_per_core;       // K tiles this core processes
-        uint32_t act_total_tiles;  // total tiles in act_cb (for wait/pop)
+        uint32_t act_cb;                        // activation CB (full shared buffer)
+        uint32_t weights_cb;                    // weights CB (per-core K-slice)
+        uint32_t out_cb;                        // output CB (out_w tiles)
+        uint32_t k_offset;                      // tile offset into act_cb
+        uint32_t k_per_core;                    // K tiles this core processes
+        uint32_t act_total_tiles;               // total tiles in act_cb (for wait/pop)
+        uint32_t weights_address_override = 0;  // byte address; overrides weights read ptr if > 0
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -105,11 +107,19 @@ struct KNSlicedMatmul {
             constexpr bool finalize = true;
             constexpr uint32_t out_w = CTArgs::out_w;
 
-            custom_mm_block_init<transpose, split_acc, dense_packing>(args.act_cb, args.weights_cb, args.out_cb, out_w);
+            reconfig_data_format<false, true>(args.weights_cb, args.act_cb);
+            pack_reconfig_data_format<true>(args.out_cb);
+
+            custom_mm_block_init_short<transpose, split_acc, dense_packing>(
+                args.act_cb, args.weights_cb, args.out_cb, out_w);
 
             // Wait for all activation tiles and weight tiles
             cb_wait_front(args.act_cb, args.act_total_tiles);
-            cb_wait_front(args.weights_cb, args.k_per_core);
+            if (args.weights_address_override > 0) {
+                UNPACK(({ unified_kernels::override_cb_rd_ptr(args.weights_cb, args.weights_address_override); }));
+            } else {
+                cb_wait_front(args.weights_cb, args.k_per_core);
+            }
 
             // Reserve output tile
             cb_reserve_back(args.out_cb, out_w);

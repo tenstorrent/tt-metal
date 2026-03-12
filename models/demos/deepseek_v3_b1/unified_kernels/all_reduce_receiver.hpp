@@ -41,7 +41,6 @@ struct AllReduceReceiver {
 
     // Reader CTArgs (NCRISC)
     template <
-        uint32_t packetHeaderCbId,
         uint32_t cbIn1,
         uint32_t alignment,
         uint32_t cbIn2,
@@ -52,7 +51,6 @@ struct AllReduceReceiver {
         uint32_t hasResidual,
         uint32_t skipLocalPush = 0>  // Skip cb_reserve/push on cb_in2 when fused with gather
     struct ReaderCTArgs {
-        static constexpr uint32_t packet_header_cb_id = packetHeaderCbId;
         static constexpr uint32_t cb_in1 = cbIn1;
         static constexpr uint32_t l1_alignment = alignment;
         static constexpr uint32_t cb_in2 = cbIn2;
@@ -110,31 +108,14 @@ struct AllReduceReceiver {
     template <typename ReaderCT, typename ComputeCT>
     class Op {
     public:
-        void operator()(const RTArgs& args) {
-            size_t unused = 0;
-            impl(args, unused);
-        }
-
-        void operator()(const RTArgs& args, size_t& fabric_arg_idx) { impl(args, fabric_arg_idx); }
+        void operator()(const RTArgs& args) { impl(args); }
 
     private:
-        void impl([[maybe_unused]] const RTArgs& args, [[maybe_unused]] size_t& fabric_arg_idx) {
+        void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
             // ================================================================
             // NCRISC (Reader) - waits for remote data, pushes to compute
             // ================================================================
-            constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
-            constexpr uint8_t sender_num_hops = 1;
-
-            tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
-
-            cb_reserve_back(ReaderCT::packet_header_cb_id, 1);
-            const uint32_t sem_header_addr = get_write_ptr(ReaderCT::packet_header_cb_id);
-            cb_push_back(ReaderCT::packet_header_cb_id, 1);
-
-            const uint64_t sender_sem_noc_addr =
-                get_noc_addr(ReaderCT::remote_sender_noc_x, ReaderCT::remote_sender_noc_y, args.sender_semaphore_addr);
-
             // Push local and residual tiles to compute immediately (they're ready)
             // Skip local push if data is already in CB (e.g., from preceding gather operation)
             if constexpr (!ReaderCT::skip_local_push) {
@@ -165,7 +146,8 @@ struct AllReduceReceiver {
             // ================================================================
             // TRISC (Compute) - performs reduction: local + remote → output
             // ================================================================
-            binary_op_init_common(ComputeCT::cb_in0, ComputeCT::cb_in1, ComputeCT::cb_out0);
+            reconfig_data_format<false, true>(ComputeCT::cb_in0, ComputeCT::cb_in1);
+            pack_reconfig_data_format<true>(ComputeCT::cb_out0);
             add_tiles_init(ComputeCT::cb_in0, ComputeCT::cb_in1);
 
             constexpr uint32_t max_dst_tiles = 4;

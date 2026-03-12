@@ -104,7 +104,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
@@ -113,8 +112,8 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            # Setup shared venv for multi-host access (handles race conditions)
-            ./tests/scripts/multihost/setup_shared_venv.sh
+            # Setup shared venv and switch to it (handles multi-host race conditions)
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-glx-2x:
@@ -157,7 +156,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
@@ -166,8 +164,8 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            # Setup shared venv for multi-host access (handles race conditions)
-            ./tests/scripts/multihost/setup_shared_venv.sh
+            # Setup shared venv and switch to it (handles multi-host race conditions)
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_dual_galaxy_tests.sh
 
   multi-host-glx-4x:
@@ -211,7 +209,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -v /etc/mpirun:/etc/mpirun:ro
             -v ${{ steps.capture-home.outputs.home }}/.ssh:${{ steps.capture-home.outputs.home }}/.ssh:ro
@@ -220,5 +217,6 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            ./tests/scripts/multihost/setup_shared_venv.sh
+            # Setup shared venv and switch to it (handles multi-host race conditions)
+            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh unit_tests

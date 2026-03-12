@@ -108,6 +108,7 @@ class ModelArgs:
             self.tokenizer = AutoTokenizer.from_pretrained(self.weights_path, trust_remote_code=True)
             self.processor = None  # GPT-OSS doesn't use vision processor
 
+        self.disable_batched_prefill = True
         self.capped_warmup_seq_len = 2048
         self.trace_prefill_supported_seq_lens = self.get_trace_prefill_supported_seq_lens()
 
@@ -172,6 +173,14 @@ class ModelArgs:
 
         # TODO: If no specific sequence lengths are listed for a model and device, the default one will be used (from the default_supported_seq_lens dictionary)
         model_specific_supported_seq_lens = {
+            "gpt-oss-120b": {
+                "T3K": [128],
+                "TG": [128],
+            },
+            "gpt-oss-20b": {
+                "T3K": [128],
+                "TG": [128],
+            }
             # exmaple : #base_model_name : {device_name : [sequence_lengths]}
         }
 
