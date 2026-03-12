@@ -55,17 +55,23 @@ This places operations within the `ttnn` package for direct import as `from ttnn
 
 ### Entry Point Signature Convention
 
-**All operation inputs MUST be regular positional parameters.** Use `None` defaults for optional ones. Do NOT use `*,` to make inputs keyword-only.
+Follow the standard TTNN convention: **input tensors and core semantic parameters are positional**, **configuration parameters are keyword-only** (after `*,`).
+
+- **Positional**: input tensors, optional input tensors (with `=None` default), semantic params like `dim`, `k`
+- **Keyword-only** (after `*,`): `epsilon`, `memory_config`, `compute_kernel_config`, `dtype`, and similar config/infrastructure params
 
 ```python
-# CORRECT — all inputs are positional, optional ones have defaults:
-def my_op(input_tensor: ttnn.Tensor, gamma: ttnn.Tensor = None, beta: ttnn.Tensor = None, epsilon: float = 1e-5, memory_config=None) -> ttnn.Tensor:
+# CORRECT — tensor inputs positional, config keyword-only:
+def my_op(input_tensor: ttnn.Tensor, gamma: ttnn.Tensor = None, beta: ttnn.Tensor = None, *, epsilon: float = 1e-5, memory_config=None) -> ttnn.Tensor:
 
-# WRONG — do not make inputs keyword-only:
-def my_op(input_tensor: ttnn.Tensor, *, gamma: ttnn.Tensor = None, epsilon: float = 1e-5):
+# WRONG — do not make tensor inputs keyword-only:
+def my_op(input_tensor: ttnn.Tensor, *, gamma: ttnn.Tensor = None, beta: ttnn.Tensor = None):
 
-# WRONG — do not make optional inputs required:
+# WRONG — do not make optional tensor inputs required:
 def my_op(input_tensor: ttnn.Tensor, gamma: ttnn.Tensor, beta: ttnn.Tensor):
+
+# WRONG — do not make config params positional:
+def my_op(input_tensor: ttnn.Tensor, gamma: ttnn.Tensor = None, epsilon: float = 1e-5):
 ```
 
 ### Entry Point Pattern
@@ -414,7 +420,7 @@ def test_{op_name}_runs(device):
 
 ## Critical Rules
 
-1. **Function signature convention**: All operation inputs are positional parameters (`None` default if optional). Do not use `*,` to make any inputs keyword-only. This ensures callers can pass args positionally or by keyword.
+1. **Function signature convention**: Follow TTNN convention — input tensors and core semantic params (dim, k, etc.) are positional (`None` default if optional). Config params (epsilon, memory_config, compute_kernel_config) go after `*,` as keyword-only. See "Entry Point Signature Convention" above.
 
 2. **Test execution**: Always run tests using pytest. Never open devices manually; use the `device` fixture from conftest.
 
