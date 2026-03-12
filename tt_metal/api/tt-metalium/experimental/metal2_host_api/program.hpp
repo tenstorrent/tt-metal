@@ -1,3 +1,5 @@
+#if 0
+
 // Program object semantics
 //   - unique ownership
 //   - moveable, non-copyable
@@ -81,3 +83,4 @@ private:
     std::shared_ptr<detail::ProgramImpl> internal_;
 };
 
+#endif

@@ -1,3 +1,5 @@
+#if 0
+
 ////////////////////////////////////////////////////////////
 // Simple Program with multi-threaded kernels and local DFBs.
 
@@ -206,3 +208,4 @@ program.set_run_parameters(program_run_params);
 // Alternative, you can use more verbose APIs to construct
 // the runtime arguments vector in place. (TBD)
 
+#endif

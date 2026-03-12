@@ -1,7 +1,21 @@
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
 
-enum class DFBAccessPattern {STRIDED, BLOCKED, CONTIGUOUS}; // this appears twice, fix it
-typedef KernelID = uint_32;
-typedef KernelName = std::string;
+#pragma once
+
+#include <cstdint>
+#include <optional>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp> 
+
+namespace tt::tt_metal::experimental::metal2_host_api {
+
+typedef KernelSpecID = uint_32;
+typedef KernelSpecName = std::string;
 
 struct KernelSpec {
 
@@ -11,13 +25,12 @@ struct KernelSpec {
 
     // Kernel identifier
     // A handle used to reference this kernel within the ProgramSpec
-    std::variant<KernelID, KernelName> unique_id;
-    // (I intend to remove either the string or uint32_t option. Having both is annoying. Thoughts?)
+    std::variant<KernelSpecID, KernelSpecName> unique_id;
 
     // Kernel source
     std::string source;
     enum class SourceType { FILE_PATH, SOURCE_CODE };
-    SourceType  source_type = SourceType::FILE_PATH;
+    SourceType source_type = SourceType::FILE_PATH;
 
     // Target nodes
     // The set of device nodes on which the kernel will run
@@ -33,7 +46,6 @@ struct KernelSpec {
 
     ///////////////////////////////////////////////////////////////////
     // Kernel compiler options
-    // Passed to the kernel compiler at Program creation
     ///////////////////////////////////////////////////////////////////
     struct CompilerOptions {
         using IncludePaths = std::vector<std::string>;
@@ -49,70 +61,56 @@ struct KernelSpec {
 
 
     ///////////////////////////////////////////////////////////////////
-    // Resource bindings
-    // Bindings (unlike arguments) are immutable Program parameters
+    // Resource bindings (immutable Program parameters)
     //////////////////////////////////////////////////////////////////
-
-    // Compile time argument bindings
-    // CTAs are bound at Program creation; they cannot be changed between Program executions
-    using CompileTimeArgBindings = std::unordered_map<std::string, uint32_t>;
-    CompileTimeArgBindings compile_time_arg_bindings;
-        // TODO -- We want to permit arbitrary POD types, including user-defined structs.
-
 
     // DFB bindings
     enum class DFBEndpointType { PRODUCER, CONSUMER, RELAY };
     struct DFBBinding {
-        std::variant<DFBid, DFBName> dfb_id;  // identify the DFB within the ProgramSpec
-        std::string local_accessor_name;      // DFB accessor name (used in the kernel source code, via DFBAccessor)
-        DFBEndpointType endpoint_type;        // producer, consumer, or relay
-        DFBAccessPattern access_pattern;      // strided, blocked, or contiguous
+        std::variant<DFBSpecID, DFBSpecName> dfb_spec_id;  // identify the DFB within the ProgramSpec
+        std::string local_accessor_name;                   // DFB accessor name (used in the kernel source code)
+        DFBEndpointType endpoint_type;                     // producer, consumer, or relay
+        DFBAccessPattern access_pattern;                   // strided, blocked, or contiguous
     };
     std::vector<DFBBinding> dfb_bindings;
 
-
     // Semaphore bindings
     struct SemaphoreBinding {
-        std::variant<SemaphoreID, std::string> semaphore_id; // identify the semaphore within the ProgramSpec
-        std::string accessor_name;                           // semaphore accessor name (used in the kernel source code)
+        std::variant<SemaphoreSpecId, SemaphoreSpecName> semaphore_spec_id; // identify the semaphore within the ProgramSpec
+        std::string accessor_name;                                          // semaphore accessor name (used in the kernel source code)
     };
     std::vector<SemaphoreBinding> semaphore_bindings;
 
-
     // TODO -- GlobalSemaphore bindings
     // TODO -- GlobalDataflowBuffer bindings
-    // TODO -- Socket bindings (might replace GlobalDataflowBuffer?)
+    // TODO -- Socket bindings
 
+    // Compile time argument bindings (values cannot be changed between Program executions)
+    using CompileTimeArgBindings = std::unordered_map<std::string, uint32_t>;
+    CompileTimeArgBindings compile_time_arg_bindings;
+    // TODO -- extend to support arbitrary POD types, including user-defined structs.
+    
 
     //////////////////////////////////////////////////////////////////////////////
-    // Runtime argument schema
-    // RTAs and CTAs are declared here
-    // (Their values are set as program execution parameters)
+    // Runtime argument schema / declaration
     //////////////////////////////////////////////////////////////////////////////
 
-    // "Legacy" specification for runtime and common runtime arguments
-    // (No support for named or typed arguments; just a vector of uint32_t)
-    // Recall that "Spec" represents the immutable aspect of the Program -- 
-    // for legacy-style kernel arguments, only the number of RTAs and CRTAs are specified. 
-    // The argument VALUES are set as program execution parameters.
-    struct LegaryKernelArgumentsSpec {
+    // Schema for runtime and common runtime arguments
+    // (The VALUES of these arguments are set as ProgramRunParams.)
+    struct RuntimeArgSchema {
+        // Schema for named and typed RTAs + CRTAs
+        // (These must be fully specified in the kernel code.)
+        //   TODO
+
+        // Schema for unnamed/variable RTAs + CRTAs
+        // (Must be of uint32_t; can be treated as varargs in the kernel code)
         using NumRTAsPerNode = std::vector<std::pair<NodeCoord, size_t>>; // {node, num_rtas}
         NumRTAsPerNode num_runtime_args_per_node;
         size_t num_common_runtime_args
     };
-    LegacyKernelArgumentsSpec legacy_kernel_args_spec;
-    
-    // "New" specification for runtime and common runtime arguments
-    // Supports:
-    //   - named and typed arguments, including user-defined structs
-    //   - additional varargs
-    struct KernelArgumentsSpec {
-        // TODO
-    };
-    NewKernelArgumentsSpec new_kernel_args_spec;
+    RuntimeArgsSchema runtime_arguments_schema;
 
 };
-
 
 struct ComputeKernelSpec : public KernelSpec {
     // Everything in the base KernelSpec, plus:
@@ -137,7 +135,7 @@ struct ComputeKernelSpec : public KernelSpec {
         bool math_approx_mode = false;
 
         // "Unpack to dest" mode must be specified on a per-DFB basis
-        using UnpackToDestMode = std::pair<std::variant<DFBid, std::string>, UnpackToDestMode>; 
+        using UnpackToDestMode = std::pair<std::variant<DFBSpecId, DFBSpecName>, UnpackToDestMode>; 
         std::vector<UnpackToDestMode> unpack_to_dest_mode = {}; // empty vector means default mode
     };
     std::optional<Gen1TensixComputeConfig> gen1_tensix_compute_config = std::nullopt;
@@ -152,11 +150,10 @@ struct ComputeKernelSpec : public KernelSpec {
         bool math_approx_mode = false;
 
         // "Unpack to dest" mode must be specified on a per-DFB basis
-        using UnpackToDestMode = std::pair<std::variant<DFBid, std::string>, UnpackToDestMode>; 
+        using UnpackToDestMode = std::pair<std::variant<DFBSpecId, DFBSpecName>, UnpackToDestMode>; 
         std::vector<UnpackToDestMode> unpack_to_dest_mode = {}; // empty vector means default mode
     };
     std::optional<Gen2TensixComputeConfig> gen2_tensix_compute_config = std::nullopt;
-
 };
 
 struct DataMovementKernelSpec : public KernelSpec {
@@ -179,9 +176,12 @@ struct DataMovementKernelSpec : public KernelSpec {
     };
 
     struct Gen2DataMovementConfig {
+        bool is_dm = true; // placeholder so I don't have an empty struct
         // TODO
-        //   The user doesn't specify the DM processor; the runtime chooses.
+        //   The user doesn't specify the DM processor (the runtime chooses).
         //   There's only one NOC.
-        //   Is there anything in here?
+        //   Is there anything in here? It's possible we don't need this.
     };
 };
+
+}  // namespace tt::tt_metal::experimental::metal2_host_api

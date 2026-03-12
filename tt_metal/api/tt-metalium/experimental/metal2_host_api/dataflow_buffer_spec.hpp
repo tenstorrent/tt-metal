@@ -1,5 +1,20 @@
-typedef DFBid = uint_32;
-typedef DFBName = std::string;
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+#include <optional>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp> 
+
+namespace tt::tt_metal::experimental::metal2_host_api {
+
+typedef DFBSpecID = uint_32;
+typedef DFBSpecName = std::string;
 enum class DFBAccessPattern {STRIDED, BLOCKED, CONTIGUOUS};
 struct TileDescriptor;
 
@@ -8,7 +23,7 @@ struct DataflowBufferSpec {
 
     // DFB identifier
     // A handle used to reference this DFB within the ProgramSpec
-    std::variant<DFBid, DFBName> unique_id;  
+    std::variant<DFBSpecID, DFBSpecName> unique_id;  
     // (I intend to remove either the string or uint32_t option. Having both is annoying. Thoughts?)
 
     // Target nodes
@@ -85,3 +100,5 @@ struct TileDescriptor {
         return height == other.height && width == other.width && transpose == other.transpose;
     }
 };
+
+}  // namespace tt::tt_metal::experimental::metal2_host_api

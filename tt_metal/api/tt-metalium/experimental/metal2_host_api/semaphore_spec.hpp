@@ -1,11 +1,26 @@
-typedef Semaphoreid = uint_32;
-typedef SemaphoreName = std::string;
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include <cstdint>
+#include <optional>
+#include <variant>
+#include <vector>
+
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp> 
+
+namespace tt::tt_metal::experimental::metal2_host_api {
+
+typedef SemaphoreSpecId = uint_32;
+typedef SemaphoreSpecName = std::string;
 
 struct SemaphoreSpec { 
 
     // Semaphore identifier
     // A handle used to reference this Semaphore within the ProgramSpec
-    std::variant<Semaphoreid, SemaphoreName> unique_id;  
+    std::variant<SemaphoreSpecId, SemaphoreSpecName> unique_id;  
     // (I'm considering removing either the string or uint32_t option. Both is annoying. Thoughts?)
 
     // Target nodes
@@ -28,3 +43,5 @@ struct SemaphoreSpec {
     SemaphoreMemoryType memory_type = SemaphoreMemoryType::L1;
 
 };
+
+}  // namespace tt::tt_metal::experimental::metal2_host_api 
