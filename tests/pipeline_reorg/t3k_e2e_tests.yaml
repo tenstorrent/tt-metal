@@ -125,3 +125,23 @@
   owner_id: U08E1JCMAJF # Marko Bezulj
   team: shield
   model-name: deepseek_prefill
+
+- name: t3k_DeepSeek_SHARED_EXPERT_FFN
+  cmd: |
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_shared_expert.py -vvv
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ffn.py -vvv
+  skus:
+    wh_llmbox:
+      timeout: 10
+  owner_id: U08E1JCMAJF
+  team: shield
+  model-name: deepseek_prefill
+
+- name: t3k_DeepSeek_RMSNORM
+  cmd: pytest models/demos/deepseek_v3_d_p/tests/pcc/test_rmsnorm.py -vvv
+  skus:
+    wh_llmbox:
+      timeout: 5
+  owner_id: U08E1JCMAJF
+  team: shield
+  model-name: deepseek_prefill

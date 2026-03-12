@@ -21,6 +21,8 @@ from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     create_expert_dispatch_table,
     create_fabric_router_config,
     extract_mesh_config,
+    get_combine_output_mesh_composer,
+    get_dispatch_input_mesh_mapper,
     get_gate_outputs,
     initialize_predictable_test_inputs,
     initialize_test_inputs,
@@ -290,12 +292,8 @@ def test_ttnn_dispatch(
 
     logger.debug(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
 
-    # x and indices: replicated across EP ranks
-    mesh_mapper_replicated = ttnn.ShardTensor2dMesh(
-        mesh_device,
-        mesh_shape=mesh_device.shape,
-        dims=(sp_axis, None),
-    )
+    # x and indices: sharded across SP axis, replicated across EP ranks
+    mesh_mapper_replicated = get_dispatch_input_mesh_mapper(mesh_device, sp_axis)
 
     tt_x = ttnn.from_torch(
         x, mesh_mapper=mesh_mapper_replicated, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
@@ -377,12 +375,7 @@ def test_ttnn_dispatch(
     torch_dispatched, torch_metadata = torch_dispatch_module(x, weights, indices, expert_offsets)
 
     # Convert TTNN outputs to torch for comparison
-    mesh_composer = ttnn.create_mesh_composer(
-        mesh_device,
-        ttnn.MeshComposerConfig(
-            dims=[1, 0],  # Axis 0: shard on tensor dim 0; Axis 1: replicated
-        ),
-    )
+    mesh_composer = get_combine_output_mesh_composer(mesh_device)
     tt_out_dispatched = ttnn.to_torch(tt_dispatched, mesh_composer=mesh_composer, dtype=torch.float32)
     tt_out_metadata = ttnn.to_torch(tt_metadata, mesh_composer=mesh_composer)
 

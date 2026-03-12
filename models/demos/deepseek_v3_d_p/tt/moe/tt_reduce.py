@@ -65,15 +65,18 @@ class TtReduceModule(LightweightModule):
         # [seq_len, topk, hidden_dim] -> [seq_len, hidden_dim]
         summed = ttnn.sum(combine_output, dim=self.topk_dim)
 
-        # 2. Reduce-scatter across chips
+        # 2. Reduce-scatter across chips (only if multiple devices in cluster_axis)
         # Reduces (sums) data across chips and scatters unique portions
         # [seq_len, hidden_dim] -> [seq_len, hidden_dim / num_chips]
-        output = ttnn.reduce_scatter(
-            summed,
-            dim=-1,
-            cluster_axis=self.cluster_axis,
-            num_links=self.num_links,
-            topology=self.topology,
-        )
+        if self.mesh_device.shape[self.cluster_axis] > 1:
+            output = ttnn.reduce_scatter(
+                summed,
+                dim=-1,
+                cluster_axis=self.cluster_axis,
+                num_links=self.num_links,
+                topology=self.topology,
+            )
+        else:
+            output = summed  # No reduce-scatter needed if only 1 device in axis
 
         return output
