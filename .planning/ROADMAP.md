@@ -67,7 +67,7 @@ Plans:
 **Plans**: 3 plans
 
 Plans:
-- [ ] 04-01-PLAN.md — Create tx_kernel_common.h shared header and refactor all 8 FABRIC_2D kernels
+- [x] 04-01-PLAN.md — Create tx_kernel_common.h shared header and refactor all 8 FABRIC_2D kernels
 - [x] 04-02-PLAN.md — Move make_tx_pattern/verify_payload_words to test_common.hpp, de-duplicate 16 TEST_F bodies
 - [ ] 04-03-PLAN.md — Build + silicon test validation (hardware gate)
 
