@@ -94,13 +94,7 @@ public:
      * - Tensor Spec and Topology are deep copied.
      * - Underlying data has the copy semantics of the HostBuffer
      */
-    HostTensor& operator=(const HostTensor& other) {
-        if (this == &other) {
-            return *this;
-        }
-        impl = other.impl ? std::make_unique<HostTensorImpl>(*other.impl) : nullptr;
-        return *this;
-    }
+    HostTensor& operator=(const HostTensor& other);
 
     /**
      * Move constructor.
@@ -108,7 +102,7 @@ public:
      * Takes over properties of the other HostTensor.
      * The other HostTensor becomes a default-constructed HostTensor.
      */
-    HostTensor(HostTensor&& other) noexcept : impl(std::move(other.impl)) {}
+    HostTensor(HostTensor&& other) noexcept;
 
     /**
      * Move assignment operator.
@@ -116,13 +110,7 @@ public:
      * Takes over properties of the other HostTensor.
      * The other HostTensor becomes a default-constructed HostTensor.
      */
-    HostTensor& operator=(HostTensor&& other) noexcept {
-        if (this == &other) {
-            return *this;
-        }
-        impl = std::move(other.impl);
-        return *this;
-    }
+    HostTensor& operator=(HostTensor&& other) noexcept;
 
     // End special member functions
 
@@ -198,41 +186,27 @@ public:
 
     // Derivables:
 
-    DataType dtype() const { return tensor_spec().tensor_layout().get_data_type(); }
-    Layout layout() const { return tensor_spec().tensor_layout().get_layout(); }
-    const Shape& logical_shape() const { return tensor_spec().logical_shape(); }
-    const Shape& padded_shape() const { return tensor_spec().padded_shape(); }
+    DataType dtype() const;
+    Layout layout() const;
+    const Shape& logical_shape() const;
+    const Shape& padded_shape() const;
 
-    volume_type logical_volume() const { return logical_shape().volume(); }
-    volume_type physical_volume() const { return padded_shape().volume(); }
+    volume_type logical_volume() const;
+    volume_type physical_volume() const;
 
-    const MemoryConfig& memory_config() const { return tensor_spec().memory_config(); }
-    bool is_sharded() const { return tensor_spec().memory_config().is_sharded(); }
+    const MemoryConfig& memory_config() const;
+    bool is_sharded() const;
 
     // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
-    const std::optional<ShardSpec>& legacy_shard_spec() const { return memory_config().shard_spec(); }
-    const std::optional<NdShardSpec>& nd_shard_spec() const { return memory_config().nd_shard_spec(); }
+    const std::optional<ShardSpec>& legacy_shard_spec() const;
+    const std::optional<NdShardSpec>& nd_shard_spec() const;
 
     // Utils:
 
     // Get the dataum's size in bytes
-    std::size_t element_size() const {
-        // this might be better?
-        // return datum_size(datatype_to_dataformat_converter(dtype()));
-        switch (dtype()) {
-            case DataType::BFLOAT16: return sizeof(bfloat16);
-            case DataType::FLOAT32: return sizeof(float);
-            case DataType::INT32: return sizeof(int32_t);
-            case DataType::UINT32: return sizeof(uint32_t);
-            case DataType::UINT16: return sizeof(uint16_t);
-            case DataType::UINT8: return sizeof(uint8_t);
-            case DataType::BFLOAT8_B:
-            case DataType::BFLOAT4_B: return sizeof(std::byte);
-            default: TT_THROW("Unsupported data type");
-        }
-    }
+    std::size_t element_size() const;
 
-    Strides strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
+    Strides strides() const;
 
     // Questionables:
 

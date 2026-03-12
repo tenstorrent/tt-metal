@@ -7,7 +7,6 @@
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
-#include <tt-metalium/experimental/tensor/details/tensor_impl.hpp>
 
 #include <tt_stl/optional_reference.hpp>
 
@@ -107,7 +106,7 @@ public:
      *
      * pre-condition: The device tensor must not be in a default constructed state.
      */
-    bool is_allocated() const { return mesh_buffer().has_value(); }
+    bool is_allocated() const;
 
     /**
      * Return the underlying device storage MeshBuffer.
@@ -115,12 +114,7 @@ public:
      *
      * pre-condition: The device tensor must not be in a default constructed state.
      */
-    ttsl::optional_reference<distributed::MeshBuffer> mesh_buffer() const {
-        if (auto ptr = mesh_buffer_invariant_breaking()) {
-            return (*ptr);
-        }
-        return std::nullopt;
-    }
+    ttsl::optional_reference<distributed::MeshBuffer> mesh_buffer() const;
 
     /**
      * Wider API compatible mesh_buffer() that returns a shared ownership to the underlying storage.
@@ -139,12 +133,7 @@ public:
      *
      * pre-condition: The device tensor must not be in a default constructed state.
      */
-    ttsl::optional_reference<distributed::MeshDevice> get_device() const {
-        if (auto buffer = mesh_buffer()) {
-            return *buffer->device();
-        }
-        return std::nullopt;
-    }
+    ttsl::optional_reference<distributed::MeshDevice> get_device() const;
 
     // Getters:
 
@@ -163,20 +152,20 @@ public:
 
     // Derivables:
 
-    DataType dtype() const { return tensor_spec().data_type(); }
-    Layout layout() const { return tensor_spec().layout(); }
-    const Shape& logical_shape() const { return tensor_spec().logical_shape(); }
-    const Shape& padded_shape() const { return tensor_spec().padded_shape(); }
+    DataType dtype() const;
+    Layout layout() const;
+    const Shape& logical_shape() const;
+    const Shape& padded_shape() const;
 
-    volume_type logical_volume() const { return logical_shape().volume(); }
-    volume_type physical_volume() const { return padded_shape().volume(); }
+    volume_type logical_volume() const;
+    volume_type physical_volume() const;
 
-    const MemoryConfig& memory_config() const { return tensor_spec().memory_config(); }
-    bool is_sharded() const { return memory_config().is_sharded(); }
+    const MemoryConfig& memory_config() const;
+    bool is_sharded() const;
 
     // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
-    const std::optional<ShardSpec>& legacy_shard_spec() const { return memory_config().shard_spec(); }
-    const std::optional<NdShardSpec>& nd_shard_spec() const { return memory_config().nd_shard_spec(); }
+    const std::optional<ShardSpec>& legacy_shard_spec() const;
+    const std::optional<NdShardSpec>& nd_shard_spec() const;
 
     // Utils:
 
@@ -185,21 +174,9 @@ public:
      *
      * pre-condition: The device tensor must not be in a default constructed state.
      */
-    std::size_t element_size() const {
-        switch (dtype()) {
-            case DataType::BFLOAT16: return sizeof(bfloat16);
-            case DataType::FLOAT32: return sizeof(float);
-            case DataType::INT32: return sizeof(int32_t);
-            case DataType::UINT32: return sizeof(uint32_t);
-            case DataType::UINT16: return sizeof(uint16_t);
-            case DataType::UINT8: return sizeof(uint8_t);
-            case DataType::BFLOAT8_B:
-            case DataType::BFLOAT4_B: return sizeof(std::byte);
-            default: TT_THROW("Unsupported data type");
-        }
-    }
+    std::size_t element_size() const;
 
-    Strides strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
+    Strides strides() const;
 
     void update_tensor_topology(TensorTopology tensor_topology);
 
