@@ -207,7 +207,6 @@ def test_forward_pass(
 
     all_passed = True
     assert_msgs = []
-
     for device_id in range(mesh_device.shape[0] * mesh_device.shape[1]):
         # Convert output back to torch
         tt_topk_weights_torch = ttnn.to_torch(per_device_topk_weight[device_id])
@@ -254,6 +253,47 @@ def test_forward_pass(
             all_passed = False
             assert_msgs.append(
                 f"Device {device_id} (row={row}, col={col}): Weights PCC is {weights_pcc:.4f}, expected > 0.53"
+            )
+
+    # Compute reference dispatch offsets from tt_topk_indices (isolates bincount + cumsum logic)
+    n_sp_devices = mesh_device.shape[0]
+    n_tp_devices = mesh_device.shape[1]
+    n_routed_experts = config.n_routed_experts
+
+    ref_histograms = torch.zeros(n_sp_devices, n_routed_experts, dtype=torch.long)
+    for row in range(n_sp_devices):
+        device_id = row * n_tp_devices  # pick first column device for this row
+        tt_indices_torch = ttnn.to_torch(per_device_topk_indices[device_id]).flatten().long()
+        ref_histograms[row] = torch.bincount(tt_indices_torch, minlength=n_routed_experts)
+
+    ref_cumsum = torch.cumsum(ref_histograms, dim=0)
+    reference_offsets = torch.zeros(n_sp_devices + 1, n_routed_experts, dtype=torch.long)
+    reference_offsets[1:] = ref_cumsum
+
+    per_device_dispatch_offsets = ttnn.get_device_tensors(dispatch_offsets)
+    for device_id in range(len(per_device_dispatch_offsets)):
+        tt_offsets_torch = ttnn.to_torch(per_device_dispatch_offsets[device_id]).long()
+        row = device_id // n_tp_devices
+        col = device_id % n_tp_devices
+
+        offsets_match = torch.equal(tt_offsets_torch, reference_offsets)
+        status_char = "✅" if offsets_match else "❌"
+        if offsets_match:
+            logger.info(f"{status_char} Device {device_id} (row={row}, col={col}): Dispatch offsets match exactly")
+        else:
+            diff = (tt_offsets_torch - reference_offsets).abs()
+            max_diff = diff.max().item()
+            num_mismatches = (diff > 0).sum().item()
+            total_elements = diff.numel()
+            logger.info(
+                f"{status_char} Device {device_id} (row={row}, col={col}): "
+                f"Dispatch offsets MISMATCH - max_diff={max_diff}, "
+                f"mismatches={num_mismatches}/{total_elements}"
+            )
+            all_passed = False
+            assert_msgs.append(
+                f"Device {device_id} (row={row}, col={col}): "
+                f"Dispatch offsets mismatch (max_diff={max_diff}, mismatches={num_mismatches}/{total_elements})"
             )
 
     assert all_passed, "\n".join(assert_msgs)
