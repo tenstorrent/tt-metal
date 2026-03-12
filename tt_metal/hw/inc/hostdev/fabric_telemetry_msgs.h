@@ -16,7 +16,7 @@ enum class RouterState : uint32_t { INITIALIZING = 0, RUNNING = 1, PAUSED = 2, D
 
 enum class FabricArch : uint8_t { WORMHOLE_B0 = 0, BLACKHOLE = 1, QUASAR = 2, STATIC_ONLY = 3 };
 
-static constexpr uint32_t FABRIC_TELEMETRY_VERSION = 1;
+static constexpr uint32_t FABRIC_TELEMETRY_VERSION = 2;
 
 // TODO: this V2 needs to be deleted.
 //       Just for avoiding conflicts.
@@ -88,6 +88,7 @@ struct StaticInfo {
     uint32_t fabric_config;
     uint8_t num_sender_channels;
     uint8_t num_receiver_channels;
+    uint8_t reserved[2];  // padding for alignment
     ChannelConfig sender_channels[MAX_TELEMETRY_SENDER_CHANNELS];
     ChannelConfig receiver_channels[MAX_TELEMETRY_RECEIVER_CHANNELS];
 };

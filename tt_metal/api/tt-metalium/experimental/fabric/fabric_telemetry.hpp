@@ -10,6 +10,7 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <cstdint>
 #include <optional>
 
@@ -72,9 +73,9 @@ struct FabricTelemetryChannelConfig {
 };
 
 /** Maximum number of sender channels in static info (matches HAL MAX_TELEMETRY_SENDER_CHANNELS). */
-inline constexpr size_t MAX_TELEMETRY_SENDER_CHANNELS = 9;
+inline constexpr std::size_t MAX_TELEMETRY_SENDER_CHANNELS = 9;
 /** Maximum number of receiver channels in static info (matches HAL MAX_TELEMETRY_RECEIVER_CHANNELS). */
-inline constexpr size_t MAX_TELEMETRY_RECEIVER_CHANNELS = 2;
+inline constexpr std::size_t MAX_TELEMETRY_RECEIVER_CHANNELS = 2;
 
 /**
  * @brief Dynamic telemetry information that can be sampled from hardware.

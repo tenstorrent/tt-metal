@@ -56,13 +56,18 @@ tt::tt_fabric::FabricTelemetryStaticInfo unpack_static_info_from_hal(const Stati
     dst.version = src.version();
     dst.supported_stats = static_cast<tt::tt_fabric::FabricTelemetryStatisticMask>(src.supported_stats());
     dst.neighbor_device_id = src.neighbor_device_id();
-    dst.num_sender_channels = src.num_sender_channels();
-    dst.num_receiver_channels = src.num_receiver_channels();
+    auto sender_src = src.sender_channels();
+    dst.num_sender_channels =
+        static_cast<std::uint8_t>(std::min<size_t>(sender_src.size(), dst.sender_channels.size()));
     for (size_t i = 0; i < dst.num_sender_channels; ++i) {
-        dst.sender_channels[i] = detail::unpack_channel_config(src.sender_channels()[i]);
+        dst.sender_channels[i] = detail::unpack_channel_config(sender_src[i]);
     }
+
+    auto receiver_src = src.receiver_channels();
+    dst.num_receiver_channels =
+        static_cast<std::uint8_t>(std::min<size_t>(receiver_src.size(), dst.receiver_channels.size()));
     for (size_t i = 0; i < dst.num_receiver_channels; ++i) {
-        dst.receiver_channels[i] = detail::unpack_channel_config(src.receiver_channels()[i]);
+        dst.receiver_channels[i] = detail::unpack_channel_config(receiver_src[i]);
     }
     return dst;
 }

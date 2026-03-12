@@ -136,6 +136,7 @@ constexpr size_t worker_info_offset_past_connection_semaphore = 32;
 // This should be renamed to channel_slot_size_bytes to avoid confusion/ambiguity:
 //   "is it the payload size or does it include the packet header size?"
 constexpr size_t channel_buffer_size = NAMED_CT_ARG("CHANNEL_BUFFER_SIZE");
+static_assert(channel_buffer_size <= UINT16_MAX, "channel_buffer_size exceeds uint16_t telemetry field");
 constexpr bool fabric_tensix_extension_mux_mode = NAMED_CT_ARG("FABRIC_TENSIX_EXTENSION_MUX_MODE");
 constexpr bool skip_src_ch_id_update = fabric_tensix_extension_mux_mode;
 
