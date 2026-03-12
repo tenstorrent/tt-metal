@@ -1,10 +1,11 @@
 ---
 phase: 3
 slug: api-detail-namespace
-status: draft
+status: partial
 nyquist_compliant: false
-wave_0_complete: false
+wave_0_complete: true
 created: 2026-03-12
+updated: 2026-03-12
 ---
 
 # Phase 3 — Validation Strategy
@@ -38,11 +39,11 @@ created: 2026-03-12
 
 | Task ID | Plan | Wave | Requirement | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|-----------|-------------------|-------------|--------|
-| 3-01-01 | 01 | 1 | API-04 | compile | `--gtest_filter=*CompileOnly*` | ✅ | ⬜ pending |
-| 3-01-02 | 01 | 1 | API-04 | structural | file existence check | ✅ | ⬜ pending |
-| 3-02-01 | 02 | 1 | API-04 | compile | `--gtest_filter=*CompileOnly*` | ✅ | ⬜ pending |
-| 3-02-02 | 02 | 1 | API-04 | structural | file existence check | ✅ | ⬜ pending |
-| 3-03-01 | 03 | 2 | API-04 | silicon | `--gtest_filter=*AutoPacketization*` | ✅ | ⬜ pending |
+| 3-01-01 | 01 | 1 | API-04 | compile | `--gtest_filter=*CompileOnly*` | ✅ | ✅ green (1 PASSED 1532ms) |
+| 3-01-02 | 01 | 1 | API-04 | structural | file existence check | ✅ | ✅ green (8 families, 16 defs, all detail::) |
+| 3-02-01 | 02 | 1 | API-04 | compile | `--gtest_filter=*CompileOnly*` | ✅ | ✅ green (1 PASSED 1572ms) |
+| 3-02-02 | 02 | 1 | API-04 | structural | file existence check | ✅ | ✅ green (9 families, 18 defs, all detail::) |
+| 3-03-01 | 03 | 2 | API-04 | silicon | `--gtest_filter=*AutoPacketization*` | ✅ | ⬜ pending (awaiting silicon checkpoint) |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 
@@ -56,19 +57,26 @@ created: 2026-03-12
 
 ## Manual-Only Verifications
 
-| Behavior | Requirement | Why Manual | Test Instructions |
-|----------|-------------|------------|-------------------|
-| No downstream callers outside auto_packetization break | API-04 | Grep-based audit — not easily automated | `grep -r "_single_packet" tt_metal/ --include="*.cpp" --include="*.hpp" --include="*.h" \| grep -v "detail/"` to find direct callers |
+| Behavior | Requirement | Why Manual | Test Instructions | Status |
+|----------|-------------|------------|-------------------|--------|
+| No downstream callers outside auto_packetization break | API-04 | Grep-based audit — not easily automated | `grep -r "_single_packet" tt_metal/ --include="*.cpp" --include="*.hpp" --include="*.h" \| grep -v "detail/"` to find direct callers | ✅ Completed 2026-03-12 — 0 bare callers found (03-03 Task 1) |
 
 ---
 
 ## Validation Sign-Off
 
-- [ ] All tasks have `<automated>` verify or Wave 0 dependencies
-- [ ] Sampling continuity: no 3 consecutive tasks without automated verify
-- [ ] Wave 0 covers all MISSING references
-- [ ] No watch-mode flags
-- [ ] Feedback latency < 30s
-- [ ] `nyquist_compliant: true` set in frontmatter
+- [x] All tasks have `<automated>` verify or Wave 0 dependencies
+- [x] Sampling continuity: no 3 consecutive tasks without automated verify
+- [x] Wave 0 covers all MISSING references
+- [x] No watch-mode flags
+- [x] Feedback latency < 30s
+- [ ] `nyquist_compliant: true` set in frontmatter — pending 3-03-01 silicon gate
 
-**Approval:** pending
+**Approval:** partial — 4/5 tasks green; awaiting silicon test checkpoint (3-03-01)
+
+## Validation Audit 2026-03-12
+| Metric | Count |
+|--------|-------|
+| Gaps found | 0 |
+| Resolved | 4 |
+| Escalated (manual-only) | 1 (3-03-01 — hardware gated) |
