@@ -469,10 +469,9 @@ def test_grid_sample_batch_output_channels_flag(
 
     grid_tensor = torch.rand(batch_size, grid_h, grid_w, 2, dtype=torch.float32) * 2.0 - 1.0
 
-    torch_output_nchw = F.grid_sample(
-        torch_input_nchw, grid_tensor, mode="bilinear", padding_mode="zeros", align_corners=False
+    torch_output_nhwc = golden_grid_sample(
+        torch_input_nhwc, grid_tensor, mode="bilinear", padding_mode="zeros", align_corners=False
     )
-    torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch.bfloat16)
 
     ttnn_input = ttnn.from_torch(
         torch_input_nhwc, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
@@ -794,10 +793,9 @@ def test_grid_sample_oft(
         signpost(header=f"Starting OFT grid_sample with {num_slices} slices and input shape {input_shape}")
 
     for slice_idx in range(num_slices):
-        torch_output_nchw = F.grid_sample(
-            torch_input_nchw, torch_grid_slices[slice_idx], mode="nearest", padding_mode="zeros", align_corners=True
+        torch_output_nhwc = golden_grid_sample(
+            torch_input_nhwc, torch_grid_slices[slice_idx], mode="nearest", padding_mode="zeros", align_corners=True
         )
-        torch_output_nhwc = torch_output_nchw.permute(0, 2, 3, 1).to(torch_io_dtype)
 
         ttnn_grid_device = ttnn_grid_device_slices[slice_idx]
         ttnn_grid_device = ttnn.to_memory_config(ttnn_grid_device, ttnn.DRAM_MEMORY_CONFIG)

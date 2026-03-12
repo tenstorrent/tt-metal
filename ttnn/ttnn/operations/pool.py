@@ -280,6 +280,7 @@ def golden_grid_sample(
     mode: str = "bilinear",
     padding_mode: str = "zeros",
     align_corners: bool = False,
+    batch_output_channels: bool = False,
     **_,
 ):
     """
@@ -287,23 +288,44 @@ def golden_grid_sample(
 
     Args:
         input_tensor: Input tensor in (N, H_in, W_in, C) format
-        grid: Grid tensor in (N, H_out, W_out, 2) format
+        grid: Grid tensor in (N, H_out, W_out, 2*K) format where K is the grid batching factor.
+              When K=1, this is the standard (N, H_out, W_out, 2) grid.
+              When K>1, K coordinate sets are packed into the last dimension.
         mode: Interpolation mode ("bilinear" or "nearest")
         padding_mode: Padding mode ("zeros", "border", or "reflection")
         align_corners: Whether to align corners
+        batch_output_channels: Controls how grid batching factor K affects output dimensions.
+            When False (default): extend W dimension - output shape (N, H_out, W_out*K, C).
+            When True: batch output channels - output shape (N, H_out, W_out, C*K).
 
     Returns:
-        Output tensor in (N, H_out, W_out, C) format
+        Output tensor in (N, H_out, W_out*K, C) if batch_output_channels=False,
+        or (N, H_out, W_out, C*K) if batch_output_channels=True.
     """
     import torch
+    from tests.ttnn.nightly.unit_tests.operations.pool.test_grid_sample import prepare_grid_batching_expected_output
+
+    N, H_grid, W_grid, last_dim = grid.shape
+    K = last_dim // 2
 
     input_nchw = input_tensor.permute(0, 3, 1, 2)
+    C = input_nchw.shape[1]
+
+    # Unpack K coordinate sets from last dim into the W dimension: (N, H_grid, W_grid, 2*K) -> (N, H_grid, W_grid*K, 2)
+    grid_unpacked = grid.reshape(N, H_grid, W_grid * K, 2)
 
     output_nchw = torch.nn.functional.grid_sample(
-        input_nchw.float(), grid.float(), mode=mode, padding_mode=padding_mode, align_corners=align_corners
+        input_nchw.float(), grid_unpacked.float(), mode=mode, padding_mode=padding_mode, align_corners=align_corners
     )
 
-    return output_nchw.permute(0, 2, 3, 1).to(input_tensor.dtype)
+    # Convert to NHWC: (N, C, H_grid, W_grid*K) -> (N, H_grid, W_grid*K, C)
+    output_nhwc = output_nchw.permute(0, 2, 3, 1).to(input_tensor.dtype)
+
+    expected_shape, output_nhwc = prepare_grid_batching_expected_output(
+        output_nhwc, N, H_grid, W_grid, C, K, batch_output_channels
+    )
+
+    return output_nhwc.reshape(expected_shape)
 
 
 ttnn.attach_golden_function(ttnn.grid_sample, golden_grid_sample)
