@@ -1,7 +1,4 @@
 #!/bin/bash
-#SBATCH --partition=bh_pod_4x32_C12
-#SBATCH --nodes=4
-#SBATCH --nodelist=bh-glx-c01u02,bh-glx-c02u02,bh-glx-c02u08,bh-glx-c01u08
 #SBATCH --job-name=pipeline_parallel_training_batch_1
 #SBATCH --output=pipeline_parallel_training_%j.out
 #SBATCH --error=pipeline_parallel_training_%j.err

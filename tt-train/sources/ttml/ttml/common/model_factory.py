@@ -61,6 +61,8 @@ class TransformerModelFactory:
 
         if "multihost_config" in tc:
             self.multihost_config = MultiHostConfig(load_config(tc["multihost_config"]))
+        else:
+            self.multihost_config = MultiHostConfig({})
         self.model_type = self.transformer_config.model_type
 
     def _create_gpt2(self):
