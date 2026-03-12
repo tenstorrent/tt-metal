@@ -26,9 +26,6 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_module_forward,
 )
 
-REAL_MOE_MODULE_PATH = "model.layers.3.mlp"
-
-
 @pytest.fixture
 def reference_model(hf_config):
     """Build the routed-experts-only MoE reference used by the TT MoE test."""
