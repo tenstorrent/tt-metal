@@ -1571,6 +1571,71 @@ jobs:
         shell: bash
 EOF
 
+# --- Check 50: env.* context interpolation in run blocks ---
+
+assert_detects "check 50 flags env interpolation in run block" "50" "Contains \${{ env.* }} directly in run: block" <<'EOF'
+name: test
+on: push
+env:
+  MY_VAR: malicious
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dynamic env
+        run: echo "${{ env.MY_VAR }}"
+EOF
+
+assert_clean "check 50 accepts env var mapped to shell var" "50" <<'EOF'
+name: test
+on: push
+env:
+  MY_VAR: malicious
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Safe env
+        run: echo "$MY_VAR"
+EOF
+
+# --- Check 51: github.ref/github.ref_name interpolation in run blocks ---
+
+assert_detects "check 51 flags github.ref_name interpolation in run block" "51" "Contains github.ref or github.ref_name interpolation directly in run: block" <<'EOF'
+name: test
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dynamic ref
+        run: echo "${{ github.ref_name }}"
+EOF
+
+assert_detects "check 51 flags github.ref interpolation in run block" "51" "Contains github.ref or github.ref_name interpolation directly in run: block" <<'EOF'
+name: test
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Dynamic ref
+        run: echo "${{ github.ref }}"
+EOF
+
+assert_clean "check 51 accepts github.ref_name via env block" "51" <<'EOF'
+name: test
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Safe ref
+        env:
+          REF_NAME: ${{ github.ref_name }}
+        run: echo "$REF_NAME"
+EOF
+
 echo ""
 echo "Results: $passed passed, $failed failed"
 

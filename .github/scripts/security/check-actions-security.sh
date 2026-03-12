@@ -20,10 +20,10 @@ SKIP_AGGREGATE=false
 FORMAT_RESULTS_FILE=""
 ISSUES_FOUND=0
 CHECKS_TO_RUN=()
-CURRENT_CHECK=""
-MAX_CHECK_NUM=49
+    CURRENT_CHECK=""
+    MAX_CHECK_NUM=51
 
-RED='\033[0;31m'
+    RED='\033[0;31m'
 YELLOW='\033[1;33m'
 GREEN='\033[0;32m'
 CYAN='\033[0;36m'
@@ -99,6 +99,8 @@ Checks:
  47  Additional attacker-controlled event contexts (HIGH)
  48  Export statements with direct interpolation (HIGH)
  49  Dynamic 'shell:' property expressions (MEDIUM)
+ 50  env.* context interpolation in run blocks (HIGH)
+ 51  github.ref/github.ref_name interpolation in run blocks (HIGH)
 EOF
     exit 0
 }
@@ -2278,6 +2280,70 @@ check_49() {
     if [[ -n "$unsafe_usage" ]]; then
         log_issue "MEDIUM" "$file" "'shell:' property contains expression interpolation - can execute arbitrary shell commands"
         return 1
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 50: env.* context interpolation in run blocks
+# =============================================================================
+check_50_description="env.* context interpolation in run blocks"
+check_50_severity="HIGH"
+
+example_check_50() {
+    cat <<'EOF'
+# BEFORE (unsafe - env variable is macro-expanded into shell code before execution):
+  run: echo "${{ env.MY_VAR }}"
+# AFTER (safe - reference as shell variable):
+  run: echo "$MY_VAR"
+EOF
+}
+
+check_50() {
+    local file="$1"
+    if grep -qE '\$\{\{.*env\.' "$file" 2>/dev/null; then
+        local unsafe_usage
+        unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*env\./ { print; next }
+            in_run_block && /\$\{\{.*env\./ { print }
+        ' "$file" 2>/dev/null)
+        if [[ -n "$unsafe_usage" ]]; then
+            log_issue "HIGH" "$file" "Contains \${{ env.* }} directly in run: block - use shell variable like \$ENV_VAR instead to prevent injection"
+            return 1
+        fi
+    fi
+    return 0
+}
+
+# =============================================================================
+# Check 51: github.ref/github.ref_name interpolation in run blocks
+# =============================================================================
+check_51_description="github.ref/github.ref_name interpolation in run blocks"
+check_51_severity="HIGH"
+
+example_check_51() {
+    cat <<'EOF'
+# BEFORE (unsafe - tag or branch name can contain shell metacharacters):
+  run: echo "Ref: ${{ github.ref_name }}"
+# AFTER (safe - shell variable is not re-parsed):
+  env:
+    REF_NAME: ${{ github.ref_name }}
+  run: echo "Ref: $REF_NAME"
+EOF
+}
+
+check_51() {
+    local file="$1"
+    if grep -qE '\$\{\{.*github\.(ref|ref_name)([^a-zA-Z0-9_]|$)' "$file" 2>/dev/null; then
+        local unsafe_usage
+        unsafe_usage=$(awk "$AWK_RUN_BLOCK_DETECT"'
+            /^[[:space:]]*(-[[:space:]]+)?run:/ && /\$\{\{.*github\.(ref|ref_name)([^a-zA-Z0-9_]|$)/ { print; next }
+            in_run_block && /\$\{\{.*github\.(ref|ref_name)([^a-zA-Z0-9_]|$)/ { print }
+        ' "$file" 2>/dev/null)
+        if [[ -n "$unsafe_usage" ]]; then
+            log_issue "HIGH" "$file" "Contains github.ref or github.ref_name interpolation directly in run: block - use env var instead"
+            return 1
+        fi
     fi
     return 0
 }
