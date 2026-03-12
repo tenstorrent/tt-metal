@@ -51,6 +51,13 @@ ALWI void unary_bcast_init(uint32_t icb, uint32_t ocb, uint32_t call_line = __bu
     }
     MATH((llk_math_pack_sync_init<DST_ACCUM_MODE>()));
     MATH((llk_math_hw_configure<DST_ACCUM_MODE>(icb, icb)));
+
+    // llk_math_hw_configure may re-enable the debug feature (clear bit 11 of
+    // RISCV_DEBUG_REG_DBG_FEATURE_DISABLE). The 32-bit D2B/B2D broadcast path
+    // in unary_bcast requires bit 11 set for correct hi/lo 16-bit splitting.
+    if (enable_unpack_to_dest) {
+        MATH((_llk_math_dbg_feature_disable_()));
+    }
 #endif
 
     PACK((llk_pack_hw_configure<DST_ACCUM_MODE>(ocb)));
