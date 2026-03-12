@@ -39,7 +39,7 @@ void BatchNormOperation::validate_tensors(
 
     check_tensor_BN(input, "input_shape", C);
     check_tensor_BN(batch_mean, "batch_mean_shape", C);
-    check_tensor_BN(batch_var, "batch_mean_shape", C);
+    check_tensor_BN(batch_var, "batch_var_shape", C);
 
     // output (N, C, H, W)
     if (output.has_value()) {
