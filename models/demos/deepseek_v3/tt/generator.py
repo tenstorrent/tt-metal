@@ -295,18 +295,22 @@ class DeepseekGenerator(WarmupForwardMixin):
 
     def _prepare_weight_configs(self, cache_dir: str | Path | None) -> None:
         weight_cache_base = Path(cache_dir) if cache_dir is not None else Path("generated/deepseek_v3")
-        weight_cache_root = weight_cache_base / ("mtp_on" if self.enable_mtp else "mtp_off")
-        weight_cache_root.mkdir(parents=True, exist_ok=True)
+        weight_cache_base.mkdir(parents=True, exist_ok=True)
+
+        cache_subdir_name = f"{self.hf_config.num_hidden_layers}_layers"
+        if self.enable_mtp:
+            cache_subdir_name = f"{cache_subdir_name}_mtp"
 
         self.model_weight_config = get_weight_config(
             ModuleClass=RowBatchedModel,
             hf_config=self.hf_config,
-            weight_cache_path=weight_cache_root,
+            weight_cache_path=weight_cache_base,
             mesh_device=self.mesh_device,
             force_recalculate=self.force_recalculate,
             random_weights=self.random_weights,
             model_path=self.model_path,
             single_layer=self.single_layer,
+            cache_subdir_name=cache_subdir_name,
         )
 
     def _assert_mtp_available(self) -> None:
@@ -1165,8 +1169,12 @@ class DeepseekGenerator(WarmupForwardMixin):
                         )
                         assert prefill_logits is not None
                         if self.sample_on_device:
-                            prefill_logits = self._slice_last_token_logits(prefill_logits, prompt_len, expand_to_batch=True)
-                            prefill_logits_sampled_device = self._sample_tokens_device(prefill_logits, user_slots=[user_id])
+                            prefill_logits = self._slice_last_token_logits(
+                                prefill_logits, prompt_len, expand_to_batch=True
+                            )
+                            prefill_logits_sampled_device = self._sample_tokens_device(
+                                prefill_logits, user_slots=[user_id]
+                            )
                             prefill_logits_sampled_host = self._tokens_from_device(
                                 prefill_logits_sampled_device, self.mesh_device, batch_size_per_row=1
                             )
