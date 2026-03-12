@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <tt_stl/assert.hpp>
+#include <variant>
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_attributes.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
@@ -13,7 +15,12 @@ TensorAttributes::TensorAttributes(Storage storage, TensorSpec tensor_spec, Tens
 
 const Storage& TensorAttributes::get_storage() const { return storage_; }
 Storage& TensorAttributes::get_storage() { return storage_; }
-const TensorSpec& TensorAttributes::get_tensor_spec() const { return tensor_spec_; }
+const TensorSpec& TensorAttributes::get_tensor_spec() const {
+    const auto* device_storage = std::get_if<DeviceStorage>(&storage_);
+    TT_FATAL(device_storage->is_allocated(), "Boom!");
+    return tensor_spec_;
+}
+
 const TensorTopology& TensorAttributes::get_tensor_topology() const { return tensor_topology_; }
 
 TensorAttributes TensorAttributes::with_tensor_topology(TensorTopology tensor_topology) const {
