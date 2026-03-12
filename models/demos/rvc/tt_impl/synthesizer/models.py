@@ -43,8 +43,6 @@ def _interpolate_1d(
     if mode not in ("nearest", "linear"):
         raise ValueError(f"Unsupported 1D interpolate mode: {mode}")
     upsample_mode = "nearest" if mode == "nearest" else "bilinear"
-
-    x = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
     x_nhwc = ttnn.reshape(x, (x.shape[0], 1, x.shape[1], 1))
     y_nhwc = ttnn.upsample(
         x_nhwc,
@@ -54,7 +52,7 @@ def _interpolate_1d(
         compute_kernel_config=compute_kernel_config,
     )
     y = ttnn.reshape(y_nhwc, (y_nhwc.shape[0], y_nhwc.shape[2], y_nhwc.shape[3]))
-    return ttnn.to_layout(y, ttnn.ROW_MAJOR_LAYOUT)
+    return y
 
 
 def _flip_last_dim(x: ttnn.Tensor) -> ttnn.Tensor:
@@ -405,6 +403,8 @@ class SourceModuleHnNSF:
     def __call__(self, x: ttnn.Tensor, upp: int = 1) -> ttnn.Tensor:
         sine_wavs = self.l_sin_gen(x, upp)
         tt_linear = self.l_linear(sine_wavs)
+        # this is needed since last dim is 1, padding due to tile layout would cause huge unnecessary memory usage
+        tt_linear = ttnn.to_layout(tt_linear, ttnn.ROW_MAJOR_LAYOUT)
         return tt_linear
 
 
@@ -510,7 +510,6 @@ class GeneratorNSF:
 
     def __call__(self, x: ttnn.Tensor, f0: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         har_source_tt = self.m_source(f0, self.upp)
-        har_source_tt = ttnn.to_layout(har_source_tt, ttnn.ROW_MAJOR_LAYOUT)
         x = self.conv_pre(x)
         if g is not None:
             x = ttnn.add(x, self.cond_linear(g), output_tensor=x)
