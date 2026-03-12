@@ -1,0 +1,8 @@
+﻿ttnn.manage\_device
+===================
+
+.. currentmodule:: ttnn
+
+.. _ttnn.manage_device:
+
+.. autofunction:: ttnn.manage_device
