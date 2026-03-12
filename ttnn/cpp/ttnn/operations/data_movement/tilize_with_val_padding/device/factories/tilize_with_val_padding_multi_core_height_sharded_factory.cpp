@@ -86,8 +86,12 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
     TT_FATAL(input.shard_spec().has_value(), "Input must have legacy shard_spec");
     TT_FATAL(output.shard_spec().has_value(), "Output must have legacy shard_spec");
 
-    TT_FATAL(!input.nd_shard_spec().has_value(), "ND sharded input is not supported by this factory");
-    TT_FATAL(!output.memory_config().nd_shard_spec().has_value(), "ND sharded output is not supported by this factory");
+    TT_FATAL(
+        !input.memory_config().created_with_nd_shard_spec(),
+        "Input created with ND shard spec is not supported by this factory");
+    TT_FATAL(
+        !output.memory_config().created_with_nd_shard_spec(),
+        "Output created with ND shard spec is not supported by this factory");
 
     auto pad_value = operation_attributes.pad_value;
 

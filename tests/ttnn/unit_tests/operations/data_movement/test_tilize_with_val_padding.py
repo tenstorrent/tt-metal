@@ -13,7 +13,6 @@ import ttnn
 from tests.ttnn.utils_for_testing import assert_equal
 
 torch.manual_seed(0)
-
 params = [
     pytest.param(
         [[1, 1, 50, 50]],
@@ -68,9 +67,8 @@ params += [
         },
     )
 ]
-
 # HEIGHT_SHARDED multicore tests
-params = [
+params += [
     pytest.param(
         [[1, 1, 96, 64]],
         {
@@ -99,7 +97,6 @@ params = [
         id="height_sharded_multicore_pad_height_4cores",
     )
 ]
-
 params += [
     pytest.param(
         [[2, 1, 64, 30]],
