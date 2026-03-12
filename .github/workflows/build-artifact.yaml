@@ -544,7 +544,7 @@ jobs:
       - name: 'Tar files'
         if: ${{ inputs.publish-artifact }}
         run: |
-          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples build/test build/tools runtime"
+          ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples build/test build/tools runtime tt_metal/pre-compiled"
           if [[ "${{ inputs.skip-tt-train }}" != "true" ]]; then
             ARTIFACT_PATHS="$ARTIFACT_PATHS build/tt-train data"
           fi
