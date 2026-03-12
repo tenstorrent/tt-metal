@@ -92,19 +92,19 @@ def test_synthesizer_trn_ms_nsf(device):
     tt_pitch = ttnn.from_torch(
         torch_pitch,
         dtype=ttnn.uint32,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
     )
     tt_nsff0 = ttnn.from_torch(
         torch_nsff0.to(torch.bfloat16),
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
     )
     tt_speaker_id = ttnn.from_torch(
         torch_speaker_id,
         dtype=ttnn.uint32,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
     )
 

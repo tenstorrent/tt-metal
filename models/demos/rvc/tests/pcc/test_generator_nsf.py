@@ -70,7 +70,7 @@ def test_generator_nsf(device):
     tt_f0 = ttnn.from_torch(
         torch_f0.to(torch.bfloat16),
         dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
     )
     tt_g = ttnn.from_torch(
