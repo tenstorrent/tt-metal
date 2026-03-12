@@ -68,7 +68,7 @@ def test_prod(device, input_shape, dim, keepdim, dtype):
     torch.manual_seed(0)
 
     rank = len(input_shape)
-    if dim is not None and ((dim < -rank) or (dim > rank - 1) or (rank == 0 and dim in [0, -1])):
+    if dim is not None and ((dim < -rank) or (dim > rank - 1) or (rank == 0 and dim not in [0, -1])):
         pytest.skip("Dimension not applicable for input shape")
 
     torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
