@@ -60,16 +60,16 @@ jobs:
             test-type: fast-viommu
           - name: cpp fast unit tests (eth, single erisc)
             cmd: |
-              run_with_backtrace_timeout './build/test/tt_metal/unit_tests_eth'
-              run_with_backtrace_timeout 'TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_eth'
-              run_with_backtrace_timeout 'TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="Fabric1D*Fixture.*"'
-              run_with_backtrace_timeout 'TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_eth'
-              run_with_backtrace_timeout 'TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=DPrintMeshFixture.ActiveEthTestPrint'
-              run_with_backtrace_timeout 'TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TensixTestWatcherPause'
-              run_with_backtrace_timeout 'TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TestWatcherAssert'
-              run_with_backtrace_timeout 'TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth'
-              run_with_backtrace_timeout 'TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramFixture.ActiveEthTestPrograms'
-              run_with_backtrace_timeout 'TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace'
+              python3 .github/scripts/run_with_backtrace_timeout.py ./build/test/tt_metal/unit_tests_eth
+              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_SLOW_DISPATCH_MODE=true ./build/test/tt_metal/unit_tests_eth
+              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_DISABLE_MULTI_AERISC=1 ./build/test/tt_metal/tt_fabric/fabric_unit_tests '--gtest_filter=Fabric1D*Fixture.*'
+              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_eth
+              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=DPrintMeshFixture.ActiveEthTestPrint
+              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TensixTestWatcherPause
+              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=WatcherAssertTest.TestWatcherAssert
+              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_debug_tools --gtest_filter=MeshWatcherFixture.ActiveEthTestWatcherSanitizeEth
+              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramFixture.ActiveEthTestPrograms
+              python3 .github/scripts/run_with_backtrace_timeout.py TT_METAL_DISABLE_MULTI_AERISC=1 build/test/tt_metal/unit_tests_dispatch --gtest_filter=UnitMeshRandomProgramTraceFixture.ActiveEthTestProgramsTrace
             timeout: 15
             test-type: fast
           - name: ttnn ops fast unit tests (ccl, DRAM prefetcher)
@@ -195,28 +195,6 @@ jobs:
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
-          run_with_backtrace_timeout() {
-            local cmd="$1"
-            local timeout_secs=120
-            eval "$cmd" &
-            local test_pid=$!
-            (
-              sleep $timeout_secs
-              if kill -0 $test_pid 2>/dev/null; then
-                echo "::error::TIMEOUT after ${timeout_secs}s, dumping backtrace: $cmd"
-                gdb -batch -ex "thread apply all bt full" -p $test_pid 2>&1 || true
-                kill -ABRT $test_pid 2>/dev/null || true
-                sleep 5
-                kill -9 $test_pid 2>/dev/null || true
-              fi
-            ) &
-            local watchdog_pid=$!
-            local rc=0
-            wait $test_pid || rc=$?
-            kill $watchdog_pid 2>/dev/null || true
-            wait $watchdog_pid 2>/dev/null || true
-            return $rc
-          }
           ${{ matrix.test-group.cmd }}
       - name: Check latency/BW results
         id: check-data
