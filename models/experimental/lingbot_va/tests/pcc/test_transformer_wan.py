@@ -5,6 +5,9 @@
 PCC tests for Lingbot-VA WanTransformer3DModel (video and action path).
 
 Compares TT model (lingbot_va.tt) vs reference. Uses (1,1) submesh; loads from cache or mmap to avoid OOM.
+
+Demo-like test cases use the same input shapes as inference_ttnn.py / inference_torch.py
+(va_robotwin_cfg: frame_chunk_size=2, latent 24x20, action 2x16, prompt_seq_len=512).
 """
 
 import gc
@@ -51,6 +54,13 @@ ROPE_MAX_SEQ_LEN = 1024
 
 TT_METAL_HOME = os.environ.get("TT_METAL_HOME", _tt_metal_root)
 LINGBOT_VA_CHECKPOINT = Path(TT_METAL_HOME) / "models/experimental/lingbot_va/reference/checkpoints/transformer"
+
+# Demo (va_robotwin_cfg): same shapes as inference_ttnn.py / inference_torch.py
+DEMO_FRAME_CHUNK = 2
+DEMO_LATENT_H = 24
+DEMO_LATENT_W = 20
+DEMO_PROMPT_SEQ_LEN = 512
+DEMO_ACTION_PER_FRAME = 16
 
 
 def _make_parallel_config(mesh_device, sp_axis, tp_axis):
@@ -148,7 +158,15 @@ def _make_action_grid_id(
 @pytest.mark.parametrize(
     ("B", "T", "H", "W", "prompt_seq_len"),
     [
-        pytest.param(1, 8, 24, 24, 77, id="lingbot_va_short"),
+        # pytest.param(1, 8, 24, 24, 77, id="lingbot_va_short"),
+        pytest.param(
+            1,
+            DEMO_FRAME_CHUNK,
+            DEMO_LATENT_H,
+            DEMO_LATENT_W,
+            DEMO_PROMPT_SEQ_LEN,
+            id="demo_robotwin",
+        ),
     ],
 )
 def test_wan_transformer_model(
@@ -277,6 +295,7 @@ F_ACTION = 8
 
 
 # Action path: (1,1) submesh; cache or mmap load.
+# Demo uses F_action=frame_chunk_size=2, action_per_frame=16, prompt_seq_len=512.
 @pytest.mark.parametrize(
     ("mesh_device", "submesh_shape", "sp_axis", "tp_axis", "num_links", "device_params", "topology", "is_fsdp"),
     [
@@ -287,7 +306,14 @@ F_ACTION = 8
 @pytest.mark.parametrize(
     ("B", "F_action", "action_per_frame", "prompt_seq_len"),
     [
-        pytest.param(1, F_ACTION, ACTION_PER_FRAME, 77, id="lingbot_va_action_short"),
+        # pytest.param(1, F_ACTION, ACTION_PER_FRAME, 77, id="lingbot_va_action_short"),
+        pytest.param(
+            1,
+            DEMO_FRAME_CHUNK,
+            DEMO_ACTION_PER_FRAME,
+            DEMO_PROMPT_SEQ_LEN,
+            id="demo_robotwin_action",
+        ),
     ],
 )
 def test_wan_transformer_model_action_mode(
