@@ -308,7 +308,7 @@ void MetalContext::teardown() {
     }
     initialized_ = false;
 
-    get_cluster().set_internal_routing_info_for_ethernet_cores(this->get_control_plane(), false);
+    // get_cluster().set_internal_routing_info_for_ethernet_cores(this->get_control_plane(), false);
 
     if (data_collector_) {
         data_collector_->DumpData();
