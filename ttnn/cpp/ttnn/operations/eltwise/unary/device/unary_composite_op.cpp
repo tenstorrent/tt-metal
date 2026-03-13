@@ -19,7 +19,7 @@
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operation.hpp"
 #include "ttnn/types.hpp"
@@ -352,35 +352,6 @@ Tensor ExecuteUnaryCompositeClamp::invoke(
         max.value(),
         temp,
         output_memory_config);
-}
-
-// Theano defines this differently...
-/**
- *
- *   alpha = 1.6732632423543772848170429916717
- *    scale = 1.0507009873554804934193349852946
- *    return scale * elu(x, alpha)
- *
- */
-// Function Selu - scaled exponential linear
-// use transformation y = scale *(max(0,x) + min(0,alpha * (exp(X)-1))) by broadcast
-// Ref: https://pytorch.org/docs/stable/generated/torch.nn.SELU.html
-Tensor _selu(
-    const Tensor& x, const float scale, const float alpha, const std::optional<MemoryConfig>& output_mem_config) {
-    // term 2
-    Tensor x_Exp_minus_1 = ttnn::expm1(x, output_mem_config);
-    Tensor result_t2_ = ttnn::multiply_(x_Exp_minus_1, alpha);
-    x_Exp_minus_1.deallocate();
-    Tensor result_term2 = ttnn::minimum(result_t2_, 0.0f, std::nullopt, output_mem_config);
-    result_t2_.deallocate();
-
-    // term 1
-    Tensor x_max = ttnn::maximum(x, 0.0f, std::nullopt, output_mem_config);
-    Tensor sum_max_term2 = ttnn::add_(x_max, result_term2);
-    x_max.deallocate();
-    Tensor result_selu = ttnn::multiply_(sum_max_term2, scale);
-
-    return result_selu;
 }
 
 std::vector<Tensor> split_tensor_for_glu(
