@@ -29,7 +29,7 @@ graph_descriptors {
     channels { count: 2 }
   }
   connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 13 } }
+    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 15 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 14 } }
     channels { count: 2 }
   }
