@@ -141,11 +141,6 @@ ttnn::Tensor pad_impl(
                 return output_tensor_height_padded;
             }
         }
-
-        auto output_w_check = output_padded_shape[3];
-        TT_FATAL(
-            output_w_check == output_memory_config.shard_spec()->shape[1],
-            "output_w != output_memory_config.shard_spec().shape[1]");
     }
 
     ttnn::Shape output_shape{output_padded_shape};
