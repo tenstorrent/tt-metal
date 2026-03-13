@@ -84,9 +84,9 @@ class LlamaMLP(AbstractModuleBase):
                 (unrounded_size + multiple_of - 1) // multiple_of
             ) * multiple_of
 
-        self.w1 = LinearLayer(embedding_size, intermediate_size, False)
-        self.w3 = LinearLayer(embedding_size, intermediate_size, False)
-        self.w2 = LinearLayer(intermediate_size, embedding_size, False)
+        self.w1 = LinearLayer(embedding_size, intermediate_size, False, zero_init=True)
+        self.w3 = LinearLayer(embedding_size, intermediate_size, False, zero_init=True)
+        self.w2 = LinearLayer(intermediate_size, embedding_size, False, zero_init=True)
 
     def forward(self, input: ttml.autograd.Tensor) -> ttml.autograd.Tensor:
         """Forward pass of MLP.

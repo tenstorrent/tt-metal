@@ -12,24 +12,32 @@ from .module_base import AbstractModuleBase
 from .parameter import Parameter
 
 
-def _create_weight(in_features: int, out_features: int):
+def _create_weight(in_features: int, out_features: int, zero_init: bool = False):
     # Shape matches C++ convention: (1, 1, out_features, in_features)
-    init_k = np.sqrt(1.0 / in_features)
-    weight_np = np.random.uniform(
-        low=-init_k,
-        high=init_k,
-        size=(1, 1, out_features, in_features),
-    ).astype(ml_dtypes.bfloat16)
+    shape = (1, 1, out_features, in_features)
+    if zero_init:
+        weight_np = np.zeros(shape).astype(ml_dtypes.bfloat16)
+    else:
+        init_k = np.sqrt(1.0 / in_features)
+        weight_np = np.random.uniform(
+            low=-init_k,
+            high=init_k,
+            size=shape,
+        ).astype(ml_dtypes.bfloat16)
     return ttml.autograd.Tensor.from_numpy(weight_np, layout=ttnn.Layout.TILE)
 
 
-def _create_bias(in_features: int, out_features: int):
-    init_k = np.sqrt(1.0 / in_features)
-    bias_np = np.random.uniform(
-        low=-init_k,
-        high=init_k,
-        size=(1, 1, 1, out_features),
-    ).astype(ml_dtypes.bfloat16)
+def _create_bias(in_features: int, out_features: int, zero_init: bool = False):
+    shape = (1, 1, 1, out_features)
+    if zero_init:
+        bias_np = np.zeros(shape).astype(ml_dtypes.bfloat16)
+    else:
+        init_k = np.sqrt(1.0 / in_features)
+        bias_np = np.random.uniform(
+            low=-init_k,
+            high=init_k,
+            size=shape,
+        ).astype(ml_dtypes.bfloat16)
     return ttml.autograd.Tensor.from_numpy(bias_np, layout=ttnn.Layout.TILE)
 
 
@@ -37,15 +45,21 @@ class LinearLayer(AbstractModuleBase):
     """Fully-connected linear layer: y = x @ W^T + b."""
 
     def __init__(
-        self, in_features: int, out_features: int, has_bias: bool = True
+        self,
+        in_features: int,
+        out_features: int,
+        has_bias: bool = True,
+        zero_init: bool = False,
     ) -> None:
         super().__init__()
 
         self.in_features = in_features
         self.out_features = out_features
-        self.weight = Parameter(_create_weight(in_features, out_features))
+        self.weight = Parameter(_create_weight(in_features, out_features, zero_init))
         self.bias = (
-            Parameter(_create_bias(in_features, out_features)) if has_bias else None
+            Parameter(_create_bias(in_features, out_features, zero_init))
+            if has_bias
+            else None
         )
 
     def __reduce__(self):

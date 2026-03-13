@@ -105,10 +105,14 @@ class Llama(AbstractModuleBase):
 
         self.config = config
 
-        self.fc = LinearLayer(config.hidden_size, config.vocab_size, False)
+        self.fc = LinearLayer(
+            config.hidden_size, config.vocab_size, False, zero_init=True
+        )
 
         vocab_size_divisible_by_32 = (config.vocab_size + 31) // 32 * 32
-        self.tok_emb = Embedding(vocab_size_divisible_by_32, config.hidden_size)
+        self.tok_emb = Embedding(
+            vocab_size_divisible_by_32, config.hidden_size, zero_init=True
+        )
 
         if config.weight_tying == ttml.models.WeightTyingType.Enabled:
             self.tok_emb.weight = self.fc.weight.tensor
