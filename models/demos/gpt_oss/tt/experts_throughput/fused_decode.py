@@ -199,6 +199,9 @@ def fused_decode_forward(
     ttnn.deallocate(tt_sparse_l1)
 
     # ------------------------------------------------------------------
+    # WORKAROUND: disable program cache around combine to avoid hang caused by
+    # override_runtime_arguments not updating fabric mux connection runtime args.
+    mesh_device.disable_and_clear_program_cache()
     logger.info("fused_decode: Step 3 - selective_reduce_combine")
     # Step 3: selective_reduce_combine
     # With the K-indexed fix (upstream #38542), the combine writer uses the
@@ -227,8 +230,9 @@ def fused_decode_forward(
     )
     ttnn.synchronize_device(mesh_device)
     logger.info("fused_decode: Step 3 sync done")
+    mesh_device.enable_program_cache()
 
-    for i in range(5):
+    for i in range(4):  # output[3] and [4] share a buffer; deallocating [3] frees both
         ttnn.deallocate(moe_gpt_outputs[i])
 
     # ------------------------------------------------------------------
