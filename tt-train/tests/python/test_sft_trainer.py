@@ -8,7 +8,6 @@ import numpy as np
 import pytest
 
 import ttml
-import ttnn
 
 from ttml.datasets.dataloader import Batch, TTMLDataloader
 from ttml.datasets.hf_dataloader import InMemoryDataloader, sft_collate_fn
@@ -172,3 +171,62 @@ def test_in_memory_dataloader_shuffle_changes_order():
     order_b = [b[0]["input_ids"][0] for b in loader]
 
     assert order_a != order_b
+
+
+# ---------------------------------------------------------------------------
+# LoraConfig re-export
+# ---------------------------------------------------------------------------
+
+
+def test_lora_config_import():
+    """LoraConfig is accessible from ttml.trainers."""
+    from ttml.trainers import LoraConfig
+
+    cfg = LoraConfig(rank=4, alpha=8.0, target_modules=[".*q_proj.*"])
+    assert cfg.rank == 4
+    assert cfg.alpha == 8.0
+    assert cfg.target_modules == [".*q_proj.*"]
+
+
+# ---------------------------------------------------------------------------
+# TrainerCallback
+# ---------------------------------------------------------------------------
+
+
+def test_trainer_callback_import():
+    """TrainerCallback is accessible from ttml.trainers."""
+    from ttml.trainers import TrainerCallback
+
+    cb = TrainerCallback()
+    # All hooks are no-ops by default — just verify they're callable.
+    cb.on_train_begin(None)
+    cb.on_step_end(None, 0, 0.0, 1e-5)
+    cb.on_eval_end(None, 0, 0.0)
+    cb.on_save(None, 0, "/tmp/ckpt")
+    cb.on_train_end(None)
+
+
+# ---------------------------------------------------------------------------
+# SFTConfig new fields
+# ---------------------------------------------------------------------------
+
+
+def test_sft_config_defaults():
+    """New SFTConfig fields have sensible defaults."""
+    from ttml.trainers import SFTConfig
+
+    cfg = SFTConfig()
+    assert cfg.max_grad_norm == 0.0
+    assert cfg.log_interval == 1
+    assert cfg.max_steps == 1000
+    assert cfg.learning_rate == 2e-5
+    assert cfg.warmup_steps == 0
+
+
+def test_sft_config_custom_values():
+    """SFTConfig accepts custom values for new fields."""
+    from ttml.trainers import SFTConfig
+
+    cfg = SFTConfig(max_grad_norm=1.0, log_interval=10)
+    assert cfg.max_grad_norm == 1.0
+    assert cfg.log_interval == 10

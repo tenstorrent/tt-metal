@@ -4,10 +4,15 @@
 
 """Single-device Supervised Fine-Tuning (SFT) trainer."""
 
+from __future__ import annotations
+
 import os
 import pickle
-from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from dataclasses import dataclass, replace
+from typing import TYPE_CHECKING, Any, Callable, Optional
+
+if TYPE_CHECKING:
+    from ttml.modules.lora import LoraConfig
 
 import numpy as np
 import ttnn
@@ -19,13 +24,57 @@ from ttml.common.utils import no_grad
 from ttml.datasets import Batch, TTMLDataloader
 
 
+class TrainerCallback:
+    """Base class for SFTTrainer callbacks.
+
+    Override any subset of hooks to customise training behaviour.
+    All methods are no-ops by default.
+    """
+
+    def on_train_begin(self, trainer: "SFTTrainer") -> None:
+        pass
+
+    def on_step_end(
+        self, trainer: "SFTTrainer", step: int, loss: float, lr: float
+    ) -> None:
+        pass
+
+    def on_eval_end(self, trainer: "SFTTrainer", step: int, eval_loss: float) -> None:
+        pass
+
+    def on_save(self, trainer: "SFTTrainer", step: int, path: str) -> None:
+        pass
+
+    def on_train_end(self, trainer: "SFTTrainer") -> None:
+        pass
+
+
 @dataclass
 class SFTConfig:
     """Configuration for :class:`SFTTrainer`.
 
-    Optimizer params, scheduler params, and loop cadence are all in one place.
-    The design intentionally mirrors TRL's ``SFTConfig`` so that users who know
-    TRL face minimal friction.
+    Training-loop cadence and default learning-rate settings live here.
+    Optimizer-specific parameters should be passed via the *optimizer*
+    argument of :class:`SFTTrainer` instead.
+
+    Attributes:
+        max_steps: Total number of optimiser steps.
+        gradient_accumulation_steps: Micro-batches accumulated before each
+            optimiser step.
+        eval_interval: Run evaluation every *N* steps (0 to disable).
+        save_interval: Save a checkpoint every *N* steps (0 to disable).
+        checkpoint_dir: Directory for checkpoint files.
+        seed: Optional RNG seed for reproducibility.
+        max_seq_len: Maximum sequence length (used for the causal mask).
+        learning_rate: Peak learning rate, also used to initialise the default
+            AdamW optimizer when no explicit optimizer is provided.
+        warmup_steps: Linear warmup steps for the default schedule.
+        max_grad_norm: Maximum gradient norm for clipping (0 to disable).
+        log_interval: Update the progress bar / fire ``on_step_end``
+            callbacks every *N* steps.
+        gradient_checkpointing: Enable activation recomputation to reduce
+            memory usage at the cost of ~30 % extra compute.  Sets the
+            model's ``runner_type`` to ``MemoryEfficient``.
     """
 
     # ---- loop ----
@@ -39,15 +88,20 @@ class SFTConfig:
     # ---- sequence ----
     max_seq_len: int = 1024
 
-    # ---- optimizer (AdamW) ----
-    lr: float = 2e-5
-    weight_decay: float = 0.01
-    beta1: float = 0.9
-    beta2: float = 0.999
-    eps: float = 1e-8
+    # ---- learning rate (used by default warmup schedule & default optimizer) ----
+    learning_rate: float = 2e-5
 
     # ---- scheduler (linear warmup → constant) ----
     warmup_steps: int = 0
+
+    # ---- gradient clipping ----
+    max_grad_norm: float = 0.0
+
+    # ---- logging ----
+    log_interval: int = 1
+
+    # ---- memory ----
+    gradient_checkpointing: bool = False
 
 
 class SFTTrainer:
@@ -58,7 +112,7 @@ class SFTTrainer:
     defined by :class:`~ttml.modules.module_base.AbstractModuleBase` and
     :class:`~ttml.datasets.TTMLDataloader`.
 
-    The training script becomes a pure wiring exercise::
+    Example::
 
         from ttml.trainers import SFTConfig, SFTTrainer
 
@@ -66,7 +120,8 @@ class SFTTrainer:
             model=model,
             train_dataloader=train_loader,
             eval_dataloader=eval_loader,
-            config=SFTConfig(max_steps=5_000, lr=2e-5),
+            config=SFTConfig(max_steps=5_000, learning_rate=2e-5, max_grad_norm=1.0),
+            optimizer={"type": "AdamW", "lr": 2e-5, "weight_decay": 0.01},
         )
         trainer.train()
     """
@@ -77,10 +132,47 @@ class SFTTrainer:
         train_dataloader: TTMLDataloader,
         eval_dataloader: Optional[TTMLDataloader],
         config: SFTConfig,
+        optimizer: Any = None,
+        peft_config: Optional[LoraConfig] = None,
         lr_schedule: Optional[Callable[[int], float]] = None,
+        callbacks: Optional[list[TrainerCallback]] = None,
+        compute_loss_func: Optional[Callable] = None,
     ) -> None:
+        """
+        Args:
+            model: Model to fine-tune.
+            train_dataloader: Training data loader.
+            eval_dataloader: Evaluation data loader (may be ``None``).
+            config: Trainer configuration.
+            optimizer: One of:
+                - A ``ttml.optimizers.OptimizerBase`` instance (used directly).
+                - A ``dict`` with at least a ``"type"`` key, forwarded to
+                  ``ttml.optimizers.create_optimizer(dict, model.parameters())``.
+                - ``None`` (default) -- creates a default AdamW with
+                  ``learning_rate=config.learning_rate``.
+            peft_config: Optional PEFT configuration (e.g. :class:`LoraConfig`).
+                When provided the model is automatically wrapped with the
+                appropriate adapter (currently :class:`LoraModel`).
+            lr_schedule: Optional callable ``step -> lr``.
+            callbacks: Optional list of :class:`TrainerCallback` instances.
+            compute_loss_func: Optional callable ``(model_output, batch) -> loss``
+                that replaces the default masked cross-entropy.
+
+        Note:
+            When ``config.gradient_checkpointing`` is ``True`` the model's
+            ``runner_type`` is switched to ``MemoryEfficient``, which
+            recomputes activations during backward instead of caching them.
+        """
         if config.seed is not None:
             ttml.autograd.AutoContext.get_instance().set_seed(config.seed)
+
+        if peft_config is not None:
+            from ttml.modules.lora import LoraModel
+
+            model = LoraModel(model, peft_config)
+
+        if config.gradient_checkpointing:
+            self._enable_gradient_checkpointing(model)
 
         self.model = model
         self.train_dataloader = train_dataloader
@@ -88,12 +180,14 @@ class SFTTrainer:
         self.config = config
         self.step = 0  # 0-based; incremented after each optimizer step
 
-        self._optimizer = self._build_optimizer()
+        self._optimizer = self._build_optimizer(optimizer)
         self._lr_schedule = (
             lr_schedule if lr_schedule is not None else self._build_lr_schedule()
         )
         self._causal_mask = self._build_causal_mask()
         self._loss_fn = ttml.ops.loss.cross_entropy_loss
+        self._callbacks = callbacks or []
+        self._compute_loss_override = compute_loss_func
 
     # ------------------------------------------------------------------
     # Public API
@@ -107,6 +201,8 @@ class SFTTrainer:
         of dataset size.
         """
         self.model.train()
+        for cb in self._callbacks:
+            cb.on_train_begin(self)
         data_iter = iter(self.train_dataloader)
         cfg = self.config
 
@@ -138,13 +234,21 @@ class SFTTrainer:
                 scaled.backward(False)
                 ttml.autograd.AutoContext.get_instance().reset_graph()
 
+            if cfg.max_grad_norm > 0:
+                ttml.core.clip_grad_norm(
+                    self.model.parameters(), cfg.max_grad_norm, 2.0, False
+                )
+
             self._optimizer.step()
             self.step += 1
 
             step_loss = float(np.mean(micro_losses))
-            bar.set_postfix(
-                {"loss": f"{step_loss:.4f}", "lr": f"{lr:.2e}"}, refresh=False
-            )
+            if cfg.log_interval > 0 and self.step % cfg.log_interval == 0:
+                bar.set_postfix(
+                    {"loss": f"{step_loss:.4f}", "lr": f"{lr:.2e}"}, refresh=False
+                )
+                for cb in self._callbacks:
+                    cb.on_step_end(self, self.step, step_loss, lr)
 
             if cfg.eval_interval > 0 and self.step % cfg.eval_interval == 0:
                 if self.eval_dataloader is not None:
@@ -157,22 +261,34 @@ class SFTTrainer:
                         },
                         refresh=False,
                     )
+                    for cb in self._callbacks:
+                        cb.on_eval_end(self, self.step, val_loss)
 
             if cfg.save_interval > 0 and self.step % cfg.save_interval == 0:
                 self._save_checkpoint()
+                for cb in self._callbacks:
+                    cb.on_save(
+                        self,
+                        self.step,
+                        os.path.join(cfg.checkpoint_dir, f"step_{self.step}.pkl"),
+                    )
+
+        for cb in self._callbacks:
+            cb.on_train_end(self)
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
     def _compute_loss(self, batch: Batch):
-        """Forward pass + masked cross-entropy loss.
+        """Forward pass + loss computation.
 
-        ``batch.loss_mask`` carries the per-token weights: 0.0 for prompt and
-        padding positions, nonzero for completion positions.  Taking the mean
-        of the masked loss gives the per-completion-token loss.
+        If *compute_loss_func* was provided it is called instead of the
+        default masked cross-entropy.
         """
         logits = self.model(batch.input_ids, self._causal_mask)  # [B, 1, T, V]
+        if self._compute_loss_override is not None:
+            return self._compute_loss_override(logits, batch)
         loss = self._loss_fn(
             logits, batch.labels, ttml.ops.ReduceType.NONE
         )  # [B, 1, T, 1]
@@ -203,16 +319,28 @@ class SFTTrainer:
         with open(path, "wb") as f:
             pickle.dump({"step": self.step, "model_state": state}, f)
 
-    def _build_optimizer(self):
-        cfg = self.config
-        adamw_cfg = ttml.optimizers.AdamWConfig.make(
-            cfg.lr, cfg.beta1, cfg.beta2, cfg.eps, cfg.weight_decay
+    def _build_optimizer(self, optimizer: Any):
+        """Resolve the *optimizer* argument into an ``OptimizerBase``.
+
+        * ``OptimizerBase`` instance -- returned as-is.
+        * ``dict`` -- forwarded to ``ttml.optimizers.create_optimizer``.
+        * ``None`` -- a default AdamW is created with ``learning_rate=config.learning_rate``.
+        """
+        if isinstance(optimizer, ttml.optimizers.OptimizerBase):
+            return optimizer
+
+        if isinstance(optimizer, dict):
+            return ttml.optimizers.create_optimizer(optimizer, self.model.parameters())
+
+        # Default: AdamW with lr from config
+        return ttml.optimizers.create_optimizer(
+            {"type": "AdamW", "lr": self.config.learning_rate},
+            self.model.parameters(),
         )
-        return ttml.optimizers.AdamW(self.model.parameters(), adamw_cfg)
 
     def _build_lr_schedule(self):
         """Return a callable ``step -> lr`` implementing linear warmup then constant."""
-        peak_lr = self.config.lr
+        peak_lr = self.config.learning_rate
         warmup = max(0, self.config.warmup_steps)
 
         def schedule(step: int) -> float:
@@ -222,8 +350,21 @@ class SFTTrainer:
 
         return schedule
 
+    @staticmethod
+    def _enable_gradient_checkpointing(model: Any) -> None:
+        """Switch the model's runner type to ``MemoryEfficient``.
+
+        Works with both bare models (Llama, NanoGPT) and LoraModel wrappers.
+        The model config is a frozen dataclass, so we replace it wholesale.
+        """
+        target = model.model if hasattr(model, "model") else model
+        cfg = getattr(target, "config", None)
+        if cfg is None or not hasattr(cfg, "runner_type"):
+            return
+        target.config = replace(cfg, runner_type=ttml.models.RunnerType.MemoryEfficient)
+
     def _build_causal_mask(self):
         mask_np = build_causal_mask(self.config.max_seq_len)  # [1, 1, T, T]
         return ttml.autograd.Tensor.from_numpy(
-            mask_np, ttnn.Layout.ROW_MAJOR, ttnn.DataType.BFLOAT16
+            mask_np, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
         )

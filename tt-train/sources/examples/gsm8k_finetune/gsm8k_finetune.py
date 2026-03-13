@@ -452,9 +452,14 @@ def train():
         save_interval=training_config.save_every,
         checkpoint_dir=training_config.checkpoint_dir,
         max_seq_len=max_sequence_length,
-        lr=scheduler_config.max_lr,
+        learning_rate=scheduler_config.max_lr,
         warmup_steps=scheduler_config.warmup_steps,
     )
+
+    optimizer_cfg = {
+        "type": "AdamW",
+        "lr": scheduler_config.max_lr,
+    }
 
     sched = SpeedrunScheduler(scheduler_config)
 
@@ -463,6 +468,7 @@ def train():
         train_dataloader=train_loader,
         eval_dataloader=eval_loader,
         config=sft_config,
+        optimizer=optimizer_cfg,
         lr_schedule=sched.lr_at,  # SpeedrunScheduler uses 0-based step index
     )
 
