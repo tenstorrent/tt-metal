@@ -367,7 +367,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     // fabric pipeline can deliver data for outer_dim N+1 before the reader finishes
     // copying outer_dim N.
     uint32_t recv_cb_index = tt::CB::c_in1;
-    uint32_t corner_sticks_per_row = is_2d ? (operation_attributes.pad2_left + operation_attributes.pad2_right) : 0;
+    uint32_t corner_sticks_per_row =
+        is_2d ? std::min(operation_attributes.pad2_left + operation_attributes.pad2_right, num_sticks_per_halo_dim) : 0;
     if (is_2d) {
         uint32_t max_padding = std::max(operation_attributes.padding_left, operation_attributes.padding_right);
         uint32_t max_outer_dims_per_core = dims_per_core_group_1;

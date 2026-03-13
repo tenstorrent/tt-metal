@@ -343,25 +343,37 @@ void kernel_main() {
                     uint32_t base_dst = inc_offset + row_offset + stick_start_id;
 
                     if constexpr (use_l1_intermediate && !is_w_fabric_writer) {
-                        // Corners-only: pop left corners then right corners from CB
-                        // Left corners: first pad2_right_sticks of interior
-                        for (uint32_t c = 0; c < pad2_right_sticks; c++) {
-                            cb_wait_front(cb_output_id, 1);
-                            uint32_t l1_read_addr = get_read_ptr(cb_output_id);
-                            uint64_t dst_noc_addr = get_noc_addr(base_dst + c, dst_accessor);
-                            noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
-                            noc_async_write_barrier();
-                            cb_pop_front(cb_output_id, 1);
-                        }
-                        // Right corners: last pad2_left_sticks of interior
-                        uint32_t right_start = base_dst + (num_sticks_to_read - pad2_left_sticks);
-                        for (uint32_t c = 0; c < pad2_left_sticks; c++) {
-                            cb_wait_front(cb_output_id, 1);
-                            uint32_t l1_read_addr = get_read_ptr(cb_output_id);
-                            uint64_t dst_noc_addr = get_noc_addr(right_start + c, dst_accessor);
-                            noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
-                            noc_async_write_barrier();
-                            cb_pop_front(cb_output_id, 1);
+                        if (pad2_right_sticks + pad2_left_sticks >= num_sticks_to_read) {
+                            // Overlap: all sticks are corners, pop exactly num_sticks_to_read
+                            for (uint32_t c = 0; c < num_sticks_to_read; c++) {
+                                cb_wait_front(cb_output_id, 1);
+                                uint32_t l1_read_addr = get_read_ptr(cb_output_id);
+                                uint64_t dst_noc_addr = get_noc_addr(base_dst + c, dst_accessor);
+                                noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
+                                noc_async_write_barrier();
+                                cb_pop_front(cb_output_id, 1);
+                            }
+                        } else {
+                            // Corners-only: pop left corners then right corners from CB
+                            // Left corners: first pad2_right_sticks of interior
+                            for (uint32_t c = 0; c < pad2_right_sticks; c++) {
+                                cb_wait_front(cb_output_id, 1);
+                                uint32_t l1_read_addr = get_read_ptr(cb_output_id);
+                                uint64_t dst_noc_addr = get_noc_addr(base_dst + c, dst_accessor);
+                                noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
+                                noc_async_write_barrier();
+                                cb_pop_front(cb_output_id, 1);
+                            }
+                            // Right corners: last pad2_left_sticks of interior
+                            uint32_t right_start = base_dst + (num_sticks_to_read - pad2_left_sticks);
+                            for (uint32_t c = 0; c < pad2_left_sticks; c++) {
+                                cb_wait_front(cb_output_id, 1);
+                                uint32_t l1_read_addr = get_read_ptr(cb_output_id);
+                                uint64_t dst_noc_addr = get_noc_addr(right_start + c, dst_accessor);
+                                noc_async_write(l1_read_addr, dst_noc_addr, stick_size);
+                                noc_async_write_barrier();
+                                cb_pop_front(cb_output_id, 1);
+                            }
                         }
                     } else {
                         // Original: all sticks sequentially
