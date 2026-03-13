@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Sequence
 
 import torch
+from loguru import logger
 from transformers.configuration_utils import PretrainedConfig
 
 import models.experimental.ops.descriptors as descriptors
@@ -32,7 +33,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     USERS_PER_ROW,
-    dequantize,
     even_int_div,
     get_mesh_coords,
     get_state_dicts,
@@ -189,7 +189,6 @@ class MLA1D(AbstractModule):
         mesh_device: ttnn.Device,
     ) -> WeightConfig:
         num_shards = mesh_device.shape[0]
-        weight_block_height, weight_block_width = hf_config.quantization_config["weight_block_size"]
 
         dim = hf_config.hidden_size
         num_heads = hf_config.num_attention_heads
@@ -199,6 +198,12 @@ class MLA1D(AbstractModule):
         v_head_dim = hf_config.v_head_dim
         q_lora_rank = hf_config.q_lora_rank
         q_head_dim = qk_nope_head_dim + qk_rope_head_dim
+
+        def _load_weight(weight_name: str, shape: tuple[int, ...]) -> torch.Tensor:
+            """
+            Load an already-dequantized weight tensor (bfloat16) from the HF state dict.
+            """
+            return get_state_dicts(state_dicts, weight_name, shape=shape, dtype=torch.bfloat16)
 
         # Norm weights
         norm_weight_configs = {
@@ -245,19 +250,10 @@ class MLA1D(AbstractModule):
         )
 
         # Regular non-split weights with DRAM sharded configs
-        wq_b_weight = dequantize(
-            get_state_dicts(
-                state_dicts, "q_b_proj.weight", (num_heads * q_head_dim, q_lora_rank), dtype=torch.float8_e4m3fn
-            ),
-            get_state_dicts(state_dicts, "q_b_proj.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
-        )
-        wo_weight = dequantize(
-            get_state_dicts(state_dicts, "o_proj.weight", (dim, num_heads * v_head_dim), dtype=torch.float8_e4m3fn),
-            get_state_dicts(state_dicts, "o_proj.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
-        )
+        wq_b_weight = _load_weight("q_b_proj.weight", (num_heads * q_head_dim, q_lora_rank))
+        wo_weight = _load_weight("o_proj.weight", (dim, num_heads * v_head_dim))
 
+        # Regular non-split weights
         linear_weight_configs = {
             "wq_b": {
                 "input_tensor_b": cls._convert_weight(
@@ -283,21 +279,8 @@ class MLA1D(AbstractModule):
 
         # Fused wq_a and wkv_a weights: concatenated along output dimension
         # Output order: [q_lora_rank | kv_lora_rank | qk_rope_head_dim]
-        wq_a_weight = dequantize(
-            get_state_dicts(state_dicts, "q_a_proj.weight", (q_lora_rank, dim), dtype=torch.float8_e4m3fn),
-            get_state_dicts(state_dicts, "q_a_proj.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
-        )
-        wkv_a_weight = dequantize(
-            get_state_dicts(
-                state_dicts,
-                "kv_a_proj_with_mqa.weight",
-                (kv_lora_rank + qk_rope_head_dim, dim),
-                dtype=torch.float8_e4m3fn,
-            ),
-            get_state_dicts(state_dicts, "kv_a_proj_with_mqa.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
-        )
+        wq_a_weight = _load_weight("q_a_proj.weight", (q_lora_rank, dim))
+        wkv_a_weight = _load_weight("kv_a_proj_with_mqa.weight", (kv_lora_rank + qk_rope_head_dim, dim))
         # Concatenate: [num_shards, q_lora_rank + kv_lora_rank + qk_rope_head_dim, dim]
         wq_kv_a_weight = torch.cat([wq_a_weight, wkv_a_weight], dim=-2)
 
@@ -331,15 +314,9 @@ class MLA1D(AbstractModule):
         }
 
         # wkv_b (Needs Special handling!!)
-        torch_weights = dequantize(
-            get_state_dicts(
-                state_dicts,
-                f"kv_b_proj.weight",
-                shape=(num_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank),
-                dtype=torch.float8_e4m3fn,
-            ),
-            get_state_dicts(state_dicts, f"kv_b_proj.weight_scale_inv", dtype=torch.float32),
-            (1, weight_block_height, weight_block_width),
+        torch_weights = _load_weight(
+            "kv_b_proj.weight",
+            shape=(num_heads * (qk_nope_head_dim + v_head_dim), kv_lora_rank),
         ).reshape(num_shards, num_heads, qk_nope_head_dim + v_head_dim, kv_lora_rank)
 
         torch_weights_k = torch_weights[..., :qk_nope_head_dim, :].transpose(
@@ -1054,7 +1031,6 @@ class MLA1D(AbstractModule):
             dim=1,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             num_workers_per_link=1,
-            use_broadcast=True,
         )
         wq_kv_a_r_config = {
             "dims": [1],
