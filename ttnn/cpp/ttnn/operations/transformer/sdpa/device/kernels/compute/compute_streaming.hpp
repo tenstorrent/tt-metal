@@ -1063,7 +1063,8 @@ template <
     uint32_t cb_lse_out,
     uint32_t cb_prev_out,
     uint32_t cb_out,
-    bool uniform_dataformat = false>
+    bool uniform_dataformat = false,
+    bool skip_kv_padding = false>
 void sdpa_ring_v2(
     const uint32_t global_q_start,
     const uint32_t global_q_end,
@@ -1251,10 +1252,13 @@ void sdpa_ring_v2(
     }
 
     // Dummy KV pop for double-buffer alignment (same as sdpa_inner_loop for RING)
-    if (KV_chunks_processed_in_iter % 2 == 0) {
-        cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
-        cb_pop_front(cb_kt_in, DHt * Sk_chunk_t);
-        cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
-        cb_pop_front(cb_v_in, Sk_chunk_t * vDHt);
+    // When skip_kv_padding=true (zigzag mode), caller handles padding once at end of all iterations.
+    if constexpr (!skip_kv_padding) {
+        if (KV_chunks_processed_in_iter % 2 == 0) {
+            cb_wait_front(cb_kt_in, DHt * Sk_chunk_t);
+            cb_pop_front(cb_kt_in, DHt * Sk_chunk_t);
+            cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
+            cb_pop_front(cb_v_in, Sk_chunk_t * vDHt);
+        }
     }
 }

@@ -123,8 +123,10 @@ void kernel_main() {
     const uint32_t joint_q_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_k_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_v_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    // Zigzag work distribution: pair indices instead of contiguous Q chunk range
+    const uint32_t pair_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t pair_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t total_q_chunks = get_arg_val<uint32_t>(argidx++);
 
     // Profile indexer: computes ring_id without synchronization
     ProfileRingIndexer indexer(ring_size, ring_index);
@@ -201,86 +203,113 @@ void kernel_main() {
             iter_num_kv_chunks /= 2;
         }
 
-        for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
-            // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
-            const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
-            const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
-            const uint32_t q_chunk = global_q_chunk % num_q_chunks;
-            const auto q_row_start_tile = q_chunk * Sq_chunk_t;
-            const bool is_joint_q = q_chunk >= num_local_q_chunks;
+        // ZIGZAG work distribution: iterate over pairs, processing q_lo then q_hi
+        // Pairs light Q chunks (early, less K work) with heavy Q chunks (late, more K work)
+        // For causal attention: work(q_i) + work(q_{n-1-i}) ≈ constant
+        for (uint32_t pair = pair_start; pair < pair_end; ++pair) {
+            uint32_t q_lo = pair;
+            uint32_t q_hi = total_q_chunks - 1 - pair;
+            // For odd total_q_chunks, the middle element pairs with itself (q_lo == q_hi)
+            uint32_t num_to_process = (q_lo != q_hi) ? 2 : 1;
 
-            if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
-                continue;
-            }
+            for (uint32_t qi = 0; qi < num_to_process; ++qi) {
+                uint32_t global_q_chunk = (qi == 0) ? q_lo : q_hi;
 
-            Slice q_slice;
-            uint32_t end_seq_tile;
-            if (is_joint_q) {
-                const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-                q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt);
-                end_seq_tile = Lt;
-            } else {
-                q_slice = Slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
-                end_seq_tile = local_padded_Nt;
-            }
+                // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
+                const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
+                const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
+                const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+                const auto q_row_start_tile = q_chunk * Sq_chunk_t;
+                const bool is_joint_q = q_chunk >= num_local_q_chunks;
 
-            // Read Q chunk
-            if constexpr (use_joint_tensors) {
+                if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
+                    continue;
+                }
+
+                Slice q_slice;
+                uint32_t end_seq_tile;
                 if (is_joint_q) {
-                    read_block(joint_q_generator, q_slice, end_seq_tile, cb_q_in, q_tile_bytes, false /*transpose*/);
+                    const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+                    q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt);
+                    end_seq_tile = Lt;
+                } else {
+                    q_slice = Slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
+                    end_seq_tile = local_padded_Nt;
+                }
+
+                // Read Q chunk
+                if constexpr (use_joint_tensors) {
+                    if (is_joint_q) {
+                        read_block(
+                            joint_q_generator, q_slice, end_seq_tile, cb_q_in, q_tile_bytes, false /*transpose*/);
+                    } else {
+                        read_block(q_generator, q_slice, end_seq_tile, cb_q_in, q_tile_bytes, false /*transpose*/);
+                    }
                 } else {
                     read_block(q_generator, q_slice, end_seq_tile, cb_q_in, q_tile_bytes, false /*transpose*/);
                 }
-            } else {
-                read_block(q_generator, q_slice, end_seq_tile, cb_q_in, q_tile_bytes, false /*transpose*/);
-            }
 
-            for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
-                const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
-                const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
-                const bool kv_chunk_is_beyond_logical_n = !kv_chunk_is_joint && (kv_global_start_tile >= logical_nt);
+                for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
+                    const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
+                    const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+                    const bool kv_chunk_is_beyond_logical_n =
+                        !kv_chunk_is_joint && (kv_global_start_tile >= logical_nt);
 
-                if (kv_chunk_is_beyond_logical_n) {
-                    continue;
-                }
-                KV_chunks_processed_in_iter++;
+                    if (kv_chunk_is_beyond_logical_n) {
+                        continue;
+                    }
+                    KV_chunks_processed_in_iter++;
 
-                Slice k_slice;
-                Slice v_slice;
-                uint32_t kv_end_seq_tile;
+                    Slice k_slice;
+                    Slice v_slice;
+                    uint32_t kv_end_seq_tile;
 
-                const uint32_t nk = nq / q_heads_per_k;
-                if (kv_chunk_is_joint) {
-                    const uint32_t joint_k_chunk = k_chunk - num_local_k_chunks;
-                    const uint32_t joint_k_row_start_tile = joint_k_chunk * Sk_chunk_t;
+                    const uint32_t nk = nq / q_heads_per_k;
+                    if (kv_chunk_is_joint) {
+                        const uint32_t joint_k_chunk = k_chunk - num_local_k_chunks;
+                        const uint32_t joint_k_row_start_tile = joint_k_chunk * Sk_chunk_t;
 
-                    k_slice = Slice(nb, nk, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
-                    v_slice = Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, vDHt);
-                    kv_end_seq_tile = Lt;
-                } else {
-                    // Profile: Always read from gathered buffer (pre-staged in arrival order)
-                    // The gathered buffer is arranged as: [ring_iter_0_kv | ring_iter_1_kv | ...]
-                    // So we use ring_iter * local_padded_Nt as the base offset
-                    const uint32_t ring_iter_kv_start_tile = ring_iter * local_padded_Nt;
-                    const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
-                    k_slice = Slice(nb, nk, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
-                    v_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, vDHt);
-                    // For end_seq_tile calculation, we need to consider logical_n within the arrival order
-                    // This is a simplification for the profile kernel
-                    kv_end_seq_tile = padded_Nt;  // Use full gathered buffer, compute kernel handles masking
-                }
+                        k_slice = Slice(nb, nk, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, DHt);
+                        v_slice = Slice(nb, nq, joint_k_row_start_tile, joint_k_row_start_tile + Sk_chunk_t, 0, vDHt);
+                        kv_end_seq_tile = Lt;
+                    } else {
+                        // Profile: Always read from gathered buffer (pre-staged in arrival order)
+                        // The gathered buffer is arranged as: [ring_iter_0_kv | ring_iter_1_kv | ...]
+                        // So we use ring_iter * local_padded_Nt as the base offset
+                        const uint32_t ring_iter_kv_start_tile = ring_iter * local_padded_Nt;
+                        const uint32_t gathered_kv_start_tile = ring_iter_kv_start_tile + k_chunk * Sk_chunk_t;
+                        k_slice = Slice(nb, nk, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, DHt);
+                        v_slice = Slice(nb, nq, gathered_kv_start_tile, gathered_kv_start_tile + Sk_chunk_t, 0, vDHt);
+                        // For end_seq_tile calculation, we need to consider logical_n within the arrival order
+                        // This is a simplification for the profile kernel
+                        kv_end_seq_tile = padded_Nt;  // Use full gathered buffer, compute kernel handles masking
+                    }
 
-                // Read K (always from gathered buffer or joint buffer)
-                {
-                    DeviceZoneScopedN("K-RESERVE");
-                    cb_reserve_back(cb_k_in, k_chunk_tiles);
-                }
-                {
-                    DeviceZoneScopedN("K-READ");
-                    if constexpr (use_joint_tensors) {
-                        if (kv_chunk_is_joint) {
-                            read_block(
-                                joint_k_generator, k_slice, kv_end_seq_tile, cb_k_in, k_tile_bytes, true /*transpose*/);
+                    // Read K (always from gathered buffer or joint buffer)
+                    {
+                        DeviceZoneScopedN("K-RESERVE");
+                        cb_reserve_back(cb_k_in, k_chunk_tiles);
+                    }
+                    {
+                        DeviceZoneScopedN("K-READ");
+                        if constexpr (use_joint_tensors) {
+                            if (kv_chunk_is_joint) {
+                                read_block(
+                                    joint_k_generator,
+                                    k_slice,
+                                    kv_end_seq_tile,
+                                    cb_k_in,
+                                    k_tile_bytes,
+                                    true /*transpose*/);
+                            } else {
+                                read_block(
+                                    gathered_k_generator,
+                                    k_slice,
+                                    kv_end_seq_tile,
+                                    cb_k_in,
+                                    k_tile_bytes,
+                                    true /*transpose*/);
+                            }
                         } else {
                             read_block(
                                 gathered_k_generator,
@@ -290,28 +319,33 @@ void kernel_main() {
                                 k_tile_bytes,
                                 true /*transpose*/);
                         }
-                    } else {
-                        read_block(
-                            gathered_k_generator, k_slice, kv_end_seq_tile, cb_k_in, k_tile_bytes, true /*transpose*/);
                     }
-                }
 
-                // Read V (always from gathered buffer or joint buffer)
-                {
-                    DeviceZoneScopedN("V-RESERVE");
-                    cb_reserve_back(cb_v_in, v_chunk_tiles);
-                }
-                {
-                    DeviceZoneScopedN("V-READ");
-                    if constexpr (use_joint_tensors) {
-                        if (kv_chunk_is_joint) {
-                            read_block(
-                                joint_v_generator,
-                                v_slice,
-                                kv_end_seq_tile,
-                                cb_v_in,
-                                v_tile_bytes,
-                                false /*transpose*/);
+                    // Read V (always from gathered buffer or joint buffer)
+                    {
+                        DeviceZoneScopedN("V-RESERVE");
+                        cb_reserve_back(cb_v_in, v_chunk_tiles);
+                    }
+                    {
+                        DeviceZoneScopedN("V-READ");
+                        if constexpr (use_joint_tensors) {
+                            if (kv_chunk_is_joint) {
+                                read_block(
+                                    joint_v_generator,
+                                    v_slice,
+                                    kv_end_seq_tile,
+                                    cb_v_in,
+                                    v_tile_bytes,
+                                    false /*transpose*/);
+                            } else {
+                                read_block(
+                                    gathered_v_generator,
+                                    v_slice,
+                                    kv_end_seq_tile,
+                                    cb_v_in,
+                                    v_tile_bytes,
+                                    false /*transpose*/);
+                            }
                         } else {
                             read_block(
                                 gathered_v_generator,
@@ -321,9 +355,6 @@ void kernel_main() {
                                 v_tile_bytes,
                                 false /*transpose*/);
                         }
-                    } else {
-                        read_block(
-                            gathered_v_generator, v_slice, kv_end_seq_tile, cb_v_in, v_tile_bytes, false /*transpose*/);
                     }
                 }
             }

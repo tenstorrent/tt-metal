@@ -396,6 +396,9 @@ RingJointSDPAProfileProgramFactory::cached_program_t RingJointSDPAProfileProgram
     defines["DHT_GRANULARITY"] = std::to_string(dht_granularity);
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
+    // ZIGZAG work distribution: enable for profile op to balance causal attention work across cores
+    // TOTAL_Q_CHUNKS = B * NH * num_q_chunks (can be computed from existing compile-time args)
+    defines["USE_ZIGZAG"] = "1";
 
     // Profile kernels: simplified reader/writer without sync
     auto reader_kernels_id = CreateKernel(
@@ -575,29 +578,44 @@ RingJointSDPAProfileProgramFactory::cached_program_t RingJointSDPAProfileProgram
     uint32_t joint_out_addr = use_joint_tensors ? joint_output_tensor.buffer()->address() : 0;
     uint32_t stats_addr = stats_output_tensor.buffer()->address();
 
-    // Set runtime args for each core
+    // Set runtime args for each core using ZIGZAG work distribution
+    // Zigzag pairs light Q chunks (early, less K work) with heavy Q chunks (late, more K work)
+    // For causal attention: work(q_i) + work(q_{n-1-i}) ≈ constant
+    //
+    // Example with 16 Q chunks:
+    //   pair 0: q_lo=0, q_hi=15 → ~35 K chunks total
+    //   pair 1: q_lo=1, q_hi=14 → ~35 K chunks total
+    //   ...
+    //   pair 7: q_lo=7, q_hi=8  → ~34 K chunks total
+    //
+    // This balances work across cores, reducing imbalance from 116x to ~1.2x.
+
     const uint32_t total_q_chunks = B * NH * num_q_chunks;
-    const uint32_t base_chunks_per_core = (num_cores == 0) ? 0 : (total_q_chunks / num_cores);
-    const uint32_t extra_chunks = (num_cores == 0) ? 0 : (total_q_chunks % num_cores);
-    uint32_t next_global_chunk = 0;
+    // Number of pairs: ceiling division to handle odd total_q_chunks
+    // For odd N, the middle element pairs with itself (q_lo == q_hi, processed once)
+    const uint32_t num_pairs = (total_q_chunks + 1) / 2;
+    const uint32_t base_pairs_per_core = (num_cores == 0) ? 0 : (num_pairs / num_cores);
+    const uint32_t extra_pairs = (num_cores == 0) ? 0 : (num_pairs % num_cores);
+    uint32_t next_pair = 0;
 
     for (uint32_t i = 0; i < num_cores; ++i) {
         CoreCoord core = {i % grid_size.x, i / grid_size.x};
 
-        uint32_t chunk_count = base_chunks_per_core + ((i < extra_chunks) ? 1 : 0);
-        if (next_global_chunk >= total_q_chunks) {
-            chunk_count = 0;
-        } else if (chunk_count > total_q_chunks - next_global_chunk) {
-            chunk_count = total_q_chunks - next_global_chunk;
+        uint32_t pair_count = base_pairs_per_core + ((i < extra_pairs) ? 1 : 0);
+        if (next_pair >= num_pairs) {
+            pair_count = 0;
+        } else if (pair_count > num_pairs - next_pair) {
+            pair_count = num_pairs - next_pair;
         }
 
-        uint32_t global_q_start = next_global_chunk;
-        uint32_t global_q_end = next_global_chunk + chunk_count;
+        uint32_t pair_start = next_pair;
+        uint32_t pair_end = next_pair + pair_count;
 
         log_debug(tt::LogOp, "core: {}", i);
         log_debug(tt::LogOp, "x={},y={}", core.x, core.y);
-        log_debug(tt::LogOp, "global_q_start: {}", global_q_start);
-        log_debug(tt::LogOp, "global_q_end: {}", global_q_end);
+        log_debug(tt::LogOp, "zigzag pair_start: {}", pair_start);
+        log_debug(tt::LogOp, "zigzag pair_end: {}", pair_end);
+        log_debug(tt::LogOp, "total_q_chunks: {}", total_q_chunks);
 
         std::vector<uint32_t> reader_args = {
             q_addr,
@@ -608,8 +626,9 @@ RingJointSDPAProfileProgramFactory::cached_program_t RingJointSDPAProfileProgram
             joint_q_addr,
             joint_k_addr,
             joint_v_addr,
-            global_q_start,
-            global_q_end,
+            pair_start,
+            pair_end,
+            total_q_chunks,
         };
         SetRuntimeArgs(program, reader_kernels_id, core, reader_args);
 
@@ -618,15 +637,17 @@ RingJointSDPAProfileProgramFactory::cached_program_t RingJointSDPAProfileProgram
             out_addr,
             joint_out_addr,
             stats_addr,
-            global_q_start,
-            global_q_end,
+            pair_start,
+            pair_end,
+            total_q_chunks,
         };
         SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
 
         // Compute args
         std::vector<uint32_t> compute_args = {
-            global_q_start,
-            global_q_end,
+            pair_start,
+            pair_end,
+            total_q_chunks,
             static_cast<uint32_t>(args.ring_size),
             static_cast<uint32_t>(args.ring_index),  // Profile: pass ring_index to compute
             // Expected inputs for fused_op_indexer: ring_size, ring_index, forward_writes, backward_writes
@@ -637,7 +658,7 @@ RingJointSDPAProfileProgramFactory::cached_program_t RingJointSDPAProfileProgram
         };
         SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
 
-        next_global_chunk += chunk_count;
+        next_pair += pair_count;
     }
 
     return cached_program_t{

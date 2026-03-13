@@ -165,8 +165,10 @@ void kernel_main() {
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t lse_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    // Zigzag work distribution: pair indices instead of contiguous Q chunk range
+    const uint32_t pair_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t pair_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t total_q_chunks = get_arg_val<uint32_t>(argidx++);
 
     // Profile indexer: computes ring_id without synchronization
     ProfileRingIndexer indexer(ring_size, ring_index);
@@ -240,76 +242,104 @@ void kernel_main() {
         const bool joint_n_needs_masking = L % (Sk_chunk_t * tt::constants::TILE_HEIGHT) != 0;
         const bool ring_iter_needs_joint_n_mask = joint_n_needs_masking && do_joint_kv;
 
-        for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
-            const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
-            const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
-            const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+        // ZIGZAG work distribution: iterate over pairs, processing q_lo then q_hi
+        // Pairs light Q chunks (early, less K work) with heavy Q chunks (late, more K work)
+        // For causal attention: work(q_i) + work(q_{n-1-i}) ≈ constant
+        for (uint32_t pair = pair_start; pair < pair_end; ++pair) {
+            uint32_t q_lo = pair;
+            uint32_t q_hi = total_q_chunks - 1 - pair;
+            // For odd total_q_chunks, the middle element pairs with itself (q_lo == q_hi)
+            uint32_t num_to_process = (q_lo != q_hi) ? 2 : 1;
 
-            // Only truly causal case appear in the iteration with local KV
-            bool causality = (ring_iter == 0 ? is_causal : false);
+            for (uint32_t qi = 0; qi < num_to_process; ++qi) {
+                uint32_t global_q_chunk = (qi == 0) ? q_lo : q_hi;
 
-            if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
-                continue;
-            }
+                const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
+                const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
+                const uint32_t q_chunk = global_q_chunk % num_q_chunks;
 
-            if (is_causal) {
-                generate_mask<false, 0, true, cb_mask_in>(
-                    Sq_chunk_t,
-                    Sk_chunk_t,
-                    q_chunk,
-                    0,
-                    ring_iter_needs_global_n_mask || ring_iter_needs_local_n_mask,
-                    ring_iter_needs_joint_n_mask,
-                    ring_iter_needs_global_n_mask ? global_n_within_ring_iter : local_padded_N,
-                    L,
-                    causality);
-            }
+                // Only truly causal case appear in the iteration with local KV
+                bool causality = (ring_iter == 0 ? is_causal : false);
 
-            const bool is_joint_q = q_chunk >= num_local_q_chunks;
-            Slice out_slice;
-            uint32_t end_seq_tile;
-            if (is_joint_q) {
-                const uint32_t joint_out_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-                out_slice = Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, vDHt);
-                end_seq_tile = Lt;
-            } else {
-                const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
-                out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, vDHt);
-                end_seq_tile = local_padded_Nt * (ring_id + 1);
-            }
+                if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
+                    continue;
+                }
 
-            uint32_t lse_seq_start_tile;
-            uint32_t lse_seq_end_tile;
-            if (is_joint_q) {
-                lse_seq_start_tile = local_padded_Nt + (q_chunk - num_local_q_chunks) * Sq_chunk_t;
-                lse_seq_end_tile = lse_seq_start_tile + Sq_chunk_t;
-                lse_seq_start_tile = std::min(lse_seq_start_tile, local_padded_Nt + Lt);
-                lse_seq_end_tile = std::min(lse_seq_end_tile, local_padded_Nt + Lt);
-            } else {
-                lse_seq_start_tile = q_chunk * Sq_chunk_t;
-                lse_seq_end_tile = lse_seq_start_tile + Sq_chunk_t;
-                lse_seq_start_tile = std::min(lse_seq_start_tile, local_padded_Nt);
-                lse_seq_end_tile = std::min(lse_seq_end_tile, local_padded_Nt);
-            }
+                if (is_causal) {
+                    generate_mask<false, 0, true, cb_mask_in>(
+                        Sq_chunk_t,
+                        Sk_chunk_t,
+                        q_chunk,
+                        0,
+                        ring_iter_needs_global_n_mask || ring_iter_needs_local_n_mask,
+                        ring_iter_needs_joint_n_mask,
+                        ring_iter_needs_global_n_mask ? global_n_within_ring_iter : local_padded_N,
+                        L,
+                        causality);
+                }
 
-            if (ring_iter > 0) {
-                if constexpr (use_joint_tensors) {
-                    if (is_joint_q) {
-                        read_prev_output_and_lse(
-                            joint_out_generator,
-                            lse_writer,
-                            lse_tile_logical,
-                            nb,
-                            nq,
-                            Sq_chunk_t,
-                            out_slice,
-                            end_seq_tile,
-                            lse_seq_start_tile,
-                            lse_seq_end_tile,
-                            cb_prev_out,
-                            cb_lse_in,
-                            tile_bytes,
-                            lse_tile_bytes);
+                const bool is_joint_q = q_chunk >= num_local_q_chunks;
+                Slice out_slice;
+                uint32_t end_seq_tile;
+                if (is_joint_q) {
+                    const uint32_t joint_out_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+                    out_slice = Slice(nb, nq, joint_out_row_start_tile, joint_out_row_start_tile + Sq_chunk_t, 0, vDHt);
+                    end_seq_tile = Lt;
+                } else {
+                    const uint32_t out_row_start_tile = q_chunk * Sq_chunk_t;
+                    out_slice = Slice(nb, nq, out_row_start_tile, out_row_start_tile + Sq_chunk_t, 0, vDHt);
+                    end_seq_tile = local_padded_Nt * (ring_id + 1);
+                }
+
+                uint32_t lse_seq_start_tile;
+                uint32_t lse_seq_end_tile;
+                if (is_joint_q) {
+                    lse_seq_start_tile = local_padded_Nt + (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+                    lse_seq_end_tile = lse_seq_start_tile + Sq_chunk_t;
+                    lse_seq_start_tile = std::min(lse_seq_start_tile, local_padded_Nt + Lt);
+                    lse_seq_end_tile = std::min(lse_seq_end_tile, local_padded_Nt + Lt);
+                } else {
+                    lse_seq_start_tile = q_chunk * Sq_chunk_t;
+                    lse_seq_end_tile = lse_seq_start_tile + Sq_chunk_t;
+                    lse_seq_start_tile = std::min(lse_seq_start_tile, local_padded_Nt);
+                    lse_seq_end_tile = std::min(lse_seq_end_tile, local_padded_Nt);
+                }
+
+                if (ring_iter > 0) {
+                    if constexpr (use_joint_tensors) {
+                        if (is_joint_q) {
+                            read_prev_output_and_lse(
+                                joint_out_generator,
+                                lse_writer,
+                                lse_tile_logical,
+                                nb,
+                                nq,
+                                Sq_chunk_t,
+                                out_slice,
+                                end_seq_tile,
+                                lse_seq_start_tile,
+                                lse_seq_end_tile,
+                                cb_prev_out,
+                                cb_lse_in,
+                                tile_bytes,
+                                lse_tile_bytes);
+                        } else {
+                            read_prev_output_and_lse(
+                                out_generator,
+                                lse_writer,
+                                lse_tile_logical,
+                                nb,
+                                nq,
+                                Sq_chunk_t,
+                                out_slice,
+                                end_seq_tile,
+                                lse_seq_start_tile,
+                                lse_seq_end_tile,
+                                cb_prev_out,
+                                cb_lse_in,
+                                tile_bytes,
+                                lse_tile_bytes);
+                        }
                     } else {
                         read_prev_output_and_lse(
                             out_generator,
@@ -327,42 +357,42 @@ void kernel_main() {
                             tile_bytes,
                             lse_tile_bytes);
                     }
-                } else {
-                    read_prev_output_and_lse(
-                        out_generator,
-                        lse_writer,
-                        lse_tile_logical,
-                        nb,
-                        nq,
-                        Sq_chunk_t,
-                        out_slice,
-                        end_seq_tile,
-                        lse_seq_start_tile,
-                        lse_seq_end_tile,
-                        cb_prev_out,
-                        cb_lse_in,
-                        tile_bytes,
-                        lse_tile_bytes);
                 }
-            }
 
-            if constexpr (use_joint_tensors) {
-                if (is_joint_q) {
-                    write_output_and_lse(
-                        joint_out_generator,
-                        lse_writer,
-                        lse_tile_logical,
-                        nb,
-                        nq,
-                        Sq_chunk_t,
-                        out_slice,
-                        end_seq_tile,
-                        lse_seq_start_tile,
-                        lse_seq_end_tile,
-                        cb_out,
-                        cb_lse_out,
-                        tile_bytes,
-                        lse_tile_bytes);
+                if constexpr (use_joint_tensors) {
+                    if (is_joint_q) {
+                        write_output_and_lse(
+                            joint_out_generator,
+                            lse_writer,
+                            lse_tile_logical,
+                            nb,
+                            nq,
+                            Sq_chunk_t,
+                            out_slice,
+                            end_seq_tile,
+                            lse_seq_start_tile,
+                            lse_seq_end_tile,
+                            cb_out,
+                            cb_lse_out,
+                            tile_bytes,
+                            lse_tile_bytes);
+                    } else {
+                        write_output_and_lse(
+                            out_generator,
+                            lse_writer,
+                            lse_tile_logical,
+                            nb,
+                            nq,
+                            Sq_chunk_t,
+                            out_slice,
+                            end_seq_tile,
+                            lse_seq_start_tile,
+                            lse_seq_end_tile,
+                            cb_out,
+                            cb_lse_out,
+                            tile_bytes,
+                            lse_tile_bytes);
+                    }
                 } else {
                     write_output_and_lse(
                         out_generator,
@@ -380,22 +410,6 @@ void kernel_main() {
                         tile_bytes,
                         lse_tile_bytes);
                 }
-            } else {
-                write_output_and_lse(
-                    out_generator,
-                    lse_writer,
-                    lse_tile_logical,
-                    nb,
-                    nq,
-                    Sq_chunk_t,
-                    out_slice,
-                    end_seq_tile,
-                    lse_seq_start_tile,
-                    lse_seq_end_tile,
-                    cb_out,
-                    cb_lse_out,
-                    tile_bytes,
-                    lse_tile_bytes);
             }
         }
         noc_async_write_barrier();  // Ensure writes of output and LSE complete before next iteration

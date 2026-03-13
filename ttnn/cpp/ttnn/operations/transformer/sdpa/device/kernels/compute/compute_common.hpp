@@ -1590,7 +1590,8 @@ template <
     bool use_joint_mask,
     bool is_chunked,
     uint32_t scale_fp32,
-    uint32_t sliding_window_size>
+    uint32_t sliding_window_size,
+    bool skip_kv_padding = false>
 void sdpa_inner_loop(
     const uint32_t Skt,
     const uint32_t qk_in0_block_w,
@@ -2028,7 +2029,8 @@ void sdpa_inner_loop(
         cb_pop_front(cb_q_in, q_chunk_tiles);
     }
 
-    if constexpr (sdpa_type == RING) {
+    // When skip_kv_padding=true (zigzag mode), caller handles padding once at end of all iterations.
+    if constexpr (sdpa_type == RING && !skip_kv_padding) {
         if (KV_chunks_processed_in_iter % 2 == 0) {
             cb_wait_front(cb_k_in, k_chunk_tiles);
             cb_wait_front(cb_v_in, v_chunk_tiles);
@@ -2311,7 +2313,8 @@ template <
     uint32_t NH,
     uint32_t DHt,
     uint32_t vDHt,
-    uint32_t scale_fp32>
+    uint32_t scale_fp32,
+    bool skip_kv_padding = false>
 void sdpa_ring(
     const uint32_t qk_in0_block_w,
     const uint32_t qk_subblock_w,
@@ -2382,8 +2385,9 @@ void sdpa_ring(
         false,  // use_joint_mask (not used)
         false,  // is_chunked (not used)
         scale_fp32,
-        0>(  // sliding_window_size (not used)
-        0,   // Skt (not used)
+        0,                 // sliding_window_size (not used)
+        skip_kv_padding>(  // pass through from sdpa_ring
+        0,                 // Skt (not used)
         qk_in0_block_w,
         qk_subblock_w,
         qk_subblock_h,

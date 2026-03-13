@@ -70,8 +70,18 @@ void kernel_main() {
     constexpr uint32_t total_mask_tiles = 1 + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
 
     uint32_t argidx = 0;
+#ifdef USE_ZIGZAG
+    // ZIGZAG work distribution: read pair indices instead of contiguous Q chunk range
+    // This balances causal attention work across cores by pairing light (early) with heavy (late) Q chunks
+    const uint32_t pair_start = get_arg_val<uint32_t>(argidx++);
+    const uint32_t pair_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t total_q_chunks_rt = get_arg_val<uint32_t>(argidx++);
+    // Note: total_q_chunks should equal TOTAL_Q_CHUNKS define, but we read from runtime for consistency with
+    // reader/writer
+#else
     const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
     const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+#endif
 
     RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
 
@@ -173,6 +183,90 @@ void kernel_main() {
         }
 
         if constexpr (use_streaming_compute) {
+#ifdef USE_ZIGZAG
+            // ZIGZAG work distribution: iterate over pairs, calling sdpa_ring_v2 once per Q chunk
+            // This balances causal attention work by pairing light (early) with heavy (late) Q chunks
+            // Track total KV chunks for padding at end (reader pushes padding once per ring_iter)
+            uint32_t zigzag_kv_chunks_total = 0;
+
+            for (uint32_t pair = pair_start; pair < pair_end; ++pair) {
+                uint32_t q_lo = pair;
+                uint32_t q_hi = total_q_chunks_rt - 1 - pair;
+                // For odd total_q_chunks, the middle element pairs with itself (q_lo == q_hi)
+                uint32_t num_to_process = (q_lo != q_hi) ? 2 : 1;
+
+                for (uint32_t qi = 0; qi < num_to_process; ++qi) {
+                    uint32_t global_q_chunk = (qi == 0) ? q_lo : q_hi;
+
+                    // Count KV chunks for this Q (same logic as reader)
+                    for (uint32_t k_chunk = 0; k_chunk < num_kv_chunks; ++k_chunk) {
+                        const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
+                        const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+                        if (!kv_chunk_is_joint && (kv_global_start_tile >= logical_nt)) {
+                            continue;
+                        }
+                        zigzag_kv_chunks_total++;
+                    }
+
+                    // Process single Q chunk with skip_kv_padding=true (we handle padding once at end)
+                    sdpa_ring_v2<
+                        Sq_chunk_t,
+                        Sk_chunk_t,
+                        0,  // Skt — not used for ring
+                        DHt,
+                        DHt,  // vDHt = DHt for ring
+                        scale_fp32,
+                        qk_subblock_h,
+                        cb_q_in,
+                        cb_k_in,
+                        cb_v_in,
+                        cb_qk_im,
+                        cb_identity_scale_in,
+                        cb_exp_max_diff,
+                        cb_col_identity,
+                        cb_recip_scratch,
+                        cb_mask_in,
+                        cb_scale_in,
+                        cb_lse_in,
+                        cb_lse_out,
+                        cb_prev_out,
+                        cb_out,
+                        uniform_dataformat,
+                        true>(               // skip_kv_padding=true
+                        global_q_chunk,      // global_q_start = single chunk
+                        global_q_chunk + 1,  // global_q_end = single chunk + 1
+                        num_kv_chunks,
+                        ring_iter,
+                        ring_id,
+                        num_local_k_chunks,
+                        local_padded_Nt,
+                        logical_nt,
+                        ring_iter_needs_global_n_mask,
+                        ring_iter_needs_joint_n_mask,
+                        local_n_needs_masking,
+                        global_n_mask_chunk_id,
+                        local_n_mask_chunk_id,
+                        joint_n_mask_chunk_id,
+                        cb_out_im_A,
+                        cb_out_im_B,
+                        cb_max_A,
+                        cb_max_B,
+                        cb_sum_A,
+                        cb_sum_B,
+                        lw_mask);
+                }
+            }
+
+            // Handle KV padding once at end of all zigzag iterations (matches reader padding logic)
+            constexpr uint32_t k_chunk_tiles = Sk_chunk_t * DHt;
+            constexpr uint32_t v_chunk_tiles = Sk_chunk_t * DHt;  // vDHt = DHt for ring
+            if (zigzag_kv_chunks_total % 2 == 0) {
+                cb_wait_front(cb_k_in, k_chunk_tiles);
+                cb_pop_front(cb_k_in, k_chunk_tiles);
+                cb_wait_front(cb_v_in, v_chunk_tiles);
+                cb_pop_front(cb_v_in, v_chunk_tiles);
+            }
+#else
             sdpa_ring_v2<
                 Sq_chunk_t,
                 Sk_chunk_t,
@@ -217,6 +311,7 @@ void kernel_main() {
                 cb_sum_A,
                 cb_sum_B,
                 lw_mask);
+#endif
         } else {
             bool causality = (ring_iter == 0 ? is_causal : false);
 
@@ -226,6 +321,106 @@ void kernel_main() {
             }
             bool balancing = (ring_index >= ring_id ? false : is_balanced);
 
+#ifdef USE_ZIGZAG
+            // ZIGZAG work distribution: iterate over pairs, calling sdpa_ring once per Q chunk
+            // This balances causal attention work by pairing light (early) with heavy (late) Q chunks
+            // Track total KV chunks for padding at end (reader pushes padding once per ring_iter)
+            uint32_t zigzag_kv_chunks_total_ns = 0;
+
+            for (uint32_t pair = pair_start; pair < pair_end; ++pair) {
+                uint32_t q_lo = pair;
+                uint32_t q_hi = total_q_chunks_rt - 1 - pair;
+                // For odd total_q_chunks, the middle element pairs with itself (q_lo == q_hi)
+                uint32_t num_to_process = (q_lo != q_hi) ? 2 : 1;
+
+                for (uint32_t qi = 0; qi < num_to_process; ++qi) {
+                    uint32_t global_q_chunk = (qi == 0) ? q_lo : q_hi;
+
+                    // Count KV chunks for this Q (same logic as reader)
+                    for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
+                        const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
+                        const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+                        if (!kv_chunk_is_joint && (kv_global_start_tile >= logical_nt)) {
+                            continue;
+                        }
+                        zigzag_kv_chunks_total_ns++;
+                    }
+
+                    // Process single Q chunk with skip_kv_padding=true (we handle padding once at end)
+                    sdpa_ring<
+                        cb_qk_im,
+                        cb_identity_scale_in,
+                        cb_scale_in,
+                        Sq_chunk_t,
+                        Sk_chunk_t,
+                        NH,
+                        DHt,
+                        vDHt,
+                        scale_fp32,
+                        true>(  // skip_kv_padding=true
+                        qk_in0_block_w,
+                        qk_subblock_w,
+                        qk_subblock_h,
+                        qk_in0_num_subblocks,
+                        qk_in1_num_subblocks,
+                        qk_num_blocks,
+                        out_in0_block_w,
+                        out_subblock_w,
+                        out_subblock_h,
+                        out_in0_num_subblocks,
+                        out_in1_num_subblocks,
+                        out_num_blocks,
+                        global_q_chunk,      // global_q_start = single chunk
+                        global_q_chunk + 1,  // global_q_end = single chunk + 1
+                        num_local_q_chunks,
+                        0,
+                        iter_num_kv_chunks,
+                        q_chunk_tiles,
+                        k_chunk_tiles,
+                        v_chunk_tiles,
+                        qk_chunk_tiles,
+                        out_chunk_tiles,
+                        ring_iter,
+                        ring_id,
+                        num_local_k_chunks,
+                        local_padded_Nt,
+                        logical_nt,
+                        ring_iter_needs_global_n_mask,
+                        ring_iter_needs_joint_n_mask,
+                        local_n_needs_masking,
+                        global_n_mask_chunk_id,
+                        local_n_mask_chunk_id,
+                        joint_n_mask_chunk_id,
+                        cb_q_in,
+                        cb_k_in,
+                        cb_v_in,
+                        cb_mask_in,
+                        cb_col_identity,
+                        cb_out_im_A,
+                        cb_out_im_B,
+                        cb_max_A,
+                        cb_max_B,
+                        cb_sum_A,
+                        cb_sum_B,
+                        cb_exp_max_diff,
+                        cb_lse_in,
+                        cb_lse_out,
+                        cb_prev_out,
+                        cb_out,
+                        lw_mask,
+                        causality,
+                        balancing);
+                }
+            }
+
+            // Handle KV padding once at end of all zigzag iterations (matches reader padding logic)
+            if (zigzag_kv_chunks_total_ns % 2 == 0) {
+                cb_wait_front(cb_k_in, k_chunk_tiles);
+                cb_pop_front(cb_k_in, k_chunk_tiles);
+                cb_wait_front(cb_v_in, v_chunk_tiles);
+                cb_pop_front(cb_v_in, v_chunk_tiles);
+            }
+#else
             sdpa_ring<cb_qk_im, cb_identity_scale_in, cb_scale_in, Sq_chunk_t, Sk_chunk_t, NH, DHt, vDHt, scale_fp32>(
                 qk_in0_block_w,
                 qk_subblock_w,
@@ -279,6 +474,7 @@ void kernel_main() {
                 lw_mask,
                 causality,
                 balancing);
+#endif
         }
     }
 }
