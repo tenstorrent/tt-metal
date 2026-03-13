@@ -124,10 +124,7 @@ def test_vision_block_inference(
         # Prepare input tensor for the TT model
         tt_input = pt_input.clone()
         tt_input = torch.nn.functional.pad(tt_input, (0, 0, 0, seq_len - ref_seq_len))
-        tt_input = model_args.prepare_residual_tensor_prefill(
-            tt_input.squeeze(0),
-            force_replicated=False if model_args.is_galaxy else True,
-        )
+        tt_input = model_args.prepare_residual_tensor_prefill(tt_input.squeeze(0))
 
         # Run our model
         tt_out = tt_model(
