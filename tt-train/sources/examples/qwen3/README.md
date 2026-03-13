@@ -221,6 +221,12 @@ If `TT_MESH_GRAPH_DESC_PATH` is **not** set, `enable_fabric` will attempt
 automatic selection for 8 or 32 devices, but this may not match your hardware.
 The script prints a large warning in this case.
 
+> **Warning:** An incorrect or mismatched `TT_MESH_GRAPH_DESC_PATH` does not
+> always produce an immediate error. In some configurations the process will
+> **silently hang** (e.g. during collective operations) instead of crashing.
+> If you observe a hang at startup or during the first forward pass, double-check
+> that the MGD file matches your actual hardware topology.
+
 For full details on MGD files, mesh shapes, and parallelism configuration see
 the [Distributed Training documentation](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/docs/DISTRIBUTED_TRAINING.md#setting-mgd-files-via-environment-variable).
 
