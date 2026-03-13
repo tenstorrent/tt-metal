@@ -22,9 +22,7 @@ def pad_reference(input_torch, padded_shape, input_tensor_start, pad_value):
     return torch.nn.functional.pad(input_torch, torch_padding, mode="constant", value=pad_value)
 
 
-def skip_if_tile_layout_incompatible(
-    layout, tensor_shape, padded_shape, input_shard_shape=None, output_shard_shape=None
-):
+def skip_if_tile_layout_incompatible(layout, input_shard_shape=None, output_shard_shape=None):
     """Skip test if tile layout is used but shapes aren't tile-aligned."""
     if layout != ttnn.TILE_LAYOUT:
         return
@@ -95,15 +93,15 @@ def assert_equal(expected, actual):
         # Uneven ND sharding, odd padding
         (
             [5, 4, 160, 160],
-            [5, 4, 191, 187],
+            [6, 7, 191, 187],
             [2, 3, 64, 96],
             [2, 3, 60, 40],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 2))}),
         ),
-        # Uneven ND sharding, tile layout
+        # Uneven ND sharding, tile divisible
         (
             [5, 4, 160, 160],
-            [5, 4, 192, 192],
+            [6, 7, 192, 192],
             [2, 3, 64, 96],
             [2, 3, 128, 128],
             ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 2))}),
@@ -126,9 +124,7 @@ def test_pad_nd_sharded(
     layout,
 ):
     effective_output_shard_shape = output_shard_shape if output_shard_shape is not None else input_shard_shape
-    skip_if_tile_layout_incompatible(
-        layout, tensor_shape, padded_shape, input_shard_shape, effective_output_shard_shape
-    )
+    skip_if_tile_layout_incompatible(layout, input_shard_shape, effective_output_shard_shape)
     torch.manual_seed(42)
 
     input_nd_shard_spec = ttnn.NdShardSpec(
@@ -187,7 +183,7 @@ def test_pad_nd_sharded(
 def test_pad_nd_sharded_to_interleaved(
     device, dtype, tensor_shape, padded_shape, input_shard_shape, shard_core_grid, layout
 ):
-    skip_if_tile_layout_incompatible(layout, tensor_shape, padded_shape, input_shard_shape=input_shard_shape)
+    skip_if_tile_layout_incompatible(layout, input_shard_shape=input_shard_shape)
     torch.manual_seed(42)
 
     input_nd_shard_spec = ttnn.NdShardSpec(
@@ -235,7 +231,7 @@ def test_pad_nd_sharded_to_interleaved(
 def test_pad_interleaved_to_nd_sharded(
     device, dtype, tensor_shape, padded_shape, output_shard_shape, shard_core_grid, layout
 ):
-    skip_if_tile_layout_incompatible(layout, tensor_shape, padded_shape, output_shard_shape=output_shard_shape)
+    skip_if_tile_layout_incompatible(layout, output_shard_shape=output_shard_shape)
     torch.manual_seed(42)
 
     output_nd_shard_spec = ttnn.NdShardSpec(
@@ -320,8 +316,6 @@ def test_pad_nd_sharded_to_legacy_sharded(
         pytest.skip("Invalid shard shape")
     skip_if_tile_layout_incompatible(
         layout,
-        tensor_shape,
-        padded_shape,
         input_shard_shape=input_shard_shape,
         output_shard_shape=layout_info["shard_shape"],
     )
@@ -390,9 +384,7 @@ def test_pad_legacy_sharded_to_nd_sharded(
     tensor_width = tensor_shape[-1]
 
     input_shard_shape = (tensor_height // num_shard_cores, tensor_width)
-    skip_if_tile_layout_incompatible(
-        layout, tensor_shape, padded_shape, input_shard_shape=input_shard_shape, output_shard_shape=output_shard_shape
-    )
+    skip_if_tile_layout_incompatible(layout, input_shard_shape=input_shard_shape, output_shard_shape=output_shard_shape)
     input_shard_spec = ttnn.ShardSpec(shard_core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     input_memory_config = ttnn.MemoryConfig(input_memory_layout, ttnn.BufferType.L1, input_shard_spec)
 
@@ -446,7 +438,7 @@ def test_pad_legacy_sharded_to_interleaved(device, dtype, tensor_shape, padded_s
     tensor_width = tensor_shape[-1]
 
     input_shard_shape = (tensor_height // num_shard_cores, tensor_width)
-    skip_if_tile_layout_incompatible(layout, tensor_shape, padded_shape, input_shard_shape=input_shard_shape)
+    skip_if_tile_layout_incompatible(layout, input_shard_shape=input_shard_shape)
     input_shard_spec = ttnn.ShardSpec(shard_core_grid, input_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     input_memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec
@@ -496,7 +488,7 @@ def test_pad_interleaved_to_legacy_sharded(device, dtype, tensor_shape, padded_s
     tensor_width = padded_shape[-1]
 
     output_shard_shape = (tensor_height // num_shard_cores, tensor_width)
-    skip_if_tile_layout_incompatible(layout, tensor_shape, padded_shape, output_shard_shape=output_shard_shape)
+    skip_if_tile_layout_incompatible(layout, output_shard_shape=output_shard_shape)
     output_shard_spec = ttnn.ShardSpec(shard_core_grid, output_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
     output_memory_config = ttnn.MemoryConfig(
         ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, output_shard_spec
@@ -520,3 +512,151 @@ def test_pad_interleaved_to_legacy_sharded(device, dtype, tensor_shape, padded_s
 
     expected_torch = pad_reference(input_torch_tensor, padded_shape, input_tensor_start, 0)
     assert_equal(expected_torch, output_torch_tensor)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "tensor_shape, padded_shape, input_tensor_start, input_shard_shape, shard_core_grid",
+    [
+        (
+            [1, 1, 16, 32],
+            [1, 1, 32, 64],
+            [0, 0, 8, 16],
+            [1, 1, 8, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+        ),
+        (
+            [5, 3, 17, 24],
+            [6, 5, 32, 64],
+            [1, 2, 7, 20],
+            [3, 2, 9, 16],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ),
+    ],
+    ids=["even_sharding", "uneven_sharding"],
+)
+def test_pad_nd_sharded_front_padding_row_major(
+    device, dtype, tensor_shape, padded_shape, input_tensor_start, input_shard_shape, shard_core_grid
+):
+    torch.manual_seed(42)
+
+    input_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=input_shard_shape, grid=shard_core_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    input_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=input_nd_shard_spec)
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    input_torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=input_memory_config,
+    )
+
+    output_ttnn_tensor = ttnn.pad(
+        input_ttnn_tensor, padded_shape, input_tensor_start, 7, use_multicore=True, memory_config=output_memory_config
+    )
+    output_torch_tensor = ttnn.to_torch(output_ttnn_tensor)
+
+    expected_torch = pad_reference(input_torch_tensor, padded_shape, input_tensor_start, 7)
+    assert_equal(expected_torch, output_torch_tensor)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize(
+    "tensor_shape, padded_shape, input_tensor_start, input_shard_shape, output_shard_shape, shard_core_grid",
+    [
+        (
+            [1, 1, 16, 32],
+            [1, 1, 32, 64],
+            [0, 0, 8, 16],
+            [1, 1, 8, 32],
+            [1, 1, 16, 32],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))}),
+        ),
+        (
+            [5, 3, 17, 24],
+            [6, 5, 32, 64],
+            [1, 2, 7, 20],
+            [3, 2, 9, 16],
+            [4, 4, 17, 24],
+            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))}),
+        ),
+    ],
+    ids=["different_shards_even", "different_shards_uneven"],
+)
+def test_pad_nd_sharded_to_nd_sharded_front_padding_row_major(
+    device,
+    dtype,
+    tensor_shape,
+    padded_shape,
+    input_tensor_start,
+    input_shard_shape,
+    output_shard_shape,
+    shard_core_grid,
+):
+    torch.manual_seed(42)
+
+    input_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=input_shard_shape, grid=shard_core_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    output_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=output_shard_shape, grid=shard_core_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    input_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=input_nd_shard_spec)
+    output_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=output_nd_shard_spec)
+
+    input_torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor,
+        dtype=dtype,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        device=device,
+        memory_config=input_memory_config,
+    )
+
+    output_ttnn_tensor = ttnn.pad(
+        input_ttnn_tensor, padded_shape, input_tensor_start, 7, use_multicore=True, memory_config=output_memory_config
+    )
+    output_torch_tensor = ttnn.to_torch(output_ttnn_tensor)
+
+    expected_torch = pad_reference(input_torch_tensor, padded_shape, input_tensor_start, 7)
+    assert_equal(expected_torch, output_torch_tensor)
+
+
+@pytest.mark.parametrize("dtype", [ttnn.bfloat16])
+def test_pad_nd_sharded_front_padding_tile_layout_not_supported(device, dtype):
+    torch.manual_seed(42)
+
+    tensor_shape = [1, 1, 32, 32]
+    padded_shape = [1, 1, 64, 64]
+    input_tensor_start = [0, 0, 32, 32]
+    input_shard_shape = [1, 1, 32, 32]
+    shard_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(0, 0))})
+
+    input_nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=input_shard_shape, grid=shard_core_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    input_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=input_nd_shard_spec)
+    output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+
+    input_torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
+    input_ttnn_tensor = ttnn.from_torch(
+        input_torch_tensor,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=input_memory_config,
+    )
+
+    with pytest.raises(RuntimeError, match="ttnn.pad: on device tile padding does not support front padding"):
+        ttnn.pad(
+            input_ttnn_tensor,
+            padded_shape,
+            input_tensor_start,
+            0,
+            use_multicore=True,
+            memory_config=output_memory_config,
+        )
