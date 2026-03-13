@@ -42,7 +42,9 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     experimental::CircularBuffer cb_ex_obj(cb_ex);
     experimental::CircularBuffer cb_ex2_obj(cb_ex2);
 
-    // The number of valid rows in the last tile in width dimension
+    // The number of valid columns in the last tile in width dimension.
+    // Because the Welford's llk is given transposed data, skip some rows when
+    // we want to skip some columns from getting processed by layer_norm.
     constexpr uint32_t last_tile_rows = W % tile_width;
     constexpr bool is_last_tile_full = (last_tile_rows == 0);
 
@@ -172,7 +174,9 @@ template <
 void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     experimental::CircularBuffer cb_in_obj(cb_in);
 
-    // The number of valid rows in the last tile in width dimension
+    // The number of valid columns in the last tile in width dimension.
+    // Because the Welford's llk is given transposed data, skip some rows when
+    // we want to skip some columns from getting processed by layer_norm.
     constexpr uint32_t last_tile_rows = W % tile_width;
     constexpr bool is_last_tile_full = (last_tile_rows == 0);
 
