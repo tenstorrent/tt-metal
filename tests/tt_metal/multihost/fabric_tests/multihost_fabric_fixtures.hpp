@@ -90,14 +90,6 @@ inline const std::vector<std::vector<EthCoord>>& get_eth_coords_for_dual_2x2_t3k
     return t3k_2x2_eth_coords;
 }
 
-inline const std::vector<std::vector<EthCoord>>& get_eth_coords_for_1x16_bigmesh_t3k() {
-    static const std::vector<std::vector<EthCoord>> t3k_1x16_eth_coords = {
-        get_eth_coords_for_2x4_t3k(),
-        get_eth_coords_for_2x4_t3k()};
-
-    return t3k_1x16_eth_coords;
-}
-
 // Base fixture for Inter-Mesh Routing Fabric 2D tests.
 class InterMeshRoutingFabric2DFixture : public BaseFabricFixture {
 public:
