@@ -204,12 +204,276 @@ For sharded tensors, each core processes exactly its shard's tiles (`shard_shape
 - **Sharding support and constraints**: Supports height-sharded, width-sharded, and block-sharded memory layouts. Any combination of sharded/interleaved inputs and output is supported. For block/width-sharded input with interleaved output, a specialized writer kernel handles the reshuffling.
 - **FP32 dest accumulation**: Enabled when output dtype is Float32, Int32, or UInt32. For GCD (always integer), this is always enabled, ensuring the 32-bit integer DST accumulator retains full precision.
 
+## SFPU Kernel Implementation
+
+This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to.
+
+### SFPU Abstraction Layers
+
+| Layer | File Path |
+|-------|-----------|
+| **API Header** | `tt_metal/hw/inc/api/compute/gcd.h` |
+| **LLK Dispatch** | `tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_gcd.h` |
+| **Core SFPU Implementation** | `tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/ckernel_sfpu_gcd.h` |
+| **Parameters Dispatch** | `tt_metal/third_party/tt_llk/tt_llk_{wormhole_b0,blackhole}/llk_lib/llk_math_eltwise_binary_sfpu_params.h` |
+
+### Call Chain
+
+1. The compute kernel calls `gcd_tile_init()` (from `api/compute/gcd.h`), which dispatches to `llk_math_eltwise_binary_sfpu_gcd_init<APPROX>()` on the MATH engine. This calls `_llk_math_eltwise_binary_sfpu_init_<SfpuType::gcd>()` to configure SFPU state and ADDR_MOD_7, then calls `calculate_sfpu_gcd_init()` to record the 7-instruction loop body into a 28-instruction replay buffer (4 unrolled iterations).
+
+2. The compute kernel then calls `gcd_tile(i*2, i*2+1, i*2)` (from `api/compute/gcd.h`), which dispatches to `llk_math_eltwise_binary_sfpu_gcd<APPROX>(idst0, idst1, odst, VectorMode::RC)` on the MATH engine.
+
+3. This calls `_llk_math_eltwise_binary_sfpu_params_<APPROX>(sfpu::calculate_sfpu_gcd, dst_index0, dst_index1, odst, VectorMode::RC)`, which starts the SFPU, loops over 4 tile faces calling `calculate_sfpu_gcd()` per face, advancing the DEST read/write pointer by 16 rows (2x `SETRWC +8`) between faces, then stops the SFPU.
+
+4. `calculate_sfpu_gcd()` iterates 8 times (one per row-group within a face), loading 32 lanes from two DST tiles via `SFPLOAD`, executing the binary GCD algorithm via `calculate_sfpu_gcd_body<31>()`, storing the result via `SFPSTORE`, and incrementing `dst_reg` to advance to the next row.
+
+### Parameters Dispatch Summary
+
+- **Vector mode**: `VectorMode::RC` (default). All 4 faces of the 32x32 tile are processed. The params dispatch loops `face = 0..3`, calling the SFPU function once per face.
+- **Operation invocation**: For each face, `calculate_sfpu_gcd(dst_index_in0, dst_index_in1, dst_index_out)` is called with its default `ITERATIONS=8`. This processes all 8 row-groups (4 rows each, 32 lanes wide) within the face.
+- **DEST address progression**: Between faces, `TTI_SETRWC(CLR_NONE, CR_D, 8, 0, 0, SET_D)` is called twice, advancing the DEST base address by 16 rows total. Within `calculate_sfpu_gcd`, `dst_reg++` advances the SFPU's internal row pointer after each of the 8 iterations. The SFPLOAD/SFPSTORE instructions use a base address of `dst_index * 64` (64 rows per tile in DEST), and the `dst_reg` counter auto-increments to process successive 4-row groups.
+
+### Annotated SFPU Kernel Source
+
+This kernel uses raw `TT_`/`TTI_` instructions with CC manipulation via `SFPSETCC`, `SFPENCC`, and `SFPLZ` (with `SFPLZ_MOD1_CC_NE0`). It falls under **Style B** due to the complex CC usage in the init (replay) loop body combined with `SFPSETCC`/`SFPENCC` in the main body.
+
+```cpp
+// File: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gcd.h
+// (Blackhole implementation is identical)
+
+template <int max_input_bits = 31>
+inline void calculate_sfpu_gcd_body() {
+    TTI_SFPMOV(0, p_sfpu::LREG0, p_sfpu::LREG2, 0); // c = a
+    TTI_SFPOR(0, p_sfpu::LREG1, p_sfpu::LREG2, 0); // c |= b
+
+    TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG3, 0); // d = c
+    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG3, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST); // d = -d
+    TTI_SFPAND(0, p_sfpu::LREG2, p_sfpu::LREG3, 0); // d &= c (isolate LSB)
+    TTI_SFPLZ(0, p_sfpu::LREG3, p_sfpu::LREG3, 0); // d = clz(d)
+
+    // Ensure that b is odd: if LSB is zero, then swap with a.
+    TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG3, p_sfpu::LREG2, SFPSHFT2_MOD1_SHFT_LREG); // c = b << d
+    TTI_SFPSETCC(0, p_sfpu::LREG2, 0, 6); // if c == 0 then b is even
+    TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, 0); // swap(a, b)
+    TTI_SFPENCC(0, 0, 0, 0);
+    TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG0, 0); // a = abs(a)
+    TTI_SFPABS(0, p_sfpu::LREG1, p_sfpu::LREG1, 0); // b = abs(b)
+
+    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST); // a = -a
+    TTI_SFPIADD(0, p_sfpu::LCONST_0, p_sfpu::LREG3, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST); // d = -d
+
+    int iterations = max_input_bits - 1;
+
+    #pragma GCC unroll 7
+    while (iterations / 4 > 0) {
+        TTI_REPLAY(0, 7 * 4, 0, 0);
+        iterations -= 4;
+    }
+
+    // Replay 2 more iterations, making a total of 30 iterations.
+    // The worst case for 31-bit inputs is 31 iterations, but we can skip the final iteration as it only affects a.
+    // In addition, we can skip the final operation of the 30th iteration as it only affects a.
+    TTI_REPLAY(0, 7 * iterations - 1, 0, 0);
+
+    TTI_SFPENCC(0, 0, 0, 0);
+}
+
+template <int ITERATIONS = 8>
+inline void calculate_sfpu_gcd(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // Binary GCD algorithm.
+    for (int d = 0; d < ITERATIONS; d++) {
+        // size of each tile in Dest is 64 rows
+        constexpr uint dst_tile_size = 64;
+
+        TT_SFPLOAD(p_sfpu::LREG0, 4, 3, dst_index_in0 * dst_tile_size);  // a
+        TT_SFPLOAD(p_sfpu::LREG1, 4, 3, dst_index_in1 * dst_tile_size);  // b
+
+        calculate_sfpu_gcd_body<31>();
+
+        TT_SFPSTORE(p_sfpu::LREG1, 4, 3, dst_index_out * dst_tile_size);
+        dst_reg++;
+    }
+}
+
+inline void calculate_sfpu_gcd_init() {
+    TTI_REPLAY(0, 7 * 4, 0, 1);
+    #pragma GCC unroll 4
+    for (int i = 0; i < 4; ++i) {
+        // We store {-a, a} in {LREG0, LREG2}, which is convenient for isolating the LSB of a.
+        TTI_SFPABS(0, p_sfpu::LREG0, p_sfpu::LREG2, 0); // LREG2 = +a
+        TTI_SFPAND(0, p_sfpu::LREG2, p_sfpu::LREG0, 0); // LREG0 &= a (isolate LSB and overwrite -a)
+        TTI_SFPLZ(0, p_sfpu::LREG0, p_sfpu::LREG0, SFPLZ_MOD1_CC_NE0); // LREG0 = clz(LREG0), disable lanes where a == 0
+        TTI_SFPIADD(0, p_sfpu::LREG3, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE); // LREG0 += d
+        TTI_SFPSHFT2(p_sfpu::LREG2, p_sfpu::LREG0, p_sfpu::LREG0, SFPSHFT2_MOD1_SHFT_LREG); // LREG0 = a >> -LREG0, making a definitely odd (now both a and b are odd)
+        TTI_SFPSWAP(0, p_sfpu::LREG0, p_sfpu::LREG1, SFPSWAP_MOD1_VEC_MIN_MAX); // ensure b < a
+        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, SFPIADD_MOD1_CC_NONE | SFPIADD_MOD1_ARG_2SCOMP_LREG_DST); // a = b - a (now a is even)
+    }
+}
+```
+
+#### CC State Machine: `calculate_sfpu_gcd_body`
+
+The body function has two distinct CC regions: (1) the setup phase with SFPSETCC/SFPENCC around a conditional swap, and (2) the replay loop body (recorded in `calculate_sfpu_gcd_init`) which uses SFPLZ with CC_NE0 to disable lanes where `a == 0` (GCD already found).
+
+```
+calculate_sfpu_gcd_body -- CC State Transitions
+================================================================
+
+  CC State: ALL_ENABLED                   <-- initial state
+       |
+       |  SFPMOV  L2 = L0                 (no CC effect)
+       |  SFPOR   L2 |= L1               (no CC effect)
+       |  SFPMOV  L3 = L2                 (no CC effect)
+       |  SFPIADD L3 = -L3  CC_NONE      (no CC effect, CC_NONE opt-out)
+       |  SFPAND  L3 &= L2               (no CC effect)
+       |  SFPLZ   L3 = clz(L3)  mod1=0   (no CC effect, SFPLZ_MOD1_CC_NONE)
+       |  SFPSHFT2 L2 = L1 << L3         (no CC effect)
+       |
+       v
+  +-------------------------------------------+
+  | SFPSETCC  L2, mod1=6 (LREG_EQ0)          |
+  |                                           |
+  | CC <- (LREG2 == 0)                        |
+  | i.e. enabled where b shifted left by      |
+  | clz(LSB(a|b)) equals zero, meaning b is   |
+  | even (its trailing zeros >= clz count)     |
+  +-------------------+-----------------------+
+                      |
+                      v
+  CC State: ENABLED where LREG2 == 0 (b is even)
+       |
+       |  SFPSWAP L0, L1  mod1=0          (CC-guarded: only lanes where b is even get swapped)
+       |
+       v
+  +-------------------------------------------+
+  | SFPENCC                                   |
+  |                                           |
+  | CC <- ALL_ENABLED                         |
+  +-------------------+-----------------------+
+                      |
+                      v
+  CC State: ALL_ENABLED
+       |
+       |  SFPABS  L0 = abs(L0)            (all lanes)
+       |  SFPABS  L1 = abs(L1)            (all lanes)
+       |  SFPIADD L0 = -L0  CC_NONE       (no CC effect, CC_NONE opt-out)
+       |  SFPIADD L3 = -L3  CC_NONE       (no CC effect, CC_NONE opt-out)
+       |
+       v
+
+  == Replay Loop (30 iterations via TTI_REPLAY) ==
+  The replayed instructions come from calculate_sfpu_gcd_init:
+
+  Per iteration (7 instructions):
+  CC State: ALL_ENABLED at start of first iteration
+  (Note: SFPLZ with SFPLZ_MOD1_CC_NE0 sets CC)
+       |
+       |  SFPABS  L2 = abs(L0)            (all lanes, since -a -> +a)
+       |  SFPAND  L0 &= L2               (all lanes, isolates LSB of a)
+       |
+       v
+  +-------------------------------------------+
+  | SFPLZ  L0 = clz(L0), SFPLZ_MOD1_CC_NE0  |
+  |                                           |
+  | CC <- (L0 != 0 before CLZ)               |
+  | Disables lanes where a == 0 (GCD found)  |
+  +-------------------+-----------------------+
+                      |
+                      v
+  CC State: ENABLED where a != 0
+       |
+       |  SFPIADD L0 += L3  CC_NONE       (CC-guarded: only a!=0 lanes; CC_NONE prevents CC update)
+       |  SFPSHFT2 L0 = L2 >> -L0         (CC-guarded: strips trailing zeros from a)
+       |  SFPSWAP L0, L1  MIN_MAX         (CC-guarded: ensures b <= a as signed integers)
+       |  SFPIADD L0 = L1 - L0  CC_NONE   (CC-guarded: a = b - a, making a even again)
+       |
+       v
+  (next iteration starts; CC is NOT reset between iterations --
+   lanes where a became 0 stay disabled for all subsequent iterations)
+
+  == End of replay loop ==
+
+  +-------------------------------------------+
+  | SFPENCC                                   |
+  |                                           |
+  | CC <- ALL_ENABLED                         |
+  +-------------------+-----------------------+
+                      |
+                      v
+  CC State: ALL_ENABLED
+       |
+       v
+  (function returns; result is in LREG1)
+```
+
+**Key CC insight**: The `SFPLZ_MOD1_CC_NE0` in the replay loop progressively disables lanes as they converge to GCD (when `a` becomes 0, that lane's GCD is in `b`/LREG1). Since `SFPENCC` is NOT called between replay iterations, once a lane is disabled it stays disabled for all remaining iterations. This is an optimization -- converged lanes skip unnecessary work. The final `SFPENCC` at the end of `calculate_sfpu_gcd_body` re-enables all lanes before returning.
+
+### SFPU Instructions Used
+
+| Instruction | Description |
+|-------------|-------------|
+| `SFPLOAD` (`TT_SFPLOAD`) | Loads 32 datums from DEST register file into an LREG. Mod0=4 (`SFPLOAD_MOD0_FMT_BOB32`, "Bag Of Bits" 32-bit) loads raw 32-bit values without format conversion, ignoring lane-enable. AddrMod=3 selects `ADDR_MOD_3` for DEST address progression. |
+| `SFPSTORE` (`TT_SFPSTORE`) | Stores 32 datums from an LREG back to DEST register file. Mod0=4 (`SFPSTORE_MOD0_FMT_BOB32`, "Bag Of Bits" 32-bit) stores raw 32-bit values without format conversion, ignoring lane-enable. AddrMod=3 selects `ADDR_MOD_3`. |
+| `SFPMOV` (`TTI_SFPMOV`) | Copies one LREG to another (register-to-register move). No CC effect. |
+| `SFPOR` (`TTI_SFPOR`) | Bitwise OR of two LREGs. Used to compute `a \| b` for LSB isolation. No CC effect. |
+| `SFPAND` (`TTI_SFPAND`) | Bitwise AND of two LREGs. Used to isolate the least significant set bit via `x & (-x)`. No CC effect. |
+| `SFPABS` (`TTI_SFPABS`) | Integer absolute value (mod1=0 defaults to integer mode). Converts negative two's complement to positive. No CC effect. |
+| `SFPLZ` (`TTI_SFPLZ`) | Count leading zeros. With mod1=0 (`SFPLZ_MOD1_CC_NONE`): pure CLZ, no CC effect. With mod1=2 (`SFPLZ_MOD1_CC_NE0`): CLZ + sets CC to enabled where input != 0 (before CLZ operation). |
+| `SFPIADD` (`TTI_SFPIADD`) | Integer add/subtract. With `SFPIADD_MOD1_CC_NONE` (mod1 bit 2 set): no CC update. With `SFPIADD_MOD1_ARG_2SCOMP_LREG_DST` (mod1 bit 1 set): computes `VC + (-VD)` effectively doing `VC - VD` or negation when VC=0. These modifier bits combine via OR. |
+| `SFPSHFT2` (`TTI_SFPSHFT2`) | Bitwise shift by register amount. `SFPSHFT2_MOD1_SHFT_LREG` (mod1=5): shifts VB by VC amount (left if positive, right if negative). Used to strip trailing zeros. No CC effect. |
+| `SFPSWAP` (`TTI_SFPSWAP`) | With mod1=0 (`SFPSWAP_MOD1_SWAP`): unconditional register swap (respects CC gating). With mod1=1 (`SFPSWAP_MOD1_VEC_MIN_MAX`): sets VD=min(VC,VD), VC=max(VC,VD) as signed integers. No CC effect. |
+| `SFPSETCC` (`TTI_SFPSETCC`) | Sets condition code. Mode 6 (`SFPSETCC_MOD1_LREG_EQ0`): enables lanes where the source LREG equals zero. |
+| `SFPENCC` (`TTI_SFPENCC`) | Resets condition code to ALL_ENABLED. Re-enables all lanes for subsequent operations. |
+| `REPLAY` (`TTI_REPLAY`) | Replays previously recorded instructions from the replay buffer. With last arg=1: starts recording mode (subsequent instructions are captured into the buffer). With last arg=0: replays `count` instructions from the buffer. Second arg specifies the instruction count. |
+
+### SFPU Register Usage
+
+| Register | Role | Description |
+|----------|------|-------------|
+| **LREG0** | `a` (negated) | Holds the first operand, stored as `-a` (negated) during the iterative loop. In the init replay body, LREG0 alternates between holding `-a`, then `abs(a)` (via SFPABS), then `clz(LSB)`, then the shift amount, then the odd `a` value, and finally `b - a` (the new even `a`). |
+| **LREG1** | `b` (GCD result) | Holds the second operand `b`. After SFPSWAP with MIN_MAX, LREG1 always holds the smaller value. When the algorithm converges (`a == 0`), LREG1 contains the GCD. This register is stored back to DEST as the output. |
+| **LREG2** | Temporary `c` | Used as scratch for intermediate values: `a \| b`, shifted `b`, absolute value of `a`. Reused across phases. |
+| **LREG3** | Temporary `d` (negate of CLZ) | Holds the count of trailing zeros (as a negated CLZ value) used for right-shifting. In the body setup, computed as `clz(LSB(a\|b))`; in the replay loop, accumulated shift count for stripping trailing zeros from `a`. |
+| **LCONST_0** | Zero constant | Hardware constant register holding 0. Used with `SFPIADD` + `2SCOMP_LREG_DST` to negate a register (0 - VD). |
+| **dst_reg** | DEST row counter | SFPU internal counter that auto-increments to walk through the 8 row-groups (4 rows each) within a tile face. Incremented via `dst_reg++` after each iteration of the outer loop in `calculate_sfpu_gcd`. |
+
+### Address Mode Configuration
+
+The SFPU init function `_llk_math_eltwise_binary_sfpu_init_<SfpuType::gcd>()` calls `eltwise_binary_sfpu_configure_addrmod<SfpuType::gcd>()`, which configures:
+
+**ADDR_MOD_7** (used for all SFPU operations in this kernel):
+```
+addr_mod_t {
+    .srca = {.incr = 0},
+    .srcb = {.incr = 0},
+    .dest = {.incr = 0},
+}
+```
+
+All increments are zero -- the DEST address does not auto-increment via ADDR_MOD between SFPU instructions. Instead, DEST progression is handled explicitly:
+- **Between row-groups within a face**: `dst_reg++` in the `calculate_sfpu_gcd` loop advances the SFPU's internal row pointer.
+- **Between faces**: `TTI_SETRWC(CLR_NONE, CR_D, 8, 0, 0, SET_D)` called twice (advancing by 16 rows total) in the params dispatch loop.
+
+GCD does NOT use ADDR_MOD_6 (the conditional branch for `SfpuType::mul_int32`, `max`, `min`, etc. does not match `SfpuType::gcd`).
+
+The SFPLOAD/SFPSTORE instructions reference `AddrMod=3` (ADDR_MOD_3). This address mode is not explicitly configured by the GCD init function -- it uses whatever default or prior configuration exists for ADDR_MOD_3 from the `A2D` (unpack-to-DEST) pipeline. The key point is that `dst_reg++` is what actually advances the DEST row pointer between iterations, not the ADDR_MOD auto-increment.
+
+This configuration is identical for Wormhole and Blackhole -- the `eltwise_binary_sfpu_configure_addrmod` function and the entire `ckernel_sfpu_gcd.h` implementation are the same across both architectures.
+
 ## External Knowledge Sources
 
 ### DeepWiki Queries
 1. **Query**: "How does the binary element-wise SFPU program factory work in ttnn? What kernels does it use and how does it handle broadcasting?"
    **Reason**: Needed architectural context for the legacy binary SFPU path before reading source code.
    **Key Findings**: Confirmed the three kernels used (reader_binary_interleaved_start_id, eltwise_binary_sfpu_kernel, writer_unary_interleaved_start_id), the factory selection logic via `is_binary_sfpu_op`, and that broadcasting routes to different factories.
+
+2. [SFPU] **Query**: "How does the gcd_tile function work in the LLK layer? What is the call chain from gcd_tile through llk_math to the ckernel SFPU implementation?"
+   **Reason**: Needed to trace the full call chain from the tile-level API through LLK dispatch to the core SFPU kernel.
+   **Key Findings**: DeepWiki did not have GCD-specific documentation but confirmed the general binary SFPU pattern: tile-level API -> llk_math dispatch -> `_llk_math_eltwise_binary_sfpu_params_` -> ckernel SFPU function. The binary SFPU params template handles face iteration and SETRWC advancement.
+
+3. [SFPU] **Query**: "What do the SFPU instructions SFPABS, SFPAND, SFPLZ, SFPSHFT2, SFPSWAP, SFPIADD, SFPLOAD, SFPSTORE, SFPSETCC, SFPENCC do? What are their operand formats and how do they interact with condition codes?"
+   **Reason**: Needed detailed semantics of every SFPU instruction used in the GCD kernel to accurately document CC state transitions and register manipulation.
+   **Key Findings**: Confirmed SFPABS does integer absolute value; SFPAND is bitwise AND; SFPLZ counts leading zeros with optional CC setting; SFPSHFT2 does register-amount bitwise shifts; SFPSWAP can do min/max or unconditional swap; SFPIADD does integer add/subtract with optional CC update and 2's complement modes; SFPSETCC sets CC based on register comparison; SFPENCC resets CC to all-enabled. SFPLOAD/SFPSTORE move data between DEST and LREGs with format conversion.
 
 ### Documentation References
 1. **Source**: `ttnn/cpp/ttnn/operations/eltwise/binary/common/binary_op_utils.cpp` (lines 47-52, 358-361, 535)
@@ -218,4 +482,16 @@ For sharded tensors, each core processes exactly its shard's tiles (`shard_shape
 
 2. **Source**: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_gcd.h`
    **Reason**: To understand the SFPU-level GCD algorithm implementation.
-   **Key Information**: Implements the binary GCD algorithm using SFPU instructions (SFPABS, SFPAND, SFPLZ, SFPSHFT2, SFPSWAP, SFPIADD). Uses TTI_REPLAY for loop unrolling -- init records 4 iterations into replay buffer, then body replays 7*4 + 7*2-1 = 41 instruction groups for 30 total iterations. Handles 31-bit signed integers. Loads/stores tile rows via SFPLOAD/SFPSTORE with INT32 data format (mode 4, format 3).
+   **Key Information**: Implements the binary GCD algorithm using SFPU instructions (SFPABS, SFPAND, SFPLZ, SFPSHFT2, SFPSWAP, SFPIADD). Uses TTI_REPLAY for loop unrolling -- init records 4 iterations into replay buffer, then body replays 7x4 + 7x2-1 = 41 instruction groups for 30 total iterations. Handles 31-bit signed integers. Loads/stores tile rows via SFPLOAD/SFPSTORE with BOB32 format (Mod0=4, "Bag Of Bits" raw 32-bit).
+
+3. [SFPU] **Source**: `runtime/sfpi/include/sfpi_constants.h`
+   **Reason**: To verify numeric values of SFPU instruction modifier constants and SFPLOAD/SFPSTORE format modes.
+   **Key Information**: `SFPSETCC_MOD1_LREG_EQ0 = 6`, `SFPLZ_MOD1_CC_NE0 = 2`, `SFPSWAP_MOD1_VEC_MIN_MAX = 1`, `SFPSHFT2_MOD1_SHFT_LREG = 5`, `SFPLOAD_MOD0_FMT_BOB32 = 4` (Bag Of Bits 32-bit raw load, no format conversion), `SFPSTORE_MOD0_FMT_BOB32 = 4`.
+
+4. [SFPU] **Source**: `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary_sfpu.h`
+   **Reason**: To understand the SFPU init, start, done functions and ADDR_MOD configuration.
+   **Key Information**: `eltwise_binary_sfpu_configure_addrmod` sets ADDR_MOD_7 with all-zero increments for GCD. The start function sets the DEST write address and stalls waiting for SFPU. The done function clears the DEST address and waits for SFPU completion.
+
+5. [SFPU] **Source**: `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary_sfpu_params.h`
+   **Reason**: To understand the face iteration and DEST address progression in the binary SFPU params dispatch.
+   **Key Information**: For VectorMode::RC, iterates 4 faces, calling the SFPU function per face with 2x `TTI_SETRWC(CR_D, +8)` between faces (16-row advancement). Blackhole params dispatch is identical.

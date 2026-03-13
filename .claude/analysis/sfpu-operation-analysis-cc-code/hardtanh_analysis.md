@@ -193,6 +193,113 @@ Note: HARDTANH does not match any of the special cases in the runtime arg packin
 - **Sharding support and constraints**: The `UnaryProgramFactory` analyzed here handles only interleaved tensors. Sharded inputs use a separate `UnaryShardedProgramFactory`.
 - **FP32 dest accumulation**: Controlled by `args.fp32_dest_acc_en`. When enabled, the DEST register uses FP32 precision for accumulation, which is relevant for maintaining precision in the clamp comparison.
 
+## SFPU Kernel Implementation
+
+This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to.
+
+### SFPU Abstraction Layers
+
+| Layer | File Path |
+|-------|-----------|
+| **API Header** | `tt_metal/hw/inc/api/compute/eltwise_unary/hardtanh.h` |
+| **LLK Dispatch** | `tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_hardtanh.h` |
+| **Core SFPU Implementation** | `tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/ckernel_sfpu_hardtanh.h` |
+| **Parameters Dispatch** | `tt_metal/third_party/tt_llk/tt_llk_{wormhole_b0,blackhole}/llk_lib/llk_math_eltwise_unary_sfpu_params.h` |
+
+### Call Chain
+
+1. The compute kernel's `SFPU_OP_CHAIN_0` macro expands to `hardtanh_tile_init(); hardtanh_tile(0, {min_hex}u, {max_hex}u);`.
+2. `hardtanh_tile_init()` (in `hardtanh.h`) calls `llk_math_eltwise_unary_sfpu_hardtanh_init<APPROX>()`, which calls `llk_math_eltwise_unary_sfpu_init<SfpuType::hardtanh, APPROX>()` to configure SFPU config registers and address modes.
+3. `hardtanh_tile(idst, param0, param1)` (in `hardtanh.h`) calls `llk_math_eltwise_unary_sfpu_hardtanh<APPROX>(idst, param0, param1)`.
+4. `llk_math_eltwise_unary_sfpu_hardtanh` (in `llk_math_eltwise_unary_sfpu_hardtanh.h`) calls `_llk_math_eltwise_unary_sfpu_params_<APPROX>(ckernel::sfpu::calculate_hardtanh<APPROX, 8>, dst_index, VectorMode::RC, param0, param1)`.
+5. `_llk_math_eltwise_unary_sfpu_params_` (in `llk_math_eltwise_unary_sfpu_params.h`) sets up DEST addressing, stalls for SFPU readiness, then calls `calculate_hardtanh(param0, param1)` once per face (4 times for `VectorMode::RC`), advancing the DEST address between faces.
+6. `calculate_hardtanh` (in `ckernel_sfpu_hardtanh.h`) executes the raw SFPU instruction sequence that performs the clamp operation.
+
+### Parameters Dispatch Summary
+
+- **Vector mode**: `VectorMode::RC` (default). All 4 faces of the 32x32 tile are processed. The dispatch loop iterates `face = 0..3`, calling the SFPU function once per face.
+- **Operation invocation**: The core SFPU function `calculate_hardtanh` is called 4 times (once per face). Each invocation internally loops 8 times (`ITERATIONS=8`), processing one datum row per iteration. This covers all 8 rows of a 16x16 face.
+- **DEST address progression**: Between faces, the dispatch function advances the DEST write address by 16 rows. On Wormhole, this is done via two `TTI_SETRWC(CLR_NONE, CR_D, 8, ...)` calls (each incrementing by 8). On Blackhole, this is done via two `inc_dst_addr<8>()` calls. Within a face, the SFPU kernel uses `sfpi::dst_reg++` to advance one row at a time. The SFPLOAD/SFPSTORE instructions use `ADDR_MOD_3` (Wormhole) or `ADDR_MOD_7` (Blackhole) with `dest.incr = 0`, so there is no auto-increment on load/store -- `dst_reg++` handles all intra-face row advancement.
+
+### Annotated SFPU Kernel Source
+
+The kernel uses raw `TTI_` instructions but has no condition code manipulation (no `SFPSETCC`, `SFPENCC`, or implicit CC side effects). `SFPSWAP`, `SFPLOAD`, `SFPSTORE`, `SFPMOV`, and `SFPLOADI` do not set CC. This is Style A.
+
+```cpp
+// File: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_hardtanh.h
+// (Blackhole version is identical except ADDR_MOD_7 replaces ADDR_MOD_3)
+
+namespace ckernel::sfpu {
+
+// Hardtanh(x) = max_val if x > max_val, min_val if x < min_val, else x
+// Equivalent to: clamp(x, min_val, max_val) = min(max(x, min_val), max_val)
+template <bool APPROXIMATION_MODE, int ITERATIONS>
+inline void calculate_hardtanh(uint param0, uint param1) { // APPROXIMATION_MODE is unused, ITERATIONS=8
+    // Load min_val (param0) into LREG2 as a full 32-bit float, lower 16 bits then upper 16 bits
+    TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_LOWER, param0 & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_UPPER, param0 >> 16);
+    // Load max_val (param1) into LREG3 as a full 32-bit float
+    TT_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_LOWER, param1 & 0xFFFF);
+    TT_SFPLOADI(p_sfpu::LREG3, sfpi::SFPLOADI_MOD0_UPPER, param1 >> 16);
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        // === Phase 1: x = max(x, min_val) ===
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0); // Load x from DEST into LREG0
+        TTI_SFPMOV(0, p_sfpu::LREG2, p_sfpu::LREG1, 0); // Copy min_val from LREG2 to LREG1
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1); // mod1=1: smaller value -> LREG0, larger -> LREG1
+        TTI_SFPSTORE(p_sfpu::LREG1, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0); // Store max(x, min_val) from LREG1
+
+        // === Phase 2: x = min(result, max_val) ===
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0); // Reload max(x, min_val) from DEST
+        TTI_SFPMOV(0, p_sfpu::LREG3, p_sfpu::LREG1, 0); // Copy max_val from LREG3 to LREG1
+        TTI_SFPSWAP(0, p_sfpu::LREG1, p_sfpu::LREG0, 1); // mod1=1: smaller value -> LREG0, larger -> LREG1
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_3, 0); // Store min(result, max_val) from LREG0
+
+        sfpi::dst_reg++; // Advance to the next row in the current tile face
+    }
+}
+
+}  // namespace ckernel::sfpu
+```
+
+### SFPU Instructions Used
+
+| Instruction | Description |
+|-------------|-------------|
+| `TT_SFPLOADI` | Loads a 16-bit immediate value into the lower or upper half of an SFPU local register. Used here to construct 32-bit float constants (min_val, max_val) in LREG2 and LREG3 from two 16-bit halves. The `SFPLOADI_MOD0_LOWER` and `SFPLOADI_MOD0_UPPER` modifiers select which half to write. |
+| `TTI_SFPLOAD` | Loads a vector of values from the DEST register file into an SFPU local register (LREG0). `InstrModLoadStore::DEFAULT` loads in the default floating-point format. The address offset field (0) combined with the current DEST row pointer determines which row is read. |
+| `TTI_SFPMOV` | Copies the contents of one SFPU local register to another. Used to duplicate the constant (min_val or max_val) into LREG1 before the swap, preserving the original in LREG2/LREG3 for reuse across iterations. |
+| `TTI_SFPSWAP` | Conditionally swaps values between two SFPU local registers based on magnitude comparison. With `mod1=1`, places the smaller value in VD (LREG0) and the larger value in VC (LREG1). This single instruction implements both `max()` and `min()` -- after the swap, LREG1 holds the max and LREG0 holds the min. Does not modify condition codes. |
+| `TTI_SFPSTORE` | Stores a vector of values from an SFPU local register back to the DEST register file. Uses the same address mode and offset as SFPLOAD to write back to the same DEST row. |
+| `sfpi::dst_reg++` | Increments the DEST register row pointer by 1, advancing to the next row within the current tile face. This is an SFPI abstraction that translates to an internal DEST address counter increment. |
+
+### SFPU Register Usage
+
+| Register | Usage |
+|----------|-------|
+| **LREG0** | Working register. Loaded with the current element vector from DEST via `SFPLOAD`. After `SFPSWAP` in Phase 1, holds `min(x, min_val)` (discarded). After `SFPSWAP` in Phase 2, holds `min(max(x, min_val), max_val)` -- the final clamped result, stored back to DEST. |
+| **LREG1** | Temporary register. Receives a copy of the comparison constant via `SFPMOV`. After `SFPSWAP` in Phase 1, holds `max(x, min_val)` (stored to DEST). After `SFPSWAP` in Phase 2, holds the larger of the two values (discarded). |
+| **LREG2** | Holds `min_val` (param0) throughout the entire kernel execution. Loaded once before the loop via two `TT_SFPLOADI` instructions (lower 16 bits, then upper 16 bits). Never modified during the loop. |
+| **LREG3** | Holds `max_val` (param1) throughout the entire kernel execution. Loaded once before the loop via two `TT_SFPLOADI` instructions. Never modified during the loop. |
+| **DEST** | The destination register file. Each row contains a vector of elements from the tile face. Read via `SFPLOAD` and written back via `SFPSTORE`. The row pointer advances by 1 each iteration via `dst_reg++`. |
+
+### Address Mode Configuration
+
+The `hardtanh` SFPU kernel uses `ADDR_MOD_3` on Wormhole and `ADDR_MOD_7` on Blackhole for all `SFPLOAD` and `SFPSTORE` instructions.
+
+**Wormhole B0**:
+- `ADDR_MOD_7` is explicitly configured during init (`eltwise_unary_sfpu_configure_addrmod<SfpuType::hardtanh>()`) to `{ srca.incr=0, srcb.incr=0, dest.incr=0 }`.
+- The dispatch function `_llk_math_eltwise_unary_sfpu_params_` calls `math::set_addr_mod_base()`, which executes `TTI_SETC16(ADDR_MOD_SET_Base_ADDR32, 1)`, shifting the effective ADDR_MOD base from slot 0..3 to slots 4..7. When the kernel references `ADDR_MOD_3`, the hardware resolves it as physical slot `3 + 4 = 7`, which is the slot configured with `dest.incr=0`.
+- With `dest.incr=0`, SFPLOAD/SFPSTORE do not auto-increment the DEST address. Row advancement within a face is handled entirely by `sfpi::dst_reg++`.
+
+**Blackhole**:
+- `ADDR_MOD_7` is explicitly configured during init to `{ srca.incr=0, srcb.incr=0, dest.incr=0 }`.
+- Blackhole does not use the ADDR_MOD base offset mechanism -- `_llk_math_eltwise_unary_sfpu_start_` does NOT call `set_addr_mod_base()`. The kernel directly references `ADDR_MOD_7`, which is the explicitly configured slot. Behavior is identical: `dest.incr=0`, no auto-increment.
+
+**Between faces** (managed by the params dispatch, not the SFPU kernel itself):
+- On Wormhole: two `TTI_SETRWC(CLR_NONE, CR_D, 8, ...)` calls advance DEST by 16 rows (8+8) to the next face.
+- On Blackhole: two `math::inc_dst_addr<8>()` calls achieve the same 16-row advance.
+
 ## External Knowledge Sources
 
 ### DeepWiki Queries
@@ -200,6 +307,18 @@ Note: HARDTANH does not match any of the special cases in the runtime arg packin
 1. **Query**: "How does the unary program factory work for SFPU operations? What is the structure of unary_program_factory.cpp and how does it set up kernels, circular buffers, and core distribution for SFPU unary ops?"
    **Reason**: Initial architectural understanding of the program factory pattern for unary SFPU operations.
    **Key Findings**: The factory creates three kernels (reader, compute, writer), splits work across cores using `split_work_to_cores()`, sets up CB c_0 (input, double-buffered) and CB c_2 (output, double-buffered), and dynamically selects the compute kernel path based on op type. Runtime arguments are updatable without recompilation via `override_runtime_arguments`.
+
+2. [SFPU] **Query**: "How is the hardtanh (relu_min/relu_max) SFPU operation implemented? What compute kernel does it use and how does it dispatch to the SFPU?"
+   **Reason**: Understanding the full SFPU call chain from compute kernel through LLK to ckernel implementation.
+   **Key Findings**: `hardtanh_tile()` dispatches through `llk_math_eltwise_unary_sfpu_hardtanh` to `_llk_math_eltwise_unary_sfpu_params_` with `calculate_hardtanh` as the functor. The core implementation uses `SFPSWAP` with mod1=1 to implement min/max operations. The metal `hw/ckernels/` implementation uses raw TTI_ instructions (different from the `tt_llk` version which uses SFPI abstractions with a subtraction-based algorithm).
+
+3. [SFPU] **Query**: "How is relu_max or hardtanh implemented in the LLK layer?" (asked to `tenstorrent/tt-llk`)
+   **Reason**: Understand the LLK dispatch mechanism and whether hardtanh reuses relu_max/relu_min kernels.
+   **Key Findings**: Hardtanh has its own dedicated `calculate_hardtanh` function separate from `_relu_max_`/`_relu_min_`. The LLK dispatch uses `_llk_math_eltwise_unary_sfpu_params_` (the parameterized variant) rather than the basic `_llk_math_eltwise_unary_sfpu_` dispatch, because hardtanh requires two parameters (min, max).
+
+4. [SFPU] **Query**: "What does the SFPSWAP instruction do? What are the modes (especially mode 1)? Does SFPSWAP modify the condition code?" (asked to `tenstorrent/tt-isa-documentation`)
+   **Reason**: Understand the core comparison/swap instruction used by the hardtanh kernel.
+   **Key Findings**: SFPSWAP with mod1=1 performs a conditional swap placing the smaller value in VD (LREG0) and the larger in VC (LREG1). It does NOT modify the condition code. Latency is 2 cycles. On Blackhole, SFPSWAP has a read-after-write hazard that may require manual SFPNOP insertion when preceded by SFPMAD.
 
 ### Documentation References
 
@@ -214,3 +333,19 @@ Note: HARDTANH does not match any of the special cases in the runtime arg packin
 3. **Source**: `tt_metal/hw/inc/api/compute/eltwise_unary/hardtanh.h`
    **Reason**: Verify the compute API wrapper that bridges the ckernel function call to the LLK layer.
    **Key Information**: `hardtanh_tile()` calls `llk_math_eltwise_unary_sfpu_hardtanh<APPROX>()` which dispatches to `_llk_math_eltwise_unary_sfpu_params_` with `calculate_hardtanh` as the SFPU function.
+
+4. [SFPU] **Source**: `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h`
+   **Reason**: Understand the params dispatch function that manages VectorMode iteration and DEST address progression between tile faces.
+   **Key Information**: For `VectorMode::RC`, iterates 4 faces, calling the SFPU functor once per face, with `TTI_SETRWC` advancing DEST by 16 rows (2x8) between faces.
+
+5. [SFPU] **Source**: `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu.h`
+   **Reason**: Understand ADDR_MOD configuration and `set_addr_mod_base()` behavior for Wormhole SFPU operations.
+   **Key Information**: The init function sets `ADDR_MOD_7` to `{dest.incr=0}` for all unary SFPU ops. `set_addr_mod_base()` shifts the base so kernel-referenced `ADDR_MOD_3` maps to physical slot 7.
+
+### Confluence References
+
+[SFPU] No Confluence page sections were consulted for this analysis. The SFPSWAP instruction details were sufficiently covered by DeepWiki's `tenstorrent/tt-isa-documentation` repository.
+
+### Glean References
+
+[SFPU] No Glean searches were needed for this analysis.

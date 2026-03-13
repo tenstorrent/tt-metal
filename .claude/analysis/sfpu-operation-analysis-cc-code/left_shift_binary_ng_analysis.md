@@ -280,6 +280,189 @@ The `split_work_to_cores()` utility divides the total output tiles across availa
 - **Sharding support and constraints**: Height, width, and block sharding are supported for native L1 sharding. Constraints include: (1) both inputs must have the same shape and memory config for native sharding, (2) no DRAM buffers, (3) no uneven shards on the output, (4) all shard grids must match. When constraints are not met, the operation falls back to interleaved (tensor accessor) mode.
 - **FP32 dest accumulation**: Enabled when output format is UInt32, Int32, or Float32, or when both input formats are Float32, Int32, or UInt32. For LEFT_SHIFT with INT32 inputs and INT32 output, `fp32_dest_acc_en` is always true.
 
+## SFPU Kernel Implementation
+
+This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to.
+
+### SFPU Abstraction Layers
+
+| Layer | File Path |
+|-------|-----------|
+| **API Header** | `tt_metal/hw/inc/api/compute/binary_shift.h` |
+| **LLK Dispatch** | `tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_shift.h` |
+| **Core SFPU Implementation** | `tt_metal/third_party/tt_llk/tt_llk_{wormhole_b0,blackhole}/common/inc/sfpu/ckernel_sfpu_shift.h` |
+| **Parameters Dispatch** | `tt_metal/third_party/tt_llk/tt_llk_{wormhole_b0,blackhole}/llk_lib/llk_math_eltwise_binary_sfpu_params.h` |
+
+### Call Chain
+
+1. The compute kernel calls `binary_left_shift_tile<DataFormat::Int32>(0, 1, 0)` (defined in `api/compute/binary_shift.h`), which wraps the call in a `MATH(...)` macro to run on the math RISC-V.
+2. This invokes `llk_math_eltwise_binary_sfpu_left_shift<APPROX, DataFormat::Int32>(0, 1, 0)` (in `llk_math_eltwise_binary_sfpu_shift.h`), which computes `INSTRUCTION_MODE` as `InstrModLoadStore::INT32` (value 4) and calls the generic params dispatch.
+3. `_llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>` (in `llk_math_eltwise_binary_sfpu_params.h`) starts the SFPU, loops over 4 tile faces in `VectorMode::RC` mode, calling the SFPU function once per face with `TTI_SETRWC` to advance DEST read/write counters between faces.
+4. The SFPU function `ckernel::sfpu::calculate_binary_left_shift<APPROX, 8, INT32, false>` (in `hw/ckernels/.../ckernel_sfpu_shift.h`) delegates directly to `_calculate_binary_left_shift_<APPROX, 8, INT32, false>` (in `tt_llk/.../ckernel_sfpu_shift.h`), which contains the actual SFPU microcode.
+
+### Parameters Dispatch Summary
+
+- **Vector mode**: `VectorMode::RC` (default) -- all 4 faces of the 32x32 tile are processed. The params dispatch loops `face = 0..3`, calling the SFPU function once per face.
+- **Operation invocation**: For each of the 4 faces, the SFPU function `_calculate_binary_left_shift_` is called with `ITERATIONS=8`. Inside, it loops 8 times (one per row within the 16x16 face, processing 2 rows per SFPU vector operation due to the 32-wide SIMD). Thus 4 faces x 8 iterations = 32 SFPU invocations per tile.
+- **DEST address progression**: Between faces, the params dispatch issues `TTI_SETRWC(CLR_NONE, CR_D, 8, 0, 0, SET_D)` twice per face (advancing DEST counter by 8+8=16 rows). Inside the SFPU function, `sfpi::dst_reg++` increments the DEST row pointer by 1 after each iteration. The SFPLOAD/SFPSTORE instructions use `ADDR_MOD_7` (Blackhole) or `ADDR_MOD_3` (Wormhole) with `dest.incr=0`, meaning the DEST address does not auto-increment from the ADDR_MOD -- all DEST progression is handled by `dst_reg++` and `SETRWC`.
+
+### Annotated SFPU Kernel Source
+
+This kernel uses raw `TT_`/`TTI_` instructions with complex condition code manipulation (SFPSETCC, SFPIADD with CC, SFPCOMPC, SFPENCC). Style B is used.
+
+```cpp
+// File: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_shift.h
+// (Blackhole version at tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_shift.h is identical
+//  except it uses ADDR_MOD_7 instead of ADDR_MOD_3)
+
+template <bool APPROXIMATION_MODE, int ITERATIONS, InstrModLoadStore INSTRUCTION_MODE, bool SIGN_MAGNITUDE_FORMAT>
+inline void _calculate_binary_left_shift_(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
+{
+    static_assert(is_valid_instruction_mode(INSTRUCTION_MODE), "INSTRUCTION_MODE must be one of: INT32_2S_COMP, INT32, LO16.");
+
+    constexpr int sfpload_instr_mod = SIGN_MAGNITUDE_FORMAT ? INT32_2S_COMP : to_underlying(INSTRUCTION_MODE);
+
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        // size of each tile in Dest is 64 rows
+        constexpr std::uint32_t dst_tile_size = 64;
+        // load
+        TT_SFPLOAD(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, dst_index_in0 * dst_tile_size);
+        TT_SFPLOAD(p_sfpu::LREG1, sfpload_instr_mod, ADDR_MOD_3, dst_index_in1 * dst_tile_size);
+        // if (shift_amount < 0 OR shift_amount >= 32) -> result should be 0
+        TTI_SFPSETCC(0, p_sfpu::LREG1, p_sfpu::LREG0, 4);
+        TTI_SFPIADD(0xFE0, p_sfpu::LREG1, p_sfpu::LREG2, 1); // 0xFE0 = -32
+        TTI_SFPCOMPC(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
+        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG0, 0);
+        TTI_SFPENCC(0, p_sfpu::LREG0, p_sfpu::LREG0, 0);
+        // shift left
+        TTI_SFPSHFT(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+        // store result
+        TT_SFPSTORE(p_sfpu::LREG0, sfpload_instr_mod, ADDR_MOD_3, dst_index_out * dst_tile_size);
+        sfpi::dst_reg++;
+    }
+}
+```
+
+**CC State Machine Diagram:**
+
+```
+_calculate_binary_left_shift_ — CC State Transitions
+================================================================
+
+  CC State: ALL_ENABLED                   <-- initial state
+       |
+       |  SFPLOAD LREG0 <- DEST[in0]     (no CC effect)
+       |  SFPLOAD LREG1 <- DEST[in1]     (no CC effect)
+       |
+       v
+  +-------------------------------------------+
+  | SFPSETCC  mod=4 (LREG_GTE0)              |
+  |   VC = LREG1 (shift_amount)              |
+  |                                           |
+  | CC <- (shift_amount >= 0)                 |
+  +-------------------+-----------------------+
+                      |
+                      v
+  CC State: ENABLED where shift_amount >= 0
+       |
+       v
+  +-------------------------------------------+
+  | SFPIADD  imm=0xFE0(-32), mod=1           |
+  |   mod=1 = ARG_IMM | CC_LT0              |
+  |   LREG2 = LREG1 + (-32)                  |
+  |         = shift_amount - 32               |
+  |                                           |
+  | CC <- CC_prev AND (result < 0)            |
+  |    = (shift_amount >= 0)                  |
+  |      AND (shift_amount - 32 < 0)          |
+  |    = (0 <= shift_amount < 32)             |
+  +-------------------+-----------------------+
+                      |
+                      v
+  CC State: ENABLED where 0 <= shift_amount < 32
+       |
+       v
+  +-------------------------------------------+
+  | SFPCOMPC  mod=0                           |
+  |   Complements the CC (else-branch)        |
+  |                                           |
+  | CC <- NOT(0 <= shift_amount < 32)         |
+  |    = (shift_amount < 0 OR                 |
+  |       shift_amount >= 32)                 |
+  +-------------------+-----------------------+
+                      |
+                      v
+  CC State: ENABLED where shift_amount < 0 OR shift_amount >= 32
+       |
+       |  SFPMOV LREG0 <- LCONST_0 (=0)  (CC-guarded: only out-of-range lanes)
+       |    Sets result to 0 for invalid shift amounts
+       |
+       v
+  +-------------------------------------------+
+  | SFPENCC  mod=0                            |
+  |                                           |
+  | CC <- ALL_ENABLED                         |
+  +-------------------+-----------------------+
+                      |
+                      v
+  CC State: ALL_ENABLED
+       |
+       |  SFPSHFT LREG0 <<= LREG1        (all lanes)
+       |    Left-shifts LREG0 by LREG1 (shift_amount)
+       |    For out-of-range lanes, LREG0 is already 0
+       |    so the shift produces 0 (harmless)
+       |
+       |  SFPSTORE LREG0 -> DEST[out]     (no CC effect)
+       |  dst_reg++                        (advance DEST pointer)
+       v
+```
+
+**Logic summary**: The kernel implements `result = (0 <= b < 32) ? (a << b) : 0`. It uses the CC system to identify lanes with out-of-range shift amounts (negative or >= 32) via SFPSETCC + SFPIADD + SFPCOMPC. For those out-of-range lanes, it sets the result register to zero before the shift executes. After re-enabling all lanes with SFPENCC, the shift instruction runs unconditionally -- valid lanes get the correct shifted value, while invalid lanes shift a zero (producing zero).
+
+### SFPU Instructions Used
+
+| Instruction | Description |
+|-------------|-------------|
+| `TT_SFPLOAD` | Loads a 32-wide vector from DEST register into an SFPU local register (LREG). The `instr_mod` field selects the data format interpretation (INT32=4 for 32-bit integer mode). Uses the `dst_index * dst_tile_size` offset to read from the correct tile in DEST. |
+| `TTI_SFPSETCC` | Sets per-lane condition code flags based on comparison of the VC operand. With mod=4 (`LREG_GTE0`), sets CC to enabled for lanes where the value in VC (LREG1, the shift amount) is >= 0. |
+| `TTI_SFPIADD` | Integer add with immediate. Adds sign-extended 12-bit immediate (0xFE0 = -32) to VC (LREG1), stores result in VD (LREG2). With mod=1 (`ARG_IMM \| CC_LT0`), also updates CC: AND-chains with previous CC, enabling only lanes where the result < 0 (i.e., shift_amount - 32 < 0). |
+| `TTI_SFPCOMPC` | Complement condition code. Inverts the current CC flags, implementing "else" logic. After SFPSETCC + SFPIADD selected lanes with valid shift amounts (0..31), SFPCOMPC selects the complementary set (invalid lanes). |
+| `TTI_SFPMOV` | Moves data between SFPU local registers. With mod=0, copies VC (LCONST_0 = 0) to VD (LREG0). CC-guarded: only executes for enabled lanes (the out-of-range lanes), zeroing their result. |
+| `TTI_SFPENCC` | Enable/disable conditional execution. With mod=0, disables lane flag checking (`UseLaneFlagsForLaneEnable = false`), effectively re-enabling all lanes. |
+| `TTI_SFPSHFT` | Bitwise shift. Shifts VD (LREG0, the input value) left by the amount in VC (LREG1, the shift amount). With mod=0, performs a left shift. The shift amount is taken from the register, not an immediate. |
+| `TT_SFPSTORE` | Stores a 32-wide vector from an SFPU local register (LREG0) back to DEST. Uses the same format mode as SFPLOAD. |
+
+### SFPU Register Usage
+
+| Register | Role | Description |
+|----------|------|-------------|
+| **LREG0** | Input value / Result | Loaded with the value to be shifted (tensor A element). After the CC-guarded zeroing and shift, holds the final result that is stored back to DEST. |
+| **LREG1** | Shift amount | Loaded with the shift amount (tensor B element). Used as the shift operand for SFPSHFT and as the comparison operand for bounds checking. |
+| **LREG2** | Temporary | Receives the result of `SFPIADD(LREG1 + (-32))` for the bounds check. Not used after the CC is set. |
+| **LCONST_0** | Constant zero | Hardware constant register holding 0. Used as the source for SFPMOV to zero out LREG0 for invalid lanes. |
+| **DEST[in0]** | Source tile 0 | DEST register holding input tensor A tile (copied from CB c_0). Read via SFPLOAD with `dst_index_in0 * 64` offset. |
+| **DEST[in1]** | Source tile 1 | DEST register holding input tensor B tile (copied from CB c_1). Read via SFPLOAD with `dst_index_in1 * 64` offset. |
+| **DEST[out]** | Output tile | DEST register where the result is written via SFPSTORE with `dst_index_out * 64` offset. In the standard call pattern, `out == in0` (slot 0), so the result overwrites the input A tile. |
+| **dst_reg** | DEST row counter | SFPI pseudo-register tracking the current row offset within the DEST tile. Incremented by 1 after each iteration to advance to the next row. |
+
+### Address Mode Configuration
+
+The SFPU kernel uses `ADDR_MOD_7` (Blackhole) or `ADDR_MOD_3` (Wormhole) for SFPLOAD/SFPSTORE instructions. Both are configured identically by `eltwise_binary_sfpu_configure_addrmod<SfpuType::unused>()` during init:
+
+| Field | Value | Description |
+|-------|-------|-------------|
+| `srca.incr` | 0 | No auto-increment of SrcA address |
+| `srcb.incr` | 0 | No auto-increment of SrcB address |
+| `dest.incr` | 0 | No auto-increment of DEST address |
+
+**Wormhole**: The init function (`llk_math_eltwise_binary_sfpu.h`) configures `ADDR_MOD_7` with all-zero increments. However, the Wormhole SFPU kernel code references `ADDR_MOD_3`. This discrepancy means `ADDR_MOD_3` must either be pre-configured by prior operations or defaults to zero increments. Since the DEST address is managed explicitly via `sfpi::dst_reg++` and `TTI_SETRWC`, the zero-increment ADDR_MOD is correct -- no auto-increment is needed from the address mode.
+
+**Blackhole**: Both the init function and the kernel code consistently use `ADDR_MOD_7` with zero increments.
+
+The address mode is intentionally chosen to avoid conflicts with `ADDR_MOD_0` and `ADDR_MOD_2`, which are used by the A2D (Accumulate-to-DEST) copy_tile operation that runs immediately before the SFPU kernel.
+
 ## External Knowledge Sources
 
 ### DeepWiki Queries
@@ -287,6 +470,18 @@ The `split_work_to_cores()` utility divides the total output tiles across availa
 1. **Query**: "How does the binary_ng operation work in TTNN? What are its program factory variants, kernel types (SFPU vs FPU), and how does it select between them? What is the SubtileBroadcastType enum and how does it affect kernel selection?"
    **Reason**: Needed architectural overview of the binary_ng framework before diving into source code.
    **Key Findings**: Confirmed single ProgramFactory with SFPU/FPU selection via `is_sfpu` flag. `SubtileBroadcastType` drives reader/compute kernel selection. `BinaryNgKernelConfig` maps broadcast types to kernel names.
+
+2. [SFPU] **Query**: "How does the binary_ng SFPU compute kernel work for binary_left_shift_tile? What is the call chain from the compute kernel through LLK to the ckernel SFPU implementation?"
+   **Reason**: Needed to trace the full call chain from compute API to core SFPU implementation and identify all files involved.
+   **Key Findings**: Confirmed 4-layer call chain: `binary_left_shift_tile` -> `llk_math_eltwise_binary_sfpu_left_shift` -> `_llk_math_eltwise_binary_sfpu_params_` -> `_calculate_binary_left_shift_`. Identified the file locations for each layer in both Wormhole and Blackhole architectures.
+
+3. [SFPU] **Query**: "How is binary_left_shift_tile implemented in the LLK layer? What SFPU instructions does the left shift kernel use?"
+   **Reason**: Needed detailed understanding of the SFPU instruction sequence and register usage in the left shift kernel.
+   **Key Findings**: Confirmed the kernel uses TT_SFPLOAD, TTI_SFPSETCC (mod=4), TTI_SFPIADD (mod=1), TTI_SFPCOMPC, TTI_SFPMOV, TTI_SFPENCC, TTI_SFPSHFT, TT_SFPSTORE. The kernel implements bounds checking for shift amounts via CC manipulation.
+
+4. [SFPU] **Query**: "What do the SFPSETCC, SFPCOMPC, SFPSHFT, SFPIADD, SFPMOV, and SFPENCC instructions do? What are the modifier values for SFPSETCC mod=4, SFPIADD mod=1?"
+   **Reason**: Needed precise understanding of instruction semantics and modifier encoding for CC state machine diagram construction.
+   **Key Findings**: SFPSETCC mod=4 = LREG_GTE0 (CC set where value >= 0). SFPIADD mod=1 = ARG_IMM | CC_LT0 (immediate add with CC update for result < 0). SFPCOMPC implements else-branch by complementing CC flags. SFPENCC resets CC to all-enabled.
 
 ### Documentation References
 
@@ -301,3 +496,11 @@ The `split_work_to_cores()` utility divides the total output tiles across availa
 3. **Source**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_common.hpp`
    **Reason**: Needed to understand the macro framework used by compute kernels (PREPROCESS, HAS_ACTIVATIONS, BCAST_INPUT).
    **Key Information**: The macro system conditionally enables pre/post-processing of operands. `HAS_ACTIVATIONS` checks if a `PROCESS_*_ACTIVATIONS` macro expands to non-empty text.
+
+4. [SFPU] **Source**: `runtime/sfpi/include/sfpi_constants.h`
+   **Reason**: Needed the numeric values of SFPSETCC and SFPIADD instruction modifiers to correctly interpret the raw TTI_ instruction arguments.
+   **Key Information**: `SFPSETCC_MOD1_LREG_GTE0 = 4`, `SFPSETCC_MOD1_LREG_LT0 = 0`, `SFPIADD_MOD1_ARG_IMM = 1`, `SFPIADD_MOD1_CC_LT0 = 0`, `SFPIADD_MOD1_CC_NONE = 4`.
+
+5. [SFPU] **Source**: `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_defs.h`
+   **Reason**: Needed the `InstrModLoadStore` enum values to understand the data format mode passed to SFPLOAD/SFPSTORE.
+   **Key Information**: `INT32 = 4`, `LO16 = 6`, `INT32_2S_COMP = 12`. For Int32 data format, `INSTRUCTION_MODE = INT32` (value 4).

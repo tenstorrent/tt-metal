@@ -281,12 +281,165 @@ For sharded mode, each core processes exactly its shard's tiles. The shard shape
 - **Sharding support and constraints**: Height, width, and block sharding are all supported. Native L1 sharding requires: (1) both inputs same shape, same memory config, same shard grid as output, (2) all in L1 (not DRAM), (3) evenly sharded output. If any condition fails, the operation falls back to the interleaved (tensor accessor) path even if tensors are technically sharded.
 - **FP32 dest accumulation**: Enabled when output format is UInt32/Int32/Float32, or when both inputs are Float32/Int32/UInt32. For EQ with FLOAT32 inputs, this is always enabled. The `fp32_dest_acc_en` flag is passed to `ComputeConfig`.
 
+## SFPU Kernel Implementation
+
+This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to for the FLOAT32 EQ path (the native `eq_binary_tile` intrinsic).
+
+### SFPU Abstraction Layers
+
+| Layer | File Path |
+|-------|-----------|
+| **API Header** | `tt_metal/hw/inc/api/compute/eltwise_binary_sfpu.h` |
+| **LLK Dispatch** | `tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_binary_comp.h` |
+| **Core SFPU Implementation** | `tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_comp.h` |
+| **Parameters Dispatch** | `tt_metal/third_party/tt_llk/tt_llk_{wormhole_b0,blackhole}/llk_lib/llk_math_eltwise_binary_sfpu_params.h` |
+
+### Call Chain
+
+1. The compute kernel calls `eq_binary_tile(idst0, idst1, odst)` (defined in `eltwise_binary_sfpu.h`), which wraps the call in the `MATH(...)` macro ensuring it only executes on the math RISC-V.
+2. This calls `llk_math_eltwise_binary_sfpu_eq_fp32<APPROX>(idst0, idst1, odst)` (in `llk_math_eltwise_binary_sfpu_binary_comp.h`), which passes the core SFPU function `ckernel::sfpu::calculate_binary_comp_fp32<APPROXIMATE, 8, SfpuType::eq>` to the params dispatch.
+3. The params dispatch `_llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>(sfpu_func, ...)` (in `llk_math_eltwise_binary_sfpu_params.h`) sets up the DEST write address, stalls until the SFPU is ready, then iterates over tile faces calling the SFPU function once per face (4 times for `VectorMode::RC`), advancing the DEST read/write counter by 16 rows between faces via `TTI_SETRWC`.
+4. The core function `calculate_binary_comp_fp32<APPROXIMATE, 8, SfpuType::eq>` (in `ckernel_sfpu_binary_comp.h`) iterates 8 times per face (one iteration per row of 16-wide SIMD vector), loading two FP32 values from DEST, comparing them, and writing the result (1.0f or 0.0f) back to DEST.
+
+### Parameters Dispatch Summary
+
+- **Vector mode**: `VectorMode::RC` (default). All 4 faces of the 32x32 tile are processed -- the params dispatch loops `face = 0..3`, calling the SFPU function once per face.
+- **Operation invocation**: For each face, `calculate_binary_comp_fp32` is called once. Internally it loops 8 iterations (ITERATIONS=8), processing one row of 16 elements per iteration, covering the full 16x8=128 elements of one face (but stored as 8 rows of the SFPU's native 16-wide SIMD).
+- **DEST address progression**: Between faces, `TTI_SETRWC(CLR_NONE, CR_D, 8, 0, 0, SET_D)` is called twice, advancing the DEST counter by 16 rows total (2 x 8). Within the SFPU function, `sfpi::dst_reg++` increments the DEST address by `SFP_DESTREG_STRIDE` (=2) after each of the 8 iterations, covering 16 rows per face.
+
+### Annotated SFPU Kernel Source
+
+This kernel uses SFPI abstractions (`sfpi::vFloat`, `sfpi::vInt`, `sfpi::dst_reg`, `v_if`/`v_elseif`/`v_endif`), so Style A (inline-commented source code) is used.
+
+**Wormhole B0 variant:**
+
+```cpp
+// File: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_comp.h
+
+template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
+inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // APPROXIMATION_MODE=APPROX (compile-time), ITERATIONS=8, RELATIONAL_OP=SfpuType::eq
+    static_assert(RELATIONAL_OP == SfpuType::eq, "Supported operation types: eq ");
+    constexpr uint dst_tile_size_sfpi = 32; // SFPI stride: 64 DEST rows / SFP_DESTREG_STRIDE(2) = 32
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        // Load two FP32 values from DEST at tile offsets for input0 and input1
+        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+        sfpi::vFloat result = 0.0f; // Default: not equal
+
+        if constexpr (RELATIONAL_OP == SfpuType::eq) {
+            sfpi::vInt in0_bits = sfpi::reinterpret<sfpi::vInt>(in0); // Bitwise reinterpret for special value handling
+            sfpi::vInt in1_bits = sfpi::reinterpret<sfpi::vInt>(in1);
+
+            // Standard float comparison (handles normal values and NaN correctly)
+            v_if(in0 == in1) { result = 1.0f; }
+            // Special handling for infinity: bitwise comparison AND check for inf exponent
+            v_elseif((in0_bits == in1_bits) && ((in0_bits & 0x7FFFFFFF) == 0x7F800000)) { result = 1.0f; }
+            v_endif;
+        }
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result; // Store result to output tile in DEST
+        sfpi::dst_reg++; // Advance DEST row pointer by SFP_DESTREG_STRIDE(2)
+    }
+}
+```
+
+**Blackhole variant** (differences from Wormhole annotated):
+
+```cpp
+// File: tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_comp.h
+
+template <bool APPROXIMATION_MODE, int ITERATIONS, SfpuType RELATIONAL_OP>
+inline void calculate_binary_comp_fp32(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // APPROXIMATION_MODE=APPROX (compile-time), ITERATIONS=8, RELATIONAL_OP=SfpuType::eq
+    static_assert(RELATIONAL_OP == SfpuType::eq, "Supported operation types: eq ");
+    constexpr uint dst_tile_size_sfpi = 32;
+
+#pragma GCC unroll 8
+    for (int d = 0; d < ITERATIONS; d++) {
+        sfpi::vFloat in0 = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi];
+        sfpi::vFloat in1 = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi];
+        sfpi::vFloat result = 0.0f;
+
+        if constexpr (RELATIONAL_OP == SfpuType::eq) {
+            sfpi::vInt in0_bits = sfpi::reinterpret<sfpi::vInt>(in0);
+            sfpi::vInt in1_bits = sfpi::reinterpret<sfpi::vInt>(in1);
+            sfpi::vInt in0_abs = in0_bits & 0x7FFFFFFF; // BH needs explicit abs for +0/-0 handling
+            sfpi::vInt in1_abs = in1_bits & 0x7FFFFFFF;
+
+            // BH: (-0.0 == 0.0) returns false in hardware FP compare, so explicitly check both-zero
+            v_if((in0 == in1) || (in0_abs == 0 && in1_abs == 0)) { result = 1.0f; }
+            // Special handling for infinity (same logic, uses precomputed abs)
+            v_elseif((in0_bits == in1_bits) && ((in0_abs == 0x7F800000))) { result = 1.0f; }
+            v_endif;
+        }
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result;
+        sfpi::dst_reg++;
+    }
+}
+```
+
+### SFPU Instructions Used
+
+The SFPI abstractions in `calculate_binary_comp_fp32` compile down to the following SFPU instructions:
+
+| Instruction / Intrinsic | Description |
+|------------------------|-------------|
+| `SFPLOAD` (via `dst_reg[]` read) | Loads a 16-wide vector from DEST register into an SFPU LREG. Used to read `in0` and `in1` from their respective tile offsets in DEST. |
+| `SFPSTORE` (via `dst_reg[] =`) | Stores a 16-wide vector from an SFPU LREG back to DEST register. Used to write the `result` to the output tile offset in DEST. |
+| `SFPLOADI` (via `result = 0.0f`, `result = 1.0f`) | Loads an immediate constant into an SFPU LREG. Used for the comparison result values 0.0f and 1.0f. |
+| `SFPSETCC` / `SFPENCC` (via `v_if`, `v_elseif`, `v_endif`) | Condition code manipulation. `v_if(in0 == in1)` compiles to a float comparison that sets the CC register per lane. `v_elseif` complements CC and sets a new condition. `v_endif` restores CC to all-enabled. |
+| `SFPIADD` (via integer comparison `in0_bits == in1_bits`) | Integer subtraction used for bitwise equality check on the reinterpreted integer representations. Sets CC based on result. |
+| `SFPAND` (via `in0_bits & 0x7FFFFFFF`) | Bitwise AND to mask off the sign bit, producing the absolute value for infinity detection. |
+| `SFPMOV` (via intermediate assignments) | Moves values between SFPU LREGs as needed by the compiler for register allocation. |
+| `SFPCOMPC` (via `v_elseif`) | Complements the current condition code, enabling the "else" branch of a conditional. |
+
+### SFPU Register Usage
+
+| Register | Usage |
+|----------|-------|
+| **DEST[idst0 * 32 + row]** | Source: input tile A. Read via `sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi]`. Each iteration reads one row (16 elements). |
+| **DEST[idst1 * 32 + row]** | Source: input tile B. Read via `sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi]`. |
+| **DEST[odst * 32 + row]** | Output: comparison result. Written via `sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result`. For EQ in binary_ng, `odst == idst0` (result overwrites input A's tile). |
+| **LREG0-LREG3** | Temporary SFPU local registers used by the compiler to hold `in0`, `in1`, `in0_bits`, `in1_bits`, `result`, and intermediate values. Exact allocation is compiler-determined from the SFPI abstractions. |
+| **LREG7** | May be used by the compiler for additional temporaries (e.g., the `in0_abs`/`in1_abs` values in the Blackhole variant). |
+| **CC register** | Condition code register, set per-lane by `v_if`/`v_elseif` comparisons to guard conditional stores of 1.0f. |
+
+### Address Mode Configuration
+
+The init function `_llk_math_eltwise_binary_sfpu_init_<SfpuType::eq>()` configures the address mode via `eltwise_binary_sfpu_configure_addrmod<SfpuType::eq>()`.
+
+For `SfpuType::eq`, the configuration is the default (no special-case branch):
+
+| Field | ADDR_MOD_7 Value |
+|-------|-----------------|
+| `srca.incr` | 0 |
+| `srcb.incr` | 0 |
+| `dest.incr` | 0 |
+
+This is the same on **both Wormhole B0 and Blackhole** -- the `eltwise_binary_sfpu_configure_addrmod` function is identical across architectures. The `ADDR_MOD_6` variant (with `dest.incr = 2`) is only configured for `mul_int32`, `mul_uint16`, `max`, `min`, and their integer variants -- not for `eq`.
+
+Since `ADDR_MOD_7` has all increments set to zero, DEST address progression is handled entirely by `sfpi::dst_reg++` within the SFPU kernel (which increments by `SFP_DESTREG_STRIDE = 2` per iteration) and by the `TTI_SETRWC` instructions in the params dispatch (which advance by 16 rows between faces). The address mode itself does not auto-increment.
+
+Note: The `SfpuType::eq` init also calls `sfpu::_init_sfpu_config_reg()` and `math::reset_counters(p_setrwc::SET_ABD_F)` to initialize the SFPU configuration register and reset the A/B/D/F read-write counters.
+
 ## External Knowledge Sources
 
 ### DeepWiki Queries
 1. **Query**: "How does the binary_ng operation work? What is the architecture of binary_ng program factory, and how does it select between FPU and SFPU paths?"
    **Reason**: Needed to understand the overall binary_ng architecture and kernel file organization before diving into source code.
    **Key Findings**: Confirmed the `is_sfpu_op` flag drives path selection, identified the kernel file naming conventions (sfpu vs non-sfpu variants), and understood the `OpConfig` mechanism that maps `BinaryOpType` to specific FPU/SFPU operations with optional pre/post-processing.
+
+2. [SFPU] **Query**: "How is eq_binary_tile implemented? What is the call chain from the compute API eq_binary_tile() down to the LLK and ckernel SFPU implementation?"
+   **Reason**: Needed to trace the full SFPU call chain from the compute API through LLK dispatch to the core SFPU kernel for binary FP32 equality comparison.
+   **Key Findings**: Confirmed the chain: `eq_binary_tile` -> `llk_math_eltwise_binary_sfpu_eq_fp32` -> `_llk_math_eltwise_binary_sfpu_params_` -> `calculate_binary_comp_fp32`. Identified that the core implementation lives in `ckernel_sfpu_binary_comp.h` with architecture-specific variants.
+
+3. [SFPU] **Query**: "How is the binary SFPU equality operation (eq_binary, eq_fp32) implemented in the LLK layer? What is the call chain from llk_math_eltwise_binary_sfpu_eq_fp32 down to the ckernel_sfpu level?"
+   **Reason**: Needed LLK-level details on the params dispatch mechanism, vector mode iteration, and face-level processing for binary SFPU operations.
+   **Key Findings**: Confirmed that `_llk_math_eltwise_binary_sfpu_params_` handles face iteration (4 faces for VectorMode::RC), SETRWC-based DEST address advancement between faces, and that ITERATIONS=8 processes all rows within a face.
 
 ### Documentation References
 1. **Source**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_utils.cpp`
@@ -300,3 +453,9 @@ For sharded mode, each core processes exactly its shard's tiles. The shard shape
 3. **Source**: `tt_metal/hw/inc/api/compute/eltwise_binary_sfpu.h`
    **Reason**: Needed to verify the SFPU intrinsic implementation for `eq_binary_tile`.
    **Key Information**: `eq_binary_tile` calls `llk_math_eltwise_binary_sfpu_eq_fp32<APPROX>()`, confirming it is an FP32-specific equality comparison at the LLK level.
+
+### Confluence References
+No Confluence pages were consulted for this analysis. The SFPI-based kernel uses high-level abstractions that did not require ISA-level instruction documentation.
+
+### Glean References
+No Glean searches were performed for this analysis.

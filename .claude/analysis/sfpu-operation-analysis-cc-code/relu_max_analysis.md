@@ -225,6 +225,130 @@ Note: Unlike HARDSHRINK or WHERE_TSS, RELU_MAX does not pack its parameter as a 
 - **Sharding support and constraints**: Sharded inputs are routed to `UnaryShardedProgramFactory` (not analyzed here). The `UnaryProgramFactory` handles only interleaved tensors.
 - **FP32 dest accumulation**: Controlled by `args.fp32_dest_acc_en`. When enabled, the DST register uses FP32 format for accumulation. Passed directly to `ComputeConfig.fp32_dest_acc_en`.
 
+## SFPU Kernel Implementation
+
+This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to.
+
+### SFPU Abstraction Layers
+
+| Layer | File Path |
+|-------|-----------|
+| **API Header** | `tt_metal/hw/inc/api/compute/eltwise_unary/relu.h` |
+| **LLK Dispatch** | `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h` |
+| **Core SFPU Implementation** | `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_relu.h` |
+| **Parameters Dispatch** | `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h` (same file as LLK Dispatch) |
+
+### Call Chain
+
+1. The compute kernel calls `relu_max_tile(0, <packed_upper_limit>)` (defined in `relu.h`).
+2. This expands via the `MATH(...)` macro to `SFPU_UNARY_ONE_PARAM_KERNEL_FN_FLOAT(_relu_max_, RC, APPROX, idst, param0)`, which resolves to `_llk_math_eltwise_unary_sfpu_params_<APPROX>(ckernel::sfpu::_relu_max_<sfpi::vFloat, APPROX, 8, uint32_t>, idst, (int)VectorMode::RC, param0)`.
+3. `_llk_math_eltwise_unary_sfpu_params_` sets the DST write address, configures address mode base, stalls until the SFPU is available, then loops over 4 faces (RC mode), calling the SFPU function once per face and advancing the DST address by `DEST_FACE_WIDTH` (16 rows) between faces via `TTI_SETRWC`.
+4. The SFPU function `_relu_max_<sfpi::vFloat, APPROX, 8, uint32_t>` converts the packed `uint32_t` threshold to `vFloat` via `Converter::as_float`, then calls `_relu_max_impl_<sfpi::vFloat, APPROX, 8>(8, v_threshold)`.
+5. `_relu_max_impl_` iterates 8 times (one per row within a face), loading from `dst_reg[0]`, applying two conditional clamps, storing back, and incrementing `dst_reg`.
+
+### Parameters Dispatch Summary
+
+- **Vector mode**: `VectorMode::RC` -- all 4 faces of the 32x32 tile are processed. The params dispatch loops `face = 0..3`, calling the SFPU function once per face.
+- **Operation invocation**: For each face, `_relu_max_<sfpi::vFloat, APPROX, 8, uint32_t>(param0)` is called. Internally this calls `_relu_max_impl_` with `iterations=8`, processing 8 rows per face (8 rows x 4 faces = 32 rows total for the tile).
+- **DEST address progression**: Between faces, the Wormhole variant uses two `TTI_SETRWC(CLR_NONE, CR_D, 8, 0, 0, SET_D)` instructions per face boundary, each advancing the DEST read/write counter by 8 rows, totaling 16 rows (= `DEST_FACE_WIDTH`). Within each face, `dst_reg++` (compiled to `INCRWC` by SFPI) advances the DEST pointer by 1 row after each of the 8 iterations. The Blackhole variant uses `math::inc_dst_addr<8>()` called twice instead of `TTI_SETRWC`, achieving the same 16-row face skip.
+
+### Annotated SFPU Kernel Source
+
+The kernel uses SFPI abstractions (`vFloat`, `vInt`, `dst_reg`, `v_if`, `v_endif`), so Style A (inline-commented source) is used.
+
+```cpp
+// File: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_relu.h
+
+template <typename VecType, bool APPROXIMATION_MODE, int ITERATIONS>
+inline void _relu_max_impl_(const int iterations, VecType threshold) // APPROXIMATION_MODE=true (unused), ITERATIONS=8
+{
+    for (int d = 0; d < iterations; d++) // 8 iterations, one per row within a face
+    {
+        VecType result = sfpi::dst_reg[0]; // Load 64-element vector from current DST row
+        v_if (result > threshold) // Per-lane: set CC where result exceeds upper_limit
+        {
+            result = threshold; // Clamp to upper_limit (CC-guarded, only lanes where result > threshold)
+        }
+        v_endif; // Restore CC to all-enabled
+        v_if (result < 0) // Per-lane: set CC where result is negative
+        {
+            result = 0; // Clamp to zero (CC-guarded, only lanes where result < 0)
+        }
+        v_endif; // Restore CC to all-enabled
+        sfpi::dst_reg[0] = result; // Store 64-element vector back to current DST row
+        sfpi::dst_reg++; // Advance DST pointer to next row (INCRWC dest +1)
+    }
+}
+
+// Wrapper: converts packed uint32_t threshold to vFloat/vInt, then dispatches to _relu_max_impl_
+template <typename VectorType, bool APPROXIMATION_MODE, int ITERATIONS, typename T>
+inline void _relu_max_(T threshold) // VectorType=sfpi::vFloat, T=uint32_t for float path
+{
+    static_assert(std::is_same_v<VectorType, sfpi::vFloat> || std::is_same_v<VectorType, sfpi::vInt>, "VectorType must be sfpi::vFloat or sfpi::vInt");
+
+    VectorType v_threshold;
+    if constexpr (std::is_same_v<T, float>)
+    {
+        v_threshold = threshold;
+    }
+    else if constexpr (std::is_same_v<T, std::uint32_t>)
+    {
+        if constexpr (std::is_same_v<VectorType, sfpi::vInt>)
+        {
+            v_threshold = static_cast<int>(Converter::as_float(threshold)); // Reinterpret bits as float, then truncate to int
+        }
+        else
+        {
+            v_threshold = Converter::as_float(threshold); // Reinterpret uint32_t bits as float value
+        }
+    }
+    else
+    {
+        static_assert(std::is_same_v<T, float> || std::is_same_v<T, std::uint32_t>, "Threshold type must be float or uint32_t");
+    }
+
+    _relu_max_impl_<VectorType, APPROXIMATION_MODE, ITERATIONS>(ITERATIONS, v_threshold);
+}
+```
+
+### SFPU Instructions Used
+
+The `_relu_max_impl_` function uses SFPI abstractions that compile to the following SFPU instructions:
+
+| SFPI Construct | Underlying SFPU Instruction(s) | Description |
+|----------------|-------------------------------|-------------|
+| `dst_reg[0]` (read) | `SFPLOAD` | Loads a 64-element vector from the current DST register row into an SFPU local register (LREG) |
+| `result > threshold` | `SFPGT` or comparison via `SFPSETCC` | Compares each lane of `result` against `threshold`, setting the condition code (CC) bitmask for lanes where the comparison is true |
+| `v_if` / `v_endif` | `SFPSETCC` / `SFPENCC` + CC stack push/pop | Manages the hardware condition code stack; `v_if` pushes the current CC and sets a new predicate, `v_endif` pops and restores the previous CC state |
+| `result = threshold` (CC-guarded) | `SFPASSIGN_LV` (predicated move) | Conditionally assigns `threshold` to `result` only for lanes where the CC is enabled; uses the `__builtin_rvtt_sfpassign_lv` intrinsic to merge old and new values per-lane |
+| `result < 0` | `SFPSETCC` with sign-bit check | Compares each lane against zero using sign-bit extraction, setting CC for negative lanes |
+| `result = 0` (CC-guarded) | `SFPASSIGN_LV` (predicated move) | Conditionally assigns zero to `result` for negative lanes |
+| `dst_reg[0] = result` (write) | `SFPSTORE` | Stores the 64-element result vector back to the current DST register row |
+| `dst_reg++` | `INCRWC` (dest +1) | Increments the DEST register read/write counter by 1 row, advancing to the next row within the face |
+
+### SFPU Register Usage
+
+| Register | Usage |
+|----------|-------|
+| **DST register** (tile at index 0) | Source and destination for the in-place relu_max operation. The tile is loaded into DST by `copy_tile` before the SFPU runs, and the SFPU reads/writes rows within this tile. Each row is 64 elements (one SFPU vector width). |
+| **LREG0** | Used implicitly by SFPI for the `result` variable -- holds the loaded DST row data during computation |
+| **LREG (for threshold)** | The `threshold` constant is loaded into an SFPU local register. Since it is a scalar broadcast to all 64 lanes, SFPI loads it via `SFPLOADI` (16-bit halves) or direct constant register depending on the value |
+| **CC register** | The hardware condition code register tracks per-lane enable/disable state. Two independent CC regions are used: first for `result > threshold` (clamp above), then for `result < 0` (clamp below). Each `v_endif` restores CC to all-enabled via `SFPENCC`. |
+
+### Address Mode Configuration
+
+The SFPU init function `_llk_math_eltwise_unary_sfpu_init_<SfpuType::relu_max>()` configures `ADDR_MOD_7` with all-zero increments:
+
+```
+ADDR_MOD_7: srca.incr=0, srcb.incr=0, dest.incr=0
+```
+
+This is the standard SFPU address mode -- it does **not** auto-increment the DEST address between SFPU instructions. Instead, DEST advancement is handled explicitly:
+- **Within a face**: `dst_reg++` compiles to an `INCRWC` instruction that increments the DEST counter by 1 row per iteration.
+- **Between faces**: The params dispatch function uses `TTI_SETRWC` (Wormhole) or `math::inc_dst_addr<8>()` (Blackhole) to jump 16 rows to the next face.
+
+No additional `ADDR_MOD_6` is configured for RELU_MAX (that is only used for `topk_local_sort`, `typecast`, `unary_max`, `unary_min`, and their INT32/UINT32 variants). The `ADDR_MOD_7` configuration is identical between Wormhole and Blackhole.
+
 ## SFPU Kernel Deep Dive
 
 The SFPU implementation of RELU_MAX lives in `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_relu.h`.
@@ -244,6 +368,14 @@ The SFPI conditional operations (`v_if`, `v_endif`) operate on the vector condit
    **Reason**: To understand the overall architecture of the unary program factory and how SFPU operations are dispatched
    **Key Findings**: The factory uses `get_block_defines` to generate SFPU-specific preprocessor defines. The compute kernel `eltwise_sfpu.cpp` is generic and uses `SFPU_OP_CHAIN_0` macro expansion. Factory selection is based on tensor sharding/sub_core_grids, not op type.
 
+2. [SFPU] **Query**: "How does the SFPU relu_max kernel work? What is the call chain from relu_max_tile through the LLK layer to the ckernel SFPU implementation? What macros like SFPU_UNARY_ONE_PARAM_KERNEL_FN_FLOAT are used?"
+   **Reason**: To understand the full call chain from the API header through LLK dispatch to the core SFPU implementation
+   **Key Findings**: The call chain is `relu_max_tile` -> `SFPU_UNARY_ONE_PARAM_KERNEL_FN_FLOAT` macro -> `_llk_math_eltwise_unary_sfpu_params_` -> `_relu_max_<sfpi::vFloat, APPROX, 8, uint32_t>` -> `_relu_max_impl_`. The macro instantiates the template with `vFloat` vector type and 8 iterations. The params dispatch handles face iteration in RC mode.
+
+3. [SFPU] **Query**: "How do v_if, v_endif, vFloat, vConst, and dst_reg work in SFPI? How does conditional assignment work with v_if for per-lane masking in the SFPU?"
+   **Reason**: To understand the SFPI abstractions used by the relu_max kernel for condition code manipulation and predicated execution
+   **Key Findings**: `v_if` pushes the current CC state and sets a new predicate bitmask based on per-lane comparison. Assignments within `v_if` blocks use `sfpassign_lv` intrinsic to merge old and new values per-lane based on CC. `v_endif` pops the CC stack restoring previous state. `dst_reg[0]` maps to SFPLOAD/SFPSTORE, and `dst_reg++` maps to INCRWC.
+
 ### Documentation References
 
 1. **Source**: `ttnn/cpp/ttnn/operations/eltwise/unary/common/unary_op_utils.cpp`
@@ -261,3 +393,23 @@ The SFPI conditional operations (`v_if`, `v_endif`) operate on the vector condit
 4. **Source**: `ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_device_operation.cpp`
    **Reason**: To understand program factory selection logic
    **Key Information**: `select_program_factory` selects based on `is_sharded()` and `sub_core_grids.has_value()`, defaulting to `UnaryProgramFactory` for standard interleaved tensors.
+
+5. [SFPU] **Source**: `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h`
+   **Reason**: To understand the parameters dispatch layer that bridges the API to the core SFPU function
+   **Key Information**: `_llk_math_eltwise_unary_sfpu_params_` sets the DST write address, stalls for SFPU readiness, loops over 4 faces in RC mode calling the SFPU function per face, advances DEST by 16 rows between faces via `TTI_SETRWC`, then clears the DST address and waits for SFPU completion.
+
+6. [SFPU] **Source**: `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu.h`
+   **Reason**: To understand the SFPU init function and ADDR_MOD configuration
+   **Key Information**: `_llk_math_eltwise_unary_sfpu_init_` initializes the SFPU config register, configures `ADDR_MOD_7` with zero increments (standard for SFPU ops), and resets counters. RELU_MAX does not require any special ADDR_MOD_6 configuration.
+
+7. [SFPU] **Source**: `tt_metal/third_party/tt_llk/tt_llk_blackhole/common/inc/sfpu/ckernel_sfpu_relu.h`
+   **Reason**: To verify cross-architecture consistency of the relu_max SFPU kernel
+   **Key Information**: The Blackhole `_relu_max_impl_` is identical to Wormhole. The `_relu_min_impl_` differs between architectures (Wormhole uses TTI instructions with SFPSWAP, Blackhole uses SFPI v_if), but relu_max is consistent across both.
+
+### Confluence References
+
+No Confluence references were needed for this analysis. The SFPI-based kernel uses high-level abstractions that are well-documented via DeepWiki.
+
+### Glean References
+
+No Glean references were needed for this analysis.

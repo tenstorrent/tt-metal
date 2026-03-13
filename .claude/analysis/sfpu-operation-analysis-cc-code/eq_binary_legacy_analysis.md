@@ -264,6 +264,190 @@ No explicit compile-time args. Behavior is controlled entirely through preproces
 
 - **FP32 dest accumulation**: Enabled when the output data format is Float32, Int32, or UInt32 (`fp32_dest_acc_en` flag). This ensures the DEST register uses full FP32 precision for accumulation, which is important for integer subtraction accuracy and for float32 output fidelity.
 
+## SFPU Kernel Implementation
+
+This section provides a dedicated deep dive into the underlying SFPU kernel functions that the compute kernel dispatches to. The EQ binary legacy operation uses two sequential SFPU operations: (1) a binary subtract (`sub_binary_tile`) and (2) a unary equal-to-zero comparison (`eqz_tile`).
+
+### SFPU Abstraction Layers
+
+The EQ operation involves two distinct SFPU call chains -- one for the binary subtract and one for the unary eqz comparison. Both are documented below.
+
+**Binary subtract (`sub_binary_tile`):**
+
+| Layer | File Path |
+|-------|-----------|
+| **API Header** | `tt_metal/hw/inc/api/compute/eltwise_binary_sfpu.h` |
+| **LLK Dispatch** | `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_binop.h` |
+| **Core SFPU Implementation** | `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary.h` |
+| **Parameters Dispatch** | `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_binary_sfpu_params.h` |
+
+**Unary eqz (`eqz_tile`):**
+
+| Layer | File Path |
+|-------|-----------|
+| **API Header** | `tt_metal/hw/inc/api/compute/eltwise_unary/comp.h` |
+| **LLK Dispatch** | `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h` (macro `SFPU_ZERO_KERNEL`) |
+| **Core SFPU Implementation** | `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_comp.h` |
+| **Parameters Dispatch** | `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h` |
+
+### Call Chain
+
+**Binary subtract path:**
+1. The compute kernel calls `sub_binary_tile(i*2, i*2+1, i*2)` (defined in `eltwise_binary_sfpu.h`).
+2. This calls `llk_math_eltwise_binary_sfpu_binop<APPROX, BinaryOp::SUB>(idst0, idst1, odst)` (in `llk_math_eltwise_binary_sfpu_binop.h`).
+3. That dispatches to `_llk_math_eltwise_binary_sfpu_params_<APPROX>(calculate_sfpu_binary<APPROX, BinaryOp::SUB, 8, is_fp32_dest_acc_en>, idst0, idst1, odst, VectorMode::RC)` (in `llk_math_eltwise_binary_sfpu_params.h`), which iterates over 4 faces and calls the SFPU function per face.
+4. `calculate_sfpu_binary` (in the WH-specific `ckernel_sfpu_binary.h`) delegates to `_calculate_sfpu_binary_<APPROX, BinaryOp::SUB, 8>()` (in the common `ckernel_sfpu_binary.h`), which performs `result = in0 - in1` using SFPI vector subtraction.
+
+**Unary eqz path:**
+1. The compute kernel calls `eqz_tile_init()` then `eqz_tile(i*2)` (defined in `comp.h`).
+2. `eqz_tile_init()` expands to `llk_math_eltwise_unary_sfpu_init<SfpuType::equal_zero, APPROX>()`, which configures ADDR_MOD_7 and resets counters.
+3. `eqz_tile(idst)` expands via `SFPU_ZERO_KERNEL(equal_zero, RC, APPROX, idst)` to `_llk_math_eltwise_unary_sfpu_params_<APPROX>(calculate_comp<APPROX, SfpuType::equal_zero>, idst, VectorMode::RC, 8)`.
+4. The params dispatch iterates over 4 faces, calling `calculate_comp<APPROX, SfpuType::equal_zero>(8)` per face. Each call processes 8 rows of the face (one `dst_reg++` per row).
+5. `calculate_comp` (in the WH-specific `ckernel_sfpu_comp.h`) checks `_sfpu_is_fp16_zero_(v, exponent_size_8)` to determine if each element equals zero, writing 1.0f or 0.0f accordingly.
+
+### Parameters Dispatch Summary
+
+**Binary subtract (`_llk_math_eltwise_binary_sfpu_params_`):**
+
+- **Vector mode**: `VectorMode::RC` -- all 4 faces of the tile are processed.
+- **Operation invocation**: A loop over 4 faces calls `calculate_sfpu_binary(dst_index_in0, dst_index_in1, dst_index_out)` once per face. Each invocation internally loops 8 times (ITERATIONS=8), processing 8 rows per face (32 rows total = one full 32x32 tile).
+- **DEST address progression**: After each face, `TTI_SETRWC(CLR_NONE, CR_D, 8, 0, 0, SET_D)` is called twice to advance the DEST read/write pointer by 16 rows (2 x 8 rows). Within the SFPU function, `dst_reg++` auto-increments the pointer by 1 row per iteration (using ADDR_MOD_7 with dest.incr=0, relying on SFPI's built-in `dst_reg++` which uses SFP_DESTREG_STRIDE).
+
+**Unary eqz (`_llk_math_eltwise_unary_sfpu_params_`):**
+
+- **Vector mode**: `VectorMode::RC` -- all 4 faces of the tile are processed.
+- **Operation invocation**: A loop over 4 faces calls `calculate_comp<APPROX, SfpuType::equal_zero>(exponent_size_8)` once per face. Each invocation internally loops 8 times (ITERATIONS=8), processing 8 rows per face.
+- **DEST address progression**: After each face, `TTI_SETRWC(CLR_NONE, CR_D, 8, 0, 0, SET_D)` is called twice to advance by 16 rows. Within `calculate_comp`, `dst_reg++` advances by 1 row per iteration. Before dispatching, `math::set_dst_write_addr` sets the initial DEST address based on `dst_index`, and `math::set_addr_mod_base()` switches to ADDR_MOD bank 4..7 (where ADDR_MOD_7 is configured with all-zero increments so the base SFPI `dst_reg++` stride is the only progression).
+
+### Annotated SFPU Kernel Source
+
+**Step 1: Binary Subtract (`_calculate_sfpu_binary_` with `BINOP=BinaryOp::SUB`)**
+
+```cpp
+// File: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_binary.h
+
+template <bool APPROXIMATION_MODE, BinaryOp BINOP, int ITERATIONS = 8>
+inline void _calculate_sfpu_binary_(const std::uint32_t dst_index_in0, const std::uint32_t dst_index_in1, const std::uint32_t dst_index_out)
+{ // For EQ: BINOP=BinaryOp::SUB, ITERATIONS=8
+    static constexpr float nan = std::numeric_limits<float>::quiet_NaN();
+    // SFPU microcode
+    for (int d = 0; d < ITERATIONS; d++)
+    {
+        // size of each tile in Dest is 64/SFP_DESTREG_STRIDE = 32 rows when using sfpi to load/store
+        constexpr std::uint32_t dst_tile_size_sfpi = 32; // offset between tiles in DEST when using SFPI indexing
+        sfpi::vFloat in0                           = sfpi::dst_reg[dst_index_in0 * dst_tile_size_sfpi]; // load row from tile A
+        sfpi::vFloat in1                           = sfpi::dst_reg[dst_index_in1 * dst_tile_size_sfpi]; // load row from tile B
+        sfpi::vFloat result                        = 0.0f;
+
+        // Only the SUB branch is active for EQ; other branches compiled away
+        if constexpr (BINOP == BinaryOp::SUB)
+        {
+            result = in0 - in1; // SFPIADD with negated in1 (SFPI subtraction)
+        }
+        // ... other BINOP branches omitted (ADD, MUL, DIV, RSUB, POW, XLOGY) ...
+
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = result; // store result back to tile A's DEST slot
+        sfpi::dst_reg++; // advance to next row within the face
+    }
+}
+```
+
+**Step 2: Equal-to-Zero Comparison (`calculate_comp` with `COMP_MODE=SfpuType::equal_zero`)**
+
+```cpp
+// File: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_comp.h
+
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_comp(uint exponent_size_8) {
+    // For EQ: COMP_MODE=SfpuType::equal_zero, ITERATIONS=8
+    const vFloat zero = 0.0f;
+    const vFloat one = 1.0f;
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0]; // load current row from DEST
+
+        // a[i] == 0: only this branch is active for equal_zero
+        if constexpr (COMP_MODE == SfpuType::equal_zero) {
+            v_if(_sfpu_is_fp16_zero_(v, exponent_size_8)) { v = one; }  // element is zero -> output 1.0
+            v_else { v = zero; }                                         // element is non-zero -> output 0.0
+            v_endif;
+        }
+        // ... other COMP_MODE branches omitted (not_equal_zero, less_than_zero, etc.) ...
+
+        dst_reg[0] = v; // write result back to DEST
+        dst_reg++;       // advance to next row
+    }
+}
+```
+
+**Helper: `_sfpu_is_fp16_zero_`**
+
+```cpp
+// File: tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/common/inc/sfpu/ckernel_sfpu_is_fp16_zero.h
+
+sfpi_inline sfpi::vInt _sfpu_is_fp16_zero_(const sfpi::vFloat& v, std::uint32_t exponent_size_8)
+{
+    if (exponent_size_8)
+    {
+        // fp16b / bfloat16 / fp32: 8-bit exponent, direct comparison works
+        return v == 0.0F;
+    }
+    else
+    {
+        // fp16a: 5-bit exponent was extended to 8-bit by adding bias of 112
+        // A true zero in fp16a becomes 0x3800 after bias addition
+        // So add 0x3800 and check if the sum is zero (overflow wraps to 0 for true zero)
+        sfpi::vInt tmp = 0x3800; // loads {0, 8'd112, 10'b0}
+        tmp += sfpi::reinterpret<sfpi::vInt>(v);
+        return tmp == 0;
+    }
+}
+```
+
+### SFPU Instructions Used
+
+The EQ binary legacy operation's SFPU kernels use SFPI abstractions that compile down to the following underlying SFPU instructions:
+
+| Instruction / Intrinsic | Description |
+|------------------------|-------------|
+| `SFPLOAD` (via `dst_reg[offset]` read) | Loads a vector row from the DEST register file into an SFPU local register (LREG). The offset indexes into DEST relative to the current base address. |
+| `SFPSTORE` (via `dst_reg[offset] = val` write) | Stores a vector row from an SFPU local register back to the DEST register file at the specified offset. |
+| `SFPIADD` (via `in0 - in1`, integer add/compare) | Used for subtraction (negate + add) and for integer zero-comparison. The `v == 0.0F` comparison in `_sfpu_is_fp16_zero_` compiles to SFPIADD-based equality check that sets condition codes. |
+| `SFPMAD` (via `in0 - in1` float subtract) | Multiply-add instruction used to implement floating-point subtraction: `in0 + (-1.0) * in1`. The SFPI compiler may use this for the `in0 - in1` operation. |
+| `SFPLOADI` (via literal loads like `0x3800`, `0.0f`, `1.0f`) | Loads an immediate constant into an SFPU local register. Used for loading comparison constants (0.0, 1.0) and the fp16a bias value (0x3800). |
+| `SFPSETCC` (via `v_if` conditions) | Sets the condition code register based on a comparison result, enabling conditional execution of subsequent instructions within the `v_if`/`v_else`/`v_endif` blocks. |
+| `SFPENCC` (via `v_endif`) | Ends conditional execution, restoring the condition code to its prior state. |
+| `SFPMOV` (via register assignments) | Moves data between SFPU local registers. Used when assigning constant values (0.0f, 1.0f) to output under conditional paths. |
+| `SFPNOP` (implicit) | No-operation padding inserted by the compiler between dependent SFPU instructions to satisfy pipeline latency requirements. |
+| `SETRWC` (via `dst_reg++` and inter-face advancement) | Sets the read/write counter for DEST addressing. `dst_reg++` increments by `SFP_DESTREG_STRIDE` (=2) rows. Between faces, explicit `TTI_SETRWC` calls advance the pointer by 8 rows each (called twice for 16-row face advancement). |
+
+### SFPU Register Usage
+
+| Register | Usage |
+|----------|-------|
+| **DEST register file** | Primary storage. Input tiles occupy DEST[i*2] (tile A) and DEST[i*2+1] (tile B). After subtraction, the result overwrites DEST[i*2]. After eqz, the final 0.0/1.0 values overwrite DEST[i*2]. Each "row" in SFPI terms is 16 elements wide (half a tile face width). |
+| **LREG0** | Working register for loading values from DEST (`dst_reg[0]` reads into LREG0 by default). Also used for intermediate computation. |
+| **LREG1-LREG3** | Additional local registers used by the SFPI compiler for holding constants (0.0f, 1.0f, 0x3800 bias), intermediate comparison results, and the condition code state during `v_if`/`v_else` blocks. |
+| **LCONST registers** | `vConst0` (LCONST_0 = 0.0f) and `vConst1` (LCONST_1 = 1.0f in fp16b format) are hardware-provided constants. The kernel loads explicit constants via SFPLOADI rather than relying on these for precision reasons. |
+| **Condition Code (CC)** | The SFPI `v_if`/`v_else`/`v_endif` constructs manipulate the CC register per-lane. For the eqz comparison, `_sfpu_is_fp16_zero_` produces a per-lane boolean via `v == 0.0F` (or the fp16a bias trick), which sets CC. The `v_if` then uses CC to conditionally write 1.0 or 0.0 to each lane. |
+
+### Address Mode Configuration
+
+The address mode configuration for the EQ operation is set during `eqz_tile_init()` (via `_llk_math_eltwise_unary_sfpu_init_<SfpuType::equal_zero>()`) and applies to both the binary subtract and unary eqz phases (since the binary phase is called first without its own init overriding addr_mod for the high bank).
+
+**ADDR_MOD_7** (configured by `eltwise_unary_sfpu_configure_addrmod<SfpuType::equal_zero>`):
+
+| Field | Value | Description |
+|-------|-------|-------------|
+| `srca.incr` | 0 | No auto-increment for source A addressing (not used by SFPU) |
+| `srcb.incr` | 0 | No auto-increment for source B addressing (not used by SFPU) |
+| `dest.incr` | 0 | No auto-increment for DEST addressing via addr_mod; DEST progression is handled entirely by SFPI's `dst_reg++` (which uses `SFP_DESTREG_STRIDE` = 2 hardware rows per increment) and explicit `TTI_SETRWC` calls between faces |
+
+The `equal_zero` SfpuType does not match any of the special-case addr_mod configurations (topk, typecast, max/min), so only ADDR_MOD_7 is set with all-zero increments.
+
+During SFPU execution, `math::set_addr_mod_base()` is called, which sets the addr_mod base register to 1 via `TTI_SETC16(ADDR_MOD_SET_Base_ADDR32, 1)`. This means SFPU instructions reference ADDR_MOD indices 4-7 (base offset of 4). ADDR_MOD_3 (used by SFPLOAD/SFPSTORE in `dst_reg[]` accesses) maps to hardware ADDR_MOD_7 under this base, which has `dest.incr=0`.
+
+This configuration is the same for Wormhole B0 and Blackhole -- the `eltwise_unary_sfpu_configure_addrmod` function has identical logic in both architectures for the `equal_zero` case.
+
 ## External Knowledge Sources
 
 ### DeepWiki Queries
@@ -271,6 +455,10 @@ No explicit compile-time args. Behavior is controlled entirely through preproces
 1. **Query**: "How does the binary element-wise SFPU program factory work in ttnn? What is the structure of element_wise_multi_core_sfpu_pgm_factory.cpp and how does it differ from the FPU path?"
    **Reason**: To understand the overall architecture of the SFPU binary path, its kernel structure, and how it differs from the FPU path.
    **Key Findings**: Confirmed the three-kernel structure (reader, compute, writer), the use of `eltwise_binary_sfpu_kernel.cpp` for compute, the role of `UnpackToDestFp32` mode, and the interim CB mechanism for pre-scaling operations. The SFPU path explicitly loads data into DST registers before SFPU function calls, while the FPU path can work more directly on CB data.
+
+2. [SFPU] **Query**: "How is eqz_tile implemented in the LLK? What is the call chain from eqz_tile through llk_math to the ckernel SFPU implementation? What file contains the core SFPU eqz calculation function?"
+   **Reason**: To identify the full call chain from the `eqz_tile` API down to the core SFPU implementation, and to locate the relevant source files.
+   **Key Findings**: Confirmed the call chain: `eqz_tile` -> `SFPU_ZERO_KERNEL` macro -> `_llk_math_eltwise_unary_sfpu_params_` -> `calculate_comp<APPROX, SfpuType::equal_zero>`. The core implementation is in `ckernel_sfpu_comp.h` (WH-specific variant at `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_comp.h`). DeepWiki correctly identified the pattern but did not have the exact file for eqz -- source code verification was required.
 
 ### Documentation References
 
@@ -289,3 +477,11 @@ No explicit compile-time args. Behavior is controlled entirely through preproces
 4. **Source**: `ttnn/cpp/ttnn/operations/eltwise/binary/device/eltwise_multi_core_program_factory_common.hpp`
    **Reason**: To understand runtime argument setup, core distribution, and work splitting logic.
    **Key Information**: Uses `split_work_to_cores` for interleaved; shard grid for sharded. Two core groups handle remainder tiles. Block/width-sharded paths have specialized start_id calculations and a different writer kernel.
+
+### Confluence References
+
+No Confluence pages were consulted for this analysis. The SFPI-based kernel uses high-level abstractions (`v_if`, `dst_reg`, `vFloat`) that are well-documented via DeepWiki and source code, so the low-level SFPU ISA page was not needed.
+
+### Glean References
+
+No Glean searches were performed for this analysis. The SFPU kernel implementations were fully traceable through source code and DeepWiki.

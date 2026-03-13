@@ -229,6 +229,183 @@ Cores are indexed linearly as `core = {i / num_cores_y, i % num_cores_y}`, filli
 
 - **FP32 dest accumulation**: Controlled by `args.fp32_dest_acc_en` and passed to `ComputeConfig`. When enabled, the DST register file uses FP32 format for intermediate results, providing higher precision for the comparison operation.
 
+## SFPU Kernel Implementation
+
+This section provides a dedicated deep dive into the underlying SFPU kernel functions that the compute kernel dispatches to. LOGICAL_NOT_UNARY has two distinct kernel implementations: an SFPI-based kernel for float/int32/uint32 types and a raw TTI-based kernel for uint16.
+
+### SFPU Abstraction Layers
+
+| Layer | File Path |
+|-------|-----------|
+| **API Header** | `tt_metal/hw/inc/api/compute/eltwise_unary/logical_not_noti.h` |
+| **LLK Dispatch** | `tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h` (macro-based dispatch via `SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS_FN` and `SFPU_UNARY_NO_PARAM_KERNEL_FN`) |
+| **Core SFPU Implementation** | `tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/ckernel_sfpu_logical_not_noti.h` |
+| **Parameters Dispatch** | `tt_metal/third_party/tt_llk/tt_llk_{wormhole_b0,blackhole}/llk_lib/llk_math_eltwise_unary_sfpu_params.h` |
+
+### Call Chain
+
+1. The compute kernel calls `logical_not_unary_tile_init()` which expands via `SFPU_UNARY_KERNEL_INIT` to `llk_math_eltwise_unary_sfpu_init<SfpuType::logical_not_unary, APPROX>()`, configuring SFPU state and address modes.
+2. The compute kernel calls `logical_not_unary_tile(0)` (for float/int32/uint32 types) which expands via `SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS_FN` to `_llk_math_eltwise_unary_sfpu_params_<APPROX>(ckernel::sfpu::calculate_logical_not_unary<V, T>, 0, VectorMode::RC)`.
+3. For uint16, `logical_not_unary_tile_uint16(0)` expands via `SFPU_UNARY_NO_PARAM_KERNEL_FN` to `_llk_math_eltwise_unary_sfpu_params_<APPROX>(ckernel::sfpu::calculate_logical_not_unary_uint16<APPROX>, 0, VectorMode::RC)`.
+4. `_llk_math_eltwise_unary_sfpu_params_` sets the DST write address, stalls until SFPU is ready, then calls the SFPU function once per face (4 faces for RC mode), advancing the DEST read/write pointer by `DEST_FACE_WIDTH` (16 rows) between faces via `TTI_SETRWC`.
+5. The core SFPU function (`calculate_logical_not_unary` or `calculate_logical_not_unary_uint16`) executes 8 iterations per face, processing 4 datums (one row of 32 elements across the SFPU's vector width) per iteration.
+
+### Parameters Dispatch Summary
+
+- **Vector mode**: `VectorMode::RC` for all type variants. This processes all 4 faces of the 32x32 tile (face 0 = top-left 16x16, face 1 = top-right 16x16, face 2 = bottom-left 16x16, face 3 = bottom-right 16x16).
+- **Operation invocation**: The params function loops 4 times (once per face). Each iteration calls the SFPU function, then executes two `TTI_SETRWC` instructions to advance the DEST read/write pointer by 16 rows (2 x 8 rows per SETRWC call) to reach the next face.
+- **DEST address progression**: The initial DEST address is set by `math::set_dst_write_addr<Tile32x32>(dst_index)`. Between faces, the pointer advances by `DEST_FACE_WIDTH` (16 rows) via two `TTI_SETRWC(CLR_NONE, CR_D, 8, 0, 0, SET_D)` calls (each advancing by 8). Within the SFPU function, `dst_reg++` (SFPI) or `dst_reg++` (TTI variant) advances by 1 row per iteration, covering 8 rows per function call. After all 4 faces, `math::clear_dst_reg_addr()` resets the pointer.
+
+### Annotated SFPU Kernel Source
+
+This operation has two kernel implementations analyzed separately below.
+
+#### Variant 1: SFPI-based kernel (float / int32 / uint32) -- Style A
+
+```cpp
+// File: tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/ckernel_sfpu_logical_not_noti.h
+
+namespace ckernel::sfpu {
+
+template <typename V, typename T>
+inline void calculate_logical_not_unary() { // V=sfpi::vFloat/vInt/vUInt, T=float/int16_t/uint16_t
+#pragma GCC unroll 0 // Prevent compiler unrolling to reduce code size
+    for (int d = 0; d < 8; d++) {
+        V v = sfpi::dst_reg[0]; // Load current DEST row into SFPU vector register
+        v_if(v == 0) { sfpi::dst_reg[0] = T(1); } // If element is zero, write 1
+        v_else { sfpi::dst_reg[0] = T(0); }        // If element is non-zero, write 0
+        v_endif;
+        sfpi::dst_reg++; // Advance DEST pointer by 1 row (emits SETRWC)
+    }
+}
+
+}  // namespace ckernel::sfpu
+```
+
+#### Variant 2: TTI-based kernel (uint16) -- Style B
+
+The Wormhole and Blackhole implementations are identical except for the ADDR_MOD index used with SFPLOAD/SFPSTORE (Wormhole uses `ADDR_MOD_3`, Blackhole uses `ADDR_MOD_7`). The Wormhole variant is shown below:
+
+```cpp
+// File: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_logical_not_noti.h
+
+template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
+inline void calculate_logical_not_unary_uint16() {
+    for (int d = 0; d < ITERATIONS; d++) {
+        // full tile size
+        constexpr int tile_size = 64;
+        // load in conditional uint16 value
+        TTI_SFPLOAD(p_sfpu::LREG0, LO16, ADDR_MOD_3, 0);
+        // initially put 0 into output
+        TTI_SFPMOV(0, p_sfpu::LCONST_0, p_sfpu::LREG1, 0);
+        // if (REG0 == 0)
+        TTI_SFPSETCC(0, 0, 0, sfpi::SFPSETCC_MOD1_LREG_EQ0);
+        // load in (int) 1
+        TTI_SFPLOADI(p_sfpu::LREG1, sfpi::SFPLOADI_MOD0_USHORT, 0x0001);
+
+        // TTI_SFPENCC(IMM12_MATH, LREG_C, LREG_DEST, INSTR_MOD1);
+        // IMM12_MATH: optional immediate value for math operations
+        // LREG_C: unused
+        // LREG_DEST: unused
+        // INSTR_MOD1: 0 => condition code enable reg is not modified.
+        TTI_SFPENCC(0, 0, 0, 0);
+        // store result
+        TTI_SFPSTORE(p_sfpu::LREG1, LO16, ADDR_MOD_3, 0);
+        sfpi::dst_reg++;
+    }
+}
+```
+
+**CC State Machine diagram for `calculate_logical_not_unary_uint16`:**
+
+```
+calculate_logical_not_unary_uint16 -- CC State Transitions (per iteration)
+================================================================
+
+  CC State: ALL_ENABLED                   <-- initial state
+       |
+       |  SFPLOAD LREG0, LO16, ADDR_MOD_3, 0   (no CC effect) -- load uint16 from DEST into LREG0
+       |  SFPMOV LCONST_0 -> LREG1              (no CC effect) -- LREG1 = 0 (default output)
+       |
+       v
+  +-------------------------------------------+
+  | SFPSETCC  SFPSETCC_MOD1_LREG_EQ0 (=6)    |
+  |                                           |
+  | CC <- (LREG0 == 0)                        |
+  +--------------------+----------------------+
+                       |
+                       v
+  CC State: ENABLED where LREG0 == 0
+       |
+       |  SFPLOADI LREG1, USHORT, 0x0001    (CC-guarded: only LREG0==0 lanes)
+       |                                     -- overwrites LREG1 with 1 for zero-valued lanes
+       v
+  +-------------------------------------------+
+  | SFPENCC  INSTR_MOD1=0                     |
+  |                                           |
+  | CC <- ALL_ENABLED                         |
+  +--------------------+----------------------+
+                       |
+                       v
+  CC State: ALL_ENABLED
+       |
+       |  SFPSTORE LREG1, LO16, ADDR_MOD_3, 0   (all lanes) -- write result to DEST
+       |  dst_reg++                               (advance DEST pointer by 1 row)
+       v
+```
+
+The logic is: LREG1 starts at 0 for all lanes. SFPSETCC enables only lanes where the input (LREG0) is zero. The CC-guarded SFPLOADI then overwrites LREG1 with 1 only for those zero-valued lanes. SFPENCC re-enables all lanes. SFPSTORE writes the final LREG1 (0 for non-zero inputs, 1 for zero inputs) back to DEST. This achieves `output = (input == 0) ? 1 : 0` using predicated execution.
+
+### SFPU Instructions Used
+
+**SFPI variant (float/int32/uint32):**
+The SFPI abstraction compiles to underlying SFPU instructions. The key operations are:
+- `dst_reg[0]` read -- compiles to `SFPLOAD` to read a row from DEST into an SFPU LREG
+- `v_if(v == 0)` -- compiles to `SFPSETCC` with EQ0 modifier, setting CC based on zero comparison
+- `dst_reg[0] = T(1)` / `dst_reg[0] = T(0)` -- compile to `SFPLOADI` + `SFPSTORE` (or `SFPMOV` from LCONST) to write constant values, guarded by CC
+- `v_else` / `v_endif` -- compile to `SFPCOMPC` (complement CC) and `SFPENCC` (re-enable all lanes)
+- `dst_reg++` -- compiles to `SETRWC` to advance the DEST read/write pointer
+
+**TTI variant (uint16):**
+
+| Instruction | Description |
+|-------------|-------------|
+| `TTI_SFPLOAD(LREG0, LO16, ADDR_MOD_3, 0)` | Load 16-bit unsigned integer from current DEST row into LREG0. `LO16` mode reads the lower 16 bits. |
+| `TTI_SFPMOV(0, LCONST_0, LREG1, 0)` | Move hardware constant 0 (LCONST_0 = register 9) into LREG1. Initializes output to 0 for all lanes. |
+| `TTI_SFPSETCC(0, 0, 0, SFPSETCC_MOD1_LREG_EQ0)` | Set condition code: CC enabled for lanes where LREG0 == 0. INSTR_MOD1=6 selects EQ0 comparison mode. |
+| `TTI_SFPLOADI(LREG1, SFPLOADI_MOD0_USHORT, 0x0001)` | Load immediate unsigned short value 1 into LREG1. CC-guarded: only executes for lanes where CC is enabled (input was zero). |
+| `TTI_SFPENCC(0, 0, 0, 0)` | End conditional code region. Resets CC to ALL_ENABLED. INSTR_MOD1=0 means the CC enable register is not modified. |
+| `TTI_SFPSTORE(LREG1, LO16, ADDR_MOD_3, 0)` | Store LREG1 as 16-bit unsigned integer back to current DEST row. `LO16` mode writes the lower 16 bits. |
+
+### SFPU Register Usage
+
+**SFPI variant:**
+- `dst_reg[0]` (aliased to DEST row at current pointer): Read input, write output. The SFPI compiler manages LREG allocation internally.
+- The SFPI runtime uses LREG0-LREG3 as working registers (compiler-managed), plus LCONST_0 (=0.0) and LCONST_1 (=1.0) as hardware-provided constants.
+
+**TTI variant:**
+
+| Register | Role | Description |
+|----------|------|-------------|
+| `LREG0` (p_sfpu::LREG0 = 0) | Input | Holds the uint16 value loaded from DEST |
+| `LREG1` (p_sfpu::LREG1 = 1) | Output | Initialized to 0 via SFPMOV from LCONST_0, then conditionally overwritten with 1 by SFPLOADI under CC guard |
+| `LCONST_0` (p_sfpu::LCONST_0 = 9) | Constant | Hardware-provided constant 0, source for SFPMOV to initialize LREG1 |
+| `CC` (condition code register) | Control flow | Set by SFPSETCC (EQ0 test on LREG0), reset by SFPENCC |
+| `DEST` (destination register file) | I/O | Source and sink for tile data; accessed via SFPLOAD/SFPSTORE with `dst_reg` pointer |
+
+### Address Mode Configuration
+
+The SFPU init function (`_llk_math_eltwise_unary_sfpu_init_`) calls `eltwise_unary_sfpu_configure_addrmod<SfpuType::logical_not_unary>()`. Since `logical_not_unary` does not match any special-cased SfpuType (topk_local_sort, typecast, unary_max/min), only the default ADDR_MOD_7 is configured:
+
+**Wormhole B0 and Blackhole (identical):**
+```
+ADDR_MOD_7: { srca.incr = 0, srcb.incr = 0, dest.incr = 0 }
+```
+
+This zero-increment address mode means that SFPLOAD/SFPSTORE do not auto-increment the DEST pointer -- the DEST pointer advancement is handled explicitly by `dst_reg++` (which emits a `SETRWC` instruction) at the end of each iteration.
+
+**Note on the uint16 variant**: The Wormhole implementation uses `ADDR_MOD_3` in its SFPLOAD/SFPSTORE instructions, while the Blackhole implementation uses `ADDR_MOD_7`. On Wormhole, the params dispatch calls `math::set_addr_mod_base()` which sets the ADDR_MOD base register to 1, shifting effective indices from range 0..3 to 4..7. This means `ADDR_MOD_3` in the source code accesses physical `ADDR_MOD_7` (3 + base 4 = 7). On Blackhole, the source code directly references `ADDR_MOD_7` and there is no base offset shift in the params dispatch. Both resolve to the same {0, 0, 0} configuration.
+
 ## External Knowledge Sources
 
 ### DeepWiki Queries
@@ -236,6 +413,10 @@ Cores are indexed linearly as `core = {i / num_cores_y, i % num_cores_y}`, filli
 1. **Query**: "How does the unary program factory work for SFPU operations? What is the structure of unary_program_factory.cpp and how does it select between FPU and SFPU paths?"
    **Reason**: Needed to understand the overall architecture of the unary program factory and how it dispatches to different compute kernels.
    **Key Findings**: Confirmed that `UnaryProgramFactory` is primarily SFPU-based, the compute kernel path is determined by `get_compute_kernel_path()`, and the factory selection depends on sharding and sub_core_grids properties. LOGICAL_NOT_UNARY falls into the default SFPU path via `eltwise_sfpu.cpp`.
+
+2. [SFPU] **Query**: "How does the unary compute kernel dispatch SFPU operations for logical_not? What is the call chain from the compute kernel through LLK to the ckernel SFPU implementation?"
+   **Reason**: Needed to trace the complete SFPU dispatch path from the compute kernel API through LLK macros to the core SFPU implementation.
+   **Key Findings**: Confirmed the call chain: `logical_not_unary_tile()` -> `SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS_FN` macro -> `_llk_math_eltwise_unary_sfpu_params_()` -> `calculate_logical_not_unary<V,T>()`. The macro system bridges the API layer to the hardware-specific ckernel implementation.
 
 ### Documentation References
 
@@ -254,3 +435,15 @@ Cores are indexed linearly as `core = {i / num_cores_y, i % num_cores_y}`, filli
 4. **Source**: `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/llk_math_eltwise_unary_sfpu_macros.h`
    **Reason**: Contains the `SFPU_UNARY_KERNEL_THREE_TEMPLATE_ARGS_FN` macro used by the logical_not_unary_tile functions.
    **Key Information**: The macro wraps the SFPU function call with `_llk_math_eltwise_unary_sfpu_params_<APPROXIMATE>()` which handles DST indexing and vector mode (RC mode = row-column processing).
+
+5. [SFPU] **Source**: `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h`
+   **Reason**: Contains the `_llk_math_eltwise_unary_sfpu_params_` function that orchestrates SFPU function dispatch with DST addressing and vector mode iteration.
+   **Key Information**: In RC mode, the function loops 4 times (one per face), calling the SFPU function each time and advancing the DEST pointer by 16 rows between faces via two `TTI_SETRWC` calls. Stalls ensure SFPU pipeline synchronization.
+
+6. [SFPU] **Source**: `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu.h`
+   **Reason**: Contains `eltwise_unary_sfpu_configure_addrmod` which sets up ADDR_MOD_7 with zero increments for the default SFPU case.
+   **Key Information**: ADDR_MOD_7 is configured with {srca=0, srcb=0, dest=0} for all standard SFPU operations. Special cases (topk, typecast, min/max) configure additional ADDR_MOD_6.
+
+7. [SFPU] **Source**: `runtime/sfpi/include/sfpi_constants.h`
+   **Reason**: Contains SFPU instruction modifier constants used in the TTI-based kernel.
+   **Key Information**: `SFPSETCC_MOD1_LREG_EQ0 = 6` (test LREG == 0), `SFPLOADI_MOD0_USHORT = 2` (load unsigned 16-bit immediate).

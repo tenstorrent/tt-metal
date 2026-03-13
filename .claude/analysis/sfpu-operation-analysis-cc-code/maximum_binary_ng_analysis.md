@@ -276,6 +276,294 @@ The `split_work_to_cores` utility divides `c_num_tiles` across available cores. 
 
 - **FP32 dest accumulation**: Enabled when output format is UInt32, Int32, or Float32, or when both inputs are Float32, Int32, or UInt32 (program factory lines 727-731). This ensures the DEST accumulator operates at full 32-bit precision for these types.
 
+## SFPU Kernel Implementation
+
+This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to. The MAXIMUM operation has two distinct SFPU kernel variants: a floating-point path (`calculate_binary_max_min<true>`) and an integer path (`calculate_binary_max_min_int32<true, false/true>`). Both use `SFPLOADMACRO`-based pipelining with `SFPSWAP` for the actual min/max comparison.
+
+### SFPU Abstraction Layers
+
+| Layer | File Path |
+|-------|-----------|
+| **API Header** | `tt_metal/hw/inc/api/compute/binary_max_min.h` |
+| **LLK Dispatch** | `tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/llk_math_eltwise_binary_sfpu_max_min.h` |
+| **Core SFPU Implementation** | `tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_max_min.h` |
+| **Parameters Dispatch** | `tt_metal/third_party/tt_llk/tt_llk_{wormhole_b0,blackhole}/llk_lib/llk_math_eltwise_binary_sfpu_params.h` |
+
+### Call Chain
+
+1. **Compute kernel** calls `binary_max_tile(0, 1, 0)` (from `binary_max_min.h`), which expands via `MATH()` to execute on the math RISC-V.
+2. **API Header** `binary_max_tile()` calls `llk_math_eltwise_binary_sfpu_binary_max<APPROX>(idst0, idst1, odst, vector_mode)` (from `llk_math_eltwise_binary_sfpu_max_min.h`).
+3. **LLK Dispatch** `llk_math_eltwise_binary_sfpu_binary_max()` calls `_llk_math_eltwise_binary_sfpu_params_<APPROXIMATE>()` (from `llk_math_eltwise_binary_sfpu_params.h`), passing `ckernel::sfpu::calculate_binary_max_min<true>` as the SFPU function pointer.
+4. **Parameters Dispatch** `_llk_math_eltwise_binary_sfpu_params_()` handles face iteration (4 faces for `VectorMode::RC`), calling the SFPU function once per face, with `TTI_SETRWC` between faces to advance the DEST read/write counter.
+5. **Core SFPU** `calculate_binary_max_min<true, 8>()` executes the actual SFPLOADMACRO + SFPSWAP pipeline to compute element-wise maximum across 8 row-iterations per face.
+
+For the init path: `binary_max_tile_init()` calls `llk_math_eltwise_binary_sfpu_binary_max_init<APPROX>()`, which calls `llk_math_eltwise_binary_sfpu_init<SfpuType::max, APPROXIMATE>()` with `sfpu::binary_max_min_init<true>` as the init function. The init configures SFPU address modes, resets counters, initializes the SFPU config register, and programs the SFPLOADMACRO instruction templates and macro definitions.
+
+### Parameters Dispatch Summary
+
+- **Vector mode**: `VectorMode::RC` (default). All 4 faces of a 32x32 tile are processed. Each face contains 8 rows of 16 elements (one SFPU vector width).
+- **Operation invocation**: The dispatch calls `calculate_binary_max_min<true>(dst_index_in0, dst_index_in1, dst_index_out)` once per face in a loop of 4 iterations. Within each call, the SFPU function iterates 8 times (ITERATIONS=8) to process all 8 rows of the face.
+- **DEST address progression**: Between faces, the dispatch issues two `TTI_SETRWC(CLR_NONE, CR_D, 8, 0, 0, SET_D)` instructions per face, each advancing the DEST read/write counter by 8 rows. This totals +16 rows per face, matching the DEST stride between consecutive faces. The SFPU function itself uses ADDR_MOD-based auto-increment (via SFPLOADMACRO scheduling) within each face to progress through the 8 rows.
+
+### Annotated SFPU Kernel Source
+
+This kernel uses raw `TT_`/`TTI_` instructions with `SFPLOADMACRO`-based pipelining. The SFPLOADMACRO mechanism schedules instruction templates and macros across pipeline stages (Load, Simple, MAD, Round, Store), achieving high throughput by overlapping load, compute, and store operations. The condition code logic in the int32 variant is complex enough to warrant a CC State Machine diagram.
+
+#### Floating-Point Variant: `calculate_binary_max_min` and `binary_max_min_init`
+
+```cpp
+// File: tt_metal/hw/ckernels/{wormhole_b0,blackhole}/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_max_min.h
+
+template <bool IS_MAX_OP = true, int ITERATIONS = 8>
+inline void calculate_binary_max_min(const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // IS_MAX_OP=true, ITERATIONS=8
+    uint offset0 = (dst_index_in0 * 32) << 1;  // DEST offset for input 0 (in units of 2 rows, matching SFPU addressing)
+    uint offset1 = (dst_index_in1 * 32) << 1;  // DEST offset for input 1
+    uint offset2 = (dst_index_out * 32) << 1;   // DEST offset for output
+
+    // Implementation notes, see the original file for more details
+
+    constexpr int b = p_sfpu::LREG2;  // LREG2 used for input1 load
+    constexpr int c = p_sfpu::LREG3;  // LREG3 used for store output
+
+#pragma GCC unroll 8
+    for (int i = 0; i < ITERATIONS; ++i) {
+        int a = i & 1;  // alternate between p_sfpu::LREG0 and p_sfpu::LREG1
+        // Macro 0: Load from input0 into LREG[a], triggers SFPSWAP in Simple stage and SFPSHFT2 (round-to-bf16) in Round stage
+        TT_SFPLOADMACRO((0 << 2) | (a & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_3, offset0 | (a >> 2));
+        // Standard load from input1 into LREG2
+        TT_SFPLOAD(b, InstrModLoadStore::DEFAULT, ADDR_MOD_3, offset1);
+        // Macro 1: Load into LREG3 for store path; triggers store of previous result in Store stage
+        TT_SFPLOADMACRO((1 << 2) | (c & 3), InstrModLoadStore::DEFAULT, ADDR_MOD_2, offset2 | (c >> 2));
+    }
+
+    TTI_SFPNOP;  // Pipeline drain: 3 NOPs to flush the 3-deep SFPLOADMACRO pipeline
+    TTI_SFPNOP;
+    TTI_SFPNOP;
+}
+
+template <bool IS_MAX_OP = true>
+inline void binary_max_min_init() {
+    // IS_MAX_OP=true
+    constexpr int b = p_sfpu::LREG2;
+
+    // InstructionTemplate[0]: SFPSWAP with mod1=9 (VD=max, VC=min) between LREG2 and template-target LREG
+    TTI_SFPSWAP(0, b, 12, IS_MAX_OP ? 9 : sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);  // mod1=9 means set VD=max and VC=min
+
+    // InstructionTemplate[1]: SFPSHFT2 with SHFT_IMM mode -- converts FP32 result to BF16 via rounding
+    TTI_SFPSHFT2(0, 0, 13, 6);  // SFPSHFT2_MOD1_SHFT_IMM
+
+    // Macro 0: {Simple: use InstrTemplate[0] on LREG(1<<3), Round: use InstrTemplate[1] on LREG(3<<3)}
+    {
+        constexpr uint simple_bits = 0x80 | 0x00 | (1 << 3) | 4;  // enable=1, type=Simple, src_lreg=1, template=0 (idx 4=InstrTemplate[0])
+        constexpr uint mad_bits = 0;
+        constexpr uint round_bits = 0x80 | 0x40 | (3 << 3) | 5;   // enable=1, VDSel=1 (use VD from load), src_lreg=3, template=1 (idx 5=InstrTemplate[1])
+        constexpr uint store_bits = 0;
+
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 0, 0);  // Program Macro 0
+    }
+
+    // Macro 1: {Store: write LREG(2<<3) using InstrTemplate (store path)}
+    {
+        constexpr uint simple_bits = 0;
+        constexpr uint mad_bits = 0;
+        constexpr uint round_bits = 0;
+        constexpr uint store_bits = 0x00 | 0x40 | (2 << 3) | 3;   // VDSel=1, src_lreg=2, template=3
+
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_LOWER, (mad_bits << 8) | simple_bits);
+        TTI_SFPLOADI(0, sfpi::SFPLOADI_MOD0_UPPER, (store_bits << 8) | round_bits);
+        TTI_SFPCONFIG(0, 4 + 1, 0);  // Program Macro 1
+    }
+
+    // Misc config: StoreMod0=DEFAULT, UsesLoadMod0ForStore={1,1}, UnitDelayKind={1,1}
+    TTI_SFPCONFIG(0x330, 8, 1);
+}
+```
+
+**Note on Wormhole vs Blackhole**: The core algorithm is identical. The only difference is the ADDR_MOD indices used in the inner loop: Wormhole uses `ADDR_MOD_3`/`ADDR_MOD_2`, while Blackhole uses `ADDR_MOD_7`/`ADDR_MOD_6`. The init function configures `ADDR_MOD_7` (dest.incr=0) and `ADDR_MOD_6` (dest.incr=2) on both platforms. On Wormhole, `ADDR_MOD_3`/`ADDR_MOD_2` are expected to be configured by the copy_tile (A2D) path or have compatible default values.
+
+#### Integer Variant: `calculate_binary_max_min_int32` and `binary_max_min_int32_init`
+
+The int32 variant is more complex because IEEE 754 floating-point comparison does not correctly order signed integers. The kernel must handle the sign bit explicitly using condition codes: it checks the XOR of the two input signs to determine whether SFPSWAP (which does float-domain comparison) needs its polarity inverted.
+
+```cpp
+// File: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_binary_max_min.h
+
+template <bool IS_MAX_OP = true, bool IS_UNSIGNED = false, int ITERATIONS = 8>
+inline void calculate_binary_max_min_int32(
+    const uint dst_index_in0, const uint dst_index_in1, const uint dst_index_out) {
+    // IS_MAX_OP=true, IS_UNSIGNED=false (signed int32), ITERATIONS=8
+    uint offset0 = (dst_index_in0 * 32) << 1;
+    uint offset1 = (dst_index_in1 * 32) << 1;
+    uint offset2 = (dst_index_out * 32) << 1;
+
+    constexpr int a0 = p_sfpu::LREG0;
+    constexpr int b0 = p_sfpu::LREG1;
+    constexpr int a1 = p_sfpu::LREG2;
+    constexpr int b1 = p_sfpu::LREG3;
+    constexpr int c = p_sfpu::LREG7;
+
+    lltt::record<lltt::NoExec>(0, 10);
+
+    // first iteration, with a0, b0, c
+    TT_SFPLOADMACRO((0 << 2) | (a0 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset0 | (a0 >> 2));
+    TT_SFPLOADMACRO((2 << 2) | (b0 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset1 | (b0 >> 2));
+    TTI_SFPSETCC(0, a1, 0, IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+    TTI_SFPENCC(0, 0, 0, 0);
+    TT_SFPLOADMACRO((3 << 2) | (c & 3), InstrModLoadStore::INT32, ADDR_MOD_2, offset2 | (c >> 2));
+
+    // second iteration, with a1, b1, c
+    TT_SFPLOADMACRO((1 << 2) | (a1 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset0 | (a1 >> 2));
+    TT_SFPLOADMACRO((2 << 2) | (b1 & 3), InstrModLoadStore::INT32, ADDR_MOD_3, offset1 | (b1 >> 2));
+    TTI_SFPSETCC(0, a0, 0, IS_UNSIGNED ? sfpi::SFPSETCC_MOD1_LREG_GTE0 : sfpi::SFPSETCC_MOD1_LREG_LT0);
+    TTI_SFPENCC(0, 0, 0, 0);
+    TT_SFPLOADMACRO((3 << 2) | (c & 3), InstrModLoadStore::INT32, ADDR_MOD_2, offset2 | (c >> 2));
+
+#pragma GCC unroll 4
+    for (int i = 0; i < ITERATIONS / 2; ++i) {
+        lltt::replay(0, 10);
+    }
+
+    if constexpr (ITERATIONS & 1) {
+        lltt::replay(0, 5);
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+        lltt::replay(5 + 2, 2);
+    } else {
+        TTI_SFPNOP;
+        TTI_SFPNOP;
+        lltt::replay(2, 2);
+    }
+
+    TTI_SFPNOP;
+}
+```
+
+**CC State Machine for `calculate_binary_max_min_int32` (signed, IS_UNSIGNED=false)**:
+
+The condition code manipulation in this kernel handles sign-aware integer comparison. The SFPSWAP instruction compares values in the floating-point domain, which works correctly for unsigned integers and same-sign signed integers. For mixed-sign signed integers, the XOR of the signs (stored in the "a" register from the previous iteration) determines whether the SFPSWAP result needs polarity correction. The `SFPSETCC` + `SFPENCC` pair effectively creates a sign-correction mask that the SFPSWAP instruction templates (configured in init) use via CC-guarding to select between normal and inverted swap behavior.
+
+```
+calculate_binary_max_min_int32 (signed) — CC State Transitions
+(Per pair of iterations; the pattern repeats ITERATIONS/2 times via lltt::replay)
+════════════════════════════════════════════════════════════════
+
+  CC State: ALL_ENABLED                   <-- initial state
+
+  -- Iteration 1 (a0, b0 pair) --
+       |
+       |  SFPLOADMACRO: load input0 row -> LREG0 (a0)    (no CC effect)
+       |  SFPLOADMACRO: load input1 row -> LREG1 (b0),
+       |    triggers SFPSWAP(a0,b0) in Simple stage       (no CC effect from load itself)
+       |    (SFPSWAP uses InstrTemplate[0], CC-guarded by current CC state)
+       |
+       v
+  +---------------------------------------------+
+  | SFPSETCC  LREG=a1(LREG2), SFPSETCC_MOD1_LREG_LT0  |
+  |                                                      |
+  | CC <- (LREG2 < 0)                                   |
+  | (LREG2 holds XOR of signs from previous iteration;  |
+  |  CC enables lanes where signs differ)                |
+  +--------------------+-----------------------------+
+                       |
+                       v
+  CC State: ENABLED where LREG2 < 0 (signs differ)
+       |
+       v
+  +---------------------------------------------+
+  | SFPENCC                                      |
+  |                                              |
+  | CC <- ALL_ENABLED                            |
+  +--------------------+-------------------------+
+                       |
+                       v
+  CC State: ALL_ENABLED
+       |
+       |  SFPLOADMACRO: Macro 3 store path              (no CC effect)
+       |    triggers store of corrected max/min result
+       |
+
+  -- Iteration 2 (a1, b1 pair) --
+       |
+       |  SFPLOADMACRO: load input0 row -> LREG2 (a1)   (no CC effect)
+       |  SFPLOADMACRO: load input1 row -> LREG3 (b1),
+       |    triggers SFPSWAP(a1,b1) in Simple stage      (no CC effect from load itself)
+       |
+       v
+  +---------------------------------------------+
+  | SFPSETCC  LREG=a0(LREG0), SFPSETCC_MOD1_LREG_LT0  |
+  |                                                      |
+  | CC <- (LREG0 < 0)                                   |
+  | (LREG0 holds XOR of signs from iteration 1)         |
+  +--------------------+-----------------------------+
+                       |
+                       v
+  CC State: ENABLED where LREG0 < 0 (signs differ)
+       |
+       v
+  +---------------------------------------------+
+  | SFPENCC                                      |
+  |                                              |
+  | CC <- ALL_ENABLED                            |
+  +--------------------+-------------------------+
+                       |
+                       v
+  CC State: ALL_ENABLED
+       |
+       |  SFPLOADMACRO: Macro 3 store path              (no CC effect)
+       |
+  [Pattern repeats for next pair via lltt::replay(0, 10)]
+```
+
+**Key insight**: The SFPSWAP instruction templates (configured in `binary_max_min_int32_init`) include both a normal swap (InstrTemplate[0] for a0/b0) and a second swap (InstrTemplate[1] for a1/b1). The CC from SFPSETCC gates whether the SFPSWAP polarity correction is applied -- when signs differ (CC enabled), the swap behavior is adjusted to account for the fact that float-domain comparison gives the wrong result for negative vs positive integers. The SFPENCC resets CC to allow unconditional store.
+
+### SFPU Instructions Used
+
+| Instruction | Description |
+|-------------|-------------|
+| `SFPLOADMACRO` | Macro-scheduled load from DEST into an LREG, triggering up to 4 pipeline stages (Simple, MAD, Round, Store) according to the programmed macro definition. Central to the high-throughput pipelining strategy. |
+| `SFPLOAD` | Standard load from DEST into an LREG. Used for the second operand (input1) which does not need macro scheduling. |
+| `SFPSWAP` | Performs vector min/max comparison between two LREGs. With mod1=9 (`SFPSWAP_MOD1_VEC_MAX`), places the maximum in VD and minimum in VC. Configured as InstructionTemplate[0] and triggered by SFPLOADMACRO. |
+| `SFPSHFT2` | Shift operation used here with `SHFT_IMM` mode (mod1=6) for FP32-to-BF16 rounding. Configured as InstructionTemplate[1] for the floating-point variant. |
+| `SFPLOADI` | Loads an immediate value into LREG0. Used during init to program macro bit fields (simple_bits, mad_bits, round_bits, store_bits) into the SFPLOADMACRO configuration. |
+| `SFPCONFIG` | Configures SFPLOADMACRO macro definitions and miscellaneous settings (StoreMod0, UsesLoadMod0ForStore, UnitDelayKind). |
+| `SFPSETCC` | Sets the condition code based on an LREG value. Used in the int32 variant with `SFPSETCC_MOD1_LREG_LT0` to detect sign-bit differences for signed integer comparison. |
+| `SFPENCC` | Resets the condition code to ALL_ENABLED. Used in the int32 variant to end the sign-correction CC region before the store. |
+| `SFPNOP` | No-operation. Used to drain the SFPLOADMACRO pipeline (3 NOPs for float, 1 for int32 after replay). |
+| `SFPSTORE` | (Implicit via SFPLOADMACRO store stage) Stores an LREG value back to DEST. Not called directly but triggered by the macro store_bits configuration. |
+
+### SFPU Register Usage
+
+| Register | Usage (Float) | Usage (Int32) |
+|----------|---------------|---------------|
+| **LREG0** | Input0 load target (even iterations, `a = i & 1`) | Input0 load target for iteration 1 (a0) |
+| **LREG1** | Input0 load target (odd iterations, `a = i & 1`) | Input1 load target for iteration 1 (b0); also holds XOR of signs for sign correction |
+| **LREG2** | Input1 load target (b) -- always loaded from input1 DEST | Input0 load target for iteration 2 (a1); also holds XOR of signs |
+| **LREG3** | Output store staging (c) -- SFPLOADMACRO routes result here before store | Input1 load target for iteration 2 (b1) |
+| **LREG7** | Not used | Output store staging (c) for int32 |
+| **DEST[idst0]** | Source tile 0 (input A), read by SFPLOAD/SFPLOADMACRO | Source tile 0 (input A), read by SFPLOADMACRO with INT32 mode |
+| **DEST[idst1]** | Source tile 1 (input B), read by SFPLOAD | Source tile 1 (input B), read by SFPLOADMACRO with INT32 mode |
+| **DEST[odst]** | Output tile, written by SFPSTORE (via macro) | Output tile, written by SFPSTORE (via macro) |
+
+The SFPLOADMACRO pipeline alternates between LREG0 and LREG1 for input0 (using `a = i & 1`) to avoid read-after-write hazards: while one LREG is being consumed by the SFPSWAP in the Simple stage, the other is being loaded in the Load stage.
+
+### Address Mode Configuration
+
+Address modes are configured in `_llk_math_eltwise_binary_sfpu_init_()` via `eltwise_binary_sfpu_configure_addrmod<SfpuType::max>()`. The configuration is identical for Wormhole and Blackhole:
+
+| ADDR_MOD | srca.incr | srcb.incr | dest.incr | Purpose |
+|----------|-----------|-----------|-----------|---------|
+| **ADDR_MOD_7** | 0 | 0 | 0 | Used for SFPLOAD/SFPLOADMACRO of inputs -- no auto-increment because the macro pipeline handles address progression internally |
+| **ADDR_MOD_6** | 0 | 0 | 2 | Used for SFPLOADMACRO store path -- dest.incr=2 advances the DEST write address by 2 rows per store, matching the SFPU's 2-row stride |
+
+**Platform difference in inner loop ADDR_MOD usage**:
+- **Blackhole**: The inner loop uses `ADDR_MOD_7` (load) and `ADDR_MOD_6` (store), matching the configured values above.
+- **Wormhole**: The inner loop uses `ADDR_MOD_3` (load) and `ADDR_MOD_2` (store). These are separate ADDR_MOD slots that may be configured by the `copy_tile` (A2D) path or have default values compatible with the requirements (incr=0 for loads, incr=2 for stores). The init function does not explicitly configure ADDR_MOD_3 or ADDR_MOD_2 for this operation.
+
+Between faces, the parameters dispatch (`_llk_math_eltwise_binary_sfpu_params_`) uses `TTI_SETRWC(CLR_NONE, CR_D, 8, 0, 0, SET_D)` twice per face to advance the DEST counter by 16 rows (2 x 8), aligning to the next face boundary.
+
 ## External Knowledge Sources
 
 ### DeepWiki Queries
@@ -283,6 +571,10 @@ The `split_work_to_cores` utility divides `c_num_tiles` across available cores. 
 1. **Query**: "How does the binary_ng operation work? What are its program factory variants, SFPU vs FPU paths, and kernel files?"
    **Reason**: Needed to understand the overall architecture of the binary_ng operation before reading source code.
    **Key Findings**: Confirmed single ProgramFactory, SFPU/FPU path selection via `is_sfpu` flag, `SubtileBroadcastType`-based kernel selection, and kernel file naming conventions (`eltwise_binary_sfpu_*.cpp` for SFPU path).
+
+2. [SFPU] **Query**: "How does binary_max_tile work? What is the call chain from compute_kernel_api binary_max_tile through LLK to the core SFPU implementation? What files are involved?"
+   **Reason**: Needed to trace the full call chain from the compute API down to the core SFPU implementation to identify all abstraction layers and file paths.
+   **Key Findings**: Confirmed the 5-layer call chain: binary_max_tile -> llk_math_eltwise_binary_sfpu_binary_max -> _llk_math_eltwise_binary_sfpu_params_ -> calculate_binary_max_min. Identified the SFPSWAP-based comparison and SFPLOADMACRO pipelining strategy. Located platform-specific files for both Wormhole and Blackhole.
 
 ### Documentation References
 
@@ -297,3 +589,11 @@ The `split_work_to_cores` utility divides `c_num_tiles` across available cores. 
 3. **Source**: `ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/kernels/compute/eltwise_utils_sfpu.hpp` and `eltwise_utils_common.hpp`
    **Reason**: Needed to understand the PREPROCESS macro, activation macros, and BCAST_INPUT logic.
    **Key Information**: PREPROCESS conditionally applies unary activations to an input CB before the main binary operation. The macro system uses preprocessor token pasting to detect empty activation lists.
+
+### Confluence References
+
+No Confluence pages were consulted for this analysis. The SFPLOADMACRO mechanism is sufficiently documented in the source code comments and the instruction template programming patterns visible in the init functions.
+
+### Glean References
+
+No Glean searches were performed for this analysis. The SFPSWAP and SFPLOADMACRO behaviors were adequately understood from the source code and DeepWiki.

@@ -212,6 +212,128 @@ The `split_work_to_cores` utility distributes `num_pages` tiles across available
 
 - **FP32 dest accumulation**: Controlled by `args.fp32_dest_acc_en`. Passed to `ComputeConfig.fp32_dest_acc_en`. When enabled, DEST registers operate in FP32 mode, providing higher precision for the comparison result before packing.
 
+## SFPU Kernel Implementation
+
+This section provides a dedicated deep dive into the underlying SFPU kernel function that the compute kernel dispatches to.
+
+### SFPU Abstraction Layers
+
+| Layer | File Path |
+|-------|-----------|
+| **API Header** | `tt_metal/hw/inc/api/compute/eltwise_unary/comp.h` |
+| **LLK Dispatch** | `tt_metal/third_party/tt_llk/tt_llk_wormhole_b0/llk_lib/llk_math_eltwise_unary_sfpu_params.h` (Wormhole) / `tt_metal/third_party/tt_llk/tt_llk_blackhole/llk_lib/llk_math_eltwise_unary_sfpu_params.h` (Blackhole) |
+| **Core SFPU Implementation** | `tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_comp.h` (Wormhole) / `tt_metal/hw/ckernels/blackhole/metal/llk_api/llk_sfpu/ckernel_sfpu_comp.h` (Blackhole) |
+| **Parameters Dispatch** | Same as LLK Dispatch (the `_llk_math_eltwise_unary_sfpu_params_` function is in `llk_math_eltwise_unary_sfpu_params.h`) |
+
+### Call Chain
+
+1. The compute kernel calls `ltz_tile(0)` (defined in `comp.h`), which wraps `MATH(SFPU_ZERO_KERNEL(less_than_zero, RC, APPROX, idst))`.
+2. The `SFPU_ZERO_KERNEL` macro (in `llk_math_eltwise_unary_sfpu_macros.h`) expands to `_llk_math_eltwise_unary_sfpu_params_<APPROX>(ckernel::sfpu::calculate_comp<APPROX, SfpuType::less_than_zero>, 0, (int)VectorMode::RC, 8)`.
+3. `_llk_math_eltwise_unary_sfpu_params_` (in `llk_math_eltwise_unary_sfpu_params.h`) sets DEST write address, activates addr_mod base, stalls for SFPU readiness, then loops over 4 faces in `VectorMode::RC`, calling `calculate_comp<false, SfpuType::less_than_zero>(8)` once per face and advancing the DEST pointer by 16 rows (2x `SETRWC` with offset 8) between faces.
+4. `calculate_comp` (in `ckernel_sfpu_comp.h`) runs 8 iterations per face invocation, each processing one 4-element vector row: it loads from `dst_reg[0]`, applies the less-than-zero comparison via SFPI conditionals, writes the result back to `dst_reg[0]`, and increments `dst_reg` (stride 2).
+
+For INT32: the call chain is identical except `ltz_tile_int32(0)` uses the `SFPU_ZERO_KERNEL_TYPE` macro to dispatch to `calculate_comp_int<false, SfpuType::less_than_zero>`.
+
+### Parameters Dispatch Summary
+
+- **Vector mode**: `VectorMode::RC` -- all 4 faces of the 32x32 tile are processed (face 0, 1, 2, 3). Each face is 16 rows x 16 columns, with the SFPU processing 4-element vectors per row.
+- **Operation invocation**: The params dispatch function loops `for (int face = 0; face < 4; face++)`, calling `calculate_comp(8)` once per face. The `8` argument is passed through as `exponent_size_8` (but is not used by the `less_than_zero` branch; it is consumed only by the `equal_zero` / `not_equal_zero` branches for `_sfpu_is_fp16_zero_`). Inside `calculate_comp`, there is an inner loop of 8 iterations, processing 8 vector rows per face (8 rows x 4 elements = 32 elements per face width, but actually 8 rows of the 16-row face since `dst_reg` stride is 2).
+- **DEST address progression**: The params dispatch sets the initial DEST write address via `math::set_dst_write_addr<Tile32x32>(dst_index)`. Between faces, Wormhole uses `TTI_SETRWC(CLR_NONE, CR_D, 8, 0, 0, SET_D)` twice (advancing DEST by 8+8=16 rows). Blackhole uses `_llk_math_eltwise_unary_sfpu_inc_dst_face_addr_()` which calls `math::inc_dst_addr<8>()` twice (same 16-row advance). Within a face, `dst_reg++` advances the SFPU's internal DEST pointer by stride 2 per iteration.
+
+### Annotated SFPU Kernel Source
+
+This kernel uses SFPI abstractions (`vFloat`, `vInt`, `v_if`, `v_else`, `v_endif`, `dst_reg`), so Style A (inline-commented source code) is used.
+
+**Float variant** (`calculate_comp` with `COMP_MODE = SfpuType::less_than_zero`):
+
+```cpp
+// File: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_comp.h
+
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_comp(uint exponent_size_8) { // APPROXIMATION_MODE=false, COMP_MODE=SfpuType::less_than_zero, ITERATIONS=8
+    const vFloat zero = 0.0f;
+    const vFloat one = 1.0f;
+    for (int d = 0; d < ITERATIONS; d++) {
+        vFloat v = dst_reg[0]; // Load 4-element vector from current DEST row into LREG
+
+        // a[i] < 0
+        if constexpr (COMP_MODE == SfpuType::less_than_zero) {
+            v_if(v >= 0.0f) { v = zero; } // Comparison compiles to SFPXFCMPS with GTE condition; lanes where v >= 0 get 0.0
+            v_else { v = one; }            // Remaining lanes (v < 0) get 1.0
+            v_endif;
+        }
+
+        dst_reg[0] = v; // Store result back to same DEST row (SFPSTORE)
+        dst_reg++;       // Advance DEST pointer by stride 2 to next vector row
+    }
+}
+```
+
+**INT32 variant** (`calculate_comp_int` with `COMP_MODE = SfpuType::less_than_zero`):
+
+```cpp
+// File: tt_metal/hw/ckernels/wormhole_b0/metal/llk_api/llk_sfpu/ckernel_sfpu_comp.h
+
+template <bool APPROXIMATION_MODE, SfpuType COMP_MODE, int ITERATIONS = 8>
+inline void calculate_comp_int() { // APPROXIMATION_MODE=false, COMP_MODE=SfpuType::less_than_zero, ITERATIONS=8
+    for (int d = 0; d < ITERATIONS; d++) {
+        vInt v = dst_reg[0]; // Load 4-element int vector from current DEST row
+        vInt zero = 0;
+
+        // a[i] < 0
+        if constexpr (COMP_MODE == SfpuType::less_than_zero) {
+            v_if(v < zero) { v = 1; } // Integer comparison via SFPIADD; lanes where v < 0 get 1
+            v_else { v = zero; }       // Remaining lanes (v >= 0) get 0
+            v_endif;
+        }
+
+        dst_reg[0] = v; // Store result back to same DEST row
+        dst_reg++;       // Advance DEST pointer by stride 2
+    }
+}
+```
+
+Note: The Wormhole and Blackhole implementations of `calculate_comp` and `calculate_comp_int` are identical in source code. The only difference is in the `calculate_comp_uint16` and `calculate_eqz_uint32`/`calculate_nez_uint32` variants (which use raw TTI_ instructions and differ in `ADDR_MOD_3` vs `ADDR_MOD_7`), but those are not used by LTZ.
+
+### SFPU Instructions Used
+
+| Instruction / Intrinsic | Description |
+|--------------------------|-------------|
+| `SFPLOAD` (via `dst_reg[0]` read) | Loads a 4-element vector from the DEST register file into an SFPU local register (LREG). Generated by the `vFloat v = dst_reg[0]` assignment. |
+| `SFPXFCMPS` (via `v >= 0.0f`) | Scalar float comparison: compares each lane of a vFloat against a scalar float constant (0.0f) with GTE condition. Sets the condition code (CC) per lane. Generated by the `v_if(v >= 0.0f)` expression in the float variant. |
+| `SFPSETCC` / `SFPPUSHC` / `SFPCOMPC` / `SFPPOPC` (via `v_if`/`v_else`/`v_endif`) | CC stack management instructions. `v_if` pushes the comparison result onto the CC stack, `v_else` complements the CC, `v_endif` pops the CC stack. These control predicated execution of the assignment instructions. |
+| `SFPLOADI` (via `v = 0.0f` / `v = 1.0f`) | Loads an immediate constant into an LREG. Used for the `zero` (0.0f) and `one` (1.0f) constants, and for integer constants `0` and `1` in the INT32 variant. |
+| `SFPSTORE` (via `dst_reg[0] = v`) | Stores a 4-element vector from an SFPU local register back to the DEST register file. Generated by `dst_reg[0] = v`. |
+| `SFPIADD` (via `v < zero` in INT32 variant) | Integer addition/comparison. In the INT32 variant, `v < zero` compiles to an SFPIADD-based comparison that sets the CC based on the sign of the result. |
+
+### SFPU Register Usage
+
+| Register | Usage |
+|----------|-------|
+| **DEST register file** | Input/output storage. The tile data resides in DEST after `copy_tile` moves it from CB c_0. Each face occupies 16 rows of DEST (rows 0-15 for face 0, 16-31 for face 1, etc.). The SFPU reads from and writes back to the same DEST location. |
+| **LREG0** | Implicitly used as the primary working register. `vFloat v = dst_reg[0]` loads into LREG0. The comparison result and constant assignments also target LREG0. `dst_reg[0] = v` stores LREG0 back to DEST. |
+| **LREG1-LREG3** | May be used transiently by the compiler for holding intermediate values (e.g., the `zero` and `one` constants), but the SFPI abstraction manages register allocation transparently. |
+| **CC (Condition Code) register** | Used by `v_if`/`v_else`/`v_endif` to track which lanes satisfy the comparison condition. Each lane has an independent CC bit controlling predicated execution. |
+| **CC Stack** | The `v_if` pushes the current CC state, `v_else` complements it (via `SFPCOMPC`), and `v_endif` pops (via `SFPPOPC`), restoring the prior CC state. |
+
+### Address Mode Configuration
+
+The SFPU init function (`_llk_math_eltwise_unary_sfpu_init_<SfpuType::less_than_zero>`) calls `eltwise_unary_sfpu_configure_addrmod<SfpuType::less_than_zero>()`, which configures:
+
+**ADDR_MOD_7** (the default SFPU addr_mod, selected because ADDR_MOD_0 and ADDR_MOD_2 are used by the A2D datacopy):
+
+| Field | Value | Description |
+|-------|-------|-------------|
+| `srca.incr` | 0 | No auto-increment for source A |
+| `srcb.incr` | 0 | No auto-increment for source B |
+| `dest.incr` | 0 | No auto-increment for DEST |
+
+This configuration is identical on both Wormhole and Blackhole. Since `dest.incr = 0`, the SFPU does not auto-increment the DEST address between SFPLOAD/SFPSTORE pairs within a single iteration. Instead, DEST address progression within a face is handled by `dst_reg++` (which advances the SFPU's internal read/write pointer by stride 2), and progression between faces is handled by the params dispatch layer using explicit `SETRWC` instructions (Wormhole) or `math::inc_dst_addr<8>()` calls (Blackhole).
+
+The `less_than_zero` SfpuType does not match any of the special-case addr_mod configurations (topk_local_sort, typecast, unary_max/min), so only ADDR_MOD_7 with all-zero increments is set.
+
+The params dispatch function also calls `math::set_addr_mod_base()` before SFPU execution, which sets `ADDR_MOD_SET_Base_ADDR32 = 1`. This shifts the effective addr_mod index range from 0-3 to 4-7, so that `ADDR_MOD_3` in SFPU instructions actually refers to hardware addr_mod slot 7 (where the zero-increment configuration was programmed). After SFPU completes, `math::clear_addr_mod_base()` restores the base to 0.
+
 ## External Knowledge Sources
 
 ### DeepWiki Queries
@@ -219,6 +341,14 @@ The `split_work_to_cores` utility distributes `num_pages` tiles across available
 1. **Query**: "How does the unary SFPU program factory work? What kernels does it use for SFPU operations like ltz?"
    **Reason**: Needed to understand the overall architecture of the unary program factory and how LTZ fits in.
    **Key Findings**: Confirmed that LTZ uses `eltwise_sfpu.cpp` as compute kernel, preprocessor defines inject operation-specific behavior via `SFPU_OP_CHAIN_0`, and the `SFPU_ZERO_KERNEL` macro is used for compare-with-zero operations.
+
+2. [SFPU] **Query**: "How does the LTZ (less than zero) SFPU kernel work? What is the call chain from ltz_tile() through the LLK layer to the ckernel SFPU implementation?"
+   **Reason**: Needed to trace the full call chain from the compute API through LLK dispatch to the core SFPU function, and identify the source files at each layer.
+   **Key Findings**: Confirmed the call chain: `ltz_tile()` -> `SFPU_ZERO_KERNEL` macro -> `_llk_math_eltwise_unary_sfpu_params_` -> `calculate_comp<APPROX, SfpuType::less_than_zero>`. The core implementation is in `ckernel_sfpu_comp.h` for both Wormhole and Blackhole.
+
+3. [SFPU] **Query**: "How do v_if, v_else, v_endif work in SFPI? How does dst_reg indexing work? What SFPU instructions do vFloat comparisons compile down to?"
+   **Reason**: Needed to understand the SFPI abstractions used in the LTZ kernel to accurately document which hardware instructions are generated.
+   **Key Findings**: `v_if`/`v_else`/`v_endif` manage a CC stack using `SFPSETCC`/`SFPPUSHC`/`SFPCOMPC`/`SFPPOPC`. Float comparisons like `v >= 0.0f` compile to `__builtin_rvtt_sfpxfcmps` (SFPXFCMPS instruction). `dst_reg[i]` accesses the DEST register file with stride 2, and `dst_reg++` advances by `SFP_DESTREG_STRIDE = 2`.
 
 ### Documentation References
 
