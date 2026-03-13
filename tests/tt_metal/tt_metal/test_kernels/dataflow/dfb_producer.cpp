@@ -10,7 +10,8 @@
 void kernel_main() {
     const uint32_t src_addr_base = get_compile_time_arg_val(0);
     const uint32_t num_entries_per_producer = get_compile_time_arg_val(1);
-    constexpr auto src_args = TensorAccessorArgs<2>();
+    constexpr uint32_t implicit_sync = get_compile_time_arg_val(2);
+    constexpr auto src_args = TensorAccessorArgs<3>();
 
     uint32_t producer_mask = get_arg_val<uint32_t>(0);
     const uint32_t num_producers = static_cast<uint32_t>(__builtin_popcount(producer_mask));
@@ -29,24 +30,16 @@ void kernel_main() {
     uint32_t entry_size = dfb.get_entry_size();
     const auto tensor_accessor = TensorAccessor(src_args, src_addr_base, entry_size);
 
-    // for (uint32_t tensix_id = 0; tensix_id < 4; tensix_id++) {
-    //     for (uint32_t tc_id = 0; tc_id < 16; tc_id++) {
-    //         DPRINT << "tensix_id: " << tensix_id << " tc_id: " << tc_id
-    //                << " capacity: " << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id)) << ENDL();
-    //     }
-    // }
-
     for (uint32_t tile_id = 0; tile_id < num_entries_per_producer; tile_id++) {
-        // DPRINT << "rbw" << ENDL();
-        dfb.reserve_back(1);
-        // DPRINT << "rbd" << ENDL();
-        // DPRINT << "rdi" << ENDL();
-        DPRINT << "producer tile id " << tile_id << " page id " << ((tile_id * num_producers) + producer_idx) << ENDL();
-        noc.async_read(tensor_accessor, dfb, entry_size, {.page_id = tile_id * num_producers + producer_idx}, {});
-        noc.async_read_barrier();
-        DPRINT << "rdd" << ENDL();
-        dfb.push_back(1);
-        // DPRINT << "pbd" << ENDL();
+        // DPRINT << "producer tile id " << tile_id << " page id " << ((tile_id * num_producers) + producer_idx) << ENDL();
+        if constexpr (implicit_sync) {
+            dfb.read_in(noc, tensor_accessor, {.page_id = tile_id * num_producers + producer_idx});
+        } else {
+            dfb.reserve_back(1);
+            noc.async_read(tensor_accessor, dfb, entry_size, {.page_id = tile_id * num_producers + producer_idx}, {});
+            noc.async_read_barrier();
+            dfb.push_back(1);
+        }
     }
     DPRINT << "PFW" << ENDL();
     dfb.finish();
