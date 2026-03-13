@@ -3,7 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -23,7 +22,6 @@ void kernel_main() {
     const auto s = TensorAccessor(dst_args, dst_addr);
 
     uint32_t i_page = start_page_id;
-    DPRINT << "writer_pad_dims_rm_interleaved_v2: i_page: " << i_page << ENDL();
     for (uint32_t iter = 0; iter < num_sticks_per_core;) {
         cb_wait_front(cb_out0, num_sticks_per_barrier);
 
@@ -45,5 +43,4 @@ void kernel_main() {
         noc_async_write_barrier();
         cb_pop_front(cb_out0, num_sticks_per_barrier);
     }
-    DPRINT << "writer_pad_dims_rm_interleaved_v2: end" << ENDL();
 }

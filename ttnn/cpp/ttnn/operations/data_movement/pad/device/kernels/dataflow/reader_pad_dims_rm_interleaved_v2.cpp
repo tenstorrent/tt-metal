@@ -5,7 +5,6 @@
 #include <stdint.h>
 #include <cstring>
 #include "api/dataflow/dataflow_api.h"
-#include "api/debug/dprint.h"
 
 inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     const uint32_t cb_id, const uint32_t num_bytes, const uint32_t val) {
@@ -82,8 +81,6 @@ void kernel_main() {
 
     uint32_t i_page = start_page_id;
     uint32_t curr_c = start_dim_offset[2], curr_h = start_dim_offset[1], curr_n = start_dim_offset[3];
-    DPRINT << "reader_pad_dims_rm_interleaved_v2: curr_c: " << curr_c << ", curr_h: " << curr_h
-           << ", curr_n: " << curr_n << ENDL();
     for (uint32_t iter = 0; iter < num_sticks_per_core;) {
         cb_reserve_back(cb_in0, num_sticks_per_barrier);
         uint32_t l1_write_addr = get_write_ptr(cb_in0);
@@ -145,5 +142,4 @@ void kernel_main() {
         noc_async_read_barrier();
         cb_push_back(cb_in0, num_sticks_per_barrier);
     }
-    DPRINT << "reader_pad_dims_rm_interleaved_v2: end" << ENDL();
 }

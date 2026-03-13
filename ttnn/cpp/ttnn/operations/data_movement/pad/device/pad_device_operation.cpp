@@ -68,11 +68,8 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input;
     if (input_tensor.layout() == Layout::ROW_MAJOR) {
-        std::cout << "Row-major pad" << std::endl;
         if (input_tensor.is_sharded()) {
-            std::cout << "Sharded input" << std::endl;
             if (can_use_sharded_optimized_factory(operation_attributes, input_tensor)) {
-                std::cout << "Can use sharded optimized factory" << std::endl;
                 uint32_t input_w = input_tensor.logical_shape()[3];
                 uint32_t output_w = operation_attributes.output_logical_shape[3];
                 uint32_t input_tot_h = std::accumulate(
@@ -87,16 +84,13 @@ PadDeviceOperation::program_factory_t PadDeviceOperation::select_program_factory
                     std::multiplies<uint32_t>());
 
                 if (input_w != output_w && input_tot_h == output_tot_h) {
-                    std::cout << "Width only padding" << std::endl;
                     return PadRmShardedWidthOnlyProgramFactory{};
                 }
                 if (input_w == output_w) {
-                    std::cout << "Height only padding" << std::endl;
                     return PadRmShardedHeightOnlyProgramFactory{};
                 }
                 // Combined width+height padding: fall through to the default factory
             }
-            std::cout << "Default factory" << std::endl;
             return PadRmReaderWriterMultiCoreDefaultProgramFactory{};
         }
         if (operation_attributes.use_multicore) {
