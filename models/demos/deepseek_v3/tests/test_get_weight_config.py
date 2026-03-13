@@ -13,6 +13,7 @@ import pytest
 import torch
 from transformers.configuration_utils import PretrainedConfig
 
+import models.demos.deepseek_v3.utils.weight_config as weight_config_module
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
 from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION
@@ -265,6 +266,73 @@ def test_get_weight_config_cache_invalidation_wrong_suffix(tmp_path: Path) -> No
     assert call_count["n"] == 2
 
 
+def test_get_weight_config_multihost_peer_uses_rank0_hit_decision(tmp_path: Path, monkeypatch) -> None:
+    """Peer ranks should follow rank 0's hit decision and skip local cache validation."""
+
+    class FakeModule:
+        @staticmethod
+        def convert_weights(hf_config, state_dicts, weight_cache_path: Path, mesh_device):
+            raise AssertionError("convert_weights should not run on a peer rank when rank 0 reported a cache hit")
+
+    sentinel = {"w": SavedWeight(path=tmp_path / "already-normalized.tensorbin", memory_config=ttnn.DRAM_MEMORY_CONFIG)}
+    monkeypatch.setattr(weight_config_module, "_is_multihost_distributed", lambda: True)
+    monkeypatch.setattr(weight_config_module, "_get_distributed_rank", lambda: 1)
+    monkeypatch.setattr(weight_config_module, "_distributed_barrier", lambda: None)
+    monkeypatch.setattr(weight_config_module, "_read_multihost_decision", lambda path: {"mode": "hit"})
+    monkeypatch.setattr(weight_config_module, "_load_cached_config_without_visibility_checks", lambda *_args: sentinel)
+
+    mesh_device = _FakeMeshDevice(shape=(2, 2))
+    hf_config = _make_hf_config(num_hidden_layers=2)
+    base_cache = tmp_path / "weight_cache"
+
+    cfg = get_weight_config(
+        ModuleClass=FakeModule,
+        hf_config=hf_config,
+        state_dicts=({"dummy": torch.empty(1)},),
+        weight_cache_path=base_cache,
+        mesh_device=mesh_device,
+        force_recalculate=False,
+    )
+
+    assert cfg is sentinel
+
+
+def test_get_weight_config_multihost_peer_miss_does_not_write_config(tmp_path: Path, monkeypatch) -> None:
+    """Peer ranks should participate in generation on miss, but leave config.json publication to rank 0."""
+
+    class FakeModule:
+        @staticmethod
+        def convert_weights(hf_config, state_dicts, weight_cache_path: Path, mesh_device):
+            (weight_cache_path / "weights").mkdir(parents=True, exist_ok=True)
+            rel_path = Path("weights") / f"w{TENSOR_CACHE_EXTENSION}"
+            (weight_cache_path / rel_path).write_bytes(b"unit-test")
+            return {"w": SavedWeight(path=rel_path, memory_config=ttnn.DRAM_MEMORY_CONFIG)}
+
+    monkeypatch.setattr(weight_config_module, "_is_multihost_distributed", lambda: True)
+    monkeypatch.setattr(weight_config_module, "_get_distributed_rank", lambda: 1)
+    monkeypatch.setattr(weight_config_module, "_distributed_barrier", lambda: None)
+    monkeypatch.setattr(weight_config_module, "_read_multihost_decision", lambda path: {"mode": "miss"})
+
+    mesh_device = _FakeMeshDevice(shape=(2, 2))
+    hf_config = _make_hf_config(num_hidden_layers=2)
+    base_cache = tmp_path / "weight_cache"
+
+    cfg = get_weight_config(
+        ModuleClass=FakeModule,
+        hf_config=hf_config,
+        state_dicts=({"dummy": torch.empty(1)},),
+        weight_cache_path=base_cache,
+        mesh_device=mesh_device,
+        force_recalculate=False,
+    )
+
+    weight_cache_path = (
+        base_cache / f"{hf_config.num_hidden_layers}_layers" / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+    )
+    assert cfg["w"].path.is_absolute()
+    assert not (weight_cache_path / "config.json").exists()
+
+
 def test_get_weight_config_path_construction(tmp_path: Path) -> None:
     """Test that weight_cache_path is correctly constructed with layers and mesh shape."""
 
@@ -380,6 +448,18 @@ def test_validate_weight_config_paths_missing_file(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="references missing file"):
         validate_weight_config_paths(root_path, weight_config)
+
+
+def test_validate_weight_config_paths_missing_file_allowed(tmp_path: Path) -> None:
+    """Test that file visibility checks can be skipped for peer ranks during first publication."""
+    root_path = tmp_path / "weights"
+    root_path.mkdir(parents=True)
+
+    weight_config = {
+        "layer1": SavedWeight(path=Path(f"missing{TENSOR_CACHE_EXTENSION}"), memory_config=ttnn.DRAM_MEMORY_CONFIG),
+    }
+
+    validate_weight_config_paths(root_path, weight_config, require_files_exist=False)
 
 
 def test_validate_weight_config_paths_wrong_suffix(tmp_path: Path) -> None:
