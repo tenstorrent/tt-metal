@@ -47,7 +47,7 @@ namespace ckernel {
  * NOTE: Be extra careful when setting respect_trigger to true. This feature breaks the LLK API contract in
  * the following way: the llk-lib layer in reduce_block_max_row is waiting and acquiring the semaphore,
  * but posting it is expected to be done by the packer in the compute kernel, i.e. 2 layers above.
- * Number of semposts must math the number of calls to reduce_block_max_row.
+ * Number of semposts must match the number of calls to reduce_block_max_row_uninit.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
@@ -88,7 +88,7 @@ ALWI void reduce_block_max_row_init() {
  * NOTE: Be extra careful when setting respect_trigger to true. This feature breaks the LLK API contract in
  * the following way: the llk-lib layer in reduce_block_max_row is waiting and acquiring the semaphore,
  * but posting it is expected to be done by the packer in the compute kernel, i.e. 2 layers above.
- * Number of semposts must math the number of calls to reduce_block_max_row.
+ * Number of semposts must match the number of calls to reduce_block_max_row_uninit.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
@@ -120,7 +120,7 @@ ALWI void reduce_block_max_row(uint32_t icb, uint32_t icb_scaler, uint32_t row_s
  * NOTE: Be extra careful when setting respect_trigger to true. This feature breaks the LLK API contract in
  * the following way: the llk-lib layer in reduce_block_max_row is waiting and acquiring the semaphore,
  * but posting it is expected to be done by the packer in the compute kernel, i.e. 2 layers above.
- * Number of semposts must math the number of calls to reduce_block_max_row.
+ * Number of semposts must match the number of calls to reduce_block_max_row_uninit.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
@@ -194,7 +194,7 @@ ALWI void reduce_block_max_row_reinit_short_runtime(uint32_t block_ct_dim, bool 
  * NOTE: Be extra careful when setting respect_trigger to true. This feature breaks the LLK API contract in
  * the following way: the llk-lib layer in reduce_block_max_row is waiting and acquiring the semaphore,
  * but posting it is expected to be done by the packer in the compute kernel, i.e. 2 layers above.
- * Number of semposts must math the number of calls to reduce_block_max_row.
+ * Number of semposts must match the number of calls to reduce_block_max_row_uninit.
  *
  * | Param Type | Name                      | Description                                                                             | Type      | Valid Range                                    | Required |
  * |------------|---------------------------|-----------------------------------------------------------------------------------------|-----------|------------------------------------------------|----------|
