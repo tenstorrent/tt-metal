@@ -306,3 +306,119 @@
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   model-name: wan2.2-t2v-a14b
+
+- name: llama3-8b performance batch-32
+  cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/meta-llama/Meta-Llama-3-8B TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/meta-llama/Meta-Llama-3-8B pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  skus:
+    bh_llmbox:
+      timeout: 10
+    bh_deskbox:
+      timeout: 10
+    bh_loudbox:
+      timeout: 10
+    bh_p300:
+      timeout: 10
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: llama3-8b
+
+- name: qwen2.5-32b-instruct performance batch-32
+  cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen2.5-32B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen2.5-32B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  skus:
+    bh_llmbox:
+      timeout: 10
+    bh_loudbox:
+      timeout: 10
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+  model-name: qwen2.5-32b-instruct
+
+- name: qwen2.5-72b-instruct performance batch-32
+  cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen2.5-72B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen2.5-72B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  skus:
+    bh_loudbox:
+      timeout: 10
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+  model-name: qwen2.5-72b-instruct
+
+- name: qwen2.5-vl-32b-instruct performance batch-32
+  cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen2.5-VL-32B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen2.5-VL-32B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  skus:
+    bh_llmbox:
+      timeout: 10
+    bh_loudbox:
+      timeout: 10
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+  model-name: qwen2.5-vl-32b-instruct
+
+- name: qwen2.5-vl-72b performance batch-32
+  cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen2.5-VL-72B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen2.5-VL-72B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  skus:
+    bh_loudbox:
+      timeout: 10
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+  model-name: qwen2.5-vl-72b
+
+- name: qwen3-vl-32b performance batch-32
+  cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-VL-32B-Instruct TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/Qwen/Qwen3-VL-32B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  skus:
+    bh_llmbox:
+      timeout: 10
+    bh_loudbox:
+      timeout: 10
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+  model-name: qwen3-vl-32b
+
+- name: mistral-small-3.1-24b performance batch-32
+  cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/mistralai/Mistral-Small-3.1-24B-Instruct-2503 TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/mistralai/Mistral-Small-3.1-24B-Instruct-2503 pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  skus:
+    bh_llmbox:
+      timeout: 10
+    bh_loudbox:
+      timeout: 10
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: mistral-small-3.1-24b
+
+- name: gpt-oss-20b performance
+  cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/openai/gpt-oss-20b TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/openai/gpt-oss-20b pytest models/demos/gpt_oss/demo/text_demo.py -k "performance" --timeout=600
+  skus:
+    bh_llmbox:
+      timeout: 15
+    bh_loudbox:
+      timeout: 15
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+  model-name: gpt-oss-20b
+
+- name: gpt-oss-120b performance
+  cmd: HF_MODEL=/localdev/blackhole_demos/huggingface_data/openai/gpt-oss-120b TT_CACHE_PATH=/localdev/blackhole_demos/huggingface_data/openai/gpt-oss-120b pytest models/demos/gpt_oss/demo/text_demo.py -k "performance" --timeout=1200
+  skus:
+    bh_loudbox:
+      timeout: 30
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+  model-name: gpt-oss-120b
+
+- name: Mochi pipeline performance
+  cmd: HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" pytest models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "4x8sp1tp0" --timeout=1500
+  skus:
+    bh_loudbox:
+      timeout: 20
+  owner_id: U09ELB03XRU # Stephen Osborne
+  team: models
+  model-name: mochi

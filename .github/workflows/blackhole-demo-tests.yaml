@@ -17,9 +17,19 @@ on:
           - all
           - whisper
           - llama3.1-8b
+          - llama3-8b
           - unet-shallow
           - llama3.3-70b
           - qwen3-32b
+          - qwen2.5-32b-instruct
+          - qwen2.5-72b-instruct
+          - qwen2.5-vl-32b-instruct
+          - qwen2.5-vl-72b
+          - qwen3-vl-32b
+          - mistral-small-3.1-24b
+          - gpt-oss-20b
+          - gpt-oss-120b
+          - mochi
           - flux.1-dev
           - wan2.2-t2v-a14b
       system-type:
