@@ -14,6 +14,8 @@
 #include <tt-metalium/mesh_device.hpp>
 #include <tt-metalium/mesh_coord.hpp>
 
+#include "ttnn/device_context.hpp"
+
 namespace ttnn::operations::debug {
 
 using namespace tt::tt_metal;
@@ -23,7 +25,7 @@ void apply_device_delay(
     ttnn::MeshDevice& mesh_device,
     const std::vector<std::vector<uint32_t>>& delays,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id) {
-    SubDeviceId sd = subdevice_id.value_or(mesh_device.get_sub_device_ids().at(0));
+    SubDeviceId sd = ttnn::DeviceContext(&mesh_device).get_effective_sub_device_id(subdevice_id);
     auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd);
 
     log_info(tt::LogAlways, "Starting delay primitive");

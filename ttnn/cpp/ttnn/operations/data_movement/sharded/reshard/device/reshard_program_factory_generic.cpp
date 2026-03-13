@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/data_movement/sharded/reshard/device/reshard_program_factory_generic.hpp"
+#include "ttnn/device_context.hpp"
 
 #include <tt-metalium/constants.hpp>
 #include <tt-metalium/host_api.hpp>
@@ -627,15 +628,15 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
     const auto& input = tensor_args.input;
     auto& output = output_tensor;
 
-    auto* device = input.device();
+    const auto device_ctx = ttnn::device_context(input);
 
     tt::tt_metal::Program program{};
 
     auto input_shard_spec = input.shard_spec().value();
     auto output_shard_spec = output.shard_spec().value();
     auto all_cores = output_shard_spec.grid;
-    auto grid = input.buffer()->buffer_type() == BufferType::DRAM ? device->dram_grid_size()
-                                                                  : device->compute_with_storage_grid_size();
+    auto grid = input.buffer()->buffer_type() == BufferType::DRAM ? device_ctx.get_dram_grid_size()
+                                                                  : device_ctx.get_compute_with_storage_grid_size();
     auto input_core_type = input.buffer()->core_type();
     uint32_t dst_cb_index = 16;
     auto cores =
@@ -686,6 +687,7 @@ ReshardGenericFactory::cached_program_t ReshardGenericFactory::create(
 
     std::vector<uint32_t> physical_core_coords;
     physical_core_coords.reserve(grid.x * grid.y);
+    auto* device = device_ctx.raw_device();
     for (uint32_t i = 0; i < grid.x; i++) {
         auto physical_input_core = device->virtual_core_from_logical_core(CoreCoord(i, 0), input_core_type);
         physical_core_coords.push_back(physical_input_core.x);

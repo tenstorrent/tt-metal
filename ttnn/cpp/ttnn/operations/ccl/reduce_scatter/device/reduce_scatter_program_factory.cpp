@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "reduce_scatter_device_operation.hpp"
+#include "ttnn/device_context.hpp"
 #include <tt-metalium/work_split.hpp>
 #include <vector>
 #include "ttnn/distributed/types.hpp"
@@ -32,7 +33,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_mesh_workload(
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
     auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto sd_id = ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(operation_attributes.subdevice_id);
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     // create semaphores
     // 3 semaphores used for within op synchronizations
@@ -100,7 +101,7 @@ ReduceScatterDeviceOperation::ReduceScatterProgram::create_at(
     log_debug(tt::LogOp, "Device index for {} is {}", mesh_coordinate, device_index);
 
     // Get core and subdevice related information
-    auto sd_id = operation_attributes.subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto sd_id = ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(operation_attributes.subdevice_id);
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     auto bbox = subdevice_core_range_set.bounding_box();
     auto first_coord = bbox.start_coord;
