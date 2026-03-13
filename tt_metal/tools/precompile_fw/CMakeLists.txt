@@ -18,7 +18,7 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/tools
 )
 
-target_precompile_headers(precompile_fw REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(precompile_fw TT::CommonPCH)
 
 add_custom_command(
     OUTPUT
