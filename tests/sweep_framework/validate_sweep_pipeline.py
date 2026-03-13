@@ -64,6 +64,7 @@ def step_generate_vectors(
     module_name: str,
     model_trace: Path,
     dry_run: bool,
+    suite_name: str | None = None,
 ) -> None:
     print(f"\n{SEPARATOR}")
     print("Step 1/4: Generate sweep vectors")
@@ -77,6 +78,8 @@ def step_generate_vectors(
         "--master-trace",
         str(model_trace),
     ]
+    if suite_name:
+        cmd += ["--suite-name", suite_name]
     _run(cmd, dry_run=dry_run)
 
 
@@ -300,6 +303,7 @@ def main() -> int:
         module_name=args.module_name,
         model_trace=model_trace,
         dry_run=args.dry_run,
+        suite_name=args.suite,
     )
 
     # Step 2: Run sweep under tracer
