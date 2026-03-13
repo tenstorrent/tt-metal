@@ -120,14 +120,14 @@ jobs:
             test-type: slow
           - name: bh_DeepSeek_PREFILL
             cmd: |
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_torch_dispatch_combine.py -vvv
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv -tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv -tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv -tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_torch_dispatch_combine.py -vvv -tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv -tb=short
             timeout: 30
             test-type: loudbox-or-qb
-            owner_id: U08E1JCMAJF
+            owner_id: U08E1JCMAJF # Marko Bezulj
             model-name: deepseek_prefill
           YAML_EOF
           )
