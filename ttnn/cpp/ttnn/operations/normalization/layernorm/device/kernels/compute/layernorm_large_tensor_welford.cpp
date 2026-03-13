@@ -45,6 +45,7 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     // The number of valid columns in the last tile in width dimension.
     // Because the Welford's llk is given transposed data, skip some rows when
     // we want to skip some columns from getting processed by layer_norm.
+    // When last tile is full the value is 0 and is not used because full update is done.
     constexpr uint32_t last_tile_rows = W % tile_width;
     constexpr bool is_last_tile_full = (last_tile_rows == 0);
 
@@ -177,6 +178,7 @@ void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     // The number of valid columns in the last tile in width dimension.
     // Because the Welford's llk is given transposed data, skip some rows when
     // we want to skip some columns from getting processed by layer_norm.
+    // When last tile is full the value is 0 and is not used because full update is done.
     constexpr uint32_t last_tile_rows = W % tile_width;
     constexpr bool is_last_tile_full = (last_tile_rows == 0);
 
