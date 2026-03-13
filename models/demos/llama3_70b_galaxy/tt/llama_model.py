@@ -54,24 +54,14 @@ class TtTransformer(LightweightModule):
         if self.args.padded_vocab_size % 32 != 0:
             raise ValueError("Bitmask application requires padded vocab size to be a multiple of 32")
         self._bitmask_shape = (self.args.max_batch_size, self._bitmask_packed_width)
-        self._compute_cq_id = 0
-        try:
-            num_cqs = int(self.mesh_device.num_hw_cqs())
-        except Exception:
-            num_cqs = 1
-        self._bitmask_copy_cq_id = 1 if num_cqs > 1 else 0
-        with ttnn.command_queue(self._bitmask_copy_cq_id):
-            self._bitmask = ttnn.from_torch(
-                torch.zeros(self._bitmask_shape, dtype=torch.int32),
-                device=self.mesh_device,
-                dtype=ttnn.int32,
-                layout=ttnn.TILE_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(
-                    self.mesh_device, dims=(-1, None), mesh_shape=self.args.cluster_shape
-                ),
-            )
+        self._bitmask = ttnn.from_torch(
+            torch.zeros(self._bitmask_shape, dtype=torch.int32),
+            device=self.mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(-1, None), mesh_shape=self.args.cluster_shape),
+        )
         self._active_bitmask = None
-        self._bitmask_copy_event = None
         self._last_host_bitmask = None
         self._debug_bitmask = os.getenv("TT_DEBUG_BITMASK", "0") == "1"
         self._debug_bitmask_step = 0
@@ -819,15 +809,14 @@ class TtTransformer(LightweightModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(-1, None), mesh_shape=self.args.cluster_shape),
         )
-        with ttnn.command_queue(self._bitmask_copy_cq_id):
-            ttnn.copy_host_to_device_tensor(bitmask_tt, target)
-            self._bitmask_copy_event = ttnn.record_event(self.mesh_device, cq_id=self._bitmask_copy_cq_id)
+        # Keep transfer path simple and deterministic: copy on default queue and synchronize.
+        ttnn.copy_host_to_device_tensor(bitmask_tt, target)
+        ttnn.synchronize_device(self.mesh_device)
         self._active_bitmask = target
 
     def complete_bitmask_to_device(self):
-        if self._bitmask_copy_event is not None:
-            ttnn.wait_for_event(cq_id=self._compute_cq_id, mesh_event=self._bitmask_copy_event)
-            self._bitmask_copy_event = None
+        # Transfer is synchronous in start_bitmask_to_device.
+        return
 
     def apply_bitmask_to_logits(self, tt_logits):
         if self._active_bitmask is None:
