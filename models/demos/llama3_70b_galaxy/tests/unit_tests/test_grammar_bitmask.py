@@ -11,6 +11,8 @@ import ttnn
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
 from models.demos.llama3_70b_galaxy.tt.model_config import get_core_ranges
 
+NUM_RANDOM_ITERS = 64
+
 
 def _torch_reference_unpack(grammar_bitmask: torch.Tensor) -> torch.Tensor:
     structured_output_arange = torch.arange(32, dtype=torch.int32, device=grammar_bitmask.device)
@@ -35,22 +37,12 @@ def test_unpack_bitmask_with_subcore_grids(mesh_device):
     batch_size = 2
     packed_vocab_dim = 8
 
-    grammar_bitmask = torch.randint(0, 2**31 - 1, (batch_size, packed_vocab_dim), dtype=torch.int32)
-    grammar_bitmask_tt = ttnn.from_torch(
-        grammar_bitmask,
+    bitmask_arange_tt = ttnn.from_torch(
+        torch.arange(32, dtype=torch.int32),
         device=mesh_device,
-        dtype=ttnn.int32,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-    )
-
-    bitmask_arange_tt = ttnn.arange(
-        start=0,
-        end=32,
-        step=1,
         dtype=ttnn.int32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     transformer = SimpleNamespace(
@@ -66,11 +58,22 @@ def test_unpack_bitmask_with_subcore_grids(mesh_device):
         bitmask_arange=bitmask_arange_tt,
     )
 
-    unpacked_tt = TtTransformer.unpack_bitmask(transformer, grammar_bitmask_tt)
-    unpacked_tt_torch = ttnn.to_torch(ttnn.get_device_tensors(unpacked_tt)[0]).to(torch.float32)
+    g = torch.Generator().manual_seed(0)
+    for i in range(NUM_RANDOM_ITERS):
+        grammar_bitmask = torch.randint(0, 2**31 - 1, (batch_size, packed_vocab_dim), dtype=torch.int32, generator=g)
+        grammar_bitmask_tt = ttnn.from_torch(
+            grammar_bitmask,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
 
-    expected = _torch_reference_unpack(grammar_bitmask)
-    assert torch.equal(unpacked_tt_torch, expected)
+        unpacked_tt = TtTransformer.unpack_bitmask(transformer, grammar_bitmask_tt)
+        unpacked_tt_torch = ttnn.to_torch(ttnn.get_device_tensors(unpacked_tt)[0]).to(torch.float32)
+
+        expected = _torch_reference_unpack(grammar_bitmask)
+        assert torch.equal(unpacked_tt_torch, expected), f"Mismatch at iteration {i}"
 
 
 @pytest.mark.parametrize(
@@ -103,22 +106,12 @@ def test_unpack_bitmask_sharded_with_subdevices_and_subcore_grids(mesh_device):
     packed_vocab_dim = 64  # divisible across Galaxy mesh sharding
     cluster_shape = tuple(mesh_device.shape)
 
-    grammar_bitmask = torch.randint(0, 2**31 - 1, (batch_size, packed_vocab_dim), dtype=torch.int32)
-    grammar_bitmask_tt = ttnn.from_torch(
-        grammar_bitmask,
+    bitmask_arange_tt = ttnn.from_torch(
+        torch.arange(32, dtype=torch.int32),
         device=mesh_device,
-        dtype=ttnn.int32,
-        layout=ttnn.TILE_LAYOUT,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-1, None), mesh_shape=cluster_shape),
-    )
-
-    bitmask_arange_tt = ttnn.arange(
-        start=0,
-        end=32,
-        step=1,
         dtype=ttnn.int32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=mesh_device,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
     transformer = SimpleNamespace(
@@ -129,15 +122,26 @@ def test_unpack_bitmask_sharded_with_subdevices_and_subcore_grids(mesh_device):
         bitmask_arange=bitmask_arange_tt,
     )
 
-    unpacked_tt = TtTransformer.unpack_bitmask(transformer, grammar_bitmask_tt)
+    g = torch.Generator().manual_seed(1)
+    for i in range(NUM_RANDOM_ITERS):
+        grammar_bitmask = torch.randint(0, 2**31 - 1, (batch_size, packed_vocab_dim), dtype=torch.int32, generator=g)
+        grammar_bitmask_tt = ttnn.from_torch(
+            grammar_bitmask,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-1, None), mesh_shape=cluster_shape),
+        )
 
-    expected_full = _torch_reference_unpack(grammar_bitmask)
-    num_cols = cluster_shape[1]
-    for idx, dev_tensor in enumerate(ttnn.get_device_tensors(unpacked_tt)):
-        row = idx // num_cols
-        local_unpacked = ttnn.to_torch(dev_tensor).to(torch.float32)
-        shard_width = local_unpacked.shape[-1]
-        expected_local = expected_full[:, row * shard_width : (row + 1) * shard_width]
-        assert torch.equal(
-            local_unpacked, expected_local
-        ), f"Mismatch on device {idx} (row={row}, col={idx % num_cols})"
+        unpacked_tt = TtTransformer.unpack_bitmask(transformer, grammar_bitmask_tt)
+
+        expected_full = _torch_reference_unpack(grammar_bitmask)
+        num_cols = cluster_shape[1]
+        for idx, dev_tensor in enumerate(ttnn.get_device_tensors(unpacked_tt)):
+            row = idx // num_cols
+            local_unpacked = ttnn.to_torch(dev_tensor).to(torch.float32)
+            shard_width = local_unpacked.shape[-1]
+            expected_local = expected_full[:, row * shard_width : (row + 1) * shard_width]
+            assert torch.equal(
+                local_unpacked, expected_local
+            ), f"Mismatch at iter {i} on device {idx} (row={row}, col={idx % num_cols})"
