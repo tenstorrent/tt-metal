@@ -19,18 +19,18 @@ AttnMatmulProgramFactory::cached_program_t AttnMatmulProgramFactory::create(
     const AttnMatmulParams& operation_attributes, const AttnMatmulInputs& tensor_args, Tensor& tensor_return_value) {
     tt::tt_metal::Program program{};
 
-    const auto& a = tensor_args.input_tensor_a;
-    const auto& b = tensor_args.input_tensor_b;
-    auto& output = tensor_return_value;
+    const auto& a = tensor_args.input_tensor_a.mesh_tensor();
+    const auto& b = tensor_args.input_tensor_b.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
 
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
 
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = a.device();
+    const auto& device = a.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), operation_attributes.compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), operation_attributes.compute_kernel_config);
 
     tt::DataFormat in0_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
     tt::DataFormat in1_data_format = tt::tt_metal::datatype_to_dataformat_converter(b.dtype());
@@ -57,9 +57,6 @@ AttnMatmulProgramFactory::cached_program_t AttnMatmulProgramFactory::create(
     log_debug(tt::LogOp, "interm_data_format: {}", interm_data_format);
     log_debug(tt::LogOp, "output_data_format: {}", output_data_format);
 
-    tt::tt_metal::Buffer* src0_buffer = a.buffer();
-    tt::tt_metal::Buffer* src1_buffer = b.buffer();
-
     // A block of work is one MtNt
     uint32_t num_cores_y = operation_attributes.compute_with_storage_grid_size.y;
     auto num_output_blocks_total = ashape[1];  // ashape[1] is Q num_heads; only parallelize on this
@@ -74,13 +71,10 @@ AttnMatmulProgramFactory::cached_program_t AttnMatmulProgramFactory::create(
                 operation_attributes.compute_with_storage_grid_size, num_output_blocks_total);
 
     auto all_device_cores = CoreRange(
-        {0, 0},
-        {a.device()->compute_with_storage_grid_size().x - 1, a.device()->compute_with_storage_grid_size().y - 1});
-    auto total_num_cores =
-        a.device()->compute_with_storage_grid_size().x * a.device()->compute_with_storage_grid_size().y;
+        {0, 0}, {device.compute_with_storage_grid_size().x - 1, device.compute_with_storage_grid_size().y - 1});
+    auto total_num_cores = device.compute_with_storage_grid_size().x * device.compute_with_storage_grid_size().y;
 
-    tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_ASSERT(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // C = torch.matmul(A.transpose(0, 2) * B).transpose(0, 2)
     // MN = MK*KN
@@ -104,9 +98,9 @@ AttnMatmulProgramFactory::cached_program_t AttnMatmulProgramFactory::create(
     uint32_t in1_KtNt_stride = transpose_hw_bool ? bshape[2] / TILE_HEIGHT * in1_Kt : in1_Kt * Nt;
     uint32_t in1_KtNt_skip = transpose_hw_bool ? (bshape[2] / TILE_HEIGHT - 1) * in1_Kt : (in1_Kt - Kt) * Nt;
 
-    uint32_t src0_addr = src0_buffer->address();
-    uint32_t src1_addr = src1_buffer->address();
-    uint32_t dst_addr = dst_buffer->address();
+    uint32_t src0_addr = a.address();
+    uint32_t src1_addr = b.address();
+    uint32_t dst_addr = output.address();
 
     uint32_t src0_cb_index = tt::CBIndex::c_0;
     uint32_t cb0_num_input_tiles = Kt * 2;
@@ -152,11 +146,11 @@ AttnMatmulProgramFactory::cached_program_t AttnMatmulProgramFactory::create(
 
     std::vector<uint32_t> reader_compile_time_args = {
         (uint32_t)transpose_hw_bool, (uint32_t)(fp32_dest_acc_en and in0_data_format == tt::DataFormat::Float32)};
-    tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(a).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(b).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {(std::uint32_t)output_cb_index};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output).append_to(writer_compile_time_args);
 
     auto reader_id = tt::tt_metal::CreateKernel(
         program,
@@ -261,13 +255,9 @@ void AttnMatmulProgramFactory::override_runtime_arguments(
     auto& program = cached_program.program;
     const auto& shared_vars = cached_program.shared_variables;
 
-    const auto& a = tensor_args.input_tensor_a;
-    const auto& b = tensor_args.input_tensor_b;
-    auto& output = tensor_return_value;
-
-    auto* src_dram_buffer_a = a.buffer();
-    auto* src_dram_buffer_b = b.buffer();
-    auto* dst_dram_buffer = output.buffer();
+    const auto& a = tensor_args.input_tensor_a.mesh_tensor();
+    const auto& b = tensor_args.input_tensor_b.mesh_tensor();
+    const auto& output = tensor_return_value.mesh_tensor();
 
     auto ashape = a.padded_shape();
     auto bshape = b.padded_shape();
@@ -329,8 +319,8 @@ void AttnMatmulProgramFactory::override_runtime_arguments(
             shared_vars.reader_id,
             core,
             {
-                src_dram_buffer_a->address(),
-                src_dram_buffer_b->address(),
+                a.address(),
+                b.address(),
                 Mt,
                 Kt,
                 Nt,
@@ -359,7 +349,7 @@ void AttnMatmulProgramFactory::override_runtime_arguments(
             shared_vars.writer_id,
             core,
             {
-                dst_dram_buffer->address(),
+                output.address(),
                 num_output_blocks_per_core * MtNt,
                 num_blocks_written * MtNt,
             });

@@ -54,10 +54,11 @@ ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_
             fused_op_signaler);
         auto matmul_sv = ttnn::prim::matmul_multi_core_reuse_mcast_1d_optimized_helper(
             program,
-            tensor_args.matmul.input_tensor,
-            {tensor_args.matmul.weight_tensor, tensor_args.second_weight_tensor.value()},
-            std::nullopt /*bias*/,
-            {tensor_return_value.at(0), tensor_return_value.at(1)},
+            tensor_args.matmul.input_tensor.mesh_tensor(),
+            {std::cref(tensor_args.matmul.weight_tensor.mesh_tensor()),
+             std::cref(tensor_args.second_weight_tensor.value().mesh_tensor())},
+            nullptr /*bias*/,
+            {std::cref(tensor_return_value.at(0).mesh_tensor()), std::cref(tensor_return_value.at(1).mesh_tensor())},
             operation_attributes.matmul.bcast_batch.value(),
             operation_attributes.matmul.compute_kernel_config.value(),
             operation_attributes.matmul.program_config.value(),
@@ -79,10 +80,10 @@ ttnn::device_operation::CachedProgram<Matmul_RS::Matmul_RS_PF::shared_variables_
         fused_op_signaler);
     auto matmul_sv = ttnn::prim::matmul_multi_core_reuse_mcast_1d_optimized_helper(
         program,
-        tensor_args.matmul.input_tensor,
-        {tensor_args.matmul.weight_tensor},
-        std::nullopt /*bias*/,
-        {tensor_return_value.at(0)},
+        tensor_args.matmul.input_tensor.mesh_tensor(),
+        {std::cref(tensor_args.matmul.weight_tensor.mesh_tensor())},
+        nullptr /*bias*/,
+        {std::cref(tensor_return_value.at(0).mesh_tensor())},
         operation_attributes.matmul.bcast_batch.value(),
         operation_attributes.matmul.compute_kernel_config.value(),
         operation_attributes.matmul.program_config.value(),

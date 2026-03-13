@@ -21,9 +21,9 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
         TT_FATAL(!tensor_args.optional_input_tensors[0].has_value(), "Bias is not supported for matmul multi core");
     }
 
-    const auto& a = tensor_args.input_tensors.at(0);
-    const auto& b = tensor_args.input_tensors.at(1);
-    auto& output = tensor_return_value.at(0);
+    const auto& a = tensor_args.input_tensors.at(0).mesh_tensor();
+    const auto& b = tensor_args.input_tensors.at(1).mesh_tensor();
+    const auto& output = tensor_return_value.at(0).mesh_tensor();
 
     TT_FATAL(operation_attributes.bcast_batch.has_value(), "Error: bcast_batch field should have been populated");
     bool bcast_batch = operation_attributes.bcast_batch.value();
@@ -41,14 +41,11 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
     uint32_t output_single_tile_size = tt::tile_size(output_data_format);
     MathFidelity math_fidelity = MathFidelity::HiFi4;
 
-    tt_metal::Buffer* src0_buffer = a.buffer();
-    tt_metal::Buffer* src1_buffer = b.buffer();
-
     // This should allocate a DRAM buffer on the device
-    tt::tt_metal::IDevice* device = a.device();
+    const auto& device = a.device();
     const auto& cshape = output.padded_shape();  // C=A*B, N1MK*11KN->N1MN
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
     uint32_t c_batch_size = get_batch_size(cshape);
     auto num_output_tiles_total = c_batch_size * cshape[-2] * cshape[-1] / TILE_HW;
@@ -61,8 +58,7 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
          num_output_tiles_per_core_group_2] =
             tt::tt_metal::split_work_to_cores(compute_with_storage_grid_size, num_output_tiles_total);
 
-    tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // C = A*B*...
     // MN = MK*KN
@@ -74,9 +70,9 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
     uint32_t MtKt = Mt * Kt;
     uint32_t MtNt = Mt * Nt;
 
-    uint32_t src0_addr = src0_buffer->address();
-    uint32_t src1_addr = src1_buffer->address();
-    uint32_t dst_addr = dst_buffer->address();
+    uint32_t src0_addr = a.address();
+    uint32_t src1_addr = b.address();
+    uint32_t dst_addr = output.address();
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = 2;
@@ -99,13 +95,13 @@ MatmulMultiCoreProgramFactory::cached_program_t MatmulMultiCoreProgramFactory::c
             .set_page_size(output_cb_index, output_single_tile_size);
     tt_metal::CreateCircularBuffer(program, all_cores, output_cb_config);
 
-    uint32_t last_ktile_w = a.logical_shape()[-1] % TILE_WIDTH;
+    uint32_t last_ktile_w = tensor_args.input_tensors.at(0).logical_shape()[-1] % TILE_WIDTH;
     std::vector<uint32_t> reader_compile_time_args = {(uint32_t)last_ktile_w};
-    tt::tt_metal::TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*src1_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(a).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(b).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> writer_compile_time_args = {};
-    tt::tt_metal::TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output).append_to(writer_compile_time_args);
 
     auto reader_id = tt_metal::CreateKernel(
         program,
@@ -206,20 +202,20 @@ void MatmulMultiCoreProgramFactory::override_runtime_arguments(
     auto num_cores = shared_variables.num_cores;
     auto num_cores_y = shared_variables.num_cores_y;
 
-    auto* src_dram_buffer_a = tensor_args.input_tensors.at(0).buffer();
-    auto* src_dram_buffer_b = tensor_args.input_tensors.at(1).buffer();
-    auto* dst_dram_buffer = tensor_return_value.at(0).buffer();
+    const auto& a = tensor_args.input_tensors.at(0).mesh_tensor();
+    const auto& b = tensor_args.input_tensors.at(1).mesh_tensor();
+    const auto& output = tensor_return_value.at(0).mesh_tensor();
 
     for (uint32_t i = 0; i < num_cores; i++) {
         CoreCoord core = {i / num_cores_y, i % num_cores_y};
         {
             auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            runtime_args[0] = src_dram_buffer_a->address();
-            runtime_args[1] = src_dram_buffer_b->address();
+            runtime_args[0] = a.address();
+            runtime_args[1] = b.address();
         }
         {
             auto& runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            runtime_args[0] = dst_dram_buffer->address();
+            runtime_args[0] = output.address();
         }
     }
 }

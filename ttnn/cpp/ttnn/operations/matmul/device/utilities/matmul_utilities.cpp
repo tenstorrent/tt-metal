@@ -236,13 +236,13 @@ tt::tt_metal::Tile get_matmul_tile(const Tensor& input_tensor, bool transpose) {
 
 namespace ttnn::prim::dram_sharded_helpers {
 
-tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord) {
-    ttnn::distributed::MeshDevice* device = a.device();
-    const ttnn::distributed::MeshDeviceView& view = device->get_view();
+tt::tt_metal::IDevice* get_device_for_dram_banks(const tt::tt_metal::MeshTensor& a, const ttnn::MeshCoordinate& coord) {
+    const tt::tt_metal::distributed::MeshDevice& device = a.device();
+    const ttnn::distributed::MeshDeviceView& view = device.get_view();
     if (!view.contains(coord) || !view.is_local(coord)) {
-        return device;
+        return const_cast<tt::tt_metal::distributed::MeshDevice*>(&device);
     }
-    return a.device()->get_device(coord);
+    return device.get_device(coord);
 }
 
 void get_max_page_size_and_num_pages(

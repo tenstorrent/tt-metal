@@ -94,12 +94,13 @@ AllGatherMatmulAsyncMeshWorkloadFactory::cached_program_t AllGatherMatmulAsyncMe
                 matmul_shared_variables = std::move(cached_program.shared_variables);
             },
             [&](const operations::matmul::MatmulMultiCoreReuseMultiCast1DProgramConfig& config) {
+                const tt::tt_metal::MeshTensor* bias_ptr = bias.has_value() ? &bias.value().mesh_tensor() : nullptr;
                 auto cached_program = ttnn::prim::matmul_multi_core_reuse_mcast_1d_optimized_helper(
                     program,
-                    all_gather_output_tensor,
-                    {weight_tensor},
-                    bias,
-                    {matmul_output_tensor},
+                    all_gather_output_tensor.mesh_tensor(),
+                    {std::cref(weight_tensor.mesh_tensor())},
+                    bias_ptr,
+                    {std::cref(matmul_output_tensor.mesh_tensor())},
                     bcast_batch,
                     compute_kernel_config,
                     config,

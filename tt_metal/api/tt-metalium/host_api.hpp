@@ -275,6 +275,10 @@ void UpdateCircularBufferPageSize(Program& program, CBHandle cb_handle, uint8_t 
 // clang-format on
 void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const Buffer& buffer);
 
+inline void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, const MeshTensor& tensor) {
+    UpdateDynamicCircularBufferAddress(program, cb_handle, *tensor.mesh_buffer()->get_reference_buffer());
+}
+
 // clang-format off
 /**
  * Update the address and total size of a dynamic circular buffer. Dynamic circular buffers share the same address space as L1 buffers.
@@ -291,6 +295,12 @@ void UpdateDynamicCircularBufferAddress(Program& program, CBHandle cb_handle, co
 // clang-format on
 void UpdateDynamicCircularBufferAddressAndTotalSize(
     Program& program, CBHandle cb_handle, const Buffer& buffer, uint32_t total_size);
+
+inline void UpdateDynamicCircularBufferAddressAndTotalSize(
+    Program& program, CBHandle cb_handle, const MeshTensor& tensor, uint32_t total_size) {
+    UpdateDynamicCircularBufferAddressAndTotalSize(
+        program, cb_handle, *tensor.mesh_buffer()->get_reference_buffer(), total_size);
+}
 
 [[deprecated(
     "tt::tt_metal::CreateSemaphore(Program& program, const std::variant<CoreRange, CoreRangeSet>& core_spec, uint32_t "

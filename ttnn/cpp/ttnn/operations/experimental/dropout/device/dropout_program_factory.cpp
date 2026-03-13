@@ -129,8 +129,8 @@ inline tt::tt_metal::KernelHandle create_compute_kernel(
 inline void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
     const DropoutKernels& kernels,
-    const tt::tt_metal::Buffer* src_buffer,
-    const tt::tt_metal::Buffer* dst_buffer,
+    const tt::tt_metal::MeshTensor& input_tensor,
+    const tt::tt_metal::MeshTensor& output_tensor,
     uint32_t num_cores,
     uint32_t num_cores_y,
     uint32_t num_tiles_per_core_group_1,
@@ -161,15 +161,16 @@ inline void assign_per_core_runtime_args(
             TT_THROW("Core not in specified core ranges.");
         }
         // Reader kernel: (src_addr, number_of_tiles, offset_in_tiles)
-        SetRuntimeArgs(program, kernels.reader, core, {src_buffer->address(), num_tiles_per_core, num_tiles_written});
+        SetRuntimeArgs(program, kernels.reader, core, {input_tensor.address(), num_tiles_per_core, num_tiles_written});
 
         // Writer kernel: (dst_addr, number_of_tiles, offset_in_tiles)
-        SetRuntimeArgs(program, kernels.writer, core, {dst_buffer->address(), num_tiles_per_core, num_tiles_written});
+        SetRuntimeArgs(program, kernels.writer, core, {output_tensor.address(), num_tiles_per_core, num_tiles_written});
 
         num_tiles_written += num_tiles_per_core;
     }
 }
 
+// Oppounity: output could be a MeshTensor?
 DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     const DropoutParams& args, const DropoutInputs& tensor_args, Tensor& output) {
     using namespace tt;
@@ -178,8 +179,8 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     // -------------------------------------------------------------------------
     // 1) Setup device, data formats, tile sizes, and compute split
     // -------------------------------------------------------------------------
-    const auto& input = tensor_args.input;
-    auto* device = input.device();
+    const auto& input = tensor_args.input.mesh_tensor();
+    const auto& device = input.device();
 
     tt::tt_metal::Program program{};
 
@@ -191,7 +192,7 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
 
     uint32_t num_tiles = input.physical_volume() / tt::constants::TILE_HW;
 
-    auto compute_with_storage_grid_size = device->compute_with_storage_grid_size();
+    auto compute_with_storage_grid_size = device.compute_with_storage_grid_size();
     uint32_t num_cores_y = compute_with_storage_grid_size.y;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_tiles_per_core_group_1, num_tiles_per_core_group_2] =
@@ -208,13 +209,12 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     // -------------------------------------------------------------------------
     // 3) Create reader/writer kernels
     // -------------------------------------------------------------------------
-    auto* src_buffer = input.buffer();
     std::vector<uint32_t> reader_compile_args = {static_cast<uint32_t>(kSrc0CbIndex)};
-    tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_args);
+    tt::tt_metal::TensorAccessorArgs(input).append_to(reader_compile_args);
 
-    auto* dst_buffer = output.buffer();
+    const auto& dst_tensor = output.mesh_tensor();
     std::vector<uint32_t> writer_compile_args = {static_cast<uint32_t>(kOutputCbIndex)};
-    tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(writer_compile_args);
+    tt::tt_metal::TensorAccessorArgs(dst_tensor).append_to(writer_compile_args);
 
     DropoutKernels kernels{};
     kernels.reader = create_reader_kernel(program, all_cores, reader_compile_args, kReaderKernelPath);
@@ -261,8 +261,8 @@ DropoutProgramFactory::cached_program_t DropoutProgramFactory::create(
     assign_per_core_runtime_args(
         program,
         kernels,
-        src_buffer,
-        dst_buffer,
+        input,
+        dst_tensor,
         num_cores,
         num_cores_y,
         num_tiles_per_core_group_1,
@@ -305,9 +305,8 @@ void DropoutProgramFactory::override_runtime_arguments(
     uint32_t num_cores = shared_vars.num_cores;
     uint32_t num_cores_y = shared_vars.num_cores_y;
 
-    const auto& input = tensor_args.input;
-    auto* src_buffer = input.buffer();
-    auto* dst_buffer = output.buffer();
+    const auto& input = tensor_args.input.mesh_tensor();
+    const auto& dst_tensor = output.mesh_tensor();
 
     // Only seed/address arguments need updating here; tile counts remain the same as in create().
     auto& reader_runtime_args = GetRuntimeArgs(program, dropout_reader_kernel);
@@ -323,12 +322,12 @@ void DropoutProgramFactory::override_runtime_arguments(
         // Update the source address for the reader kernel
         {
             auto& runtime_args = reader_runtime_args[core.x][core.y];
-            runtime_args[kSrcBufferIdx] = src_buffer->address();
+            runtime_args[kSrcBufferIdx] = input.address();
         }
         // Update the destination address for the writer kernel
         {
             auto& runtime_args = writer_runtime_args[core.x][core.y];
-            runtime_args[kDstBufferIdx] = dst_buffer->address();
+            runtime_args[kDstBufferIdx] = dst_tensor.address();
         }
         // Update the seed for the compute kernels
         if (core_group_1.contains(core)) {
