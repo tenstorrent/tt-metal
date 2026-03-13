@@ -227,6 +227,19 @@ void py_module(nb::module_& m, nb::module_& m_modules) {
         auto py_gpt2 = static_cast<nb::class_<models::gpt2::Transformer, models::BaseTransformer>>(
             py_gpt2_module.attr("GPT2Transformer"));
         py_gpt2.def(nb::init<const models::gpt2::TransformerConfig&>());
+
+        // Explicit __call__ binding: GPT-2 overrides operator()(TensorPtr, optional<TensorPtr>)
+        // which does not match the two-arg (TensorPtr, TensorPtr) binding on ModuleBase.
+        py_gpt2.def(
+            "__call__",
+            [](models::gpt2::Transformer& self,
+               const ttml::autograd::TensorPtr& tensor,
+               const ttml::autograd::TensorPtr& mask) {
+                return self(tensor, std::optional<ttml::autograd::TensorPtr>(mask));
+            },
+            nb::arg("tensor"),
+            nb::arg("mask"),
+            "Model forward pass with causal mask.");
     }
 
     {
