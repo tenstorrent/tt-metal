@@ -1021,7 +1021,7 @@ def test_ring_joint_sdpa_profile_seq_lengths(device, seq_len_per_device: int):
 # ============================================================================
 
 
-@pytest.mark.parametrize("ring_index", [0, 31])
+@pytest.mark.parametrize("ring_index", list(range(32)))
 def test_ring_joint_sdpa_profile_production_scale(device, ring_index: int):
     """
     Profile ring_joint_sdpa with production-scale dimensions.
