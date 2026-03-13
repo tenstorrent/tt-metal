@@ -285,7 +285,8 @@ def run_neighbor_pad_2d_impl(
     # Semaphores
     h_neighbor_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
     w_neighbor_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
-    barrier_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    h_barrier_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
+    w_barrier_sem = ttnn.create_global_semaphore(mesh_device, ccl_sub_device_crs, 0)
 
     # Shard input to mesh
     dims = [None, None]
@@ -326,7 +327,7 @@ def run_neighbor_pad_2d_impl(
         padding_mode,
         [h_axis, w_axis],
         [h_neighbor_sem, w_neighbor_sem],
-        [barrier_sem],
+        [h_barrier_sem, w_barrier_sem],
         num_links=[num_links, num_links],
         memory_config=mem_config,
         topology=topology,

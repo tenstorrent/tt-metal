@@ -42,6 +42,7 @@ Tensor neighbor_pad_async(
     const GlobalSemaphore& h_neighbor_semaphore,
     const GlobalSemaphore& w_neighbor_semaphore,
     const GlobalSemaphore& barrier_semaphore,
+    const GlobalSemaphore& w_barrier_semaphore,
     std::optional<size_t> num_preferred_links,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,

@@ -320,7 +320,9 @@ class CCLManager:
         num_links: list,
         use_persistent_buffer: bool = False,
     ) -> ttnn.Tensor:
-        barrier_sem = self.get_barrier_semaphore(axes[0])
+        barrier_sems = [self.get_barrier_semaphore(axes[0])]
+        if len(axes) >= 2:
+            barrier_sems.append(self.get_barrier_semaphore(axes[1]))
 
         persistent_buf = None
         if use_persistent_buffer:
@@ -336,7 +338,7 @@ class CCLManager:
             padding_mode,
             axes,
             neighbor_sems,
-            [barrier_sem],
+            barrier_sems,
             num_links=num_links,
             topology=self.topology,
             persistent_output_buffer=persistent_buf,

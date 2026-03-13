@@ -24,6 +24,7 @@ struct NeighborPadAsyncParams {
     GlobalSemaphore h_neighbor_semaphore;  // Not default constructible
     GlobalSemaphore w_neighbor_semaphore;  // Not default constructible
     GlobalSemaphore barrier_semaphore;     // Not default constructible
+    GlobalSemaphore w_barrier_semaphore;   // W-axis startup barrier (separate from W reader sems)
     uint32_t num_links = 0;
     MemoryConfig output_mem_config;
     ttnn::ccl::Topology topology;
@@ -49,6 +50,7 @@ struct NeighborPadAsyncParams {
         const GlobalSemaphore& h_neighbor_semaphore,
         const GlobalSemaphore& w_neighbor_semaphore,
         const GlobalSemaphore& barrier_semaphore,
+        const GlobalSemaphore& w_barrier_semaphore,
         uint32_t num_links,
         MemoryConfig output_mem_config,
         ttnn::ccl::Topology topology,
@@ -69,6 +71,7 @@ struct NeighborPadAsyncParams {
         h_neighbor_semaphore(h_neighbor_semaphore),
         w_neighbor_semaphore(w_neighbor_semaphore),
         barrier_semaphore(barrier_semaphore),
+        w_barrier_semaphore(w_barrier_semaphore),
         num_links(num_links),
         output_mem_config(std::move(output_mem_config)),
         topology(topology),
@@ -93,6 +96,7 @@ struct NeighborPadAsyncParams {
         attrs.emplace_back("h_neighbor_semaphore", h_neighbor_semaphore);
         attrs.emplace_back("w_neighbor_semaphore", w_neighbor_semaphore);
         attrs.emplace_back("barrier_semaphore", barrier_semaphore);
+        attrs.emplace_back("w_barrier_semaphore", w_barrier_semaphore);
         attrs.emplace_back("num_links", num_links);
         attrs.emplace_back("output_mem_config", output_mem_config);
         attrs.emplace_back("topology", topology);

@@ -81,6 +81,9 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
                 worker_reader_runtime_args[0] = input.buffer()->address();
                 worker_reader_runtime_args[1] = output.buffer()->address();
                 worker_reader_runtime_args[9] = operation_attributes.h_neighbor_semaphore.address();
+                // W reader signal semaphore (for 2D corner forwarding)
+                worker_reader_runtime_args[12] = direction == 0 ? operation_attributes.barrier_semaphore.address()
+                                                                : operation_attributes.h_neighbor_semaphore.address();
 
                 // writer
                 auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];
@@ -89,11 +92,6 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
                 worker_writer_runtime_args[13] = operation_attributes.h_neighbor_semaphore.address();
                 worker_writer_runtime_args[14] = true;  // always enable startup barrier
                 worker_writer_runtime_args[17] = operation_attributes.barrier_semaphore.address();
-                // Phase 2 signal target sem addresses: 8 targets starting at index 19,
-                // sem addr at offset +2 within each 3-element group
-                for (uint32_t s = 0; s < 8; s++) {
-                    worker_writer_runtime_args[19 + (s * 3) + 2] = operation_attributes.barrier_semaphore.address();
-                }
 
                 core_idx++;
             }
@@ -111,23 +109,20 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
             auto& worker_writer_runtime_args = writer_runtime_args[core.x][core.y];
             worker_writer_runtime_args[0] = input.buffer()->address();
             worker_writer_runtime_args[1] = output.buffer()->address();
-            // Phase 2 signal target sem addresses: 8 targets starting at index 11,
-            // sem addr at offset +2 within each 3-element group
-            for (uint32_t s = 0; s < 8; s++) {
-                worker_writer_runtime_args[11 + (s * 3) + 2] = operation_attributes.barrier_semaphore.address();
-            }
         }
 
         // W fabric workers (Phase 2, for 2D padding)
         for (size_t i = 0; i < shared_vars.w_reader_kernel_ids.size(); ++i) {
             CoreCoord core = shared_vars.w_fabric_core_coords[i];
 
-            // W reader (indices shifted +1 due to outer_dim_start at [1])
+            // W reader — reads from INPUT tensor for H-interior rows,
+            // from H reader L1 for H-pad rows (diagonal corner forwarding)
             auto& reader_runtime_args = GetRuntimeArgs(program, shared_vars.w_reader_kernel_ids[i]);
             auto& w_reader_args = reader_runtime_args[core.x][core.y];
-            w_reader_args[3] = operation_attributes.barrier_semaphore.address();
+            w_reader_args[3] = operation_attributes.barrier_semaphore.address();     // h_corner_dir0_sem
+            w_reader_args[4] = operation_attributes.h_neighbor_semaphore.address();  // h_corner_dir1_sem
             w_reader_args[5] = operation_attributes.w_neighbor_semaphore.address();
-            w_reader_args[6] = output.buffer()->address();
+            w_reader_args[6] = input.buffer()->address();
 
             // W writer
             auto& writer_runtime_args = GetRuntimeArgs(program, shared_vars.w_writer_kernel_ids[i]);
@@ -136,9 +131,7 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
             w_writer_args[1] = output.buffer()->address();
             w_writer_args[13] = operation_attributes.w_neighbor_semaphore.address();
             w_writer_args[14] = true;  // use_barrier_semaphore (W-axis startup barrier)
-            // Use h_neighbor_semaphore (not barrier_semaphore) — W reader on same core uses
-            // barrier_semaphore for Phase 2 barrier, so they must use different addresses.
-            w_writer_args[17] = operation_attributes.h_neighbor_semaphore.address();
+            w_writer_args[17] = operation_attributes.w_barrier_semaphore.address();
         }
     }
 }
@@ -157,14 +150,13 @@ void NeighborPadAsyncMeshWorkloadFactory::override_runtime_arguments(
 // Phase 1 — Interior copy + H halo exchange (all ~120 cores active):
 //   Local copy cores: read input sticks → write to output DRAM at (h+pH, w+pW) offset.
 //   H fabric writer (BRISC): self-pad zeros/replicate to output DRAM for H pad rows,
-//     send H boundary data to neighbor via fabric.
-//   H fabric reader (NCRISC): receive H halo from fabric → L1 → output DRAM.
-//   All Phase 1 cores (local copy writers, H fabric writers, and H fabric readers)
-//     signal Phase 2 barrier on completion.
+//     send H boundary data to neighbor via fabric. Corner sticks (at W-pad column positions)
+//     go to neighbor L1, non-corner sticks go directly to neighbor DRAM.
+//   H fabric reader (NCRISC): receive H halo corners from L1, copy to output DRAM.
 //
 // Phase 2 — W halo exchange (2–8 W fabric cores, i.e. 2 × pad2_num_links):
-//   W reader: waits on Phase 2 barrier, then reads W boundary sticks from output DRAM
-//     (safe because Phase 1 calls noc_async_write_barrier() before signaling the barrier).
+//   W reader: reads W boundary sticks from INPUT tensor (no Phase 1 barrier needed).
+//     Maps output rows to input rows for H-pad row handling.
 //     Sends to neighbor via fabric or self-pads. Receives from neighbor → L1 → CB.
 //   W writer: pops from CB, writes self-pad and incoming W padding to output DRAM,
 //     sends W boundary data to neighbor via fabric.
@@ -174,6 +166,10 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     const NeighborPadAsyncInputs& tensor_args,
     Tensor& tensor_return_value) {
     auto* mesh_device = tensor_args.input_tensor.device();
+    // Per-device pointer for core coordinate lookups: different BH devices may have
+    // different core harvesting, so the same logical core maps to different NOC (x,y)
+    // coordinates on different chips. Use per-device IDevice* instead of mesh-wide API.
+    auto* current_device = mesh_device->get_device(mesh_coordinate);
 
     // Use MeshCoordinates to find forward and backward devices
     // This is safe on bigmesh where remote devices might not exist on this rank
@@ -287,6 +283,20 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     bool is_padding_zeros = operation_attributes.padding_mode == "zeros";
     const bool is_2d = operation_attributes.pad_dim2.has_value();
 
+    if (is_2d) {
+        TT_FATAL(
+            operation_attributes.pad2_left == operation_attributes.pad2_right,
+            "2D neighbor_pad corner forwarding requires symmetric W padding (pad2_left={} != pad2_right={}). "
+            "Asymmetric padding would require storing different corner column counts per direction.",
+            operation_attributes.pad2_left,
+            operation_attributes.pad2_right);
+        TT_FATAL(
+            operation_attributes.num_links == 1,
+            "2D neighbor_pad diagonal corner forwarding requires num_links=1, got {}. "
+            "W reader hardcodes H reader core positions at logical (0,0) and (1,0).",
+            operation_attributes.num_links);
+    }
+
     // For 2D padding: compute secondary dimension metrics
     uint32_t output_num_sticks_per_halo_dim = num_sticks_per_halo_dim;  // default: same as input
     uint32_t writer_stick_start_id = 0;
@@ -369,7 +379,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     if (is_2d) {
         uint32_t max_padding = std::max(operation_attributes.padding_left, operation_attributes.padding_right);
         uint32_t max_outer_dims_per_core = dims_per_core_group_1;
-        uint32_t recv_total_sticks = max_outer_dims_per_core * max_padding * writer_num_sticks_to_read;
+        uint32_t corner_sticks_per_row = operation_attributes.pad2_left + operation_attributes.pad2_right;
+        uint32_t recv_total_sticks = max_outer_dims_per_core * max_padding * corner_sticks_per_row;
         uint32_t recv_buf_size = recv_total_sticks * page_size;
         if (recv_buf_size > 0) {
             CircularBufferConfig recv_cb_config =
@@ -436,7 +447,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         for (uint32_t i = 0; i < num_w_fabric_cores; i++) {
             CoreCoord wc = {num_h_fabric_cores + i, 0};
             w_fabric_logical_cores.push_back(wc);
-            w_fabric_virtual_cores.push_back(mesh_device->worker_core_from_logical_core(wc));
+            w_fabric_virtual_cores.push_back(current_device->worker_core_from_logical_core(wc));
         }
         w_fabric_core_range =
             CoreRangeSet(CoreRange({num_h_fabric_cores, 0}, {num_h_fabric_cores + num_w_fabric_cores - 1, 0}));
@@ -487,8 +498,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         for (uint32_t direction = 0; direction < num_directions; direction++) {
             CoreCoord core = {link * num_directions + direction, 0};
             CoreCoord opposite_core = {(link * num_directions) + (1 - direction), 0};
-            CoreCoord virtual_core = mesh_device->worker_core_from_logical_core(core);
-            CoreCoord virtual_opposite_core = mesh_device->worker_core_from_logical_core(opposite_core);
+            CoreCoord virtual_core = current_device->worker_core_from_logical_core(core);
+            CoreCoord virtual_opposite_core = current_device->worker_core_from_logical_core(opposite_core);
             if (core_group_1.contains(core)) {
                 link_dims_to_read = dims_per_core_group_1;
             } else {
@@ -527,7 +538,17 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 direction ? operation_attributes.padding_right : operation_attributes.padding_left,  // padding
                 (operation_attributes.dim == 0) ? link_dims_to_read : num_sticks_per_halo_dim,  // num_sticks_to_read
                 num_sticks_per_halo_dim,  // num_sticks_per_halo_dim
-                operation_attributes.h_neighbor_semaphore.address()};
+                operation_attributes.h_neighbor_semaphore.address(),
+                is_2d ? operation_attributes.pad2_left : 0u,    // pad2_left_sticks
+                is_2d ? operation_attributes.pad2_right : 0u};  // pad2_right_sticks
+            // W reader signaling args (populated after W fabric core creation below)
+            reader_rt_args.push_back(0);  // [12] w_reader_signal_sem_addr (placeholder)
+            reader_rt_args.push_back(0);  // [13] num_w_readers_to_signal (placeholder)
+            constexpr uint32_t MAX_W_SIGNAL_TARGETS_READER = 8;
+            for (uint32_t w = 0; w < MAX_W_SIGNAL_TARGETS_READER; w++) {
+                reader_rt_args.push_back(0);  // w_reader_noc_x (placeholder)
+                reader_rt_args.push_back(0);  // w_reader_noc_y (placeholder)
+            }
             SetRuntimeArgs(program, worker_reader_kernel_id, {core}, reader_rt_args);
 
             // Writer
@@ -589,21 +610,17 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 true,                                                 // use_barrier_semaphore
                 virtual_opposite_core.x,                              // barrier_sem_noc0_x
                 virtual_opposite_core.y,                              // barrier_sem_noc0_y
-                operation_attributes.barrier_semaphore.address()};
-            // Phase 2 signal targets (W fabric reader cores for 2D padding)
-            // Max targets = pad2_num_links * 2 directions (up to 8 W fabric cores)
+                operation_attributes.barrier_semaphore.address(),
+                is_2d ? operation_attributes.pad2_left : 0u,    // pad2_left_sticks (corner routing)
+                is_2d ? operation_attributes.pad2_right : 0u};  // pad2_right_sticks (corner routing)
+            // Phase 2 signal targets — no longer needed since W reader reads from input tensor.
+            // Keep zero-filled slots to preserve runtime arg layout.
             constexpr uint32_t MAX_PHASE2_SIGNAL_TARGETS = 8;
-            writer_rt_args.push_back(is_2d ? num_w_fabric_cores : 0);
+            writer_rt_args.push_back(0);  // num_phase2_signal_targets = 0
             for (uint32_t s = 0; s < MAX_PHASE2_SIGNAL_TARGETS; s++) {
-                if (is_2d && s < num_w_fabric_cores) {
-                    writer_rt_args.push_back(w_fabric_virtual_cores[s].x);
-                    writer_rt_args.push_back(w_fabric_virtual_cores[s].y);
-                    writer_rt_args.push_back(operation_attributes.barrier_semaphore.address());
-                } else {
-                    writer_rt_args.push_back(0);
-                    writer_rt_args.push_back(0);
-                    writer_rt_args.push_back(0);
-                }
+                writer_rt_args.push_back(0);
+                writer_rt_args.push_back(0);
+                writer_rt_args.push_back(0);
             }
             if (direction) {
                 writer_rt_args.push_back(false);
@@ -726,20 +743,14 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     operation_attributes.padding_left,
                     writer_num_sticks_to_read,        // original W sticks per row
                     output_num_sticks_per_halo_dim};  // W+2pW for 2D, W for 1D
-                // Phase 2 signal targets (W fabric reader cores for 2D padding)
-                // Max targets = pad2_num_links * 2 directions (up to 8 W fabric cores)
+                // Phase 2 signal targets — no longer needed since W reader reads from input tensor.
+                // Keep zero-filled slots to preserve runtime arg layout.
                 constexpr uint32_t MAX_PHASE2_SIGNAL_TARGETS = 8;
-                local_writer_rt_args.push_back(is_2d ? num_w_fabric_cores : 0);
+                local_writer_rt_args.push_back(0);  // num_phase2_signal_targets = 0
                 for (uint32_t s = 0; s < MAX_PHASE2_SIGNAL_TARGETS; s++) {
-                    if (is_2d && s < num_w_fabric_cores) {
-                        local_writer_rt_args.push_back(w_fabric_virtual_cores[s].x);
-                        local_writer_rt_args.push_back(w_fabric_virtual_cores[s].y);
-                        local_writer_rt_args.push_back(operation_attributes.barrier_semaphore.address());
-                    } else {
-                        local_writer_rt_args.push_back(0);
-                        local_writer_rt_args.push_back(0);
-                        local_writer_rt_args.push_back(0);
-                    }
+                    local_writer_rt_args.push_back(0);
+                    local_writer_rt_args.push_back(0);
+                    local_writer_rt_args.push_back(0);
                 }
                 SetRuntimeArgs(program, local_writer_kernel_id, {logical_core}, local_writer_rt_args);
 
@@ -752,17 +763,11 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     std::vector<KernelHandle> w_reader_kernel_ids;
     std::vector<KernelHandle> w_writer_kernel_ids;
     if (is_2d) {
-        // Each H fabric writer and local copy writer signals Phase 2 exactly once,
-        // after ALL their work is complete (main loop + handle_incoming_writes).
-        uint32_t barrier_count = static_cast<uint32_t>(writer_kernel_ids.size() + local_writer_kernel_ids.size());
+        // Phase 2 W readers read from input tensor directly — no Phase 1 barrier needed.
         log_trace(
             tt::LogOp,
-            "NeighborPad2D: barrier_count={} (h_writers={} local_writers={}), "
-            "w_outer_dim_size={}, is_first_h={}, is_last_h={}, is_first_w={}, is_last_w={}, "
+            "NeighborPad2D: w_outer_dim_size={}, is_first_h={}, is_last_h={}, is_first_w={}, is_last_w={}, "
             "output_row_width={}, num_interior_sticks={}, pad2_left={}",
-            barrier_count,
-            writer_kernel_ids.size(),
-            local_writer_kernel_ids.size(),
             w_outer_dim_size,
             is_first_device,
             is_last_device,
@@ -790,6 +795,9 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             w_num_targets_backward,
             mesh_device);
 
+        // W barrier unicast needs per-device routing: 2D fabric uses (mesh_id, chip_id), 1D uses hop distance
+        bool has_2d_fabric = mesh_device->get_view().num_rows() > 1 && mesh_device->get_view().num_cols() > 1;
+
         for (uint32_t w_link = 0; w_link < pad2_num_links; w_link++) {
             // Per-link work distribution: split w_outer_dim_size rows across pad2_num_links
             uint32_t w_link_start = (w_link * w_rows_per_link) + std::min(w_link, w_extra_rows);
@@ -807,7 +815,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 CoreCoord w_core = w_fabric_logical_cores[w_core_idx];
                 CoreCoord w_virtual_core = w_fabric_virtual_cores[w_core_idx];
 
-                // Phase 2 W reader kernel — reads boundary sticks from output DRAM.
+                // Phase 2 W reader kernel — reads boundary sticks from INPUT tensor directly.
+                // No Phase 1 barrier needed since input data is already in DRAM.
                 auto w_reader_kernel_config = ReaderDataMovementConfig{};
                 w_reader_kernel_config.compile_args = {
                     w_direction ? is_last_w_device : is_first_w_device,  // is_first_chip
@@ -816,7 +825,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     w_direction,                                         // direction
                     is_padding_zeros,
                     page_size};  // stick_size
-                TensorAccessorArgs(*output_buffer).append_to(w_reader_kernel_config.compile_args);
+                TensorAccessorArgs(*input_buffer).append_to(w_reader_kernel_config.compile_args);
                 w_reader_kernel_config.compile_args.push_back(recv_cb_index);  // recv_cb_id
                 auto w_reader_kernel_id = CreateKernel(
                     program,
@@ -826,17 +835,41 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     w_reader_kernel_config);
                 w_reader_kernel_ids.push_back(w_reader_kernel_id);
 
+                // H reader core virtual coordinates for L1-to-L1 corner reading.
+                // H reader dir=0 at logical (0,0), dir=1 at logical (1,0) (for num_links=1).
+                CoreCoord h_reader_dir0_logical = {0, 0};
+                CoreCoord h_reader_dir1_logical = {1, 0};
+                CoreCoord h_reader_dir0_virtual = current_device->worker_core_from_logical_core(h_reader_dir0_logical);
+                CoreCoord h_reader_dir1_virtual = current_device->worker_core_from_logical_core(h_reader_dir1_logical);
+
+                // H-axis edge flags: dir=0 receives when !is_first_device, dir=1 when !is_last_device
+                bool has_h_dir0_neighbor = !is_first_device;
+                bool has_h_dir1_neighbor = !is_last_device;
+
+                uint32_t corner_sticks_per_row = operation_attributes.pad2_left + operation_attributes.pad2_right;
+
                 std::vector<uint32_t> w_reader_rt_args = {
-                    w_link_count,  // outer_dim_size (per-link)
-                    w_link_start,  // outer_dim_start (per-link)
-                    w_direction ? operation_attributes.pad2_right : operation_attributes.pad2_left,  // padding
-                    operation_attributes.barrier_semaphore.address(),                                // barrier_sem_addr
-                    barrier_count,
-                    operation_attributes.w_neighbor_semaphore.address(),
-                    tensor_return_value.buffer()->address(),  // output_tensor_address
-                    output_num_sticks_per_halo_dim,           // output_row_width (W + 2*pW)
-                    operation_attributes.pad2_left,           // pad2_left
-                    num_sticks_per_halo_dim};                 // num_interior_sticks (W)
+                    w_link_count,  // [0] outer_dim_size (per-link)
+                    w_link_start,  // [1] outer_dim_start (per-link)
+                    w_direction ? operation_attributes.pad2_right : operation_attributes.pad2_left,  // [2] padding
+                    operation_attributes.barrier_semaphore.address(),     // [3] h_corner_dir0_sem_addr
+                    operation_attributes.h_neighbor_semaphore.address(),  // [4] h_corner_dir1_sem_addr
+                    operation_attributes.w_neighbor_semaphore.address(),  // [5]
+                    tensor_args.input_tensor.buffer()->address(),         // [6] input_tensor_address
+                    num_sticks_per_halo_dim,                              // [7] input_row_width
+                    output_halo_dim_size,                                 // [8] output_halo_dim_size
+                    operation_attributes.padding_left,                    // [9] h_pad_left
+                    input_halo_dim_size,                                  // [10] input_halo_dim_size
+                    static_cast<uint32_t>(h_reader_dir0_virtual.x),       // [11] h_reader_dir0_noc_x
+                    static_cast<uint32_t>(h_reader_dir0_virtual.y),       // [12] h_reader_dir0_noc_y
+                    static_cast<uint32_t>(h_reader_dir1_virtual.x),       // [13] h_reader_dir1_noc_x
+                    static_cast<uint32_t>(h_reader_dir1_virtual.y),       // [14] h_reader_dir1_noc_y
+                    static_cast<uint32_t>(has_h_dir0_neighbor),           // [15]
+                    static_cast<uint32_t>(has_h_dir1_neighbor),           // [16]
+                    operation_attributes.padding_left,                    // [17] h_padding_left
+                    operation_attributes.padding_right,                   // [18] h_padding_right
+                    corner_sticks_per_row,                                // [19] h_corner_sticks_per_padrow
+                    operation_attributes.pad2_left};                      // [20] h_corner_left_count
                 SetRuntimeArgs(program, w_reader_kernel_id, {w_core}, w_reader_rt_args);
 
                 // Phase 2 W writer kernel (reuses minimal_default_writer)
@@ -889,15 +922,74 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     true,  // use_barrier_semaphore (W writers: W-axis startup barrier)
                     w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].x,  // barrier_sem_noc0_x (opp W dir)
                     w_fabric_virtual_cores[(w_link * 2) + (1 - w_direction)].y,  // barrier_sem_noc0_y (opp W dir)
-                    // Use h_neighbor_semaphore (not barrier_semaphore) for W startup barrier:
-                    // W reader (NCRISC) on the same core uses barrier_semaphore for Phase 2 barrier.
-                    // Using the same address would cause cross-contamination of increment counts.
-                    operation_attributes.h_neighbor_semaphore.address()};  // barrier_sem
+                    // W startup barrier must use a separate semaphore (w_barrier_semaphore):
+                    // W reader (NCRISC) on the same core uses barrier_semaphore for H-corner dir=0
+                    // and h_neighbor_semaphore for H-corner dir=1. Sharing either would cause
+                    // cross-contamination between H-corner signals and startup barrier counts.
+                    operation_attributes.w_barrier_semaphore.address(),  // barrier_sem
+                    0u,   // pad2_left_sticks (unused by W writer — corner routing is H-only)
+                    0u};  // pad2_right_sticks (unused by W writer)
                 // No Phase 2 signal targets (W writers ARE Phase 2)
                 constexpr uint32_t MAX_PHASE2_SIGNAL_TARGETS = 8;
                 w_writer_rt_args.push_back(0);
                 for (uint32_t s = 0; s < MAX_PHASE2_SIGNAL_TARGETS * 3; s++) {
                     w_writer_rt_args.push_back(0);
+                }
+                // W barrier unicast targets: per-device NOC coordinates for W-axis startup barrier.
+                // Different BH devices may have different core harvesting, so the same logical
+                // worker core maps to different NOC (x,y) on different chips. Multicast targets a
+                // single fixed (noc_x, noc_y) that is wrong on remote devices with different
+                // harvesting. Instead, send individual unicasts with per-device NOC coordinates.
+                // H writers keep multicast since H-axis (same column) devices share a UBB board
+                // with consistent harvesting.
+                // 1-hop barrier: only send to immediate W neighbor (0 or 1 targets).
+                // Multi-hop fabric unicasts from worker cores fail on 2D BH mesh,
+                // but 1-hop works (proven by data transfer). Since W data transfer
+                // only goes to the immediate neighbor, 1-hop barrier is sufficient.
+                constexpr uint32_t MAX_BARRIER_TARGETS = 1;
+                uint32_t barrier_targets_for_dir =
+                    (w_direction ? w_backward_coord.has_value() : w_forward_coord.has_value()) ? 1u : 0u;
+                w_writer_rt_args.push_back(barrier_targets_for_dir);
+                for (uint32_t t = 0; t < MAX_BARRIER_TARGETS; t++) {
+                    if (t < barrier_targets_for_dir) {
+                        int offset = w_direction ? -(int)(t + 1) : (int)(t + 1);
+                        auto target_coord = ::ttnn::ccl::get_physical_neighbor_from_physical_coord(
+                            tensor_args.input_tensor,
+                            mesh_coordinate,
+                            offset,
+                            ttnn::ccl::Topology::Linear,
+                            operation_attributes.pad2_cluster_axis);
+                        TT_FATAL(
+                            target_coord.has_value(),
+                            "W barrier target at offset {} from ({},{}) should exist",
+                            offset,
+                            mesh_coordinate[0],
+                            mesh_coordinate[1]);
+                        auto* target_device = mesh_device->get_device(target_coord.value());
+                        CoreCoord target_dir0_virtual =
+                            target_device->worker_core_from_logical_core(w_fabric_logical_cores[w_link * 2 + 0]);
+                        CoreCoord target_dir1_virtual =
+                            target_device->worker_core_from_logical_core(w_fabric_logical_cores[w_link * 2 + 1]);
+                        uint32_t route_arg0, route_arg1;
+                        if (has_2d_fabric) {
+                            auto fabric_node_id = mesh_device->get_fabric_node_id(target_coord.value());
+                            route_arg0 = *fabric_node_id.mesh_id;
+                            route_arg1 = fabric_node_id.chip_id;
+                        } else {
+                            route_arg0 = 0;
+                            route_arg1 = t + 1;  // distance in hops
+                        }
+                        w_writer_rt_args.push_back(target_dir0_virtual.x);
+                        w_writer_rt_args.push_back(target_dir0_virtual.y);
+                        w_writer_rt_args.push_back(target_dir1_virtual.x);
+                        w_writer_rt_args.push_back(target_dir1_virtual.y);
+                        w_writer_rt_args.push_back(route_arg0);
+                        w_writer_rt_args.push_back(route_arg1);
+                    } else {
+                        for (int z = 0; z < 6; z++) {
+                            w_writer_rt_args.push_back(0);
+                        }
+                    }
                 }
                 // Fabric connection args: W neighbors are physically adjacent (1 hop via E/W
                 // ethernet), so append_fabric_connection_rt_args correctly finds them.
@@ -921,6 +1013,33 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                     w_writer_rt_args.push_back(false);
                 }
                 SetRuntimeArgs(program, w_writer_kernel_id, {w_core}, w_writer_rt_args);
+            }
+        }
+    }
+
+    // Back-fill H reader runtime args with W reader signaling info (now that W cores are created).
+    // H reader dir=0 signals barrier_semaphore on W reader cores.
+    // H reader dir=1 signals h_neighbor_semaphore on W reader cores.
+    if (is_2d) {
+        uint32_t core_idx = 0;
+        for (uint32_t link = 0; link < num_links; link++) {
+            for (uint32_t direction = 0; direction < num_directions; direction++) {
+                CoreCoord core = {link * num_directions + direction, 0};
+                auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_ids[core_idx]);
+                auto& args = reader_runtime_args[core.x][core.y];
+
+                // Determine which semaphore this H reader direction signals on W reader cores
+                args[12] = direction == 0 ? operation_attributes.barrier_semaphore.address()
+                                          : operation_attributes.h_neighbor_semaphore.address();
+                args[13] = num_w_fabric_cores;
+
+                // Fill W reader core NOC coordinates
+                for (uint32_t w = 0; w < num_w_fabric_cores && w < 8; w++) {
+                    args[14 + w * 2] = w_fabric_virtual_cores[w].x;
+                    args[14 + w * 2 + 1] = w_fabric_virtual_cores[w].y;
+                }
+
+                core_idx++;
             }
         }
     }
