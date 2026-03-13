@@ -18,6 +18,7 @@ from tqdm import tqdm
 from torch.nn import functional as F
 
 from models.experimental.tt_symbiote.tests.deepseek_ocr_vision_model.ttnn_symbiote_vit_model import TTNNVitModel
+from models.experimental.tt_symbiote.modules.conv import TTNNImageEncoderViT
 
 
 def get_abs_pos_sam(abs_pos, tgt_size):
@@ -122,6 +123,7 @@ def test_deepseek_ocr(device):
         nn.GELU: TTNNGelu,
         nn.Conv2d: TTNNConv2dNHWC,
         model.model.vision_model.__class__: TTNNVitModel,
+        model.model.sam_model.__class__: TTNNImageEncoderViT,
         # nn.LayerNorm: TTNNLayerNorm,
         # model.model.layers[0].self_attn.__class__: LlamaAttention,
     }
