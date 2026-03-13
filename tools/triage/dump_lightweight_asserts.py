@@ -66,7 +66,7 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
         with open(file, "r") as f:
             lines = f.readlines()
             if not (0 <= line - 1 < len(lines)):
-                return "?wrong line number?"
+                return "?wrong line number? Check the first code line in the stack trace."
             code_line = lines[line - 1]
             start_index = -1
             while True:
@@ -75,13 +75,13 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
                     break
                 start_index = new_index
             if start_index == -1:
-                return "?ASSERT() not found?"
+                return "ASSERT() not found! Check the first code line in the stack trace."
             while start_index > 0 and (code_line[start_index - 1].isalnum() or code_line[start_index - 1] == "_"):
                 start_index -= 1
             # Find the matching closing parenthesis for ASSERT(
             open_paren_index = code_line.find("(", start_index)
             if open_paren_index == -1:
-                return "?ASSERT() not opened?"
+                return "ASSERT() not opened! Check the first code line in the stack trace."
             paren_count = 1
             i = open_paren_index + 1
             while i < len(code_line):
@@ -93,7 +93,7 @@ def extract_assert_code(file: str | None, line: int | None, column: int | None) 
                         break
                 i += 1
             if paren_count != 0:
-                return "?ASSERT() not closed?"
+                return "ASSERT() is multi line. Check the first code line in the stack trace."
             return code_line[start_index : i + 1].strip()
     except Exception:
         return "?"
