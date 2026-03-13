@@ -53,13 +53,57 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand, const std:
 }
 
 template <bool is_fp32_dest_acc_en, bool disable_src_zero_flag = false>
+inline void llk_unpack_hw_configure(
+    const std::uint32_t unpA_operand,
+    const std::uint32_t unpB_operand,
+    const std::uint32_t unpA_face_r_dim,
+    const std::uint32_t unpB_face_r_dim,
+    const std::uint32_t unpA_num_faces,
+    const std::uint32_t unpB_num_faces,
+    const std::uint32_t unpA_tile_size,
+    const std::uint32_t unpB_tile_size) {
+    // In0 -> unpA
+    // In1 -> unpB
+    const uint32_t unpA_operand_id = get_operand_id(unpA_operand);
+    const uint32_t unpB_operand_id = get_operand_id(unpB_operand);
+
+    _llk_unpack_hw_configure_<is_fp32_dest_acc_en, disable_src_zero_flag>(
+        unpack_src_format[unpA_operand_id],
+        unpack_src_format[unpB_operand_id],
+        unpack_dst_format[unpA_operand_id],
+        unpack_dst_format[unpB_operand_id],
+        unpA_face_r_dim,
+        unpB_face_r_dim,
+        unpA_num_faces,
+        unpB_num_faces,
+        unpA_tile_size,
+        unpB_tile_size);
+}
+
+template <bool is_fp32_dest_acc_en, bool disable_src_zero_flag = false>
 inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand) {
     llk_unpack_hw_configure<is_fp32_dest_acc_en, disable_src_zero_flag>(unpA_operand, unpA_operand);
 }
 
-inline bool should_reconfigure_cbs(std::uint32_t old_operand, std::uint32_t new_operand) {
+inline bool should_reconfigure_cbs(const std::uint32_t old_operand, const std::uint32_t new_operand) {
     return (unpack_src_format[old_operand] != unpack_src_format[new_operand]) ||
-           (unpack_dst_format[old_operand] != unpack_dst_format[new_operand]);
+           (unpack_dst_format[old_operand] != unpack_dst_format[new_operand]) ||
+           (unpack_tile_face_r_dim[old_operand] != unpack_tile_face_r_dim[new_operand]) ||
+           (unpack_tile_num_faces[old_operand] != unpack_tile_num_faces[new_operand]);
+}
+
+inline bool should_reconfigure_cbs(
+    const std::uint32_t unpack_src_format_old,
+    const std::uint32_t unpack_src_format_new,
+    const std::uint32_t unpack_dst_format_old,
+    const std::uint32_t unpack_dst_format_new,
+    const std::uint32_t unpack_tile_face_r_dim_old,
+    const std::uint32_t unpack_tile_face_r_dim_new,
+    const std::uint32_t unpack_tile_num_faces_old,
+    const std::uint32_t unpack_tile_num_faces_new) {
+    return (unpack_src_format_old != unpack_src_format_new) || (unpack_dst_format_old != unpack_dst_format_new) ||
+           (unpack_tile_face_r_dim_old != unpack_tile_face_r_dim_new) ||
+           (unpack_tile_num_faces_old != unpack_tile_num_faces_new);
 }
 
 // TODO NC: Clean up as the part of tt-metal#34499
@@ -75,6 +119,20 @@ inline void llk_unpack_reconfig_data_format_srca(const std::uint32_t srca_new_op
     // Currently, there is a constraint that tile size is equal to the fifo page size
     // TODO NC: tile size should be computed in the LLK instead, as the part of #34495
     const std::uint32_t tile_size = get_local_cb_interface(srca_operand_id).fifo_page_size;
+    _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(
+        unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id], tile_size, face_r_dim, num_faces);
+}
+
+template <
+    bool is_fp32_dest_acc_en,
+    bool to_from_int8 = false,
+    p_dim_stride_target dim_stride_target = p_dim_stride_target::IGNORE>
+inline void llk_unpack_reconfig_data_format_srca(
+    const std::uint32_t srca_new_operand,
+    const std::uint32_t tile_size,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t num_faces) {
+    const std::uint32_t srca_operand_id = get_operand_id(srca_new_operand);
     _llk_unpack_reconfig_data_format_srca_impl_<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(
         unpack_src_format[srca_operand_id], unpack_dst_format[srca_operand_id], tile_size, face_r_dim, num_faces);
 }
@@ -96,6 +154,20 @@ inline void llk_unpack_reconfig_data_format_srcb(const std::uint32_t srcb_new_op
         unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id], tile_size, face_r_dim, num_faces);
 }
 
+template <
+    bool is_fp32_dest_acc_en,
+    bool to_from_int8 = false,
+    p_dim_stride_target dim_stride_target = p_dim_stride_target::IGNORE>
+inline void llk_unpack_reconfig_data_format_srcb(
+    const std::uint32_t srcb_new_operand,
+    const std::uint32_t tile_size,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t num_faces) {
+    std::uint32_t srcb_operand_id = get_operand_id(srcb_new_operand);
+    _llk_unpack_reconfig_data_format_srcb_impl_<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(
+        unpack_src_format[srcb_operand_id], unpack_dst_format[srcb_operand_id], tile_size, face_r_dim, num_faces);
+}
+
 // TODO NC: Clean up as the part of tt-metal#34499
 template <
     bool is_fp32_dest_acc_en,
@@ -110,6 +182,36 @@ inline void llk_unpack_reconfig_data_format_srca(
         llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(srca_new_operand);
     } else if constexpr (dim_stride_target != p_dim_stride_target::IGNORE) {
         llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(srca_new_operand);
+    }
+}
+
+template <
+    bool is_fp32_dest_acc_en,
+    bool to_from_int8 = false,
+    p_dim_stride_target dim_stride_target = p_dim_stride_target::IGNORE>
+inline void llk_unpack_reconfig_data_format_srca(
+    const std::uint32_t srca_old_operand,
+    const std::uint32_t srca_new_operand,
+    const std::uint32_t tile_size,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t num_faces) {
+    std::uint32_t old_srca_operand_id = get_operand_id(srca_old_operand);
+    std::uint32_t new_srca_operand_id = get_operand_id(srca_new_operand);
+
+    if (should_reconfigure_cbs(
+            unpack_src_format[old_srca_operand_id],
+            unpack_src_format[new_srca_operand_id],
+            unpack_dst_format[old_srca_operand_id],
+            unpack_dst_format[new_srca_operand_id],
+            unpack_tile_face_r_dim[old_srca_operand_id],
+            face_r_dim,
+            unpack_tile_num_faces[old_srca_operand_id],
+            num_faces)) {
+        llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(
+            srca_new_operand, tile_size, face_r_dim, num_faces);
+    } else if constexpr (dim_stride_target != p_dim_stride_target::IGNORE) {
+        llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(
+            srca_new_operand, tile_size, face_r_dim, num_faces);
     }
 }
 
@@ -130,6 +232,36 @@ inline void llk_unpack_reconfig_data_format_srcb(
     }
 }
 
+template <
+    bool is_fp32_dest_acc_en,
+    bool to_from_int8 = false,
+    p_dim_stride_target dim_stride_target = p_dim_stride_target::IGNORE>
+inline void llk_unpack_reconfig_data_format_srcb(
+    const std::uint32_t srcb_old_operand,
+    const std::uint32_t srcb_new_operand,
+    const std::uint32_t tile_size,
+    const std::uint32_t face_r_dim,
+    const std::uint32_t num_faces) {
+    std::uint32_t old_srcb_operand_id = get_operand_id(srcb_old_operand);
+    std::uint32_t new_srcb_operand_id = get_operand_id(srcb_new_operand);
+
+    if (should_reconfigure_cbs(
+            unpack_src_format[old_srcb_operand_id],
+            unpack_src_format[new_srcb_operand_id],
+            unpack_dst_format[old_srcb_operand_id],
+            unpack_dst_format[new_srcb_operand_id],
+            unpack_tile_face_r_dim[old_srcb_operand_id],
+            face_r_dim,
+            unpack_tile_num_faces[old_srcb_operand_id],
+            num_faces)) {
+        llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(
+            srcb_new_operand, tile_size, face_r_dim, num_faces);
+    } else if constexpr (dim_stride_target != p_dim_stride_target::IGNORE) {
+        llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(
+            srcb_new_operand, tile_size, face_r_dim, num_faces);
+    }
+}
+
 // TODO NC: Clean up as the part of tt-metal#34499
 template <
     bool is_fp32_dest_acc_en,
@@ -147,6 +279,26 @@ template <
     bool to_from_int8 = false,
     p_dim_stride_target dim_stride_target = p_dim_stride_target::IGNORE>
 inline void llk_unpack_reconfig_data_format(
+    const std::uint32_t srca_new_operand,
+    const std::uint32_t srcb_new_operand,
+    const std::uint32_t srca_tile_size,
+    const std::uint32_t srcb_tile_size,
+    const std::uint32_t srca_face_r_dim,
+    const std::uint32_t srcb_face_r_dim,
+    const std::uint32_t srca_num_faces,
+    const std::uint32_t srcb_num_faces) {
+    llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(
+        srca_new_operand, srca_tile_size, srca_face_r_dim, srca_num_faces);
+    llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(
+        srcb_new_operand, srcb_tile_size, srcb_face_r_dim, srcb_num_faces);
+}
+
+// TODO NC: Clean up as the part of tt-metal#34499
+template <
+    bool is_fp32_dest_acc_en,
+    bool to_from_int8 = false,
+    p_dim_stride_target dim_stride_target = p_dim_stride_target::IGNORE>
+inline void llk_unpack_reconfig_data_format(
     const std::uint32_t srca_old_operand,
     const std::uint32_t srca_new_operand,
     const std::uint32_t srcb_old_operand,
@@ -155,6 +307,27 @@ inline void llk_unpack_reconfig_data_format(
         srca_old_operand, srca_new_operand);
     llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(
         srcb_old_operand, srcb_new_operand);
+}
+
+template <
+    bool is_fp32_dest_acc_en,
+    bool to_from_int8 = false,
+    p_dim_stride_target dim_stride_target = p_dim_stride_target::IGNORE>
+inline void llk_unpack_reconfig_data_format(
+    const std::uint32_t srca_old_operand,
+    const std::uint32_t srca_new_operand,
+    const std::uint32_t srcb_old_operand,
+    const std::uint32_t srcb_new_operand,
+    const std::uint32_t srca_tile_size,
+    const std::uint32_t srcb_tile_size,
+    const std::uint32_t srca_face_r_dim,
+    const std::uint32_t srcb_face_r_dim,
+    const std::uint32_t srca_num_faces,
+    const std::uint32_t srcb_num_faces) {
+    llk_unpack_reconfig_data_format_srca<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(
+        srca_old_operand, srca_new_operand, srca_tile_size, srca_face_r_dim, srca_num_faces);
+    llk_unpack_reconfig_data_format_srcb<is_fp32_dest_acc_en, to_from_int8, dim_stride_target>(
+        srcb_old_operand, srcb_new_operand, srcb_tile_size, srcb_face_r_dim, srcb_num_faces);
 }
 
 // TODO NC: Remove as a part of tt-metal#36411
