@@ -637,12 +637,40 @@ class TtTransformer(LightweightModule):
         self._debug_dump_all_shards("converted_bitmask_tile", converted_bitmask)
         if hasattr(self, "_debug_log_device_tensor_slice"):
             self._debug_log_device_tensor_slice("unpacked_bitmask_01", converted_bitmask)
+        converted_bitmask_pre_penalty = None
+        if hasattr(self, "_debug_should_log_bitmask") and self._debug_should_log_bitmask():
+            try:
+                converted_bitmask_pre_penalty = (
+                    ttnn.to_torch(ttnn.get_device_tensors(converted_bitmask)[0]).to(torch.int32).clone()
+                )
+            except Exception:
+                converted_bitmask_pre_penalty = None
         # converted_bitmask is 0/1. Compute (x - 1) * 1e9 -> {-1e9, 0}.
         result = ttnn.add(converted_bitmask, -1.0, dtype=ttnn.float32, **op_kwargs)
-        ttnn.multiply_(result, 1e9, **op_kwargs)
+        result = ttnn.multiply(result, 1e9, **op_kwargs)
+        self._debug_dump_all_shards("converted_bitmask_tile_post_penalty", converted_bitmask)
         self._debug_dump_all_shards("unpacked_penalty_mask", result)
         if hasattr(self, "_debug_log_device_tensor_slice"):
             self._debug_log_device_tensor_slice("unpacked_penalty_mask", result)
+        if converted_bitmask_pre_penalty is not None:
+            try:
+                converted_bitmask_post_penalty = ttnn.to_torch(ttnn.get_device_tensors(converted_bitmask)[0]).to(
+                    torch.int32
+                )
+                if not torch.equal(converted_bitmask_pre_penalty, converted_bitmask_post_penalty):
+                    mismatch = converted_bitmask_pre_penalty != converted_bitmask_post_penalty
+                    first_idx = torch.nonzero(mismatch, as_tuple=False)[0].tolist()
+                    pre = converted_bitmask_pre_penalty[tuple(first_idx)].item()
+                    post = converted_bitmask_post_penalty[tuple(first_idx)].item()
+                    print(
+                        f"[TT_DEBUG_BITMASK] step={self._debug_bitmask_step} "
+                        f"converted_bitmask mutated after penalty ops at idx={first_idx} pre={pre} post={post}"
+                    )
+            except Exception as e:
+                print(
+                    f"[TT_DEBUG_BITMASK] step={self._debug_bitmask_step} "
+                    f"converted_bitmask post-penalty check failed: {e}"
+                )
         self._sanity_check_unpacked_bitmask(bitmask, converted_bitmask, result)
         return result
 
