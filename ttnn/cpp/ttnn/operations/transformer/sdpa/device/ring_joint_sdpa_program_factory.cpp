@@ -566,9 +566,14 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     // previous block output as input — only needed for multi Q-chunk case
     if (max_q_per_core > 1) {
-        auto c_in7_config = CircularBufferConfig(out_im_tiles * out_tile_size, {{tt::CBIndex::c_7, out_df}})
-                                .set_page_size(tt::CBIndex::c_7, out_tile_size);
-        CreateCircularBuffer(program, core_grid, c_in7_config);
+        // Alias c_7 and c_16: both use out_df/out_tile_size with Sq_chunk_t*DHt tiles.
+        // Non-overlapping lifetimes: c_7 consumed before K-loop, c_16 produced after K-loop.
+        auto c_in7_out0_config =
+            CircularBufferConfig(
+                out_im_tiles * out_tile_size, {{tt::CBIndex::c_7, out_df}, {tt::CBIndex::c_16, out_df}})
+                .set_page_size(tt::CBIndex::c_7, out_tile_size)
+                .set_page_size(tt::CBIndex::c_16, out_tile_size);
+        CreateCircularBuffer(program, core_grid, c_in7_out0_config);
     }
 
     // column identity input
@@ -616,10 +621,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                                   .set_page_size(tt::CBIndex::c_31, stats_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed7_config);
 
-    // Output
-    auto c_out0_config = CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}})
-                             .set_page_size(tt::CBIndex::c_16, out_tile_size);
-    CreateCircularBuffer(program, core_grid, c_out0_config);
+    // Output — for single Q-chunk, allocate standalone; for multi Q-chunk, already aliased with c_7 above
+    if (max_q_per_core == 1) {
+        auto c_out0_config = CircularBufferConfig(out0_t * out_tile_size, {{tt::CBIndex::c_16, out_df}})
+                                 .set_page_size(tt::CBIndex::c_16, out_tile_size);
+        CreateCircularBuffer(program, core_grid, c_out0_config);
+    }
 
     // stats output
     auto c_out1_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_17, im_df}})

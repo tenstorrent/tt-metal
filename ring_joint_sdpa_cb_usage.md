@@ -222,7 +222,7 @@ For L1 chain forwarding, K receive is very fast → V might not be free yet → 
 | Priority | Technique | What | Savings | Risk | Kernel Changes? |
 |----------|-----------|------|---------|------|-----------------|
 | 1 | 5a. Skip c_7 alloc (single Q) | Don't allocate prev_out when `max_q_per_core == 1` | **56 KB** | **None** | Program factory only | **DONE** ✅ |
-| 2 | 1. Alias c_7 ↔ c_16 | prev_out ↔ output (for multi Q-chunk) | **56 KB** | **Low** | Program factory only |
+| 2 | 1. Alias c_7 ↔ c_16 | prev_out ↔ output (for multi Q-chunk) | **56 KB** | **Low** | Program factory only | **DONE** ✅ |
 | 3 | 2. Alias c_6 ↔ c_31 | max_in ↔ exp_max_diff | **14 KB** | **Low** | Program factory only |
 | 4 | 3. Alias c_17 ↔ c_11 | max_out ↔ sum_in | **14 KB** | **Low** | Program factory only |
 | 5 | 4. Alias c_10 ↔ c_6 | sum_out ↔ max_in (combine with #3) | **14 KB** | **Low** | Program factory only |
