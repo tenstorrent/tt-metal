@@ -1447,12 +1447,7 @@ class TTNNDeepseekV2MoE(TTNNModule):
             batch, _, seq, hidden = hidden_states_4d.shape
             orig_shape = [batch, seq, hidden]
 
-        print("hidden_states_4d input to gate: ", hidden_states_4d.shape)
-
         topk_idx, topk_weight, _ = self.gate(hidden_states)
-
-        print("topk_idx.shape : ", topk_idx.shape)
-        print("topk_weight.shape : ", topk_weight.shape)
 
         topk_idx = topk_idx[:, :, :6]
         topk_weight = topk_weight[:, :, :6]
@@ -1682,19 +1677,6 @@ class TTNNDeepseekOCRMoEGate(TTNNModule):
         Output: (topk_weight, topk_idx) same as HF gate.
         """
         logits = self.linear(hidden_states).to_ttnn
-        logits = ttnn.experimental.reduce_scatter_minimal_async(
-            logits,
-            persistent_output_buffers=None,
-            dim=2,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=1,
-            cluster_axis=1,
-            topology=ttnn.Topology.Ring,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
-        )
 
         if self.scoring_func == "softmax":
             scores = ttnn.softmax(logits, dim=-1)
@@ -1706,8 +1688,6 @@ class TTNNDeepseekOCRMoEGate(TTNNModule):
         if self.topk_method == "greedy":
             topk_weight, topk_idx = ttnn.topk(scores, k=self.top_k, largest=True, dim=-1, sorted=False)
             topk_weight = ttnn.gather(scores, dim=2, index=topk_idx)
-            print("topk_weight.shape : ", topk_weight.shape)
-            print("topk_idx.shape : ", topk_idx.shape)
         elif self.topk_method == "group_limited_greedy":
             topk_idx, topk_weight = self._forward_group_limited_greedy(scores)
         elif self.topk_method == "noaux_tc":
