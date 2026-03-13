@@ -124,13 +124,13 @@ class MoE(SharedStateAddOn, AbstractModule):
             ModelState containing CCL configurations
         """
         # Store CCL object for runtime semaphore initialization
+        num_links = ccl.get_max_links(axis=0)
         return {
-            # CCL-specific parameters (semaphores and num_links)
             "all_to_all_dispatch": {
-                "num_links": 4,
+                "num_links": num_links,
             },
             "all_to_all_combine": {
-                "num_links": 4,
+                "num_links": num_links,
             },
             "ccl": ccl,
         }

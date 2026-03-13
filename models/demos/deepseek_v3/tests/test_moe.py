@@ -26,10 +26,12 @@ from models.demos.deepseek_v3.utils.test_utils import (
 @pytest.fixture
 def reference_model(hf_config):
     """Get the actual DeepSeek MLP model using local implementation."""
+    from copy import deepcopy
+
     torch.use_deterministic_algorithms(True)
-    # Note : Running Reference MoE without shared experts
-    hf_config.n_shared_experts = None
-    return DeepseekV3MoE(hf_config).eval()
+    config = deepcopy(hf_config)
+    config.n_shared_experts = None
+    return DeepseekV3MoE(config).eval()
 
 
 _max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
