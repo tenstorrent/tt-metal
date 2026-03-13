@@ -762,8 +762,8 @@ void bind_binary_bw_div(
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::arg("other_tensor"),
-            nb::arg("rounding_mode") = nb::none(),
             nb::kw_only(),
+            nb::arg("rounding_mode") = nb::none(),
             nb::arg("are_required_outputs") = std::vector<bool>{true, true},
             nb::arg("memory_config") = nb::none(),
             nb::arg("input_grad") = nb::none(),
@@ -812,35 +812,130 @@ void bind_binary_backward_assign(nb::module_& mod) {
 }  // namespace
 
 void py_module(nb::module_& module) {
-    bind_binary_backward_ops<"atan2_bw">(module, &ttnn::atan2_bw, "Returns the gradient of atan2 operation.");
-    bind_binary_backward_ops<"xlogy_bw">(module, &ttnn::xlogy_bw, "Returns the gradient of xlogy operation.");
-    bind_binary_backward_ops<"hypot_bw">(module, &ttnn::hypot_bw, "Returns the gradient of hypot operation.");
-    bind_binary_backward_ops<"ldexp_bw">(module, &ttnn::ldexp_bw, "Returns the gradient of ldexp operation.");
-    bind_binary_backward_ops<"logaddexp_bw">(
-        module, &ttnn::logaddexp_bw, "Returns the gradient of logaddexp operation.");
-    bind_binary_backward_ops<"logaddexp2_bw">(
-        module, &ttnn::logaddexp2_bw, "Returns the gradient of logaddexp2 operation.");
-    bind_binary_backward_ops<"squared_difference_bw">(
-        module, &ttnn::squared_difference_bw, "Returns the gradient of squared_difference operation.");
-    bind_binary_backward_ops<"min_bw">(module, &ttnn::min_bw, "Returns the gradient of min operation.");
-    bind_binary_backward_ops<"max_bw">(module, &ttnn::max_bw, "Returns the gradient of max operation.");
+    bind_binary_bw_mul<"mul_bw">(
+        module,
+        R"doc(Performs backward operations for multiply on :attr:`input_tensor_a`, :attr:`input_tensor_b`, with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    bind_binary_backward_addalpha<"addalpha_bw">(
-        module, "alpha", "Alpha value", 1.0f, "Returns the gradient of addalpha operation.");
-    bind_binary_backward_sub_alpha<"subalpha_bw">(
-        module, "alpha", "Alpha value", 1.0f, "Returns the gradient of subalpha operation.");
+    bind_binary_bw_add<"add_bw">(
+        module,
+        R"doc(Performs backward operations for add of :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(Sharding is not supported if both inputs are tensors.)doc");
 
-    bind_binary_backward_rsub<"rsub_bw">(module, "Returns the gradient of rsub operation.");
+    bind_binary_bw_sub<"sub_bw">(
+        module,
+        R"doc(Performs backward operations for subtract of :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`scalar` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    bind_binary_backward_concat<"concat_bw">(
-        module, "dim", "Dimension to concat", 0, "Returns the gradient of concat operation.");
+    bind_binary_bw_div<"div_bw">(
+        module,
+        R"doc(Performs backward operations for divide on :attr:`input_tensor`, :attr:`alpha` or :attr:`input_tensor_a`, :attr:`input_tensor_b`, :attr:`rounding_mode`,  with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
 
-    bind_binary_bw_mul<"mul_bw">(module, "Returns the gradient of mul operation.");
-    bind_binary_bw_add<"add_bw">(module, "Returns the gradient of add operation.");
-    bind_binary_bw_sub<"sub_bw">(module, "Returns the gradient of sub operation.");
-    bind_binary_bw_div<"div_bw">(module, "Returns the gradient of div operation.");
+    bind_binary_backward_ops<"remainder_bw">(
+        module,
+        nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
+            &ttnn::remainder_bw),
+        R"doc(Performs backward operations for remainder of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(Supported only in WHB0. For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
+
+    bind_binary_backward_ops<"fmod_bw">(
+        module,
+        nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
+            &ttnn::fmod_bw),
+        R"doc(Performs backward operations for fmod of :attr:`input_tensor_a`, :attr:`scalar` or :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 
     bind_binary_backward_assign(module);
+
+    bind_binary_backward_ops<"atan2_bw">(
+        module,
+        &ttnn::atan2_bw,
+        R"doc(Performs backward operations for atan2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16)doc");
+
+    bind_binary_backward_sub_alpha<"subalpha_bw">(
+        module,
+        "alpha",
+        "Alpha value",
+        1.0f,
+        R"doc(Performs backward operations for subalpha of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
+
+    bind_binary_backward_addalpha<"addalpha_bw">(
+        module,
+        "alpha",
+        "Alpha value",
+        1.0f,
+        R"doc(Performs backward operations for addalpha on :attr:`input_tensor_b` , :attr:`input_tensor_a` and :attr:`alpha` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
+
+    bind_binary_backward_ops<"xlogy_bw">(
+        module,
+        &ttnn::xlogy_bw,
+        R"doc(Performs backward operations for xlogy of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
+
+    bind_binary_backward_ops<"hypot_bw">(
+        module,
+        &ttnn::hypot_bw,
+        R"doc(Performs backward operations for hypot of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(Performance of the PCC may degrade when using BFLOAT8_B. For more details, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
+
+    bind_binary_backward_ops<"ldexp_bw">(
+        module,
+        &ttnn::ldexp_bw,
+        R"doc(Performs backward operations for ldexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(Recommended input range : [-80, 80]. Performance of the PCC may degrade if the input falls outside this range.)doc");
+
+    bind_binary_backward_ops<"logaddexp_bw">(
+        module,
+        &ttnn::logaddexp_bw,
+        R"doc(Performs backward operations for logaddexp of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
+
+    bind_binary_backward_ops<"logaddexp2_bw">(
+        module,
+        &ttnn::logaddexp2_bw,
+        R"doc(Performs backward operations for logaddexp2 of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
+
+    bind_binary_backward_ops<"squared_difference_bw">(
+        module,
+        &ttnn::squared_difference_bw,
+        R"doc(Performs backward operations for squared_difference of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
+
+    bind_binary_backward_concat<"concat_bw">(
+        module,
+        "dim",
+        "Dimension to concatenate",
+        0,
+        R"doc(Performs backward operations for concat on :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc",
+        R"doc(BFLOAT16)doc");
+
+    bind_binary_backward_rsub<"rsub_bw">(
+        module,
+        R"doc(Performs backward operations for subtraction of :attr:`input_tensor_a` from :attr:`input_tensor_b` with given :attr:`grad_tensor` (reversed order of subtraction operator).)doc",
+        R"doc(BFLOAT16, BFLOAT8_B)doc");
+
+    bind_binary_backward_ops<"min_bw">(
+        module,
+        &ttnn::min_bw,
+        R"doc(Performs backward operations for minimum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
+
+    bind_binary_backward_ops<"max_bw">(
+        module,
+        &ttnn::max_bw,
+        R"doc(Performs backward operations for maximum of :attr:`input_tensor_a` and :attr:`input_tensor_b` with given :attr:`grad_tensor`.)doc");
 
     bind_binary_backward_bias_gelu<"bias_gelu_bw">(
         module,
@@ -849,19 +944,10 @@ void py_module(nb::module_& module) {
         "approximate",
         "Approximation type",
         "none",
-        "Returns the gradient of bias_gelu operation.");
-
-    bind_binary_backward_ops<"remainder_bw">(
-        module,
-        nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
-            &ttnn::remainder_bw),
-        "Returns the gradient of remainder operation.");
-
-    bind_binary_backward_ops<"fmod_bw">(
-        module,
-        nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
-            &ttnn::fmod_bw),
-        "Returns the gradient of fmod operation.");
+        R"doc(Performs backward operations for bias_gelu on :attr:`input_tensor_a` and :attr:`input_tensor_b` or :attr:`input_tensor` and :attr:`bias`, with given :attr:`grad_tensor` using given :attr:`approximate` mode.
+        :attr:`approximate` mode can be 'none', 'tanh'.)doc",
+        R"doc(BFLOAT16)doc",
+        R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
 }
 
 }  // namespace ttnn::operations::binary_backward
