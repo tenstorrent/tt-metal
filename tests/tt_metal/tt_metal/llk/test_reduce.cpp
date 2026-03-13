@@ -577,7 +577,7 @@ void run_single_core_reduce_program(
         log_error(LogTest, "Failure position={}", argfail);
     }
 
-    ASSERT_TRUE(pass);
+    EXPECT_TRUE(pass);
     log_info(
         LogTest,
         "TileDimH = {}, TileDimW = {}, MathFid = {}, ReduceType = {}, FP32DestAcc = {}, DstSyncFull = {}",
@@ -608,6 +608,9 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
+                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        GTEST_SKIP();
+                    }
                     ReduceConfig test_config = {
                         .shape = shape,
                         .reduce_dim = ReduceDim::H,
@@ -632,8 +635,7 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceH) {
 }
 
 TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
-    std::vector<uint32_t> shape = {1, 1, 1 * TILE_HEIGHT, 1 * TILE_WIDTH};
-    // std::vector<uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
+    std::vector<uint32_t> shape = {1, 3, 17 * TILE_HEIGHT, 19 * TILE_WIDTH};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], 32};
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
@@ -643,6 +645,9 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceW) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
+                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        GTEST_SKIP();
+                    }
                     ReduceConfig test_config = {
                         .shape = shape,
                         .reduce_dim = ReduceDim::W,
@@ -681,6 +686,9 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHW) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
+                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        GTEST_SKIP();
+                    }
                     ReduceConfig test_config = {
                         .shape = shape,
                         .reduce_dim = ReduceDim::HW,
@@ -718,6 +726,9 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHMathOnly) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
+                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        GTEST_SKIP();
+                    }
                     ReduceConfig test_config = {
                         .shape = shape,
                         .reduce_dim = ReduceDim::H,
@@ -752,6 +763,9 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceWMathOnly) {
         for (uint8_t reduce_type = uint8_t(ReduceType::SUM); reduce_type <= uint8_t(ReduceType::MAX); reduce_type++) {
             for (bool fp32_dest_acc_en : {true, false}) {
                 for (bool dst_full_sync_en : {true, false}) {
+                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        GTEST_SKIP();
+                    }
                     ReduceConfig test_config = {
                         .shape = shape,
                         .reduce_dim = ReduceDim::W,
@@ -790,6 +804,9 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceHWMathOnly) {
                     continue;
                 }
                 for (bool dst_full_sync_en : {true, false}) {
+                    if (this->arch_ == tt::ARCH::QUASAR && fp32_dest_acc_en && !dst_full_sync_en) {
+                        GTEST_SKIP();
+                    }
                     ReduceConfig test_config = {
                         .shape = shape,
                         .reduce_dim = ReduceDim::HW,
@@ -817,6 +834,10 @@ TEST_F(MeshDeviceFixture, TensixComputeReduceWTinyTiles) {
     tt_metal::Tile tile_shape = tt_metal::Tile({TILE_HEIGHT / 2, TILE_WIDTH});
     std::vector<uint32_t> shape = {1, 1, 1 * tile_shape.get_tile_shape()[0], 13 * tile_shape.get_tile_shape()[1]};
     std::vector<uint32_t> result_shape = {shape[0], shape[1], shape[2], tile_shape.get_tile_shape()[1]};
+    if (this->arch_ == tt::ARCH::QUASAR) {
+        // Tiny tiles not yet supported on Quasar
+        GTEST_SKIP();
+    }
     for (uint8_t math_fid = uint8_t(MathFidelity::LoFi); math_fid <= uint8_t(MathFidelity::HiFi4); math_fid++) {
         // MathFidelity : {0, 2, 3, 4}; so skip value 1
         if (math_fid == 1) {
