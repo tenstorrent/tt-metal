@@ -13,6 +13,7 @@
 #include <vector>
 #include <gtest/gtest.h>
 #include <tt-metalium/core_coord.hpp>
+#include "tests/tt_metal/tt_fabric/fabric_data_movement/runner_common.hpp"
 
 namespace tt::tt_fabric::test {
 
@@ -70,26 +71,28 @@ inline uint32_t family_tx_op(AutoPacketFamily family) {
 }
 
 // Maps each AutoPacketFamily to its device kernel .cpp path.
-// Paths are relative to project root (as used by CreateKernel).
-// All unicast variants share unicast_tx_writer_raw.cpp (dispatches via send_op).
-// All multicast variants share multicast_tx_writer_raw.cpp (dispatches via send_op).
+// All unicast/multicast variants share tx_writer_raw.cpp (selected via IS_MULTICAST define).
+// SparseMulticast uses its own dedicated kernel.
 inline std::string family_kernel_path(AutoPacketFamily family) {
     const std::string base = "tests/tt_metal/tt_fabric/fabric_data_movement/auto_packetization/kernels/";
+    if (family == AutoPacketFamily::SparseMulticast) {
+        return base + "sparse_multicast_tx_writer_raw.cpp";
+    }
+    return base + "tx_writer_raw.cpp";
+}
+
+// Returns true if the family requires the IS_MULTICAST compile-time define.
+inline bool family_is_multicast(AutoPacketFamily family) {
     switch (family) {
-        case AutoPacketFamily::UnicastWrite:
-        case AutoPacketFamily::UnicastScatter:
-        case AutoPacketFamily::UnicastFusedAtomicInc:
-        case AutoPacketFamily::UnicastFusedScatterAtomicInc:
-            return base + "unicast_tx_writer_raw.cpp";
         case AutoPacketFamily::MulticastWrite:
         case AutoPacketFamily::MulticastScatter:
         case AutoPacketFamily::MulticastFusedAtomicInc:
         case AutoPacketFamily::MulticastFusedScatterAtomicInc:
-            return base + "multicast_tx_writer_raw.cpp";
         case AutoPacketFamily::SparseMulticast:
-            return base + "sparse_multicast_tx_writer_raw.cpp";
+            return true;
+        default:
+            return false;
     }
-    return "";
 }
 
 // Returns true if the family uses scatter semantics (2-destination writes).
@@ -118,30 +121,6 @@ inline bool family_is_fused(AutoPacketFamily family) {
     }
 }
 
-// Generate deterministic TX pattern: 0xA5A50000 + i
-inline std::vector<uint32_t> make_tx_pattern(size_t n_words) {
-    std::vector<uint32_t> tx(n_words);
-    for (size_t i = 0; i < n_words; ++i) {
-        tx[i] = 0xA5A50000u + static_cast<uint32_t>(i);
-    }
-    return tx;
-}
-
-// Validate RX payload equals TX payload word-by-word.
-inline void verify_payload_words(
-    const std::vector<uint32_t>& rx,
-    const std::vector<uint32_t>& tx,
-    size_t word_offset = 0,
-    size_t n_words = 0) {
-    size_t count = (n_words > 0) ? n_words : tx.size();
-    for (size_t i = 0; i < count; ++i) {
-        if (rx[i + word_offset] != tx[i]) {
-            ADD_FAILURE() << "Data mismatch at word " << i << " (offset " << word_offset
-                          << "): got 0x" << std::hex << rx[i + word_offset]
-                          << ", exp 0x" << tx[i] << std::dec;
-            return;
-        }
-    }
-}
+// make_tx_pattern and verify_payload_words are provided by runner_common.hpp
 
 }  // namespace tt::tt_fabric::test

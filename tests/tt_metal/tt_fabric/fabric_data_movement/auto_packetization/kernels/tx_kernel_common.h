@@ -4,9 +4,8 @@
 
 // Shared boilerplate header for all auto-packetization TX (sender) kernels.
 //
-// Included by 3 TX kernels:
-//   - unicast_tx_writer_raw.cpp      (dispatches all 4 unicast variants via TX_OP_*)
-//   - multicast_tx_writer_raw.cpp    (dispatches all 4 multicast variants via TX_OP_*)
+// Included by 2 TX kernels:
+//   - tx_writer_raw.cpp              (unified unicast/multicast via IS_MULTICAST define)
 //   - sparse_multicast_tx_writer_raw.cpp
 //
 // Provides:
