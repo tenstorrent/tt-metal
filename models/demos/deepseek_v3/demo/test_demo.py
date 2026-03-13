@@ -15,7 +15,6 @@ MODEL_PATH = Path(
 )
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
 
-
 def _demo_case(
     *,
     max_prompts: int,
@@ -48,14 +47,14 @@ def _demo_case(
         },
         id=case_id,
         marks=marks,
-)
-
+    )
 
 # Test matrix:
 # +------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
 # | id               | max_prompts | max_users_per_row | repeat_batches | max_new_tokens | override_num_layers | enable_trace | sample_on_device | artifact_name            | profile_decode | stop_at_eos | expect_full_length |
 # +------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
-# | tg_stress        | 32          | 8                 | 2              | 128            | 5                   | False        | True             | None                     | False          | False       | True               |
+# | tg_stress        | 56          | 32                | 2              | 128            | 5                   | False        | True             | None                     | False          | False       | True               |
+# | tg_upr8          | 32          | 8                 | 2              | 128            | 5                   | False        | True             | None                     | False          | False       | True               |
 # | dual_full_demo   | 256         | 32                | 1              | 129            | None                | True         | True             | dual_demo_full_results   | False          | None        | False              |
 # | dual_stress_demo | 56          | 32                | 20             | 129            | None                | True         | True             | dual_demo_stress_results | False          | False       | True               |
 # | quad_full_demo   | 512         | 32                | 1              | 129            | None                | True         | True             | quad_demo_full_results   | False          | None        | False              |
@@ -69,6 +68,21 @@ def _demo_case(
     "case",
     [
         _demo_case(
+            max_prompts=56,
+            max_users_per_row=32,
+            repeat_batches=2,
+            max_new_tokens=128,
+            override_num_layers=5,
+            enable_trace=False,
+            sample_on_device=True,
+            artifact_name=None,
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="tg_stress",
+            marks=pytest.mark.requires_device(["TG"]),
+        ),
+        _demo_case(
             max_prompts=32,
             max_users_per_row=8,
             repeat_batches=2,
@@ -80,7 +94,7 @@ def _demo_case(
             profile_decode=False,
             stop_at_eos=False,
             expect_full_length=True,
-            case_id="tg_stress",
+            case_id="tg_upr8",
             marks=pytest.mark.requires_device(["TG"]),
         ),
         _demo_case(
