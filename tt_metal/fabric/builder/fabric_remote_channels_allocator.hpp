@@ -55,8 +55,13 @@ public:
     /**
      * Emit the complete ChannelAllocations CT arg block for remote receiver channels.
      * Format: [tag] [num_entries] [per-entry data...] [receiver_to_entry_idx...]
+     *
+     * @param ct_args Vector to append compile-time arguments to
+     * @param is_receiver_channel_active_per_vc Whether the receiver channel is active per VC
      */
-    void emit_channel_allocations_ct_args(std::vector<uint32_t>& ct_args, size_t num_used_receiver_channels) const;
+    void emit_channel_allocations_ct_args(
+        std::vector<uint32_t>& ct_args,
+        const std::array<bool, builder_config::MAX_NUM_VCS>& is_receiver_channel_active_per_vc) const;
 
     /**
      * Get the base address for the remote receiver channel in a specific VC.
