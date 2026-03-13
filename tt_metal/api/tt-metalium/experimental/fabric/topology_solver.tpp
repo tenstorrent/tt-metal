@@ -1175,7 +1175,7 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
                     missing_nodes_str << fmt::format("{}", node);
                 }
 
-                log_warning(
+                log_debug(
                     tt::LogFabric,
                     "Topology solver: {} constraint node(s) for target node {} are not present in the global graph. "
                     "These nodes will be ignored. Missing nodes: {}",
@@ -1185,7 +1185,7 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
 
                 // Warn if all constraint nodes are missing (empty restricted_indices)
                 if (restricted_indices.empty()) {
-                    log_warning(
+                    log_debug(
                         tt::LogFabric,
                         "Topology solver: All constraint nodes for target node {} are missing from the global graph. "
                         "This target node will have no restrictions.",
@@ -1225,7 +1225,7 @@ ConstraintIndexData<TargetNode, GlobalNode>::ConstraintIndexData(
                     missing_nodes_str << fmt::format("{}", node);
                 }
 
-                log_warning(
+                log_debug(
                     tt::LogFabric,
                     "Topology solver: {} preferred constraint node(s) for target node {} are not present in the global "
                     "graph. These nodes will be ignored. Missing nodes: {}",

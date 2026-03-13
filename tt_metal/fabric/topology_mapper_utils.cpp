@@ -754,11 +754,22 @@ void add_rank_binding_constraints(
     MeshId logical_mesh_id,
     const std::map<MeshId, std::map<FabricNodeId, MeshHostRankId>>& fabric_node_id_to_mesh_rank,
     const std::map<MeshId, std::map<tt::tt_metal::AsicID, MeshHostRankId>>& asic_id_to_mesh_rank) {
-    if (!fabric_node_id_to_mesh_rank.contains(logical_mesh_id) || !asic_id_to_mesh_rank.contains(logical_mesh_id)) {
+    if (!fabric_node_id_to_mesh_rank.contains(logical_mesh_id)) {
         return;
     }
     const auto& fabric_node_ranks = fabric_node_id_to_mesh_rank.at(logical_mesh_id);
-    const auto& asic_ranks = asic_id_to_mesh_rank.at(logical_mesh_id);
+
+    // When asic_id_to_mesh_rank has no entry for this mesh, treat all physical ASICs as UNSET
+    std::map<tt::tt_metal::AsicID, MeshHostRankId> asic_ranks_unset;
+    if (!asic_id_to_mesh_rank.contains(logical_mesh_id)) {
+        for (const auto& [_, asic_set] : config.hostname_to_asics) {
+            for (const auto& asic_id : asic_set) {
+                asic_ranks_unset[asic_id] = ::tt::tt_fabric::MESH_HOST_RANK_UNSET;
+            }
+        }
+    }
+    const std::map<tt::tt_metal::AsicID, MeshHostRankId>& asic_ranks =
+        asic_id_to_mesh_rank.contains(logical_mesh_id) ? asic_id_to_mesh_rank.at(logical_mesh_id) : asic_ranks_unset;
 
     // Group fabric nodes by rank: rank_to_fabric_nodes[R] = { fabric nodes that must map to rank R's ASICs }
     std::map<MeshHostRankId, std::set<FabricNodeId>> rank_to_fabric_nodes;

@@ -468,10 +468,12 @@ void TopologyMapper::build_mapping(const Cluster& cluster) {
             }
         }
 
-        // Extract pinnings from MGD and add to config (same as control plane)
-        const auto& pinnings = mesh_graph_.get_mesh_graph_descriptor().get_pinnings();
-        for (const auto& [pos, fabric_node] : pinnings) {
-            config.pinnings.emplace_back(pos, fabric_node);
+        // Extract pinnings from MGD and add to config (only if mesh graph descriptor is available)
+        if (mesh_graph_.get_mesh_graph_descriptor_path().has_value()) {
+            const auto& pinnings = mesh_graph_.get_mesh_graph_descriptor().get_pinnings();
+            for (const auto& [pos, fabric_node] : pinnings) {
+                config.pinnings.emplace_back(pos, fabric_node);
+            }
         }
 
         // Build ASIC positions map (required if pinnings are used)
