@@ -416,6 +416,7 @@ class MLA1D(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
         """Prefill model config for an MLP with 1D tensor parallelism.
 
@@ -562,6 +563,7 @@ class MLA1D(AbstractModule):
         )
 
         return {
+            "batch_size_per_row": batch_size_per_row,
             "num_heads": num_heads,
             "num_heads_local": num_heads_local,
             "q_lora_rank": q_lora_rank,
@@ -591,7 +593,7 @@ class MLA1D(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        batch_size_per_row: int = USERS_PER_ROW,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
         """Generate decode operator configuration for this MLP layer.
 
@@ -1117,6 +1119,7 @@ class MLA1D(AbstractModule):
         )
 
         return {
+            "batch_size_per_row": batch_size_per_row,
             "num_heads": num_heads,
             "q_lora_rank": q_lora_rank,
             "kv_lora_rank": kv_lora_rank,
@@ -1707,7 +1710,7 @@ class MLA1D(AbstractModule):
         ttnn.deallocate(tt_kvpe_fp16)
 
         # Update KVPE Cache
-        batch_size_per_dp_shard = even_int_div(cfg.get("batch_size_per_row", USERS_PER_ROW), sdpa_dp_factor)
+        batch_size_per_dp_shard = even_int_div(cfg["batch_size_per_row"], sdpa_dp_factor)
         local_batch_idx = batch_idx % batch_size_per_dp_shard  # Local batch index within the DP shard
         col_idx = batch_idx // batch_size_per_dp_shard  # Which DP shard the batch belongs to
         if _deepseek_kvdbg_enabled():

@@ -13,7 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
-from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
@@ -231,8 +231,8 @@ def create_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--max-users-per-row",
         type=int,
-        default=None,
-        help="Override the maximum number of active users per row for demo decode.",
+        default=USERS_PER_ROW,
+        help=f"Maximum number of active users per row for demo decode (default: {USERS_PER_ROW}).",
     )
     return p
 
@@ -336,7 +336,7 @@ def run_demo(
     *,
     model_path: str | Path | None = None,
     max_new_tokens: int = 32,
-    max_users_per_row: int | None = None,
+    max_users_per_row: int = USERS_PER_ROW,
     cache_dir: str | Path | None = None,
     random_weights: bool = False,
     single_layer: str | None = None,
