@@ -117,6 +117,7 @@ def test_deepseek_ocr(device):
         model.model.sam_model.__class__: ImageEncoderViT,
         # model.model.layers[0].input_layernorm.__class__: TTNNRMSNorm,
     }
+
     nn_to_ttnn = {
         nn.Linear: TTNNLinear,
         nn.SiLU: TTNNSilu,
@@ -124,6 +125,7 @@ def test_deepseek_ocr(device):
         nn.Conv2d: TTNNConv2dNHWC,
         model.model.vision_model.__class__: TTNNVitModel,
         model.model.sam_model.__class__: TTNNImageEncoderViT,
+        # model.model.layers[1].mlp.__class__: TTNNDeepseekV2MoE,
         # nn.LayerNorm: TTNNLayerNorm,
         # model.model.layers[0].self_attn.__class__: LlamaAttention,
     }
