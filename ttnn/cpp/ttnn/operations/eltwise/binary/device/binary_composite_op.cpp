@@ -66,7 +66,7 @@ Tensor _isclose(
     return result;
 }
 
-Tensor ExecuteMinimum::invoke(
+Tensor minimum(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const DataType>& /*output_dtype*/,
@@ -88,7 +88,7 @@ Tensor ExecuteMinimum::invoke(
         use_legacy);
 }
 
-Tensor ExecuteMinimum::invoke(
+Tensor minimum(
     const Tensor& input_a,
     unary::ScalarVariant value,
     const std::optional<const DataType>& /*output_dtype*/,
@@ -106,7 +106,7 @@ Tensor ExecuteMinimum::invoke(
         value);
 }
 
-Tensor ExecuteMaximum::invoke(
+Tensor maximum(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const DataType>& /*output_dtype*/,
@@ -128,7 +128,7 @@ Tensor ExecuteMaximum::invoke(
         use_legacy);
 }
 
-Tensor ExecuteMaximum::invoke(
+Tensor maximum(
     const Tensor& input_a,
     unary::ScalarVariant value,
     const std::optional<const DataType>& /*output_dtype*/,
@@ -144,6 +144,68 @@ Tensor ExecuteMaximum::invoke(
                 invoke(input_a, input_b, memory_config, optional_output_tensor);
         },
         value);
+}
+
+Tensor bias_gelu(
+    const Tensor& input_tensor_a_arg,
+    const Tensor& input_tensor_b_arg,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    std::optional<bool> use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return BinaryOperation<BinaryOpType::BIAS_GELU>::invoke(
+        input_tensor_a_arg,
+        input_tensor_b_arg,
+        output_dtype,
+        memory_config,
+        optional_output_tensor,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy,
+        sub_core_grids);
+}
+
+Tensor bias_gelu(
+    const Tensor& input_tensor_a,
+    const float bias,
+    const std::optional<const DataType>& /*dtype*/,
+    const std::optional<ttnn::MemoryConfig>& memory_config,
+    const std::optional<Tensor>& optional_output_tensor,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/,
+    std::optional<bool> /*use_legacy*/,
+    const std::optional<CoreRangeSet>& /*sub_core_grids*/) {
+    return ttnn::gelu(
+        ttnn::add(input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor),
+        true,
+        memory_config,
+        optional_output_tensor);
+}
+
+Tensor bias_gelu(
+    const Tensor& input_tensor_a,
+    float scalar,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations) {
+    return BinaryOperation<BinaryOpType::BIAS_GELU>::invoke(
+        input_tensor_a,
+        scalar,
+        output_dtype,
+        memory_config,
+        output,
+        post_activations,
+        lhs_activations,
+        rhs_activations);
 }
 
 Tensor _atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<MemoryConfig>& output_mem_config) {
@@ -188,7 +250,7 @@ Tensor _atan2(const Tensor& input_b, const Tensor& input_a, const std::optional<
     return res;
 }
 
-Tensor ExecuteDiv::invoke(
+Tensor div(
     const Tensor& input,
     float value,
     bool fast_and_approximate_mode,
@@ -316,7 +378,7 @@ Tensor ExecuteDiv::invoke(
     return output_tensor.value();
 }
 
-Tensor ExecuteDiv::invoke(
+Tensor div(
     const Tensor& input_a,
     const Tensor& input_b,
     bool fast_and_approximate_mode,
@@ -475,19 +537,17 @@ Tensor _div_no_nan(const Tensor& input_a, const Tensor& input_b, const std::opti
     return ttnn::where(ttnn::eqz(input_b, output_mem_config), 0.0f, div_result);
 }
 
-Tensor ExecutePrelu::invoke(
-    const Tensor& input, float weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
+Tensor prelu(const Tensor& input, float weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     return ttnn::prelu_sfpu(input, weight);
 }
 
-Tensor ExecutePrelu::invoke(
+Tensor prelu(
     const Tensor& input, const std::array<float, 1>& weight, const std::optional<MemoryConfig>& /*output_mem_config*/) {
     float scalar_weight = weight[0];
     return ttnn::prelu_sfpu(input, scalar_weight);
 }
 
-Tensor ExecutePrelu::invoke(
-    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
+Tensor prelu(const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config) {
     const auto& s_a = input_a.logical_shape();
     const auto volume = input_b.logical_volume();
     TT_FATAL(
@@ -597,7 +657,7 @@ Tensor run_remainder(
     return result;
 }
 // Binary remainder will be overloaded by unary remainder in another PR
-Tensor ExecuteBinaryRemainder::invoke(
+Tensor remainder(
     const Tensor& input_a,
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -625,7 +685,7 @@ Tensor ExecuteBinaryRemainder::invoke(
     return do_typecast ? typecast(result, input_dtype, std::nullopt, std::nullopt, sub_core_grids) : result;
 }
 
-Tensor ExecuteBinaryRemainder::invoke(
+Tensor remainder(
     const Tensor& input,
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -634,7 +694,7 @@ Tensor ExecuteBinaryRemainder::invoke(
 }
 
 // FMOD result = input − (other * trunc(input/other))
-Tensor ExecuteBinaryFmod::invoke(
+Tensor fmod(
     const Tensor& input_a,
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -651,7 +711,7 @@ Tensor ExecuteBinaryFmod::invoke(
         std::nullopt);  // use_legacy
 }
 
-Tensor ExecuteBinaryFmod::invoke(
+Tensor fmod(
     const Tensor& input,
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -753,7 +813,7 @@ Tensor _polyval(
     return final_tensor;
 }
 
-Tensor ExecuteGCD::invoke(
+Tensor gcd(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const DataType>& /*output_dtype*/,
@@ -775,7 +835,7 @@ Tensor ExecuteGCD::invoke(
         use_legacy);
 }
 
-Tensor ExecuteLCM::invoke(
+Tensor lcm(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const DataType>& /*output_dtype*/,
@@ -798,7 +858,7 @@ Tensor ExecuteLCM::invoke(
 }
 
 // power - floating point exponent
-Tensor ExecutePower::invoke(
+Tensor pow(
     const Tensor& input_a,
     float exponent,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -806,14 +866,14 @@ Tensor ExecutePower::invoke(
     float exponent_floor = std::floor(exponent);
     if (static_cast<int32_t>(exponent_floor) == exponent) {
         int32_t exp = exponent;
-        return ExecutePower::invoke(input_a, exp, output_mem_config, output_tensor);
+        return pow(input_a, exp, output_mem_config, output_tensor);
     }
     return ttnn::operations::unary::ExecuteUnaryTSVariant<ttnn::operations::unary::UnaryOpType::POWER>::invoke(
         input_a, exponent, output_mem_config, output_tensor);
 }
 
 // power - integer exponent
-Tensor ExecutePower::invoke(
+Tensor pow(
     const Tensor& input,
     int32_t exponent,
     const std::optional<MemoryConfig>& output_mem_config,
@@ -828,7 +888,7 @@ Tensor ExecutePower::invoke(
 }
 
 // power - tensor exponent
-Tensor ExecutePower::invoke(
+Tensor pow(
     const Tensor& input,
     const Tensor& exponent,
     const std::optional<const DataType>& /*dtype*/,
@@ -851,7 +911,7 @@ Tensor ExecutePower::invoke(
 }
 
 // power - scalar input, tensor exponent
-Tensor ExecutePower::invoke(
+Tensor pow(
     float input_a,
     const Tensor& exponent,
     const std::optional<const DataType>& /*dtype*/,
@@ -865,7 +925,7 @@ Tensor ExecutePower::invoke(
     // https://github.com/tenstorrent/pytorch2.0_ttnn/blob/main/docs/operations/aten.pow.Scalar.md
 
     Tensor input = ttnn::full_like(exponent, input_a);
-    return ExecutePower::invoke(
+    return pow(
         input,
         exponent,
         std::nullopt,
@@ -877,7 +937,7 @@ Tensor ExecutePower::invoke(
         use_legacy);
 }
 
-Tensor ExecuteRsub::invoke(
+Tensor rsub(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<const DataType>& output_dtype,
@@ -899,7 +959,7 @@ Tensor ExecuteRsub::invoke(
         use_legacy);
 }
 
-Tensor ExecuteRsub::invoke(
+Tensor rsub(
     const Tensor& input_tensor_a,
     const float input_b,
     const std::optional<const DataType>& output_dtype,
@@ -933,7 +993,7 @@ Tensor ExecuteRsub::invoke(
 }
 
 // Bitwise AND
-Tensor ExecuteBitwiseAnd::invoke(
+Tensor bitwise_and(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
@@ -974,7 +1034,7 @@ Tensor ExecuteBitwiseAnd::invoke(
         use_legacy);
 }
 
-Tensor ExecuteBitwiseAnd::invoke(
+Tensor bitwise_and(
     const Tensor& input_tensor_a,
     const int32_t input_b,
     const std::optional<MemoryConfig>& memory_config,
@@ -1009,7 +1069,7 @@ Tensor ExecuteBitwiseAnd::invoke(
 }
 
 // Bitwise OR
-Tensor ExecuteBitwiseOr::invoke(
+Tensor bitwise_or(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
@@ -1042,7 +1102,7 @@ Tensor ExecuteBitwiseOr::invoke(
         input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
 }
 
-Tensor ExecuteBitwiseOr::invoke(
+Tensor bitwise_or(
     const Tensor& input_tensor_a,
     const int32_t input_b,
     const std::optional<MemoryConfig>& memory_config,
@@ -1077,7 +1137,7 @@ Tensor ExecuteBitwiseOr::invoke(
 }
 
 // Bitwise XOR
-Tensor ExecuteBitwiseXor::invoke(
+Tensor bitwise_xor(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
@@ -1110,7 +1170,7 @@ Tensor ExecuteBitwiseXor::invoke(
         input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
 }
 
-Tensor ExecuteBitwiseXor::invoke(
+Tensor bitwise_xor(
     const Tensor& input_tensor_a,
     const int32_t input_b,
     const std::optional<MemoryConfig>& memory_config,
@@ -1145,7 +1205,7 @@ Tensor ExecuteBitwiseXor::invoke(
 }
 
 // Bitwise Left Shift
-Tensor ExecuteBitwiseLeftShift::invoke(
+Tensor bitwise_left_shift(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
@@ -1178,7 +1238,7 @@ Tensor ExecuteBitwiseLeftShift::invoke(
         input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
 }
 
-Tensor ExecuteBitwiseLeftShift::invoke(
+Tensor bitwise_left_shift(
     const Tensor& input_tensor_a,
     const int32_t input_b,
     const std::optional<MemoryConfig>& memory_config,
@@ -1213,7 +1273,7 @@ Tensor ExecuteBitwiseLeftShift::invoke(
 }
 
 // Bitwise Right Shift
-Tensor ExecuteBitwiseRightShift::invoke(
+Tensor bitwise_right_shift(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config,
@@ -1246,7 +1306,7 @@ Tensor ExecuteBitwiseRightShift::invoke(
         input_tensor_a, input_tensor_b, std::nullopt, memory_config, optional_output_tensor);
 }
 
-Tensor ExecuteBitwiseRightShift::invoke(
+Tensor bitwise_right_shift(
     const Tensor& input_tensor_a,
     const int32_t input_b,
     const std::optional<MemoryConfig>& memory_config,

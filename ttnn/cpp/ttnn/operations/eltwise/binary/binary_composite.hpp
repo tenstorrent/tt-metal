@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <array>
 #include <optional>
 #include <vector>
 
@@ -27,462 +28,365 @@ namespace operations::binary {
  * @param exponent The exponent
  * @return The result tensor
  */
-struct ExecutePower {
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        int32_t exponent,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+Tensor pow(
+    const Tensor& input_tensor,
+    int32_t exponent,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-    static Tensor invoke(
-        const Tensor& input_a,
-        float exponent,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt);
+Tensor pow(
+    const Tensor& input_a,
+    float exponent,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-    static Tensor invoke(
-        float input_a,
-        const Tensor& exponent,
-        const std::optional<const DataType>& dtype = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+Tensor pow(
+    float input_a,
+    const Tensor& exponent,
+    const std::optional<const DataType>& dtype = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
 
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        const Tensor& exponent,
-        const std::optional<const DataType>& dtype = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
-};
+Tensor pow(
+    const Tensor& input_tensor,
+    const Tensor& exponent,
+    const std::optional<const DataType>& dtype = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
 
 template <BinaryCompositeOpType binary_comp_op_type>
-struct ExecuteBinaryCompositeOps {
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, memory_config);
-    }
-};
+inline Tensor binary_composite_op(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, memory_config);
+}
 
 template <BinaryCompositeOpType binary_comp_op_type>
-struct ExecuteBinaryCompositeOpsIsClose {
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        float rtol,
-        float atol,
-        const bool equal_nan,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<binary_comp_op_type>::handle(
-            input_tensor_a, input_tensor_b, rtol, atol, equal_nan, memory_config);
-    }
-};
+inline Tensor binary_composite_op_isclose(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    float rtol,
+    float atol,
+    const bool equal_nan,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, rtol, atol, equal_nan, memory_config);
+}
 
 template <BinaryCompositeOpType binary_comp_op_type>
-struct ExecuteDivLikeOps {
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, memory_config);
-    }
-    static Tensor invoke(
-        const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<binary_comp_op_type>::handle(input_tensor_a, value, memory_config);
-    }
-};
-
-struct ExecuteDiv {
-    static Tensor invoke(
-        const Tensor& input_a,
-        const Tensor& input_b,
-        bool fast_and_approximate_mode = false,
-        const std::optional<std::string>& rounding_mode = std::nullopt,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        const std::optional<Tensor>& output_tensor = std::nullopt,
-        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-
-    static Tensor invoke(
-        const Tensor& input,
-        float value,
-        bool fast_and_approximate_mode = false,
-        const std::optional<std::string>& rounding_mode = std::nullopt,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        std::optional<Tensor> output = std::nullopt,
-        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
-        const std::optional<bool>& use_legacy = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-};
-
-template <BinaryOpType binary_op_type>
-struct ExecuteBiasGelu {
-    static Tensor invoke(
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-        return BinaryOperation<binary_op_type>::invoke(
-            input_tensor_a_arg,
-            input_tensor_b_arg,
-            output_dtype,
-            memory_config,
-            optional_output_tensor,
-            post_activations,
-            lhs_activations,
-            rhs_activations,
-            use_legacy,
-            sub_core_grids);
-    }
-
-    static Tensor invoke(
-        const ttnn::Tensor& input_tensor_a,
-        const float bias,
-        const std::optional<const DataType>& /*dtype*/ = std::nullopt,
-        const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/ = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/ = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/ = {},
-        std::optional<bool> /*use_legacy*/ = std::nullopt,
-        const std::optional<CoreRangeSet>& /*sub_core_grids*/ = std::nullopt) {
-        return ttnn::gelu(
-            ttnn::add(input_tensor_a, bias, std::nullopt, memory_config, optional_output_tensor),
-            true,
-            memory_config,
-            optional_output_tensor);
-    }
-
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& output = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-        return BinaryOperation<binary_op_type>::invoke(
-            input_tensor_a,
-            input_tensor_b,
-            output_dtype,
-            memory_config,
-            output,
-            lhs_activations,
-            rhs_activations,
-            post_activations,
-            sub_core_grids);
-    }
-
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        float scalar,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& output = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {}) {
-        return BinaryOperation<binary_op_type>::invoke(
-            input_tensor_a,
-            scalar,
-            output_dtype,
-            memory_config,
-            output,
-            lhs_activations,
-            rhs_activations,
-            post_activations);
-    }
-};
+inline Tensor div_like_op(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    return OpHandler<binary_comp_op_type>::handle(input_tensor_a, input_tensor_b, memory_config);
+}
 
 template <BinaryCompositeOpType binary_comp_op_type>
-struct ExecuteBinaryCompositeOpsPolyval {
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const std::vector<float>& coeffs,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-        return OpHandler<binary_comp_op_type>::handle(input_tensor_a, coeffs, memory_config);
-    }
-};
+inline Tensor div_like_op(
+    const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    return OpHandler<binary_comp_op_type>::handle(input_tensor_a, value, memory_config);
+}
 
-struct ExecuteBinaryFmod {
-    static Tensor invoke(
-        const Tensor& input_a,
-        const Tensor& input_b,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor div(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    bool fast_and_approximate_mode = false,
+    const std::optional<std::string>& rounding_mode = std::nullopt,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<Tensor>& output_tensor = std::nullopt,
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    const std::optional<bool>& use_legacy = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        float scalar,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-};
+Tensor div(
+    const Tensor& input,
+    float value,
+    bool fast_and_approximate_mode = false,
+    const std::optional<std::string>& rounding_mode = std::nullopt,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    std::optional<Tensor> output = std::nullopt,
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
+    const std::optional<bool>& use_legacy = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-struct ExecuteBinaryRemainder {
-    static Tensor invoke(
-        const Tensor& input_a,
-        const Tensor& input_b,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor bias_gelu(
+    const Tensor& input_tensor_a_arg,
+    const Tensor& input_tensor_b_arg,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        float scalar,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
-        const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
-};
+Tensor bias_gelu(
+    const ttnn::Tensor& input_tensor_a,
+    const float bias,
+    const std::optional<const DataType>& /*dtype*/ = std::nullopt,
+    const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*post_activations*/ = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*lhs_activations*/ = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> /*rhs_activations*/ = {},
+    std::optional<bool> /*use_legacy*/ = std::nullopt,
+    const std::optional<CoreRangeSet>& /*sub_core_grids*/ = std::nullopt);
 
-struct ExecuteLCM {
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
-};
+Tensor bias_gelu(
+    const Tensor& input_tensor_a,
+    float scalar,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& output = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {});
 
-struct ExecuteGCD {
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
-};
+template <BinaryCompositeOpType binary_comp_op_type>
+inline Tensor binary_composite_op_polyval(
+    const Tensor& input_tensor_a,
+    const std::vector<float>& coeffs,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt) {
+    return OpHandler<binary_comp_op_type>::handle(input_tensor_a, coeffs, memory_config);
+}
 
-struct ExecuteMaximum {
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+Tensor fmod(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-    static Tensor invoke(
-        const Tensor& input_a,
-        unary::ScalarVariant value,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
-};
+Tensor fmod(
+    const Tensor& input_tensor,
+    float scalar,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-struct ExecuteMinimum {
-    static Tensor invoke(
-        const Tensor& input_tensor_a,
-        const Tensor& input_tensor_b,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+Tensor remainder(
+    const Tensor& input_a,
+    const Tensor& input_b,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-    static Tensor invoke(
-        const Tensor& input_a,
-        unary::ScalarVariant value,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
-};
+Tensor remainder(
+    const Tensor& input_tensor,
+    float scalar,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
-struct ExecutePrelu {
-    static Tensor invoke(
-        const Tensor& input_a,
-        const Tensor& input_b,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+Tensor lcm(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
 
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        const std::array<float, 1>& weight,
-        const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
+Tensor gcd(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
 
-    static Tensor invoke(
-        const Tensor& input_tensor, float weight, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
-};
+Tensor maximum(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
 
-struct ExecuteRsub {
-    static Tensor invoke(
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+Tensor maximum(
+    const Tensor& input_a,
+    unary::ScalarVariant value,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
 
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        float input_b,
-        const std::optional<const DataType>& output_dtype = std::nullopt,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
-};
+Tensor minimum(
+    const Tensor& input_tensor_a,
+    const Tensor& input_tensor_b,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
 
-struct ExecuteBitwiseAnd {
-    static Tensor invoke(
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+Tensor minimum(
+    const Tensor& input_a,
+    unary::ScalarVariant value,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
 
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        int32_t input_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
-};
+Tensor prelu(
+    const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
-struct ExecuteBitwiseOr {
-    static Tensor invoke(
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+Tensor prelu(
+    const Tensor& input_tensor,
+    const std::array<float, 1>& weight,
+    const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        int32_t input_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
-};
+Tensor prelu(
+    const Tensor& input_tensor, float weight, const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 
-struct ExecuteBitwiseXor {
-    static Tensor invoke(
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+Tensor rsub(
+    const Tensor& input_tensor_a_arg,
+    const Tensor& input_tensor_b_arg,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
 
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        int32_t input_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
-};
+Tensor rsub(
+    const Tensor& input_tensor,
+    float input_b,
+    const std::optional<const DataType>& output_dtype = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
 
-struct ExecuteBitwiseLeftShift {
-    static Tensor invoke(
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+Tensor bitwise_and(
+    const Tensor& input_tensor_a_arg,
+    const Tensor& input_tensor_b_arg,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
 
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        int32_t input_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
-};
+Tensor bitwise_and(
+    const Tensor& input_tensor,
+    int32_t input_b,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
 
-struct ExecuteBitwiseRightShift {
-    static Tensor invoke(
-        const Tensor& input_tensor_a_arg,
-        const Tensor& input_tensor_b_arg,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
+Tensor bitwise_or(
+    const Tensor& input_tensor_a_arg,
+    const Tensor& input_tensor_b_arg,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
 
-    static Tensor invoke(
-        const Tensor& input_tensor,
-        int32_t input_b,
-        const std::optional<MemoryConfig>& memory_config = std::nullopt,
-        const std::optional<Tensor>& optional_output_tensor = std::nullopt,
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
-        tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
-        std::optional<bool> use_legacy = std::nullopt);
-};
+Tensor bitwise_or(
+    const Tensor& input_tensor,
+    int32_t input_b,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
 
-struct ExecuteLogicalLeftShift : ExecuteBitwiseLeftShift {
-    // Inherits all functionality from ExecuteBitwiseLeftShift
-    // but creates a distinct type for registration
-};
+Tensor bitwise_xor(
+    const Tensor& input_tensor_a_arg,
+    const Tensor& input_tensor_b_arg,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
+
+Tensor bitwise_xor(
+    const Tensor& input_tensor,
+    int32_t input_b,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
+
+Tensor bitwise_left_shift(
+    const Tensor& input_tensor_a_arg,
+    const Tensor& input_tensor_b_arg,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
+
+Tensor bitwise_left_shift(
+    const Tensor& input_tensor,
+    int32_t input_b,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
+
+Tensor bitwise_right_shift(
+    const Tensor& input_tensor_a_arg,
+    const Tensor& input_tensor_b_arg,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
+
+Tensor bitwise_right_shift(
+    const Tensor& input_tensor,
+    int32_t input_b,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<Tensor>& optional_output_tensor = std::nullopt,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> post_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> lhs_activations = {},
+    tt::stl::Span<const unary::EltwiseUnaryWithParam> rhs_activations = {},
+    std::optional<bool> use_legacy = std::nullopt);
 
 }  // namespace operations::binary
 
@@ -497,7 +401,7 @@ inline Tensor bias_gelu(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::ExecuteBiasGelu<operations::binary::BinaryOpType::BIAS_GELU>::invoke(
+    return operations::binary::bias_gelu(
         input_tensor_a_arg,
         input_tensor_b_arg,
         output_dtype,
@@ -536,7 +440,7 @@ inline Tensor bias_gelu(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::ExecuteBiasGelu<operations::binary::BinaryOpType::BIAS_GELU>::invoke(
+    return operations::binary::bias_gelu(
         input_tensor_a,
         input_tensor_b,
         output_dtype,
@@ -559,7 +463,7 @@ inline Tensor minimum(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteMinimum::invoke(
+    return operations::binary::minimum(
         input_tensor_a,
         input_tensor_b,
         output_dtype,
@@ -581,7 +485,7 @@ inline Tensor minimum(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteMinimum::invoke(
+    return operations::binary::minimum(
         input_a,
         value,
         output_dtype,
@@ -603,7 +507,7 @@ inline Tensor maximum(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteMaximum::invoke(
+    return operations::binary::maximum(
         input_tensor_a,
         input_tensor_b,
         output_dtype,
@@ -625,7 +529,7 @@ inline Tensor maximum(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteMaximum::invoke(
+    return operations::binary::maximum(
         input_a,
         value,
         output_dtype,
@@ -647,7 +551,7 @@ inline Tensor gcd(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteGCD::invoke(
+    return operations::binary::gcd(
         input_tensor_a,
         input_tensor_b,
         output_dtype,
@@ -669,7 +573,7 @@ inline Tensor lcm(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteLCM::invoke(
+    return operations::binary::lcm(
         input_tensor_a,
         input_tensor_b,
         output_dtype,
@@ -685,7 +589,7 @@ inline Tensor atan2(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::ATAN2>::invoke(
+    return operations::binary::binary_composite_op<operations::binary::BinaryCompositeOpType::ATAN2>(
         input_tensor_a, input_tensor_b, memory_config);
 }
 
@@ -693,7 +597,7 @@ inline Tensor nextafter(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::NEXTAFTER>::invoke(
+    return operations::binary::binary_composite_op<operations::binary::BinaryCompositeOpType::NEXTAFTER>(
         input_tensor_a, input_tensor_b, memory_config);
 }
 
@@ -704,21 +608,21 @@ inline Tensor isclose(
     float atol,
     const bool equal_nan,
     const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return operations::binary::ExecuteBinaryCompositeOpsIsClose<operations::binary::BinaryCompositeOpType::ISCLOSE>::
-        invoke(input_tensor_a, input_tensor_b, rtol, atol, equal_nan, memory_config);
+    return operations::binary::binary_composite_op_isclose<operations::binary::BinaryCompositeOpType::ISCLOSE>(
+        input_tensor_a, input_tensor_b, rtol, atol, equal_nan, memory_config);
 }
 
 inline Tensor div_no_nan(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return operations::binary::ExecuteDivLikeOps<operations::binary::BinaryCompositeOpType::DIV_NO_NAN>::invoke(
+    return operations::binary::div_like_op<operations::binary::BinaryCompositeOpType::DIV_NO_NAN>(
         input_tensor_a, input_tensor_b, memory_config);
 }
 
 inline Tensor div_no_nan(
     const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return operations::binary::ExecuteDivLikeOps<operations::binary::BinaryCompositeOpType::DIV_NO_NAN>::invoke(
+    return operations::binary::div_like_op<operations::binary::BinaryCompositeOpType::DIV_NO_NAN>(
         input_tensor_a, value, memory_config);
 }
 
@@ -726,13 +630,13 @@ inline Tensor floor_div(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return operations::binary::ExecuteDivLikeOps<operations::binary::BinaryCompositeOpType::FLOOR_DIV>::invoke(
+    return operations::binary::div_like_op<operations::binary::BinaryCompositeOpType::FLOOR_DIV>(
         input_tensor_a, input_tensor_b, memory_config);
 }
 
 inline Tensor floor_div(
     const Tensor& input_tensor_a, float value, const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return operations::binary::ExecuteDivLikeOps<operations::binary::BinaryCompositeOpType::FLOOR_DIV>::invoke(
+    return operations::binary::div_like_op<operations::binary::BinaryCompositeOpType::FLOOR_DIV>(
         input_tensor_a, value, memory_config);
 }
 
@@ -740,7 +644,7 @@ inline Tensor outer(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return operations::binary::ExecuteBinaryCompositeOps<operations::binary::BinaryCompositeOpType::OUTER>::invoke(
+    return operations::binary::binary_composite_op<operations::binary::BinaryCompositeOpType::OUTER>(
         input_tensor_a, input_tensor_b, memory_config);
 }
 
@@ -757,7 +661,7 @@ inline Tensor div(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::ExecuteDiv::invoke(
+    return operations::binary::div(
         input_a,
         input_b,
         fast_and_approximate_mode,
@@ -785,7 +689,7 @@ inline Tensor div(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::ExecuteDiv::invoke(
+    return operations::binary::div(
         input,
         value,
         fast_and_approximate_mode,
@@ -805,7 +709,7 @@ inline Tensor remainder(
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::ExecuteBinaryRemainder::invoke(input_a, input_b, output_mem_config, sub_core_grids);
+    return operations::binary::remainder(input_a, input_b, output_mem_config, sub_core_grids);
 }
 
 inline Tensor remainder(
@@ -813,7 +717,7 @@ inline Tensor remainder(
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::ExecuteBinaryRemainder::invoke(input_tensor, scalar, output_mem_config, sub_core_grids);
+    return operations::binary::remainder(input_tensor, scalar, output_mem_config, sub_core_grids);
 }
 
 inline Tensor fmod(
@@ -821,7 +725,7 @@ inline Tensor fmod(
     const Tensor& input_b,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::ExecuteBinaryFmod::invoke(input_a, input_b, output_mem_config, sub_core_grids);
+    return operations::binary::fmod(input_a, input_b, output_mem_config, sub_core_grids);
 }
 
 inline Tensor fmod(
@@ -829,32 +733,32 @@ inline Tensor fmod(
     float scalar,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::ExecuteBinaryFmod::invoke(input_tensor, scalar, output_mem_config, sub_core_grids);
+    return operations::binary::fmod(input_tensor, scalar, output_mem_config, sub_core_grids);
 }
 
 inline Tensor polyval(
     const Tensor& input_tensor_a,
     const std::vector<float>& coeffs,
     const std::optional<MemoryConfig>& memory_config = std::nullopt) {
-    return operations::binary::ExecuteBinaryCompositeOpsPolyval<
-        operations::binary::BinaryCompositeOpType::POLYVAL>::invoke(input_tensor_a, coeffs, memory_config);
+    return operations::binary::binary_composite_op_polyval<operations::binary::BinaryCompositeOpType::POLYVAL>(
+        input_tensor_a, coeffs, memory_config);
 }
 
 inline Tensor prelu(
     const Tensor& input_a, const Tensor& input_b, const std::optional<MemoryConfig>& output_mem_config = std::nullopt) {
-    return operations::binary::ExecutePrelu::invoke(input_a, input_b, output_mem_config);
+    return operations::binary::prelu(input_a, input_b, output_mem_config);
 }
 
 inline Tensor prelu(
     const Tensor& input_tensor,
     const std::array<float, 1>& weight,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt) {
-    return operations::binary::ExecutePrelu::invoke(input_tensor, weight, output_mem_config);
+    return operations::binary::prelu(input_tensor, weight, output_mem_config);
 }
 
 inline Tensor prelu(
     const Tensor& input_tensor, float weight, const std::optional<MemoryConfig>& output_mem_config = std::nullopt) {
-    return operations::binary::ExecutePrelu::invoke(input_tensor, weight, output_mem_config);
+    return operations::binary::prelu(input_tensor, weight, output_mem_config);
 }
 
 inline Tensor rsub(
@@ -867,7 +771,7 @@ inline Tensor rsub(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteRsub::invoke(
+    return operations::binary::rsub(
         input_tensor_a_arg,
         input_tensor_b_arg,
         output_dtype,
@@ -889,7 +793,7 @@ inline Tensor rsub(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteRsub::invoke(
+    return operations::binary::rsub(
         input_tensor,
         input_b,
         output_dtype,
@@ -910,7 +814,7 @@ inline Tensor bitwise_and(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteBitwiseAnd::invoke(
+    return operations::binary::bitwise_and(
         input_tensor_a_arg,
         input_tensor_b_arg,
         memory_config,
@@ -930,7 +834,7 @@ inline Tensor bitwise_and(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteBitwiseAnd::invoke(
+    return operations::binary::bitwise_and(
         input_tensor,
         input_b,
         memory_config,
@@ -950,7 +854,7 @@ inline Tensor bitwise_or(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteBitwiseOr::invoke(
+    return operations::binary::bitwise_or(
         input_tensor_a_arg,
         input_tensor_b_arg,
         memory_config,
@@ -970,7 +874,7 @@ inline Tensor bitwise_or(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteBitwiseOr::invoke(
+    return operations::binary::bitwise_or(
         input_tensor,
         input_b,
         memory_config,
@@ -990,7 +894,7 @@ inline Tensor bitwise_xor(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteBitwiseXor::invoke(
+    return operations::binary::bitwise_xor(
         input_tensor_a_arg,
         input_tensor_b_arg,
         memory_config,
@@ -1010,7 +914,7 @@ inline Tensor bitwise_xor(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteBitwiseXor::invoke(
+    return operations::binary::bitwise_xor(
         input_tensor,
         input_b,
         memory_config,
@@ -1030,7 +934,7 @@ inline Tensor bitwise_left_shift(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteBitwiseLeftShift::invoke(
+    return operations::binary::bitwise_left_shift(
         input_tensor_a_arg,
         input_tensor_b_arg,
         memory_config,
@@ -1050,7 +954,7 @@ inline Tensor bitwise_left_shift(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteBitwiseLeftShift::invoke(
+    return operations::binary::bitwise_left_shift(
         input_tensor,
         input_b,
         memory_config,
@@ -1070,7 +974,7 @@ inline Tensor logical_left_shift(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteLogicalLeftShift::invoke(
+    return operations::binary::bitwise_left_shift(
         input_tensor_a_arg,
         input_tensor_b_arg,
         memory_config,
@@ -1090,7 +994,7 @@ inline Tensor logical_left_shift(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteLogicalLeftShift::invoke(
+    return operations::binary::bitwise_left_shift(
         input_tensor,
         input_b,
         memory_config,
@@ -1110,7 +1014,7 @@ inline Tensor bitwise_right_shift(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteBitwiseRightShift::invoke(
+    return operations::binary::bitwise_right_shift(
         input_tensor_a_arg,
         input_tensor_b_arg,
         memory_config,
@@ -1130,7 +1034,7 @@ inline Tensor bitwise_right_shift(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecuteBitwiseRightShift::invoke(
+    return operations::binary::bitwise_right_shift(
         input_tensor,
         input_b,
         memory_config,
@@ -1146,7 +1050,7 @@ inline Tensor pow(
     int32_t exponent,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return operations::binary::ExecutePower::invoke(input_tensor, exponent, output_mem_config, optional_output_tensor);
+    return operations::binary::pow(input_tensor, exponent, output_mem_config, optional_output_tensor);
 }
 
 inline Tensor pow(
@@ -1154,7 +1058,7 @@ inline Tensor pow(
     float exponent,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt) {
-    return operations::binary::ExecutePower::invoke(input_a, exponent, output_mem_config, optional_output_tensor);
+    return operations::binary::pow(input_a, exponent, output_mem_config, optional_output_tensor);
 }
 
 inline Tensor pow(
@@ -1167,7 +1071,7 @@ inline Tensor pow(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecutePower::invoke(
+    return operations::binary::pow(
         input_a,
         exponent,
         dtype,
@@ -1189,7 +1093,7 @@ inline Tensor pow(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt) {
-    return operations::binary::ExecutePower::invoke(
+    return operations::binary::pow(
         input_tensor,
         exponent,
         dtype,
