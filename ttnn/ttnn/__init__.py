@@ -404,7 +404,6 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
     MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
-    matmul_descriptor,
 )
 
 from ttnn.operations.normalization import (

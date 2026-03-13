@@ -184,34 +184,12 @@ void LayerNormShardedProgramFactory::override_runtime_arguments(
 }
 
 tt::tt_metal::ProgramDescriptor LayerNormShardedProgramFactory::create_descriptor(
-    const LayerNormParams& operation_attributes,
-    const LayerNormInputs& tensor_args,
-    Tensor& tensor_return_value,
-    const std::optional<CoreRangeSet>& core_range_set) {
+    const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace sharded_layernorm_helpers;
 
     // For sharded layernorm, core ranges are derived from tensor shard spec.
-    // If core_range_set is provided, validate that shard spec cores are within it.
     const auto& input_shard_spec = tensor_args.input.shard_spec();
     TT_FATAL(input_shard_spec.has_value(), "Sharded layernorm requires input tensor to have a shard spec");
-
-    if (core_range_set.has_value()) {
-        const auto& shard_grid = input_shard_spec.value().grid;
-        // Verify that all cores in the shard spec are within the provided core_range_set
-        for (const auto& shard_core_range : shard_grid.ranges()) {
-            for (auto x = shard_core_range.start_coord.x; x <= shard_core_range.end_coord.x; ++x) {
-                for (auto y = shard_core_range.start_coord.y; y <= shard_core_range.end_coord.y; ++y) {
-                    CoreCoord core = {x, y};
-                    TT_FATAL(
-                        core_range_set.value().contains(core),
-                        "Sharded tensor shard spec core ({}, {}) is not within the provided core_range_set. "
-                        "The sharded tensor must lie entirely within the input core range.",
-                        x,
-                        y);
-                }
-            }
-        }
-    }
 
     // Extract from operation_attributes and tensor_args
     const auto& a = tensor_args.input;

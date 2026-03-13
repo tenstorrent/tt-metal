@@ -28,7 +28,7 @@ def layer_norm(
 
     Args:
         input_tensor: The input tensor (must be on device).
-        core_range_set: Unused — kept for API compatibility.
+        core_range_set: Optional core range set for fusion placement. Embedded into the program config.
         epsilon: Small constant for numerical stability (default: 1e-12).
         weight: Optional weight (gamma) tensor for scaling.
         bias: Optional bias (beta) tensor for shifting.
@@ -40,6 +40,12 @@ def layer_norm(
     Returns:
         OpDescriptor containing the program descriptor, input tensors, and output tensors.
     """
+    # If core_range_set is provided, embed it in the program config for fusion placement.
+    if core_range_set is not None and program_config is None:
+        program_config = ttnn.LayerNormDefaultProgramConfig(core_range_set=core_range_set)
+    elif core_range_set is not None and isinstance(program_config, ttnn.LayerNormDefaultProgramConfig):
+        program_config.core_range_set = core_range_set
+
     descriptor, output = ttnn.layer_norm_descriptor(
         input_tensor,
         epsilon=epsilon,

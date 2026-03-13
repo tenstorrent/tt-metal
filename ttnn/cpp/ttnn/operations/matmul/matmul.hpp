@@ -8,10 +8,8 @@
 #include <tt-metalium/core_coord.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
-#include "ttnn/operations/matmul/device/matmul_device_operation.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
-#include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn {
@@ -62,18 +60,6 @@ std::vector<Tensor> matmul_batched_weights(
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<const GlobalCircularBuffer>& global_cb = std::nullopt,
     const std::optional<tt::tt_metal::SubDeviceId>& sub_device_id = std::nullopt);
-
-ttnn::device_operation::OpDescriptorResult<ttnn::prim::MatmulDeviceOperation> matmul_descriptor(
-    const Tensor& input_tensor_a,
-    const Tensor& input_tensor_b,
-    bool transpose_a = false,
-    bool transpose_b = false,
-    const std::optional<const MemoryConfig>& memory_config = std::nullopt,
-    std::optional<const DataType> dtype = std::nullopt,
-    const std::optional<const MatmulProgramConfig>& program_config = std::nullopt,
-    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    std::optional<const CoreGrid> core_grid = std::nullopt,
-    const std::optional<const tt::tt_metal::Tile>& output_tile = std::nullopt);
 
 Tensor linear(
     const Tensor& input_tensor_a,
@@ -133,7 +119,6 @@ using operations::matmul::addmm;
 using operations::matmul::linear;
 using operations::matmul::matmul;
 using operations::matmul::matmul_batched_weights;
-using operations::matmul::matmul_descriptor;
 using operations::matmul::sparse_matmul;
 
 }  // namespace ttnn

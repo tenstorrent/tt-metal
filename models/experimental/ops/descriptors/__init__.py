@@ -10,6 +10,5 @@ Provides operation descriptors for creating and composing parallel operations.
 
 from .normalization.rms_norm import rms_norm
 from .normalization.layer_norm import layer_norm
-from .matmul import matmul
 
-__all__ = ["rms_norm", "layer_norm", "matmul"]
+__all__ = ["rms_norm", "layer_norm"]
