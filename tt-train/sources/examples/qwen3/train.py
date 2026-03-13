@@ -62,12 +62,6 @@ Usage:
     python train.py --model_path Qwen/Qwen3-0.6B --max_seq_len 128 \\
         --dataset wikitext --steps 500 --lr 1e-4 --lora_rank 8
 
-    # Checkpoint with scattered intermediates (further memory savings;
-    # scatters saved activations across TP devices, requires batch_size % tp_size == 0):
-    python train.py --model_path Qwen/Qwen3-8B --max_seq_len 128 \\
-        --dataset wikitext --steps 500 --lr 1e-4 --mesh_shape 1 8 --checkpoint \\
-        --scatter_intermediates
-
     # Save checkpoints + TensorBoard logs (view with `tensorboard --logdir ./output/logs`):
     python train.py --model_path Qwen/Qwen3-0.6B --max_seq_len 128 \\
         --dataset wikitext --steps 500 --lr 1e-4 --save_dir ./output
@@ -348,14 +342,6 @@ def main():
         "Trades compute for memory during backward.",
     )
     parser.add_argument(
-        "--scatter_intermediates",
-        action="store_true",
-        default=False,
-        help="When used with --checkpoint, scatter saved activations across "
-        "TP devices to reduce per-device memory by tp_size. "
-        "Requires batch_size %% tp_size == 0.",
-    )
-    parser.add_argument(
         "--track_memory",
         type=int,
         nargs="?",
@@ -585,7 +571,6 @@ def main():
         dp_size=dp_size,
         tp_size=tp_size,
         checkpoint=args.checkpoint,
-        scatter_intermediates=args.scatter_intermediates,
         track_memory=args.track_memory,
         sharded_loss=args.sharded_loss,
     )
@@ -764,11 +749,7 @@ def main():
     print(
         f"  Gradient clipping: {'%.1f' % args.clip_grad_norm if use_clip else 'disabled'}"
     )
-    ckpt_status = "disabled"
-    if args.checkpoint:
-        ckpt_status = "enabled" + (
-            " + scatter_intermediates" if args.scatter_intermediates else ""
-        )
+    ckpt_status = "enabled" if args.checkpoint else "disabled"
     print(f"  Gradient checkpointing: {ckpt_status}")
     print(f"  Freeze embedding/lm_head: {args.freeze_embeddings}")
     if lora_config:

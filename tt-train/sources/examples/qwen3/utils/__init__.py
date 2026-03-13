@@ -12,7 +12,6 @@ from utils.lora import (  # noqa: F401
 from utils.checkpoint import (  # noqa: F401
     CheckpointFunction,
     checkpoint,
-    checkpoint_scattered,
 )
 from utils.dataset import (  # noqa: F401
     TextDataset,

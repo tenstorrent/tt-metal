@@ -56,10 +56,7 @@ from ttml.modules import AbstractModuleBase, ModuleList, Parameter
 
 from model_qwen3 import Qwen3Config, Qwen3RMSNorm, ConcatLastDim, linear
 from utils.memory import memory_snapshot
-from utils.checkpoint import (  # noqa: F401 — re-exported for callers
-    checkpoint,
-    checkpoint_scattered,
-)
+from utils.checkpoint import checkpoint  # noqa: F401 — re-exported for callers
 from utils.param_utils import (
     unpermute_proj_rows,
     unpermute_norm_weights,
@@ -73,7 +70,6 @@ from utils.tensor_utils import (
     make_replicated_zeros,
 )
 from utils.distributed_ops import (
-    all_gather_fwd_scatter_bwd,
     _vocab_parallel_embedding,
 )
 
@@ -117,7 +113,9 @@ class ColumnParallelLinear(AbstractModuleBase):
         bias_t = self.col_bias.tensor if self.col_bias is not None else None
         x = linear(x, self.weight.tensor, bias_t)
         if self.gather_output:
-            x = all_gather_fwd_scatter_bwd(x, 3, self.shard_dim)
+            x = ttml.ops.distributed.all_gather(
+                x, 3, self.shard_dim, ttml.ops.distributed.GradOutputType.REPLICATED
+            )
         return x
 
 
@@ -363,7 +361,6 @@ class DistributedQwen3Model(AbstractModuleBase):
         config: Qwen3Config,
         shard_dim=None,
         use_checkpoint=False,
-        scatter_intermediates=False,
         track_memory=0,
         tied_embed_weight=None,
     ):
@@ -371,7 +368,6 @@ class DistributedQwen3Model(AbstractModuleBase):
         self.config = config
         self.shard_dim = shard_dim
         self.use_checkpoint = use_checkpoint
-        self.scatter_intermediates = scatter_intermediates
         self.track_memory = track_memory
         self.tied_embed_weight = tied_embed_weight
         vocab_tiled = ((config.vocab_size + 31) // 32) * 32
@@ -401,16 +397,16 @@ class DistributedQwen3Model(AbstractModuleBase):
             )
         else:
             h = ttml.ops.embedding.embedding(input_ids, self.embed_tokens.tensor)
-            h = all_gather_fwd_scatter_bwd(h, 3, self.shard_dim)
+            h = ttml.ops.distributed.all_gather(
+                h, 3, self.shard_dim, ttml.ops.distributed.GradOutputType.REPLICATED
+            )
         if self.track_memory:
             h = memory_snapshot(h, "AFTER_EMBEDDING_FWD", "AFTER_EMBEDDING_BWD")
         position_offset = 0
         if past_key_values is not None:
             position_offset = past_key_values.get_seq_length()
         for i, layer in enumerate(self.layers):
-            if self.use_checkpoint and self.scatter_intermediates:
-                h = checkpoint_scattered(layer, 0, self.shard_dim, h, attention_mask)
-            elif self.use_checkpoint:
+            if self.use_checkpoint:
                 h = checkpoint(
                     layer, h, attention_mask, past_key_values, position_offset
                 )
@@ -453,7 +449,6 @@ class DistributedQwen3ForCausalLM(AbstractModuleBase):
         tie_word_embeddings=False,
         shard_dim=None,
         use_checkpoint=False,
-        scatter_intermediates=False,
         track_memory=0,
         sharded_loss=False,
     ):
@@ -479,7 +474,6 @@ class DistributedQwen3ForCausalLM(AbstractModuleBase):
             config,
             shard_dim,
             use_checkpoint=use_checkpoint,
-            scatter_intermediates=scatter_intermediates,
             track_memory=track_memory,
             tied_embed_weight=(
                 self.lm_head.weight.tensor if tie_word_embeddings else None

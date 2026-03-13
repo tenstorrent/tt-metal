@@ -23,7 +23,6 @@ All three scripts load a pretrained HuggingFace Qwen3 model and accept the same 
 | `--mesh_shape ROWS COLS` | Device mesh `[DP, TP]` | `1 1` |
 | `--sharded_loss` | Keep LM head output vocab-sharded (distributed cross-entropy) | off |
 | `--checkpoint` | Gradient checkpointing (activation recomputation) | off |
-| `--scatter_intermediates` | Scatter saved activations across TP devices | off |
 | `--track_memory [N]` | Memory tracking (snapshot every N-th layer) | off |
 
 ### 1. `generate.py` — Forward / Generation Correctness
@@ -85,17 +84,13 @@ python gradients.py --model_path Qwen/Qwen3-8B --prompt "Once upon a time" \
 python gradients.py --model_path Qwen/Qwen3-8B --prompt "Once upon a time" \
     --max_seq_len 128 --mesh_shape 1 8 --checkpoint
 
-# TP + checkpointing + scattered intermediates
-python gradients.py --model_path Qwen/Qwen3-8B --prompt "Once upon a time" \
-    --max_seq_len 128 --mesh_shape 1 8 --checkpoint --scatter_intermediates
-
 # Data parallelism
 python gradients.py --model_path Qwen/Qwen3-0.6B --prompt "Once upon a time" \
     --max_seq_len 128 --mesh_shape 4 1
 
 # DP + TP
 python gradients.py --model_path Qwen/Qwen3-8B --prompt "Once upon a time" \
-    --max_seq_len 128 --mesh_shape 4 8 --checkpoint --scatter_intermediates
+    --max_seq_len 128 --mesh_shape 4 8 --checkpoint
 ```
 
 **Extra flags:** `--prompt`, `--batch_size`
@@ -114,10 +109,10 @@ python train.py --model_path Qwen/Qwen3-0.6B --max_seq_len 128 \
 python train.py --model_path Qwen/Qwen3-8B --max_seq_len 128 \
     --dataset wikitext --steps 500 --lr 1e-4 --mesh_shape 1 8
 
-# TP + gradient checkpointing + scattered intermediates
+# TP + gradient checkpointing
 python train.py --model_path Qwen/Qwen3-8B --max_seq_len 128 \
     --dataset wikitext --steps 500 --lr 1e-4 --mesh_shape 1 8 \
-    --checkpoint --scatter_intermediates
+    --checkpoint
 
 # LoRA fine-tuning
 python train.py --model_path Qwen/Qwen3-0.6B --max_seq_len 128 \
@@ -231,15 +226,7 @@ the [Distributed Training documentation](https://github.com/tenstorrent/tt-metal
 
 ## Nice-to-Have TODOs
 
-- **Slow generation** — decode-step attention masks and KV cache updates
-  involve host-to-device communication every token. Same applies to
-  sampling/generation with sharded loss / scattered last block.
-
 - **VocabParallelEmbedding & sharded loss** — `_vocab_parallel_embedding`
   (`utils/distributed_ops.py`) and `sharded_cross_entropy_loss`
   (`utils/sharded_loss.py`) are composite ops with NumPy host-side logic.
   Implement as proper device kernels.
-
-- **AllGatherFwdScatterBwd** — (`utils/distributed_ops.py`) is a workaround
-  custom autograd op (all_gather forward, scatter backward). Replace with the
-  appropriate built-in op when one becomes available.

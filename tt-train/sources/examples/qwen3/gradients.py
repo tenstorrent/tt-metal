@@ -21,17 +21,13 @@ Usage:
     python gradients.py --model_path Qwen/Qwen3-8B --prompt "Once upon a time" \\
         --max_seq_len 128 --mesh_shape 1 8 --checkpoint
 
-    # Checkpoint with scattered intermediates:
-    python gradients.py --model_path Qwen/Qwen3-8B --prompt "Once upon a time" \\
-        --max_seq_len 128 --mesh_shape 1 8 --checkpoint --scatter_intermediates
-
     # Data parallelism:
     python gradients.py --model_path Qwen/Qwen3-0.6B --prompt "Once upon a time" \\
         --max_seq_len 128 --mesh_shape 4 1
 
     # Combined DP + TP:
     python gradients.py --model_path Qwen/Qwen3-8B --prompt "Once upon a time" \\
-        --max_seq_len 128 --mesh_shape 4 8 --checkpoint --scatter_intermediates
+        --max_seq_len 128 --mesh_shape 4 8 --checkpoint
 """
 
 import argparse
@@ -544,14 +540,6 @@ def main():
         "peak memory for the LM head forward/backward.",
     )
     parser.add_argument(
-        "--scatter_intermediates",
-        action="store_true",
-        default=False,
-        help="When used with --checkpoint, scatter saved activations across "
-        "TP devices to reduce per-device memory by tp_size. "
-        "Requires batch_size %% tp_size == 0.",
-    )
-    parser.add_argument(
         "--batch_size",
         type=int,
         default=1,
@@ -634,7 +622,6 @@ def main():
         dp_size=dp_size,
         tp_size=tp_size,
         checkpoint=args.checkpoint,
-        scatter_intermediates=args.scatter_intermediates,
         track_memory=args.track_memory,
         sharded_loss=args.sharded_loss,
     )

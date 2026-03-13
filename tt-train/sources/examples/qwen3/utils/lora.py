@@ -125,9 +125,12 @@ class LoRAColumnParallelLinear(AbstractModuleBase):
         )
         base_out = ttml.ops.linear.linear(x_b, self.base_layer.weight.tensor, bias_t)
         if self.base_layer.gather_output:
-            import model_qwen3_distributed as _md
-
-            base_out = _md.all_gather_fwd_scatter_bwd(base_out, 3, self.shard_dim)
+            base_out = ttml.ops.distributed.all_gather(
+                base_out,
+                3,
+                self.shard_dim,
+                ttml.ops.distributed.GradOutputType.REPLICATED,
+            )
         h = ttml.ops.linear.linear(x_b, self.lora_A.tensor, None)
         lora_out = ttml.ops.linear.linear(h, self.lora_B.tensor, None)
         if self.scaling != 1.0:

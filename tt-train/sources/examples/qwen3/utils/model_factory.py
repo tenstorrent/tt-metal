@@ -34,7 +34,6 @@ def create_ttml_model(
     dp_size=1,
     tp_size=1,
     checkpoint=False,
-    scatter_intermediates=False,
     track_memory=False,
     sharded_loss=False,
 ):
@@ -63,15 +62,11 @@ def create_ttml_model(
                 tie_word_embeddings=tie,
                 shard_dim=shard_dim,
                 use_checkpoint=checkpoint,
-                scatter_intermediates=scatter_intermediates,
                 track_memory=track_memory,
                 sharded_loss=sharded_loss,
             )
             if checkpoint:
-                ckpt_msg = "ENABLED"
-                if scatter_intermediates:
-                    ckpt_msg += " (scatter_intermediates=True)"
-                print(f"  Gradient checkpointing: {ckpt_msg}")
+                print("  Gradient checkpointing: ENABLED")
             if sharded_loss:
                 print("  Sharded loss: ENABLED (LM head gather_output=False)")
         else:
@@ -84,11 +79,6 @@ def create_ttml_model(
             )
             if checkpoint:
                 print("  Gradient checkpointing: ENABLED")
-            if scatter_intermediates:
-                print(
-                    "  WARNING: --scatter_intermediates requires "
-                    "--checkpoint and TP mode, ignoring."
-                )
 
     print(f"  Model created in {time.time() - t0:.2f}s")
     return model, config, tie, shard_dim, mode_str

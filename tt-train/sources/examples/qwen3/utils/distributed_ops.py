@@ -5,10 +5,6 @@
 """Custom distributed autograd ops for tensor-parallel Qwen3.
 
 Provides:
-  - AllGatherFwdScatterBwd / all_gather_fwd_scatter_bwd:
-      all_gather in forward, scatter (reduce_scatter / tp_size) in backward.
-      Correctly averages gradients when the gathered output feeds replicated
-      per-device computation (e.g. a replicated loss).
   - _BroadcastMul:
       Multiply by a broadcast-compatible constant with no gradient for the
       second operand.  Works around ttml.ops.binary.mul not reducing broadcast
@@ -24,42 +20,6 @@ import ttnn
 import ttml
 
 from utils.tensor_utils import get_device, get_tp_size
-
-
-# ---------------------------------------------------------------------------
-# AllGatherFwdScatterBwd — custom autograd op
-# ---------------------------------------------------------------------------
-
-
-class AllGatherFwdScatterBwd(ttml.autograd.Function):
-    """all_gather forward, scatter (reduce_scatter / tp_size) backward.
-
-    The standard all_gather backward is reduce_scatter, which sums tp_size
-    identical gradients when the gathered output feeds into identical
-    per-device computation (e.g. a replicated loss).  This op uses scatter
-    (reduce_scatter / tp_size) as backward, which correctly averages them.
-    """
-
-    @staticmethod
-    def forward(ctx, x, dim, shard_dim):
-        ctx.dim = dim
-        ctx.shard_dim = shard_dim
-        # all_gather on a detached tensor (bypass autograd of the library op)
-        temp = ttml.autograd.create_tensor(x.get_value(), requires_grad=False)
-        gathered = ttml.ops.distributed.all_gather(temp, dim, shard_dim)
-        return ttml.autograd.create_tensor(gathered.get_value())
-
-    @staticmethod
-    def backward(ctx, grad_output):
-        # scatter = reduce_scatter / tp_size (bypass autograd)
-        temp = ttml.autograd.create_tensor(grad_output, requires_grad=False)
-        scattered = ttml.ops.distributed.scatter(temp, ctx.dim, ctx.shard_dim)
-        return scattered.get_value()
-
-
-def all_gather_fwd_scatter_bwd(x, dim, shard_dim):
-    """all_gather forward, scatter backward — drop-in replacement."""
-    return AllGatherFwdScatterBwd.apply(x, dim, shard_dim)
 
 
 # ---------------------------------------------------------------------------
