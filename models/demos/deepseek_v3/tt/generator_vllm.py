@@ -69,6 +69,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             model_path=Path(model_path),
             cache_dir=Path(cache_dir),
             tokenizer=tokenizer,
+            max_seq_len=max_seq_len,
         )
 
         return model

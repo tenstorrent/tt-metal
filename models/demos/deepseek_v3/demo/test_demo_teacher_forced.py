@@ -123,13 +123,14 @@ def test_demo_teacher_forcing_accuracy(
     tf_prompt_len = int(payload["tf_prompt_len"])
     saved_max_new_tokens = int(payload.get("max_new_tokens"))
 
-    max_supported_new_tokens = GENERATOR_MAX_SEQ_LEN - tf_prompt_len
+    configured_max_seq_len = GENERATOR_MAX_SEQ_LEN
+    max_supported_new_tokens = configured_max_seq_len - tf_prompt_len
     if max_supported_new_tokens <= 0:
-        pytest.skip(f"Prompt length {tf_prompt_len} exceeds max_seq_len {GENERATOR_MAX_SEQ_LEN}.")
+        pytest.skip(f"Prompt length {tf_prompt_len} exceeds max_seq_len {configured_max_seq_len}.")
     if max_new_tokens > max_supported_new_tokens:
         pytest.skip(
             f"Requested max_new_tokens={max_new_tokens} exceeds generator capacity: "
-            f"max_seq_len={GENERATOR_MAX_SEQ_LEN}, prompt_len={tf_prompt_len} -> max_new_tokens<={max_supported_new_tokens}."
+            f"max_seq_len={configured_max_seq_len}, prompt_len={tf_prompt_len} -> max_new_tokens<={max_supported_new_tokens}."
         )
 
     requested_system_name = os.getenv("MESH_DEVICE")
@@ -193,6 +194,7 @@ def test_demo_teacher_forcing_accuracy(
         cache_dir=CACHE_DIR,
         random_weights=False,
         max_new_tokens=max_new_tokens,
+        max_seq_len=configured_max_seq_len,
         repeat_batches=1,
         token_accuracy=True,
         reference_file=reference_file,

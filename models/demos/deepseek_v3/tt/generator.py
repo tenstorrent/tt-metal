@@ -33,7 +33,7 @@ from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
-MAX_SEQ_LEN = 32768
+DEFAULT_MAX_SEQ_LEN = 32768
 
 
 def _build_verify_alias_page_table_host(
@@ -176,7 +176,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         )
         model_max_seq_len = int(self.hf_config.max_position_embeddings)
-        requested_max_seq_len = MAX_SEQ_LEN if max_seq_len is None else int(max_seq_len)
+        requested_max_seq_len = DEFAULT_MAX_SEQ_LEN if max_seq_len is None else int(max_seq_len)
         if requested_max_seq_len <= 0:
             raise ValueError(f"max_seq_len must be > 0, got {requested_max_seq_len}")
         if requested_max_seq_len % ttnn.TILE_SIZE != 0:
@@ -185,11 +185,11 @@ class DeepseekGenerator(WarmupForwardMixin):
             raise ValueError(
                 f"max_seq_len {requested_max_seq_len} exceeds model-supported context length {model_max_seq_len}"
             )
-        if requested_max_seq_len != MAX_SEQ_LEN:
+        if requested_max_seq_len != DEFAULT_MAX_SEQ_LEN:
             logger.warning(
                 "Using overridden max_seq_len={} (default={}, model supports up to {}).",
                 requested_max_seq_len,
-                MAX_SEQ_LEN,
+                DEFAULT_MAX_SEQ_LEN,
                 model_max_seq_len,
             )
         self.hf_config.max_seq_len = requested_max_seq_len

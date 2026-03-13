@@ -145,7 +145,7 @@ class RotarySetup:
             raise ValueError(
                 f"position idxs must be < max_seq_len ({self.hf_config.max_seq_len}); "
                 f"got max position {max_pos}. "
-                "Trim inputs or increase the configured max_seq_len (DeepseekGenerator MAX_SEQ_LEN)."
+                "Trim inputs or increase the configured max_seq_len."
             )
 
         # Add padding if needed
