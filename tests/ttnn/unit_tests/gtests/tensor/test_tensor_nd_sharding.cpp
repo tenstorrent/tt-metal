@@ -138,6 +138,9 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
 
     const auto& buffer = tensor.mesh_buffer();
 
+    // TODO(#38691): Clean this up after we provide non-shared-ptr overloads for these methods.
+    const auto& shared_mesh_buffer = tensor.device_storage().get_mesh_buffer_leak_ownership();
+
     size_t region_size = buffer.page_size();
     while (buffer.size() % (region_size * 2) == 0) {
         region_size *= 2;
@@ -157,13 +160,13 @@ TEST_P(NDShardingTests, RegionWriteReadTest) {
             distributed::ShardDataTransfer{distributed::MeshCoordinate(0, 0)}
                 .host_data(reinterpret_cast<std::byte*>(partial_readback_data.data()) + region_offset)
                 .region(buffer_region);
-        device_->mesh_command_queue().enqueue_write_shards(buffer, {write_shard_data_transfer}, true);
-        device_->mesh_command_queue().enqueue_read_shards({read_shard_data_transfer}, buffer, true);
+        device_->mesh_command_queue().enqueue_write_shards(shared_mesh_buffer, {write_shard_data_transfer}, true);
+        device_->mesh_command_queue().enqueue_read_shards({read_shard_data_transfer}, shared_mesh_buffer, true);
     }
     EXPECT_EQ(tensor_data, partial_readback_data);
 
     distributed::ReadShard(
-        device_->mesh_command_queue(), full_readback_data, buffer, distributed::MeshCoordinate(0, 0), true);
+        device_->mesh_command_queue(), full_readback_data, shared_mesh_buffer, distributed::MeshCoordinate(0, 0), true);
     EXPECT_EQ(tensor_data, full_readback_data);
 }
 
