@@ -334,7 +334,7 @@ def _get_t5_prompt_embeds(models, prompt, num_videos_per_prompt=1, max_sequence_
     if getattr(text_encoder, "mesh_device", None) is not None:
         mesh_device = text_encoder.mesh_device
         tt_input = ttnn.from_torch(text_input_ids, dtype=ttnn.uint32, device=mesh_device)
-        tt_mask = ttnn.from_torch(mask.float(), device=mesh_device)
+        tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, device=mesh_device)
         tt_outputs = text_encoder(tt_input, attention_mask=tt_mask)
         last_hidden = tt_outputs[-1]
         prompt_embeds = ttnn.to_torch(last_hidden).float()
@@ -347,7 +347,6 @@ def _get_t5_prompt_embeds(models, prompt, num_videos_per_prompt=1, max_sequence_
             text_input_ids.to(text_encoder_device), mask.to(text_encoder_device)
         ).last_hidden_state
         prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
-
     prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
     prompt_embeds = torch.stack(
         [torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))]) for u in prompt_embeds],
