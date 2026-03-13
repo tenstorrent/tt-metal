@@ -4,7 +4,7 @@
 
 #pragma once
 
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 #include <algorithm>
