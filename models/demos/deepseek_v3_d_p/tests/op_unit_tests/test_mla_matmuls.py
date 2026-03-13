@@ -31,6 +31,18 @@ prog_config_mm5_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     fuse_batch=False,
                     fused_activation=None,)
 
+# [100, 128] * [128, 224]
+prog_config_mm5_bh_25k = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+                    in0_block_w=8,
+                    out_subblock_h=1,
+                    out_subblock_w=7,
+                    per_core_M=10,
+                    per_core_N=21,
+                    transpose_mcast=False,
+                    fuse_batch=False,
+                    fused_activation=None,)
+
 # [128, 56] * [56, 18]
 prog_config_mm3_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
@@ -38,6 +50,18 @@ prog_config_mm3_bh = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                     out_subblock_h=1,
                     out_subblock_w=2,
                     per_core_M=13,
+                    per_core_N=2,
+                    transpose_mcast=False,
+                    fuse_batch=False,
+                    fused_activation=None,)
+
+# [100, 56] * [56, 18]
+prog_config_mm3_bh_25k = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+                    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+                    in0_block_w=8,
+                    out_subblock_h=2,
+                    out_subblock_w=2,
+                    per_core_M=10,
                     per_core_N=2,
                     transpose_mcast=False,
                     fuse_batch=False,
@@ -55,9 +79,27 @@ prog_config_mm4_bh = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                     fused_activation=None,
                     mcast_in0=False,)
 
-SEQ_LEN = 32 * 1024
+# [32, 100, 16] * [32, 16, 4]
+prog_config_mm4_bh_25k = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
+                    compute_with_storage_grid_size=compute_with_storage_grid_size_11x10,
+                    in0_block_w=16,
+                    out_subblock_h=1,
+                    out_subblock_w=4,
+                    per_core_M=1,
+                    per_core_N=4,
+                    fuse_batch=False,
+                    fused_activation=None,
+                    mcast_in0=False,)
+
 HIDDEN_SIZE = 7168
 NUM_HEADS = 128
+
+# Obtained by dividing 128 * 1024 over 4 galaxies
+SEQ_LEN_32K = 32768
+
+# Obtained by dividing 100 * 1024 over 4 galaxies
+SEQ_LEN_25K = 25600
+
 # Mesh configuration: (sp_axis=0, tp_axis=1)
 # SP (Sequence Parallelism) on axis 0, TP (Tensor Parallelism) on axis 1
 @pytest.mark.parametrize(
@@ -77,12 +119,19 @@ NUM_HEADS = 128
 )
 @pytest.mark.parametrize("in0_x, in0_y, in0_z, in0_w, in0_sp_sharded, in0_tp_sharded, in0_tp_shard_dim, in0_dtype, in1_x, in1_y, in1_z, in1_w, in1_tp_sharded, in1_tp_shard_dim, in1_dtype, out_dtype, prog_config, act_mem_config, out_mem_config",
     [
-        (1, 1, SEQ_LEN, HIDDEN_SIZE, True, True, 3, ttnn.bfloat16, 1, 1, HIDDEN_SIZE, 1536, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, None, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        (1, 1, SEQ_LEN, 1536, True, False, None, ttnn.bfloat16, 1, 1, 1536, 24576, True, 3, ttnn.bfloat8_b, ttnn.bfloat16, None, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        (1, NUM_HEADS, SEQ_LEN, 128, True, True, 1, ttnn.bfloat16, 1, NUM_HEADS, 128, 512, True, 1, ttnn.bfloat8_b, ttnn.bfloat16, None, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        (1, 1, SEQ_LEN, HIDDEN_SIZE, True, True, 3, ttnn.bfloat16, 1, 1, HIDDEN_SIZE, 576, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, prog_config_mm3_bh, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        (1, NUM_HEADS, SEQ_LEN, 512, True, True, 1, ttnn.bfloat16, 1, NUM_HEADS, 512, 128, True, 1, ttnn.bfloat8_b, ttnn.bfloat8_b, prog_config_mm4_bh, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
-        (1, 1, SEQ_LEN, 16384, True, True, 3, ttnn.bfloat16, 1, 1, 16384, 7168, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, prog_config_mm5_bh, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG), 
+        (1, 1, SEQ_LEN_32K, HIDDEN_SIZE, True, True, 3, ttnn.bfloat16, 1, 1, HIDDEN_SIZE, 1536, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, None, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (1, 1, SEQ_LEN_32K, 1536, True, False, None, ttnn.bfloat16, 1, 1, 1536, 24576, True, 3, ttnn.bfloat8_b, ttnn.bfloat16, None, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (1, NUM_HEADS, SEQ_LEN_32K, 128, True, True, 1, ttnn.bfloat16, 1, NUM_HEADS, 128, 512, True, 1, ttnn.bfloat8_b, ttnn.bfloat16, None, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (1, 1, SEQ_LEN_32K, HIDDEN_SIZE, True, True, 3, ttnn.bfloat16, 1, 1, HIDDEN_SIZE, 576, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, prog_config_mm3_bh, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (1, NUM_HEADS, SEQ_LEN_32K, 512, True, True, 1, ttnn.bfloat16, 1, NUM_HEADS, 512, 128, True, 1, ttnn.bfloat8_b, ttnn.bfloat8_b, prog_config_mm4_bh, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (1, 1, SEQ_LEN_32K, 16384, True, True, 3, ttnn.bfloat16, 1, 1, 16384, 7168, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, prog_config_mm5_bh, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+
+        (1, 1, SEQ_LEN_25K, HIDDEN_SIZE, True, True, 3, ttnn.bfloat16, 1, 1, HIDDEN_SIZE, 1536, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, None, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (1, 1, SEQ_LEN_25K, 1536, True, False, None, ttnn.bfloat16, 1, 1, 1536, 24576, True, 3, ttnn.bfloat8_b, ttnn.bfloat16, None, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (1, NUM_HEADS, SEQ_LEN_25K, 128, True, True, 1, ttnn.bfloat16, 1, NUM_HEADS, 128, 512, True, 1, ttnn.bfloat8_b, ttnn.bfloat16, None, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (1, 1, SEQ_LEN_25K, HIDDEN_SIZE, True, True, 3, ttnn.bfloat16, 1, 1, HIDDEN_SIZE, 576, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, prog_config_mm3_bh_25k, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (1, NUM_HEADS, SEQ_LEN_25K, 512, True, True, 1, ttnn.bfloat16, 1, NUM_HEADS, 512, 128, True, 1, ttnn.bfloat8_b, ttnn.bfloat8_b, prog_config_mm4_bh_25k, ttnn.L1_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
+        (1, 1, SEQ_LEN_25K, 16384, True, True, 3, ttnn.bfloat16, 1, 1, 16384, 7168, True, 2, ttnn.bfloat8_b, ttnn.bfloat16, prog_config_mm5_bh_25k, ttnn.DRAM_MEMORY_CONFIG, ttnn.DRAM_MEMORY_CONFIG),
     ]
 )
 @pytest.mark.parametrize(
