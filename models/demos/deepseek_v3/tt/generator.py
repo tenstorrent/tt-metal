@@ -655,12 +655,28 @@ class DeepseekGenerator(WarmupForwardMixin):
         row_sums = probs.sum(dim=-1)
         valid_rows = torch.isfinite(probs).all(dim=-1) & torch.isfinite(row_sums) & (row_sums > 0)
 
+        # Honor sampling.seed (if provided) for deterministic host-side sampling.
+        generator: torch.Generator | None = None
+        if getattr(sampling, "seed", None) is not None:
+            seed_value = DeepseekGenerator._sampling_param_scalar(sampling.seed, "seed")
+            if seed_value is not None:
+                generator = torch.Generator(device=probs.device).manual_seed(int(seed_value))
+
         if valid_rows.all():
-            return torch.multinomial(probs, num_samples=1).squeeze(-1)
+            if generator is None:
+                return torch.multinomial(probs, num_samples=1).squeeze(-1)
+            return torch.multinomial(probs, num_samples=1, generator=generator).squeeze(-1)
 
         sampled_tokens = torch.argmax(logits, dim=-1)
         if valid_rows.any():
-            sampled_tokens[valid_rows] = torch.multinomial(probs[valid_rows], num_samples=1).squeeze(-1)
+            if generator is None:
+                sampled_tokens[valid_rows] = torch.multinomial(probs[valid_rows], num_samples=1).squeeze(-1)
+            else:
+                sampled_tokens[valid_rows] = torch.multinomial(
+                    probs[valid_rows],
+                    num_samples=1,
+                    generator=generator,
+                ).squeeze(-1)
         return sampled_tokens
 
     def _pad_batch(self, tokens_list: List[List[int]], batch_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
