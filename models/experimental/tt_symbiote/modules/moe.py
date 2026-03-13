@@ -35,6 +35,21 @@ def _to_torch_any(tensor):
     return TorchTTNNTensor(tensor).to_torch
 
 
+def _to_ttnn_raw(tensor):
+    """Return raw ttnn.Tensor from TorchTTNNTensor or ttnn.Tensor for use in ttnn ops."""
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    if tensor is None:
+        raise ValueError("Expected a tensor; got None.")
+    if isinstance(tensor, TorchTTNNTensor):
+        if not hasattr(tensor, "to_ttnn"):
+            raise AttributeError("TorchTTNNTensor has no to_ttnn property.")
+        return tensor.to_ttnn
+    if hasattr(tensor, "shape") and hasattr(tensor, "layout"):
+        return tensor
+    raise TypeError(f"Expected TorchTTNNTensor or ttnn.Tensor; got {type(tensor).__name__}.")
+
+
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
 SPARSITY_BLOCK_SIZE = 32
 
@@ -1722,6 +1737,8 @@ class Qwen3OmniMoeTalkerTextExpertsTTNN(TTNNExperts):
         self.tt_w3_proj = ttnn.to_device(self.tt_w3_proj, self.device)
         self.tt_w2_proj = ttnn.to_device(self.tt_w2_proj, self.device)
 
+        # expert_mapping_tensors and remap_topk_mask are kept for the module lifetime;
+        # they are used on every forward and are not explicitly deallocated.
         self.expert_mapping_tensors = ttnn.from_torch(
             torch.eye(self.num_devices, dtype=torch.int32)
             .repeat_interleave(self.num_experts_per_device, dim=0)
@@ -1788,9 +1805,24 @@ class Qwen3OmniMoeTalkerTextMLPTTNN(TTNNModule):
         return tt_module
 
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if x is None:
+            raise ValueError("Qwen3OmniMoeTalkerTextMLPTTNN.forward: input x is None.")
+        if not hasattr(x, "shape") or len(x.shape) < 2:
+            raise ValueError(
+                f"Qwen3OmniMoeTalkerTextMLPTTNN.forward: input must be at least 2D; got shape {getattr(x, 'shape', None)}."
+            )
+        if self.config is not None and hasattr(self.config, "hidden_size"):
+            # Validate last dim when config is available (sharded: last dim may be hidden_size // n_devices)
+            last_dim = int(x.shape[-1])
+            if last_dim <= 0:
+                raise ValueError(
+                    f"Qwen3OmniMoeTalkerTextMLPTTNN.forward: input last dim must be positive; got {last_dim}."
+                )
         x_gate = self.gate_proj(x)
         x_up = self.up_proj(x)
-        x = ttnn.mul(x_gate.to_ttnn, x_up.to_ttnn)
+        a = _to_ttnn_raw(x_gate)
+        b = _to_ttnn_raw(x_up)
+        x = ttnn.mul(a, b)
         x = self.down_proj(x)
         return x
 
@@ -1838,6 +1870,20 @@ class TTNNQwen3TalkerMoE(TTNNModule):
                 qwen_config.moe_intermediate_size,
             )
             cfg.num_experts = qwen_config.num_experts
+            # Optional CCL / collective config (defaults match current hardcoded behavior)
+            cfg.ccl_num_links = getattr(qwen_config, "ccl_num_links", 1)
+            cfg.ccl_all_gather_topology = getattr(qwen_config, "ccl_all_gather_topology", ttnn.Topology.Linear)
+            cfg.ccl_reduce_scatter_topology = getattr(qwen_config, "ccl_reduce_scatter_topology", ttnn.Topology.Ring)
+            cfg.ccl_chunks_per_sync = getattr(qwen_config, "ccl_chunks_per_sync", 10)
+            cfg.ccl_num_workers_per_link = getattr(qwen_config, "ccl_num_workers_per_link", 2)
+            cfg.ccl_num_buffers_per_channel = getattr(qwen_config, "ccl_num_buffers_per_channel", 2)
+        else:
+            cfg.ccl_num_links = 1
+            cfg.ccl_all_gather_topology = ttnn.Topology.Linear
+            cfg.ccl_reduce_scatter_topology = ttnn.Topology.Ring
+            cfg.ccl_chunks_per_sync = 10
+            cfg.ccl_num_workers_per_link = 2
+            cfg.ccl_num_buffers_per_channel = 2
 
         module = cls(cfg)
         module._fallback_torch_layer = torch_moe
@@ -1874,16 +1920,64 @@ class TTNNQwen3TalkerMoE(TTNNModule):
 
     @run_on_devices(DeviceArch.T3K)
     def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        if x is None or not hasattr(x, "shape"):
+            raise ValueError("TTNNQwen3TalkerMoE.forward: input x must be a valid tensor.")
+        if len(x.shape) < 2:
+            raise ValueError(f"TTNNQwen3TalkerMoE.forward: input must be at least 2D; got shape {x.shape}.")
+
+        device_state = getattr(self, "device_state", None)
+        if device_state is None:
+            raise RuntimeError("TTNNQwen3TalkerMoE.forward: device_state is not set. Call set_device() before forward.")
+        if not hasattr(device_state, "ccl_manager") or device_state.ccl_manager is None:
+            raise RuntimeError(
+                "TTNNQwen3TalkerMoE.forward: device_state.ccl_manager is not available. "
+                "Required for all_gather/reduce_scatter on multi-device."
+            )
+
+        num_links = getattr(self.config, "ccl_num_links", 1)
+        ag_topology = getattr(self.config, "ccl_all_gather_topology", ttnn.Topology.Linear)
+        rs_topology = getattr(self.config, "ccl_reduce_scatter_topology", ttnn.Topology.Ring)
+        chunks_per_sync = getattr(self.config, "ccl_chunks_per_sync", 10)
+        num_workers = getattr(self.config, "ccl_num_workers_per_link", 2)
+        num_buffers = getattr(self.config, "ccl_num_buffers_per_channel", 2)
+
         residual = x
 
+        try:
+            return self._forward_impl(
+                x,
+                residual,
+                device_state,
+                num_links,
+                ag_topology,
+                rs_topology,
+                chunks_per_sync,
+                num_workers,
+                num_buffers,
+            )
+        except Exception as e:
+            raise RuntimeError(f"TTNNQwen3TalkerMoE forward failed: {e}") from e
+
+    def _forward_impl(
+        self,
+        x,
+        residual,
+        device_state,
+        num_links,
+        ag_topology,
+        rs_topology,
+        chunks_per_sync,
+        num_workers,
+        num_buffers,
+    ):
         # 1. All-gather to reconstruct full hidden dim from tensor-parallel shards
         x = ttnn.experimental.all_gather_async(
             x,
             dim=-1,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=1,
-            topology=ttnn.Topology.Linear,
+            multi_device_global_semaphore=device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=num_links,
+            topology=ag_topology,
         )
 
         if x.layout != ttnn.TILE_LAYOUT:
@@ -1945,14 +2039,14 @@ class TTNNQwen3TalkerMoE(TTNNModule):
             routed_out,
             persistent_output_buffers=None,
             dim=3,
-            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
-            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=1,
+            multi_device_global_semaphore=device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
+            barrier_semaphore=device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=num_links,
             cluster_axis=1,
-            topology=ttnn.Topology.Ring,
-            chunks_per_sync=10,
-            num_workers_per_link=2,
-            num_buffers_per_channel=2,
+            topology=rs_topology,
+            chunks_per_sync=chunks_per_sync,
+            num_workers_per_link=num_workers,
+            num_buffers_per_channel=num_buffers,
         )
 
         # 7. Shared expert MLP on the original (sharded) input
