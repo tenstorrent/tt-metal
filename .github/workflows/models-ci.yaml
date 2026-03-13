@@ -1,0 +1,252 @@
+name: "Models CI"
+
+on:
+  workflow_dispatch:
+    inputs:
+      # ── Tier selection (checkboxes) ───────────────────────────────
+      tier-1:
+        description: "Tier 1"
+        required: false
+        type: boolean
+        default: true
+      tier-2:
+        description: "Tier 2"
+        required: false
+        type: boolean
+        default: true
+      tier-3:
+        description: "Tier 3"
+        required: false
+        type: boolean
+        default: false
+
+      # ── Test type selection (checkboxes) ──────────────────────────
+      run-unit-tests:
+        description: "Unit tests"
+        required: false
+        type: boolean
+        default: true
+      run-e2e-tests:
+        description: "End-to-end tests"
+        required: false
+        type: boolean
+        default: true
+      run-sweep-tests:
+        description: "Sweep tests"
+        required: false
+        type: boolean
+        default: false
+
+      # ── SKU selection ─────────────────────────────────────────────
+      skus:
+        description: "SKUs to test (comma-separated). Options: all, wh_n150, wh_n300, wh_llmbox_perf, wh_galaxy"
+        required: false
+        type: string
+        default: "all"
+
+      # ── Other filters ─────────────────────────────────────────────
+      model:
+        description: "Model filter (e.g. llama3.1-8b). Leave 'all' to run everything."
+        required: false
+        default: all
+        type: string
+      platform:
+        required: false
+        type: choice
+        default: "Ubuntu 22.04"
+        options:
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
+        description: "Platform to build and test"
+      build-type:
+        required: false
+        type: choice
+        default: Release
+        options:
+          - Release
+          - Debug
+          - RelWithDebInfo
+          - ASan
+          - TSan
+        description: "Build type configuration"
+      enable-lto:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable Link Time Optimization (LTO)"
+      mlperf-read-only:
+        required: false
+        type: boolean
+        default: true
+        description: "Mount /mnt/MLPerf as read-only (uncheck for read-write access)"
+
+permissions:
+  packages: write
+  contents: write
+
+jobs:
+  # ── Shared steps ──────────────────────────────────────────────────
+  resolve-skus:
+    runs-on: ubuntu-latest
+    outputs:
+      enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
+    steps:
+      - name: Resolve SKU selection
+        id: resolve
+        run: |
+          ALL_SKUS="wh_n150,wh_n300,wh_llmbox_perf,wh_galaxy"
+          VALID_SKUS="wh_n150 wh_n300 wh_llmbox_perf wh_galaxy"
+          SKU_INPUT="${{ inputs.skus || 'all' }}"
+
+          # Normalize: trim spaces around commas
+          SKU_INPUT=$(echo "$SKU_INPUT" | sed 's/ *, */,/g')
+
+          if [[ "$SKU_INPUT" == "all" ]]; then
+            SKUS="$ALL_SKUS"
+          else
+            # Validate each SKU in the comma-separated list
+            SKUS=""
+            IFS=',' read -ra ITEMS <<< "$SKU_INPUT"
+            for item in "${ITEMS[@]}"; do
+              if [[ ! " $VALID_SKUS " =~ " $item " ]]; then
+                echo "::error::Invalid SKU '$item'. Valid options: all, wh_n150, wh_n300, wh_llmbox_perf, wh_galaxy"
+                exit 1
+              fi
+              SKUS="${SKUS:+$SKUS,}$item"
+            done
+          fi
+
+          if [[ -z "$SKUS" ]]; then
+            echo "::error::No SKUs selected — provide at least one SKU or 'all'."
+            exit 1
+          fi
+          echo "enabled-skus=$SKUS" >> $GITHUB_OUTPUT
+          echo "Selected SKUs: $SKUS"
+
+  build-artifact:
+    uses: ./.github/workflows/build-artifact.yaml
+    permissions:
+      packages: write
+    secrets: inherit
+    with:
+      build-type: ${{ inputs.build-type || 'Release' }}
+      build-wheel: true
+      platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
+      enable-lto: ${{ inputs.enable-lto || false }}
+
+  # ── Tier 1 ────────────────────────────────────────────────────────
+  t1-unit-tests:
+    needs: [build-artifact, resolve-skus]
+    if: ${{ inputs.tier-1 && inputs.run-unit-tests }}
+    secrets: inherit
+    uses: ./.github/workflows/models-unit-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      model: ${{ inputs.model || 'all' }}
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      tier: "1"
+
+  t1-e2e-tests:
+    needs: [build-artifact, resolve-skus]
+    if: ${{ inputs.tier-1 && inputs.run-e2e-tests }}
+    secrets: inherit
+    uses: ./.github/workflows/models-e2e-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      model: ${{ inputs.model || 'all' }}
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      tier: "1"
+
+  t1-sweep-tests:
+    needs: [build-artifact, resolve-skus]
+    if: ${{ inputs.tier-1 && inputs.run-sweep-tests }}
+    secrets: inherit
+    uses: ./.github/workflows/models-sweep-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      model: ${{ inputs.model || 'all' }}
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      tier: "1"
+
+  # ── Tier 2 ────────────────────────────────────────────────────────
+  t2-unit-tests:
+    needs: [build-artifact, resolve-skus]
+    if: ${{ inputs.tier-2 && inputs.run-unit-tests }}
+    secrets: inherit
+    uses: ./.github/workflows/models-unit-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      model: ${{ inputs.model || 'all' }}
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      tier: "2"
+
+  t2-e2e-tests:
+    needs: [build-artifact, resolve-skus]
+    if: ${{ inputs.tier-2 && inputs.run-e2e-tests }}
+    secrets: inherit
+    uses: ./.github/workflows/models-e2e-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      model: ${{ inputs.model || 'all' }}
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      tier: "2"
+
+  t2-sweep-tests:
+    needs: [build-artifact, resolve-skus]
+    if: ${{ inputs.tier-2 && inputs.run-sweep-tests }}
+    secrets: inherit
+    uses: ./.github/workflows/models-sweep-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      model: ${{ inputs.model || 'all' }}
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      tier: "2"
+
+  # ── Tier 3 ────────────────────────────────────────────────────────
+  t3-unit-tests:
+    needs: [build-artifact, resolve-skus]
+    if: ${{ inputs.tier-3 && inputs.run-unit-tests }}
+    secrets: inherit
+    uses: ./.github/workflows/models-unit-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      model: ${{ inputs.model || 'all' }}
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      tier: "3"
+
+  t3-e2e-tests:
+    needs: [build-artifact, resolve-skus]
+    if: ${{ inputs.tier-3 && inputs.run-e2e-tests }}
+    secrets: inherit
+    uses: ./.github/workflows/models-e2e-tests-impl.yaml
+    with:
+      docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
+      build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
+      wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
+      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      model: ${{ inputs.model || 'all' }}
+      mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
+      tier: "3"
+
+  # Note: Tier 3 sweep tests not yet defined — no sweep entries with tier 3 exist in models_sweep_tests.yaml
