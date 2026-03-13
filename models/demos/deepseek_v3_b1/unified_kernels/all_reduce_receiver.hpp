@@ -111,6 +111,55 @@ struct AllReduceReceiver {
         void operator()(const RTArgs& args) { impl(args); }
 
     private:
+#if defined(COMPILE_FOR_TRISC)
+        template <bool AcquireRegs>
+        static FORCE_INLINE void batched_add(uint32_t cb_a, uint32_t cb_b, uint32_t cb_out, uint32_t num_tiles) {
+            // constexpr uint32_t max_dst_tiles = 4;
+            // uint32_t num_batches = (num_tiles + max_dst_tiles - 1) / max_dst_tiles;
+
+            cb_wait_front(cb_a, num_tiles);
+            cb_wait_front(cb_b, num_tiles);
+            cb_reserve_back(cb_out, num_tiles);
+
+            // Original code for reference
+            // TODO: Restore the pack overlap with math for better performance
+            // for (uint32_t batch = 0; batch < num_batches; ++batch) {
+            //     uint32_t start_tile = batch * max_dst_tiles;
+            //     uint32_t batch_size = (start_tile + max_dst_tiles <= num_tiles)
+            //                               ? max_dst_tiles
+            //                               : (num_tiles - start_tile);
+
+            //     tile_regs_acquire();
+            //     for (uint32_t i = 0; i < batch_size; ++i) {
+            //         add_tiles(cb_a, cb_b, start_tile + i, start_tile + i, i);
+            //     }
+            //     tile_regs_commit();
+
+            //     tile_regs_wait();
+            //     for (uint32_t i = 0; i < batch_size; ++i) {
+            //         pack_tile(i, cb_out, start_tile + i);
+            //     }
+            //     tile_regs_release();
+            // }
+            if constexpr (AcquireRegs) {
+                tile_regs_acquire();
+            }
+            for (uint32_t i = 0; i < num_tiles; i++) {
+                add_tiles(cb_a, cb_b, i, i, i);
+            }
+            tile_regs_commit();
+            tile_regs_wait();
+            for (uint32_t i = 0; i < num_tiles; i++) {
+                pack_tile(i, cb_out, i);
+            }
+            tile_regs_release();
+
+            cb_pop_front(cb_a, num_tiles);
+            cb_pop_front(cb_b, num_tiles);
+            cb_push_back(cb_out, num_tiles);
+        }
+#endif
+
         void impl([[maybe_unused]] const RTArgs& args) {
 #if defined(COMPILE_FOR_NCRISC)
             // ================================================================
@@ -118,16 +167,16 @@ struct AllReduceReceiver {
             // ================================================================
             // Push local and residual tiles to compute immediately (they're ready)
             // Skip local push if data is already in CB (e.g., from preceding gather operation)
+            if constexpr (ReaderCT::has_residual) {
+                cb_reserve_back(ReaderCT::cb_residual, ReaderCT::num_standard_tiles);
+                cb_push_back(ReaderCT::cb_residual, ReaderCT::num_standard_tiles);
+            }
             DPRINT << "RA S1" << ENDL();
             if constexpr (!ReaderCT::skip_local_push) {
                 cb_reserve_back(ReaderCT::cb_in2, ReaderCT::num_standard_tiles);
                 cb_push_back(ReaderCT::cb_in2, ReaderCT::num_standard_tiles);
             }
             DPRINT << "RA S2" << ENDL();
-            if constexpr (ReaderCT::has_residual) {
-                cb_reserve_back(ReaderCT::cb_residual, ReaderCT::num_standard_tiles);
-                cb_push_back(ReaderCT::cb_residual, ReaderCT::num_standard_tiles);
-            }
             DPRINT << "RA S3" << ENDL();
             // Wait for remote sender to signal data has been written to intermediate tensor
             auto local_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sender_semaphore_addr);
@@ -149,101 +198,24 @@ struct AllReduceReceiver {
             // ================================================================
             reconfig_data_format<false, true>(ComputeCT::cb_in0, ComputeCT::cb_in1);
             pack_reconfig_data_format<true>(ComputeCT::cb_out0);
-            add_tiles_init(ComputeCT::cb_in0, ComputeCT::cb_in1);
-            DPRINT << "RA S5" << ENDL();
-            constexpr uint32_t max_dst_tiles = 4;
-            constexpr uint32_t num_batches = (ComputeCT::num_tiles + max_dst_tiles - 1) / max_dst_tiles;
 
+            // TODO: Fix this to account for actual dst size
+            static_assert(ComputeCT::num_tiles <= 8, "num_tiles must be less than or equal to 8");
+
+            // TODO: This gets rid of CB temp use
             if constexpr (ComputeCT::has_residual) {
-                // Fused residual add: (local + residual) + remote → output
-                DPRINT << "RA S6" << ENDL();
-                cb_wait_front(ComputeCT::cb_in1, ComputeCT::num_tiles);
+                copy_tile_to_dst_init_short(ComputeCT::cb_residual);
                 cb_wait_front(ComputeCT::cb_residual, ComputeCT::num_tiles);
-                cb_reserve_back(ComputeCT::cb_temp, ComputeCT::num_tiles);
-                DPRINT << "RA S8" << ENDL();
-                // First add: local + residual → temp
-                for (uint32_t batch = 0; batch < num_batches; ++batch) {
-                    uint32_t start_tile = batch * max_dst_tiles;
-                    uint32_t batch_size = (start_tile + max_dst_tiles <= ComputeCT::num_tiles)
-                                              ? max_dst_tiles
-                                              : (ComputeCT::num_tiles - start_tile);
-
-                    tile_regs_acquire();
-                    for (uint32_t i = 0; i < batch_size; ++i) {
-                        add_tiles(ComputeCT::cb_in1, ComputeCT::cb_residual, start_tile + i, start_tile + i, i);
-                    }
-                    tile_regs_commit();
-
-                    tile_regs_wait();
-                    for (uint32_t i = 0; i < batch_size; ++i) {
-                        pack_tile(i, ComputeCT::cb_temp, start_tile + i);
-                    }
-                    tile_regs_release();
+                tile_regs_acquire();
+                for (uint32_t i = 0; i < ComputeCT::num_tiles; i++) {
+                    copy_tile(ComputeCT::cb_residual, i, i);
                 }
-                DPRINT << "RA S9" << ENDL();
-                cb_pop_front(ComputeCT::cb_in1, ComputeCT::num_tiles);
                 cb_pop_front(ComputeCT::cb_residual, ComputeCT::num_tiles);
-                cb_push_back(ComputeCT::cb_temp, ComputeCT::num_tiles);
-                DPRINT << "RA S10" << ENDL();
-                // Second add: (local+residual) + remote → output
-                cb_wait_front(ComputeCT::cb_in0, ComputeCT::num_tiles);
-                cb_wait_front(ComputeCT::cb_temp, ComputeCT::num_tiles);
-                cb_reserve_back(ComputeCT::cb_out0, ComputeCT::num_tiles);
-                DPRINT << "RA S11" << ENDL();
-                for (uint32_t batch = 0; batch < num_batches; ++batch) {
-                    uint32_t start_tile = batch * max_dst_tiles;
-                    uint32_t batch_size = (start_tile + max_dst_tiles <= ComputeCT::num_tiles)
-                                              ? max_dst_tiles
-                                              : (ComputeCT::num_tiles - start_tile);
-
-                    tile_regs_acquire();
-                    for (uint32_t i = 0; i < batch_size; ++i) {
-                        add_tiles(ComputeCT::cb_temp, ComputeCT::cb_in0, start_tile + i, start_tile + i, i);
-                    }
-                    tile_regs_commit();
-
-                    tile_regs_wait();
-                    for (uint32_t i = 0; i < batch_size; ++i) {
-                        pack_tile(i, ComputeCT::cb_out0, start_tile + i);
-                    }
-                    tile_regs_release();
-                }
-                DPRINT << "RA S12" << ENDL();
-                cb_pop_front(ComputeCT::cb_in0, ComputeCT::num_tiles);
-                cb_pop_front(ComputeCT::cb_temp, ComputeCT::num_tiles);
-                cb_push_back(ComputeCT::cb_out0, ComputeCT::num_tiles);
-                DPRINT << "RA S13" << ENDL();
-            } else {
-                // Simple all-reduce: local + remote → output
-                DPRINT << "RA S14" << ENDL();
-                cb_wait_front(ComputeCT::cb_in0, ComputeCT::num_tiles);
-                cb_wait_front(ComputeCT::cb_in1, ComputeCT::num_tiles);
-                cb_reserve_back(ComputeCT::cb_out0, ComputeCT::num_tiles);
-                DPRINT << "RA S15" << ENDL();
-                for (uint32_t batch = 0; batch < num_batches; ++batch) {
-                    uint32_t start_tile = batch * max_dst_tiles;
-                    uint32_t batch_size = (start_tile + max_dst_tiles <= ComputeCT::num_tiles)
-                                              ? max_dst_tiles
-                                              : (ComputeCT::num_tiles - start_tile);
-
-                    tile_regs_acquire();
-                    for (uint32_t i = 0; i < batch_size; ++i) {
-                        add_tiles(ComputeCT::cb_in0, ComputeCT::cb_in1, start_tile + i, start_tile + i, i);
-                    }
-                    tile_regs_commit();
-
-                    tile_regs_wait();
-                    for (uint32_t i = 0; i < batch_size; ++i) {
-                        pack_tile(i, ComputeCT::cb_out0, start_tile + i);
-                    }
-                    tile_regs_release();
-                }
-                DPRINT << "RA S16" << ENDL();
-                cb_pop_front(ComputeCT::cb_in0, ComputeCT::num_tiles);
-                cb_pop_front(ComputeCT::cb_in1, ComputeCT::num_tiles);
-                cb_push_back(ComputeCT::cb_out0, ComputeCT::num_tiles);
-                DPRINT << "RA S17" << ENDL();
             }
+            constexpr bool acquire_regs = ComputeCT::has_residual ? false : true;
+            add_tiles_init(ComputeCT::cb_in0, ComputeCT::cb_in1, ComputeCT::has_residual);
+            batched_add<acquire_regs>(ComputeCT::cb_in0, ComputeCT::cb_in1, ComputeCT::cb_out0, ComputeCT::num_tiles);
+
 #endif
         }
     };
