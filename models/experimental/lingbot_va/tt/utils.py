@@ -16,6 +16,13 @@ from typing import TYPE_CHECKING
 
 import torch
 
+import ttnn
+from models.tt_dit.parallel.config import VaeHWParallelConfig, ParallelFactor
+from models.tt_dit.parallel.manager import CCLManager
+from models.experimental.lingbot_va.tt.vae_encoder import VaeWanEncoder
+from models.tt_dit.models.vae.vae_wan2_1 import WanCausalConv3d
+from models.tt_dit.utils.conv3d import conv_pad_in_channels, conv_pad_height, conv_unpad_height
+
 from .transformer_wan import (
     CROSS_ATTN_NORM,
     DIM,
@@ -236,9 +243,134 @@ def load_text_encoder(
     return tt_encoder
 
 
+def load_vae_encoder(
+    van_encoder,
+    config,
+    mesh_device: "ttnn.MeshDevice",
+    torch_dtype: torch.dtype = torch.bfloat16,
+    ccl_manager: "CCLManager | None" = None,
+    parallel_config: "VaeHWParallelConfig | None" = None,
+):
+    encoder_weights = {k: v.cpu() for k, v in van_encoder.state_dict().items()}
+    cfg = config
+    del van_encoder
+
+    if parallel_config is None:
+        parallel_config = VaeHWParallelConfig(
+            height_parallel=ParallelFactor(factor=1, mesh_axis=0),
+            width_parallel=ParallelFactor(factor=1, mesh_axis=1),
+        )
+    if ccl_manager is None:
+        ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+
+    vae_encoder = VaeWanEncoder(
+        in_channels=cfg.in_channels,
+        dim=cfg.base_dim,
+        z_dim=cfg.z_dim * 2,
+        dim_mult=list(cfg.dim_mult),
+        num_res_blocks=cfg.num_res_blocks,
+        attn_scales=cfg.attn_scales,
+        temperal_downsample=cfg.temperal_downsample,
+        is_residual=cfg.is_residual,
+        mesh_device=mesh_device,
+        ccl_manager=ccl_manager,
+        parallel_config=parallel_config,
+    )
+    vae_encoder.load_torch_state_dict(encoder_weights)
+    return vae_encoder
+
+
+def patchify(x, patch_size):
+    if patch_size is None or patch_size == 1:
+        return x
+    batch_size, channels, frames, height, width = x.shape
+    x = x.view(
+        batch_size,
+        channels,
+        frames,
+        height // patch_size,
+        patch_size,
+        width // patch_size,
+        patch_size,
+    )
+    x = x.permute(0, 1, 6, 4, 2, 3, 5).contiguous()
+    x = x.view(
+        batch_size,
+        channels * patch_size * patch_size,
+        frames,
+        height // patch_size,
+        width // patch_size,
+    )
+    return x
+
+
+class WanVAEStreamingWrapper:
+    def __init__(
+        self,
+        vae_model,
+        mesh_device: "ttnn.MeshDevice",
+        ccl_manager: "CCLManager | None" = None,
+        parallel_config: "VaeHWParallelConfig | None" = None,
+    ):
+        self.vae = vae_model
+        self.encoder = load_vae_encoder(vae_model.encoder, vae_model.config, mesh_device, ccl_manager, parallel_config)
+        self.quant_conv = WanCausalConv3d(
+            vae_model.config.z_dim * 2,
+            vae_model.config.z_dim * 2,
+            kernel_size=1,
+            mesh_device=mesh_device,
+            parallel_config=parallel_config,
+            ccl_manager=ccl_manager,
+        )
+        quant_conv_weights = {k: v.cpu() for k, v in vae_model.quant_conv.state_dict().items()}
+        self.quant_conv.load_torch_state_dict(quant_conv_weights)
+        self.parallel_config = parallel_config
+        self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager
+
+        if hasattr(self.vae, "_cached_conv_counts"):
+            self.enc_conv_num = self.vae._cached_conv_counts["encoder"]
+        else:
+            count = 0
+            for m in self.encoder.modules():
+                if m.__class__.__name__ == "WanCausalConv3d":
+                    count += 1
+            self.enc_conv_num = count
+
+        self.clear_cache()
+
+    def clear_cache(self):
+        self.feat_cache = [None] * self.enc_conv_num
+
+    def encode_chunk(self, x_chunk):
+        if hasattr(self.vae.config, "patch_size") and self.vae.config.patch_size is not None:
+            x_chunk = patchify(x_chunk, self.vae.config.patch_size)
+        feat_idx = [0]
+        video_BTHWC = x_chunk.permute(0, 2, 3, 4, 1)
+        video_BTHWC = conv_pad_in_channels(video_BTHWC)
+        video_BTHWC, logical_h = conv_pad_height(video_BTHWC, self.parallel_config.height_parallel.factor)
+        video_BTHWC = ttnn.from_torch(
+            video_BTHWC,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            device=self.mesh_device,
+        )
+        out, logical_h = self.encoder(video_BTHWC, logical_h, feat_cache=self.feat_cache, feat_idx=feat_idx)
+        enc = self.quant_conv(out, logical_h)
+        # Encoder may not update logical_h when using residual down blocks; use actual tensor H to avoid slice past end
+        enc_h = enc.shape[2]
+        enc = conv_unpad_height(enc, min(logical_h, enc_h))
+        enc = ttnn.to_torch(enc)
+        enc = enc.permute(0, 4, 1, 2, 3)
+        return enc
+
+
 __all__ = [
     "load_transformer",
     "load_transformer_from_state_dict",
     "load_text_encoder",
+    "load_vae_encoder",
     "_local_path",
+    "patchify",
+    "WanVAEStreamingWrapper",
 ]

@@ -44,7 +44,6 @@ from tqdm import tqdm
 from reference.utils import (
     VA_CONFIGS,
     FlowMatchScheduler,
-    WanVAEStreamingWrapper,
     data_seq_to_patch,
     get_mesh_id,
     init_logger,
@@ -59,7 +58,12 @@ import gc
 import ttnn
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
-from tt.utils import load_text_encoder as load_text_encoder_tt, load_transformer as load_transformer_tt
+from tt.utils import (
+    load_text_encoder as load_text_encoder_tt,
+    load_transformer as load_transformer_tt,
+    WanVAEStreamingWrapper,
+)
+from models.tt_dit.parallel.config import VaeHWParallelConfig
 
 # Keys the server uses (va_robotwin_cfg.obs_cam_keys)
 OBS_CAM_HIGH = "observation.images.cam_high"
@@ -226,22 +230,13 @@ def _load_models_phase1(config):
     enable_offload = getattr(config, "enable_offload", True)
     ckpt = config.wan22_pretrained_model_name_or_path
 
-    vae = load_vae(
-        os.path.join(ckpt, "vae"),
-        torch_dtype=dtype,
-        torch_device="cpu" if enable_offload else device,
-    )
-    streaming_vae = WanVAEStreamingWrapper(vae)
-
-    tokenizer = load_tokenizer(os.path.join(ckpt, "tokenizer"))
-
     mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
-    parallel_config = DiTParallelConfig(
+    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+    dit_parallel_config = DiTParallelConfig(
         tensor_parallel=ParallelFactor(mesh_axis=1, factor=1),
         sequence_parallel=ParallelFactor(mesh_axis=0, factor=1),
         cfg_parallel=None,
     )
-    ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
 
     # Load TTNN text encoder only (no transformer yet) to avoid OOM.
     text_encoder = load_text_encoder_tt(
@@ -251,6 +246,19 @@ def _load_models_phase1(config):
         torch_dtype=dtype,
         max_prompt_length=512,
     )
+    vae_parallel_config = VaeHWParallelConfig(
+        height_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        width_parallel=ParallelFactor(factor=1, mesh_axis=1),
+    )
+
+    vae = load_vae(
+        os.path.join(ckpt, "vae"),
+        torch_dtype=dtype,
+        torch_device="cpu" if enable_offload else device,
+    )
+    streaming_vae = WanVAEStreamingWrapper(vae, mesh_device, ccl_manager, vae_parallel_config)
+
+    tokenizer = load_tokenizer(os.path.join(ckpt, "tokenizer"))
 
     scheduler = FlowMatchScheduler(shift=config.snr_shift, sigma_min=0.0, extra_one_step=True)
     action_scheduler = FlowMatchScheduler(shift=config.action_snr_shift, sigma_min=0.0, extra_one_step=True)
@@ -264,8 +272,7 @@ def _load_models_phase1(config):
             torch_dtype=dtype,
             torch_device="cpu" if enable_offload else device,
         )
-        streaming_vae_half = WanVAEStreamingWrapper(vae_half)
-
+        streaming_vae_half = WanVAEStreamingWrapper(vae_half, mesh_device, ccl_manager, vae_parallel_config)
     return {
         "vae": vae,
         "streaming_vae": streaming_vae,
@@ -281,7 +288,7 @@ def _load_models_phase1(config):
         "env_type": config.env_type,
         "transformer_is_tt": True,
         "mesh_device": mesh_device,
-        "parallel_config": parallel_config,
+        "parallel_config": dit_parallel_config,
         "ccl_manager": ccl_manager,
     }
 
