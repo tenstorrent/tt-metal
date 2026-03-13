@@ -569,7 +569,7 @@ def test_sdxl_base_group_norm_bh(device, input_shape, perf_test_mode=False):
     tt_input_tensor = ttnn.from_torch(
         dummy_tensor,
         dtype=ttnn.DataType.BFLOAT16,
-        layout=ttnn.TILE_LAYOUT if C == 512 else ttnn.ROW_MAJOR_LAYOUT,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
         memory_config=ttnn.create_sharded_memory_config(
             shape=dummy_tensor.shape,
             core_grid=core_grid,
