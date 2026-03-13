@@ -285,6 +285,8 @@ from ttnn.device import (
     dump_device_memory_state,
     get_memory_view,
     get_max_worker_l1_unreserved_size,
+    get_dram_alignment,
+    get_l1_alignment,
     get_optimal_dram_bank_to_logical_worker_assignment,
     enable_asynchronous_slow_dispatch,
     disable_asynchronous_slow_dispatch,
@@ -334,8 +336,15 @@ from ttnn.core import (
     num_cores_to_corerangeset,
     num_cores_to_corerangeset_in_subcoregrids,
     split_work_to_cores,
+    round_up,
+    div_up,
+    find_max_divisor,
+    grid_to_cores,
     get_current_command_queue_id_for_thread,
 )
+
+tile_size = ttnn._ttnn.tensor.tile_size
+element_size = ttnn._ttnn.tensor.element_size
 
 import ttnn.reflection
 import ttnn.database
