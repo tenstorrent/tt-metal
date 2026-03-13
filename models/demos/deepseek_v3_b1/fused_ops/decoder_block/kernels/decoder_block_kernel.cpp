@@ -1149,6 +1149,8 @@ void kernel_main() {
         sdpa_reduce_worker_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         sdpa_reduce_worker_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         sdpa_reduce_worker_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        sdpa_reduce_worker_args.swap_r1_reduction_order = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        sdpa_reduce_worker_args.swap_r2_reduction_order = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
     }
 
     using SdpaReduceForwarderCTArgs = deepseek_b1_ops::SdpaReduceForwarder::CTArgs<0, 0, 0>;

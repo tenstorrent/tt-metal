@@ -324,7 +324,8 @@ ALWI void sdpa_tail_streaming_conditional(
     uint32_t cb_l2,
     uint32_t cb_l_out,
     bool neighbor_valid,
-    bool local_valid) {
+    bool local_valid,
+    bool swap_reduction_order) {
     // Only local valid - copy local data to output
     if (!neighbor_valid && local_valid) {
         // TODO: Can be optimized to just division
@@ -375,8 +376,25 @@ ALWI void sdpa_tail_streaming_conditional(
     }
 
     // Both valid - perform normal SDPA reduction
-    sdpa_tail_streaming<SDPA_EXP_APPROX_MODE, normalize, untilize, block_size, scale_fp32, num_l_chunks, vector_mode>(
-        cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1, cb_l2, cb_l_out);
+    if (swap_reduction_order) {
+        sdpa_tail_streaming<
+            SDPA_EXP_APPROX_MODE,
+            normalize,
+            untilize,
+            block_size,
+            scale_fp32,
+            num_l_chunks,
+            vector_mode>(cb_prev_max_sum, cb_worker_max_sum, cb_cur_max_sum, cb_l2, cb_l1, cb_l_out);
+    } else {
+        sdpa_tail_streaming<
+            SDPA_EXP_APPROX_MODE,
+            normalize,
+            untilize,
+            block_size,
+            scale_fp32,
+            num_l_chunks,
+            vector_mode>(cb_worker_max_sum, cb_prev_max_sum, cb_cur_max_sum, cb_l1, cb_l2, cb_l_out);
+    }
 }
 
 #endif  // COMPILE_FOR_TRISC
@@ -551,6 +569,8 @@ struct SdpaReduceWorker {
         uint32_t r1_neighbor_device_idx;
         uint32_t r2_neighbor_device_idx;
         uint32_t r2_neighbor_r1_neighbor_idx;
+        uint32_t swap_r1_reduction_order;
+        uint32_t swap_r2_reduction_order;
     };
 
     using RTArgs = unified_kernels::SelectByRISCV<ReaderArgs, WriterArgs, ComputeArgs>;
@@ -791,7 +811,8 @@ struct SdpaReduceWorker {
                 CTArgs::cb_local_l,
                 CTArgs::cb_r1_result_l,
                 r1_neighbor_valid,
-                local_valid);
+                local_valid,
+                args.swap_r1_reduction_order);
 
             // Pop R1 input MS CBs — TRISC-owned, no BRISC race.
             // cb_r1_neighbor_ms: incoming from neighbor, consumed only by TRISC
@@ -831,7 +852,8 @@ struct SdpaReduceWorker {
                 CTArgs::cb_r1_result_l,
                 CTArgs::cb_l_out,
                 r2_neighbor_r1_valid,
-                local_r1_valid);
+                local_r1_valid,
+                args.swap_r2_reduction_order);
 
             // Pop R2 worker MS CB — incoming from neighbor, consumed only by TRISC.
             // Do NOT pop cb_r1_result_ms — BRISC owns that pop (writer_impl line 668)

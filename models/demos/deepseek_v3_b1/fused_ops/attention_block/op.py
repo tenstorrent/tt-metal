@@ -3817,7 +3817,6 @@ class AttentionBlock:
                             r2_fwd_buffer_base + sdpa_fwd_r2_buffer_offset + r2_slot_idx * sdpa_fwd_slot_size
                         )
                         r2_dst_fabric_node_id = fwd_fabric_node_id  # Type B sends R2 to forward neighbor
-
                     brisc_rt_args = [
                         int(r1_dst_fabric_node_id.mesh_id),  # r1_dst_mesh_id (varies by type!)
                         r1_dst_fabric_node_id.chip_id,  # r1_dst_chip_id
@@ -3866,6 +3865,15 @@ class AttentionBlock:
                             pos_r2_neighbor_idx - 1 + sdpa_num_ring_devices
                         ) % sdpa_num_ring_devices
 
+                    # Deterministic reduction order: canonical operand ordering based on device indices
+                    # so all devices produce bit-identical results.
+                    # R1: swap so lower device index is always arg1 ("worker")
+                    swap_r1_reduction_order = 1 if sdpa_ring_idx < pos_r1_neighbor_idx else 0
+                    # R2: swap so the R1 pair with lower min device index is always arg1 ("worker")
+                    r1_pair_min = min(sdpa_ring_idx, pos_r1_neighbor_idx)
+                    r2_pair_min = min(pos_r2_neighbor_idx, pos_r2_neighbor_r1_idx)
+                    swap_r2_reduction_order = 1 if r1_pair_min < r2_pair_min else 0
+
                     # TRISC args: pos_addr, device_idx, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
                     sdpa_worker_trisc_rt_args[worker_core.x][worker_core.y] = [
                         sdpa_pos_addr,
@@ -3873,6 +3881,8 @@ class AttentionBlock:
                         pos_r1_neighbor_idx,
                         pos_r2_neighbor_idx,
                         pos_r2_neighbor_r1_idx,
+                        swap_r1_reduction_order,
+                        swap_r2_reduction_order,
                     ]
 
                     # Extend NCRISC args: pos_addr, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
