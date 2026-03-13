@@ -184,8 +184,12 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
     std::unordered_map<const std::byte*, uint64_t> buffer_to_offset;
 
     uint64_t next_buffer_offset = 0;
-    for (const auto& coord : host_storage.buffer().shard_coords()) {
-        // Iterate over local populated shards.
+    // Iterate over distribution coordinates and map to physical coordinates via the topology.
+    const auto& topology_mesh_coords = tensor.tensor_topology().mesh_coords();
+    size_t dist_idx = 0;
+    for (const auto& dist_coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
+        const auto& coord = topology_mesh_coords[dist_idx++];
+
         if (const auto& buffer = host_storage.buffer().get_shard(coord); buffer.has_value()) {
             const auto* buffer_address = buffer->view_bytes().data();
             const std::size_t buffer_size = buffer->view_bytes().size();
@@ -195,7 +199,7 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
             size_t key = 0;
             for (size_t dim = 0; dim < placements.size(); ++dim) {
                 if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
-                    key = key * mesh_shape[dim] + coord[dim];
+                    key = key * mesh_shape[dim] + dist_coord[dim];
                 }
             }
 
