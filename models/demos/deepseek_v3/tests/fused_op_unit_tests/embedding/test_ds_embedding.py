@@ -132,8 +132,16 @@ def _run_ds_embedding_test(
 
     # Log output shape for debugging
     logger.info(f"tt_output_torch shape after mesh concat: {tt_output_torch.shape}")
-    # Shape is [num_rows, seq_len, hidden_per_row] = [4, seq_len, 1792]
+    # Recent embedding API changes can produce either:
+    # - [num_rows, seq_len, hidden_per_row]
+    # - [num_rows, 1, seq_len, hidden_per_row]
+    if tt_output_torch.ndim == 4:
+        assert tt_output_torch.shape[1] == 1, f"Unexpected embedding output shape: {tt_output_torch.shape}"
+        tt_output_torch = tt_output_torch[:, 0, :, :]
+    elif tt_output_torch.ndim != 3:
+        raise ValueError(f"Unexpected embedding output shape: {tt_output_torch.shape}")
 
+    # Shape is now [num_rows, seq_len, hidden_per_row] = [4, seq_len, 1792]
     # Trim to original seq_len first
     tt_output_torch = tt_output_torch[:, :original_seq_len, :]
 

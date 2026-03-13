@@ -8,10 +8,19 @@ import json
 from pathlib import Path
 from types import SimpleNamespace
 
+import pytest
 import safetensors.torch
 import torch
 
-from models.demos.deepseek_v3.utils.hf_model_utils import save_dequantized_hf_checkpoint
+from models.demos.deepseek_v3.utils.hf_model_utils import (
+    index_model_weights,
+    load_weight_from_weights_dict,
+    materialize_model_weights,
+    prepare_model_state_dict,
+    save_dequantized_hf_checkpoint,
+    unload_weight_from_weights_dict,
+)
+from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3.utils.test_utils import dequantize_state_dict, load_state_dict
 
 
@@ -145,3 +154,97 @@ def test_dequantize_state_dict_compat_shim_handles_quantized_inputs():
     )
     assert dequantized["plain.weight"].dtype == torch.bfloat16
     assert torch.equal(dequantized["plain.weight"], plain_weight.to(torch.bfloat16))
+
+
+def test_prepare_model_state_dict_returns_lazy_state_dict_for_hf_weights(tmp_path: Path):
+    model_dir = tmp_path / "deepseek-dequantized"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    lm_head = torch.tensor([[1.0, -1.0], [2.0, -2.0]], dtype=torch.bfloat16)
+    safetensors.torch.save_file(
+        {
+            "model.embed_tokens.weight": torch.tensor([[0.5, 0.25], [-0.5, -0.25]], dtype=torch.bfloat16),
+            "model.norm.weight": torch.tensor([1.0, 2.0], dtype=torch.bfloat16),
+            "lm_head.weight": lm_head,
+        },
+        str(shard),
+    )
+    _write_index(
+        model_dir,
+        {
+            "model.embed_tokens.weight": shard.name,
+            "model.norm.weight": shard.name,
+            "lm_head.weight": shard.name,
+        },
+    )
+
+    state_dict = prepare_model_state_dict(SimpleNamespace(), random_weights=False, model_path=str(model_dir))
+
+    assert isinstance(state_dict, LazyStateDict)
+    assert "lm_head.weight" in state_dict
+    assert torch.equal(state_dict["lm_head.weight"], lm_head)
+
+
+def test_prepare_model_state_dict_rejects_quantized_hf_weights(tmp_path: Path):
+    model_dir = tmp_path / "deepseek-quantized"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    safetensors.torch.save_file(
+        {
+            "model.embed_tokens.weight": torch.tensor([[1.0]], dtype=torch.bfloat16),
+            "model.layers.0.self_attn.q_proj.weight_scale_inv": torch.tensor([[0.5]], dtype=torch.float32),
+            "lm_head.weight": torch.tensor([[2.0]], dtype=torch.bfloat16),
+        },
+        str(shard),
+    )
+    _write_index(
+        model_dir,
+        {
+            "model.embed_tokens.weight": shard.name,
+            "model.layers.0.self_attn.q_proj.weight_scale_inv": shard.name,
+            "lm_head.weight": shard.name,
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="Detected quantized HF tensors"):
+        prepare_model_state_dict(SimpleNamespace(), random_weights=False, model_path=str(model_dir))
+
+
+def test_materialize_model_weights_keeps_explicit_eager_path(tmp_path: Path):
+    model_dir = tmp_path / "deepseek-materialized"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    lm_head = torch.tensor([[3.0, -3.0]], dtype=torch.bfloat16)
+    safetensors.torch.save_file({"lm_head.weight": lm_head}, str(shard))
+
+    state_dict = materialize_model_weights(model_dir)
+
+    assert isinstance(state_dict, dict)
+    assert torch.equal(state_dict["lm_head.weight"], lm_head)
+
+
+def test_unload_weight_from_lazy_state_dict_evicts_cache(tmp_path: Path):
+    model_dir = tmp_path / "deepseek-lazy-unload"
+    model_dir.mkdir(parents=True, exist_ok=True)
+
+    shard = model_dir / "model-00001-of-00001.safetensors"
+    weight = torch.tensor([[4.0, -4.0]], dtype=torch.bfloat16)
+    safetensors.torch.save_file({"lm_head.weight": weight}, str(shard))
+    _write_index(model_dir, {"lm_head.weight": shard.name})
+
+    state_dict = index_model_weights(model_dir)
+    assert isinstance(state_dict, LazyStateDict)
+
+    load_weight = load_weight_from_weights_dict(state_dict)
+    unload_weight = unload_weight_from_weights_dict(state_dict)
+    target_tensor = torch.empty_like(weight)
+
+    load_weight("lm_head.weight", target_tensor)
+    assert "lm_head.weight" in state_dict._cache
+
+    unload_weight("lm_head.weight", target_tensor)
+    assert target_tensor.numel() == 0
+    assert "lm_head.weight" not in state_dict._cache
