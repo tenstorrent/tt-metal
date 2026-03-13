@@ -88,8 +88,12 @@ void write_successful_jit_build_marker(const JitBuildState& build, const JitBuil
 // own temp file, and the last rename wins.  Last-writer-wins is acceptable
 // because all clients produce equivalent content (same source, same flags).
 //
+// No two clients ever call hard_link_or_copy with the same destination path.
+// Each call goes to a process-unique temp path from generate_temp_path(),
+// which embeds a 64-bit random per-process ID (collision probability ~2^-64).
+//
 // All NFS cache writes in this file follow this pattern:
-//   1. generate_temp_path(final_path) -> unique temp path
+//   1. generate_temp_path(final_path) -> unique temp path per process
 //   2. hard_link_or_copy(source, temp_path)
 //   3. safe_rename(temp_path, final_path)
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
@@ -680,6 +684,23 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
 
     sync_build_steps(events);
 
+    const size_t num_srcs = this->srcs_.size();
+    const size_t num_compiled = compiled.count();
+    cache_total_srcs_.fetch_add(num_srcs, std::memory_order_relaxed);
+    cache_compiled_count_.fetch_add(num_compiled, std::memory_order_relaxed);
+    if (num_srcs > 0) {
+        const size_t total = cache_total_srcs_.load(std::memory_order_relaxed);
+        const size_t compiled_total = cache_compiled_count_.load(std::memory_order_relaxed);
+        const size_t hits_total = total - compiled_total;
+        log_debug(
+            tt::LogBuildKernels,
+            "JIT cache: {}/{} hits ({:.1f}%){}",
+            hits_total,
+            total,
+            100.0 * static_cast<double>(hits_total) / static_cast<double>(total),
+            state_changed ? " [state changed, full recompile]" : "");
+    }
+
     if (env_.get_rtoptions().get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
     }
@@ -879,6 +900,8 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         if (use_scratch) {
             // Merge compiled object files from scratch to NFS cache, renaming
             // from temp names to final names in one step.
+            // Each process uses a unique temp path from generate_temp_path();
+            // no two clients write to the same NFS path in hard_link_or_copy.
             for (size_t i = 0; i < num_objs; ++i) {
                 fs::path scratch_temp = fs::path(work_dir) / this->temp_objs_[i];
                 fs::path cache_final = fs::path(cache_dir) / this->objs_[i];

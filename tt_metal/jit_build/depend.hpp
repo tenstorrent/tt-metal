@@ -32,8 +32,8 @@ void write_dependency_hashes(
     std::ostream& hash_file,
     const std::string& canonical_dir = {});
 
-// Reads dependencies from .d file and writes their hashes to .hash file.
-// Deletes the .hash file on any failure.
+// Reads dependencies from .d file and writes their hashes to .dephash file.
+// Deletes the .dephash file on any failure.
 // When `canonical_dir` is non-empty, scratch-local paths in the .dephash
 // output are rewritten to NFS cache paths (see overload above for details).
 void write_dependency_hashes(
@@ -45,7 +45,7 @@ void write_dependency_hashes(
 // Returns true if all dependencies' hashes match those stored in `hash_file`.
 bool dependencies_up_to_date(std::istream& hash_file);
 
-// Returns true if all dependencies' hashes match those stored in the .hash file.
+// Returns true if all dependencies' hashes match those stored in the .dephash file.
 bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj);
 
 }  // namespace tt::jit_build

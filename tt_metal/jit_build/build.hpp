@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #pragma once
+#include <atomic>
 #include <cstdint>
 #include <bitset>
 #include <span>
@@ -170,6 +171,13 @@ protected:
     // Used to detect when build flags change between runs so that stale cached objects
     // are not reused.  Written to a ".build_state" file in the output directory.
     uint64_t build_state_hash_{};
+
+    // Lifetime cache hit-rate counters.  Accumulate across all compile() calls on
+    // this JitBuildState.  Mutable so compile() (which is const) can update them.
+    // fetch_add with relaxed ordering is sufficient: these are diagnostic counters
+    // with no ordering dependency on other memory operations.
+    mutable std::atomic<size_t> cache_total_srcs_{0};
+    mutable std::atomic<size_t> cache_compiled_count_{0};
 
     // Upper bound for compile objects.
     // Current max obj count is 2 -- very sufficient for now.

@@ -176,6 +176,11 @@ bool safe_rename(const std::filesystem::path& src, const std::filesystem::path& 
 // Safe create_hard_link with fallback to copy_file, retrying on ESTALE.
 // Does NOT sync -- call sync_filesystem() at the appropriate boundary.
 // Returns true on success, false on failure.
+//
+// NFS safety: callers MUST write to a unique temporary path (e.g. via
+// jit_build::utils::FileRenamer::generate_temp_path()), then atomically
+// rename to the final destination.  See the "NFS write safety" comment in
+// tt_metal/jit_build/build.cpp for the full pattern and rationale.
 bool safe_hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link);
 
 // Safe create_directories that ignores "already exists" and retries on ESTALE.
