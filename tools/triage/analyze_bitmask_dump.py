@@ -179,7 +179,12 @@ def _infer_group_size(host_packed: Optional[torch.Tensor], packed_by_shard: Dict
 
 
 def analyze_step_grouped(
-    step: int, shard_map: Dict[int, StepShard], verbose: bool, show_ok: bool, ignore_logits_nan: bool
+    step: int,
+    shard_map: Dict[int, StepShard],
+    verbose: bool,
+    show_ok: bool,
+    ignore_logits_nan: bool,
+    check_all_replicas: bool,
 ) -> int:
     errs = 0
     host_packed: Optional[torch.Tensor] = None
@@ -230,17 +235,35 @@ def analyze_step_grouped(
             lines.append(f"  inferred mesh rows={mesh_rows} cols={mesh_cols}; " f"join_order(c0-per-row)={join_order}")
 
         # Replica consistency check on packed stage (must be exact across cols).
-        packed_stage = by_name.get("packed_bitmask_device", {})
-        for r in range(mesh_rows):
-            ref = packed_stage[shard_ids[r * mesh_cols]].to(torch.int32)
-            for c in range(1, mesh_cols):
-                sid = shard_ids[r * mesh_cols + c]
-                cur = packed_stage[sid].to(torch.int32)
-                msg = first_mismatch(cur, ref)
-                if msg:
-                    lines.append(f"  ! packed replica mismatch row={r} col={c} shard={sid} -> {msg}")
-                    local_errs += 1
-                    break
+        def _check_stage_replicas(stage_name: str) -> None:
+            nonlocal local_errs
+            stage = by_name.get(stage_name, {})
+            if not stage:
+                return
+            for r in range(mesh_rows):
+                ref = stage[shard_ids[r * mesh_cols]]
+                ref = ref.to(torch.float32) if ref.is_floating_point() else ref.to(torch.int32)
+                for c in range(1, mesh_cols):
+                    sid = shard_ids[r * mesh_cols + c]
+                    cur = stage[sid]
+                    cur = cur.to(torch.float32) if cur.is_floating_point() else cur.to(torch.int32)
+                    msg = first_mismatch(cur, ref, atol=2.0e6 if ref.is_floating_point() else 0.0, rtol=0.0)
+                    if msg:
+                        lines.append(f"  ! {stage_name} replica mismatch row={r} col={c} shard={sid} -> {msg}")
+                        local_errs += 1
+                        break
+
+        _check_stage_replicas("packed_bitmask_device")
+        if check_all_replicas:
+            for stage_name in (
+                "bitmask_to_broadcast",
+                "broadcast_unpacked_rshift",
+                "broadcast_unpacked_and1",
+                "unpacked_bitmask_reshape",
+                "converted_bitmask_tile",
+                "unpacked_penalty_mask",
+            ):
+                _check_stage_replicas(stage_name)
 
         joined: Dict[str, torch.Tensor] = {}
         for name in NAMES:
@@ -353,6 +376,11 @@ def main() -> None:
         action="store_true",
         help="Treat non-finite logits delta positions as mismatches",
     )
+    ap.add_argument(
+        "--check-all-replicas",
+        action="store_true",
+        help="Validate row/col replica consistency for all dumped bitmask stages",
+    )
     args = ap.parse_args()
 
     by_step = load_dump_dir(args.dump_dir)
@@ -377,6 +405,7 @@ def main() -> None:
                     verbose=args.verbose,
                     show_ok=args.show_ok,
                     ignore_logits_nan=not args.no_ignore_logits_nan,
+                    check_all_replicas=args.check_all_replicas,
                 )
         else:
             total_errs += analyze_step_grouped(
@@ -385,6 +414,7 @@ def main() -> None:
                 verbose=args.verbose,
                 show_ok=args.show_ok,
                 ignore_logits_nan=not args.no_ignore_logits_nan,
+                check_all_replicas=args.check_all_replicas,
             )
 
     print(f"\nDone. Total issues found: {total_errs}")
