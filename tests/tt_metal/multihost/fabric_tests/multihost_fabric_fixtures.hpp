@@ -90,6 +90,14 @@ inline const std::vector<std::vector<EthCoord>>& get_eth_coords_for_dual_2x2_t3k
     return t3k_2x2_eth_coords;
 }
 
+inline const std::vector<std::vector<EthCoord>>& get_eth_coords_for_1x16_bigmesh_t3k() {
+    static const std::vector<std::vector<EthCoord>> t3k_1x16_eth_coords = {
+        get_eth_coords_for_2x4_t3k(),
+        get_eth_coords_for_2x4_t3k()};
+
+    return t3k_1x16_eth_coords;
+}
+
 // Base fixture for Inter-Mesh Routing Fabric 2D tests.
 class InterMeshRoutingFabric2DFixture : public BaseFabricFixture {
 public:
@@ -236,6 +244,18 @@ class NanoExabox1x8FabricFixture : public Fixture {
     }
 };
 
+// Generic Fixture for BigMesh 1x16 dual T3K systems using Fabric (two T3Ks as a single mesh)
+template <typename Fixture>
+class BigMesh1x16FabricFixture : public Fixture {
+    std::string get_path_to_mesh_graph_desc() override {
+        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_1x16_experimental_bigmesh_mgd.textproto";
+    }
+
+    std::vector<std::vector<EthCoord>> get_eth_coord_mapping() override {
+        return get_eth_coords_for_1x16_bigmesh_t3k();
+    }
+};
+
 // Dedicated Fabric and Distributed Test Fixtures fir Multi-Host + Multi-Mesh Tests
 using IntermeshSplit2x2FabricFixture = Split2x2FabricFixture<InterMeshRoutingFabric2DFixture>;
 using MeshDeviceSplit2x2Fixture = Split2x2FabricFixture<MultiMeshDeviceFabricFixture>;
@@ -254,6 +274,9 @@ using MeshDeviceNanoExabox2x4Fixture = NanoExabox2x4FabricFixture<MultiMeshDevic
 
 using IntermeshNanoExabox1x8FabricFixture = NanoExabox1x8FabricFixture<InterMeshRoutingFabric2DFixture>;
 using MeshDeviceNanoExabox1x8Fixture = NanoExabox1x8FabricFixture<MultiMeshDeviceFabricFixture>;
+
+using IntermeshBigMesh1x16FabricFixture = BigMesh1x16FabricFixture<InterMeshRoutingFabric2DFixture>;
+using MeshDeviceBigMesh1x16Fixture = BigMesh1x16FabricFixture<MultiMeshDeviceFabricFixture>;
 
 // Fixture for Exabox systems using Fabric
 class IntermeshExaboxFabricFixture : public BaseFabricFixture {
