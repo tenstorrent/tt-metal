@@ -24,7 +24,7 @@ void kernel_main() {
     constexpr uint32_t Ht = get_compile_time_arg_val(5);
     constexpr uint32_t Wt = get_compile_time_arg_val(6);
     constexpr bool freq_per_head = get_compile_time_arg_val(7) == 1;
-    constexpr bool trans_mat_sharded = get_compile_time_arg_val(8) == 1;
+    constexpr bool trans_mat_use_global_cb = get_compile_time_arg_val(8) == 1;
     constexpr bool cos_sin_sharded = get_compile_time_arg_val(9) == 1;
     constexpr bool cos_sin_sharded_reload = get_compile_time_arg_val(10) == 1;
     constexpr auto input_args = TensorAccessorArgs<11>();
@@ -43,7 +43,7 @@ void kernel_main() {
     // Transformation matrix
     // ------------------------------------------------------------------
     // Read transformation matrix in CB (only once, because it will be reused)
-    if constexpr (trans_mat_sharded) {
+    if constexpr (trans_mat_use_global_cb) {
         cb_reserve_back(trans_mat_cb_id, onetile);
         cb_push_back(trans_mat_cb_id, onetile);
     } else {
