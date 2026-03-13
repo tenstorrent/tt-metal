@@ -27,6 +27,7 @@ NAMES = [
     "broadcast_unpacked_and1",
     "unpacked_bitmask_reshape",
     "converted_bitmask_tile",
+    "converted_bitmask_tile_post_penalty",
     "unpacked_penalty_mask",
     "logits_before_mask",
     "logits_after_mask",
@@ -261,6 +262,7 @@ def analyze_step_grouped(
                 "broadcast_unpacked_and1",
                 "unpacked_bitmask_reshape",
                 "converted_bitmask_tile",
+                "converted_bitmask_tile_post_penalty",
                 "unpacked_penalty_mask",
             ):
                 _check_stage_replicas(stage_name)
@@ -309,6 +311,9 @@ def analyze_step_grouped(
             "broadcast_unpacked_and1": torch_and1,
             "unpacked_bitmask_reshape": torch_unpacked,
             "converted_bitmask_tile": torch_unpacked,
+            # converted_bitmask is re-dumped after the penalty add/multiply ops to detect
+            # in-place mutation; it should still equal the pre-penalty 0/1 values.
+            "converted_bitmask_tile_post_penalty": torch_unpacked,
             "unpacked_penalty_mask": torch_penalty,
         }
         for name, exp in stage_expected.items():
