@@ -1010,9 +1010,10 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             video_torch = self.vae_ccl_manager.device_to_host(tt_video_BCTHW, concat_dims)
             video_torch = video_torch[:, :, :, :new_logical_h, :]
 
-            # Vectorized denormalize + format conversion
-            # Replaces postprocess_video's per-frame Python loop over 84 frames
-            video = (video_torch * 0.5 + 0.5).clamp(0, 1).permute(0, 2, 3, 4, 1).float().numpy()
+            if output_type == "np":
+                video = (video_torch * 0.5 + 0.5).clamp(0, 1).permute(0, 2, 3, 4, 1).float().numpy()
+            else:
+                video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
         else:
             video = latents
 
