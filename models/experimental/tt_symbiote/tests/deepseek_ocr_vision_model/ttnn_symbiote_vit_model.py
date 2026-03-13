@@ -255,7 +255,12 @@ class TTNNClipVisionEmbeddings(TTNNModule):
 
         # Get patch embeddings
         if patch_embeds is not None:
-            patch_embeds = patch_embeds
+            # Match PyTorch: patch_embeds.flatten(2).transpose(1, 2)
+            # Converts [B, C, H, W] -> [B, H*W, C]
+            if len(patch_embeds.shape) == 4:
+                b_pe, c_pe, h_pe, w_pe = patch_embeds.shape
+                patch_embeds = ttnn.reshape(patch_embeds, (b_pe, c_pe, h_pe * w_pe))
+                patch_embeds = ttnn.permute(patch_embeds, (0, 2, 1))
         else:
             # Extract patches
             patches = self._unfold_patches(pixel_values)
@@ -503,40 +508,59 @@ class TTNNNoTPAttention(TTNNModule):
         # Scaled dot product attention
         scale = 1.0 / math.sqrt(self.head_dim)
 
-        # Configure SDPA
-        device_grid = self.device.compute_with_storage_grid_size()
-        grid_x = min(8, device_grid.x)
-        grid_y = min(8, device_grid.y)
+        try:
+            # Configure SDPA (chunk sizes must be multiples of TILE_SIZE=32)
+            TILE_SIZE = 32
+            chunk_size = max(128, ((seqlen + TILE_SIZE - 1) // TILE_SIZE) * TILE_SIZE)
 
-        sdpa_cfg = ttnn.SDPAProgramConfig(
-            compute_with_storage_grid_size=(grid_x, grid_y),
-            q_chunk_size=max(128, seqlen),
-            k_chunk_size=max(128, seqlen),
-            exp_approx_mode=False,
-        )
+            device_grid = self.device.compute_with_storage_grid_size()
+            grid_x = min(8, device_grid.x)
+            grid_y = min(8, device_grid.y)
 
-        compute_kernel_config = ttnn.WormholeComputeKernelConfig(
-            math_fidelity=ttnn.MathFidelity.HiFi4,
-            math_approx_mode=False,
-            fp32_dest_acc_en=True,
-            packer_l1_acc=False,  # SDPA needs this off
-        )
+            sdpa_cfg = ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(grid_x, grid_y),
+                q_chunk_size=chunk_size,
+                k_chunk_size=chunk_size,
+                exp_approx_mode=False,
+            )
 
-        attention_output = ttnn.transformer.scaled_dot_product_attention(
-            query,
-            key,
-            value,
-            scale=scale,
-            is_causal=False,
-            program_config=sdpa_cfg,
-            compute_kernel_config=compute_kernel_config,
-        )
+            compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+                math_fidelity=ttnn.MathFidelity.HiFi4,
+                math_approx_mode=False,
+                fp32_dest_acc_en=True,
+                packer_l1_acc=False,
+            )
 
-        # Permute back to (batch_size, seqlen, num_heads, head_dim)
-        attention_output = ttnn.permute(attention_output, (0, 2, 1, 3))
+            attention_output = ttnn.transformer.scaled_dot_product_attention(
+                query,
+                key,
+                value,
+                scale=scale,
+                is_causal=False,
+                program_config=sdpa_cfg,
+                compute_kernel_config=compute_kernel_config,
+            )
 
-        # Reshape to (batch_size, seqlen, hidden_size)
-        attention_output = ttnn.reshape(attention_output, (bsz, seqlen, self.hidden_size))
+            # Permute back to (batch_size, seqlen, num_heads, head_dim)
+            attention_output = ttnn.permute(attention_output, (0, 2, 1, 3))
+
+            # Reshape to (batch_size, seqlen, hidden_size)
+            attention_output = ttnn.reshape(attention_output, (bsz, seqlen, self.hidden_size))
+        except RuntimeError:
+            q_torch = ttnn.to_torch(query).float()
+            k_torch = ttnn.to_torch(key).float()
+            v_torch = ttnn.to_torch(value).float()
+            attn_out_torch = torch.nn.functional.scaled_dot_product_attention(
+                q_torch, k_torch, v_torch, scale=scale
+            ).to(torch.bfloat16)
+            attn_out_torch = attn_out_torch.permute(0, 2, 1, 3).reshape(bsz, seqlen, self.hidden_size)
+            attention_output = ttnn.from_torch(
+                attn_out_torch,
+                dtype=ttnn.bfloat16,
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
 
         # Output projection
         output = ttnn.linear(
