@@ -1,0 +1,5 @@
+weights/
+*.pth
+__pycache__/
+generated/
+RT-DETR/rtdetr_pytorch/output/
