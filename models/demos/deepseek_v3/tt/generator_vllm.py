@@ -69,6 +69,7 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             model_path=Path(model_path),
             cache_dir=Path(cache_dir),
             tokenizer=tokenizer,
+            max_seq_len=max_seq_len,
         )
 
         return model
@@ -147,7 +148,6 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
             .decode_forward(
                 tokens=tokens_step,
                 start_pos=kwargs["start_pos"],
-                batch_size_per_row=USERS_PER_ROW,
                 enable_trace=enable_trace,
                 page_table=page_tables,
             )

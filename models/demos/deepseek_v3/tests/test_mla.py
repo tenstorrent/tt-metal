@@ -215,8 +215,8 @@ def run_test_forward_pass_mla2d(
 
     # Set up page config
     logger.info("Setting up model configs")
-    user_id = None if mode == "decode" else torch.randint(0, USERS_PER_ROW * mesh_device.shape[0], ()).item()
-    paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
+    user_id = None if mode == "decode" else torch.randint(0, batch_size_per_row * mesh_device.shape[0], ()).item()
+    paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, batch_size_per_row, mesh_device.shape[1])
     paged_input_cache, torch_page_table = paged_cache_from_torch(
         input_cache, tuple(mesh_device.shape), paged_config, user_id
     )
@@ -233,30 +233,13 @@ def run_test_forward_pass_mla2d(
         real_weights=module_path is not None,
         layer_id=module_path,
     )
-    model_config = get_model_config(MLA2D, mode, hf_config_short, mesh_device)
+    model_config = get_model_config(MLA2D, mode, hf_config_short, mesh_device, batch_size_per_row)
     model_state = MLA2D.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_cache)
     run_config = create_run_config(model_config, weight_config, model_state)
 
     # Set up ttnn inputs
     logger.info("Setting up model inputs")
-    # Create input memory config using the new pattern
-    if mode == "decode":
-        # Calculate per-device shape after ShardTensor2dMesh with dims=(-2, -1)
-        # For decode, torch_input.unsqueeze(0) has shape [1, seq_len, batch, hidden_size],
-        # so dims=(-2, -1) shards the (batch, hidden_size) dimensions across the mesh.
-        full_shape = torch_input.unsqueeze(0).shape  # [1, seq_len, batch, hidden_size]
-        per_device_shape = (
-            full_shape[0],
-            full_shape[1],
-            full_shape[2] // mesh_device.shape[0],  # batch (dim -2) sharded across mesh rows
-            full_shape[3] // mesh_device.shape[1],  # hidden_size (dim -1) sharded across mesh cols
-        )
-        input_memory_config = ttnn.create_sharded_memory_config(
-            per_device_shape,
-            **run_config["mla1d"]["wq_kv_a_in0_memory_config"],
-        )
-    else:
-        input_memory_config = run_config["input_memory_config"]
+    input_memory_config = run_config["input_memory_config"]
 
     tt_input = ttnn.from_torch(
         torch_input.unsqueeze(0),
@@ -416,6 +399,45 @@ def test_forward_pass(
         state_dict,
         decode_position_ids,
         perf_mode,
+    )
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": get_fabric_config(),
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
+def test_mode_decode_forward_pass_batch_8_users_per_row(
+    hf_config_short,
+    cache_path,
+    mesh_device,
+    ccl,
+    model_path,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict,
+):
+    # Keep this case out of the shared matrix so batch-8 decode coverage stays targeted.
+    run_test_forward_pass_mla2d(
+        layer_idx=0,
+        mode="decode",
+        seq_len=1,
+        batch_size_per_row=8,
+        hf_config_short=hf_config_short,
+        cache_path=cache_path,
+        mesh_device=mesh_device,
+        ccl=ccl,
+        model_path=model_path,
+        module_path="model.layers.0.self_attn",
+        force_recalculate_weight_config=force_recalculate_weight_config,
+        state_dict=state_dict,
+        decode_position_ids=17,
+        perf_mode=False,
     )
 
 

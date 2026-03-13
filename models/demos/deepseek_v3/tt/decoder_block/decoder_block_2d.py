@@ -46,8 +46,14 @@ class DecoderBlock2D(DecoderBlock2DBase):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
-        return NonExpert.decode_model_config(hf_config, mesh_device, fabric_config)
+        return NonExpert.decode_model_config(
+            hf_config,
+            mesh_device,
+            fabric_config,
+            batch_size_per_row=batch_size_per_row,
+        )
 
     @classmethod
     def create_mlp_state(

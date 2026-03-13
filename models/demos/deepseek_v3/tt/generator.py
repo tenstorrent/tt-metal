@@ -25,7 +25,7 @@ from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
-MAX_SEQ_LEN = 2048
+DEFAULT_MAX_SEQ_LEN = 2048
 
 
 def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.Tensor]:
@@ -50,8 +50,8 @@ class DeepseekGenerator(WarmupForwardMixin):
     Notes:
     - Prefill at the model level is not fully implemented in RowBatchedModel; we emulate
       prefill by iterating decode steps over the prompt tokens (updates caches).
-    - Batch size in configs is tied to USERS_PER_ROW; for simplicity we decode
-      up to that many sequences. If fewer are provided, we pad/ignore extras.
+    - Decode runs are configured for up to a fixed number of users per row.
+      If fewer prompts are provided, we pad/ignore extras.
 
     Usage:
     - Context manager (recommended):
@@ -73,7 +73,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         mesh_device: ttnn.MeshDevice | None = None,
         model_path: str | Path | None = None,
         cache_dir: str | Path | None = None,
-        batch_size: int = USERS_PER_ROW,
+        batch_size_per_row: int = USERS_PER_ROW,
         tokenizer=None,
         random_weights: bool = False,
         dense_layers: int | None = None,
@@ -97,11 +97,24 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.hf_config = (
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         )
-        # Hard-code the context length to keep KV cache + RoPE tables bounded.
-        # (Avoid env var overrides; long-context runs should change this constant in code.)
-        if max_seq_len is not None and int(max_seq_len) != MAX_SEQ_LEN:
-            logger.warning(f"Ignoring requested max_seq_len={max_seq_len}; using MAX_SEQ_LEN={MAX_SEQ_LEN}.")
-        self.hf_config.max_seq_len = MAX_SEQ_LEN
+        model_max_seq_len = int(self.hf_config.max_position_embeddings)
+        requested_max_seq_len = DEFAULT_MAX_SEQ_LEN if max_seq_len is None else int(max_seq_len)
+        if requested_max_seq_len <= 0:
+            raise ValueError(f"max_seq_len must be > 0, got {requested_max_seq_len}")
+        if requested_max_seq_len % ttnn.TILE_SIZE != 0:
+            raise ValueError(f"max_seq_len {requested_max_seq_len} must be divisible by TILE_SIZE={ttnn.TILE_SIZE}")
+        if requested_max_seq_len > model_max_seq_len:
+            raise ValueError(
+                f"max_seq_len {requested_max_seq_len} exceeds model-supported context length {model_max_seq_len}"
+            )
+        if requested_max_seq_len != DEFAULT_MAX_SEQ_LEN:
+            logger.warning(
+                "Using overridden max_seq_len={} (default={}, model supports up to {}).",
+                requested_max_seq_len,
+                DEFAULT_MAX_SEQ_LEN,
+                model_max_seq_len,
+            )
+        self.hf_config.max_seq_len = requested_max_seq_len
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
@@ -128,14 +141,23 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.ccl = CCL(mesh_device)
         mesh_shape = list(mesh_device.shape)
         self.dp_factor = mesh_shape[1]
-        self.batch_size_per_row = USERS_PER_ROW
+        batch_size_per_row = int(batch_size_per_row)
+        if batch_size_per_row <= 0:
+            raise ValueError(f"batch_size_per_row must be > 0, got {batch_size_per_row}")
+        if batch_size_per_row % self.dp_factor != 0:
+            raise ValueError(f"batch_size_per_row {batch_size_per_row} must be divisible by dp_factor={self.dp_factor}")
+        self.batch_size_per_row = batch_size_per_row
         self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
 
         if sample_on_device and enable_trace:
             raise ValueError("sample_on_device=True and enable_trace=True is not supported yet. Disable either one.")
         # Configure sampling
         if self.sample_on_device:
-            self.sampling_args = make_deepseek_sampling_args(mesh_device, self.hf_config.vocab_size)
+            self.sampling_args = make_deepseek_sampling_args(
+                mesh_device,
+                self.hf_config.vocab_size,
+                max_batch_size=self.batch_size_per_row,
+            )
             self.sampling_generator = SamplingGenerator(
                 args=self.sampling_args, mesh_device=self.mesh_device, tt_ccl=self.ccl, enable_internal_trace=False
             )
@@ -195,32 +217,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         if self.enable_mem_profile:
             dump_ttnn_meminfo(self.mesh_device, header=header)
 
-    @staticmethod
-    def _ensure_max_seq_len(hf_config) -> None:
-        if getattr(hf_config, "max_seq_len", None) is not None:
-            return
-        try:
-            max_pos = getattr(hf_config, "max_position_embeddings", None)
-            scaled = None
-            if getattr(hf_config, "rope_scaling", None):
-                factor = hf_config.rope_scaling.get("factor")
-                orig = hf_config.rope_scaling.get("original_max_position_embeddings")
-                if factor and orig:
-                    scaled = int(factor * orig)
-            if max_pos is not None and scaled is not None:
-                # Prefer the larger of the declared max_position_embeddings and the rope-scaled length.
-                hf_config.max_seq_len = int(max(max_pos, scaled))
-                return
-            if scaled is not None:
-                hf_config.max_seq_len = int(scaled)
-                return
-            if max_pos is not None:
-                hf_config.max_seq_len = int(max_pos)
-                return
-        except Exception:
-            pass
-        hf_config.max_seq_len = 4096
-
     def _prepare_weight_configs(self, cache_dir: str | Path | None) -> None:
         weight_cache_path = Path(cache_dir) if cache_dir is not None else Path("generated/deepseek_v3")
         weight_cache_path.mkdir(parents=True, exist_ok=True)
@@ -259,7 +255,9 @@ class DeepseekGenerator(WarmupForwardMixin):
             logger.info("Creating model prefill config...")
             self._dump_meminfo("Before creating model prefill config...")
             self.model_prefill_cfg = RowBatchedModel.prefill_model_config(
-                hf_config=self.hf_config, mesh_device=self.mesh_device
+                hf_config=self.hf_config,
+                mesh_device=self.mesh_device,
+                batch_size_per_row=self.batch_size_per_row,
             )
             self._dump_meminfo("After creating model prefill config...")
             self._prepare_model_states(kv_cache_override=kv_cache_override)
@@ -281,7 +279,9 @@ class DeepseekGenerator(WarmupForwardMixin):
                 hasattr(self, "model_shared_state") and self.model_shared_state is not None
             ), "Model shared state must be prepared before creating decode run config. Run _prepare_run_configs('prefill') first."
             self.model_decode_cfg = RowBatchedModel.decode_model_config(
-                hf_config=self.hf_config, mesh_device=self.mesh_device
+                hf_config=self.hf_config,
+                mesh_device=self.mesh_device,
+                batch_size_per_row=self.batch_size_per_row,
             )
             self._dump_meminfo("Before creating model run config for decode...")
             self.model_run_config_decode = create_run_config(
@@ -470,7 +470,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         return tt_out
 
-    def _tokens_from_device(self, tt_out_tok, mesh_device, batch_size_per_row=USERS_PER_ROW) -> torch.Tensor:
+    def _tokens_from_device(self, tt_out_tok, mesh_device, batch_size_per_row: int) -> torch.Tensor:
         composed = ttnn.to_torch(
             tt_out_tok,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, -1), mesh_shape=tuple(mesh_device.shape)),
@@ -494,19 +494,13 @@ class DeepseekGenerator(WarmupForwardMixin):
         positions: [B] int tensor
         returns: (rope_tensors, tt_positions)
         """
-        # Build RoPE tensors for current positions
-        rope_setup = RotarySetup(
-            device=self.mesh_device, batch_size_per_row=self.batch_size_per_row, hf_config=self.hf_config
-        )
-        rope_mats = rope_setup.get_rot_mats_table(seq_len=1)
+        rope_mats = self.rope_setup.get_rot_mats_table(seq_len=1)
         rope_tensors = {
             "cos_matrix": rope_mats["cos_matrix"],
             "sin_matrix": rope_mats["sin_matrix"],
             "trans_matrix": rope_mats["trans_matrix"],
         }
 
-        # Create TTNN position tensor as INT32 with the same sharding pattern used in tests
-        mesh_shape = list(self.mesh_device.shape)
         tt_positions = ttnn.from_torch(
             positions.to(torch.int32),
             device=self.mesh_device,
@@ -816,7 +810,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                     decode_logits = self.decode_forward(
                         tokens=next_tokens,
                         start_pos=positions,
-                        batch_size_per_row=self.batch_size_per_row,
                         profiler=profiler,
                         gen_idx=gen_idx,
                         enable_trace=self.enable_trace,
@@ -1053,7 +1046,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         self,
         init_tokens: torch.Tensor,
         positions: torch.Tensor,
-        batch_size_per_row: int,
         page_tables: torch.Tensor | None = None,
     ) -> None:
         """Allocate persistent inputs, capture trace for one decode iteration, and store trace state."""
@@ -1114,7 +1106,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         self,
         tokens: torch.Tensor,
         start_pos: torch.Tensor,
-        batch_size_per_row: int = USERS_PER_ROW,
         gen_idx: int = 0,
         profiler: BenchmarkProfiler | None = None,
         enable_trace: bool = False,
@@ -1135,7 +1126,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         else:
             # Capture trace and return trace output
             if self._trace_id is None:
-                self._capture_decode_trace(tokens, start_pos, batch_size_per_row, page_table)
+                self._capture_decode_trace(tokens, start_pos, page_table)
                 # First call: return the captured run's output
                 assert self._trace_output is not None
                 logits = ttnn.to_torch(
