@@ -20,6 +20,18 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
     "max_prompts,max_users_per_row,repeat_batches,max_new_tokens,override_num_layers,enable_trace,artifact_name,profile_decode",
     [
         pytest.param(
+            56,
+            32,
+            2,
+            128,
+            5,
+            False,
+            None,
+            False,
+            id="tg_stress",
+            marks=pytest.mark.requires_device(["TG"]),
+        ),
+        pytest.param(
             32,
             8,
             2,
@@ -28,7 +40,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             False,
             None,
             False,
-            id="tg_stress",
+            id="tg_upr8",
             marks=pytest.mark.requires_device(["TG"]),
         ),
         pytest.param(
@@ -108,7 +120,8 @@ def test_demo(
     DeepSeek v3 demo test with prompts loaded from JSON file.
 
     Test variants:
-    - tg_stress (TG): request 32 prompts with users_per_row=8, 2 batches, 5 layers - exercises reduced-row decode on single-host TG
+    - tg_stress (TG): 56 prompts, 2 batches, 5 layers - stress test for CI
+    - tg_upr8 (TG): 32 prompts with users_per_row=8, 2 batches, 5 layers - reduced-row functionality check on single-host TG
     - dual_full_demo (DUAL): 256 prompts, 1 batch - tests full prompt capacity
     - dual_stress_demo (DUAL): 56 prompts, 20 batches - tests stability under repeated execution
     - quad_full_demo (QUAD): 512 prompts, 1 batch - tests full prompt capacity

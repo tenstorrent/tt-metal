@@ -145,8 +145,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         batch_size_per_row = int(batch_size_per_row)
         if batch_size_per_row <= 0:
             raise ValueError(f"batch_size_per_row must be > 0, got {batch_size_per_row}")
-        if batch_size_per_row > USERS_PER_ROW:
-            raise ValueError(f"batch_size_per_row {batch_size_per_row} exceeds the supported maximum {USERS_PER_ROW}")
         if batch_size_per_row % self.dp_factor != 0:
             raise ValueError(f"batch_size_per_row {batch_size_per_row} must be divisible by dp_factor={self.dp_factor}")
         self.batch_size_per_row = batch_size_per_row
