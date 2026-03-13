@@ -241,7 +241,7 @@ class DecoderBlockStage(StageKind):
             bcast_secondary_cluster_axis=1,
             reduce_cluster_axis=1,
             sdpa_cluster_axis=0,
-            sdpa_scale_fp32=1.0,
+            sdpa_scale_fp32=d["scale"],
             num_links=1,
             skip_ccl=False,
             upstream_socket=self._state["recv_socket"],

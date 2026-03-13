@@ -672,7 +672,10 @@ def create_decoder_block_tensors(
             golden_moe_shared_down = state_dict[_sd_key("mlp.shared_experts.down_proj.weight")].T.contiguous()
             golden_moe_routing_weights = state_dict[_sd_key("mlp.gate.weight")].T.contiguous()
             golden_moe_bias = (
-                state_dict[_sd_key("mlp.gate.e_score_correction_bias")].reshape(1, 8, 32).contiguous().to(torch.bfloat16)
+                state_dict[_sd_key("mlp.gate.e_score_correction_bias")]
+                .reshape(1, 8, 32)
+                .contiguous()
+                .to(torch.bfloat16)
             )
             golden_moe_gate_proj_dict = {}
             golden_moe_up_proj_dict = {}
@@ -992,7 +995,7 @@ def test_decoder(
                 bcast_secondary_cluster_axis,
                 reduce_cluster_axis,
                 0,  # sdpa_cluster_axis
-                1.0,  # sdpa_scale_fp32
+                d["scale"],  # sdpa_scale_fp32
                 1,  # num_links
                 epsilon,
                 use_fp32,
@@ -1072,7 +1075,7 @@ def test_decoder(
                 bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
                 reduce_cluster_axis=reduce_cluster_axis,
                 sdpa_cluster_axis=0,  # sdpa_cluster_axis
-                sdpa_scale_fp32=1.0,  # sdpa_scale_fp32
+                sdpa_scale_fp32=d["scale"],  # sdpa_scale_fp32
                 num_links=1,  # num_links
                 epsilon=epsilon,
                 fp32_dest_acc_en=use_fp32,
@@ -1569,7 +1572,7 @@ def test_decoder_mlp(
             bcast_secondary_cluster_axis=bcast_secondary_cluster_axis,
             reduce_cluster_axis=reduce_cluster_axis,
             sdpa_cluster_axis=0,
-            sdpa_scale_fp32=1.0,
+            sdpa_scale_fp32=d["scale"],
             num_links=1,
             epsilon=epsilon,
             fp32_dest_acc_en=use_fp32,

@@ -1983,7 +1983,7 @@ void kernel_main() {
         true>
         moe_mcast;
 
-    auto mla_body = [&]() __attribute__((always_inline)) __attribute__((always_inline)) {
+    auto mla_body = [&]() __attribute__((always_inline)) {
         // DPRINT << "Starting MLA" << ENDL();
         // ========================================================================
         // CCL Broadcast (optional, skip if single-device mode)
@@ -2382,7 +2382,7 @@ void kernel_main() {
         }
     };
 
-    auto moe_body = [&]() {
+    auto moe_body = [&]() __attribute__((always_inline)) {
         // 0. Residual Mcast: Broadcast input as residual to mcast receiver cores (pop_src=false)
         // DPRINT << "Starting MoE" << ENDL();
         {

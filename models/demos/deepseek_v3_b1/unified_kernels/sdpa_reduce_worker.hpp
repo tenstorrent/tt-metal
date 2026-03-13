@@ -340,6 +340,9 @@ ALWI void sdpa_tail_streaming_conditional(
         } else {
             sdpa_forward_data(cb_prev_max_sum, cb_cur_max_sum, num_l_chunks, cb_l2, cb_l_out, block_size);
         }
+        // Wait for remote data to arrive still since we need to properly pop the CBs
+        cb_wait_front(cb_worker_max_sum, 1);
+        cb_wait_front(cb_l1, num_l_chunks * block_size);
         return;
     }
 
@@ -358,12 +361,16 @@ ALWI void sdpa_tail_streaming_conditional(
         } else {
             sdpa_forward_data(cb_worker_max_sum, cb_cur_max_sum, num_l_chunks, cb_l1, cb_l_out, block_size);
         }
+        // We don't pop local data so no need to wait for it
         return;
     }
 
     // Just copy local data as fallback
     if (!neighbor_valid && !local_valid) {
         sdpa_forward_data(cb_prev_max_sum, cb_cur_max_sum, num_l_chunks, cb_l2, cb_l_out, block_size);
+        // Wait for remote data to arrive still since we need to properly pop the CBs
+        cb_wait_front(cb_worker_max_sum, 1);
+        cb_wait_front(cb_l1, num_l_chunks * block_size);
         return;
     }
 

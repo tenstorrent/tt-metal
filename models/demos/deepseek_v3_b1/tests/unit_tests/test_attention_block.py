@@ -897,7 +897,7 @@ def test_attention_block(
             bcast_secondary_cluster_axis,
             reduce_cluster_axis,
             0,  # sdpa_cluster_axis
-            1.0,  # sdpa_scale_fp32
+            scale,  # sdpa_scale_fp32
             1,  # num_links
             epsilon,
             use_fp32,
