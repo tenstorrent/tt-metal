@@ -11,9 +11,9 @@
 #include "ttnn/operations/data_movement/unsqueeze/unsqueeze.hpp"
 #include <ttnn/operations/copy/typecast/typecast.hpp>
 
-namespace ttnn::operations::embedding {
+namespace ttnn {
 
-ttnn::Tensor EmbeddingOperation::invoke(
+ttnn::Tensor embedding(
     const Tensor& input_tensor,
     const Tensor& weight_arg,
     const std::optional<int>& pad_token,
@@ -76,4 +76,4 @@ ttnn::Tensor EmbeddingOperation::invoke(
     return embeddings;
 }
 
-}  // namespace ttnn::operations::embedding
+}  // namespace ttnn
