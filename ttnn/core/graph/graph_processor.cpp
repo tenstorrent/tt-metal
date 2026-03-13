@@ -298,6 +298,7 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
 node_id GraphProcessor::add_tensor(const Tensor& t) {
     tt::tt_metal::Buffer* buffer = nullptr;
     if (is_device_tensor(t)) {
+        TT_FATAL(t.is_allocated(), "Tensor is not allocated on device");
         // `t.buffers()` returns a reference buffer allocated on first device in a mesh.
         // It has an ID different from the "backing" buffer that was used to perform the allocation.
         // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
