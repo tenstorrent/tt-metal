@@ -9,22 +9,7 @@ import json
 from pathlib import Path
 from typing import Any, Collection
 
-TASK_ALIASES = {
-    "r1_aime24": "aime24",
-}
-
-
-def resolve_task_name(task_name: str, task_names: Collection[str]) -> str | None:
-    if task_name in task_names:
-        return task_name
-    alias = TASK_ALIASES.get(task_name)
-    if alias in task_names:
-        return alias
-    if task_name.startswith("r1_"):
-        stripped = task_name[len("r1_") :]
-        if stripped in task_names:
-            return stripped
-    return None
+from .score_lmeval_outputs import TASK_ALIASES, resolve_task_name
 
 
 def _jsonify(value: Any) -> Any:
