@@ -46,12 +46,11 @@ python3 tt-train/tools/profiling/results_json/add_roofline.py results.json /path
   --phases 1 2
 ```
 
-### Local mode (interactive node)
+### Local mode
 
-If you already have an interactive reservation via `srun`, skip Slurm submission:
+If you want to run this locally, without slurm present, you can do this with `--local` flag.
 
 ```bash
-srun --partition bh_pod_4x32_B45 --nodelist bh-glx-b08u02 --pty bash
 # Then on the node:
 ./tt-train/tools/profiling/run_experiments.sh --local --phases 1 2
 ```
