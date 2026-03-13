@@ -8,6 +8,7 @@ import torch
 
 import ttnn
 from models.common.sampling import SamplingGenerator, SamplingParams, format_sampling_params
+from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, make_deepseek_sampling_args
 
 
@@ -151,3 +152,31 @@ def test_deepseek_device_sampling_stochastic_behavior(mesh_device, ccl, hf_confi
         f"Only {len(sampled_set)} unique token(s) in {num_samples} samples; sampling may be stuck. "
         f"sampled_set={sorted(sampled_set)}"
     )
+
+
+def test_deepseek_host_sampling_argmax_fallback():
+    logits = torch.tensor([[1.0, 4.0, 2.0], [0.5, 0.1, 0.2]], dtype=torch.float32)
+
+    greedy = DeepseekGenerator._sample_next_token(logits, None)
+    zero_temp = DeepseekGenerator._sample_next_token(
+        logits,
+        SamplingParams(temperature=0.0, top_k=0, top_p=1.0),
+    )
+
+    expected = torch.tensor([1, 0], dtype=torch.int64)
+    assert torch.equal(greedy, expected)
+    assert torch.equal(zero_temp, expected)
+
+
+def test_deepseek_host_sampling_rejects_non_uniform_lists():
+    logits = torch.tensor([[1.0, 2.0, 3.0]], dtype=torch.float32)
+
+    with pytest.raises(ValueError, match="uniform temperature list"):
+        DeepseekGenerator._sample_next_token(
+            logits,
+            SamplingParams(
+                temperature=[1.0, 0.5],
+                top_k=0,
+                top_p=1.0,
+            ),
+        )

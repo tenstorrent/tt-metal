@@ -606,6 +606,79 @@ class DeepseekGenerator(WarmupForwardMixin):
     def _sample_greedy_on_host(self, logits: torch.Tensor) -> torch.Tensor:
         return torch.argmax(logits, dim=-1)  # [B]
 
+    @staticmethod
+    def _sampling_param_scalar(value, name: str):
+        if isinstance(value, list):
+            if not value:
+                raise ValueError(f"{name} must not be an empty list")
+            first = value[0]
+            if any(v != first for v in value[1:]):
+                raise ValueError(f"Host-side sampling requires a scalar or uniform {name} list, got {value}")
+            return first
+        return value
+
+    @staticmethod
+    def _sample_next_token(logits: torch.Tensor, sampling: SamplingParams | None) -> torch.Tensor:
+        """Sample next tokens from host logits.
+
+        Falls back to greedy argmax when sampling is disabled or temperature <= 0.
+        """
+        if sampling is None:
+            return torch.argmax(logits, dim=-1)
+
+        temperature = float(DeepseekGenerator._sampling_param_scalar(sampling.temperature, "temperature"))
+        if temperature <= 0:
+            return torch.argmax(logits, dim=-1)
+
+        top_k = int(DeepseekGenerator._sampling_param_scalar(sampling.top_k, "top_k"))
+        top_p = float(DeepseekGenerator._sampling_param_scalar(sampling.top_p, "top_p"))
+        scores = logits / temperature
+
+        if top_k > 0:
+            top_k = min(top_k, scores.shape[-1])
+            kth_values = torch.topk(scores, top_k, dim=-1).values[..., -1, None]
+            scores = scores.masked_fill(scores < kth_values, float("-inf"))
+
+        if 0.0 < top_p < 1.0:
+            sorted_scores, sorted_indices = torch.sort(scores, descending=True, dim=-1)
+            sorted_probs = torch.softmax(sorted_scores, dim=-1)
+            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+            remove_mask = cumulative_probs > top_p
+            remove_mask[..., 0] = False
+            sorted_scores = sorted_scores.masked_fill(remove_mask, float("-inf"))
+
+            filtered_scores = torch.full_like(scores, float("-inf"))
+            filtered_scores.scatter_(dim=-1, index=sorted_indices, src=sorted_scores)
+            scores = filtered_scores
+
+        probs = torch.softmax(scores, dim=-1)
+        row_sums = probs.sum(dim=-1)
+        valid_rows = torch.isfinite(probs).all(dim=-1) & torch.isfinite(row_sums) & (row_sums > 0)
+
+        # Honor sampling.seed (if provided) for deterministic host-side sampling.
+        generator: torch.Generator | None = None
+        if getattr(sampling, "seed", None) is not None:
+            seed_value = DeepseekGenerator._sampling_param_scalar(sampling.seed, "seed")
+            if seed_value is not None:
+                generator = torch.Generator(device=probs.device).manual_seed(int(seed_value))
+
+        if valid_rows.all():
+            if generator is None:
+                return torch.multinomial(probs, num_samples=1).squeeze(-1)
+            return torch.multinomial(probs, num_samples=1, generator=generator).squeeze(-1)
+
+        sampled_tokens = torch.argmax(logits, dim=-1)
+        if valid_rows.any():
+            if generator is None:
+                sampled_tokens[valid_rows] = torch.multinomial(probs[valid_rows], num_samples=1).squeeze(-1)
+            else:
+                sampled_tokens[valid_rows] = torch.multinomial(
+                    probs[valid_rows],
+                    num_samples=1,
+                    generator=generator,
+                ).squeeze(-1)
+        return sampled_tokens
+
     def _pad_batch(self, tokens_list: List[List[int]], batch_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """Pad/pack a list of token id sequences to batch of size batch_size.
 
@@ -697,6 +770,13 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         # Run one or more prefill+decode batches
         for _ in range(repeat_batches):
+            if self.sample_on_device:
+                self._reset_sampling_state(
+                    self.sampling_params if sampling is None else sampling,
+                    self.batch_size,
+                    self.batch_size_per_row,
+                )
+
             # Reset teacher-forcing state per batch.
             if teacher_forcing is not None:
                 teacher_forcing.reset()
@@ -747,7 +827,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                         prefill_logits_sampled_host = self._tokens_from_device(
                             prefill_logits_sampled_device, self.mesh_device, batch_size_per_row=1
                         )
-                        pred_token = prefill_logits_sampled_host[0]
+                        pred_token = int(prefill_logits_sampled_host[0].item())
                         ttnn.deallocate(prefill_logits)
                         ttnn.deallocate(prefill_logits_sampled_device)
                     else:
@@ -757,7 +837,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                         ), "prefill_logits should be a torch.Tensor on host"
                         # Sample only from the actual last prompt position for this user.
                         last_token_logits = prefill_logits[0, 0, max(prompt_len - 1, 0), :]
-                        pred_token = self._sample_greedy_on_host(last_token_logits)
+                        pred_token = int(self._sample_next_token(last_token_logits.unsqueeze(0), sampling).item())
                     prefill_tokens.append(torch.tensor(pred_token, dtype=torch.int64))
                     self.ccl.reset_sem_counters()
                 prefill_tokens = torch.stack(prefill_tokens)
@@ -834,7 +914,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
                     else:
                         assert isinstance(decode_logits, torch.Tensor), "decode_logits should be a torch.Tensor on host"
-                        pred_tokens = self._sample_greedy_on_host(decode_logits)
+                        pred_tokens = self._sample_next_token(decode_logits, sampling)
 
                     if teacher_forcing is not None:
                         # Record user-0 prediction for accuracy, then force teacher token.
