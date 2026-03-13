@@ -176,6 +176,15 @@ TEST_F(InterMeshDual2x4FabricFixture, MultiMeshNorthMulticast_1) {
     }
 }
 
+// ========= Setup Validation for BigMesh 1x16 Dual T3K  =========
+// BigMesh is a single mesh spanning two hosts — no inter-mesh routing.
+// This test validates that FABRIC_2D setup and device open/close succeed.
+
+TEST_F(IntermeshBigMesh1x16FabricFixture, DeviceSetupAndTeardown) {
+    ASSERT_FALSE(this->devices_.empty());
+    log_info(tt::LogTest, "BigMesh 1x16: opened {} local devices successfully", this->devices_.size());
+}
+
 // ========= Data-Movement Tests for NanoExabox Machines  =========
 
 TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastBwd) {
