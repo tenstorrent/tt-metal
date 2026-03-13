@@ -47,6 +47,7 @@
 #include "ttnn/operations/experimental/matmul/group_attn_matmul/group_attn_matmul_nanobind.hpp"
 #include "ttnn/operations/experimental/ccl/ccl_experimental_nanobind.hpp"
 #include "ttnn/operations/experimental/plusone/plusone_nanobind.hpp"
+#include "ttnn/operations/experimental/dit_minimal_rm_binary/dit_minimal_rm_binary_nanobind.hpp"
 #include "ttnn/operations/experimental/dropout/dropout_nanobind.hpp"
 #include "ttnn/operations/experimental/bcast_to/bcast_to_nanobind.hpp"
 #include "ttnn/operations/experimental/reshape/view_nanobind.hpp"
@@ -117,6 +118,7 @@ void py_module(nb::module_& mod) {
     matmul::detail::bind_group_attn_matmul(mod);
 
     plusone::detail::bind_experimental_plusone_operation(mod);
+    dit_minimal_rm_binary::detail::bind_dit_minimal_rm_binary(mod);
     dropout::detail::bind_experimental_dropout_operation(mod);
     reshape::detail::bind_view(mod);
 
