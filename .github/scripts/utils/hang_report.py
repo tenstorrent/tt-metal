@@ -65,7 +65,7 @@ def write_hang_junit_xml(triage_summary: str = "") -> str | None:
     failure_message = "[HANG DETECTED] Card hang detected during test execution. tt-triage was invoked."
 
     xml_content = dedent(
-      """\
+        """\
         <?xml version="1.0" encoding="utf-8"?>
         <testsuites name="pytest tests">
           <testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="0" timestamp="{timestamp}" hostname="{hostname}">
@@ -83,7 +83,7 @@ def write_hang_junit_xml(triage_summary: str = "") -> str | None:
             </testcase>
           </testsuite>
         </testsuites>"""
-      ).format(
+    ).format(
         timestamp=timestamp,
         hostname=escape(hostname),
         classname=escape(classname),
