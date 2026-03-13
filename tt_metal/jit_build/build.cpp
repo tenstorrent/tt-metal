@@ -754,6 +754,17 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
     }
 }
 
+void JitBuildState::ensure_scratch_genfiles(const JitBuildSettings* settings) const {
+    if (scratch_path_.empty() || !settings) {
+        return;
+    }
+    auto kernel_name = settings->get_full_kernel_name();
+    std::string nfs_genfiles_dir = fmt::format("{}{}", this->out_path_, kernel_name);
+    std::string scratch_genfiles_dir = fmt::format("{}{}", this->scratch_path_, kernel_name);
+    tt::filesystem::safe_create_directories(scratch_genfiles_dir);
+    copy_genfiles_to_scratch(nfs_genfiles_dir, scratch_genfiles_dir);
+}
+
 void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets) const {
     // ZoneScoped;
     auto kernel_name = settings ? std::string_view{settings->get_full_kernel_name()} : "";
@@ -764,22 +775,13 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
 
     // When scratch is configured, SFPI compile+link happens on local disk to
     // avoid NFS ESTALE errors.  Results are merged to cache_dir afterwards.
+    // NOTE: ensure_scratch_genfiles() must be called by the caller before build()
+    // when multiple triscs share a kernel, to avoid races on the genfiles copy.
     const bool use_scratch = !scratch_path_.empty();
     std::string work_dir = cache_dir;
     if (use_scratch) {
         work_dir = fmt::format("{}{}{}/", this->scratch_path_, kernel_name, this->target_name_);
         tt::filesystem::safe_create_directories(work_dir);
-
-        if (settings) {
-            // Generated headers (kernel_includes.hpp, chlkc_descriptors.h, etc.)
-            // are written to NFS by jit_build_genfiles_* before build() runs.
-            // The compiler finds them via -I.. relative to the target dir.
-            // Copy them to scratch so they're resolvable from the scratch work_dir.
-            std::string nfs_genfiles_dir = fmt::format("{}{}", this->out_path_, kernel_name);
-            std::string scratch_genfiles_dir = fmt::format("{}{}", this->scratch_path_, kernel_name);
-            tt::filesystem::safe_create_directories(scratch_genfiles_dir);
-            copy_genfiles_to_scratch(nfs_genfiles_dir, scratch_genfiles_dir);
-        }
     }
 
     // If no link targets are provided, use the current build state as the only link target
@@ -896,6 +898,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     // ZoneScoped;
 
+    build.ensure_scratch_genfiles(settings);
     build.build(settings);
     write_successful_jit_build_marker(build, settings);
 }
@@ -903,14 +906,20 @@ void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
 void jit_build_for_processors(std::span<const JitBuildState* const> targets, const JitBuildSettings* settings) {
     TT_ASSERT(!targets.empty());
     const JitBuildState& primary = *targets[0];
+    primary.ensure_scratch_genfiles(settings);
     primary.build(settings, targets);
     write_successful_jit_build_marker(primary, settings);
 }
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
+    // Copy genfiles once before launching parallel builds to avoid races
+    // where concurrent triscs overwrite each other's scratch genfiles.
+    if (!build_subset.empty()) {
+        build_subset.begin()->ensure_scratch_genfiles(settings);
+    }
+
     std::vector<std::shared_future<void>> events;
     for (const auto& build : build_subset) {
-        // Capture the necessary objects by reference
         launch_build_step([&build, settings] { build.build(settings); }, events);
     }
 
