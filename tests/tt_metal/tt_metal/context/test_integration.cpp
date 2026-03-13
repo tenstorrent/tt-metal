@@ -211,7 +211,11 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         ASSERT_FALSE(buffer->is_allocated());
 
         // Test command queue operations
-        // auto& cq = mock_device->mesh_command_queue();
+        auto& cq = mock_device->mesh_command_queue();
+        std::vector<uint32_t> write_data(16);
+        std::iota(write_data.begin(), write_data.end(), 0xDEADBEEF);
+
+        distributed::EnqueueWriteMeshBuffer(cq, buffer, write_data, true);
     }
 
     // Assert that we didn't implicitly create the physical metal context
