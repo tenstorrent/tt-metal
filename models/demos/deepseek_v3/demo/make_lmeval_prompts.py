@@ -7,9 +7,9 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import Any, Collection
+from typing import Any
 
-from .score_lmeval_outputs import TASK_ALIASES, resolve_task_name
+from .score_lmeval_outputs import resolve_task_name
 
 
 def _jsonify(value: Any) -> Any:
