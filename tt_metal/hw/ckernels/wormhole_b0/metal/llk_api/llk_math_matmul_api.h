@@ -24,11 +24,22 @@ inline void llk_math_matmul_init(
     const std::uint32_t in0_tile_c_dim = get_operand_tile_c_dim(in0_id);
     const std::uint32_t in1_tile_r_dim = get_operand_tile_r_dim(in1_id);
     const std::uint32_t in1_tile_c_dim = get_operand_tile_c_dim(in1_id);
+    const std::uint32_t in0_dst_format = get_operand_dst_format(in0_id);
+    const std::uint32_t in1_dst_format = get_operand_dst_format(in1_id);
 
     const bool partial_face = (in0_tile_r_dim < FACE_R_DIM);
 
     _llk_math_matmul_init_<math_fidelity, THROTTLE_LEVEL>(
-        in0_tile_r_dim, in0_tile_c_dim, in1_tile_r_dim, in1_tile_c_dim, partial_face, transpose, ct_dim, rt_dim);
+        in0_tile_r_dim,
+        in0_tile_c_dim,
+        in1_tile_r_dim,
+        in1_tile_c_dim,
+        partial_face,
+        transpose,
+        ct_dim,
+        rt_dim,
+        in0_dst_format,
+        in1_dst_format);
 }
 
 template <MathFidelity math_fidelity, int THROTTLE_LEVEL = 0, uint32_t num_faces = 4 /*not used*/>
