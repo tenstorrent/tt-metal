@@ -19,12 +19,6 @@ def _torch_reference_unpack(grammar_bitmask: torch.Tensor) -> torch.Tensor:
     return torch.where(unpacked != 0, torch.tensor(0.0), torch.tensor(-1e9))
 
 
-def _print_tensor_summary(name: str, tensor: torch.Tensor, max_items: int = 16) -> None:
-    flat = tensor.reshape(-1)
-    sample = flat[: min(max_items, flat.numel())].tolist()
-    print(f"[GRAMMAR_BITMASK_TEST] {name}: shape={tuple(tensor.shape)} dtype={tensor.dtype} sample={sample}")
-
-
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -137,25 +131,13 @@ def test_unpack_bitmask_sharded_with_subdevices_and_subcore_grids(mesh_device):
 
     unpacked_tt = TtTransformer.unpack_bitmask(transformer, grammar_bitmask_tt)
 
-    # Validate first local shard directly (same shard type used in runtime path).
-    local_unpacked = ttnn.to_torch(ttnn.get_device_tensors(unpacked_tt)[0]).to(torch.float32)
     expected_full = _torch_reference_unpack(grammar_bitmask)
-    local_width = local_unpacked.shape[-1]
-    expected_local = expected_full[:, :local_width]
-
-    _print_tensor_summary("packed_bitmask_host", grammar_bitmask)
-    _print_tensor_summary("unpacked_local_device", local_unpacked)
-    _print_tensor_summary("expected_local", expected_local)
-
-    mismatch = local_unpacked != expected_local
-    mismatch_count = int(mismatch.sum().item())
-    print(f"[GRAMMAR_BITMASK_TEST] mismatch_count={mismatch_count}")
-    if mismatch_count > 0:
-        first_idx = torch.nonzero(mismatch, as_tuple=False)[0].tolist()
-        print(
-            "[GRAMMAR_BITMASK_TEST] first_mismatch_idx="
-            f"{first_idx} got={local_unpacked[tuple(first_idx)].item()} "
-            f"expected={expected_local[tuple(first_idx)].item()}"
-        )
-
-    assert torch.equal(local_unpacked, expected_local)
+    num_cols = cluster_shape[1]
+    for idx, dev_tensor in enumerate(ttnn.get_device_tensors(unpacked_tt)):
+        row = idx // num_cols
+        local_unpacked = ttnn.to_torch(dev_tensor).to(torch.float32)
+        shard_width = local_unpacked.shape[-1]
+        expected_local = expected_full[:, row * shard_width : (row + 1) * shard_width]
+        assert torch.equal(
+            local_unpacked, expected_local
+        ), f"Mismatch on device {idx} (row={row}, col={idx % num_cols})"
