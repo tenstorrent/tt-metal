@@ -163,9 +163,7 @@ def prefill_forward(
         tt_sdpa_out = ttnn.reshape(tt_sdpa_out, [1, 1, total_seq_len, -1])
 
     tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
-    # Note: apply_output_projection already deallocates its input tensor internally
     tt_sdpa_out.deallocate(True)
     # Tensor parallel allreduce
     tt_out_result = apply_allreduce(tt_out, mesh_config, ccl_manager, hidden_size)
-    tt_out.deallocate(True)
     return tt_out_result

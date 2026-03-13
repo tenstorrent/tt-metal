@@ -203,7 +203,6 @@ def _process_prefill_chunk(
 
         # Reduce across experts
         next_states_reduced = reduce_experts(next_states)
-        next_states.deallocate(True)
         down.deallocate(True)
         if next_states_reduced_acc is None:
             next_states_reduced_acc = next_states_reduced
