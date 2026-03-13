@@ -1501,7 +1501,7 @@ def run_test_moe_gpt_e2e(
     # experts_per_device = experts_total / total_mesh_devices = 128 / 32 = 4 = E ✓
     global_experts = experts_total  # 128
     experts_per_cluster = experts_total // mesh_cols  # 128 // 8 = 16 ring-local experts
-    combine_output_torch = torch.zeros(experts_per_cluster, M, K, dtype=torch.bfloat16)
+    combine_output_torch = torch.zeros(selected_experts_k, M, K, dtype=torch.bfloat16)
     tt_combine_preallocated = ttnn.from_torch(
         combine_output_torch,
         dtype=ttnn.bfloat16,
@@ -1945,3 +1945,635 @@ def test_dispatch_compute_combine(
         experts_total=experts_total,
     )
     assert passing, "Dispatch sparse buffer mismatch on one or more devices"
+
+
+def run_test_combine_isolation(mesh_device, tokens_global, hidden_size, selected_experts_k, experts_total, num_iters=5):
+    """Test selective_reduce_combine in isolation with gpt-oss shapes.
+
+    Runs dispatch+moe_gpt once to generate real combine inputs, then calls
+    selective_reduce_combine multiple times to verify correctness and stability.
+    """
+    torch.manual_seed(42)
+    cluster_axis = 0
+    ring_devices = mesh_device.shape[cluster_axis]  # 4
+    total_mesh_devices = mesh_device.get_num_devices()  # 32
+    total_tokens = tokens_global  # 128
+    M = tokens_global // ring_devices  # 32
+    E = experts_total // total_mesh_devices  # 4
+    N = hidden_size
+    L = 1
+    tokens_per_chunk = 32
+    mesh_cols = mesh_device.shape[1]
+
+    # --- Expert mapping ---
+    expert_mapping_torch = create_expert_mapping_tensors(
+        num_devices=total_mesh_devices,
+        num_experts_global=experts_total,
+        mesh_device=mesh_device,
+        new_format=True,
+        return_torch=True,
+    )
+    tt_dispatch_mapping = ttnn.from_torch(
+        expert_mapping_torch.to(torch.int16),
+        dtype=ttnn.uint16,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_moe_gpt_mapping = ttnn.from_torch(
+        expert_mapping_torch.to(torch.int16),
+        dtype=ttnn.uint16,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # --- Weights ---
+    torch_w0 = torch.randn(1, E, hidden_size, N, dtype=torch.bfloat16) * 0.01
+    torch_w1 = torch.randn(1, E, hidden_size, N, dtype=torch.bfloat16) * 0.01
+    torch_w2 = torch.randn(1, E, N, hidden_size, dtype=torch.bfloat16) * 0.01
+
+    ring2cores = build_ring2cores(mesh_device)
+    num_cores = len(ring2cores)
+    groups_per_core = MAX_W0_W1_TILES_PER_CORE // 2
+    dram_cores = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(num_cores)]
+    dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in dram_cores])
+
+    tt_w0_w1 = ttnn.from_torch(
+        prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, hidden_size, N, ring2cores),
+        dtype=ttnn.bfloat4_b,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(
+                dram_core_range_set,
+                (L * E * groups_per_core * hidden_size, 4 * ttnn.TILE_SIZE),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_w2 = ttnn.from_torch(
+        prepare_w2_tensor(torch_w2, L, E, N, hidden_size, ring2cores),
+        dtype=ttnn.bfloat4_b,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(dram_core_range_set, (L * E * 2 * N, 4 * ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # --- Input tokens + routing ---
+    raw_input_torch = torch.randn(1, 1, tokens_global, hidden_size, dtype=torch.bfloat16)
+    indices_list = [torch.randperm(experts_total)[:selected_experts_k].to(torch.int32) for _ in range(tokens_global)]
+    expert_indices = torch.stack(indices_list).reshape(1, 1, tokens_global, selected_experts_k)
+    expert_scores = torch.stack(
+        [s / s.sum() for s in [torch.rand(selected_experts_k, dtype=torch.float32) for _ in range(tokens_global)]]
+    ).reshape(1, 1, tokens_global, selected_experts_k)
+
+    # Input sharding for dispatch
+    num_cores_y = min(8, tokens_global // ring_devices)
+    num_cores_x = (tokens_global // ring_devices + num_cores_y - 1) // num_cores_y
+    input_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}),
+        [1, selected_experts_k],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_indices_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+
+    shard_2d = dict(
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
+    )
+    tt_raw_input = ttnn.from_torch(
+        raw_input_torch, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, **shard_2d
+    )
+    tt_indices = ttnn.from_torch(
+        expert_indices.to(torch.int16), dtype=ttnn.uint16, memory_config=input_indices_mem, **shard_2d
+    )
+    tt_scores = ttnn.from_torch(expert_scores, dtype=ttnn.bfloat16, memory_config=input_indices_mem, **shard_2d)
+
+    # Dispatch output tensors
+    dispatch_drain_core = ttnn.CoreCoord(6, 9)
+    drain_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(dispatch_drain_core, dispatch_drain_core)}),
+        [total_tokens, selected_experts_k],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    drain_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, drain_shard_spec)
+
+    tt_sparse_out = ttnn.from_torch(
+        torch.zeros(1, total_tokens, hidden_size, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    tt_indices_out = ttnn.from_torch(
+        torch.zeros(1, total_tokens, selected_experts_k, dtype=torch.int16),
+        dtype=ttnn.uint16,
+        memory_config=drain_mem,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+    tt_scores_out = ttnn.from_torch(
+        torch.zeros(1, total_tokens, selected_experts_k, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        memory_config=drain_mem,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+    )
+
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+    all_cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
+    )
+    dispatch_sem = ttnn.create_global_semaphore(mesh_device, all_cores, 0)
+
+    tt_input_l1 = ttnn.to_memory_config(tt_raw_input, memory_config=ttnn.L1_MEMORY_CONFIG)
+    ttnn.synchronize_device(mesh_device)
+
+    # --- Dispatch ---
+    (tt_sparse, tt_idx, tt_sc) = ttnn.experimental.all_to_all_dispatch_metadata(
+        tt_input_l1,
+        tt_indices,
+        tt_scores,
+        tt_dispatch_mapping,
+        cluster_axis=cluster_axis,
+        num_links=4,
+        output_tensors=(tt_sparse_out, tt_indices_out, tt_scores_out),
+        cross_device_semaphore=dispatch_sem,
+        dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_UNICAST,
+    )
+    ttnn.synchronize_device(mesh_device)
+    logger.info("combine_isolation: dispatch done")
+
+    # --- moe_gpt ---
+    tt_sparse = ttnn.reshape(tt_sparse, [total_tokens, hidden_size])
+    moe_gpt_outputs = ttnn.experimental.moe_gpt(
+        tt_sparse,
+        expert_indices=tt_idx,
+        expert_scores=tt_sc,
+        expert_mapping=tt_moe_gpt_mapping,
+        w0_w1_tensor=tt_w0_w1,
+        w2_tensor=tt_w2,
+        cluster_axis=cluster_axis,
+    )
+    ttnn.synchronize_device(mesh_device)
+    logger.info("combine_isolation: moe_gpt done")
+    # Debug: print moe_gpt output tensor configs
+    for i in range(5):
+        t = moe_gpt_outputs[i]
+        per_dev = ttnn.get_device_tensors(t)
+        logger.info(f"  moe_gpt_output[{i}]: shape={t.shape}, dtype={t.dtype}, layout={t.layout}")
+        logger.info(f"    per_device[0] shape={per_dev[0].shape}, memory_config={per_dev[0].memory_config()}")
+
+    # --- Setup combine infrastructure ---
+    COMBINE_H = 4
+    COMBINE_W = 3
+    combine_core_range_set, combine_start, combine_end = get_moe_gpt_combine_core_range(
+        mesh_device, COMBINE_W, COMBINE_H
+    )
+    combine_worker_cores = list(ttnn.corerange_to_cores(combine_core_range_set, row_wise=True))
+    mux_start = ttnn.CoreCoord(combine_end.x + 1, combine_start.y)
+    mux_end = ttnn.CoreCoord(combine_end.x + 2, combine_end.y)
+    combine_mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(mux_start, mux_end)])
+    combine_semaphore = ttnn.create_global_semaphore(mesh_device, all_cores, 0)
+
+    # --- Build torch reference ---
+    raw_input_2d = raw_input_torch.reshape(tokens_global, hidden_size)
+    ring_expert_sets = {}
+    for col in range(mesh_cols):
+        ring_expert_sets[col] = set()
+        for e_global in range(experts_total):
+            owning_device = int(expert_mapping_torch[0, e_global])
+            if owning_device % mesh_cols == col:
+                ring_expert_sets[col].add(e_global)
+
+    ref_per_device = {}
+    K_sel = selected_experts_k
+    for dev_idx in range(total_mesh_devices):
+        ring_pos = dev_idx // mesh_cols
+        col = dev_idx % mesh_cols
+        ref_combine = torch.zeros(K_sel, M, hidden_size, dtype=torch.float32)
+        with torch.no_grad():
+            for t in range(M):
+                global_token = ring_pos * M + t
+                for k in range(K_sel):
+                    global_e = expert_indices[0, 0, global_token, k].item()
+                    if global_e not in ring_expert_sets[col]:
+                        continue
+                    local_e = global_e % E
+                    token = raw_input_2d[global_token : global_token + 1].to(torch.float32)
+                    gate = (token @ torch_w0[0, local_e].to(torch.float32)).to(torch.bfloat16)
+                    up = (token @ torch_w1[0, local_e].to(torch.float32)).to(torch.bfloat16)
+                    activated = swiglu_reference(gate, up).to(torch.float32)
+                    ref_combine[k, t] = activated @ torch_w2[0, local_e].to(torch.float32)
+        ref_per_device[dev_idx] = ref_combine
+
+    # Pre-allocate combine output tensor (same as test_dispatch_compute_combine)
+    tt_combine_preallocated = ttnn.from_torch(
+        torch.zeros(selected_experts_k, M, hidden_size, dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # --- Run combine N times ---
+    all_passing = True
+    for iteration in range(num_iters):
+        tt_combine_result = ttnn.experimental.selective_reduce_combine(
+            moe_gpt_outputs[4],
+            moe_gpt_outputs[1],
+            moe_gpt_outputs[2],
+            moe_gpt_outputs[0],
+            hidden_size=hidden_size,
+            batch_size=total_tokens,
+            seq_size=1,
+            select_experts_k=selected_experts_k,
+            experts=experts_total,
+            cluster_axis=cluster_axis,
+            topology=ttnn.Topology.Ring,
+            num_links=4,
+            token_parallel_core_dim=COMBINE_H,
+            data_parallel_core_dim=COMBINE_W,
+            worker_cores=combine_worker_cores,
+            mux_core_range_set=combine_mux_cores,
+            output_tensor=tt_combine_preallocated,
+            optional_cross_device_semaphore=combine_semaphore,
+        )
+        ttnn.synchronize_device(mesh_device)
+
+        # Verify
+        combine_per_device = ttnn.get_device_tensors(tt_combine_result)
+        iter_passing = True
+        for dev_idx in range(total_mesh_devices):
+            actual_combine = ttnn.to_torch(combine_per_device[dev_idx]).reshape(K_sel, M, hidden_size)
+            actual_sum = actual_combine.to(torch.float32).sum(dim=0)
+            ref_sum = ref_per_device[dev_idx].sum(dim=0)
+            pcc_pass, pcc_val = comp_pcc(actual_sum, ref_sum, PCC_THRESHOLD)
+            if not pcc_pass:
+                logger.error(f"  iter {iteration} device {dev_idx}: FAILED PCC={pcc_val:.4f}")
+                iter_passing = False
+                all_passing = False
+
+        if iter_passing:
+            logger.info(f"combine_isolation iter {iteration}: ALL PASSED")
+        else:
+            logger.error(f"combine_isolation iter {iteration}: SOME FAILED")
+
+    # Cleanup
+    for i in range(5):
+        ttnn.deallocate(moe_gpt_outputs[i])
+
+    return all_passing
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((4, 8), id="4x8")], indirect=True)
+@pytest.mark.parametrize("tokens_global", [128])
+@pytest.mark.parametrize("hidden_size", [2880])
+@pytest.mark.parametrize("selected_experts_k", [4])
+@pytest.mark.parametrize("experts_total", [128])
+@pytest.mark.parametrize("num_iters", [5])
+def test_combine_isolation(
+    mesh_device, tokens_global, hidden_size, selected_experts_k, experts_total, num_iters, device_params
+):
+    """Test selective_reduce_combine in isolation: generate data via dispatch+moe_gpt, then run combine N times."""
+    mesh_device.disable_and_clear_program_cache()
+    passing = run_test_combine_isolation(
+        mesh_device=mesh_device,
+        tokens_global=tokens_global,
+        hidden_size=hidden_size,
+        selected_experts_k=selected_experts_k,
+        experts_total=experts_total,
+        num_iters=num_iters,
+    )
+    assert passing, "Combine isolation test failed"
+
+
+def run_test_full_pipeline_multi_iter(
+    mesh_device,
+    tokens_global,
+    hidden_size,
+    selected_experts_k,
+    experts_total,
+    num_iters=3,
+    use_output_tensor=True,
+):
+    """Test full fused pipeline (dispatch -> moe_gpt -> combine) N times.
+
+    Unlike combine_isolation (which reuses moe_gpt outputs), this runs the
+    ENTIRE pipeline each iteration, mimicking what the model does across layers.
+    """
+    torch.manual_seed(42)
+    cluster_axis = 0
+    ring_devices = mesh_device.shape[cluster_axis]  # 4
+    total_mesh_devices = mesh_device.get_num_devices()  # 32
+    total_tokens = tokens_global  # 128
+    M = tokens_global // ring_devices  # 32
+    E = experts_total // total_mesh_devices  # 4
+    N = hidden_size
+    L = 1
+    mesh_cols = mesh_device.shape[1]
+
+    # --- Expert mapping ---
+    expert_mapping_torch = create_expert_mapping_tensors(
+        num_devices=total_mesh_devices,
+        num_experts_global=experts_total,
+        mesh_device=mesh_device,
+        new_format=True,
+        return_torch=True,
+    )
+    tt_dispatch_mapping = ttnn.from_torch(
+        expert_mapping_torch.to(torch.int16),
+        dtype=ttnn.uint16,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_moe_gpt_mapping = ttnn.from_torch(
+        expert_mapping_torch.to(torch.int16),
+        dtype=ttnn.uint16,
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # --- Weights ---
+    torch_w0 = torch.randn(1, E, hidden_size, N, dtype=torch.bfloat16) * 0.01
+    torch_w1 = torch.randn(1, E, hidden_size, N, dtype=torch.bfloat16) * 0.01
+    torch_w2 = torch.randn(1, E, N, hidden_size, dtype=torch.bfloat16) * 0.01
+
+    ring2cores = build_ring2cores(mesh_device)
+    num_cores = len(ring2cores)
+    groups_per_core = MAX_W0_W1_TILES_PER_CORE // 2
+    dram_cores = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(num_cores)]
+    dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in dram_cores])
+
+    tt_w0_w1 = ttnn.from_torch(
+        prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, hidden_size, N, ring2cores),
+        dtype=ttnn.bfloat4_b,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(
+                dram_core_range_set,
+                (L * E * groups_per_core * hidden_size, 4 * ttnn.TILE_SIZE),
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+    tt_w2 = ttnn.from_torch(
+        prepare_w2_tensor(torch_w2, L, E, N, hidden_size, ring2cores),
+        dtype=ttnn.bfloat4_b,
+        device=mesh_device,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.DRAM,
+            ttnn.ShardSpec(dram_core_range_set, (L * E * 2 * N, 4 * ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR),
+        ),
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+    )
+
+    # --- Combine infrastructure (shared across iterations) ---
+    compute_grid = mesh_device.compute_with_storage_grid_size()
+    all_cores = ttnn.CoreRangeSet(
+        {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid.x - 1, compute_grid.y - 1))}
+    )
+    dispatch_sem = ttnn.create_global_semaphore(mesh_device, all_cores, 0)
+
+    COMBINE_H = 4
+    COMBINE_W = 3
+    combine_core_range_set, combine_start, combine_end = get_moe_gpt_combine_core_range(
+        mesh_device, COMBINE_W, COMBINE_H
+    )
+    combine_worker_cores = list(ttnn.corerange_to_cores(combine_core_range_set, row_wise=True))
+    mux_start = ttnn.CoreCoord(combine_end.x + 1, combine_start.y)
+    mux_end = ttnn.CoreCoord(combine_end.x + 2, combine_end.y)
+    combine_mux_cores = ttnn.CoreRangeSet([ttnn.CoreRange(mux_start, mux_end)])
+    combine_semaphore = ttnn.create_global_semaphore(mesh_device, all_cores, 0)
+
+    # Pre-allocate combine output (reused across iterations if use_output_tensor)
+    tt_combine_preallocated = None
+    if use_output_tensor:
+        tt_combine_preallocated = ttnn.from_torch(
+            torch.zeros(selected_experts_k, M, hidden_size, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        )
+
+    # Input sharding config
+    num_cores_y = min(8, tokens_global // ring_devices)
+    num_cores_x = (tokens_global // ring_devices + num_cores_y - 1) // num_cores_y
+    input_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}),
+        [1, selected_experts_k],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    input_indices_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
+
+    dispatch_drain_core = ttnn.CoreCoord(6, 9)
+    drain_shard_spec = ttnn.ShardSpec(
+        ttnn.CoreRangeSet({ttnn.CoreRange(dispatch_drain_core, dispatch_drain_core)}),
+        [total_tokens, selected_experts_k],
+        ttnn.ShardOrientation.ROW_MAJOR,
+    )
+    drain_mem = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, drain_shard_spec)
+
+    shard_2d = dict(
+        device=mesh_device,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, None), mesh_shape=tuple(mesh_device.shape)),
+    )
+
+    # === Run full pipeline N times ===
+    all_passing = True
+    for iteration in range(num_iters):
+        logger.info(f"=== Pipeline iteration {iteration}/{num_iters} ===")
+
+        # Fresh random input each iteration (like different layers in the model)
+        raw_input_torch = torch.randn(1, 1, tokens_global, hidden_size, dtype=torch.bfloat16)
+        indices_list = [
+            torch.randperm(experts_total)[:selected_experts_k].to(torch.int32) for _ in range(tokens_global)
+        ]
+        expert_indices = torch.stack(indices_list).reshape(1, 1, tokens_global, selected_experts_k)
+
+        # Upload inputs
+        tt_raw_input = ttnn.from_torch(
+            raw_input_torch, dtype=ttnn.bfloat16, memory_config=ttnn.DRAM_MEMORY_CONFIG, **shard_2d
+        )
+        tt_indices = ttnn.from_torch(
+            expert_indices.to(torch.int16), dtype=ttnn.uint16, memory_config=input_indices_mem, **shard_2d
+        )
+        # Use uniform scores for simplicity
+        expert_scores = torch.ones(1, 1, tokens_global, selected_experts_k, dtype=torch.float32) / selected_experts_k
+        tt_scores = ttnn.from_torch(expert_scores, dtype=ttnn.bfloat16, memory_config=input_indices_mem, **shard_2d)
+
+        # Dispatch output tensors (fresh each iteration)
+        tt_sparse_out = ttnn.from_torch(
+            torch.zeros(1, total_tokens, hidden_size, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        tt_indices_out = ttnn.from_torch(
+            torch.zeros(1, total_tokens, selected_experts_k, dtype=torch.int16),
+            dtype=ttnn.uint16,
+            memory_config=drain_mem,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+        tt_scores_out = ttnn.from_torch(
+            torch.zeros(1, total_tokens, selected_experts_k, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            memory_config=drain_mem,
+            device=mesh_device,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
+        tt_input_l1 = ttnn.to_memory_config(tt_raw_input, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.synchronize_device(mesh_device)
+
+        # --- Step 1: Dispatch ---
+        logger.info(f"  iter {iteration}: dispatch")
+        (tt_sparse, tt_idx, tt_sc) = ttnn.experimental.all_to_all_dispatch_metadata(
+            tt_input_l1,
+            tt_indices,
+            tt_scores,
+            tt_dispatch_mapping,
+            cluster_axis=cluster_axis,
+            num_links=4,
+            output_tensors=(tt_sparse_out, tt_indices_out, tt_scores_out),
+            cross_device_semaphore=dispatch_sem,
+            dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_UNICAST,
+        )
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"  iter {iteration}: dispatch done")
+
+        # --- Step 2: moe_gpt ---
+        tt_sparse_2d = ttnn.reshape(tt_sparse, [total_tokens, hidden_size])
+        logger.info(f"  iter {iteration}: moe_gpt")
+        moe_gpt_outputs = ttnn.experimental.moe_gpt(
+            tt_sparse_2d,
+            expert_indices=tt_idx,
+            expert_scores=tt_sc,
+            expert_mapping=tt_moe_gpt_mapping,
+            w0_w1_tensor=tt_w0_w1,
+            w2_tensor=tt_w2,
+            cluster_axis=cluster_axis,
+        )
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"  iter {iteration}: moe_gpt done")
+
+        # --- Step 3: selective_reduce_combine ---
+        logger.info(f"  iter {iteration}: combine (use_output_tensor={use_output_tensor})")
+        combine_kwargs = dict(
+            hidden_size=hidden_size,
+            batch_size=total_tokens,
+            seq_size=1,
+            select_experts_k=selected_experts_k,
+            experts=experts_total,
+            cluster_axis=cluster_axis,
+            topology=ttnn.Topology.Ring,
+            num_links=4,
+            token_parallel_core_dim=COMBINE_H,
+            data_parallel_core_dim=COMBINE_W,
+            worker_cores=combine_worker_cores,
+            mux_core_range_set=combine_mux_cores,
+        )
+        if use_output_tensor:
+            combine_kwargs["output_tensor"] = tt_combine_preallocated
+            combine_kwargs["optional_cross_device_semaphore"] = combine_semaphore
+
+        tt_combine_result = ttnn.experimental.selective_reduce_combine(
+            moe_gpt_outputs[4],
+            moe_gpt_outputs[1],
+            moe_gpt_outputs[2],
+            moe_gpt_outputs[0],
+            **combine_kwargs,
+        )
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"  iter {iteration}: combine done")
+
+        # --- Cleanup moe_gpt outputs (like fused_decode.py does) ---
+        for i in range(5):
+            ttnn.deallocate(moe_gpt_outputs[i])
+
+        # --- Optional: do tilize + deallocate combine output (like model does) ---
+        tt_combine_tile = ttnn.to_layout(tt_combine_result, ttnn.TILE_LAYOUT)
+        if not use_output_tensor:
+            ttnn.deallocate(tt_combine_result)
+        # Deallocate tilized version too
+        ttnn.deallocate(tt_combine_tile)
+
+        ttnn.synchronize_device(mesh_device)
+        logger.info(f"  iter {iteration}: cleanup done")
+
+    logger.info(f"Full pipeline multi-iter test PASSED ({num_iters} iterations, use_output_tensor={use_output_tensor})")
+    return True
+
+
+@pytest.mark.parametrize(
+    "device_params",
+    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.ROW, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    indirect=True,
+)
+@pytest.mark.parametrize("mesh_device", [pytest.param((4, 8), id="4x8")], indirect=True)
+@pytest.mark.parametrize("tokens_global", [128])
+@pytest.mark.parametrize("hidden_size", [2880])
+@pytest.mark.parametrize("selected_experts_k", [4])
+@pytest.mark.parametrize("experts_total", [128])
+@pytest.mark.parametrize("num_iters", [3])
+@pytest.mark.parametrize("use_output_tensor", [True, False], ids=["with_output_tensor", "without_output_tensor"])
+def test_full_pipeline_multi_iter(
+    mesh_device,
+    tokens_global,
+    hidden_size,
+    selected_experts_k,
+    experts_total,
+    num_iters,
+    use_output_tensor,
+    device_params,
+):
+    """Test full fused pipeline (dispatch -> moe_gpt -> combine) run N times.
+
+    This mimics what the model does across layers: each iteration is a fresh
+    dispatch+moe_gpt+combine with deallocations in between.
+    Tests both with and without output_tensor to isolate the hang cause.
+    """
+    mesh_device.enable_program_cache()
+    passing = run_test_full_pipeline_multi_iter(
+        mesh_device=mesh_device,
+        tokens_global=tokens_global,
+        hidden_size=hidden_size,
+        selected_experts_k=selected_experts_k,
+        experts_total=experts_total,
+        num_iters=num_iters,
+        use_output_tensor=use_output_tensor,
+    )
+    assert passing, "Full pipeline multi-iter test failed"

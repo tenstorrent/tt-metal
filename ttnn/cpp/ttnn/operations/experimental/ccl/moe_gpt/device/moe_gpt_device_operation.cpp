@@ -7,7 +7,6 @@
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_align.hpp>
-#include <set>
 
 namespace ttnn::operations::experimental::moe_gpt {
 
@@ -130,7 +129,7 @@ MoEGPTDeviceOperation::spec_return_value_t MoEGPTDeviceOperation::compute_output
     // Output 1: Expert activation (token_id + k_indices + scores per row)
     uint32_t activation_row_elements = (2 * experts_per_device) + 1;
     uint32_t activation_row_bytes = tt::align(activation_row_elements * sizeof(uint32_t), l1_alignment);
-    uint32_t activation_total_bytes = (total_tokens + 1) * activation_row_bytes;
+    uint32_t activation_total_bytes = total_tokens * activation_row_bytes;
     auto activation_spec = TensorSpec(
         Shape({1, activation_total_bytes / sizeof(uint32_t)}),
         tt::tt_metal::TensorLayout(
@@ -150,62 +149,38 @@ MoEGPTDeviceOperation::spec_return_value_t MoEGPTDeviceOperation::compute_output
             tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
             tt::tt_metal::MemoryConfig(tt::tt_metal::TensorMemoryLayout::INTERLEAVED, tt::tt_metal::BufferType::L1)));
 
-    // Output 3: Combine output (BLOCK_SHARDED on combine cores, ROW_MAJOR)
-    // Grid: COMBINE_W cols (data-parallel, splitting hidden dim) × COMBINE_H rows (token-parallel).
-    // Each core's shard packs all experts sequentially: expert e's tokens occupy rows
-    // [e*tokens_per_tp .. (e+1)*tokens_per_tp), matching selective_reduce_combine's expected layout.
-    constexpr uint32_t COMBINE_W = 3;  // data_parallel_core_dim (hidden dim split)
-    constexpr uint32_t COMBINE_H = 4;  // token_parallel_core_dim (token dim split)
+    // Output 3/4: Shared tilize output (HEIGHT_SHARDED on all worker cores)
+    // Matches moe_compute output format: TILE layout on output[3], ROW_MAJOR alias on output[4].
     auto* device = tensor_args.w0_w1_tensor.device();
-    const auto dram_bank2core_coords =
-        device->get_optimal_dram_bank_to_logical_worker_assignment(tt::tt_metal::NOC::RISCV_0_default);
-    std::set<std::pair<uint32_t, uint32_t>> matmul_core_set;
-    for (const auto& c : dram_bank2core_coords) {
-        matmul_core_set.insert({c.x, c.y});
-    }
+    const auto& w2_shape = tensor_args.w2_tensor.logical_shape();
+    // hidden_size from w2 tensor: w2 shape is (num_cores, L, E, 2, N, 4*TILE_SIZE)
+    // N = hidden_size / tile_width, so hidden_size = N * tile_width where tile_width = 32
+    // But more directly: w2 packs N tiles of width 32 across 2 groups, so hidden_size = w2_shape[4] * 32
+    uint32_t hidden_size = w2_shape[4] * 32;
+
     CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
-    CoreRange combine_core_range({0, 0}, {0, 0});
-    bool found = false;
-    for (uint32_t sy = 0; sy + COMBINE_H <= worker_grid_size.y && !found; sy++) {
-        for (uint32_t sx = 0; sx + COMBINE_W <= worker_grid_size.x && !found; sx++) {
-            bool valid = true;
-            for (uint32_t dy = 0; dy < COMBINE_H && valid; dy++) {
-                for (uint32_t dx = 0; dx < COMBINE_W && valid; dx++) {
-                    if (matmul_core_set.count({sx + dx, sy + dy})) {
-                        valid = false;
-                    }
-                }
-            }
-            if (valid) {
-                combine_core_range = CoreRange({sx, sy}, {sx + COMBINE_W - 1, sy + COMBINE_H - 1});
-                found = true;
-            }
-        }
-    }
-    TT_FATAL(found, "Could not find a {}x{} combine core range that avoids matmul cores", COMBINE_W, COMBINE_H);
-
-    CoreRangeSet combine_core_range_set(combine_core_range);
-    uint32_t combine_shard_h = experts_per_device * total_tokens / COMBINE_H;  // E*total_tokens/height_shards
-    constexpr uint32_t K_hidden = 2880;
-    uint32_t combine_shard_w = K_hidden / COMBINE_W;  // 960
-
-    ttnn::MemoryConfig combine_memory_config = ttnn::MemoryConfig{
-        tt::tt_metal::TensorMemoryLayout::BLOCK_SHARDED,
+    CoreRangeSet shard_cores({CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1})});
+    ttnn::MemoryConfig output_sharded_memory_config = ttnn::MemoryConfig{
+        tt::tt_metal::TensorMemoryLayout::HEIGHT_SHARDED,
         tt::tt_metal::BufferType::L1,
-        tt::tt_metal::ShardSpec(
-            combine_core_range_set, {combine_shard_h, combine_shard_w}, tt::tt_metal::ShardOrientation::ROW_MAJOR),
+        tt::tt_metal::ShardSpec(shard_cores, {2 * 32, hidden_size}, tt::tt_metal::ShardOrientation::ROW_MAJOR),
     };
 
-    auto combine_output_shape = ttnn::Shape({experts_per_device * total_tokens, K_hidden});
-    auto combine_output_spec = TensorSpec(
-        Shape(combine_output_shape),
+    auto tilize_output_shape = ttnn::Shape({shard_cores.num_cores(), 2, 32, hidden_size});
+    auto tilize_output_spec = TensorSpec(
+        Shape(tilize_output_shape),
         tt::tt_metal::TensorLayout(
             tt::tt_metal::DataType::BFLOAT16,
-            tt::tt_metal::PageConfig(tt::tt_metal::Layout::ROW_MAJOR),
-            combine_memory_config));
+            tt::tt_metal::PageConfig(tt::tt_metal::Layout::TILE),
+            output_sharded_memory_config));
 
-    // Output 4: Same buffer (alias for compatibility with moe_compute output convention)
-    return {per_expert_spec, activation_spec, e_t_spec, combine_output_spec, combine_output_spec};
+    // Output 4: Same buffer re-perceived as ROW_MAJOR (alias for torch interop)
+    const auto& tilize_output_layout = tilize_output_spec.tensor_layout();
+    const tt::tt_metal::TensorLayout output_layout(
+        tilize_output_layout.get_data_type(), ROW_MAJOR_LAYOUT, tilize_output_layout.get_memory_config());
+    const auto output_spec = TensorSpec(tilize_output_shape, output_layout);
+
+    return {per_expert_spec, activation_spec, e_t_spec, tilize_output_spec, output_spec};
 }
 
 MoEGPTDeviceOperation::tensor_return_value_t MoEGPTDeviceOperation::create_output_tensors(
@@ -213,14 +188,20 @@ MoEGPTDeviceOperation::tensor_return_value_t MoEGPTDeviceOperation::create_outpu
     const auto output_specs = compute_output_specs(args, tensor_args);
     auto* device = tensor_args.w0_w1_tensor.device();
 
-    const auto combine_output = create_device_tensor(output_specs[3], device);
+    const auto tilize_output_tensor = create_device_tensor(output_specs[3], device);
+
+    // Re-perceive tilize output tensor as RM for output[4] (same buffer, different layout view)
+    const auto& output_storage = tilize_output_tensor.device_storage();
+    const auto& output_spec = output_specs[4];
+    const auto& output_topology = tilize_output_tensor.tensor_attributes->get_tensor_topology();
+    const ttnn::Tensor output_tensor(output_storage, output_spec, output_topology);
 
     return {
         create_device_tensor(output_specs[0], device),
         create_device_tensor(output_specs[1], device),
         create_device_tensor(output_specs[2], device),
-        combine_output,
-        combine_output};  // output 4 is an alias of output 3
+        tilize_output_tensor,
+        output_tensor};
 }
 
 std::tuple<MoEGPTDeviceOperation::operation_attributes_t, MoEGPTDeviceOperation::tensor_args_t>

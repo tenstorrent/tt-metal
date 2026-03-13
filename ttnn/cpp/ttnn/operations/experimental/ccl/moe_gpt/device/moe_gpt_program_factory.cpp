@@ -179,20 +179,22 @@ MoEGPTMeshWorkloadFactory::create_at(
         combine_cores = combine_cores_unsorted;
         combine_core_range_set = CoreRangeSet(combine_core_range);
 
-        // Combine output CB: c_0 backed by the shared tilize/matmul output tensor (index 3)
-        const auto& combine_output_tensor = tensor_return_value.at(3);
-        constexpr uint32_t combine_shard_width_tiles = 30;                         // 90/3
-        constexpr uint32_t output_page_size = combine_shard_width_tiles * 32 * 2;  // 1920 bytes per row
-        const uint32_t output_num_pages = combine_output_tensor.logical_shape()[0] / COMBINE_H;
+        // Combine output CB: c_0 on combine cores, backed by the HEIGHT_SHARDED output tensor
+        const auto& tilize_output_tensor = tensor_return_value.at(3);
+        const CoreRangeSet shard_cores = tilize_output_tensor.memory_config().shard_spec()->grid;
+        const uint32_t output_pages = tilize_output_tensor.buffer()->num_pages();
+        const uint32_t output_page_size = tilize_output_tensor.buffer()->page_size();
+        const uint32_t shared_cb_num_pages_combine = output_pages / shard_cores.num_cores();
+        const auto output_dataformat = tt::tt_metal::datatype_to_dataformat_converter(tilize_output_tensor.dtype());
 
         auto [combine_cb_id, sharded_output_cb_handle] = tt::tt_metal::create_cb(
             (uint32_t)tt::CBIndex::c_0,
             program,
             combine_core_range_set,
             output_page_size,
-            output_num_pages,
-            tt::tt_metal::datatype_to_dataformat_converter(combine_output_tensor.dtype()),
-            combine_output_tensor.buffer());
+            shared_cb_num_pages_combine,
+            output_dataformat,
+            tilize_output_tensor.buffer());
 
         cb_handles_sharded_combine["cb_combine_out"] = sharded_output_cb_handle;
 
@@ -208,7 +210,7 @@ MoEGPTMeshWorkloadFactory::create_at(
         // semaphore slot 0 which conflicts with dispatch infrastructure on combine cores.
 
         // Output base L1 address
-        output_base_l1_addr = combine_output_tensor.buffer()->address();
+        output_base_l1_addr = tilize_output_tensor.buffer()->address();
     }
 
     const auto tensors = std::vector<const Tensor*>{
@@ -282,9 +284,10 @@ MoEGPTMeshWorkloadFactory::create_at(
         named_compile_time_args["tilize_drain_core_noc_y"] = (uint32_t)early_drain_physical.y;
 
         // Combine core compile-time args (for dm1 and compute)
-        named_compile_time_args["height_shard_dim"] = 4u;
-        named_compile_time_args["width_shard_dim"] = 3u;
-        named_compile_time_args["combine_shard_width_tiles"] = 30u;
+        named_compile_time_args["height_shard_dim"] = operation_attributes.output_height_shard_dim;
+        named_compile_time_args["width_shard_dim"] = operation_attributes.output_width_shard_dim;
+        named_compile_time_args["combine_shard_width_tiles"] =
+            tensor_args.w2_tensor.logical_shape()[4] / operation_attributes.output_width_shard_dim;
         named_compile_time_args["tile_width"] = 32u;
         named_compile_time_args["tile_width_size_bytes"] = 64u;
         named_compile_time_args["num_tokens_total"] = total_tokens;
