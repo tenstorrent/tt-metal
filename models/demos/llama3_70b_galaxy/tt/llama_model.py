@@ -5,6 +5,7 @@
 import ttnn
 import torch
 import os
+from pathlib import Path
 from tqdm import tqdm
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.common.rmsnorm import RMSNorm
@@ -76,6 +77,9 @@ class TtTransformer(LightweightModule):
         self._debug_bitmask = os.getenv("TT_DEBUG_BITMASK", "0") == "1"
         self._debug_bitmask_step = 0
         self._debug_bitmask_max_steps = int(os.getenv("TT_DEBUG_BITMASK_MAX_STEPS", "32"))
+        self._debug_bitmask_dump = os.getenv("TT_DEBUG_BITMASK_DUMP", "0") == "1"
+        self._debug_bitmask_dump_dir = Path(os.getenv("TT_DEBUG_BITMASK_DUMP_DIR", "/tmp/tt_debug_bitmask"))
+        self._debug_bitmask_dump_dir.mkdir(parents=True, exist_ok=True)
         self.bitmask_arange = ttnn.arange(
             start=0, end=32, step=1, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
         )
@@ -620,16 +624,23 @@ class TtTransformer(LightweightModule):
         batch_dim, vocab_dim = bitmask.shape
         if hasattr(self, "_debug_log_device_tensor_slice"):
             self._debug_log_device_tensor_slice("packed_bitmask_device", bitmask)
+        self._debug_dump_all_shards("packed_bitmask_device", bitmask)
         bitmask_to_broadcast = ttnn.reshape(bitmask, (batch_dim, vocab_dim, 1), **op_kwargs)
+        self._debug_dump_all_shards("bitmask_to_broadcast", bitmask_to_broadcast)
         broadcast_unpacked = ttnn.bitwise_right_shift(bitmask_to_broadcast, self.bitmask_arange)
+        self._debug_dump_all_shards("broadcast_unpacked_rshift", broadcast_unpacked)
         broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
+        self._debug_dump_all_shards("broadcast_unpacked_and1", broadcast_unpacked)
         unpacked_bitmask = ttnn.reshape(broadcast_unpacked, (batch_dim, -1), **op_kwargs)
+        self._debug_dump_all_shards("unpacked_bitmask_reshape", unpacked_bitmask)
         converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
+        self._debug_dump_all_shards("converted_bitmask_tile", converted_bitmask)
         if hasattr(self, "_debug_log_device_tensor_slice"):
             self._debug_log_device_tensor_slice("unpacked_bitmask_01", converted_bitmask)
         # converted_bitmask is 0/1. Compute (x - 1) * 1e9 -> {-1e9, 0}.
         result = ttnn.add(converted_bitmask, -1.0, dtype=ttnn.float32, **op_kwargs)
         ttnn.multiply_(result, 1e9, **op_kwargs)
+        self._debug_dump_all_shards("unpacked_penalty_mask", result)
         if hasattr(self, "_debug_log_device_tensor_slice"):
             self._debug_log_device_tensor_slice("unpacked_penalty_mask", result)
         self._sanity_check_unpacked_bitmask(bitmask, converted_bitmask, result)
@@ -657,6 +668,9 @@ class TtTransformer(LightweightModule):
                 f"[TT_DEBUG_BITMASK] step={self._debug_bitmask_step} packed_bitmask_host: "
                 f"shape={tuple(bitmask.shape)} dtype={bitmask.dtype} sample={sample}"
             )
+        if self._debug_bitmask_dump and self._debug_should_log_bitmask():
+            host_path = self._debug_bitmask_dump_dir / f"step{self._debug_bitmask_step:04d}_packed_bitmask_host.pt"
+            torch.save(self._last_host_bitmask, host_path)
         bitmask_tt = ttnn.from_torch(
             bitmask,
             device=None,
@@ -679,6 +693,7 @@ class TtTransformer(LightweightModule):
             return tt_logits
         if hasattr(self, "_debug_log_device_tensor_slice"):
             self._debug_log_device_tensor_slice("logits_before_mask", tt_logits)
+        self._debug_dump_all_shards("logits_before_mask", tt_logits)
         with ttnn.trace_allocation_safe_scope(self.mesh_device):
             bitmask_unpacked = self.unpack_bitmask(self._active_bitmask)
             ttnn.add_(
@@ -689,6 +704,7 @@ class TtTransformer(LightweightModule):
             bitmask_unpacked.deallocate(True)
         if hasattr(self, "_debug_log_device_tensor_slice"):
             self._debug_log_device_tensor_slice("logits_after_mask", tt_logits)
+        self._debug_dump_all_shards("logits_after_mask", tt_logits)
         if hasattr(self, "_debug_should_log_bitmask") and self._debug_should_log_bitmask():
             self._debug_bitmask_step += 1
         return tt_logits
@@ -862,6 +878,24 @@ class TtTransformer(LightweightModule):
             )
         except Exception as e:
             print(f"[TT_DEBUG_BITMASK] step={self._debug_bitmask_step} {name}: debug read failed: {e}")
+
+    def _debug_dump_all_shards(self, name, tensor):
+        if not self._debug_bitmask_dump or not self._debug_should_log_bitmask():
+            return
+        try:
+            shards = ttnn.get_device_tensors(tensor)
+            for shard_idx, shard in enumerate(shards):
+                shard_torch = ttnn.to_torch(shard).detach().cpu()
+                out_path = self._debug_bitmask_dump_dir / (
+                    f"step{self._debug_bitmask_step:04d}_{name}_shard{shard_idx:02d}.pt"
+                )
+                torch.save(shard_torch, out_path)
+            print(
+                f"[TT_DEBUG_BITMASK] step={self._debug_bitmask_step} dumped "
+                f"{len(shards)} shard(s) for {name} to {self._debug_bitmask_dump_dir}"
+            )
+        except Exception as e:
+            print(f"[TT_DEBUG_BITMASK] step={self._debug_bitmask_step} {name}: dump failed: {e}")
 
     def switch_mode(self, mode):
         if mode == "decode":
