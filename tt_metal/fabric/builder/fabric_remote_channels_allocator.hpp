@@ -59,56 +59,39 @@ public:
     void emit_channel_allocations_ct_args(std::vector<uint32_t>& ct_args, size_t num_used_receiver_channels) const;
 
     /**
-     * Get the base address for a specific remote receiver channel in a specific VC.
+     * Get the base address for the remote receiver channel in a specific VC.
+     * Each VC has at most one remote receiver channel.
      * @param vc_id Virtual Channel ID (0 for VC0, 1 for VC1)
-     * @param channel_id Channel ID within the VC
      * @return Base address
      */
-    size_t get_remote_receiver_channel_base_address(size_t vc_id, size_t channel_id) const;
+    size_t get_remote_receiver_channel_base_address(size_t vc_id) const;
 
     /**
-     * Get the number of buffers for a specific remote receiver channel in a specific VC.
+     * Get the number of buffers for the remote receiver channel in a specific VC.
+     * Each VC has at most one remote receiver channel.
      * @param vc_id Virtual Channel ID (0 for VC0, 1 for VC1)
-     * @param channel_id Channel ID within the VC
      * @return Number of buffers
      */
-    size_t get_remote_receiver_channel_num_buffers(size_t vc_id, size_t channel_id) const;
+    size_t get_remote_receiver_channel_num_buffers(size_t vc_id) const;
 
     /**
-     * Legacy getter for VC0 only (for backward compatibility).
-     * @param channel_id Channel ID
-     * @return Base address
-     */
-    size_t get_remote_receiver_channel_base_address(size_t channel_id) const {
-        return get_remote_receiver_channel_base_address(0, channel_id);
-    }
-
-    /**
-     * Legacy getter for VC0 only (for backward compatibility).
-     * @param channel_id Channel ID
-     * @return Number of buffers
-     */
-    size_t get_remote_receiver_channel_num_buffers(size_t channel_id) const {
-        return get_remote_receiver_channel_num_buffers(0, channel_id);
-    }
-
-    /**
-     * Get the number of used receiver channels for a specific VC.
+     * Get whether a specific VC has an active receiver channel.
      * @param vc_id Virtual Channel ID (0 for VC0, 1 for VC1)
-     * @return Number of used receiver channels
+     * @return true if the VC has an active receiver channel
      */
-    size_t get_num_receiver_channels(size_t vc_id) const {
+    bool is_receiver_channel_active(size_t vc_id) const {
         TT_FATAL(
             vc_id < builder_config::MAX_NUM_VCS, "VC ID {} out of bounds (max {})", vc_id, builder_config::MAX_NUM_VCS);
-        return num_used_receiver_channels_per_vc_[vc_id];
+        return is_receiver_channel_active_per_vc_[vc_id];
     }
 
     /**
-     * Legacy getter: Get total number of used receiver channels across all VCs.
-     * @return Total number of used receiver channels
+     * Get total number of active receiver channels across all VCs.
+     * @return Total number of active receiver channels (0, 1, or 2)
      */
     size_t get_num_receiver_channels() const {
-        return num_used_receiver_channels_per_vc_[0] + num_used_receiver_channels_per_vc_[1];
+        return static_cast<size_t>(is_receiver_channel_active_per_vc_[0]) +
+               static_cast<size_t>(is_receiver_channel_active_per_vc_[1]);
     }
 
     /**
@@ -117,26 +100,20 @@ public:
     void print(std::ostream& os) const override;
 
 private:
-    // Per-VC remote receiver channel data (VC × channel)
-    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
-        remote_receiver_channels_base_address_ = {};
-    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
-        remote_receiver_channels_num_buffers_ = {};
-    std::array<size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc_ = {0, 0};
+    // Per-VC remote receiver channel data (one channel per VC)
+    std::array<size_t, builder_config::MAX_NUM_VCS> remote_receiver_channel_base_address_ = {};
+    std::array<size_t, builder_config::MAX_NUM_VCS> remote_receiver_channel_num_buffers_ = {};
+    std::array<bool, builder_config::MAX_NUM_VCS> is_receiver_channel_active_per_vc_ = {false, false};
 };
 
 inline void FabricRemoteChannelsAllocator::print(std::ostream& os) const {
     os << "FabricRemoteChannelsAllocator {\n";
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        os << "  VC" << vc << " num_used_receiver_channels: " << num_used_receiver_channels_per_vc_[vc] << "\n";
-        if (num_used_receiver_channels_per_vc_[vc] > 0) {
-            os << "  VC" << vc << " Remote Receiver Channels:\n";
-            for (size_t i = 0; i < num_used_receiver_channels_per_vc_[vc]; ++i) {
-                os << "    VC" << vc << " Channel " << i << ":\n";
-                os << "      base_address: 0x" << std::hex << remote_receiver_channels_base_address_[vc][i] << std::dec
-                   << "\n";
-                os << "      num_buffers: " << remote_receiver_channels_num_buffers_[vc][i] << "\n";
-            }
+        os << "  VC" << vc << " is_receiver_channel_active: " << is_receiver_channel_active_per_vc_[vc] << "\n";
+        if (is_receiver_channel_active_per_vc_[vc]) {
+            os << "  VC" << vc << " Remote Receiver Channel:\n";
+            os << "      base_address: 0x" << std::hex << remote_receiver_channel_base_address_[vc] << std::dec << "\n";
+            os << "      num_buffers: " << remote_receiver_channel_num_buffers_[vc] << "\n";
         }
     }
     os << "}";

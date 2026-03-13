@@ -133,8 +133,8 @@ public:
     const std::array<std::size_t, builder_config::MAX_NUM_VCS>& get_max_sender_channels_per_vc() const {
         return max_sender_channels_per_vc_;
     }
-    const std::array<std::size_t, builder_config::MAX_NUM_VCS>& get_max_receiver_channels_per_vc() const {
-        return max_receiver_channels_per_vc_;
+    const std::array<bool, builder_config::MAX_NUM_VCS>& get_is_receiver_channel_active_per_vc() const {
+        return is_receiver_channel_active_per_vc_;
     }
 
     // ============ Tensix Config ============
@@ -195,7 +195,7 @@ private:
 
     // Computed max channel counts based on actual router types in this fabric
     std::array<std::size_t, builder_config::MAX_NUM_VCS> max_sender_channels_per_vc_{};
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> max_receiver_channels_per_vc_{};
+    std::array<bool, builder_config::MAX_NUM_VCS> is_receiver_channel_active_per_vc_{};
 
     // Pre-built EDM config templates
     std::unique_ptr<FabricEriscDatamoverConfig> router_config_;

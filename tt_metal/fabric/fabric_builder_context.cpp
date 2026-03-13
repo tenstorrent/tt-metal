@@ -42,7 +42,7 @@ void FabricBuilderContext::compute_max_channel_counts() {
 
     // Compute max channel counts across all router types in this fabric
     max_sender_channels_per_vc_.fill(0);
-    max_receiver_channels_per_vc_.fill(0);
+    is_receiver_channel_active_per_vc_.fill(false);
 
     for (const auto& mapping : possible_mappings) {
         uint32_t num_vcs = mapping.get_num_virtual_channels();
@@ -50,9 +50,7 @@ void FabricBuilderContext::compute_max_channel_counts() {
             max_sender_channels_per_vc_[vc] = std::max(
                 max_sender_channels_per_vc_[vc],
                 static_cast<std::size_t>(mapping.get_num_sender_channels_for_vc(vc)));
-            max_receiver_channels_per_vc_[vc] = std::max(
-                max_receiver_channels_per_vc_[vc],
-                static_cast<std::size_t>(1u));  // Always 1 receiver per VC
+            is_receiver_channel_active_per_vc_[vc] = true;  // Always 1 receiver per VC (when VC is active)
         }
     }
 }
@@ -124,8 +122,8 @@ std::unique_ptr<FabricEriscDatamoverConfig> FabricBuilderContext::create_edm_con
         fabric_context_.get_fabric_channel_buffer_size_bytes(),
         fabric_context_.get_fabric_topology(),
         edm_options,
-        max_sender_channels_per_vc_,      // Max for this fabric instance
-        max_receiver_channels_per_vc_);   // Max for this fabric instance
+        max_sender_channels_per_vc_,          // Max for this fabric instance
+        is_receiver_channel_active_per_vc_);  // Max for this fabric instance
 }
 
 FabricEriscDatamoverConfig& FabricBuilderContext::get_fabric_router_config(
