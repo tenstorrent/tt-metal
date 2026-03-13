@@ -29,11 +29,6 @@ def random_torch_tensor(dtype, shape):
     return torch.rand(shape).bfloat16().float()
 
 
-def skip_if_torch_pad_reference_unsupported(dtype):
-    if dtype in (ttnn.uint16, ttnn.uint32):
-        pytest.skip("PyTorch pad reference does not support the uint16/uint32 promotion used by this test")
-
-
 @pytest.mark.parametrize("n", [16])
 @pytest.mark.parametrize("c", [3])
 @pytest.mark.parametrize("h", [230])
@@ -50,7 +45,6 @@ def skip_if_torch_pad_reference_unsupported(dtype):
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.int32, ttnn.uint16])
 def test_pad_rm(device, n, c, h, w, padding, torch_padding, value, dtype):
     torch.manual_seed(0)
-    skip_if_torch_pad_reference_unsupported(dtype)
 
     torch_input_tensor = random_torch_tensor(dtype, (n, c, h, w))
     torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
@@ -65,7 +59,6 @@ def test_pad_rm(device, n, c, h, w, padding, torch_padding, value, dtype):
 
 def run_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, value, dtype, layout):
     torch.manual_seed(0)
-    skip_if_torch_pad_reference_unsupported(dtype)
 
     torch_input_tensor = random_torch_tensor(dtype, (n, c, h, w))
     torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
@@ -112,7 +105,6 @@ def test_pad_with_program_cache(device, n, c, h, w, padding, torch_padding, valu
 
 def run_pad_rm_sharded(device, n, c, h, w, padding, torch_padding, value, shard_orient, dtype):
     torch.manual_seed(0)
-    skip_if_torch_pad_reference_unsupported(dtype)
 
     torch_input_tensor = random_torch_tensor(dtype, (n, c, h, w))
     torch_output_tensor = torch.nn.functional.pad(torch_input_tensor, torch_padding, mode="constant", value=value)
@@ -484,7 +476,6 @@ def test_pad_conv2d_sweep(device, dtype, use_multicore, shape, padded_shape, mem
 def test_pad_op(device, in_dtype, shape, padshape, use_multicore, layout, mem_config):
     if layout == ttnn.ROW_MAJOR_LAYOUT and in_dtype == ttnn.bfloat8_b:
         pytest.skip("row major bfloat8 is not supported")
-    skip_if_torch_pad_reference_unsupported(in_dtype)
     torch_input = random_torch_tensor(in_dtype, shape)
 
     ttnn_input = ttnn.from_torch(torch_input, device=device, memory_config=mem_config, dtype=in_dtype, layout=layout)
