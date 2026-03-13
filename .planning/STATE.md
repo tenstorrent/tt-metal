@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-13T21:52:19.824Z"
+last_updated: "2026-03-13T23:40:00Z"
 progress:
   total_phases: 6
-  completed_phases: 1
-  total_plans: 2
-  completed_plans: 2
+  completed_phases: 3
+  total_plans: 4
+  completed_plans: 4
 ---
 
 # Project State
@@ -18,7 +18,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-12)
 
 **Core value:** Each PR is self-contained, correct, and independently reviewable
-**Current focus:** Phase 4 — Device Sender Per-VC
+**Current focus:** Phase 5 — Channel Allocator
 
 ## Phase Validation Procedure
 
@@ -46,26 +46,20 @@ Note: Neither the build nor the sanity test should hang. Any hang is a regressio
 
 ## Current Phase
 
-**Phase 3: Host Sender Per-VC — Plan 02 Complete (2026-03-13)**
+**Phase 4: Device Sender Per-VC — Plan 01 Complete (2026-03-13)**
 
 Plan 01 completed:
-- Removed dead `AllocatorConstructionParams` struct from `fabric_builder_config.hpp` (flat-only, never instantiated)
-- Added `MAX_RISC_CORES_PER_ETH_CHAN = 2` constant to `builder_config` namespace
-- Changed `is_sender_channel_serviced_` and `is_receiver_channel_serviced_` outer dim to `MAX_RISC_CORES_PER_ETH_CHAN`
-- Updated `num_used_sender_channels` comment to document it as derived from `num_used_sender_channels_per_vc`
-- Build: PASSED (213/213 targets, zero errors)
-
-Plan 02 completed:
-- `compute_mesh_router_builder.cpp`: replaced flat `edm_config.num_used_sender_channels` with explicit per-VC sum `num_used_sender_channels_per_vc[0] + num_used_sender_channels_per_vc[1]`
-- Build: PASSED (127/127 targets, zero errors)
+- Added `VC0_SENDER_CHANNEL_START = 0` to `fabric_erisc_router_ct_args.hpp` after `VC1_RECEIVER_CHANNEL`, completing sender/receiver naming symmetry
+- Replaced all 5 `is_sender_channel_serviced[0]` literal guard expressions in `fabric_erisc_router.cpp` with `is_sender_channel_serviced[VC0_SENDER_CHANNEL_START]`
+- Build: PASSED (zero new errors)
 - Sanity test: PASSED (all 12 latency tests passed golden comparison, no hangs)
 
 Key decisions:
-- `MAX_RISC_CORES_PER_ETH_CHAN` added as separate constant (not alias) from `MAX_NUM_VCS` to distinguish RISC core indexing from VC indexing
-- `AllocatorConstructionParams` removal confirmed safe via grep — only definition existed, no users
-- CT arg emission loops in `erisc_datamover_builder.cpp` left with flat guard — semantically equivalent, plan deferred
+- `VC0_SENDER_CHANNEL_START` placed adjacent to `VC0/VC1_RECEIVER_CHANNEL` block in `ct_args.hpp` to group all VC start index constants together
+- `run_sender_channel_step` template call flat indices (0-4) left unchanged — they are absolute kernel slot indices, not VC-start guards
+- RT arg parsing loops (`for i < MAX_NUM_SENDER_CHANNELS`) left unchanged — flat wire format intact (DS-02)
 
 ## Next Plan
 
-**Phase 3 complete — all 2 plans done**
-Ready for Phase 4 (host-sender-per-vc-logic) or next PR preparation.
+**Phase 4 complete — all 1 plans done**
+Ready for Phase 5 (Channel Allocator).

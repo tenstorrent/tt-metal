@@ -28,8 +28,8 @@
 
 ### Device Sender Channels (PR 4)
 
-- [ ] **DS-01**: Device-side sender channel arrays use per-VC indexing
-- [ ] **DS-02**: CT args parsing for sender channels uses per-VC accessors
+- [x] **DS-01**: Device-side sender channel arrays use per-VC indexing
+- [x] **DS-02**: CT args parsing for sender channels uses per-VC accessors
 
 ### Channel Allocator (PR 5)
 
