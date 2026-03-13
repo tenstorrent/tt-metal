@@ -55,12 +55,7 @@ public:
         std::string kernel_name,
         size_t compile_hash,
         std::string precompiled_dir,
-        PrecompiledKernelConfig::FallbackPolicy fallback_policy) :
-        std::runtime_error("Precompiled kernel binaries not found."),
-        kernel_name_(std::move(kernel_name)),
-        compile_hash_(compile_hash),
-        precompiled_dir_(std::move(precompiled_dir)),
-        fallback_policy_(fallback_policy) {}
+        PrecompiledKernelConfig::FallbackPolicy fallback_policy);
 
     const std::string& kernel_name() const noexcept { return kernel_name_; }
     size_t compile_hash() const noexcept { return compile_hash_; }
