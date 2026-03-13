@@ -186,7 +186,7 @@ class MatmulCustomCompressed:
                 shard_assignment = ct.get_assignment_per_shard(core_coord)
                 ctas = pack_formats_as_ctas(shard_assignment)
                 core_values.append((core_coord, ctas))
-            per_core_pos_cta = PerCorePositionalCTADescriptor(core_values=core_values)
+            per_core_pos_cta = PerCorePositionalCTADescriptor(trisc_core_values=core_values)
         else:
             # Runtime path: create per-tile metadata tensor in L1
             # Each tile gets one uint32: [abs_addr:24 | fmt:8], precomputed with absolute addresses.
