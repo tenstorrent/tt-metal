@@ -87,6 +87,7 @@ void ProfilerInitializer::teardown(std::unordered_set<InitializerKey>& init_done
     if (getDeviceProfilerState(descriptor_->metal_context().get_context_id())) {
         // Read profiler results from dispatch cores
         for (auto* dev : devices_) {
+            TT_ASSERT(dev != nullptr, "Device is nullptr");
             detail::ReadDeviceProfilerResults(static_cast<IDevice*>(dev), ProfilerReadState::ONLY_DISPATCH_CORES);
         }
 
