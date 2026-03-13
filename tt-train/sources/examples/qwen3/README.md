@@ -198,26 +198,36 @@ qwen3/
     └── tensor_utils.py          # Tensor creation, padding, mesh gather helpers
 ```
 
-## Hardware / Descriptor Notes
-
-This example was developed and tested on a **Wormhole (WH) LoudBox** (T3K).
+## Hardware / Distributed Setup
 
 Device initialisation lives in `utils/device_setup.py` and is shared by all
 three entry-point scripts (`generate.py`, `gradients.py`, `train.py`).
-It contains a hardcoded lookup table (`_MGD_TABLE`) that maps mesh shapes to
-mesh-graph descriptor files and fabric configs:
+In distributed mode it calls `ttml.core.distributed.enable_fabric()` which
+automatically selects the fabric config (including wrap-around / torus
+connections) from the Mesh Graph Descriptor (MGD) file.
 
-- `(2, 4)` → `t3k_mesh_graph_descriptor.textproto`, `FABRIC_2D`
-- `(1, 8)` → `t3k_1x8_mesh_graph_descriptor.textproto`, `FABRIC_2D_TORUS_XY`
+### Setting the MGD file
 
-Any shape not in the table falls back to `FABRIC_2D` with auto-discovery.
-To run on a different machine or topology you will likely need to update
-`_MGD_TABLE` (or set `TT_MESH_GRAPH_DESC_PATH` manually).
+Before running in distributed mode, set the `TT_MESH_GRAPH_DESC_PATH`
+environment variable to point to the MGD file that matches your hardware:
 
-The Python-side table was introduced to avoid the hardcoded fallback to
-`t3k_mesh_graph_descriptor` that the C++ path
-(`ttml/ttnn_fixed/distributed/tt_metal.cpp`) uses for 8-device setups, that
-hangs on LoudBox.
+```bash
+export TT_MESH_GRAPH_DESC_PATH="$TT_METAL_HOME/tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto"
+```
+
+Common MGD files (relative to `$TT_METAL_HOME`):
+
+| Topology | MGD file |
+|----------|----------|
+| T3K 1×8 | `tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto` |
+| Galaxy 1×32 | `tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto` |
+
+If `TT_MESH_GRAPH_DESC_PATH` is **not** set, `enable_fabric` will attempt
+automatic selection for 8 or 32 devices, but this may not match your hardware.
+The script prints a large warning in this case.
+
+For full details on MGD files, mesh shapes, and parallelism configuration see
+the [Distributed Training documentation](https://github.com/tenstorrent/tt-metal/blob/main/tt-train/docs/DISTRIBUTED_TRAINING.md#setting-mgd-files-via-environment-variable).
 
 ## Nice-to-Have TODOs
 

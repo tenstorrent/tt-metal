@@ -5,64 +5,51 @@
 """Shared Tenstorrent device setup for single-device and distributed modes."""
 
 import os
-from pathlib import Path
+import sys
 
-import ttnn
 import ttml
-from ttml.common.utils import get_tt_metal_home
 
-# Mesh-shape → (descriptor filename, FabricConfig).
-# The default T3K descriptor assumes [2,4]; a [1,8] mesh needs its own
-# descriptor with RING,RING dim_types so the control plane wires up the
-# correct topology.  Shapes that aren't listed use auto-discovery.
-_MGD_TABLE: dict[tuple[int, int], tuple[str, "ttnn.FabricConfig"]] = {
-    (2, 4): ("t3k_mesh_graph_descriptor.textproto", ttnn.FabricConfig.FABRIC_2D),
-    (1, 8): (
-        "tests/tt_metal/tt_fabric/custom_mesh_descriptors/"
-        "t3k_1x8_mesh_graph_descriptor.textproto",
-        ttnn.FabricConfig.FABRIC_2D_TORUS_XY,
-    ),
-}
+
+_MGD_WARNING = """
+================================================================================
+  WARNING: TT_MESH_GRAPH_DESC_PATH is NOT set!
+
+  Distributed mode requires a Mesh Graph Descriptor (MGD) file.
+  enable_fabric() will attempt automatic selection for 8 or 32 devices,
+  but this may not match your hardware topology.
+
+  For reliable operation, set the environment variable explicitly:
+
+      export TT_MESH_GRAPH_DESC_PATH="/path/to/your/mesh_graph_descriptor.textproto"
+
+  Common MGD files (relative to $TT_METAL_HOME):
+      tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_1x8_mesh_graph_descriptor.textproto
+      tests/tt_metal/tt_fabric/custom_mesh_descriptors/galaxy_1x32_mesh_graph_descriptor.textproto
+
+  See: https://github.com/tenstorrent/tt-metal/blob/main/tt-train/docs/DISTRIBUTED_TRAINING.md#setting-mgd-files-via-environment-variable
+================================================================================
+"""
 
 
 def setup_device(dp_size: int, tp_size: int, seed: int = 42):
     """Open a Tenstorrent device (single or mesh) and return ``(ctx, device)``.
 
     Handles:
-      - ``TT_METAL_RUNTIME_ROOT`` env-var fallback
-      - Fabric enablement and parallelism-context initialisation
+      - Fabric enablement via ``ttml.core.distributed.enable_fabric``
+      - Parallelism-context initialisation
     """
     distributed = dp_size > 1 or tp_size > 1
     total_devices = dp_size * tp_size
 
-    if "TT_METAL_RUNTIME_ROOT" not in os.environ:
-        tt_metal_home = get_tt_metal_home()
-        if tt_metal_home and os.path.exists(tt_metal_home):
-            os.environ["TT_METAL_RUNTIME_ROOT"] = tt_metal_home
-
     if distributed:
+        if "TT_MESH_GRAPH_DESC_PATH" not in os.environ:
+            print(_MGD_WARNING, file=sys.stderr)
+
         print(
             f"\nEnabling distributed mode: DP={dp_size}, TP={tp_size} "
             f"({total_devices} devices, mesh [{dp_size}, {tp_size}])"
         )
-
-        mesh_shape = (dp_size, tp_size)
-        user_set_mgd = "TT_MESH_GRAPH_DESC_PATH" in os.environ
-
-        if not user_set_mgd and mesh_shape in _MGD_TABLE:
-            mgd_rel, fabric_cfg = _MGD_TABLE[mesh_shape]
-            runtime_root = os.environ.get(
-                "TT_METAL_RUNTIME_ROOT", get_tt_metal_home() or ""
-            )
-            mgd_path = str(Path(runtime_root) / mgd_rel)
-            if Path(mgd_path).exists():
-                os.environ["TT_MESH_GRAPH_DESC_PATH"] = mgd_path
-                print(f"  MGD: {mgd_path}")
-            else:
-                print(f"  WARNING: MGD not found ({mgd_path}), using auto-discovery")
-            ttnn.set_fabric_config(fabric_cfg)
-        else:
-            ttnn.set_fabric_config(ttnn.FabricConfig.FABRIC_2D)
+        ttml.core.distributed.enable_fabric(total_devices)
 
     ctx = ttml.autograd.AutoContext.get_instance()
     if distributed:
