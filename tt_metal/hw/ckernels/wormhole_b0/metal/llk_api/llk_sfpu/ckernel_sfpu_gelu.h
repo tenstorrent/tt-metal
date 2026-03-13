@@ -23,13 +23,16 @@ namespace sfpu {
 // Three active regions (plus zero default):
 //   x >= 2.78125:          Identity (result = x)
 //   -3.125 <= x < 2.78125: Core CDF polynomial (degree-15 in u=x²)
-//   -13.1875 < x < -3.125: Inline Cody-Waite exp with 3-term Mills ratio
+//   -13.1875 < x < -3.125: Inline Cody-Waite exp with correction polynomial
 //   x <= -13.1875:          Zero (BF16 natural saturation)
 //
 // The exp region uses inline Cody-Waite range reduction instead of the library
-// _sfpu_exp_f32_accurate_ call, saving ~15 SFPU ops by skipping special-case
-// checks (no overflow/underflow/NaN possible in the known input range) and
-// reducing Taylor degree from 7 to 5.
+// _sfpu_exp_f32_accurate_ call, skipping special-case checks (no overflow/
+// underflow/NaN possible in the known input range) and reducing Taylor degree
+// from 7 to 5. The correction factor (replacing the asymptotic Mills ratio
+// 1 - 1/x² + 3/x⁴ - ...) is a degree-4 minimax polynomial in x, fitted to
+// the TRUE erfc-based function. This eliminates the reciprocal call and its
+// LUT init entirely.
 //
 // Saturation thresholds verified by exhaustive BF16 sweep with RNE rounding.
 // =============================================================================
@@ -49,6 +52,17 @@ constexpr float GELU_CDF_CORE_C9 = 1.0574820044e-04f;
 constexpr float GELU_CDF_CORE_C11 = -7.0036203397e-06f;
 constexpr float GELU_CDF_CORE_C13 = 2.9501944709e-07f;
 constexpr float GELU_CDF_CORE_C15 = -5.7769380390e-09f;
+
+// Degree-4 correction polynomial for the exp-based region (-13.1875, -3.125)
+// P(x) ≈ GELU(x) · exp(x²/2), so result = exp(-x²/2) · P(x)
+// Fitted to the TRUE erfc-based function via minimax (Chebyshev) approximation.
+// Replaces the reciprocal + 3-term Mills ratio, saving ~8 ops + LUT init.
+// Validated: Max ULP = 1 across all 266 BF16 values in the region.
+constexpr float GELU_EXP_CORR_C0 = -2.9069766448e-01f;
+constexpr float GELU_EXP_CORR_C1 = 3.9288617802e-02f;
+constexpr float GELU_EXP_CORR_C2 = 5.8260409601e-03f;
+constexpr float GELU_EXP_CORR_C3 = 3.9454728181e-04f;
+constexpr float GELU_EXP_CORR_C4 = 1.0058581740e-05f;
 
 // Forward GELU Evaluation with CDF Polynomial Approximation
 // GELU(x) = x * Phi(x) where Phi is approximated piecewise
@@ -75,8 +89,9 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         sfpi::vFloat phi = GELU_CDF_CORE_C0 + x * odd_poly;
         result = x * phi;
     }
-    // Exp-based region (-13.1875, -3.125): asymptotic formula
-    // GELU(x) ≈ -exp(-x²/2) / √(2π) · (1 - 1/x² + 3/x⁴ - 15/x⁶)
+    // Exp-based region (-13.1875, -3.125): exp(-x²/2) · P(x)
+    // P(x) is a degree-4 correction polynomial fitted to the TRUE function
+    // GELU(x)·exp(x²/2) via minimax approximation over x ∈ (-13.1875, -3.125).
     //
     // Uses inline Cody-Waite range reduction instead of library exp call.
     // For x ∈ (-13.1875, -3.125), t = -x²/2 ∈ (-86.8, -4.88), so z = t/ln2
@@ -85,10 +100,6 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
     // Degree-5 Taylor (vs degree-7 in library): error < 3.3e-9 relative,
     // negligible for BF16 output.
     v_elseif(x > -13.1875f) {
-        constexpr float K = -0.3989422804014327f;  // -1/√(2π)
-        constexpr float K3 = 3.0f * K;             // -3/√(2π)
-        constexpr float K15 = 15.0f * K;           // -15/√(2π)
-
         sfpi::vFloat x2 = x * x;
         sfpi::vFloat t = x2 * (-0.5f);  // t = -x²/2
 
@@ -119,12 +130,12 @@ sfpi_inline sfpi::vFloat calculate_gelu_piecewise(sfpi::vFloat x) {
         sfpi::vInt new_exp = p_exp + k_int;
         sfpi::vFloat exp_val = sfpi::setexp(p, new_exp);
 
-        // 3-term Mills ratio correction: K·(1 - 1/x² + 3/x⁴ - 15/x⁶)
-        // Let u = 1/x². Horner: K + u·(-K + u·(3K + u·(-15K)))
-        sfpi::vFloat inv_x2 = _sfpu_reciprocal_<2>(x2);
-        sfpi::vFloat scaled = ((-K15 * inv_x2 + K3) * inv_x2 - K) * inv_x2 + K;
+        // Correction polynomial: P(x) ≈ GELU(x)·exp(x²/2)
+        // Replaces reciprocal + Mills ratio, saving ~8 ops + LUT init
+        sfpi::vFloat correction = PolynomialEvaluator::eval(
+            x, GELU_EXP_CORR_C0, GELU_EXP_CORR_C1, GELU_EXP_CORR_C2, GELU_EXP_CORR_C3, GELU_EXP_CORR_C4);
 
-        result = exp_val * scaled;
+        result = exp_val * correction;
     }
     v_endif;
 
@@ -135,10 +146,8 @@ template <bool APPROXIMATION_MODE, bool is_fp32_dest_acc_en>
 void gelu_init() {
     if constexpr (APPROXIMATION_MODE) {
         _init_gelu_<APPROXIMATION_MODE>();
-    } else {
-        // Accurate mode needs reciprocal for exp-based region's 1/x^2
-        _init_reciprocal_<false, false>();
     }
+    // Accurate mode: no init needed (correction polynomial replaces reciprocal)
 }
 
 template <bool APPROXIMATION_MODE>
