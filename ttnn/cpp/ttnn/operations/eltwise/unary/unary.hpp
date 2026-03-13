@@ -10,8 +10,6 @@
 namespace ttnn {
 namespace operations::unary {
 
-using operations::complex::ComplexTensor;
-
 enum class SigmoidMode {
     FAST_APPROXIMATE,
     ACCURATE_FAST_EXP,
@@ -29,6 +27,12 @@ Tensor unary_impl(
 
 }  // namespace detail
 
+// The ExecuteUnaryTSVariant and ExecuteUnaryWithFloatParameter structures are
+// necessary to `invoke()` for the `fmod`, `minimum` and `maximum` operations --
+// these three are also implemented as binary versions, and declaring binary
+// minimum as a const variable while the unary minimum is defined as a free function
+// will lead to the build error due to the type redefinition. Once the #39697 is merged
+// these two can be migrated.
 template <UnaryOpType unary_op_type>
 struct ExecuteUnaryTSVariant {
     static Tensor invoke(
@@ -391,10 +395,7 @@ inline Tensor rsub_sfpu(
     const Tensor& t,
     T param,
     const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt) {
-    return operations::unary::detail::unary_impl(
-        t, {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::RSUB, {param}}}, m, o);
-}
+    const std::optional<Tensor>& o = std::nullopt);
 
 Tensor add_sfpu(
     const Tensor& t,

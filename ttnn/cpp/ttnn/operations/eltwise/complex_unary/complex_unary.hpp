@@ -11,8 +11,6 @@
 
 namespace ttnn {
 
-namespace operations::complex_unary {}  // namespace operations::complex_unary
-
 Tensor real(
     const ComplexTensor& input_tensor, const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt);
 Tensor imag(

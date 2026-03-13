@@ -12,6 +12,7 @@
 #include "ttnn/operations/eltwise/binary/binary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
+#include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::operations::unary {
 
@@ -446,6 +447,19 @@ Tensor unary_chain(
     const std::optional<Tensor>& o) {
     return operations::unary::detail::unary_impl(t, chain, m, o);
 }
+
+template <typename T>
+Tensor rsub_sfpu(
+    const Tensor& t,
+    T param,
+    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
+    const std::optional<Tensor>& o = std::nullopt) {
+    return operations::unary::detail::unary_impl(
+        t, {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::RSUB, {param}}}, m, o);
+}
+
+extern template Tensor rsub_sfpu<Tensor>(
+    const Tensor&, Tensor, const std::optional<tt::tt_metal::MemoryConfig>&, const std::optional<Tensor>&);
 
 Tensor add_sfpu(
     const Tensor& t, float p, const std::optional<tt::tt_metal::MemoryConfig>& m, const std::optional<Tensor>& o) {
