@@ -9,6 +9,7 @@ target_link_libraries(
     mem_bench
     PRIVATE
         Metalium::Metal
+        Metalium::Metal::Hardware
         numa
         benchmark::benchmark
 )

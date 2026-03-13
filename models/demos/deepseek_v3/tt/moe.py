@@ -15,6 +15,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     AllGatherAsyncConfig,
     AllToAllCombineConfig,
     AllToAllDispatchConfig,
+    DeepseekMoEReduceScatterConfig,
     MeshDeviceStub,
     MulConfig,
     ReduceScatterAsyncMinimalConfig,
@@ -139,6 +140,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        fabric_config: ttnn.FabricConfig,
         mode: str,
         topk_fallback: bool = False,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
@@ -176,6 +178,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             return {
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 "num_devices": mesh_device.get_num_devices(),
+                "fabric_config": fabric_config,
                 "num_experts_per_device": num_experts_per_device,
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
@@ -192,10 +195,19 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "output_memory_config": input_output_memory_config,
                 "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
                 "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
+                "sum_experts_output_memory_config": memory_config,
                 "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
                     cluster_axis=1,
                     dim=3,
                     memory_config=input_output_memory_config,
+                ),
+                "ring_sum_experts_output_memory_config": DeepseekMoEReduceScatterConfig.create_default_input_memory_config(
+                    USERS_PER_ROW, HIDDEN_SIZE, TP_SIZE
+                ),
+                "ring_final_output_reduce_scatter": DeepseekMoEReduceScatterConfig(
+                    cluster_axis=1,
+                    dim=3,
+                    output_memory_config=input_output_memory_config,
                 ),
                 "revert_tp": AllGatherAsyncConfig(
                     mesh_device=MeshDeviceStub(mesh_device.shape),
@@ -215,6 +227,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             return {
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 "num_devices": mesh_device.get_num_devices(),
+                "fabric_config": fabric_config,
                 "num_experts_per_device": num_experts_per_device,
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
@@ -231,6 +244,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "output_memory_config": memory_config,
                 "all_to_all_dispatch": AllToAllDispatchConfig(cluster_axis=0, memory_config=memory_config),
                 "all_to_all_combine": AllToAllCombineConfig(cluster_axis=0, memory_config=memory_config),
+                "sum_experts_output_memory_config": memory_config,
                 "final_output_reduce_scatter": ReduceScatterAsyncMinimalConfig(
                     cluster_axis=1,
                     dim=3,
@@ -246,15 +260,23 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def decode_model_config(
-        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, topk_fallback: bool = False
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.Device,
+        fabric_config: ttnn.FabricConfig,
+        topk_fallback: bool = False,
     ) -> ModelDecodeConfig:
-        return cls.model_config(hf_config, mesh_device, "decode", topk_fallback=topk_fallback)
+        return cls.model_config(hf_config, mesh_device, fabric_config, "decode", topk_fallback=topk_fallback)
 
     @classmethod
     def prefill_model_config(
-        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, topk_fallback: bool = False
+        cls,
+        hf_config: PretrainedConfig,
+        mesh_device: ttnn.Device,
+        fabric_config: ttnn.FabricConfig,
+        topk_fallback: bool = False,
     ) -> ModelPrefillConfig:
-        return cls.model_config(hf_config, mesh_device, "prefill", topk_fallback=topk_fallback)
+        return cls.model_config(hf_config, mesh_device, fabric_config, "prefill", topk_fallback=topk_fallback)
 
     @classmethod
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
@@ -331,7 +353,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             seq_len,
         )
 
-        # Note: reduce_scatter is handled by the caller (decoder block or test)
+        # Note: sum_experts and reduce_scatter is handled by the caller (decoder block or test)
 
         return post_combine_output_tensor
 
@@ -453,7 +475,6 @@ class MoE(SharedStateAddOn, AbstractModule):
             )
             ttnn.deallocate(topk_weights_chunk)
 
-            post_combine_output_tensor = ttnn.sum(post_combine_output_tensor, dim=0, keepdim=True)
             output_chunks.append(post_combine_output_tensor)
 
         if len(output_chunks) == 1:
@@ -466,6 +487,10 @@ class MoE(SharedStateAddOn, AbstractModule):
         ttnn.deallocate(x_rm)
         ttnn.deallocate(topk_experts_indices_rm)
         return post_combine_output_tensor
+
+    @classmethod
+    def _fwd_all_gather(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+        return ttnn.experimental.all_gather_async(x, **cfg["ccl"].populate_all_gather_runtime_args(cfg["revert_tp"]))
 
     @classmethod
     def _fwd_reduce_scatter(
@@ -490,10 +515,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         return ttnn.reduce_scatter(post_combine_output_tensor, **rs_kwargs)
 
     @classmethod
-    def _fwd_all_gather(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
-        return ttnn.experimental.all_gather_async(x, **cfg["ccl"].populate_all_gather_runtime_args(cfg["revert_tp"]))
-
-    @classmethod
     def forward_prefill(
         cls, x: ttnn.Tensor, cfg: RunPrefillConfig, handle_tensor_parallel: bool = False
     ) -> ttnn.Tensor:
@@ -504,9 +525,10 @@ class MoE(SharedStateAddOn, AbstractModule):
         # Run the forward pass
         output = cls.forward(x, cfg)
 
-        # Handle reduce_scatter if tensor parallel is enabled
+        # Handle sum_experts and reduce_scatter if tensor parallel is enabled
         if handle_tensor_parallel:
             ccl = cfg["ccl"]
+            output = ttnn.sum(output, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
             output = cls._fwd_reduce_scatter(output, cfg, ccl)
 
         return output
@@ -520,9 +542,23 @@ class MoE(SharedStateAddOn, AbstractModule):
         # Run the forward pass
         output = cls.forward(x, cfg)
 
-        # Handle reduce_scatter if tensor parallel is enabled
+        # Handle sum_experts and reduce_scatter if tensor parallel is enabled
         if handle_tensor_parallel:
             ccl = cfg["ccl"]
-            output = cls._fwd_reduce_scatter(output, cfg, ccl)
+            tp_size = cfg["mesh_device"].shape[1]
+
+            if cfg["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING and tp_size == 8:
+                output = ttnn.experimental.deepseek_moe_fast_reduce_nc(
+                    output,
+                    dim=0,
+                    split_size=output.shape[-1] // tp_size,
+                    output_memory_config=cfg["ring_sum_experts_output_memory_config"],
+                )
+                output = ttnn.experimental.deepseek_moe_reduce_scatter(
+                    output, **cfg["ring_final_output_reduce_scatter"]
+                )
+            else:
+                output = ttnn.sum(output, dim=0, keepdim=True, memory_config=cfg["sum_experts_output_memory_config"])
+                output = cls._fwd_reduce_scatter(output, cfg, ccl)
 
         return output

@@ -11,9 +11,9 @@
 #include "ttnn/operations/embedding_backward/device/embedding_backward_device_operation.hpp"
 #include "ttnn/operation.hpp"
 
-namespace ttnn::operations::embedding_backward {
+namespace ttnn {
 
-Tensor EmbeddingBackwardOperation::invoke(
+Tensor embedding_bw(
     const Tensor& input_tensor_arg,
     const Tensor& weight_tensor_arg,
     const Tensor& output_gradient_tensor_arg,
@@ -34,4 +34,4 @@ Tensor EmbeddingBackwardOperation::invoke(
         input_tensor, output_gradient_tensor_arg, output_mem_config, out_dtype, num_embeddings, optional_output_tensor);
 }
 
-}  // namespace ttnn::operations::embedding_backward
+}  // namespace ttnn
