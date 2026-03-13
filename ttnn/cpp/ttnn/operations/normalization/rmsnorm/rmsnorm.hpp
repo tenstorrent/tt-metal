@@ -7,14 +7,26 @@
 #include "ttnn/decorators.hpp"
 
 #include "ttnn/operations/normalization/layernorm/device/layernorm_types.hpp"
+#include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include "ttnn/device_operation.hpp"
 
 namespace ttnn {
 
 DeviceComputeKernelConfig rmsnorm_default_compute_config(tt::ARCH arch);
 
 Tensor rms_norm(
+    const Tensor& input_tensor,
+    float epsilon = 1e-12,
+    const std::optional<const Tensor>& weight = std::nullopt,
+    const std::optional<const Tensor>& bias = std::nullopt,
+    const std::optional<const Tensor>& residual_input_tensor = std::nullopt,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt,
+    const std::optional<const prim::LayerNormProgramConfig>& program_config = std::nullopt,
+    std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+
+ttnn::device_operation::OpDescriptorResult<prim::LayerNormDeviceOperation> rms_norm_descriptor(
     const Tensor& input_tensor,
     float epsilon = 1e-12,
     const std::optional<const Tensor>& weight = std::nullopt,

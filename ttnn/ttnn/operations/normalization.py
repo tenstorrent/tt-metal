@@ -136,6 +136,8 @@ LayerNormShardedProgramFactory = ttnn._ttnn.operations.normalization.LayerNormSh
 layernorm_default_compute_config = ttnn._ttnn.operations.normalization.layernorm_default_compute_config
 rmsnorm_default_compute_config = ttnn._ttnn.operations.normalization.rmsnorm_default_compute_config
 create_layernorm_program_config = ttnn._ttnn.operations.normalization.create_layernorm_program_config
+layer_norm_descriptor = ttnn._ttnn.operations.normalization.layer_norm_descriptor
+rms_norm_descriptor = ttnn._ttnn.operations.normalization.rms_norm_descriptor
 
 
 def create_layer_norm_reciprocals(device: ttnn.Device, core_range_set: ttnn.CoreRangeSet, width: int):
