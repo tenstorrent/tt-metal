@@ -941,6 +941,20 @@ class TtTransformer(LightweightModule):
         unpacked01_locals = [ttnn.to_torch(x).to(torch.int32) for x in unpacked01_shards]
         penalty_locals = [ttnn.to_torch(x).to(torch.float32) for x in penalty_shards]
 
+        def _dump_sanity_tensors(tag: str, tensors: dict[str, torch.Tensor]):
+            try:
+                out_dir = self._debug_bitmask_dump_dir
+                out_dir.mkdir(parents=True, exist_ok=True)
+                base = f"step{self._debug_bitmask_step:04d}_sanity_{tag}"
+                for name, tensor in tensors.items():
+                    torch.save(tensor.detach().cpu(), out_dir / f"{base}_{name}.pt")
+                print(
+                    f"[TT_DEBUG_BITMASK] step={self._debug_bitmask_step} dumped sanity tensors "
+                    f"for '{tag}' to {out_dir}"
+                )
+            except Exception as e:
+                print(f"[TT_DEBUG_BITMASK] step={self._debug_bitmask_step} sanity dump failed for '{tag}': {e}")
+
         def _first_mismatch(a: torch.Tensor, b: torch.Tensor):
             if a.shape != b.shape:
                 return None, tuple(a.shape), tuple(b.shape)
@@ -948,7 +962,9 @@ class TtTransformer(LightweightModule):
             if not torch.any(mismatch):
                 return None
             idx = torch.nonzero(mismatch, as_tuple=False)[0].tolist()
-            return idx, a[tuple(idx)].item(), b[tuple(idx)].item()
+            mismatch_count = int(mismatch.sum().item())
+            total_count = int(mismatch.numel())
+            return idx, a[tuple(idx)].item(), b[tuple(idx)].item(), mismatch_count, total_count
 
         # For ShardTensor2dMesh(dims=(-1, None), mesh_shape=(rows, cols)):
         # - row axis shards last tensor dim
@@ -968,15 +984,23 @@ class TtTransformer(LightweightModule):
                         )
                     mm = _first_mismatch(cur, ref)
                     if mm is not None:
-                        idx, got, exp = mm
+                        idx, got, exp, mismatch_count, total_count = mm
                         if idx is None:
+                            _dump_sanity_tensors(
+                                f"{name}_replica_shape_row{row}_col{col}",
+                                {"ref": ref, "cur": cur},
+                            )
                             raise AssertionError(
                                 f"Bitmask sanity check failed ({name}): replica shape mismatch "
                                 f"row={row} col={col} got={got} expected={exp}"
                             )
+                        _dump_sanity_tensors(
+                            f"{name}_replica_row{row}_col{col}",
+                            {"ref": ref, "cur": cur},
+                        )
                         raise AssertionError(
                             f"Bitmask sanity check failed ({name}): replica mismatch row={row} col={col} idx={idx} "
-                            f"got={got} expected={exp}"
+                            f"got={got} expected={exp} mismatches={mismatch_count}/{total_count}"
                         )
                 canonical.append(ref)
             return torch.cat(canonical, dim=1)
@@ -989,12 +1013,23 @@ class TtTransformer(LightweightModule):
             host = self._last_host_bitmask.to(torch.int32)
             mm = _first_mismatch(packed_global, host)
             if mm is not None:
-                idx, got, exp = mm
+                idx, got, exp, mismatch_count, total_count = mm
                 if idx is None:
+                    _dump_sanity_tensors(
+                        "packed_global_shape",
+                        {"packed_global": packed_global, "host": host},
+                    )
                     raise AssertionError(
                         f"Bitmask sanity check failed (packed global) shape mismatch got={got} expected={exp}"
                     )
-                raise AssertionError(f"Bitmask sanity check failed (packed global) idx={idx} got={got} expected={exp}")
+                _dump_sanity_tensors(
+                    "packed_global",
+                    {"packed_global": packed_global, "host": host},
+                )
+                raise AssertionError(
+                    f"Bitmask sanity check failed (packed global) idx={idx} got={got} expected={exp} "
+                    f"mismatches={mismatch_count}/{total_count}"
+                )
 
         structured_output_arange = torch.arange(32, dtype=torch.int32, device=packed_global.device)
         expected01_global = (
@@ -1002,12 +1037,30 @@ class TtTransformer(LightweightModule):
         ).reshape(packed_global.shape[0], -1)
         mm01 = _first_mismatch(unpacked01_global.to(torch.int32), expected01_global.to(torch.int32))
         if mm01 is not None:
-            idx, got, exp = mm01
+            idx, got, exp, mismatch_count, total_count = mm01
             if idx is None:
+                _dump_sanity_tensors(
+                    "unpacked01_global_shape",
+                    {
+                        "unpacked01_global": unpacked01_global.to(torch.int32),
+                        "expected01_global": expected01_global.to(torch.int32),
+                    },
+                )
                 raise AssertionError(
                     f"Bitmask sanity check failed (unpacked01 global) shape mismatch got={got} expected={exp}"
                 )
-            raise AssertionError(f"Bitmask sanity check failed (unpacked01 global) idx={idx} got={got} expected={exp}")
+            _dump_sanity_tensors(
+                "unpacked01_global",
+                {
+                    "packed_global": packed_global.to(torch.int32),
+                    "unpacked01_global": unpacked01_global.to(torch.int32),
+                    "expected01_global": expected01_global.to(torch.int32),
+                },
+            )
+            raise AssertionError(
+                f"Bitmask sanity check failed (unpacked01 global) idx={idx} got={got} expected={exp} "
+                f"mismatches={mismatch_count}/{total_count}"
+            )
 
         expected_penalty_global = torch.where(
             expected01_global != 0,
@@ -1016,12 +1069,30 @@ class TtTransformer(LightweightModule):
         )
         mmp = _first_mismatch(penalty_global.to(torch.float32), expected_penalty_global.to(torch.float32))
         if mmp is not None:
-            idx, got, exp = mmp
+            idx, got, exp, mismatch_count, total_count = mmp
             if idx is None:
+                _dump_sanity_tensors(
+                    "penalty_global_shape",
+                    {
+                        "penalty_global": penalty_global.to(torch.float32),
+                        "expected_penalty_global": expected_penalty_global.to(torch.float32),
+                    },
+                )
                 raise AssertionError(
                     f"Bitmask sanity check failed (penalty global) shape mismatch got={got} expected={exp}"
                 )
-            raise AssertionError(f"Bitmask sanity check failed (penalty global) idx={idx} got={got} expected={exp}")
+            _dump_sanity_tensors(
+                "penalty_global",
+                {
+                    "penalty_global": penalty_global.to(torch.float32),
+                    "expected_penalty_global": expected_penalty_global.to(torch.float32),
+                    "unpacked01_global": unpacked01_global.to(torch.int32),
+                },
+            )
+            raise AssertionError(
+                f"Bitmask sanity check failed (penalty global) idx={idx} got={got} expected={exp} "
+                f"mismatches={mismatch_count}/{total_count}"
+            )
 
     def _debug_log_device_tensor_slice(self, name, tensor, width=16):
         if not self._debug_should_log_bitmask():
