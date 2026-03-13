@@ -116,7 +116,7 @@ inline Tensor move_sharded(const Tensor& input_tensor, const std::optional<Memor
     }
     auto shard_spec = input_tensor.shard_spec().value();
 
-    // TODO(#38697): Migrate to Tensor::deallocate(true)
+    // TODO(#38697): Migrate to Tensor::deallocate(/* forced = */ false)
     input_tensor.device_storage().get_mesh_buffer_leak_ownership()->deallocate();
 
     auto output_tensor_spec = input_tensor.tensor_spec();
