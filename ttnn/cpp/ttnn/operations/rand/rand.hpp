@@ -5,20 +5,16 @@
 #pragma once
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::rand {
-struct Rand {
-    static Tensor invoke(
-        const ttnn::Shape& shape,
-        MeshDevice& device,
-        DataType dtype = DataType::BFLOAT16,
-        Layout layout = Layout::TILE,
-        const MemoryConfig& memory_config = types::DRAM_MEMORY_CONFIG,
-        float from = 0.0f,
-        float to = 1.0f,
-        uint32_t seed = 0);
-};
-}  // namespace ttnn::operations::rand
-
 namespace ttnn {
-constexpr auto rand = ttnn::register_operation<"ttnn::rand", ttnn::operations::rand::Rand>();
+
+Tensor rand(
+    const ttnn::Shape& shape,
+    MeshDevice& device,
+    DataType dtype = DataType::BFLOAT16,
+    Layout layout = Layout::TILE,
+    const MemoryConfig& memory_config = types::DRAM_MEMORY_CONFIG,
+    float from = 0.0f,
+    float to = 1.0f,
+    uint32_t seed = 0);
+
 }  // namespace ttnn
