@@ -172,12 +172,13 @@ protected:
     // are not reused.  Written to a ".build_state" file in the output directory.
     uint64_t build_state_hash_{};
 
-    // Lifetime cache hit-rate counters.  Accumulate across all compile() calls on
-    // this JitBuildState.  Mutable so compile() (which is const) can update them.
-    // fetch_add with relaxed ordering is sufficient: these are diagnostic counters
-    // with no ordering dependency on other memory operations.
-    mutable std::atomic<size_t> cache_total_srcs_{0};
-    mutable std::atomic<size_t> cache_compiled_count_{0};
+    // Global cache hit-rate counters.  Static so they accumulate across all
+    // JitBuildState instances and are unaffected by copy/move construction.
+    // fetch_add uses release and load uses acquire so that a reader always
+    // observes a consistent snapshot: compiled_count never appears to exceed
+    // total_srcs even when multiple instances update concurrently.
+    static std::atomic<size_t> cache_total_srcs_;
+    static std::atomic<size_t> cache_compiled_count_;
 
     // Upper bound for compile objects.
     // Current max obj count is 2 -- very sufficient for now.

@@ -53,6 +53,9 @@ using namespace std;
 
 namespace tt::tt_metal {
 
+std::atomic<size_t> JitBuildState::cache_total_srcs_{0};
+std::atomic<size_t> JitBuildState::cache_compiled_count_{0};
+
 namespace {
 
 void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
@@ -686,11 +689,11 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
 
     const size_t num_srcs = this->srcs_.size();
     const size_t num_compiled = compiled.count();
-    cache_total_srcs_.fetch_add(num_srcs, std::memory_order_relaxed);
-    cache_compiled_count_.fetch_add(num_compiled, std::memory_order_relaxed);
+    cache_total_srcs_.fetch_add(num_srcs, std::memory_order_release);
+    cache_compiled_count_.fetch_add(num_compiled, std::memory_order_release);
     if (num_srcs > 0) {
-        const size_t total = cache_total_srcs_.load(std::memory_order_relaxed);
-        const size_t compiled_total = cache_compiled_count_.load(std::memory_order_relaxed);
+        const size_t total = cache_total_srcs_.load(std::memory_order_acquire);
+        const size_t compiled_total = cache_compiled_count_.load(std::memory_order_acquire);
         const size_t hits_total = total - compiled_total;
         log_debug(
             tt::LogBuildKernels,
