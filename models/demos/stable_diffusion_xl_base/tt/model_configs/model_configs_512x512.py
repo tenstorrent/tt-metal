@@ -1021,8 +1021,8 @@ class ModelOptimisations512x512:
 
     def _get_groupnorm_config(self, module_path):
         # Workaround GroupNorm configs for Issue #36408
-        if module_path == "down_blocks.2.resnets.0.norm1":
-            return self.groupnorm_configs["SHARDED_GROUPNORM_4X4_INPLACE"]
+        # if module_path == "down_blocks.2.resnets.0.norm1":
+        #     return self.groupnorm_configs["SHARDED_GROUPNORM_4X4_INPLACE"]
         if module_path == "up_blocks.0.resnets.2.norm1":
             return self.groupnorm_configs["DRAM_GROUPNORM_4X4"]
 
