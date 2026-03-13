@@ -107,6 +107,24 @@ The script parses all `*.log` files in the specified directory and provides:
 - **Success Rate**: Percentage of healthy iterations (80%+ is typically a pass)
 - **Recommendations**: Actionable next steps based on detected failure patterns
 - **Cluster Info**: Detected hosts, chips per host, and traffic configuration
+- **Exit Codes**: Returns specific exit codes for automated workflows
+
+**Exit Codes Description**
+The script returns exit codes enabling automated troubleshooting (e.g., Ansible playbooks):
+- `0` - Cluster healthy (≥80% success rate)
+- `1` - Unhealthy links (repeated on same link)
+- `2` - Unhealthy links (scattered across different links)
+- `3` - DRAM training failures
+- `4` - Missing connections (found in FSD but not in discovered topology)
+- `5` - Extra connections (found in topology but not in FSD)
+- `6` - Missing global connection
+- `7` - FSD error
+- `8` - MGD error
+- `9` - Workload timeout
+- `10` - ARC timeout
+- `11` - AICLK timeout
+- `12` - Network errors (MPI/SSH)
+- `50` - Inconclusive (manual review required)
 
 ### Dispatch Tests
 
@@ -166,6 +184,17 @@ The script parses the test log and provides:
 - **Warnings & Failures**: Critical errors and runtime warnings detected during testing
 - **Recommendations**: Actionable next steps including escalation paths for persistent issues
 - **Final Test Result**: Clear pass/fail indication with appropriate exit code
+
+**Exit Codes for Automation:**
+The script returns specific exit codes for automated workflows:
+- `0` - All tests passed
+- `1` - MGD error (topology mismatch)
+- `2` - Firmware initialization failed
+- `3` - Fabric router sync timeout
+- `4` - Test hanging (incomplete log)
+- `5` - NOC address conflict
+- `6` - Ethernet core timeout
+- `50` - Inconclusive (manual review required)
 
 
 **Important: Host Ordering Matters for 4x32 Clusters**
@@ -257,8 +286,10 @@ A missing cable or bad port/connection will show up as a **consistently missing 
 | `run_validation.sh` | Full 50-loop validation |
 | `run_dispatch_tests.sh` | Chip stability stress tests |
 | `run_fabric_tests.sh` | Fabric connectivity tests |
-| `analyze_validation_results.py` | Parse validation logs || `analyze_dispatch_results.py` | Parse dispatch test logs |
-| `analyze_fabric_results.py` | Parse fabric test logs || `mpi-docker` | MPI+Docker wrapper (`--help` for usage) |
+| `analyze_validation_results.py` | Parse validation logs |
+| `analyze_dispatch_results.py` | Parse dispatch test logs |
+| `analyze_fabric_results.py` | Parse fabric test logs |
+| `mpi-docker` | MPI+Docker wrapper (`--help` for usage) |
 
 ## Config Files
 
