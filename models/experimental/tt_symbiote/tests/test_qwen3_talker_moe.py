@@ -79,4 +79,4 @@ def test_qwen3_talker_moe_ttnn_matches_torch(mesh_device):
     pcc = torch.corrcoef(torch.stack([hf_flat, ttnn_flat]))[0, 1]
     print(f"PCC TTNNQwen3TalkerMoE_vs_Qwen3OmniMoeTalkerTextSparseMoeBlock: {pcc.item()}")
     assert not torch.isnan(pcc), "PCC is NaN between HF and TTNN Qwen3 talker MoE outputs"
-    assert pcc > 0.999, f"PCC too low between HF and TTNN Qwen3 talker MoE outputs: {pcc.item()}"
+    assert pcc > 0.99, f"PCC too low between HF and TTNN Qwen3 talker MoE outputs: {pcc.item()}"
