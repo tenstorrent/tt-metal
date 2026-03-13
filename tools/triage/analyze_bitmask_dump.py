@@ -95,21 +95,27 @@ def tensor_stats(t: torch.Tensor) -> str:
 
 
 def first_mismatch(a: torch.Tensor, b: torch.Tensor) -> Optional[str]:
-    h = min(a.shape[0], b.shape[0])
-    w = min(a.shape[1], b.shape[1]) if a.ndim >= 2 and b.ndim >= 2 else None
-    if w is not None:
-        a2 = a[:h, :w]
-        b2 = b[:h, :w]
+    # Compare with trailing dims flattened so tensors like
+    # (B, W, 32) can be directly compared against (B, W*32).
+    if a.ndim >= 2:
+        a = a.reshape(a.shape[0], -1)
     else:
-        n = min(a.numel(), b.numel())
-        a2 = a.reshape(-1)[:n]
-        b2 = b.reshape(-1)[:n]
+        a = a.reshape(1, -1)
+    if b.ndim >= 2:
+        b = b.reshape(b.shape[0], -1)
+    else:
+        b = b.reshape(1, -1)
+
+    h = min(a.shape[0], b.shape[0])
+    w = min(a.shape[1], b.shape[1])
+    a2 = a[:h, :w]
+    b2 = b[:h, :w]
     neq = a2 != b2
     if not torch.any(neq):
         return None
     idx = torch.nonzero(neq, as_tuple=False)[0].tolist()
-    got = a2[tuple(idx)].item() if isinstance(idx, list) else a2[idx].item()
-    exp = b2[tuple(idx)].item() if isinstance(idx, list) else b2[idx].item()
+    got = a2[idx[0], idx[1]].item()
+    exp = b2[idx[0], idx[1]].item()
     return f"first mismatch idx={idx} got={got} expected={exp}"
 
 
