@@ -922,28 +922,6 @@ class TtTransformer(LightweightModule):
         return torch.where(unpacked != 0, torch.tensor(0.0), torch.tensor(-1e9))
 
     def _sanity_check_unpacked_bitmask(self, packed_device_tensor, unpacked01_device_tensor, penalty_device_tensor):
-        def _dump_sanity_failure(
-            shard_idx, suffix, packed_local, unpacked01_local, expected01_local, penalty_local, expected_penalty_local
-        ):
-            if not self._debug_bitmask_dump or not self._debug_should_log_bitmask():
-                return
-            try:
-                base = (
-                    self._debug_bitmask_dump_dir
-                    / f"step{self._debug_bitmask_step:04d}_sanity_{suffix}_shard{shard_idx:02d}"
-                )
-                torch.save(packed_local.detach().cpu(), Path(str(base) + "_packed.pt"))
-                torch.save(unpacked01_local.detach().cpu(), Path(str(base) + "_unpacked01.pt"))
-                torch.save(expected01_local.detach().cpu(), Path(str(base) + "_expected01.pt"))
-                torch.save(penalty_local.detach().cpu(), Path(str(base) + "_penalty.pt"))
-                torch.save(expected_penalty_local.detach().cpu(), Path(str(base) + "_expected_penalty.pt"))
-                print(
-                    f"[TT_DEBUG_BITMASK] step={self._debug_bitmask_step} dumped sanity failure tensors "
-                    f"for shard={shard_idx} ({suffix}) to {self._debug_bitmask_dump_dir}"
-                )
-            except Exception as e:
-                print(f"[TT_DEBUG_BITMASK] step={self._debug_bitmask_step} failed to dump sanity failure tensors: {e}")
-
         packed_shards = ttnn.get_device_tensors(packed_device_tensor)
         unpacked01_shards = ttnn.get_device_tensors(unpacked01_device_tensor)
         penalty_shards = ttnn.get_device_tensors(penalty_device_tensor)
@@ -953,139 +931,99 @@ class TtTransformer(LightweightModule):
                 f"unpacked01={len(unpacked01_shards)} penalty={len(penalty_shards)}"
             )
 
-        for shard_idx, (packed_shard, unpacked01_shard, penalty_shard) in enumerate(
-            zip(packed_shards, unpacked01_shards, penalty_shards)
-        ):
-            packed_local = ttnn.to_torch(packed_shard).to(torch.int32)
-            unpacked01_local = ttnn.to_torch(unpacked01_shard).to(torch.int32)
-            penalty_local = ttnn.to_torch(penalty_shard).to(torch.float32)
-
-            # Also compare packed local shard against the exact host bitmask before H2D copy.
-            if self._last_host_bitmask is not None:
-                host = self._last_host_bitmask
-                if packed_local.shape[0] == host.shape[0] and packed_local.shape[1] <= host.shape[1]:
-                    shard_w = packed_local.shape[1]
-                    found_host_match = False
-                    for col_start in range(0, host.shape[1] - shard_w + 1, shard_w):
-                        if torch.equal(packed_local, host[:, col_start : col_start + shard_w]):
-                            found_host_match = True
-                            break
-                    if not found_host_match:
-                        raise AssertionError(
-                            f"Bitmask sanity check failed on shard={shard_idx}: "
-                            "packed device shard does not match any host packed slice"
-                        )
-
-            expected_penalty_local = self._torch_reference_unpack_local(packed_local)
-            expected01_local = torch.where(
-                expected_penalty_local == 0.0,
-                torch.tensor(1, dtype=torch.int32),
-                torch.tensor(0, dtype=torch.int32),
+        mesh_rows, mesh_cols = self.args.cluster_shape
+        num_shards = len(packed_shards)
+        if mesh_rows * mesh_cols != num_shards:
+            raise AssertionError(
+                f"Bitmask sanity check failed: cluster_shape={self.args.cluster_shape} "
+                f"does not match shard count={num_shards}"
             )
 
-            if unpacked01_local.shape != expected01_local.shape:
-                h01 = min(unpacked01_local.shape[0], expected01_local.shape[0])
-                w01 = min(unpacked01_local.shape[1], expected01_local.shape[1])
-                unpacked01_compare = unpacked01_local[:h01, :w01]
-                expected01_compare = expected01_local[:h01, :w01]
-            else:
-                unpacked01_compare = unpacked01_local
-                expected01_compare = expected01_local
+        packed_locals = [ttnn.to_torch(x).to(torch.int32) for x in packed_shards]
+        unpacked01_locals = [ttnn.to_torch(x).to(torch.int32) for x in unpacked01_shards]
+        penalty_locals = [ttnn.to_torch(x).to(torch.float32) for x in penalty_shards]
 
-            if not torch.equal(unpacked01_compare, expected01_compare):
-                # Re-read once after synchronize to rule out transient async-read mismatch.
-                transient_cleared = False
-                try:
-                    ttnn.synchronize_device(self.mesh_device)
-                    unpacked01_local_sync = ttnn.to_torch(unpacked01_shard).to(torch.int32)
-                    if unpacked01_local_sync.shape != expected01_local.shape:
-                        h01s = min(unpacked01_local_sync.shape[0], expected01_local.shape[0])
-                        w01s = min(unpacked01_local_sync.shape[1], expected01_local.shape[1])
-                        unpacked01_sync_compare = unpacked01_local_sync[:h01s, :w01s]
-                        expected01_sync_compare = expected01_local[:h01s, :w01s]
-                    else:
-                        unpacked01_sync_compare = unpacked01_local_sync
-                        expected01_sync_compare = expected01_local
-                    if torch.equal(unpacked01_sync_compare, expected01_sync_compare):
-                        transient_cleared = True
-                        if self._debug_should_log_bitmask():
-                            print(
-                                f"[TT_DEBUG_BITMASK] step={self._debug_bitmask_step} "
-                                f"transient unpacked01 mismatch cleared after synchronize on shard={shard_idx}"
+        def _first_mismatch(a: torch.Tensor, b: torch.Tensor):
+            if a.shape != b.shape:
+                return None, tuple(a.shape), tuple(b.shape)
+            mismatch = a != b
+            if not torch.any(mismatch):
+                return None
+            idx = torch.nonzero(mismatch, as_tuple=False)[0].tolist()
+            return idx, a[tuple(idx)].item(), b[tuple(idx)].item()
+
+        # For ShardTensor2dMesh(dims=(-1, None), mesh_shape=(rows, cols)):
+        # - row axis shards last tensor dim
+        # - col axis replicates. Validate replication and pick col=0 as canonical shard per row.
+        def _reassemble_with_replica_check(locals_list: list[torch.Tensor], name: str) -> torch.Tensor:
+            canonical = []
+            for row in range(mesh_rows):
+                base_idx = row * mesh_cols
+                ref = locals_list[base_idx]
+                for col in range(1, mesh_cols):
+                    cur_idx = base_idx + col
+                    cur = locals_list[cur_idx]
+                    if cur.shape != ref.shape:
+                        raise AssertionError(
+                            f"Bitmask sanity check failed ({name}): replica shape mismatch "
+                            f"row={row} col={col} got={tuple(cur.shape)} expected={tuple(ref.shape)}"
+                        )
+                    mm = _first_mismatch(cur, ref)
+                    if mm is not None:
+                        idx, got, exp = mm
+                        if idx is None:
+                            raise AssertionError(
+                                f"Bitmask sanity check failed ({name}): replica shape mismatch "
+                                f"row={row} col={col} got={got} expected={exp}"
                             )
-                except Exception:
-                    pass
+                        raise AssertionError(
+                            f"Bitmask sanity check failed ({name}): replica mismatch row={row} col={col} idx={idx} "
+                            f"got={got} expected={exp}"
+                        )
+                canonical.append(ref)
+            return torch.cat(canonical, dim=1)
 
-                if not transient_cleared:
-                    mismatch01 = unpacked01_compare != expected01_compare
-                    first_idx01 = torch.nonzero(mismatch01, as_tuple=False)[0].tolist()
-                    got01 = unpacked01_compare[tuple(first_idx01)].item()
-                    exp01 = expected01_compare[tuple(first_idx01)].item()
-                    _dump_sanity_failure(
-                        shard_idx,
-                        "unpacked01",
-                        packed_local,
-                        unpacked01_compare,
-                        expected01_compare,
-                        penalty_local,
-                        expected_penalty_local,
-                    )
+        packed_global = _reassemble_with_replica_check(packed_locals, "packed")
+        unpacked01_global = _reassemble_with_replica_check(unpacked01_locals, "unpacked01")
+        penalty_global = _reassemble_with_replica_check(penalty_locals, "penalty")
+
+        if self._last_host_bitmask is not None:
+            host = self._last_host_bitmask.to(torch.int32)
+            mm = _first_mismatch(packed_global, host)
+            if mm is not None:
+                idx, got, exp = mm
+                if idx is None:
                     raise AssertionError(
-                        f"Bitmask sanity check failed (unpacked01) on shard={shard_idx} idx={first_idx01} "
-                        f"got={got01} expected={exp01}"
+                        f"Bitmask sanity check failed (packed global) shape mismatch got={got} expected={exp}"
                     )
+                raise AssertionError(f"Bitmask sanity check failed (packed global) idx={idx} got={got} expected={exp}")
 
-            if penalty_local.shape != expected_penalty_local.shape:
-                h = min(penalty_local.shape[0], expected_penalty_local.shape[0])
-                w = min(penalty_local.shape[1], expected_penalty_local.shape[1])
-                penalty_compare = penalty_local[:h, :w]
-                expected_penalty_compare = expected_penalty_local[:h, :w]
-            else:
-                penalty_compare = penalty_local
-                expected_penalty_compare = expected_penalty_local
+        structured_output_arange = torch.arange(32, dtype=torch.int32, device=packed_global.device)
+        expected01_global = (
+            torch.bitwise_right_shift(packed_global[:, :, None], structured_output_arange[None, None, :]) & 1
+        ).reshape(packed_global.shape[0], -1)
+        mm01 = _first_mismatch(unpacked01_global.to(torch.int32), expected01_global.to(torch.int32))
+        if mm01 is not None:
+            idx, got, exp = mm01
+            if idx is None:
+                raise AssertionError(
+                    f"Bitmask sanity check failed (unpacked01 global) shape mismatch got={got} expected={exp}"
+                )
+            raise AssertionError(f"Bitmask sanity check failed (unpacked01 global) idx={idx} got={got} expected={exp}")
 
-            if not torch.equal(penalty_compare, expected_penalty_compare):
-                # Re-read once after synchronize to rule out transient async-read mismatch.
-                transient_cleared = False
-                try:
-                    ttnn.synchronize_device(self.mesh_device)
-                    penalty_local_sync = ttnn.to_torch(penalty_shard).to(torch.float32)
-                    if penalty_local_sync.shape != expected_penalty_local.shape:
-                        hs = min(penalty_local_sync.shape[0], expected_penalty_local.shape[0])
-                        ws = min(penalty_local_sync.shape[1], expected_penalty_local.shape[1])
-                        penalty_sync_compare = penalty_local_sync[:hs, :ws]
-                        expected_penalty_sync_compare = expected_penalty_local[:hs, :ws]
-                    else:
-                        penalty_sync_compare = penalty_local_sync
-                        expected_penalty_sync_compare = expected_penalty_local
-                    if torch.equal(penalty_sync_compare, expected_penalty_sync_compare):
-                        transient_cleared = True
-                        if self._debug_should_log_bitmask():
-                            print(
-                                f"[TT_DEBUG_BITMASK] step={self._debug_bitmask_step} "
-                                f"transient penalty mismatch cleared after synchronize on shard={shard_idx}"
-                            )
-                except Exception:
-                    pass
-
-                if not transient_cleared:
-                    mismatch = penalty_compare != expected_penalty_compare
-                    first_idx = torch.nonzero(mismatch, as_tuple=False)[0].tolist()
-                    got = penalty_compare[tuple(first_idx)].item()
-                    exp = expected_penalty_compare[tuple(first_idx)].item()
-                    _dump_sanity_failure(
-                        shard_idx,
-                        "penalty",
-                        packed_local,
-                        unpacked01_local,
-                        expected01_local,
-                        penalty_compare,
-                        expected_penalty_compare,
-                    )
-                    raise AssertionError(
-                        f"Bitmask sanity check failed (penalty) on shard={shard_idx} idx={first_idx} "
-                        f"got={got} expected={exp}"
-                    )
+        expected_penalty_global = torch.where(
+            expected01_global != 0,
+            torch.tensor(0.0, dtype=torch.float32, device=expected01_global.device),
+            torch.tensor(-1e9, dtype=torch.float32, device=expected01_global.device),
+        )
+        mmp = _first_mismatch(penalty_global.to(torch.float32), expected_penalty_global.to(torch.float32))
+        if mmp is not None:
+            idx, got, exp = mmp
+            if idx is None:
+                raise AssertionError(
+                    f"Bitmask sanity check failed (penalty global) shape mismatch got={got} expected={exp}"
+                )
+            raise AssertionError(f"Bitmask sanity check failed (penalty global) idx={idx} got={got} expected={exp}")
 
     def _debug_log_device_tensor_slice(self, name, tensor, width=16):
         if not self._debug_should_log_bitmask():
