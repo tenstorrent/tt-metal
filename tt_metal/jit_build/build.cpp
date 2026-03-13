@@ -68,12 +68,6 @@ void build_failure(const string& target_name, const string& op, const string& cm
     }
 }
 
-void write_successful_jit_build_marker(const JitBuildState& build, const JitBuildSettings* settings) {
-    const string out_dir = (settings == nullptr) ? build.get_out_path() + "/"
-                                                 : build.get_out_path() + settings->get_full_kernel_name() + "/";
-    std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
-}
-
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
     std::error_code ec;
     std::filesystem::create_hard_link(target, link, ec);
@@ -864,8 +858,6 @@ void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     ++jit_build_invocation_count;
 
     build.build(settings);
-    write_successful_jit_build_marker(build, settings);
-
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     static auto& tok = BuildCacheTelemetry::inst().register_metric("jit_build");
     tok.record(elapsed_ms);
@@ -878,8 +870,6 @@ void jit_build_for_processors(std::span<const JitBuildState* const> targets, con
 
     const JitBuildState& primary = *targets[0];
     primary.build(settings, targets);
-    write_successful_jit_build_marker(primary, settings);
-
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     static auto& tok = BuildCacheTelemetry::inst().register_metric("jit_build_for_processors");
     tok.record(elapsed_ms);
@@ -894,9 +884,6 @@ void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* 
     }
 
     sync_build_steps(events);
-    for (const auto& build : build_subset) {
-        write_successful_jit_build_marker(build, settings);
-    }
 }
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {

@@ -185,7 +185,6 @@ KernelCompileDescriptor build_kernel_descriptor(
     desc.request.gpp = build_env.build_env.get_gpp();
     static const std::vector<std::string> extensions = {".h", ".hpp", ".cpp"};
     desc.request.generated_files = tt::jit_build::utils::read_directory_files(build_options.path, extensions);
-    desc.output_dir = build_options.path;
 
     int num_binaries = kernel->expected_num_binaries();
     for (int i = 0; i < num_binaries; ++i) {
