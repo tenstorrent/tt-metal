@@ -69,7 +69,7 @@ def test_prod(device, input_shape, dim, keepdim, dtype):
 
     rank = len(input_shape)
     # rank = 0 is special case for scalar tensor and it usually supports dim=0 or dim=-1.
-    if dim is not None and ((dim < -rank) or (dim > rank - 1) and not (rank == 0 and dim in [0, -1])):
+    if dim is not None and ((dim < -rank) or (dim > rank - 1)) and not (rank == 0 and dim in [0, -1]):
         pytest.skip("Dimension not applicable for input shape")
 
     torch_input_tensor = torch.randn(input_shape, dtype=torch.bfloat16)
