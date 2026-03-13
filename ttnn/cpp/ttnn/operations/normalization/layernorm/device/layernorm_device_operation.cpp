@@ -3,15 +3,63 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "layernorm_device_operation.hpp"
+#include "layernorm_common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
 #include "ttnn/device_operation.hpp"
+#include "ttnn/device.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/math.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 using uint32_t = std::uint32_t;
 using namespace tt::tt_metal;
 
 namespace ttnn::prim {
+
+LayerNormParams LayerNormParams::with_defaults(
+    const Tensor& input_tensor,
+    LayerNormType norm_type,
+    float eps,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<LayerNormProgramConfig>& program_config,
+    const std::optional<DeviceComputeKernelConfig>& compute_kernel_config,
+    DistributedLayerNormStage distributed_norm_stage,
+    const std::optional<DataType>& dtype,
+    const std::optional<operations::unary::UnaryWithParam>& fused_activation) {
+    auto resolved_mem_config = output_mem_config.value_or(input_tensor.memory_config());
+
+    auto resolved_program_config = program_config.value_or(create_layernorm_program_config(
+        input_tensor.shard_spec(),
+        input_tensor.tensor_spec().tile().get_height(),
+        input_tensor.tensor_spec().tile().get_width()));
+
+    DeviceComputeKernelConfig resolved_compute_config;
+    if (compute_kernel_config.has_value()) {
+        resolved_compute_config = compute_kernel_config.value();
+    } else {
+        auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
+                                                                       : ttnn::GetDefaultDevice()->arch();
+        if (norm_type == LayerNormType::RMSNORM) {
+            // RMSNorm defaults: approx_mode=true, fp32_acc=false
+            resolved_compute_config =
+                init_device_compute_kernel_config(arch, std::nullopt, MathFidelity::HiFi4, true, false);
+        } else {
+            // LayerNorm defaults: approx_mode=false, fp32_acc=true
+            resolved_compute_config =
+                init_device_compute_kernel_config(arch, std::nullopt, MathFidelity::HiFi4, false, true);
+        }
+    }
+
+    return LayerNormParams{
+        .norm_type = norm_type,
+        .distributed_norm_stage = distributed_norm_stage,
+        .eps = eps,
+        .output_mem_config = resolved_mem_config,
+        .program_config = resolved_program_config,
+        .compute_kernel_config = resolved_compute_config,
+        .dtype = dtype,
+        .fused_activation = fused_activation};
+}
 
 LayerNormDeviceOperation::program_factory_t LayerNormDeviceOperation::select_program_factory(
     const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& tensor_args) {

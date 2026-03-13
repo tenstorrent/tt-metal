@@ -15,22 +15,6 @@ namespace ttnn {
 
 DeviceComputeKernelConfig layernorm_default_compute_config(tt::ARCH arch);
 
-// Shared preparation for layer_norm and rms_norm descriptor paths.
-// Resolves defaults for memory config, compute kernel config, and program config,
-// then constructs the LayerNormParams and LayerNormInputs structs.
-std::pair<prim::LayerNormParams, prim::LayerNormInputs> prepare_norm(
-    const Tensor& input_tensor,
-    float epsilon,
-    prim::LayerNormType norm_type,
-    const DeviceComputeKernelConfig& default_compute_config,
-    const std::optional<const Tensor>& weight = std::nullopt,
-    const std::optional<const Tensor>& bias = std::nullopt,
-    const std::optional<const Tensor>& residual_input_tensor = std::nullopt,
-    const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<const prim::LayerNormProgramConfig>& program_config = std::nullopt,
-    const std::optional<const DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-    const std::optional<const Tensor>& recip_tensor = std::nullopt);
-
 Tensor layer_norm(
     const Tensor& input_tensor,
     float epsilon = 1e-12,

@@ -8,18 +8,23 @@
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
-#include "ttnn/operations/normalization/layernorm/device/layernorm_common.hpp"
-#include "ttnn/operations/normalization/layernorm/layernorm.hpp"
-#include "ttnn/device.hpp"
+#include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn {
 
 DeviceComputeKernelConfig rmsnorm_default_compute_config(tt::ARCH arch) {
-    bool approx_mode = true;
-    bool fp32_acc = false;
-    return init_device_compute_kernel_config(arch, std::nullopt, MathFidelity::HiFi4, approx_mode, fp32_acc);
+    return init_device_compute_kernel_config(arch, std::nullopt, MathFidelity::HiFi4, true, false);
 }
+
+namespace {
+std::optional<Tensor> to_opt(const std::optional<const Tensor>& t) {
+    if (t.has_value()) {
+        return t.value();
+    }
+    return std::nullopt;
+}
+}  // namespace
 
 Tensor rms_norm(
     const Tensor& input_tensor,
@@ -33,7 +38,6 @@ Tensor rms_norm(
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().size();
 
-    // ROW_MAJOR, 0V, 0D handled here before prepare_norm() which fatals on these cases.
     TT_FATAL(
         input_tensor.layout() != Layout::ROW_MAJOR,
         "ttnn::rms_norm does not support ROW_MAJOR input tensors. Use TILE layout.");
@@ -55,23 +59,18 @@ Tensor rms_norm(
         return result;
     }
 
-    auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
-                                                                   : ttnn::GetDefaultDevice()->arch();
-    auto kernel_config_val = compute_kernel_config.value_or(rmsnorm_default_compute_config(arch));
-    return ttnn::prim::layer_norm(
-        input_tensor,
-        epsilon,
-        weight,
-        bias,
-        residual_input_tensor,
-        output_memory_config,
-        program_config.value_or(ttnn::prim::create_layernorm_program_config(
-            input_tensor.shard_spec(),
-            input_tensor.tensor_spec().tile().get_height(),
-            input_tensor.tensor_spec().tile().get_width())),
-        kernel_config_val,
-        std::nullopt,  // dtype
-        prim::LayerNormType::RMSNORM);
+    auto attrs = prim::LayerNormParams::with_defaults(
+        input_tensor, prim::LayerNormType::RMSNORM, epsilon, memory_config, program_config, compute_kernel_config);
+
+    auto args = prim::LayerNormInputs{
+        .input = input_tensor,
+        .residual_input_tensor = to_opt(residual_input_tensor),
+        .weight = to_opt(weight),
+        .bias = to_opt(bias),
+        .stats = std::nullopt,
+        .recip_tensor = std::nullopt};
+
+    return ttnn::device_operation::launch<prim::LayerNormDeviceOperation>(attrs, args);
 }
 
 ttnn::device_operation::OpDescriptorResult<prim::LayerNormDeviceOperation> rms_norm_descriptor(
@@ -83,19 +82,16 @@ ttnn::device_operation::OpDescriptorResult<prim::LayerNormDeviceOperation> rms_n
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<const prim::LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config) {
-    auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
-                                                                   : ttnn::GetDefaultDevice()->arch();
-    auto [attrs, args] = prepare_norm(
-        input_tensor,
-        epsilon,
-        prim::LayerNormType::RMSNORM,
-        rmsnorm_default_compute_config(arch),
-        weight,
-        bias,
-        residual_input_tensor,
-        memory_config,
-        program_config,
-        compute_kernel_config);
+    auto attrs = prim::LayerNormParams::with_defaults(
+        input_tensor, prim::LayerNormType::RMSNORM, epsilon, memory_config, program_config, compute_kernel_config);
+
+    auto args = prim::LayerNormInputs{
+        .input = input_tensor,
+        .residual_input_tensor = to_opt(residual_input_tensor),
+        .weight = to_opt(weight),
+        .bias = to_opt(bias),
+        .stats = std::nullopt,
+        .recip_tensor = std::nullopt};
 
     return ttnn::device_operation::create_op_descriptor<prim::LayerNormDeviceOperation>(attrs, args);
 }
