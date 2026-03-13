@@ -2670,8 +2670,8 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
             packet_header,
             src_addr,
             page_size * 2,
-            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+            tt::tt_fabric::NocUnicastScatterCommandHeader(
+                {noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}),
             num_hops);
     } else {
         // Large pages: fall back to separate unicast writes
@@ -2731,8 +2731,8 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
             client_interface,
             packet_header,
             src_addr,
-            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+            tt::tt_fabric::NocUnicastScatterCommandHeader(
+                {noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}),
             page_size * 2);
     } else {
         // Large pages: fall back to separate unicast writes
@@ -2791,7 +2791,8 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
     fabric_unicast_noc_scatter_write_set_state<UpdateMask>(
         packet_header,
         num_hops,
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+        tt::tt_fabric::NocUnicastScatterCommandHeader(
+            {noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}),
         payload_size);
 }
 
@@ -3238,8 +3239,8 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
             packet_header,
             src_addr,
             page_size * 2,
-            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+            tt::tt_fabric::NocUnicastScatterCommandHeader(
+                {noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}),
             start_distance,
             range);
     } else {
@@ -3309,8 +3310,8 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
             client_interface,
             packet_header,
             src_addr,
-            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+            tt::tt_fabric::NocUnicastScatterCommandHeader(
+                {noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}),
             page_size * 2);
     } else {
         // Large pages: fall back to separate multicast unicast writes
@@ -3374,7 +3375,8 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
         packet_header,
         start_distance,
         range,
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+        tt::tt_fabric::NocUnicastScatterCommandHeader(
+            {noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}),
         payload_size);
 }
 

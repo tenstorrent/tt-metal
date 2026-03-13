@@ -3146,8 +3146,8 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write(
             route_id,
             src_addr,
             page_size * 2,
-            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
+            tt::tt_fabric::NocUnicastScatterCommandHeader(
+                {noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}));
     } else {
         // Large pages: fall back to separate unicast writes (connection manager variant)
         fabric_unicast_noc_unicast_write(connection_manager, route_id, src_addr, addrgen, page_id0, offset0);
@@ -3261,8 +3261,8 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_with_state(
             connection_manager,
             route_id,
             src_addr,
-            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+            tt::tt_fabric::NocUnicastScatterCommandHeader(
+                {noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}),
             page_size * 2);
     } else {
         // Large pages: fall back to separate unicast writes (connection manager variant)
@@ -3325,7 +3325,7 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
         packet_header,
         dst_dev_id,
         dst_mesh_id,
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}},
         payload_size);
 }
 
@@ -3370,8 +3370,8 @@ FORCE_INLINE void fabric_unicast_noc_scatter_write_set_state(
             packet_header,
             slot.dst_dev_id,
             slot.dst_mesh_id,
-            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+            tt::tt_fabric::NocUnicastScatterCommandHeader(
+                {noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}),
             payload_size);
     });
 }
@@ -3869,8 +3869,8 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write(
             ranges,
             src_addr,
             page_size * 2,
-            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)});
+            tt::tt_fabric::NocUnicastScatterCommandHeader(
+                {noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}));
     } else {
         // Large pages: fall back to separate multicast unicast writes using addrgen connection manager variant
         fabric_multicast_noc_unicast_write(connection_manager, route_id, ranges, src_addr, addrgen, page_id0, offset0);
@@ -4003,8 +4003,8 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_with_state(
             connection_manager,
             route_id,
             src_addr,
-            tt::tt_fabric::NocUnicastScatterCommandHeader{
-                {noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+            tt::tt_fabric::NocUnicastScatterCommandHeader(
+                {noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}),
             page_size * 2);
     } else {
         // Large pages: fall back to separate multicast unicast writes using addrgen connection manager variant
@@ -4070,7 +4070,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
         dst_dev_id,
         dst_mesh_id,
         ranges,
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}},
         payload_size);
 }
 
@@ -4120,7 +4120,7 @@ FORCE_INLINE void fabric_multicast_noc_scatter_write_set_state(
         connection_manager,
         route_id,
         ranges,
-        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, static_cast<uint16_t>(page_size)},
+        tt::tt_fabric::NocUnicastScatterCommandHeader{{noc_address0, noc_address1}, {static_cast<uint16_t>(page_size)}},
         payload_size);
 }
 
