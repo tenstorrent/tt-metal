@@ -2259,29 +2259,6 @@ def test_untilize_multi_core_nd_sharded_to_interleaved(
     nd_shard_spec = tensor_spec.memory_config.nd_shard_spec
     assert nd_shard_spec is not None
 
-    # Skip ND shard configurations that trigger pre-existing OOB in tt-sim's ND shard factory.
-    # This includes sub-tile shards and configs where total shard capacity exceeds tensor volume.
-    if os.environ.get("TT_METAL_SIMULATOR") is not None:
-        shard_height = nd_shard_spec.shard_shape[-2]
-        shard_width = nd_shard_spec.shard_shape[-1]
-        if shard_height < 32 or shard_width < 32:
-            pytest.skip(
-                f"Skipping: ND shard dims ({shard_height}x{shard_width}) smaller than tile (32x32) "
-                f"causes OOB in tt-sim."
-            )
-        grid_size = shard_core_grid.num_cores()
-        total_elements = 1
-        for dim in tensor_shape:
-            total_elements *= dim
-        shard_elements = 1
-        for dim in nd_shard_spec.shard_shape:
-            shard_elements *= dim
-        if shard_elements * grid_size > total_elements and grid_size > 1:
-            pytest.skip(
-                f"Skipping: shard capacity ({shard_elements}x{grid_size} cores) exceeds tensor "
-                f"volume ({total_elements}), causes OOB in tt-sim."
-            )
-
     output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.L1)
     input_torch_tensor = torch.randn(tensor_shape, dtype=torch.bfloat16)
     try:
