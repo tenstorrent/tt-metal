@@ -40,8 +40,20 @@ pytestmark = pytest.mark.use_module_device
 @pytest.mark.parametrize("momentum", [0.0, 0.1])
 @pytest.mark.parametrize("testing_dtype", ["float32", "bfloat16"])
 @pytest.mark.parametrize("testing_dtype2", ["float32", "bfloat16"])
+@pytest.mark.parametrize("use_output_tensor", [True, False])
 def test_batch_norm_tests(
-    input_shapes, check_mean, check_var, weight, bias, eps, device, momentum, training, testing_dtype, testing_dtype2
+    input_shapes,
+    check_mean,
+    check_var,
+    weight,
+    bias,
+    eps,
+    device,
+    momentum,
+    training,
+    testing_dtype,
+    testing_dtype2,
+    use_output_tensor,
 ):
     # Skip certain configurations that we don't want to test or support
     if (not training) and ((not check_mean) or (not check_var)):
@@ -71,17 +83,34 @@ def test_batch_norm_tests(
         else (None, None)
     )
 
-    tt_output_tensor_on_device = ttnn.batch_norm(
-        input_tensor,
-        running_mean=mean_tensor,
-        running_var=var_tensor,
-        training=training,
-        eps=eps,
-        weight=weight_tensor,
-        bias=bias_tensor,
-        momentum=momentum,
-    )
+    if use_output_tensor:
+        _, tt_output_tensor_on_device = data_gen_with_range_batch_norm(
+            input_shapes, 0, 1, device, is_input=True, testing_dtype=testing_dtype
+        )
+        ttnn.batch_norm(
+            input_tensor,
+            running_mean=mean_tensor,
+            running_var=var_tensor,
+            training=training,
+            eps=eps,
+            weight=weight_tensor,
+            bias=bias_tensor,
+            momentum=momentum,
+            output=tt_output_tensor_on_device,
+        )
+    else:
+        tt_output_tensor_on_device = ttnn.batch_norm(
+            input_tensor,
+            running_mean=mean_tensor,
+            running_var=var_tensor,
+            training=training,
+            eps=eps,
+            weight=weight_tensor,
+            bias=bias_tensor,
+            momentum=momentum,
+        )
     tt_output = ttnn.to_torch(tt_output_tensor_on_device)
+
     tt_updated_mean = None
     tt_updated_var = None
     if training:
