@@ -8,8 +8,7 @@ import pickle
 import sqlite3
 from types import ModuleType
 import zlib
-from importlib.machinery import SourceFileLoader
-from importlib.util import module_from_spec
+from importlib.util import spec_from_file_location, module_from_spec
 
 import enlighten
 import pandas as pd
@@ -21,19 +20,21 @@ SWEEP_RESULTS_DIR = SWEEPS_DIR / "results"
 DATABASE_FILE_NAME = SWEEP_RESULTS_DIR / "db.sqlite"
 
 
-class SweepFileLoader(SourceFileLoader):
-    def load_module(self) -> ModuleType:
-        spec = self.spec
-        module = module_from_spec(spec)
-        self.exec_module(module)
-
-        if not hasattr(module, "skip"):
-            setattr(module, "skip", lambda **kwargs: (False, None))
-
-        if not hasattr(module, "xfail"):
-            setattr(module, "xfail", lambda **kwargs: (False, None))
-
-        return module
+def _load_sweep_module(sweep_name: str, file_name: pathlib.Path | str) -> ModuleType:
+    module_path_parts = pathlib.PurePath(sweep_name).parts
+    module_name = f"sweep_module_{'.'.join(module_path_parts)}"
+    spec = spec_from_file_location(module_name, str(file_name))
+    if spec is None:
+        raise RuntimeError(f"Failed to load sweep module: spec_from_file_location returned None for {file_name!r}")
+    if spec.loader is None:
+        raise RuntimeError(f"Failed to load sweep module: spec has no loader for {file_name!r}")
+    module = module_from_spec(spec)
+    spec.loader.exec_module(module)
+    if not hasattr(module, "skip"):
+        setattr(module, "skip", lambda **kwargs: (False, None))
+    if not hasattr(module, "xfail"):
+        setattr(module, "xfail", lambda **kwargs: (False, None))
+    return module
 
 
 if not SWEEP_RESULTS_DIR.exists():
@@ -125,7 +126,7 @@ def run_single_test(file_name, index, *, device):
     logger.info(f"Running {file_name}")
 
     sweep_name = get_sweep_name(file_name)
-    sweep_module = SweepFileLoader(f"sweep_module_{sweep_name}", str(file_name)).load_module()
+    sweep_module = _load_sweep_module(sweep_name, file_name)
     permutation = list(permutations(sweep_module.parameters))[index]
 
     pretty_printed_parameters = ",\n".join(
@@ -144,7 +145,7 @@ def run_single_test(file_name, index, *, device):
 def run_sweep(file_name, *, device):
     current_datetime = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     sweep_name = get_sweep_name(file_name)
-    sweep_module = SweepFileLoader(f"sweep_module_{sweep_name}", str(file_name)).load_module()
+    sweep_module = _load_sweep_module(sweep_name, file_name)
 
     parameter_names = get_parameter_names(sweep_module.parameters)
     column_names = ["sweep_name", "timestamp", "status", "exception"] + parameter_names
