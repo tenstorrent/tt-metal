@@ -15,6 +15,7 @@
 #include "ttnn/kernel/dataflow/generate_bcast_scalar.hpp"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
 #include "dataflow_common.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 template <typename ReaderType, typename TensorAccessorType>
 void read_prev_output_and_lse(
@@ -32,6 +33,7 @@ void read_prev_output_and_lse(
     const uint32_t cb_lse_in,
     const uint32_t tile_bytes,
     const uint32_t lse_tile_bytes) {
+    DeviceZoneScopedN("WRITER-READ-PREV");
     // Read previous output for this Q chunk
     read_block(cat_out_generator, out_slice, end_seq_tile, cb_prev_out, tile_bytes, false);
 
@@ -62,6 +64,7 @@ void write_output_and_lse(
     const uint32_t cb_lse_out,
     const uint32_t tile_bytes,
     const uint32_t lse_tile_bytes) {
+    DeviceZoneScopedN("WRITER-OUT");
     write_block(cat_out_generator, out_slice, end_seq_tile, cb_out, tile_bytes);
 
     cb_wait_front(cb_lse_out, Sq_chunk_t);

@@ -21,6 +21,7 @@
 #include "api/compute/matmul.h"
 #include "api/compute/reduce.h"
 #include "api/compute/reduce_custom.h"
+#include "tools/profiler/kernel_profiler.hpp"
 
 ALWI void sdpa_reduce_copy_tile_to_dst_init_short(uint32_t cbid, uint32_t transpose = 0) {
     UNPACK((llk_unpack_A_init<BroadcastType::NONE, false, EltwiseBinaryReuseDestType::NONE, UnpackToDestEn>(
@@ -1738,21 +1739,28 @@ void sdpa_inner_loop(
              *
              * matmul_blocks internally waits on both inputs
              */
-            pack_reconfig_data_format(cb_qk_im);
-            matmul_blocks(
-                cb_q_in,
-                cb_k_in,
-                cb_qk_im,
-                Sq_chunk_t,
-                Sk_chunk_t,
-                DHt,
-                qk_num_blocks,
-                qk_in0_num_subblocks,
-                qk_in1_num_subblocks,
-                qk_in0_block_w,
-                qk_subblock_h,
-                qk_subblock_w,
-                true /*transpose*/);
+            {
+                DeviceZoneScopedN("WAIT-K");
+                cb_wait_front(cb_k_in, k_chunk_tiles);
+            }
+            {
+                DeviceZoneScopedN("QK");
+                pack_reconfig_data_format(cb_qk_im);
+                matmul_blocks(
+                    cb_q_in,
+                    cb_k_in,
+                    cb_qk_im,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    DHt,
+                    qk_num_blocks,
+                    qk_in0_num_subblocks,
+                    qk_in1_num_subblocks,
+                    qk_in0_block_w,
+                    qk_subblock_h,
+                    qk_subblock_w,
+                    true /*transpose*/);
+            }
 
             /**
              * Note
@@ -1814,12 +1822,7 @@ void sdpa_inner_loop(
              *  cur_max = eltwise_max(prev_max, max(qk, dim=-1))
              * else:
              *  cur_max = max(qk, dim=-1)
-             */
-            reconfig_data_format(cb_qk_im, cb_identity_scale_in);
-            reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
-                alias_cur_max, alias_prev_max, processed_k_chunks > 0);
-
-            /**
+             *
              * sub_exp fuses a few operations.
              * In-place it performs `QK = exp((QK - cur_max) * scale)`
              *
@@ -1829,30 +1832,40 @@ void sdpa_inner_loop(
              * Partial reduce_sum is used to push the final row_reduction within a tile
              * outside of the loop over K chunks.
              */
-            sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
-                alias_cur_max, alias_cur_sum, Sk_chunk_t);
+            {
+                DeviceZoneScopedN("SOFTMAX");
+                reconfig_data_format(cb_qk_im, cb_identity_scale_in);
+                reduce_c<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_qk_im, cb_identity_scale_in, Sq_chunk_t, Sk_chunk_t>(
+                    alias_cur_max, alias_prev_max, processed_k_chunks > 0);
+                sub_exp_block_bcast_cols_inplace<cb_qk_im, Sq_chunk_t, scale_fp32, true>(
+                    alias_cur_max, alias_cur_sum, Sk_chunk_t);
+            }
 
             /* OUT_IM = QK @ V_CHUNK */
-            matmul_blocks(
-                cb_qk_im,
-                cb_v_in,
-                alias_mm2_cur_out,
-                Sq_chunk_t,
-                vDHt,
-                Sk_chunk_t,
-                out_num_blocks,
-                out_in0_num_subblocks,
-                out_in1_num_subblocks,
-                out_in0_block_w,
-                out_subblock_h,
-                out_subblock_w,
-                false /*transpose*/);
+            {
+                DeviceZoneScopedN("OUT");
+                matmul_blocks(
+                    cb_qk_im,
+                    cb_v_in,
+                    alias_mm2_cur_out,
+                    Sq_chunk_t,
+                    vDHt,
+                    Sk_chunk_t,
+                    out_num_blocks,
+                    out_in0_num_subblocks,
+                    out_in1_num_subblocks,
+                    out_in0_block_w,
+                    out_subblock_h,
+                    out_subblock_w,
+                    false /*transpose*/);
+            }
 
             cb_pop_front(cb_qk_im, qk_chunk_tiles);
             reconfig_data_format(alias_prev_max, alias_cur_max);
 
             /* OUT_ACC += OUT_IM */
             if (processed_k_chunks > 0) {
+                DeviceZoneScopedN("RESCALE");
                 /**
                  * cb_exp_max_diff = torch.exp((cb_prev_max - cb_cur_max) * scale)
                  * Scale is fused into exp again since max is the max of unscaled scores.

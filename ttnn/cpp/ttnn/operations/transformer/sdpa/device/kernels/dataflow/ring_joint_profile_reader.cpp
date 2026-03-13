@@ -19,6 +19,7 @@
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
 #include "dataflow_common.hpp"
+#include "tools/profiler/kernel_profiler.hpp"
 
 /**
  * Profile indexer for ring_joint_sdpa.
@@ -270,33 +271,60 @@ void kernel_main() {
                 }
 
                 // Read K (always from gathered buffer or joint buffer)
-                cb_reserve_back(cb_k_in, k_chunk_tiles);
-                if constexpr (use_joint_tensors) {
-                    if (kv_chunk_is_joint) {
-                        read_block(
-                            joint_k_generator, k_slice, kv_end_seq_tile, cb_k_in, k_tile_bytes, true /*transpose*/);
+                {
+                    DeviceZoneScopedN("K-RESERVE");
+                    cb_reserve_back(cb_k_in, k_chunk_tiles);
+                }
+                {
+                    DeviceZoneScopedN("K-READ");
+                    if constexpr (use_joint_tensors) {
+                        if (kv_chunk_is_joint) {
+                            read_block(
+                                joint_k_generator, k_slice, kv_end_seq_tile, cb_k_in, k_tile_bytes, true /*transpose*/);
+                        } else {
+                            read_block(
+                                gathered_k_generator,
+                                k_slice,
+                                kv_end_seq_tile,
+                                cb_k_in,
+                                k_tile_bytes,
+                                true /*transpose*/);
+                        }
                     } else {
                         read_block(
                             gathered_k_generator, k_slice, kv_end_seq_tile, cb_k_in, k_tile_bytes, true /*transpose*/);
                     }
-                } else {
-                    read_block(
-                        gathered_k_generator, k_slice, kv_end_seq_tile, cb_k_in, k_tile_bytes, true /*transpose*/);
                 }
 
                 // Read V (always from gathered buffer or joint buffer)
-                cb_reserve_back(cb_v_in, v_chunk_tiles);
-                if constexpr (use_joint_tensors) {
-                    if (kv_chunk_is_joint) {
-                        read_block(
-                            joint_v_generator, v_slice, kv_end_seq_tile, cb_v_in, v_tile_bytes, false /*transpose*/);
+                {
+                    DeviceZoneScopedN("V-RESERVE");
+                    cb_reserve_back(cb_v_in, v_chunk_tiles);
+                }
+                {
+                    DeviceZoneScopedN("V-READ");
+                    if constexpr (use_joint_tensors) {
+                        if (kv_chunk_is_joint) {
+                            read_block(
+                                joint_v_generator,
+                                v_slice,
+                                kv_end_seq_tile,
+                                cb_v_in,
+                                v_tile_bytes,
+                                false /*transpose*/);
+                        } else {
+                            read_block(
+                                gathered_v_generator,
+                                v_slice,
+                                kv_end_seq_tile,
+                                cb_v_in,
+                                v_tile_bytes,
+                                false /*transpose*/);
+                        }
                     } else {
                         read_block(
                             gathered_v_generator, v_slice, kv_end_seq_tile, cb_v_in, v_tile_bytes, false /*transpose*/);
                     }
-                } else {
-                    read_block(
-                        gathered_v_generator, v_slice, kv_end_seq_tile, cb_v_in, v_tile_bytes, false /*transpose*/);
                 }
             }
         }
