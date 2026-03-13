@@ -13,7 +13,6 @@ import pytest
 import torch
 from transformers.configuration_utils import PretrainedConfig
 
-import models.demos.deepseek_v3.utils.weight_config as weight_config_module
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
 from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION
