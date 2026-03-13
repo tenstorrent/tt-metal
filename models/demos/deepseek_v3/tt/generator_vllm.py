@@ -190,7 +190,6 @@ class DeepseekV3ForCausalLM(DeepseekGenerator):
         decode_step_output = super().decode_forward(
             tokens=tokens_step,
             start_pos=kwargs["start_pos"],
-            batch_size_per_row=USERS_PER_ROW,
             enable_trace=enable_trace,
             page_table=page_tables,
             sample_on_device=sample_on_device,

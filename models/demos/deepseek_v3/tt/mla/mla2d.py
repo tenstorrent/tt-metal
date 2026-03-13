@@ -18,7 +18,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     ReduceScatterAsyncMinimalConfig,
     SavedWeight,
 )
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -73,11 +72,10 @@ class MLA2D(MLA1D):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        batch_size_per_row: int = USERS_PER_ROW,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
-        super_cfg = super().prefill_model_config(hf_config, mesh_device)
+        super_cfg = super().prefill_model_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
         input_memory_config = super_cfg.pop("input_memory_config")
-        super_cfg["batch_size_per_row"] = batch_size_per_row
         return {
             "mla1d": super_cfg,
             "input_memory_config": input_memory_config,
@@ -98,11 +96,10 @@ class MLA2D(MLA1D):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        batch_size_per_row: int = USERS_PER_ROW,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
         super_cfg = super().decode_model_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
         input_memory_config = super_cfg.pop("input_memory_config")
-        super_cfg["batch_size_per_row"] = batch_size_per_row
         return {
             "mla1d": super_cfg,
             "input_memory_config": input_memory_config,
@@ -188,7 +185,7 @@ class MLA2D(MLA1D):
         ccl = cfg["ccl"]
 
         x_next = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["seq_ag_prefill"]))
-        batch_size_per_row = cfg["mla1d"].get("batch_size_per_row", USERS_PER_ROW)
+        batch_size_per_row = cfg["mla1d"]["batch_size_per_row"]
         x_out = super().forward_prefill(
             x_next,
             batch_idx=batch_idx % batch_size_per_row,
