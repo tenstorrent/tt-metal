@@ -8,6 +8,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -33,45 +36,43 @@ void kernel_main() {
     const uint32_t in0_tile_bytes = get_tile_size(cb_id_in0);
     const uint32_t in1_tile_bytes = get_tile_size(cb_id_in1);
 
-    uint32_t l1_write_addr_in0;
-    uint32_t l1_write_addr_in1;
+    experimental::Noc noc;
+    experimental::CircularBuffer cb0(cb_id_in0);
+    experimental::CircularBuffer cb1(cb_id_in1);
 
 #ifndef IN0_SHARDED
     const auto s0 = TensorAccessor(src0_args, src0_addr, in0_tile_bytes);
 #else
-    cb_reserve_back(cb_id_in0, num_tiles);
-    cb_push_back(cb_id_in0, num_tiles);
+    cb0.reserve_back(num_tiles);
+    cb0.push_back(num_tiles);
 #endif
 
     const auto s1 = TensorAccessor(src1_args, src1_addr, in1_tile_bytes);
 
 #ifdef BCAST_SCALAR
-    cb_reserve_back(cb_id_in1, onetile);
-    l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-    noc_async_read_tile(bcast_id, s1, l1_write_addr_in1);
-    noc_async_read_barrier();
-    cb_push_back(cb_id_in1, onetile);
+    cb1.reserve_back(onetile);
+    noc.async_read(s1, cb1, in1_tile_bytes, {.page_id = bcast_id}, {.offset_bytes = 0});
+    noc.async_read_barrier();
+    cb1.push_back(onetile);
 #endif
 
     for (uint32_t i = 0; i < num_tiles; i++) {
         uint32_t curr_id = base_start_id_HtWt + curr_id_from_base;
 
 #ifndef IN0_SHARDED
-        cb_reserve_back(cb_id_in0, onetile);
-        l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-        noc_async_read_tile(curr_id, s0, l1_write_addr_in0);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, onetile);
+        cb0.reserve_back(onetile);
+        noc.async_read(s0, cb0, in0_tile_bytes, {.page_id = curr_id}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb0.push_back(onetile);
 #endif
 
         curr_id_from_base++;
 
 #ifndef BCAST_SCALAR
-        cb_reserve_back(cb_id_in1, onetile);
-        l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-        noc_async_read_tile(bcast_id, s1, l1_write_addr_in1);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in1, onetile);
+        cb1.reserve_back(onetile);
+        noc.async_read(s1, cb1, in1_tile_bytes, {.page_id = bcast_id}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb1.push_back(onetile);
 
         if (curr_id_from_base == HtWt) {
             bcast_id++;

@@ -8,6 +8,9 @@
 
 #include <stdint.h>
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t src0_addr = get_arg_val<uint32_t>(0);
@@ -33,8 +36,9 @@ void kernel_main() {
     const auto s0 = TensorAccessor(src0_args, src0_addr, tile_bytes);
     const auto s1 = TensorAccessor(src1_args, src1_addr, tile_bytes);
 
-    uint32_t l1_write_addr_in0;
-    uint32_t l1_write_addr_in1;
+    experimental::Noc noc;
+    experimental::CircularBuffer cb0(cb_id_in0);
+    experimental::CircularBuffer cb1(cb_id_in1);
 
     uint32_t num_tiles = src0_num_tiles;
     uint32_t i = 0;
@@ -42,19 +46,17 @@ void kernel_main() {
     for (uint32_t nc = 0; nc < NC; nc++) {
         for (uint32_t ht = 0; ht < Ht; ht++) {
             for (uint32_t wt = 0; wt < Wt; wt++) {
-                cb_reserve_back(cb_id_in0, onetile);
-                l1_write_addr_in0 = get_write_ptr(cb_id_in0);
-                noc_async_read_tile(i, s0, l1_write_addr_in0);
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in0, onetile);
+                cb0.reserve_back(onetile);
+                noc.async_read(s0, cb0, tile_bytes, {.page_id = i}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                cb0.push_back(onetile);
 
                 // for each W-tile of the first tensor we push one tile from the second arg tile list
                 // but we loop the second list around
-                cb_reserve_back(cb_id_in1, onetile);
-                l1_write_addr_in1 = get_write_ptr(cb_id_in1);
-                noc_async_read_tile(i1, s1, l1_write_addr_in1);
-                noc_async_read_barrier();
-                cb_push_back(cb_id_in1, onetile);
+                cb1.reserve_back(onetile);
+                noc.async_read(s1, cb1, tile_bytes, {.page_id = i1}, {.offset_bytes = 0});
+                noc.async_read_barrier();
+                cb1.push_back(onetile);
                 i1++;
                 i++;  // input tile iterates over NC Ht Wt
             }

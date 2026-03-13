@@ -5,6 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -57,23 +60,28 @@ void kernel_main() {
     constexpr auto src2_args =
         TensorAccessorArgs<src1_args.next_compile_time_args_offset(), src1_args.next_common_runtime_args_offset()>();
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_pred(predicate_cb);
+    experimental::CircularBuffer cb_true(true_cb);
+    experimental::CircularBuffer cb_false(false_cb);
+
 #if SRC_SHARDED_A
-    cb_reserve_back(predicate_cb, src_num_tiles);
-    cb_push_back(predicate_cb, src_num_tiles);
+    cb_pred.reserve_back(src_num_tiles);
+    cb_pred.push_back(src_num_tiles);
 #else
     const uint32_t src0_tile_bytes = get_tile_size(predicate_cb);
     const auto s0 = TensorAccessor(src0_args, src_addr, src0_tile_bytes);
 #endif
 #if SRC_SHARDED_B
-    cb_reserve_back(true_cb, true_num_tiles);
-    cb_push_back(true_cb, true_num_tiles);
+    cb_true.reserve_back(true_num_tiles);
+    cb_true.push_back(true_num_tiles);
 #else
     const uint32_t src1_tile_bytes = get_tile_size(true_cb);
     const auto s1 = TensorAccessor(src1_args, true_addr, src1_tile_bytes);
 #endif
 #if SRC_SHARDED_C
-    cb_reserve_back(false_cb, false_num_tiles);
-    cb_push_back(false_cb, false_num_tiles);
+    cb_false.reserve_back(false_num_tiles);
+    cb_false.push_back(false_num_tiles);
 #else
     const uint32_t src2_tile_bytes = get_tile_size(false_cb);
     const auto s2 = TensorAccessor(src2_args, false_addr, src2_tile_bytes);
@@ -136,68 +144,69 @@ void kernel_main() {
                 for (uint32_t c = start_c; c < C && num_tiles_read < dst_num_tiles; ++c, start_th = 0) {
                     // for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
 #if SRC_BCAST_A
-                    cb_reserve_back(predicate_cb, onetile);
+                    cb_pred.reserve_back(onetile);
 #if !SRC_SHARDED_A
-                    uint32_t l1_write_addr_predicate = get_write_ptr(predicate_cb);
-                    noc_async_read_page(tile_offset, s0, l1_write_addr_predicate);
-                    noc_async_read_barrier();
+                    noc.async_read(s0, cb_pred, src0_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+                    noc.async_read_barrier();
 #endif
                     FILL_TILE_WITH_FIRST_ELEMENT(predicate_cb);
-                    cb_push_back(predicate_cb, onetile);
+                    cb_pred.push_back(onetile);
 #endif
 #if SRC_BCAST_B
-                    cb_reserve_back(true_cb, onetile);
+                    cb_true.reserve_back(onetile);
 #if !SRC_SHARDED_B
-                    uint32_t l1_write_addr_true = get_write_ptr(true_cb);
-                    noc_async_read_page(true_tile_offset, s1, l1_write_addr_true);
-                    noc_async_read_barrier();
+                    noc.async_read(s1, cb_true, src1_tile_bytes, {.page_id = true_tile_offset}, {.offset_bytes = 0});
+                    noc.async_read_barrier();
 #endif
                     FILL_TILE_WITH_FIRST_ELEMENT_B(true_cb);
-                    cb_push_back(true_cb, onetile);
+                    cb_true.push_back(onetile);
 #endif
 
                     // False tensor broadcast (same as true tensor)
 #if SRC_BCAST_C
-                    cb_reserve_back(false_cb, onetile);
+                    cb_false.reserve_back(onetile);
 #if !SRC_SHARDED_C
-                    uint32_t l1_write_addr_false = get_write_ptr(false_cb);
-                    noc_async_read_page(false_tile_offset, s2, l1_write_addr_false);
-                    noc_async_read_barrier();
+                    noc.async_read(s2, cb_false, src2_tile_bytes, {.page_id = false_tile_offset}, {.offset_bytes = 0});
+                    noc.async_read_barrier();
 #endif
                     FILL_TILE_WITH_FIRST_ELEMENT_C(false_cb);
-                    cb_push_back(false_cb, onetile);
+                    cb_false.push_back(onetile);
 #endif
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
 #if !SRC_BCAST_A
-                            cb_reserve_back(predicate_cb, onetile);
+                            cb_pred.reserve_back(onetile);
 #if !SRC_SHARDED_A
-                            uint32_t l1_write_addr_predicate = get_write_ptr(predicate_cb);
-                            noc_async_read_page(tile_offset + tw, s0, l1_write_addr_predicate);
-                            noc_async_read_barrier();
+                            noc.async_read(
+                                s0, cb_pred, src0_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
+                            noc.async_read_barrier();
 #endif
-                            cb_push_back(predicate_cb, onetile);
+                            cb_pred.push_back(onetile);
 #endif
 #if !SRC_BCAST_B
-                            cb_reserve_back(true_cb, onetile);
+                            cb_true.reserve_back(onetile);
 #if !SRC_SHARDED_B
-                            uint32_t l1_write_addr_true = get_write_ptr(true_cb);
-                            noc_async_read_page(true_tile_offset + tw, s1, l1_write_addr_true);
-                            noc_async_read_barrier();
+                            noc.async_read(
+                                s1, cb_true, src1_tile_bytes, {.page_id = true_tile_offset + tw}, {.offset_bytes = 0});
+                            noc.async_read_barrier();
 #endif
-                            cb_push_back(true_cb, onetile);
+                            cb_true.push_back(onetile);
 #endif
 
                             // False tensor non-broadcast (same as true tensor)
 #if !SRC_BCAST_C
-                            cb_reserve_back(false_cb, onetile);
+                            cb_false.reserve_back(onetile);
 #if !SRC_SHARDED_C
-                            uint32_t l1_write_addr_false = get_write_ptr(false_cb);
-                            noc_async_read_page(false_tile_offset + tw, s2, l1_write_addr_false);
-                            noc_async_read_barrier();
+                            noc.async_read(
+                                s2,
+                                cb_false,
+                                src2_tile_bytes,
+                                {.page_id = false_tile_offset + tw},
+                                {.offset_bytes = 0});
+                            noc.async_read_barrier();
 #endif
-                            cb_push_back(false_cb, onetile);
+                            cb_false.push_back(onetile);
 #endif
                         }
                         // next row of tiles should start at the first column for non-sharded case
