@@ -862,6 +862,9 @@ class TTTriageError(Exception):
     pass
 
 
+TRIAGE_SUMMARY_PATH = "generated/triage_summary.txt"
+
+
 def _build_triage_summary(script_queue: list[TriageScript]) -> str:
     summary_lines = []
     for script in script_queue:
@@ -979,9 +982,13 @@ def main():
                 utils.INFO(f"Total execution time: {total_time:.2f}s")
         progress.remove_task(scripts_task)
 
-    from hang_report import write_hang_junit_xml
-
-    write_hang_junit_xml(_build_triage_summary(script_queue))
+    try:
+        os.makedirs(os.path.dirname(TRIAGE_SUMMARY_PATH), exist_ok=True)
+        with open(TRIAGE_SUMMARY_PATH, "w") as f:
+            f.write(_build_triage_summary(script_queue))
+        utils.INFO(f"Triage summary written to {TRIAGE_SUMMARY_PATH}")
+    except Exception as e:
+        utils.WARN(f"Failed to write triage summary: {e}")
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)

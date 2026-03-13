@@ -21,6 +21,7 @@ if not os.environ.get("TT_METAL_HOME"):
 METAL_HOME = Path(os.environ.get("TT_METAL_HOME"))
 HANG_APP = METAL_HOME / "build/tools/tests/triage/hang_apps/add_2_integers_hang/triage_hang_app_add_2_integers_hang"
 TRIAGE_SCRIPT = METAL_HOME / "tools/tt-triage.py"
+HANG_REPORT_SCRIPT = METAL_HOME / ".github/scripts/utils/hang_report.py"
 REPORT_DIR = METAL_HOME / "generated/test_reports"
 
 FAKE_TEST_ID = "fake/test_hang.py::test_hung_operation[device0]"
@@ -28,8 +29,13 @@ FAKE_TEST_ID = "fake/test_hang.py::test_hung_operation[device0]"
 
 @pytest.mark.skipif(not HANG_APP.exists(), reason="Hang app binary not built")
 @pytest.mark.skipif(not TRIAGE_SCRIPT.exists(), reason="tt-triage.py not found")
+@pytest.mark.skipif(not HANG_REPORT_SCRIPT.exists(), reason="hang_report.py not found")
 def test_hang_generates_junit_xml():
     existing = set(REPORT_DIR.glob("hang_report_*.xml")) if REPORT_DIR.exists() else set()
+
+    hang_report_cmd = f"python3 {HANG_REPORT_SCRIPT}"
+    triage_cmd = f"python3 {TRIAGE_SCRIPT} --disable-progress --skip-version-check"
+    dispatch_cmd = f"{hang_report_cmd}; {triage_cmd} 1>&2; {hang_report_cmd} --update"
 
     result = subprocess.run(
         [str(HANG_APP)],
@@ -39,7 +45,7 @@ def test_hang_generates_junit_xml():
         env={
             **os.environ,
             "TT_METAL_OPERATION_TIMEOUT_SECONDS": "0.5",
-            "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE": f"python3 {TRIAGE_SCRIPT} --disable-progress --skip-version-check 1>&2",
+            "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE": dispatch_cmd,
             "PYTEST_CURRENT_TEST": f"{FAKE_TEST_ID} (call)",
         },
     )
