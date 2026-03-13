@@ -29,6 +29,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
+        example/example.cpp
         example/device/example_device_operation.cpp
         example/device/multi_core_program_factory.cpp
         example/device/single_core_program_factory.cpp
