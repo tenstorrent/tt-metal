@@ -3368,6 +3368,7 @@ class ModelArgs:
             "Qwen3-VL-32B": "Qwen/Qwen3-VL-32B-Instruct",
             "Qwen2.5-32B-Instruct": "Qwen/Qwen2.5-32B-Instruct",
             "Llama-3-8B": "meta-llama/Llama-3-8B",
+            "Meta-Llama-3-8B": "meta-llama/Meta-Llama-3-8B",
             "Llama-3.1-8B": "meta-llama/Llama-3.1-8B-Instruct",
             "Llama-3.1-70B": "meta-llama/Llama-3.1-70B-Instruct",
             "Llama-3.2-1B": "meta-llama/Llama-3.2-1B-Instruct",
