@@ -85,7 +85,7 @@ def compute_padded_vocab_size(vocab_size: int, num_devices: int) -> int:
     """Pad total vocab so each device shard is tile-aligned."""
     if num_devices < 1:
         raise ValueError(f"num_devices must be >= 1, got {num_devices}")
-    return nearest_multiple(vocab_size, 32 * num_devices)
+    return nearest_multiple(vocab_size, ttnn.TILE_SIZE * num_devices)
 
 
 class MathFidelitySetting(Enum):
@@ -494,7 +494,8 @@ class ModelArgs:
             self.batch_size_per_device_group = max(self.max_batch_size // list(device.shape)[1], 1)
         else:
             self.batch_size_per_device_group = self.max_batch_size
-        self.tile_size = 32
+
+        self.tile_size = ttnn.TILE_SIZE  # Expose for downstream consumers (attention, etc.)
         self.is_70b = False
         self.is_90b = False
         self.fuse_qkv = False
@@ -585,7 +586,7 @@ class ModelArgs:
             self.optimizations = DecodersPrecision.accuracy(num_decoders=self.n_layers, model_name=self.model_name)
 
         self.dummy_weights = dummy_weights
-        self.tile_padded_batch_rows = self.tile_size * int(math.ceil(self.max_batch_size / self.tile_size))
+        self.tile_padded_batch_rows = ttnn.TILE_SIZE * int(math.ceil(self.max_batch_size / ttnn.TILE_SIZE))
 
         # Enable workarounds by default until di/dt issues are fixed
         self.di_dt_workaround = os.getenv("DISABLE_DI_DT_WORKAROUND") != "1"
@@ -626,7 +627,7 @@ class ModelArgs:
             assert self.n_kv_heads % self.cluster_shape[1] == 0, "n_kv_heads must be divisible by num_devices"
             self.n_local_heads = self.n_heads // self.cluster_shape[1]
             self.qkv_size = self.head_dim * (2 * self.n_kv_heads + self.n_heads)
-            self.min_kv_prefill_shard_seqlen = (self.tile_size * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
+            self.min_kv_prefill_shard_seqlen = (ttnn.TILE_SIZE * 8 * 8) / (self.n_kv_heads // self.cluster_shape[1])
 
             # All Gather Matmul for Dense Out (DO) - computed flag stored as instance attribute
             # NOTE: Fused all gather matmul only supports a core grid of size num_devices x 1
@@ -634,7 +635,7 @@ class ModelArgs:
             self._use_fused_all_gather_matmul = (
                 self.num_devices == 8
                 and os.getenv("ACTUAL_DEVICE", "") != "TG"
-                and (self.dim // self.tile_size // self.num_devices) % self.num_devices == 0
+                and (self.dim // ttnn.TILE_SIZE // self.num_devices) % self.num_devices == 0
                 and self.num_devices > 1
                 and self.ccl_topology() == ttnn.Topology.Ring
             ) or self.prefetcher is not None
@@ -658,12 +659,12 @@ class ModelArgs:
             )
             if self.num_devices == 32:
                 lm_head_num_rows = 4
-                while self.dim % (32 * 32 * lm_head_num_rows) != 0:
+                while self.dim % (self.num_devices * ttnn.TILE_SIZE * lm_head_num_rows) != 0:
                     lm_head_num_rows -= 1
             else:
                 lm_head_num_rows = 8
             lm_head_cores_per_row = 8
-            while self.dim % (32 * lm_head_num_rows * lm_head_cores_per_row) != 0:
+            while self.dim % (ttnn.TILE_SIZE * lm_head_num_rows * lm_head_cores_per_row) != 0:
                 lm_head_num_rows -= 1
                 if lm_head_num_rows == 0:
                     lm_head_cores_per_row -= 1
@@ -683,12 +684,12 @@ class ModelArgs:
             self.mlp1_3_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
-                else self.find_prefill_grid(self.prefill_rows, self.dim // self.tile_size)
+                else self.find_prefill_grid(self.prefill_rows, self.dim // ttnn.TILE_SIZE)
             )
             self.mlp2_grid = lambda seq_len: (
                 (8, min(min(seq_len, 1024) // 32, 4))
                 if self.is_galaxy
-                else self.find_prefill_grid(self.prefill_rows, self.hidden_dim // self.tile_size)
+                else self.find_prefill_grid(self.prefill_rows, self.hidden_dim // ttnn.TILE_SIZE)
             )
             self.mlp_core_grid = (
                 self.dram_shard_core_grid_for_k(self.dim)
@@ -764,8 +765,8 @@ class ModelArgs:
                 k=self.dim // self.cluster_shape[0],
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=self.mlp1_3_grid(min(seq_len, self.prefill_len_cutoff)),
-                per_core_M=math.ceil(min(seq_len, self.prefill_len_cutoff) / self.tile_size / self.cluster_shape[1]),
-                per_core_N=math.ceil(n_w1_w3 / self.tile_size / self.cluster_shape[0]),
+                per_core_M=math.ceil(min(seq_len, self.prefill_len_cutoff) / ttnn.TILE_SIZE / self.cluster_shape[1]),
+                per_core_N=math.ceil(n_w1_w3 / ttnn.TILE_SIZE / self.cluster_shape[0]),
                 fused_activation=ttnn.UnaryOpType.SILU,
             )
             self.model_config["PREFILL_MIXTRAL_MLP_W3_PRG_CONFIG"] = lambda seq_len: self.matmul_config(
@@ -773,8 +774,8 @@ class ModelArgs:
                 k=self.dim // self.cluster_shape[0],
                 n=n_w1_w3,
                 grid_size=self.mlp1_3_grid(min(seq_len, self.prefill_len_cutoff)),
-                per_core_M=math.ceil(min(seq_len, self.prefill_len_cutoff) / self.tile_size / self.cluster_shape[1]),
-                per_core_N=math.ceil(n_w1_w3 / self.tile_size / self.cluster_shape[0]),
+                per_core_M=math.ceil(min(seq_len, self.prefill_len_cutoff) / ttnn.TILE_SIZE / self.cluster_shape[1]),
+                per_core_N=math.ceil(n_w1_w3 / ttnn.TILE_SIZE / self.cluster_shape[0]),
             )
             self.model_config["PREFILL_MLP_W1_PRG_CONFIG_128"] = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
                 compute_with_storage_grid_size=(8, 8),
@@ -956,7 +957,7 @@ class ModelArgs:
 
             def _get_xattn_kv_prefill_mem_cfg(seq_len):
                 M = (self.n_kv_heads // self.num_devices) * seq_len
-                cores_x, cores_y = self.find_grid(M // self.tile_size)
+                cores_x, cores_y = self.find_grid(M // ttnn.TILE_SIZE)
                 return ttnn.create_sharded_memory_config(
                     (
                         nearest_32(M // (cores_x * cores_y)),
@@ -1211,7 +1212,7 @@ class ModelArgs:
                 n=self.hidden_dim // self.cluster_shape[1],
                 grid_size=self.mlp1_3_grid(seq_len),
                 per_core_N=math.ceil(
-                    (self.hidden_dim // self.cluster_shape[1]) / (self.tile_size * self.dram_shard_grid_width)
+                    (self.hidden_dim // self.cluster_shape[1]) / (ttnn.TILE_SIZE * self.dram_shard_grid_width)
                 )
                 if not self.is_galaxy
                 else None,
@@ -1261,7 +1262,7 @@ class ModelArgs:
                 k=self.hidden_dim // (self.cluster_shape[1] if self.is_galaxy else 1),
                 n=self.dim,
                 grid_size=self.mlp2_grid(seq_len),
-                per_core_N=math.ceil(self.dim / (self.tile_size * self.dram_shard_grid_width))
+                per_core_N=math.ceil(self.dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
                 if not self.is_galaxy
                 else None,
             )
@@ -1556,7 +1557,7 @@ class ModelArgs:
                 else (
                     max(  # NOTE: P100 runs OOM in L1 with 8 per_core_M
                         1,
-                        8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / self.tile_size / 8),  # 8 rows
+                        8 if seq_len >= self.MAX_QKV_MM_SEQ_LEN else math.ceil(seq_len / ttnn.TILE_SIZE / 8),  # 8 rows
                     )
                 ),  # M / TILE_HEIGHT / Grid_Size (dynamic based on seqlen)
                 per_core_N=math.ceil(
@@ -1606,7 +1607,7 @@ class ModelArgs:
                 qkv_core_grid = (
                     self.dram_shard_core_grid_for_k(self.dim) if not self.is_galaxy else num_to_coregrid(num_cores)
                 )
-                shard_height = self.tile_size * mesh_cols
+                shard_height = ttnn.TILE_SIZE * mesh_cols
                 shard_width = self.dim // qkv_core_grid.num_cores if not self.is_galaxy else 32
                 return ttnn.create_sharded_memory_config(
                     (
@@ -1673,7 +1674,7 @@ class ModelArgs:
             if prefetcher is not None:
                 start_core = ttnn.CoreCoord(1, 0)
                 return ttnn.create_sharded_memory_config(
-                    shape=(math.ceil(self.n_local_heads / 32) * 32, self.head_dim),
+                    shape=(math.ceil(self.n_local_heads / ttnn.TILE_SIZE) * ttnn.TILE_SIZE, self.head_dim),
                     core_grid=ttnn.num_cores_to_corerangeset_in_subcoregrids(
                         start_core,
                         batch_size_per_device_group,
@@ -1686,7 +1687,7 @@ class ModelArgs:
                 )
             else:
                 return ttnn.create_sharded_memory_config(
-                    shape=(math.ceil(self.n_local_heads / 32) * 32, self.head_dim),
+                    shape=(math.ceil(self.n_local_heads / ttnn.TILE_SIZE) * ttnn.TILE_SIZE, self.head_dim),
                     core_grid=ttnn.CoreRangeSet({num_to_corerange(batch_size_per_device_group)}),
                     strategy=ttnn.ShardStrategy.HEIGHT,
                     orientation=ttnn.ShardOrientation.ROW_MAJOR,
@@ -1786,18 +1787,18 @@ class ModelArgs:
                 if self.use_fused_all_gather_matmul:
                     do_core_grid_size = (8, 1)
                     do_per_core_N = (
-                        self.dim // self.num_devices // self.tile_size // (do_core_grid_size[0] * do_core_grid_size[1])
+                        self.dim // self.num_devices // ttnn.TILE_SIZE // (do_core_grid_size[0] * do_core_grid_size[1])
                     )
                     return ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
                         compute_with_storage_grid_size=do_core_grid_size,
                         in0_block_w=self.dim
-                        // self.tile_size
+                        // ttnn.TILE_SIZE
                         // (do_core_grid_size[0] * do_core_grid_size[1]),  # [32 x 8k] x [8k x 1k] = [32 x 1k]
                         out_subblock_h=1,
                         out_subblock_w=get_out_subblock_w(
                             do_per_core_N, out_subblock_h=1
                         ),  # Max out_subblock_w = 4, needs to be divisible by per_core_N
-                        per_core_M=self.tile_padded_batch_rows // self.tile_size,
+                        per_core_M=self.tile_padded_batch_rows // ttnn.TILE_SIZE,
                         per_core_N=do_per_core_N,
                         fuse_batch=True,
                         fused_activation=None,
@@ -1872,10 +1873,10 @@ class ModelArgs:
                 m=min(seq_len, 1024),
                 k=k_dim,
                 n=n_dim,
-                grid_size=self.find_prefill_grid(self.prefill_rows, k_dim // self.tile_size),
+                grid_size=self.find_prefill_grid(self.prefill_rows, k_dim // ttnn.TILE_SIZE),
                 in0_block_w=1 if self.is_galaxy else None,
                 fuse_batch=seq_len <= 1024,
-                per_core_N=math.ceil(n_dim / (self.tile_size * self.dram_shard_grid_width))
+                per_core_N=math.ceil(n_dim / (ttnn.TILE_SIZE * self.dram_shard_grid_width))
                 if dram_sharded_wo
                 else None,
             )
@@ -2112,8 +2113,8 @@ class ModelArgs:
             else:
                 max_columns_per_device = LLAMA_VOCAB_SIZE // NUM_LM_HEAD_COLUMNS
         if prefetcher is not None:
-            return math.ceil(max_columns_per_device / (self.tile_size * prefetcher.ring_size)) * (
-                self.tile_size * prefetcher.ring_size
+            return math.ceil(max_columns_per_device / (ttnn.TILE_SIZE * prefetcher.ring_size)) * (
+                ttnn.TILE_SIZE * prefetcher.ring_size
             )
         else:
             return max_columns_per_device
@@ -2553,10 +2554,8 @@ class ModelArgs:
         self.vocab_size = text_config["vocab_size"]
         if self.is_galaxy:
             self.padded_vocab_size = 128 * 1024
-        elif self.num_devices > 1:
-            self.padded_vocab_size = compute_padded_vocab_size(self.vocab_size, self.num_devices)
         else:
-            self.padded_vocab_size = None
+            self.padded_vocab_size = compute_padded_vocab_size(self.vocab_size, self.num_devices)
         self.head_dim = text_config.get("head_dim", self.dim // self.n_heads) or self.dim // self.n_heads
         self.num_experts_per_tok = text_config.get("num_experts_per_tok", 0)
         self.max_context_len = text_config.get("max_position_embeddings")
@@ -2614,7 +2613,7 @@ class ModelArgs:
             # Only pad if MLP_PADDED_CORES is non-zero
             if mlp_padded_cores > 0:
                 padded_hidden_dim = nearest_multiple(
-                    self.hidden_dim, mlp_padded_cores * self.tile_size * self.num_devices
+                    self.hidden_dim, mlp_padded_cores * ttnn.TILE_SIZE * self.num_devices
                 )
                 if padded_hidden_dim != self.hidden_dim:
                     logger.info(
@@ -3000,7 +2999,7 @@ class ModelArgs:
         """Create DRAM-sharded memory config for width-sharded tensors"""
         dram_cores = self.dram_grid_size.x  # WH has 12 dram cores, P150 has 8, P100 has 7
         assert self.dram_grid_size.y == 1, "Current dram sharding assumes y dim is 1"
-        padded_size = math.ceil(n / (self.tile_size * dram_cores)) * (self.tile_size * dram_cores)
+        padded_size = math.ceil(n / (ttnn.TILE_SIZE * dram_cores)) * (ttnn.TILE_SIZE * dram_cores)
         if dram_grid is None:
             dram_grid = self.dram_weight_grid
         shard_spec = ttnn.ShardSpec(dram_grid, (k, padded_size // dram_cores), ttnn.ShardOrientation.ROW_MAJOR)
@@ -3019,9 +3018,9 @@ class ModelArgs:
         per_core_N=None,
     ):
         if per_core_M is None:
-            per_core_M = math.ceil(m / (self.tile_size * grid_size[1]))
+            per_core_M = math.ceil(m / (ttnn.TILE_SIZE * grid_size[1]))
         if per_core_N is None:
-            per_core_N = math.ceil(n / (self.tile_size * grid_size[0]))
+            per_core_N = math.ceil(n / (ttnn.TILE_SIZE * grid_size[0]))
 
         out_subblock_h = 1
         out_subblock_w = (
@@ -3030,9 +3029,9 @@ class ModelArgs:
 
         if in0_block_w is None:
             assert (
-                k % (self.tile_size * grid_size[1]) == 0
+                k % (ttnn.TILE_SIZE * grid_size[1]) == 0
             ), f"Input width must be divisible by tile size times grid size"
-            in0_block_w = self.find_largest_divisor(k // (self.tile_size * grid_size[1]))
+            in0_block_w = self.find_largest_divisor(k // (ttnn.TILE_SIZE * grid_size[1]))
 
         return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
             compute_with_storage_grid_size=grid_size,
@@ -3047,7 +3046,7 @@ class ModelArgs:
         )
 
     def dram_shard_core_grid_for_k(self, k: int) -> Tuple[int, int]:
-        rows, cols = self.find_grid(k // self.tile_size)
+        rows, cols = self.find_grid(k // ttnn.TILE_SIZE)
         return ttnn.CoreGrid(x=cols, y=rows)
 
     def find_grid(self, N):
@@ -3115,7 +3114,7 @@ class ModelArgs:
         return rows, cols
 
     def dram_shard_core_grid_for_k_and_n(self, k: int, n: int) -> Tuple[int, int]:
-        rows, cols = self.find_grid_k_n(k // self.tile_size, n // self.tile_size)
+        rows, cols = self.find_grid_k_n(k // ttnn.TILE_SIZE, n // ttnn.TILE_SIZE)
         return ttnn.CoreGrid(x=cols, y=rows)
 
     def find_grid_k_n(self, K, N):
@@ -3166,13 +3165,13 @@ class ModelArgs:
             # num_cores = self.dram_shard_core_grid_for_k(k).num_cores
             num_cores = self.dram_shard_core_grid_for_k_and_n(k, n).num_cores
             assert (
-                k % (self.tile_size * num_cores) == 0
-            ), f"k must be divisible by tile_size * num_cores: {k} % {self.tile_size * num_cores} != 0"
-            # assert n % (self.tile_size * num_cores) == 0, f"n must be divisible by tile_size * num_cores: {n} % {self.tile_size * num_cores} != 0"
+                k % (ttnn.TILE_SIZE * num_cores) == 0
+            ), f"k must be divisible by tile_size * num_cores: {k} % {ttnn.TILE_SIZE * num_cores} != 0"
+            # assert n % (ttnn.TILE_SIZE * num_cores) == 0, f"n must be divisible by tile_size * num_cores: {n} % {ttnn.TILE_SIZE * num_cores} != 0"
         return ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
-            in0_block_w=self.find_largest_divisor(k // (self.tile_size * num_cores)),
-            per_core_M=math.ceil(m / self.tile_size),
-            per_core_N=math.ceil(n / (self.tile_size * num_cores)),
+            in0_block_w=self.find_largest_divisor(k // (ttnn.TILE_SIZE * num_cores)),
+            per_core_M=math.ceil(m / ttnn.TILE_SIZE),
+            per_core_N=math.ceil(n / (ttnn.TILE_SIZE * num_cores)),
             fused_activation=fused_activation,
         )
 
@@ -3251,8 +3250,8 @@ class ModelArgs:
         overwrite_subblock_w=None,
         overwrite_subblock_h=None,
     ):
-        tile_width = 32
-        tile_height = 32
+        tile_width = ttnn.TILE_SIZE
+        tile_height = ttnn.TILE_SIZE
 
         if (
             n // tile_width // grid.num_cores < 1
@@ -3262,7 +3261,7 @@ class ModelArgs:
             grid = ttnn.CoreGrid(x=grid.x, y=grid_y)
 
         per_core_m = m // tile_height
-        per_core_k = self.find_largest_divisor(k // (self.tile_size * grid.num_cores))
+        per_core_k = self.find_largest_divisor(k // (ttnn.TILE_SIZE * grid.num_cores))
         per_core_n = math.ceil(n / tile_width / grid.num_cores)
 
         if is_fp32_accumulate:
@@ -3333,7 +3332,7 @@ class ModelArgs:
         Args:
             grid (ttnn.CoreGrid): Grid specification for the norm operation
         """
-        block_w = self.dim // grid.num_cores // self.tile_size
+        block_w = self.dim // grid.num_cores // ttnn.TILE_SIZE
         # Find largest value <= 4 that evenly divides block_w
         subblock_w = 4
         while subblock_w > 0:
@@ -3343,7 +3342,7 @@ class ModelArgs:
         return ttnn.LayerNormShardedMultiCoreProgramConfig(
             compute_with_storage_grid_size=[grid.x, grid.y],
             subblock_w=subblock_w,
-            block_h=self.tile_padded_batch_rows // self.tile_size,
+            block_h=self.tile_padded_batch_rows // ttnn.TILE_SIZE,
             block_w=block_w,
             inplace=False,
         )
@@ -3838,7 +3837,7 @@ class ModelArgs:
             qkv_core_grid = self.dram_shard_core_grid_for_k(self.dim)
             self.model_config["QKV_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
                 (
-                    self.tile_size * mesh_rows,
+                    ttnn.TILE_SIZE * mesh_rows,
                     self.dim // qkv_core_grid.num_cores,
                 ),  # Shard shape: [32, 128] -> 1 shard per core
                 core_grid=qkv_core_grid,
@@ -3849,7 +3848,7 @@ class ModelArgs:
             gather_core_grid = self.dram_shard_core_grid_for_k(self.dim // 4)
             self.model_config["SELF_OUT_GATHERED_MEMCFG"] = lambda mesh_rows: ttnn.create_sharded_memory_config(
                 (
-                    self.tile_size * mesh_rows,
+                    ttnn.TILE_SIZE * mesh_rows,
                     self.dim // 4 // gather_core_grid.num_cores,
                 ),
                 core_grid=gather_core_grid,
@@ -3860,7 +3859,7 @@ class ModelArgs:
             users_core_grid = self.dram_shard_core_grid_for_k(self.dim // 8)
             self.model_config["GATHER_USERS_MEMCFG"] = lambda mesh_cols: ttnn.create_sharded_memory_config(
                 (
-                    self.tile_size * mesh_cols,
+                    ttnn.TILE_SIZE * mesh_cols,
                     self.dim // 8 // users_core_grid.num_cores,
                 ),
                 core_grid=users_core_grid,
