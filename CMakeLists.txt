@@ -267,6 +267,7 @@ endif()
 # Build subdirectories
 ############################################################################################################################
 
+include(helper_functions)
 add_subdirectory(tt_stl)
 add_subdirectory(tools)
 add_subdirectory(tt_metal)

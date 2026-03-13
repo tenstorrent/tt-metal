@@ -111,7 +111,7 @@ target_link_libraries(
         tt_metal
 )
 target_compile_features(scaleout_tools PUBLIC cxx_std_20)
-target_precompile_headers(scaleout_tools REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(scaleout_tools TT::CommonPCH)
 
 install(TARGETS scaleout_tools EXPORT Metalium LIBRARY COMPONENT metalium-runtime FILE_SET api COMPONENT metalium-dev)
 
