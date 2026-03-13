@@ -97,16 +97,83 @@ This document captures findings from profiling the `ring_joint_sdpa_profile` ope
 
 ---
 
+## Work Distribution Across Cores
+
+### Table 1: Kernel Duration (ms) - Logical Coordinates
+
+```
+ y\x|    0     1     2     3     4     5     6     7     8     9    10
+----+------------------------------------------------------------------
+   0|   6.7  59.4 138.4  32.8  33.0 138.3  58.9   6.5 137.5  84.5   5.6
+   1| 112.9 112.7   7.4  86.6 139.4   7.2  59.8 138.5  32.7  32.3 136.8
+   2|  58.2   6.1 137.5  84.7   6.0 111.2 111.0   5.6  84.1 136.5   4.5
+   3|  57.3 136.5  30.6  31.0 136.3  56.9   4.7 135.9  82.9   4.0 109.1
+   4| 109.5   4.0  83.2 136.2   3.8  56.8 135.9  29.8  30.1 135.2  55.5
+   5|   3.4 135.1  82.2   3.3 108.7 108.8   3.0  82.1 135.1   2.7  55.6
+   6| 134.8  28.5  29.1 134.6  55.1   2.6 107.5 108.1   1.8   2.1 107.4
+   7| 108.0   1.4   2.0 107.4 108.0   1.4   2.0 107.4 108.0   1.4   2.0
+   8| 107.3 108.0   1.3   1.9 107.3 107.9   1.3   1.9 107.3 107.9   1.3
+   9|   1.8 107.3 107.9   1.2   1.8 107.3 107.9   1.2   1.8 107.3 107.9
+```
+
+### Table 2: Visual Pattern - Symbol Indicators
+
+```
+Legend:  .=<20ms   o=20-60ms   *=60-100ms   #=>100ms
+
+ y\x|  0  1  2  3  4  5  6  7  8  9 10
+----+---------------------------------
+   0|  .  o  #  o  o  #  o  .  #  *  .
+   1|  #  #  .  *  #  .  o  #  o  o  #
+   2|  o  .  #  *  .  #  #  .  *  #  .
+   3|  o  #  o  o  #  o  .  #  *  .  #
+   4|  #  .  *  #  .  o  #  o  o  #  o
+   5|  .  #  *  .  #  #  .  *  #  .  o
+   6|  #  o  o  #  o  .  #  #  .  .  #
+   7|  #  .  .  #  #  .  .  #  #  .  .
+   8|  #  #  .  .  #  #  .  .  #  #  .
+   9|  .  #  #  .  .  #  #  .  .  #  #
+```
+
+### Work Distribution Summary
+
+| Symbol | Duration | Core Count | Observation |
+|--------|----------|------------|-------------|
+| `.` | <20ms | 36 | Idle 85%+ of kernel time |
+| `o` | 20-60ms | 20 | Medium utilization |
+| `*` | 60-100ms | 8 | High utilization |
+| `#` | >100ms | 46 | Gate wall-clock time |
+
+### Key Observations
+
+1. **Checkerboard Pattern**: Fast (`.`) and slow (`#`) cores alternate regularly across the grid - this is NOT random but reflects the Q chunk assignment pattern.
+
+2. **Round-Robin Assignment**: Q chunks are assigned round-robin across cores, spreading causal work imbalance across the grid rather than clustering it.
+
+3. **Causal Work Variance**:
+   - Q chunk 0 → processes 3 K chunks → ~1-7ms
+   - Q chunk 15 → processes 32 K chunks → ~139ms
+   - 10x work difference per Q chunk
+
+4. **Wall-Clock Impact**:
+   - Kernel duration: 139ms (slowest core at x=4, y=1)
+   - Mean duration: 65ms
+   - 36 cores finish in <20ms and sit idle for remaining ~120ms
+
+5. **Potential Speedup**: ~2.1x improvement possible (139ms → 65ms) from work rebalancing alone.
+
+---
+
 ## Hypothesis Analysis
 
 ### Priority-Ordered Table
 
 | Priority | Hypothesis | Status | Issue | Evidence |
 |----------|------------|--------|-------|----------|
-| **1** | **H5: DRAM Bandwidth Saturation** | **CRITICAL** | Reader spends 94% of time in DRAM reads (K-READ 59%, V-READ 35%). This is the upstream bottleneck. | K-RESERVE only 8.6% - reader not blocked by compute |
-| **2** | **H3: CB Wait Stalls (WAIT-K)** | **CONFIRMED** | Compute waits 16% for K data. Will worsen if compute speeds up. | WAIT-K = 82ms of 515ms total |
-| **3** | **H2: QK Matmul Subblock Config** | **SUSPECTED** | QK matmul is 66% of compute - may have suboptimal subblock dims. | Dominates compute but blocked by data |
-| **4** | **H4: Work Imbalance Across Cores** | **UNKNOWN** | 512 Q chunks / 110 cores = uneven (4-5 per core). | Need per-core analysis |
+| **1** | **H4: Work Imbalance Across Cores** | **CRITICAL** | 116x imbalance: fastest core 1.2ms, slowest 139ms. Wall-clock gated by slowest. | 36 cores <20ms, 46 cores >100ms |
+| **2** | **H5: DRAM Bandwidth Saturation** | **CRITICAL** | Reader spends 94% of time in DRAM reads (K-READ 59%, V-READ 35%). | K-RESERVE only 8.6% - reader not blocked by compute |
+| **3** | **H3: CB Wait Stalls (WAIT-K)** | **CONFIRMED** | Compute waits 16% for K data. Will worsen if compute speeds up. | WAIT-K = 82ms of 515ms total |
+| **4** | **H2: QK Matmul Subblock Config** | **SUSPECTED** | QK matmul is 66% of compute - may have suboptimal subblock dims. | Dominates compute but blocked by data |
 | **5** | **H6: Causal Masking Overhead** | **CONFIRMED** | ring_index=0 does full causal triangle; ring_index=31 is 14% faster. | Expected, not actionable |
 | **6** | **H1: SFPU Dominates** | **REJECTED** | SOFTMAX (SFPU ops) only 6.7% of compute. | Not a bottleneck |
 
@@ -138,16 +205,35 @@ This document captures findings from profiling the `ring_joint_sdpa_profile` ope
 **Implication:** Any compute optimization will increase WAIT-K unless reader throughput improves.
 
 #### H4: Work Imbalance Across Cores
-**Status: UNKNOWN**
+**Status: CRITICAL**
 
 **Theory:** With 110 cores and B*NH*num_q_chunks work units, load may be uneven.
 
-**Configuration:**
-- B=1, NH=32, num_q_chunks=16
-- Total work = 512 Q chunks
-- Per core = 512 / 110 = 4.65 chunks (some get 4, some 5)
+**Finding:** Massive imbalance confirmed:
+```
+Cores: 110  |  Min: 1.19ms  |  Max: 139.39ms  |  Imbalance: 116.9x
 
-**Next Steps:** Extract per-core durations from profile_log_device.csv.
+Duration Histogram:
+  [  0- 20) ms: 36 cores  (idle most of the time)
+  [ 20- 40) ms: 10 cores
+  [ 40- 60) ms: 10 cores
+  [ 60- 80) ms:  0 cores
+  [ 80-100) ms:  8 cores
+  [100-120) ms: 28 cores
+  [120-140) ms: 18 cores  (bottleneck cores)
+```
+
+**Root Cause:** Causal masking creates triangular work pattern:
+- Q chunk 0 processes only 3 K chunks
+- Q chunk 15 processes all 32 K chunks
+- Cores assigned to early Q chunks finish 10-100x faster
+
+**Impact:** Wall-clock time is gated by the slowest core (139ms), while 36 cores sit idle after ~20ms.
+
+**Potential Solutions:**
+1. Work-stealing between cores
+2. Dynamic Q chunk assignment
+3. Rebalance Q chunks to equalize K chunk counts
 
 #### H5: DRAM Bandwidth Saturation
 **Status: CRITICAL**
@@ -181,40 +267,58 @@ This is expected behavior from the causal attention pattern, not a bug.
 
 ---
 
-## Key Insight: Memory-Bound System
+## Key Insights
 
-**The system is memory-bound, not compute-bound.**
+### 1. Work Imbalance is the Primary Bottleneck
+
+**116x imbalance between cores due to causal masking.**
 
 ```
-Data Flow:
+Core Duration Distribution:
+  Fastest cores: ~1.2ms   (36 cores idle after <20ms)
+  Slowest cores: ~139ms   (18 cores doing most work)
+
+Wall-clock time = slowest core = 139ms
+Theoretical if balanced = ~65ms (mean)
+```
+
+**Consequence:** Even with perfect compute/memory optimization, wall-clock is gated by the slowest cores processing the largest Q chunks.
+
+### 2. System is Also Memory-Bound
+
+**The slowest cores are memory-bound, not compute-bound.**
+
+```
+Data Flow (on busy cores):
 DRAM ──[K-READ]──> Reader CB ──[WAIT-K]──> Compute ──[QK]──> ...
          ↑                         ↑              ↑
     DRAM-limited (94%)      waiting 16%     66% of compute
 ```
 
-**Consequence:** Optimizing QK matmul alone would shift time from QK to WAIT-K with no net wall-clock improvement. The bottleneck is upstream in DRAM bandwidth.
+**Consequence:** Optimizing QK matmul alone would shift time from QK to WAIT-K with no net improvement.
 
 ---
 
 ## Optimization Priorities
 
-1. **DRAM Read Optimization** (addresses H5)
+1. **Work Rebalancing** (addresses H4) - **TOP PRIORITY**
+   - Rebalance Q chunk assignment to equalize K chunk counts
+   - Consider work-stealing between cores
+   - Dynamic scheduling instead of static assignment
+
+2. **DRAM Read Optimization** (addresses H5)
    - Increase CB sizes for more buffering/prefetch
    - Ensure reads are coalesced and aligned
    - Consider double-buffering strategies
 
-2. **Reader Prefetching** (addresses H3)
+3. **Reader Prefetching** (addresses H3)
    - Start reading next K/V while compute processes current
    - Overlap DRAM latency with compute
 
-3. **QK Matmul Efficiency** (addresses H2)
-   - Only after data bottleneck is addressed
+4. **QK Matmul Efficiency** (addresses H2)
+   - Only after work imbalance and data bottlenecks are addressed
    - Investigate subblock configuration
    - Check for DST register spills
-
-4. **Work Distribution** (addresses H4)
-   - Analyze per-core variation
-   - Consider load balancing if variance is high
 
 ---
 
