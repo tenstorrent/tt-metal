@@ -20,16 +20,14 @@ Run (with hardware + real weights):
 
 from __future__ import annotations
 
-import importlib
 import inspect
 import os
 import sys
 import types
 from pathlib import Path
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock
 
 import pytest
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -123,9 +121,7 @@ class TestModuleStructure:
 
         stub_map = {
             "models.demos.deepseek_v3.tt.generator": dsv3_gen,
-            "models.demos.deepseek_v3.tt.model": types.ModuleType(
-                "models.demos.deepseek_v3.tt.model"
-            ),
+            "models.demos.deepseek_v3.tt.model": types.ModuleType("models.demos.deepseek_v3.tt.model"),
             "models.demos.deepseek_v3.tt.model.row_batched_model": dsv3_rbm,
             "models.demos.deepseek_v3.utils.weight_config": dsv3_wc,
             "models.demos.kimi_k25.utils.config_adapter": kimi_ca,
@@ -172,13 +168,10 @@ class TestModuleStructure:
         from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
         from models.demos.kimi_k25.tt.kimi_model import KimiGenerator
 
-        assert issubclass(
-            KimiGenerator, DeepseekGenerator
-        ), "KimiGenerator must subclass DeepseekGenerator"
+        assert issubclass(KimiGenerator, DeepseekGenerator), "KimiGenerator must subclass DeepseekGenerator"
 
     def test_kimi_generator_overrides_prepare_weight_configs(self):
         """KimiGenerator.\_prepare\_weight\_configs is overridden (not inherited)."""
-        from models.demos.deepseek_v3.tt.generator import DeepseekGenerator
         from models.demos.kimi_k25.tt.kimi_model import KimiGenerator
 
         # The method should be defined directly on KimiGenerator, not inherited
@@ -191,12 +184,12 @@ class TestModuleStructure:
         """_DEFAULT_CACHE_DIR is set to a kimi-specific path (not deepseek)."""
         from models.demos.kimi_k25.tt.kimi_model import _DEFAULT_CACHE_DIR
 
-        assert "kimi" in str(_DEFAULT_CACHE_DIR).lower(), (
-            f"_DEFAULT_CACHE_DIR should contain 'kimi', got {_DEFAULT_CACHE_DIR!r}"
-        )
-        assert "deepseek" not in str(_DEFAULT_CACHE_DIR).lower(), (
-            f"_DEFAULT_CACHE_DIR must not be the deepseek path, got {_DEFAULT_CACHE_DIR!r}"
-        )
+        assert (
+            "kimi" in str(_DEFAULT_CACHE_DIR).lower()
+        ), f"_DEFAULT_CACHE_DIR should contain 'kimi', got {_DEFAULT_CACHE_DIR!r}"
+        assert (
+            "deepseek" not in str(_DEFAULT_CACHE_DIR).lower()
+        ), f"_DEFAULT_CACHE_DIR must not be the deepseek path, got {_DEFAULT_CACHE_DIR!r}"
 
 
 # ---------------------------------------------------------------------------
@@ -254,9 +247,7 @@ class TestWeightLoaderIntegration:
         """kimi_model imports KimiLazyStateDict from the correct module."""
         import models.demos.kimi_k25.tt.kimi_model as km
 
-        assert hasattr(km, "KimiLazyStateDict"), (
-            "KimiLazyStateDict must be importable via kimi_model module"
-        )
+        assert hasattr(km, "KimiLazyStateDict"), "KimiLazyStateDict must be importable via kimi_model module"
 
     def test_prepare_weight_configs_uses_kimi_state_dict(self):
         """_prepare_weight_configs calls KimiLazyStateDict, not the parent loader."""
@@ -274,12 +265,9 @@ class TestWeightLoaderIntegration:
 
         source = inspect.getsource(km.KimiGenerator._prepare_weight_configs)
         assert "random_weights" in source, (
-            "_prepare_weight_configs must check self.random_weights and "
-            "fall through to parent for smoke tests."
+            "_prepare_weight_configs must check self.random_weights and " "fall through to parent for smoke tests."
         )
-        assert "super()" in source, (
-            "_prepare_weight_configs must call super() for the random_weights path."
-        )
+        assert "super()" in source, "_prepare_weight_configs must call super() for the random_weights path."
 
 
 # ---------------------------------------------------------------------------

@@ -14,6 +14,7 @@ Kimi K2.5. Key differences:
 * ``mesh_device`` uses the same ``MESH_DEVICE`` env-var-driven logic as DSV3.
 * ``state_dict`` loads via :class:`KimiLazyStateDict` (INT4 → BF16 transparent).
 """
+
 from __future__ import annotations
 
 import os
@@ -29,6 +30,7 @@ from models.demos.kimi_k25.utils.config_adapter import KimiK25Config
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
 
 def _make_kimi_hf_config_fixture() -> KimiK25Config:
     """Return a KimiK25Config usable as ``hf_config`` in all DSV3 module tests.
@@ -48,6 +50,7 @@ def _make_kimi_hf_config_from_real(model_path: Path) -> object:
     """
     try:
         from transformers import AutoConfig
+
         hf_cfg = AutoConfig.from_pretrained(str(model_path), trust_remote_code=True)
         # Validate and log — raises ValueError on arch mismatch
         kimi_cfg = KimiK25Config.from_hf_config(hf_cfg)
@@ -55,8 +58,7 @@ def _make_kimi_hf_config_from_real(model_path: Path) -> object:
         return kimi_cfg
     except Exception as exc:  # noqa: BLE001
         logger.warning(
-            f"Kimi conftest: failed to load real HF config from {model_path!r}: {exc}. "
-            "Falling back to fixture."
+            f"Kimi conftest: failed to load real HF config from {model_path!r}: {exc}. " "Falling back to fixture."
         )
         return _make_kimi_hf_config_fixture()
 
@@ -64,6 +66,7 @@ def _make_kimi_hf_config_from_real(model_path: Path) -> object:
 # ---------------------------------------------------------------------------
 # Session-scoped fixtures
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="session")
 def model_path() -> Path:
@@ -118,6 +121,7 @@ def state_dict(model_path: Path):
     if model_path is None:
         pytest.skip("KIMI_HF_MODEL not set — skipping real-weight test")
     from models.demos.kimi_k25.utils.weight_loader import KimiLazyStateDict
+
     return KimiLazyStateDict(model_path)
 
 
@@ -137,6 +141,7 @@ def clear_state_dict_cache(request):
 # Function-scoped fixtures (device / determinism)
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture(scope="session")
 def force_recalculate_weight_config():
     return False
@@ -152,6 +157,7 @@ def set_deterministic_env():
 # ---------------------------------------------------------------------------
 # Mesh device — mirrors DSV3 conftest pattern
 # ---------------------------------------------------------------------------
+
 
 @pytest.fixture(scope="function")
 def mesh_device(request):
@@ -203,4 +209,5 @@ def mesh_device(request):
 def ccl(mesh_device):
     """CCL instance for distributed tests."""
     from models.demos.deepseek_v3.tt.ccl import CCL
+
     return CCL(mesh_device)

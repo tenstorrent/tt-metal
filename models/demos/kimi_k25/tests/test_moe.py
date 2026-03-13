@@ -18,6 +18,7 @@ Kimi-specific differences tested here:
 Milestone: M4 (Single-Layer Accuracy)
 Reference: models/demos/deepseek_v3/tests/test_moe.py
 """
+
 from __future__ import annotations
 
 import os
@@ -58,6 +59,7 @@ _PREFILL_SEQ_LEN = int(_MAX_SEQ_LEN_ENV) if _MAX_SEQ_LEN_ENV else 128
 # Fixtures
 # ---------------------------------------------------------------------------
 
+
 @pytest.fixture
 def reference_model(hf_config: KimiK25Config):
     """DSV3 DeepseekV3MoE reference model configured with Kimi K2.5 params."""
@@ -80,10 +82,7 @@ def _get_test_state_dict(
 ) -> dict:
     """Prepare state dict for test: random (no weights needed) or real."""
     if weight_type == "random":
-        return {
-            name: tensor.detach().clone()
-            for name, tensor in reference_model.state_dict().items()
-        }
+        return {name: tensor.detach().clone() for name, tensor in reference_model.state_dict().items()}
 
     # Real weights from KimiLazyStateDict
     assert weight_type == "real"
@@ -97,9 +96,7 @@ def _get_test_state_dict(
         if not name.startswith("shared_experts.")
     }
     if not moe_state_dict:
-        pytest.skip(
-            f"Checkpoint does not contain routed MoE weights under '{_MOE_LAYER_PATH}'"
-        )
+        pytest.skip(f"Checkpoint does not contain routed MoE weights under '{_MOE_LAYER_PATH}'")
     reference_model.load_state_dict(moe_state_dict)
     return moe_state_dict
 
@@ -107,6 +104,7 @@ def _get_test_state_dict(
 # ---------------------------------------------------------------------------
 # Hardware tests
 # ---------------------------------------------------------------------------
+
 
 @pytest.mark.timeout(1200)
 @pytest.mark.parametrize(
@@ -185,9 +183,7 @@ def test_forward_pass(
     tt_input = ttnn.from_torch(
         torch_input.unsqueeze(1),
         device=mesh_device,
-        mesh_mapper=ttnn.ShardTensor2dMesh(
-            mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)
-        ),
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
         dtype=ttnn.bfloat16,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
@@ -205,9 +201,7 @@ def test_forward_pass(
 
     tt_output_torch = ttnn.to_torch(
         tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(
-            mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)
-        ),
+        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=tuple(mesh_device.shape)),
     )
 
     ttnn.deallocate(tt_input)
@@ -224,6 +218,7 @@ def test_forward_pass(
 # ---------------------------------------------------------------------------
 # CPU-only sanity tests (no hardware required)
 # ---------------------------------------------------------------------------
+
 
 class TestKimiMoEConfigSanity:
     """Fast sanity checks — run on any machine, no hardware needed."""
@@ -248,10 +243,7 @@ class TestKimiMoEConfigSanity:
             out = reference_model(x)
         assert out.shape == x.shape, f"Expected shape {x.shape}, got {out.shape}"
         assert not torch.isnan(out).any(), "NaN in reference MoE output"
-        logger.info(
-            f"[PASS] Reference Kimi MoE forward: "
-            f"input {x.shape} → output {out.shape}"
-        )
+        logger.info(f"[PASS] Reference Kimi MoE forward: " f"input {x.shape} → output {out.shape}")
 
 
 if __name__ == "__main__":

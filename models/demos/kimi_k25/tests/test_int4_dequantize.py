@@ -24,11 +24,7 @@ import torch
 # Allow running from repo root without install
 sys.path.insert(0, ".")
 
-from models.demos.kimi_k25.utils.int4_dequantize import (
-    dequantize_int4_weight,
-    unpack_int4_nibbles,
-)
-
+from models.demos.kimi_k25.utils.int4_dequantize import dequantize_int4_weight, unpack_int4_nibbles
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -57,7 +53,7 @@ def _pack_reference(int4_signed: torch.Tensor) -> torch.Tensor:
     """
     assert int4_signed.dtype == torch.int8, "Input must be int8"
     unsigned = (int4_signed + 8).to(torch.uint8)  # zero-point 8 → [0, 15]
-    low = unsigned[..., 0::2]   # even positions → low nibble
+    low = unsigned[..., 0::2]  # even positions → low nibble
     high = unsigned[..., 1::2]  # odd  positions → high nibble
     return low | (high << 4)
 
@@ -97,11 +93,9 @@ def test_dequantize_exact_pcc():
     scales = torch.rand(out_features, n_groups, dtype=torch.float32) * 0.01 + 1e-4
 
     # Ground-truth dequantization
-    ref_fp = (
-        ref_int4.float()
-        .reshape(out_features, n_groups, group_size)
-        * scales.unsqueeze(-1)
-    ).reshape(out_features, in_features)
+    ref_fp = (ref_int4.float().reshape(out_features, n_groups, group_size) * scales.unsqueeze(-1)).reshape(
+        out_features, in_features
+    )
 
     # Pack → dequantize via our code path
     packed = _pack_reference(ref_int4)
@@ -134,16 +128,12 @@ def test_dequantize_kimi_expert_shapes():
         ref_int4 = torch.randint(-8, 8, (out_features, in_features), dtype=torch.int8)
         scales = torch.rand(out_features, n_groups, dtype=torch.float32) * 0.01 + 1e-4
 
-        ref_fp = (
-            ref_int4.float()
-            .reshape(out_features, n_groups, group_size)
-            * scales.unsqueeze(-1)
-        ).reshape(out_features, in_features)
+        ref_fp = (ref_int4.float().reshape(out_features, n_groups, group_size) * scales.unsqueeze(-1)).reshape(
+            out_features, in_features
+        )
 
         packed = _pack_reference(ref_int4)
-        result = dequantize_int4_weight(
-            packed, scales, group_size=group_size, output_dtype=torch.bfloat16
-        )
+        result = dequantize_int4_weight(packed, scales, group_size=group_size, output_dtype=torch.bfloat16)
 
         # Compare against BF16-cast ground truth (accounts for BF16 rounding)
         ref_bf16 = ref_fp.bfloat16()
@@ -164,9 +154,7 @@ def test_dequantize_bf16_output():
     scales_bf16 = (torch.rand(out_features, n_groups, dtype=torch.float32) * 0.01).bfloat16()
 
     packed = _pack_reference(ref_int4)
-    result = dequantize_int4_weight(
-        packed, scales_bf16, group_size=group_size, output_dtype=torch.bfloat16
-    )
+    result = dequantize_int4_weight(packed, scales_bf16, group_size=group_size, output_dtype=torch.bfloat16)
 
     assert result.dtype == torch.bfloat16, f"Expected bfloat16, got {result.dtype}"
     assert result.shape == (out_features, in_features), f"Shape mismatch: {result.shape}"
@@ -212,7 +200,7 @@ def test_dequantize_validation_errors():
         ),
         (
             "in_features not divisible by group_size",
-            torch.zeros(4, 5, dtype=torch.uint8),   # in_features=10
+            torch.zeros(4, 5, dtype=torch.uint8),  # in_features=10
             torch.zeros(4, 1),
             32,
         ),
