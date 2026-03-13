@@ -1729,9 +1729,9 @@ class Glm4MoeTT:
 
         if self.mtp_enabled:
             rope_dim = int(self.hparams.head_dim * self.hparams.partial_rotary_factor)
-            # Tile-pad MTP batch for embed/hidden tensors (they go through _sharded_rms_norm
-            # and linear ops that need tile-padded dim[-2])
-            mtp_batch = ((active + 31) // 32) * 32
+            # MTP batch = active batch. TILE_LAYOUT handles physical padding internally.
+            # mtp_embed_tt must match mtp_hidden_tt's logical batch for ttnn.add compatibility.
+            mtp_batch = active
 
             mtp_embed_tt = ttnn.from_torch(
                 torch.zeros(1, 1, mtp_batch, hidden, dtype=torch.bfloat16),
