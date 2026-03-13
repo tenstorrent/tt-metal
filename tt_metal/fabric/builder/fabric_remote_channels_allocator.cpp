@@ -50,7 +50,8 @@ size_t FabricRemoteChannelsAllocator::get_remote_receiver_channel_num_buffers(si
 }
 
 void FabricRemoteChannelsAllocator::emit_channel_allocations_ct_args(
-    std::vector<uint32_t>& ct_args, size_t num_used_receiver_channels) const {
+    std::vector<uint32_t>& ct_args,
+    const std::array<bool, builder_config::MAX_NUM_VCS>& is_receiver_channel_active_per_vc) const {
     // Tag
     ct_args.push_back(0xabcd1234);
 
@@ -62,9 +63,13 @@ void FabricRemoteChannelsAllocator::emit_channel_allocations_ct_args(
     emit_ct_args(ct_args);
 
     // No sender channels for remote allocator (0 sender entries)
-    // Receiver channel-to-entry index (identity mapping)
-    for (size_t i = 0; i < num_used_receiver_channels; ++i) {
-        ct_args.push_back(static_cast<uint32_t>(i));
+    // Receiver channel-to-entry index: emit sequential indices only for active VCs
+    size_t entry_index = 0;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        if (is_receiver_channel_active_per_vc[vc]) {
+            ct_args.push_back(static_cast<uint32_t>(entry_index));
+            ++entry_index;
+        }
     }
 }
 
