@@ -41,11 +41,13 @@ def assert_equal(expected, actual):
         ([1, 1, 16, 64], [1, 1, 32, 64], [1, 1, 8, 64], [1, 1, 16, 64]),
         # Combined H and W padding, different output shard
         ([1, 1, 16, 32], [1, 1, 32, 64], [1, 1, 8, 32], [1, 1, 16, 32]),
+        # Uneven ND sharding
+        ([5, 4, 160, 160], [5, 4, 192, 192], [2, 3, 64, 96], [2, 3, 60, 40]),
     ],
 )
 @pytest.mark.parametrize(
     "shard_core_grid",
-    [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 1))})],
+    [ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(3, 2))})],
 )
 @pytest.mark.parametrize("input_is_nd_sharded", [True, False])
 @pytest.mark.parametrize("output_is_nd_sharded", [True, False])
@@ -60,9 +62,6 @@ def test_pad_nd_sharded(
     input_is_nd_sharded,
     output_is_nd_sharded,
 ):
-    if not output_is_nd_sharded and output_shard_shape is not None:
-        pytest.skip("output_shard_shape only applies when output is nd-sharded")
-
     torch.manual_seed(42)
 
     effective_output_shard_shape = output_shard_shape if output_shard_shape is not None else input_shard_shape
@@ -72,19 +71,26 @@ def test_pad_nd_sharded(
     output_nd_shard_spec = ttnn.NdShardSpec(
         shard_shape=effective_output_shard_shape, grid=shard_core_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
     )
+    print("input_shard_shape: ", input_shard_shape)
+    print("output_shard_shape: ", effective_output_shard_shape)
 
     if input_is_nd_sharded:
         input_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=input_nd_shard_spec)
+        print("input had nd_shard_spec: ", input_memory_config.nd_shard_spec is not None)
+        print("input has shard_spec: ", input_memory_config.shard_spec is not None)
     else:
         input_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
     if output_is_nd_sharded:
         output_memory_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=output_nd_shard_spec)
+        print("output had nd_shard_spec: ", output_memory_config.nd_shard_spec is not None)
+        print("output has shard_spec: ", output_memory_config.shard_spec is not None)
     else:
         output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
 
     input_torch_tensor = torch.rand(tensor_shape, dtype=torch.bfloat16)
     input_tensor_start = [0] * len(tensor_shape)
-
+    # print("memory config layout BEFORE from_torch:", input_memory_config.memory_layout)
+    # print("shard shape BEFORE from_torch:", input_memory_config.nd_shard_spec.shard_shape)
     input_ttnn_tensor = ttnn.from_torch(
         input_torch_tensor,
         dtype=dtype,
@@ -92,12 +98,17 @@ def test_pad_nd_sharded(
         device=device,
         memory_config=input_memory_config,
     )
+    # print("memory config layout AFTER from_torch:", input_ttnn_tensor.memory_config().memory_layout)
+    # print("shard shape AFTER from_torch:", input_ttnn_tensor.memory_config().shard_spec.shape)
+    # print("input memory layout: ", input_ttnn_tensor.memory_config().memory_layout())
     output_ttnn_tensor = ttnn.pad(
-        input_ttnn_tensor, padded_shape, input_tensor_start, 0, use_multicore=True, memory_config=output_memory_config
+        input_ttnn_tensor, padded_shape, input_tensor_start, 10, use_multicore=True, memory_config=output_memory_config
     )
     output_torch_tensor = ttnn.to_torch(output_ttnn_tensor)
 
-    expected_torch = pad_reference(input_torch_tensor, padded_shape, input_tensor_start, 0)
+    expected_torch = pad_reference(input_torch_tensor, padded_shape, input_tensor_start, 10)
+    print(output_torch_tensor.shape)
+    print(expected_torch.shape)
     assert_equal(expected_torch, output_torch_tensor)
 
 

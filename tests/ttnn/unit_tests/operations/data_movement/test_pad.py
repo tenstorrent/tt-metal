@@ -499,6 +499,36 @@ def test_pad_op(device, in_dtype, shape, padshape, use_multicore, layout, mem_co
         assert torch.equal(output_tt, output_torch)
 
 
+@pytest.mark.parametrize("in_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("use_multicore", [True])
+def test_pad_op_row_major_unevernly_sharded(device, in_dtype, use_multicore):
+    shape = [1, 1, 18, 50]
+    padshape = [1, 1, TILE_HEIGHT, 2 * TILE_WIDTH]
+    shard_shape = [1, 1, 18, 40]
+
+    shard_core_grid = ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(1, 0))})
+    nd_shard_spec = ttnn.NdShardSpec(
+        shard_shape=shard_shape, grid=shard_core_grid, orientation=ttnn.ShardOrientation.ROW_MAJOR
+    )
+    input_mem_config = ttnn.MemoryConfig(buffer_type=ttnn.BufferType.L1, nd_shard_spec=nd_shard_spec)
+
+    torch_input = random_torch_tensor(in_dtype, shape)
+    ttnn_input = ttnn.from_torch(
+        torch_input, device=device, memory_config=input_mem_config, dtype=in_dtype, layout=ttnn.ROW_MAJOR_LAYOUT
+    )
+
+    output_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, ttnn.BufferType.DRAM)
+    output_tt = ttnn.pad(
+        ttnn_input, padshape, [0, 0, 0, 0], value=0, use_multicore=use_multicore, memory_config=output_mem_config
+    )
+    output_tt = ttnn.to_torch(output_tt)
+    assert output_tt.shape == torch.Size(padshape), f"Shape mismatch: expected {padshape}, got {list(output_tt.shape)}"
+
+    shape_diff = list(map(lambda x, y: x - y, padshape, shape))
+    output_torch = torch.nn.functional.pad(torch_input, [0, shape_diff[-1], 0, shape_diff[-2]], value=0)
+    assert torch.equal(output_tt, output_torch)
+
+
 def _unsqueeze(smaller, larger, fill):
     diff = len(larger) - len(smaller)
     return [fill] * diff + smaller

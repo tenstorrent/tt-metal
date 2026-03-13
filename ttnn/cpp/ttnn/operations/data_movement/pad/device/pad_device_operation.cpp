@@ -40,6 +40,11 @@ bool can_use_sharded_optimized_factory(const PadParams& operation_attributes, co
     if (operation_attributes.sub_core_grids.has_value()) {
         return false;
     }
+    if (operation_attributes.output_mem_config.shard_spec().value().shape[0] <
+        input_tensor.shard_spec().value().shape[0]) {
+        // Note this case causes the sharded optimized PadRmShardedWidthOnlyProgramFactory{} to hang.
+        return false;
+    }
     return true;
 }
 }  // namespace
@@ -126,19 +131,19 @@ void PadDeviceOperation::validate_on_program_cache_miss(
             "On device padding only supports padding at end of dims");
     }
     TT_FATAL(
-        input_tensor.padded_shape()[0] + operation_attributes.input_tensor_start[0] <=
+        input_tensor.logical_shape()[0] + operation_attributes.input_tensor_start[0] <=
             operation_attributes.output_padded_shape[0],
         "Output size cannot fit input with offset");
     TT_FATAL(
-        input_tensor.padded_shape()[1] + operation_attributes.input_tensor_start[1] <=
+        input_tensor.logical_shape()[1] + operation_attributes.input_tensor_start[1] <=
             operation_attributes.output_padded_shape[1],
         "Output size cannot fit input with offset");
     TT_FATAL(
-        input_tensor.padded_shape()[2] + operation_attributes.input_tensor_start[2] <=
+        input_tensor.logical_shape()[2] + operation_attributes.input_tensor_start[2] <=
             operation_attributes.output_padded_shape[2],
         "Output size cannot fit input with offset");
     TT_FATAL(
-        input_tensor.padded_shape()[3] + operation_attributes.input_tensor_start[3] <=
+        input_tensor.logical_shape()[3] + operation_attributes.input_tensor_start[3] <=
             operation_attributes.output_padded_shape[3],
         "Output size cannot fit input with offset");
 

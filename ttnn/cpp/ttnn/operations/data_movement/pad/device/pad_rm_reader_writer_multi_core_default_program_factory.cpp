@@ -120,7 +120,6 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 PadRmReaderWriterMultiCoreDefaultProgramFactory::cached_program_t
 PadRmReaderWriterMultiCoreDefaultProgramFactory::create(
     const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output) {
-    std::cout << "PadRmReaderWriterMultiCoreDefaultProgramFactory::create" << std::endl;
     const auto& a = tensor_args.input;
     const auto& pad_value = operation_attributes.pad_value;
     const auto& output_padded_shape = operation_attributes.output_padded_shape;
