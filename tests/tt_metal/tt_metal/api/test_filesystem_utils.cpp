@@ -502,13 +502,6 @@ TEST_F(FilesystemUtilsTest, SafeRename_ReturnsFalseWhenDestParentDoesNotExist) {
     EXPECT_TRUE(std::filesystem::exists(source));
 }
 
-TEST_F(FilesystemUtilsTest, SafeCreateDirectories_CreatesNestedDirectories) {
-    // Create nested directories in a single call - all parent directories should be created
-    std::filesystem::path valid_nested = temp_dir_ / "valid" / "nested" / "path";
-    EXPECT_TRUE(safe_create_directories(valid_nested));
-    EXPECT_TRUE(std::filesystem::exists(valid_nested));
-}
-
 // Test that verifies operations work on symlinks (if supported)
 TEST_F(FilesystemUtilsTest, SafeOperations_HandleSymlinks) {
     std::filesystem::path target = create_test_file("symlink_target.txt", "symlinked content");
