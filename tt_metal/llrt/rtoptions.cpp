@@ -411,7 +411,7 @@ uint16_t RunTimeOptions::get_effective_inspector_rpc_server_port() const {
         uint32_t port = base + static_cast<uint32_t>(rank);
         if (port > 65535) {
             log_warning(
-                tt::LogRuntime,
+                tt::LogMetal,
                 "Inspector RPC port overflow: base_port={} + rank={} exceeds 65535, clamping to 65535. "
                 "Consider reducing base port or rank count to avoid port conflicts.",
                 base,
