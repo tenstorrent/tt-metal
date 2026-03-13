@@ -198,6 +198,20 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         auto mesh_config_mock = distributed::MeshDeviceConfig(distributed::MeshShape(1));
         auto mock_device = mock_env_bh_1.create_mesh_device(mesh_config_mock);
         context_id = mock_device->impl().get_context_id();
+
+        // Test buffer allocation and deallocation
+        constexpr size_t page_size = 4096;
+        constexpr size_t buffer_size = page_size * 12;
+        distributed::DeviceLocalBufferConfig local_config{.page_size = buffer_size, .buffer_type = BufferType::L1};
+        distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
+        auto buffer = distributed::MeshBuffer::create(buffer_config, local_config, mock_device.get());
+        log_info(tt::LogTest, "Buffer address: {}", buffer->address());
+        ASSERT_TRUE(buffer->is_allocated());
+        buffer->deallocate();
+        ASSERT_FALSE(buffer->is_allocated());
+
+        // Test command queue operations
+        // auto& cq = mock_device->mesh_command_queue();
     }
 
     // Assert that we didn't implicitly create the physical metal context
