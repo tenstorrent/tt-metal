@@ -1255,13 +1255,16 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // Emit local channel allocations
     auto* static_alloc_ptr = dynamic_cast<FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
     TT_FATAL(static_alloc_ptr != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator");
+    const std::array<size_t, builder_config::MAX_NUM_VCS> actual_sender_channels_per_vc = {
+        actual_sender_channels_vc0, actual_sender_channels_vc1};
     static_alloc_ptr->emit_channel_allocations_ct_args(
-        ct_args, actual_sender_channels_vc0, actual_sender_channels_vc1, num_receiver_channels);
+        ct_args, actual_sender_channels_per_vc, config.is_receiver_channel_active_per_vc);
 
     // Emit remote channel allocations
     ct_args.push_back(0xabaddad6);
     TT_FATAL(config.remote_channels_allocator != nullptr, "Remote channels allocator must be non-null");
-    config.remote_channels_allocator->emit_channel_allocations_ct_args(ct_args, num_receiver_channels);
+    config.remote_channels_allocator->emit_channel_allocations_ct_args(
+        ct_args, config.is_receiver_channel_active_per_vc);
 
     // Downstream sender data
     ct_args.push_back(0xabaddad7);

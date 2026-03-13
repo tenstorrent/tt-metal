@@ -542,9 +542,12 @@ void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_
 
 void FabricStaticSizedChannelsAllocator::emit_channel_allocations_ct_args(
     std::vector<uint32_t>& ct_args,
-    size_t num_used_vc0_sender_channels,
-    size_t num_used_vc1_sender_channels,
-    size_t num_used_receiver_channels) const {
+    const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_sender_channels_per_vc,
+    const std::array<bool, builder_config::MAX_NUM_VCS>& is_receiver_channel_active_per_vc) const {
+    size_t num_used_vc0_sender_channels = num_used_sender_channels_per_vc[0];
+    size_t num_used_vc1_sender_channels = num_used_sender_channels_per_vc[1];
+    size_t num_used_receiver_channels = static_cast<size_t>(is_receiver_channel_active_per_vc[0]) +
+                                        static_cast<size_t>(is_receiver_channel_active_per_vc[1]);
     // Tag
     ct_args.push_back(0xabcd1234);
 
