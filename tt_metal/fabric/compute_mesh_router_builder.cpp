@@ -256,7 +256,9 @@ std::unique_ptr<ComputeMeshRouterBuilder> ComputeMeshRouterBuilder::build(
 
     // Build reverse channel maps and compute injection flags for each builder variant
     // Get ERISC's channel count from config
-    size_t erisc_num_channels = edm_config.num_used_sender_channels;
+    // Derive from per-VC counts — consistent with num_used_sender_channels_per_vc as canonical source
+    size_t erisc_num_channels =
+        edm_config.num_used_sender_channels_per_vc[0] + edm_config.num_used_sender_channels_per_vc[1];
     auto erisc_to_router_channel_map =
         get_variant_to_router_channel_map(channel_mapping, BuilderType::ERISC, erisc_num_channels);
     auto erisc_injection_flags =
