@@ -101,7 +101,7 @@ void write_dependency_hashes(
 
         uint64_t hash = 0;
         bool success = tt::filesystem::retry_on_estale([&]() {
-            ::errno = 0;
+            errno = 0;
             std::ifstream dep_file(dep_path, std::ios::binary);
             hash = hash_file_content(dep_file);
             return !dep_file.fail() || dep_file.eof();
@@ -178,7 +178,7 @@ void write_dependency_hashes(
 
     std::ofstream hash_file;
     bool opened = tt::filesystem::retry_on_estale([&]() {
-        ::errno = 0;
+        errno = 0;
         hash_file.open(hash_path);
         return hash_file.is_open();
     });
@@ -189,7 +189,7 @@ void write_dependency_hashes(
 
     std::ifstream dep_file;
     opened = tt::filesystem::retry_on_estale([&]() {
-        ::errno = 0;
+        errno = 0;
         dep_file.open(dep_path);
         return dep_file.is_open();
     });
@@ -222,7 +222,7 @@ bool dependencies_up_to_date(std::istream& hash_file) {
 
         std::ifstream dep_file;
         tt::filesystem::retry_on_estale([&]() {
-            ::errno = 0;
+            errno = 0;
             dep_file.open(dep, std::ios::binary);
             return dep_file.is_open();
         });

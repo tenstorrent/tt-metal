@@ -136,7 +136,7 @@ bool retry_on_estale(Operation&& operation) {
         if (operation()) {
             return true;
         }
-        if (::errno != ESTALE) {
+        if (errno != ESTALE) {
             break;
         }
         if (attempt < kMaxFsRetries - 1) {

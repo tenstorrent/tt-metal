@@ -38,7 +38,7 @@ void sync_filesystem(const std::filesystem::path& path) {
     // Using O_DIRECTORY ensures we only succeed if it's actually a directory.
     int fd = ::open(path_str.c_str(), O_RDONLY | O_DIRECTORY);
 
-    if (fd == -1 && ::errno == ENOTDIR) {
+    if (fd == -1 && errno == ENOTDIR) {
         // Path exists but is not a directory - try to open its parent.
         std::filesystem::path parent = path.parent_path();
 
@@ -52,10 +52,10 @@ void sync_filesystem(const std::filesystem::path& path) {
 
     if (fd != -1) {
         if (::syncfs(fd) != 0) {
-            log_debug(tt::LogMetal, "syncfs failed for {}: {}", path_str, ::strerror(::errno));
+            log_debug(tt::LogMetal, "syncfs failed for {}: {}", path_str, ::strerror(errno));
         }
         if (::close(fd) != 0) {
-            log_debug(tt::LogMetal, "close failed after syncfs for {}: {}", path_str, ::strerror(::errno));
+            log_debug(tt::LogMetal, "close failed after syncfs for {}: {}", path_str, ::strerror(errno));
         }
         return;
     }
