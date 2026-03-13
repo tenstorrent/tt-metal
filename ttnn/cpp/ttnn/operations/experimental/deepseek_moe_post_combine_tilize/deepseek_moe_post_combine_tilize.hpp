@@ -24,6 +24,9 @@ struct DeepseekMoEPostCombineTilizeOperation {
         const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 };
 
+// const ttnn::Tensor& input_tensor,
+// const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config = std::nullopt);
+
 }  // namespace operations::experimental::deepseek_moe_post_combine_tilize
 
 namespace experimental::deepseek_moe_post_combine_tilize {
