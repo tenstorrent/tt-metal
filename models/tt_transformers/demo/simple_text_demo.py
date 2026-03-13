@@ -1514,7 +1514,7 @@ def test_demo_text(
                 "N150_Llama-3.2-1B": 25,
                 "N150_Llama-3.2-3B": 62,
                 "N150_Llama-3.1-8B": 120,
-                "N150_Mistral-7B": 106,
+                "N150_Mistral-7B": 40,  # Updated from 106; observed ~37.5ms in CI (issue #39581)
                 # N300 targets
                 # Faster-than-expected TTFT observed in CI; lower target and widen tolerance to avoid false failures.
                 "N300_Qwen2.5-7B": (90, 1.25),  # (value, high_tolerance_ratio)

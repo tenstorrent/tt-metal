@@ -99,7 +99,7 @@ bool is_native_L1_sharding(
             return false;
         }
         // Check if output grid differs from input grids - if so, cannot use native sharding
-        if (output_memory_config.is_sharded() && output_memory_config.shard_spec().has_value()) {
+        if (output_memory_config.shard_spec().has_value()) {
             const auto& out_grid = output_memory_config.shard_spec()->grid;
             if (predicate_spec.memory_config().is_sharded() &&
                 predicate_spec.memory_config().shard_spec().has_value() &&
@@ -125,7 +125,7 @@ bool is_native_L1_sharding(
         if (false_spec->memory_config().is_sharded() && false_spec->memory_config().buffer_type() == BufferType::L1) {
             return true;
         }
-        if (output_memory_config.is_sharded() && output_memory_config.buffer_type() == BufferType::L1) {
+        if (output_memory_config.buffer_type() == BufferType::L1) {
             return true;
         }
     }
@@ -173,6 +173,9 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
      {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::NONE},
      {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+    // TTT ROW_COL_BCAST for WHERE
+    {{TernaryOpType::WHERE, TernaryVariant::TTT, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
 
     // TTS configurations for WHERE
     {{TernaryOpType::WHERE, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
@@ -187,6 +190,9 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
      {KernelName::ReaderScalarBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
     {{TernaryOpType::WHERE, TernaryVariant::TTS, TernaryBroadcastType::NONE},
      {KernelName::ReaderNoBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    // TTS ROW_COL_BCAST for WHERE
+    {{TernaryOpType::WHERE, TernaryVariant::TTS, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
 
     // TST configurations for WHERE
     {{TernaryOpType::WHERE, TernaryVariant::TST, TernaryBroadcastType::COL_BCAST},
@@ -201,6 +207,9 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
      {KernelName::ReaderScalarBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
     {{TernaryOpType::WHERE, TernaryVariant::TST, TernaryBroadcastType::NONE},
      {KernelName::ReaderNoBcastTST, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    // TST ROW_COL_BCAST for WHERE
+    {{TernaryOpType::WHERE, TernaryVariant::TST, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTST, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
 
     // TTT configurations for LERP - same kernels, different compute operation
     {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
@@ -213,6 +222,9 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
      {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::NONE},
      {KernelName::ReaderNoBcastTTT, KernelName::ComputeNoBcastTTT, KernelName::WriterNoBcastTernary}},
+    // TTT ROW_COL_BCAST for LERP
+    {{TernaryOpType::LERP, TernaryVariant::TTT, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTT, KernelName::ComputeBcastTTT, KernelName::WriterNoBcastTernary}},
 
     // TTT configurations for ADDCMUL (shared addc_ops kernels)
     {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::NONE},
@@ -225,6 +237,9 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
      {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastAddcOp, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastAddcOp, KernelName::WriterNoBcastTernary}},
+    // TTT ROW_COL_BCAST for ADDCMUL
+    {{TernaryOpType::ADDCMUL, TernaryVariant::TTT, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTT, KernelName::ComputeBcastAddcOp, KernelName::WriterNoBcastTernary}},
 
     // TTT configurations for ADDCDIV (shared addc_ops kernels)
     {{TernaryOpType::ADDCDIV, TernaryVariant::TTT, TernaryBroadcastType::NONE},
@@ -237,6 +252,9 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
      {KernelName::ReaderScalarBcastTTT, KernelName::ComputeBcastAddcOp, KernelName::WriterNoBcastTernary}},
     {{TernaryOpType::ADDCDIV, TernaryVariant::TTT, TernaryBroadcastType::COL_BCAST},
      {KernelName::ReaderColBcastTTT, KernelName::ComputeBcastAddcOp, KernelName::WriterNoBcastTernary}},
+    // TTT ROW_COL_BCAST for ADDCDIV
+    {{TernaryOpType::ADDCDIV, TernaryVariant::TTT, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTT, KernelName::ComputeBcastAddcOp, KernelName::WriterNoBcastTernary}},
 
     // TTS configurations for LERP
     {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::COL_BCAST},
@@ -251,6 +269,10 @@ static const std::unordered_map<KernelLookupKey, KernelConfigEntry, KernelLookup
      {KernelName::ReaderScalarBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
     {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::NONE},
      {KernelName::ReaderNoBcastTTS, KernelName::ComputeNoBcastTTS_TST, KernelName::WriterNoBcast}},
+    // TTS ROW_COL_BCAST for LERP
+    {{TernaryOpType::LERP, TernaryVariant::TTS, TernaryBroadcastType::ROW_COL_BCAST},
+     {KernelName::ReaderRowColBcastTTS, KernelName::ComputeBcastTTS_TST, KernelName::WriterNoBcast}},
+
 };
 
 TernaryKernelConfig::TernaryKernelConfig(
@@ -294,6 +316,10 @@ std::string get_kernel_file_path(KernelName kernel_name, bool is_fpu) {
         case KernelName::ReaderRowBcastTTT: return fmt::format(dataflow, root, "ternary_reader_rowbcast_ttt.cpp");
         case KernelName::ReaderRowBcastTST:
         case KernelName::ReaderRowBcastTTS: return fmt::format(dataflow, root, "tts_tst_reader_row_bcast.cpp");
+        case KernelName::ReaderRowColBcastTTT:
+            return fmt::format(dataflow, root, "ternary_reader_row_col_bcast_ttt.cpp");
+        case KernelName::ReaderRowColBcastTTS:
+        case KernelName::ReaderRowColBcastTST: return fmt::format(dataflow, root, "tts_tst_reader_row_col_bcast.cpp");
         case KernelName::WriterNoBcastTernary:
         case KernelName::WriterNoBcast:
         case KernelName::WriterColBcastTTT: return fmt::format(dataflow, root, "ternary_writer_nobcast.cpp");
@@ -508,6 +534,20 @@ TernaryBroadcastType get_broadcast_type(const ttnn::Shape& predicate_shape, cons
             return TernaryBroadcastType::SCALAR_A_BCAST;
         }
 
+        bool is_pred_row = (pred_row_bcast && !pred_col_bcast);
+        bool is_pred_col = (!pred_row_bcast && pred_col_bcast);
+        bool is_b_row = (b_row_bcast && !b_col_bcast);
+        bool is_b_col = (!b_row_bcast && b_col_bcast);
+        bool is_pred_full = (pred_h == max_h && pred_w == max_w);
+        bool is_b_full = (b_h == max_h && b_w == max_w);
+
+        bool pred_ok = is_pred_row || is_pred_col || is_pred_full;
+        bool b_ok = is_b_row || is_b_col || is_b_full;
+
+        if (pred_ok && b_ok) {
+            return TernaryBroadcastType::ROW_COL_BCAST;
+        }
+
         return TernaryBroadcastType::INVALID_BCAST;
     }
 
@@ -611,6 +651,22 @@ TernaryBroadcastType get_broadcast_type(
         if ((is_pred_scalar || is_pred_non_bcast) && (is_true_scalar || is_true_non_bcast) &&
             (is_false_scalar || is_false_non_bcast)) {
             return TernaryBroadcastType::SCALAR_BCAST;
+        }
+
+        // Mixed row+col broadcast: each tensor is one of scalar(1,1), row(1,W), col(H,1), or full(H,W)
+        bool is_pred_row = (pred_row_bcast && !pred_col_bcast);
+        bool is_pred_col = (!pred_row_bcast && pred_col_bcast);
+        bool is_true_row = (true_row_bcast && !true_col_bcast);
+        bool is_true_col = (!true_row_bcast && true_col_bcast);
+        bool is_false_row = (false_row_bcast && !false_col_bcast);
+        bool is_false_col = (!false_row_bcast && false_col_bcast);
+
+        bool pred_valid = is_pred_scalar || is_pred_non_bcast || is_pred_row || is_pred_col;
+        bool true_valid = is_true_scalar || is_true_non_bcast || is_true_row || is_true_col;
+        bool false_valid = is_false_scalar || is_false_non_bcast || is_false_row || is_false_col;
+
+        if (pred_valid && true_valid && false_valid) {
+            return TernaryBroadcastType::ROW_COL_BCAST;
         }
 
         return TernaryBroadcastType::INVALID_BCAST;

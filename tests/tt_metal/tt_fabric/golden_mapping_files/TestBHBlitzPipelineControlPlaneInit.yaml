@@ -3,7 +3,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_0
       mesh:
         - mesh: 0
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
@@ -71,7 +71,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_1
       mesh:
         - mesh: 1
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 1
@@ -139,7 +139,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_10
       mesh:
         - mesh: 10
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 2
@@ -207,7 +207,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_11
       mesh:
         - mesh: 11
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 4
@@ -275,7 +275,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_12
       mesh:
         - mesh: 12
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 2
@@ -343,7 +343,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_13
       mesh:
         - mesh: 13
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 1
@@ -411,7 +411,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_14
       mesh:
         - mesh: 14
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 2
@@ -479,7 +479,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_15
       mesh:
         - mesh: 15
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 1
@@ -547,7 +547,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_16
       mesh:
         - mesh: 16
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 2
@@ -615,7 +615,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_17
       mesh:
         - mesh: 17
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 4
@@ -683,7 +683,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_18
       mesh:
         - mesh: 18
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 2
@@ -751,7 +751,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_19
       mesh:
         - mesh: 19
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 4
@@ -819,7 +819,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_2
       mesh:
         - mesh: 2
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
@@ -887,7 +887,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_20
       mesh:
         - mesh: 20
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
@@ -955,7 +955,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_21
       mesh:
         - mesh: 21
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 1
@@ -1023,7 +1023,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_22
       mesh:
         - mesh: 22
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
@@ -1091,7 +1091,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_23
       mesh:
         - mesh: 23
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 1
@@ -1159,7 +1159,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_24
       mesh:
         - mesh: 24
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 2
@@ -1227,7 +1227,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_25
       mesh:
         - mesh: 25
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 4
@@ -1295,7 +1295,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_26
       mesh:
         - mesh: 26
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 2
@@ -1363,7 +1363,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_27
       mesh:
         - mesh: 27
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 4
@@ -1431,7 +1431,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_28
       mesh:
         - mesh: 28
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
@@ -1499,7 +1499,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_29
       mesh:
         - mesh: 29
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 1
@@ -1567,7 +1567,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_3
       mesh:
         - mesh: 3
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 4
@@ -1635,7 +1635,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_30
       mesh:
         - mesh: 30
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
@@ -1703,7 +1703,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_31
       mesh:
         - mesh: 31
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 1
@@ -1771,7 +1771,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_32
       mesh:
         - mesh: 32
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 2
@@ -1839,7 +1839,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_33
       mesh:
         - mesh: 33
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 1
@@ -1907,7 +1907,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_34
       mesh:
         - mesh: 34
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 2
@@ -1975,7 +1975,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_35
       mesh:
         - mesh: 35
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 1
@@ -2043,7 +2043,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_36
       mesh:
         - mesh: 36
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
@@ -2111,7 +2111,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_37
       mesh:
         - mesh: 37
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 1
@@ -2179,7 +2179,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_38
       mesh:
         - mesh: 38
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
@@ -2247,7 +2247,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_39
       mesh:
         - mesh: 39
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 4
@@ -2315,7 +2315,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_4
       mesh:
         - mesh: 4
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 2
@@ -2383,7 +2383,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_40
       mesh:
         - mesh: 40
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 2
@@ -2451,7 +2451,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_41
       mesh:
         - mesh: 41
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 4
@@ -2519,7 +2519,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_42
       mesh:
         - mesh: 42
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
@@ -2587,7 +2587,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_43
       mesh:
         - mesh: 43
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 1
@@ -2655,7 +2655,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_44
       mesh:
         - mesh: 44
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
@@ -2723,7 +2723,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_45
       mesh:
         - mesh: 45
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 4
@@ -2791,7 +2791,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_46
       mesh:
         - mesh: 46
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 2
@@ -2859,7 +2859,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_47
       mesh:
         - mesh: 47
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 4
@@ -2927,7 +2927,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_5
       mesh:
         - mesh: 5
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 4
@@ -2995,7 +2995,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_6
       mesh:
         - mesh: 6
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
@@ -3063,7 +3063,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_7
       mesh:
         - mesh: 7
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 1
@@ -3131,7 +3131,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_8
       mesh:
         - mesh: 8
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 3
@@ -3199,7 +3199,7 @@ asic_to_fabric_node_mapping:
     - hostname: g14glx03_9
       mesh:
         - mesh: 9
-          chips:
+        - chips:
             - umd_chip_id: 0
               asic_position:
                 tray_id: 4
