@@ -93,6 +93,20 @@ class SamplingGenerator:
     def _new_trace_state(self):
         return {"id": None, "input": None, "output": None, "kwargs": {}}
 
+    def cleanup(self):
+        trace_states = getattr(self, "_trace_states", None)
+        if not trace_states:
+            return
+        for slot in trace_states.values():
+            trace_id = slot.get("id")
+            if trace_id is None:
+                continue
+            try:
+                ttnn.release_trace(self.mesh_device, trace_id)
+            except Exception as e:
+                logger.warning(f"Failed to release trace {trace_id} for SamplingGenerator: {e}")
+                continue
+
     def _trace_slot(self, penalties_on: bool, log_probs_on: bool, force_argmax: bool):
         key = _TraceKey(penalties_on=penalties_on, log_probs_on=log_probs_on, force_argmax=force_argmax)
         slot = self._trace_states.get(key)
