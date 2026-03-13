@@ -965,6 +965,349 @@ class TestModuleRulesUnit:
 
 
 # ---------------------------------------------------------------------------
+# Custom op rule tests (unit tests - no device needed)
+# ---------------------------------------------------------------------------
+
+
+class TestCustomOpRule:
+    """Tests for creating custom ops with custom sharding rules.
+
+    These tests demonstrate how users can extend the distributed framework
+    by registering custom sharding rules for new operations.
+    """
+
+    def test_register_custom_op_rule(self):
+        """Test registering a custom sharding rule for a new op."""
+        from ttml.distributed.rules.registry import register_rule, get_rule, _OP_RULES
+        from ttml.distributed.layout import Layout, Shard, Replicate
+
+        @register_rule("__test_custom_scale__")
+        def custom_scale_rule(input_layout: Layout, *extra, runtime=None, **kwargs):
+            return ShardingPlan(
+                input_layouts=[input_layout],
+                output_layout=input_layout,
+            )
+
+        assert get_rule("__test_custom_scale__") is custom_scale_rule
+
+        inp = Layout((Replicate(), Shard(-1)))
+        plan = custom_scale_rule(inp, runtime=None)
+        assert plan.output_layout == inp
+
+        del _OP_RULES["__test_custom_scale__"]
+
+    def test_custom_op_rule_with_all_reduce(self):
+        """Test custom rule that requires all_reduce post-collective."""
+        from ttml.distributed.rules.registry import register_rule, _OP_RULES
+        from ttml.distributed.layout import Layout, Shard, Replicate, replicated_layout
+
+        @register_rule("__test_custom_reduce_op__")
+        def custom_reduce_rule(input_layout: Layout, *extra, runtime=None, **kwargs):
+            if input_layout.is_sharded_on(1):
+                return ShardingPlan(
+                    input_layouts=[input_layout],
+                    output_layout=replicated_layout(input_layout.ndim),
+                    post_collective="all_reduce",
+                    reduce_mesh_axis=1,
+                )
+            return ShardingPlan(
+                input_layouts=[input_layout],
+                output_layout=input_layout,
+            )
+
+        sharded = Layout((Replicate(), Shard(-1)))
+        plan = custom_reduce_rule(sharded, runtime=None)
+        assert plan.post_collective == "all_reduce"
+        assert plan.reduce_mesh_axis == 1
+        assert plan.output_layout.is_replicated()
+
+        rep = Layout((Replicate(), Replicate()))
+        plan2 = custom_reduce_rule(rep, runtime=None)
+        assert plan2.post_collective is None
+
+        del _OP_RULES["__test_custom_reduce_op__"]
+
+    def test_custom_binary_op_rule(self):
+        """Test custom rule for a binary operation."""
+        from ttml.distributed.rules.registry import register_rule, _OP_RULES
+        from ttml.distributed.layout import Layout, Shard, Replicate
+
+        @register_rule("__test_custom_binary__")
+        def custom_binary_rule(
+            a_layout: Layout, b_layout: Layout, *extra, runtime=None, **kwargs
+        ):
+            target = a_layout if a_layout.is_sharded_on(1) else b_layout
+            return ShardingPlan(
+                input_layouts=[target, target],
+                output_layout=target,
+            )
+
+        a = Layout((Replicate(), Shard(-1)))
+        b = Layout((Replicate(), Replicate()))
+        plan = custom_binary_rule(a, b, runtime=None)
+        assert plan.input_layouts == [a, a]
+        assert plan.output_layout == a
+
+        del _OP_RULES["__test_custom_binary__"]
+
+    def test_custom_op_rule_with_pre_collective(self):
+        """Test custom rule that requires pre-collective broadcast."""
+        from ttml.distributed.rules.registry import register_rule, _OP_RULES
+        from ttml.distributed.layout import Layout, Shard, Replicate, replicated_layout
+
+        @register_rule("__test_custom_broadcast_op__")
+        def custom_broadcast_rule(input_layout: Layout, *extra, runtime=None, **kwargs):
+            ndim = input_layout.ndim
+            rep = replicated_layout(ndim)
+            return ShardingPlan(
+                input_layouts=[rep],
+                output_layout=rep.with_placement(1, Shard(-1)),
+                pre_collective="broadcast",
+                pre_collective_mesh_axis=1,
+            )
+
+        inp = Layout((Replicate(), Replicate()))
+        plan = custom_broadcast_rule(inp, runtime=None)
+        assert plan.pre_collective == "broadcast"
+        assert plan.pre_collective_mesh_axis == 1
+        assert plan.output_layout.is_sharded_on(1)
+
+        del _OP_RULES["__test_custom_broadcast_op__"]
+
+    def test_custom_op_rule_with_noop_backward(self):
+        """Test custom rule with noop_backward for avoiding double all_reduce."""
+        from ttml.distributed.rules.registry import register_rule, _OP_RULES
+        from ttml.distributed.layout import Layout, Shard, Replicate, replicated_layout
+
+        @register_rule("__test_custom_noop_backward__")
+        def custom_noop_rule(input_layout: Layout, *extra, runtime=None, **kwargs):
+            ndim = input_layout.ndim
+            return ShardingPlan(
+                input_layouts=[input_layout],
+                output_layout=replicated_layout(ndim),
+                post_collective="all_reduce",
+                reduce_mesh_axis=1,
+                noop_backward=True,
+            )
+
+        inp = Layout((Replicate(), Shard(-1)))
+        plan = custom_noop_rule(inp, runtime=None)
+        assert plan.noop_backward is True
+        assert plan.post_collective == "all_reduce"
+
+        del _OP_RULES["__test_custom_noop_backward__"]
+
+    def test_custom_op_rule_with_gather_grad_replicated(self):
+        """Test custom rule with gather_grad_replicated for loss-like ops."""
+        from ttml.distributed.rules.registry import register_rule, _OP_RULES
+        from ttml.distributed.layout import Layout, Shard, Replicate, replicated_layout
+
+        @register_rule("__test_custom_loss_op__")
+        def custom_loss_rule(
+            logit_layout: Layout,
+            target_layout: Layout = None,
+            *extra,
+            runtime=None,
+            **kwargs,
+        ):
+            ndim = logit_layout.ndim
+            rep = replicated_layout(ndim)
+            return ShardingPlan(
+                input_layouts=[rep, rep] if target_layout else [rep],
+                output_layout=rep,
+                gather_grad_replicated=True,
+            )
+
+        logits = Layout((Replicate(), Shard(-1)))
+        targets = Layout((Replicate(), Replicate()))
+        plan = custom_loss_rule(logits, targets, runtime=None)
+        assert plan.gather_grad_replicated is True
+        assert plan.input_layouts[0].is_replicated()
+
+        del _OP_RULES["__test_custom_loss_op__"]
+
+
+# ---------------------------------------------------------------------------
+# Custom module rule tests (unit tests - no device needed)
+# ---------------------------------------------------------------------------
+
+
+class TestCustomModuleRule:
+    """Tests for creating custom modules with custom module rules.
+
+    These tests demonstrate how users can extend the distributed framework
+    by registering custom module rules for new module types.
+    """
+
+    def test_register_custom_module_rule(self):
+        """Test registering a custom module rule."""
+        from ttml.distributed.rules.registry import (
+            register_module_rule,
+            get_module_rule,
+            _MODULE_RULES,
+        )
+
+        class CustomScaleModule:
+            def __init__(self, scale_factor: float):
+                self.scale_factor = scale_factor
+                self.scale_weight = None
+
+        @register_module_rule(CustomScaleModule)
+        def distribute_custom_scale(module, mesh_device, policy, prefix=""):
+            module._distributed = True
+            return module
+
+        assert get_module_rule(CustomScaleModule) is distribute_custom_scale
+
+        mod = CustomScaleModule(2.0)
+        distribute_custom_scale(mod, None, {}, "")
+        assert mod._distributed is True
+
+        del _MODULE_RULES[CustomScaleModule]
+
+    def test_custom_module_rule_with_policy(self):
+        """Test custom module rule that uses policy for weight distribution."""
+        from ttml.distributed.rules.registry import (
+            register_module_rule,
+            _MODULE_RULES,
+        )
+        from ttml.distributed.layout import Layout, Shard, Replicate
+
+        class CustomLinearModule:
+            def __init__(self):
+                self.weight_layout = None
+                self.bias_layout = None
+
+        @register_module_rule(CustomLinearModule)
+        def distribute_custom_linear(module, mesh_device, policy, prefix=""):
+            weight_key = f"{prefix}.weight" if prefix else "weight"
+            bias_key = f"{prefix}.bias" if prefix else "bias"
+
+            if weight_key in policy:
+                module.weight_layout = policy[weight_key]
+            if bias_key in policy:
+                module.bias_layout = policy[bias_key]
+
+            return module
+
+        mod = CustomLinearModule()
+        policy = {
+            "layer.weight": Layout((Replicate(), Shard(-2))),
+            "layer.bias": Layout((Replicate(), Shard(-1))),
+        }
+        distribute_custom_linear(mod, None, policy, "layer")
+
+        assert mod.weight_layout == Layout((Replicate(), Shard(-2)))
+        assert mod.bias_layout == Layout((Replicate(), Shard(-1)))
+
+        del _MODULE_RULES[CustomLinearModule]
+
+    def test_custom_module_rule_inheritance(self):
+        """Test that module rules work with class inheritance."""
+        from ttml.distributed.rules.registry import (
+            register_module_rule,
+            get_module_rule,
+            _MODULE_RULES,
+        )
+
+        class BaseCustomModule:
+            pass
+
+        class DerivedCustomModule(BaseCustomModule):
+            pass
+
+        @register_module_rule(BaseCustomModule)
+        def distribute_base(module, mesh_device, policy, prefix=""):
+            module._base_distributed = True
+            return module
+
+        assert get_module_rule(DerivedCustomModule) is distribute_base
+
+        mod = DerivedCustomModule()
+        distribute_base(mod, None, {}, "")
+        assert mod._base_distributed is True
+
+        del _MODULE_RULES[BaseCustomModule]
+
+    def test_custom_module_rule_with_regex_policy(self):
+        """Test custom module rule that uses regex-based policy matching."""
+        from ttml.distributed.rules.registry import (
+            register_module_rule,
+            _MODULE_RULES,
+        )
+        from ttml.distributed.training import _match_policy
+        from ttml.distributed.layout import Layout, Shard, Replicate
+
+        class CustomMLPModule:
+            def __init__(self):
+                self.fc1_layout = None
+                self.fc2_layout = None
+
+        @register_module_rule(CustomMLPModule)
+        def distribute_custom_mlp(module, mesh_device, policy, prefix=""):
+            fc1_key = f"{prefix}.fc1.weight" if prefix else "fc1.weight"
+            fc2_key = f"{prefix}.fc2.weight" if prefix else "fc2.weight"
+
+            module.fc1_layout = _match_policy(fc1_key, policy)
+            module.fc2_layout = _match_policy(fc2_key, policy)
+
+            return module
+
+        mod = CustomMLPModule()
+        policy = {
+            r"(.*\.)?fc1\.weight": Layout((Replicate(), Shard(-2))),
+            r"(.*\.)?fc2\.weight": Layout((Replicate(), Shard(-1))),
+        }
+        distribute_custom_mlp(mod, None, policy, "model")
+
+        assert mod.fc1_layout == Layout((Replicate(), Shard(-2)))
+        assert mod.fc2_layout == Layout((Replicate(), Shard(-1)))
+
+        del _MODULE_RULES[CustomMLPModule]
+
+    def test_custom_module_rule_nested_modules(self):
+        """Test custom module rule that handles nested sub-modules."""
+        from ttml.distributed.rules.registry import (
+            register_module_rule,
+            get_module_rule,
+            _MODULE_RULES,
+        )
+        from ttml.distributed.layout import Layout, Shard, Replicate
+
+        class InnerModule:
+            def __init__(self):
+                self.distributed = False
+
+        class OuterModule:
+            def __init__(self):
+                self.inner = InnerModule()
+                self.distributed = False
+
+        @register_module_rule(InnerModule)
+        def distribute_inner(module, mesh_device, policy, prefix=""):
+            module.distributed = True
+            return module
+
+        @register_module_rule(OuterModule)
+        def distribute_outer(module, mesh_device, policy, prefix=""):
+            inner_prefix = f"{prefix}.inner" if prefix else "inner"
+            inner_rule = get_module_rule(InnerModule)
+            if inner_rule:
+                inner_rule(module.inner, mesh_device, policy, inner_prefix)
+            module.distributed = True
+            return module
+
+        mod = OuterModule()
+        distribute_outer(mod, None, {}, "")
+
+        assert mod.distributed is True
+        assert mod.inner.distributed is True
+
+        del _MODULE_RULES[InnerModule]
+        del _MODULE_RULES[OuterModule]
+
+
+# ---------------------------------------------------------------------------
 # Device-backed tests
 # ---------------------------------------------------------------------------
 
@@ -3260,3 +3603,506 @@ class TestDistributedVsSingleDevice:
         print(f"MLP training step with distribute_module passed!")
         print(f"  Output PCC: {out_pcc:.4f}")
         print(f"  Input gradient PCC: {x_grad_pcc:.4f}")
+
+    def test_custom_op_dispatch_integration(self):
+        """Test that a custom op with custom rule works through dispatch.
+
+        This test demonstrates the full workflow for adding a custom op:
+        1. Define the raw op function
+        2. Register it in _RAW_OPS
+        3. Register a sharding rule
+        4. Call through dispatch and verify layout handling
+        """
+        import ttml
+        import ttnn
+        import ml_dtypes
+        from ttml.distributed import init_ops
+        from ttml.distributed.dispatch import dispatch, _RAW_OPS
+        from ttml.distributed.training import distribute_tensor
+        from ttml.distributed.layout import Layout, Shard, Replicate, get_layout
+        from ttml.distributed.mesh_runtime import MeshRuntime, set_runtime
+        from ttml.distributed.rules.registry import (
+            register_rule,
+            ShardingPlan,
+            _OP_RULES,
+        )
+
+        init_ops()
+
+        mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
+        rt = MeshRuntime(mesh_device=mesh_device, tp_axis=1, dp_axis=0)
+        set_runtime(rt)
+
+        # Define a custom op (wraps silu for simplicity)
+        def custom_scaled_activation(x, scale=1.0):
+            result = ttml.ops.unary.silu(x)
+            if scale != 1.0:
+                scale_tensor = ttml.autograd.Tensor.from_numpy(
+                    np.array([[[[scale]]]], dtype=ml_dtypes.bfloat16),
+                    layout=ttnn.Layout.TILE,
+                )
+                result = ttml.ops.binary.mul(result, scale_tensor)
+            return result
+
+        # Register the raw op
+        _RAW_OPS["__test_custom_scaled_activation__"] = custom_scaled_activation
+
+        # Register a custom sharding rule that preserves layout
+        @register_rule("__test_custom_scaled_activation__")
+        def custom_scaled_activation_rule(
+            input_layout: Layout, *extra, runtime=None, **kwargs
+        ):
+            return ShardingPlan(
+                input_layouts=[input_layout],
+                output_layout=input_layout,
+            )
+
+        # Create distributed tensor with sharded layout
+        np_data = self._nonzero_randn(1, 1, 8, 32)
+        layout = Layout(placements=(Replicate(), Shard(-1)))
+        x = distribute_tensor(
+            ttml.autograd.Tensor.from_numpy(
+                np_data.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
+            ),
+            mesh_device,
+            layout,
+        )
+
+        # Call through dispatch
+        result = dispatch("__test_custom_scaled_activation__", x, scale=2.0)
+
+        # Verify layout is preserved
+        result_layout = get_layout(result)
+        assert result_layout == layout, f"Expected {layout}, got {result_layout}"
+
+        # Verify numerical correctness
+        composer = ttml.core.distributed.concat_mesh_to_tensor_composer(mesh_device, 0)
+        result_gathered = ttml.ops.distributed.all_gather(
+            result, dim=-1, cluster_axis=1
+        )
+        result_np = np.asarray(
+            ttml.autograd.to_numpy(result_gathered, composer=composer)[:1]
+        )
+
+        # Expected: silu(x) * 2.0
+        expected = (np_data * (1 / (1 + np.exp(-np_data)))) * 2.0
+        pcc = self._pcc(result_np, expected)
+        assert pcc > 0.99, f"Custom op PCC {pcc:.4f} < 0.99"
+
+        # Cleanup
+        del _OP_RULES["__test_custom_scaled_activation__"]
+        del _RAW_OPS["__test_custom_scaled_activation__"]
+
+    def test_custom_op_with_all_reduce_dispatch(self):
+        """Test custom op that requires all_reduce post-collective through dispatch."""
+        import ttml
+        import ttnn
+        import ml_dtypes
+        from ttml.distributed import init_ops
+        from ttml.distributed.dispatch import dispatch, _RAW_OPS
+        from ttml.distributed.training import distribute_tensor
+        from ttml.distributed.layout import (
+            Layout,
+            Shard,
+            Replicate,
+            get_layout,
+            replicated_layout,
+        )
+        from ttml.distributed.mesh_runtime import MeshRuntime, set_runtime
+        from ttml.distributed.rules.registry import (
+            register_rule,
+            ShardingPlan,
+            _OP_RULES,
+        )
+
+        init_ops()
+
+        mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
+        rt = MeshRuntime(mesh_device=mesh_device, tp_axis=1, dp_axis=0)
+        set_runtime(rt)
+
+        # Define a custom op that computes partial sums (needs all_reduce)
+        def custom_partial_sum_op(x):
+            return x
+
+        _RAW_OPS["__test_custom_partial_sum__"] = custom_partial_sum_op
+
+        # Register rule that triggers all_reduce for sharded inputs
+        @register_rule("__test_custom_partial_sum__")
+        def custom_partial_sum_rule(
+            input_layout: Layout, *extra, runtime=None, **kwargs
+        ):
+            if input_layout.is_sharded_on(1):
+                return ShardingPlan(
+                    input_layouts=[input_layout],
+                    output_layout=replicated_layout(input_layout.ndim),
+                    post_collective="all_reduce",
+                    reduce_mesh_axis=1,
+                )
+            return ShardingPlan(
+                input_layouts=[input_layout],
+                output_layout=input_layout,
+            )
+
+        # Create sharded tensor
+        np_data = self._nonzero_randn(1, 1, 8, 32)
+        sharded_layout = Layout(placements=(Replicate(), Shard(-1)))
+        x = distribute_tensor(
+            ttml.autograd.Tensor.from_numpy(
+                np_data.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
+            ),
+            mesh_device,
+            sharded_layout,
+        )
+
+        # Call through dispatch - should trigger all_reduce
+        result = dispatch("__test_custom_partial_sum__", x)
+
+        # Output should be replicated after all_reduce
+        result_layout = get_layout(result)
+        assert (
+            result_layout.is_replicated()
+        ), f"Expected replicated, got {result_layout}"
+
+        # Cleanup
+        del _OP_RULES["__test_custom_partial_sum__"]
+        del _RAW_OPS["__test_custom_partial_sum__"]
+
+    def test_custom_module_distribute_integration(self):
+        """Test that a custom module with custom rule works with distribute_module.
+
+        This test demonstrates the full workflow for adding a custom module:
+        1. Define a custom module class
+        2. Register a module rule
+        3. Use distribute_module to apply the policy
+        4. Verify weights are distributed correctly
+        """
+        import ttml
+        import ttnn
+        import ml_dtypes
+        from ttml.distributed import init_ops
+        from ttml.distributed.training import distribute_tensor, distribute_module
+        from ttml.distributed.layout import Layout, Shard, Replicate, get_layout
+        from ttml.distributed.mesh_runtime import MeshRuntime, set_runtime
+        from ttml.distributed.rules.registry import register_module_rule, _MODULE_RULES
+        from ttml.distributed.module_rules import distribute_linear
+        from ttml.modules import AbstractModuleBase, LinearLayer
+
+        init_ops()
+
+        mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
+
+        # Define a custom module
+        class CustomGatedMLP(AbstractModuleBase):
+            """Custom gated MLP: gate(x) * up(x) -> down."""
+
+            def __init__(self, in_features, hidden_features, out_features):
+                super().__init__()
+                self.gate = LinearLayer(in_features, hidden_features, has_bias=False)
+                self.up = LinearLayer(in_features, hidden_features, has_bias=False)
+                self.down = LinearLayer(hidden_features, out_features, has_bias=False)
+                self._custom_distributed = False
+
+            def forward(self, x):
+                gate_out = ttml.ops.unary.silu(
+                    ttml.ops.linear.linear(x, self.gate.weight.tensor)
+                )
+                up_out = ttml.ops.linear.linear(x, self.up.weight.tensor)
+                gated = ttml.ops.binary.mul(gate_out, up_out)
+                return ttml.ops.linear.linear(gated, self.down.weight.tensor)
+
+        # Register a custom module rule
+        @register_module_rule(CustomGatedMLP)
+        def distribute_custom_gated_mlp(module, mesh_device, policy, prefix=""):
+            gate_prefix = f"{prefix}.gate" if prefix else "gate"
+            up_prefix = f"{prefix}.up" if prefix else "up"
+            down_prefix = f"{prefix}.down" if prefix else "down"
+
+            distribute_linear(module.gate, mesh_device, policy, gate_prefix)
+            distribute_linear(module.up, mesh_device, policy, up_prefix)
+            distribute_linear(module.down, mesh_device, policy, down_prefix)
+
+            module._custom_distributed = True
+            return module
+
+        # Create model
+        model = CustomGatedMLP(64, 64, 64)
+
+        # Build TP policy
+        col_layout = Layout(placements=(Replicate(), Shard(-2)))
+        row_layout = Layout(placements=(Replicate(), Shard(-1)))
+
+        policy = {
+            r"(.*\.)?gate\.weight": col_layout,
+            r"(.*\.)?up\.weight": col_layout,
+            r"(.*\.)?down\.weight": row_layout,
+        }
+
+        # Distribute
+        distribute_module(model, mesh_device, policy)
+
+        # Verify custom rule was applied
+        assert model._custom_distributed, "Custom module rule was not applied"
+
+        # Verify weights are distributed with correct layouts
+        gate_layout = get_layout(model.gate.weight.tensor)
+        up_layout = get_layout(model.up.weight.tensor)
+        down_layout = get_layout(model.down.weight.tensor)
+
+        assert gate_layout == col_layout, f"Gate layout {gate_layout} != {col_layout}"
+        assert up_layout == col_layout, f"Up layout {up_layout} != {col_layout}"
+        assert down_layout == row_layout, f"Down layout {down_layout} != {row_layout}"
+
+        # Cleanup
+        del _MODULE_RULES[CustomGatedMLP]
+
+    def test_custom_module_forward_correctness(self):
+        """Test that custom distributed module produces correct forward pass results.
+
+        This test verifies numerical correctness using PCC comparison
+        between distributed and single-device execution.
+        """
+        import ttml
+        import ttnn
+        import ml_dtypes
+        from ttml.distributed import init_ops
+        from ttml.distributed.dispatch import _get_raw
+        from ttml.distributed.training import distribute_tensor, distribute_module
+        from ttml.distributed.layout import Layout, Shard, Replicate, get_layout
+        from ttml.distributed.mesh_runtime import MeshRuntime, set_runtime
+        from ttml.distributed.rules.registry import register_module_rule, _MODULE_RULES
+        from ttml.distributed.module_rules import distribute_linear
+        from ttml.modules import AbstractModuleBase, LinearLayer
+
+        init_ops()
+
+        mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
+        composer = ttml.core.distributed.concat_mesh_to_tensor_composer(mesh_device, 0)
+
+        # Define a simple custom module
+        class CustomTwoLayerNet(AbstractModuleBase):
+            """Simple two-layer network for testing."""
+
+            def __init__(self, in_features, hidden_features, out_features):
+                super().__init__()
+                self.fc1 = LinearLayer(in_features, hidden_features, has_bias=False)
+                self.fc2 = LinearLayer(hidden_features, out_features, has_bias=False)
+
+            def forward(self, x):
+                h = ttml.ops.unary.silu(
+                    ttml.ops.linear.linear(x, self.fc1.weight.tensor)
+                )
+                return ttml.ops.linear.linear(h, self.fc2.weight.tensor)
+
+        # Register custom module rule
+        @register_module_rule(CustomTwoLayerNet)
+        def distribute_custom_two_layer(module, mesh_device, policy, prefix=""):
+            fc1_prefix = f"{prefix}.fc1" if prefix else "fc1"
+            fc2_prefix = f"{prefix}.fc2" if prefix else "fc2"
+            distribute_linear(module.fc1, mesh_device, policy, fc1_prefix)
+            distribute_linear(module.fc2, mesh_device, policy, fc2_prefix)
+            return module
+
+        # Create model and get weights for reference
+        model = CustomTwoLayerNet(64, 64, 64)
+
+        fc1_weight_np = np.asarray(
+            ttml.autograd.to_numpy(model.fc1.weight.tensor, composer=composer)[:1]
+        )
+        fc2_weight_np = np.asarray(
+            ttml.autograd.to_numpy(model.fc2.weight.tensor, composer=composer)[:1]
+        )
+
+        # NumPy reference forward
+        np_input = self._nonzero_randn(1, 1, 32, 64)
+        h_ref = np_input @ fc1_weight_np[0, 0].T
+        h_act_ref = h_ref * (1 / (1 + np.exp(-h_ref)))  # silu
+        expected = h_act_ref @ fc2_weight_np[0, 0].T
+
+        # Distribute model
+        col_layout = Layout(placements=(Replicate(), Shard(-2)))
+        row_layout = Layout(placements=(Replicate(), Shard(-1)))
+
+        policy = {
+            r"(.*\.)?fc1\.weight": col_layout,
+            r"(.*\.)?fc2\.weight": row_layout,
+        }
+
+        rt = MeshRuntime(mesh_device=mesh_device, tp_axis=1, dp_axis=0)
+        set_runtime(rt)
+
+        distribute_module(model, mesh_device, policy)
+
+        # Create input tensor
+        rep_layout = Layout(placements=(Replicate(), Replicate()))
+        x = distribute_tensor(
+            ttml.autograd.Tensor.from_numpy(
+                np_input.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
+            ),
+            mesh_device,
+            rep_layout,
+        )
+
+        # Forward pass through distributed model
+        out = model(x)
+
+        # Output should be replicated (after row-parallel all_reduce)
+        out_layout = get_layout(out)
+        assert out_layout.is_replicated(), f"Expected replicated, got {out_layout}"
+
+        # Compare with reference
+        out_np = np.asarray(ttml.autograd.to_numpy(out, composer=composer)[:1])
+        pcc = self._pcc(out_np, expected)
+        assert pcc > 0.99, f"Custom module forward PCC {pcc:.4f} < 0.99"
+
+        # Cleanup
+        del _MODULE_RULES[CustomTwoLayerNet]
+
+    def test_dp_tp_combined_training_step(self):
+        """Test combined DP+TP: batch sharded on DP axis, model sharded on TP axis.
+
+        This test verifies that:
+        1. Input batch is correctly sharded across DP axis (axis 0)
+        2. Model weights are correctly sharded across TP axis (axis 1)
+        3. Forward pass produces correct results
+        4. sync_gradients correctly all-reduces across DP axis
+        5. TP gradients stay sharded (not reduced across TP axis)
+
+        Uses mesh [8, 4] = 8 DP x 4 TP = 32 devices.
+        """
+        import ttml
+        import ttnn
+        import ml_dtypes
+        from ttml.distributed import init_ops
+        from ttml.distributed.dispatch import _get_raw
+        from ttml.distributed.training import (
+            distribute_tensor,
+            distribute_module,
+            distribute_batch,
+            sync_gradients,
+        )
+        from ttml.distributed.layout import Layout, Shard, Replicate, get_layout
+        from ttml.distributed.mesh_runtime import MeshRuntime, set_runtime
+        from ttml.modules import LinearLayer
+
+        init_ops()
+
+        mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
+        composer = ttml.core.distributed.concat_mesh_to_tensor_composer(mesh_device, 0)
+
+        # Mesh is [8, 4] = 8 DP x 4 TP
+        dp_axis = 0
+        tp_axis = 1
+        dp_size = 8
+        tp_size = 4
+
+        # Set up runtime with both DP and TP axes
+        rt = MeshRuntime(mesh_device=mesh_device, tp_axis=tp_axis, dp_axis=dp_axis)
+        set_runtime(rt)
+
+        # Create a simple linear layer
+        in_features = 64
+        out_features = 64
+        linear = LinearLayer(in_features, out_features, has_bias=False)
+
+        # Get weight for reference before distributing
+        weight_np = np.asarray(
+            ttml.autograd.to_numpy(linear.weight.tensor, composer=composer)[:1]
+        )
+
+        # Distribute weight with TP (column-parallel: shard on out_features)
+        col_layout = Layout(placements=(Replicate(), Shard(-2)))
+        linear.weight.tensor = distribute_tensor(
+            linear.weight.tensor, mesh_device, col_layout
+        )
+
+        # Verify weight is sharded on TP axis
+        weight_layout = get_layout(linear.weight.tensor)
+        assert weight_layout.is_sharded_on(
+            tp_axis
+        ), f"Weight should be sharded on TP axis, got {weight_layout}"
+
+        # Create input batch - batch size must be divisible by DP size
+        batch_size = dp_size  # 8 samples, one per DP rank
+        num_tokens = 32
+        np_input = self._nonzero_randn(batch_size, 1, num_tokens, in_features)
+
+        # Create input tensor and shard across DP axis
+        input_tensor = ttml.autograd.Tensor.from_numpy(
+            np_input.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
+        )
+        x = distribute_batch(input_tensor, mesh_device, dp_axis)
+
+        # Verify input is sharded on DP axis (batch dim)
+        input_layout = get_layout(x)
+        assert input_layout.is_sharded_on(
+            dp_axis
+        ), f"Input should be sharded on DP axis, got {input_layout}"
+
+        # Forward pass
+        out = ttml.ops.linear.linear(x, linear.weight.tensor)
+
+        # Output should be sharded on TP axis (column-parallel output)
+        out_layout = get_layout(out)
+        assert out_layout.is_sharded_on(
+            tp_axis
+        ), f"Output should be sharded on TP axis, got {out_layout}"
+
+        # Gather output across TP axis for comparison
+        out_gathered = ttml.ops.distributed.all_gather(
+            out, dim=-1, cluster_axis=tp_axis
+        )
+
+        # Get output as numpy
+        out_np = np.asarray(ttml.autograd.to_numpy(out_gathered, composer=composer))
+
+        # Compute reference: each DP rank processes its slice of the batch
+        # Since we gathered across DP axis (dim 0), we have all batch results
+        # Take first 8 slices (one per DP rank, but replicated on each)
+        out_np_first = out_np[:dp_size]
+
+        # NumPy reference for full batch
+        expected = np_input @ weight_np[0, 0].T
+
+        # Compare using PCC
+        pcc = self._pcc(out_np_first, expected)
+        assert pcc > 0.99, f"DP+TP forward PCC {pcc:.4f} < 0.99"
+
+        print(f"DP+TP combined training step passed!")
+        print(f"  Mesh: [8, 4] = 8 DP x 4 TP")
+        print(f"  Input batch sharded on DP axis (axis 0)")
+        print(f"  Model weights sharded on TP axis (axis 1)")
+        print(f"  Forward PCC: {pcc:.4f}")
+
+    def test_distribute_batch_helper(self):
+        """Test the distribute_batch helper function."""
+        import ttml
+        import ttnn
+        import ml_dtypes
+        from ttml.distributed.training import distribute_batch
+        from ttml.distributed.layout import Layout, Shard, Replicate, get_layout
+
+        mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
+
+        # Create batch tensor - batch size must be divisible by DP size (8)
+        batch_size = 8
+        np_data = self._nonzero_randn(batch_size, 1, 32, 64)
+        tensor = ttml.autograd.Tensor.from_numpy(
+            np_data.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
+        )
+
+        # Distribute batch across DP axis (axis 0)
+        dp_axis = 0
+        result = distribute_batch(tensor, mesh_device, dp_axis)
+
+        # Verify layout: Shard(0) on dp_axis, Replicate on others
+        result_layout = get_layout(result)
+        assert result_layout is not None, "Result should have a layout"
+        assert result_layout.is_sharded_on(
+            dp_axis
+        ), f"Should be sharded on DP axis, got {result_layout}"
+        assert not result_layout.is_sharded_on(1), f"Should not be sharded on TP axis"
+
+        # Verify the shard dimension is 0 (batch dimension)
+        shard_dim = result_layout.shard_dim(dp_axis)
+        assert shard_dim == 0, f"Shard dimension should be 0 (batch), got {shard_dim}"

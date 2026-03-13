@@ -155,7 +155,11 @@ def create_dataset(text: str, seq_length: int):
     return InMemoryTokenDataset(tokens, seq_length), tokenizer
 
 
-def collate(samples, seq_length: int):
+def collate(samples, seq_length: int, mesh_device=None, dp_axis: int = None):
+    """Collate samples into batch tensors.
+
+    If dp_axis is provided, the batch is sharded across that mesh axis.
+    """
     batch_size = len(samples)
     data, targets = [], []
     for s, t in samples:
@@ -163,12 +167,32 @@ def collate(samples, seq_length: int):
         targets.extend(t)
     data_np = np.array(data, dtype=np.uint32).reshape(batch_size, 1, 1, seq_length)
     targets_np = np.array(targets, dtype=np.uint32).reshape(batch_size, seq_length)
-    data_t = ttml.autograd.Tensor.from_numpy(
-        data_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
-    )
-    targets_t = ttml.autograd.Tensor.from_numpy(
-        targets_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
-    )
+
+    # Shard batch across DP axis if enabled - create tensor directly with mapper
+    if dp_axis is not None and mesh_device is not None:
+        mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
+            mesh_device, 0, dp_axis  # shard dim 0 (batch) across dp_axis
+        )
+        data_t = ttml.autograd.Tensor.from_numpy(
+            data_np,
+            layout=ttnn.Layout.ROW_MAJOR,
+            new_type=ttnn.DataType.UINT32,
+            mapper=mapper,
+        )
+        targets_t = ttml.autograd.Tensor.from_numpy(
+            targets_np,
+            layout=ttnn.Layout.ROW_MAJOR,
+            new_type=ttnn.DataType.UINT32,
+            mapper=mapper,
+        )
+    else:
+        data_t = ttml.autograd.Tensor.from_numpy(
+            data_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
+        )
+        targets_t = ttml.autograd.Tensor.from_numpy(
+            targets_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
+        )
+
     return data_t, targets_t
 
 
@@ -522,7 +546,12 @@ def main():
         for batch_start in range(0, dataset_len, batch_size):
             batch_end = min(batch_start + batch_size, dataset_len)
             samples = [dataset[i] for i in indices[batch_start:batch_end]]
-            input_tokens, target_tokens = collate(samples, seq_len)
+            input_tokens, target_tokens = collate(
+                samples,
+                seq_len,
+                mesh_device=mesh_device if dp_axis is not None else None,
+                dp_axis=dp_axis,
+            )
 
             # Track memory only on first step
             track_this_step = args.track_memory and is_first_step

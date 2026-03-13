@@ -103,6 +103,39 @@ def distribute_tensor(
 
 
 # ---------------------------------------------------------------------------
+# distribute_batch
+# ---------------------------------------------------------------------------
+
+
+def distribute_batch(
+    tensor,
+    mesh_device,
+    dp_axis: int,
+) -> Any:
+    """Distribute a batch tensor across the DP axis.
+
+    Each DP rank gets a slice of the batch. The tensor is sharded
+    along dimension 0 (batch dimension) across the dp_axis of the mesh.
+
+    Args:
+        tensor: Input batch tensor (batch dimension is dim 0)
+        mesh_device: The mesh device
+        dp_axis: The data parallel mesh axis
+
+    Returns:
+        Distributed tensor with batch sharded across dp_axis
+    """
+    mesh_shape = mesh_device.shape
+    ndim = mesh_shape.dims() if hasattr(mesh_shape, "dims") else len(mesh_shape)
+
+    # Build layout: Shard(0) on dp_axis, Replicate on others
+    placements = tuple(Shard(0) if i == dp_axis else Replicate() for i in range(ndim))
+    layout = Layout(placements=placements)
+
+    return distribute_tensor(tensor, mesh_device, layout)
+
+
+# ---------------------------------------------------------------------------
 # distribute_module
 # ---------------------------------------------------------------------------
 

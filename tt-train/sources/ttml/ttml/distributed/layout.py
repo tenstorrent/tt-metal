@@ -47,19 +47,49 @@ Placement = Union[Shard, Replicate]
 # ---------------------------------------------------------------------------
 
 
-@dataclass(frozen=True)
 class Layout:
     """Describes how a tensor is placed across an N-dimensional mesh.
 
     ``placements`` is a tuple with one entry per mesh dimension.  Each entry
     is either ``Shard(dim)`` or ``Replicate()``.
+
+    Can be created in several ways:
+    - Layout(placements=(Shard(0), Replicate()))  # explicit tuple
+    - Layout(ndim=2)  # all Replicate()
+    - Layout(ndim=2, axis_placements={1: Shard(-1)})  # Replicate() on axis 0, Shard(-1) on axis 1
     """
 
-    placements: Tuple[Placement, ...]
+    __slots__ = ("placements",)
 
-    def __post_init__(self):
-        if not isinstance(self.placements, tuple):
-            object.__setattr__(self, "placements", tuple(self.placements))
+    def __init__(
+        self,
+        placements: Tuple[Placement, ...] = None,
+        *,
+        ndim: int = None,
+        axis_placements: dict = None,
+    ):
+        """Create a Layout.
+
+        Args:
+            placements: Explicit tuple of placements (legacy API)
+            ndim: Number of mesh dimensions (creates all Replicate() by default)
+            axis_placements: Dict mapping mesh_axis -> Placement for non-replicated axes
+        """
+        if placements is not None:
+            # Legacy API: explicit placements tuple
+            if not isinstance(placements, tuple):
+                placements = tuple(placements)
+            object.__setattr__(self, "placements", placements)
+        elif ndim is not None:
+            # New API: ndim with optional axis_placements
+            p_list = [Replicate() for _ in range(ndim)]
+            if axis_placements:
+                for axis, placement in axis_placements.items():
+                    p_list[axis] = placement
+            object.__setattr__(self, "placements", tuple(p_list))
+        else:
+            # Empty layout
+            object.__setattr__(self, "placements", ())
 
     @property
     def ndim(self) -> int:
@@ -84,9 +114,20 @@ class Layout:
         lst[mesh_axis] = placement
         return Layout(placements=tuple(lst))
 
+    def __eq__(self, other):
+        if not isinstance(other, Layout):
+            return False
+        return self.placements == other.placements
 
-def replicated_layout(ndim: int = 1) -> Layout:
-    return Layout(placements=tuple(Replicate() for _ in range(ndim)))
+    def __hash__(self):
+        return hash(self.placements)
+
+    def __repr__(self):
+        return f"Layout({self.placements})"
+
+
+def replicated_layout(ndim: int = 2) -> Layout:
+    return Layout(ndim=ndim)
 
 
 # ---------------------------------------------------------------------------
@@ -126,12 +167,30 @@ _LAYOUT_ATTR = "_distributed_layout"
 def get_layout(tensor) -> Optional[Layout]:
     """Read the Layout attached to a ttml autograd tensor.
 
-    Falls back to reading the underlying ttnn TensorTopology if no
-    Python-side layout has been stamped.
+    The layout dimensions always match the mesh device dimensions.
+    Falls back to reading the underlying ttnn TensorTopology.
     """
+    ttnn_tensor = tensor.get_value()
+    topology = ttnn_tensor.tensor_topology()
 
-    topology = tensor.get_value().tensor_topology()
-    return layout_from_topology(topology)
+    # Get mesh dimensions from the tensor's device
+    # device.shape is a property (MeshShape), not a method
+    device = ttnn_tensor.device()
+    mesh_ndim = None
+    if hasattr(device, "shape"):
+        mesh_shape = device.shape  # property, not callable
+        mesh_ndim = (
+            mesh_shape.dims() if hasattr(mesh_shape, "dims") else len(mesh_shape)
+        )
+
+    layout = layout_from_topology(topology)
+
+    # Extend to mesh dimensions if needed
+    if mesh_ndim is not None and layout.ndim < mesh_ndim:
+        axis_placements = {i: p for i, p in enumerate(layout.placements)}
+        layout = Layout(ndim=mesh_ndim, axis_placements=axis_placements)
+
+    return layout
 
 
 def set_layout(tensor, layout: Layout) -> None:

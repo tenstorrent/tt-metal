@@ -3,11 +3,10 @@
 
 """Sharding rules for loss ops.
 
-cross_entropy_loss needs the full (replicated) logits.  If the logits are
-sharded (e.g. column-parallel classification head), the rule requests a
-replicated input layout.  The dispatch layer uses ``all_gather`` with
-``GradOutputType.REPLICATED`` so the backward divides by TP-size, giving
-each device the correct gradient for its shard.
+cross_entropy_loss needs the full logits along the vocab dimension (last dim).
+If the logits are sharded on the last dimension (e.g. column-parallel output),
+the rule gathers only that dimension while preserving other sharding (e.g. DP
+batch sharding).
 """
 
 from __future__ import annotations
@@ -22,20 +21,32 @@ def cross_entropy_loss_rule(
     runtime=None,
     **kwargs,
 ) -> ShardingPlan:
-    """Logits must be replicated for loss computation.
+    """Gather logits along vocab dimension (last dim) for loss computation.
 
-    The target tensor (integer labels) is not distributed by TP.
+    Only gathers the last tensor dimension (vocab/logits). Other dimensions
+    (e.g. batch sharded on DP axis) are preserved.
     """
     if not layouts:
         return ShardingPlan(input_layouts=[], output_layout=replicated_layout(1))
 
     logit_layout = layouts[0]
-    ndim = logit_layout.ndim
-    rep = replicated_layout(ndim)
 
-    input_layouts = [rep] + list(layouts[1:])
+    # Build layout: gather any sharding on the last tensor dimension (dim 3 for 4D input),
+    # keep all other placements as-is
+    new_placements = []
+    for p in logit_layout.placements:
+        if isinstance(p, Shard) and p.dim in (-1, 3):
+            # Shard on last dim (vocab) -> gather it
+            new_placements.append(Replicate())
+        else:
+            # Keep other placements (preserves batch sharding, etc.)
+            new_placements.append(p)
+    logit_target_layout = Layout(placements=tuple(new_placements))
+
+    # Target layout: keep as-is (preserves DP batch sharding)
+    input_layouts = [logit_target_layout] + list(layouts[1:])
     return ShardingPlan(
         input_layouts=input_layouts,
-        output_layout=rep,
+        output_layout=logit_target_layout,
         gather_grad_replicated=True,
     )
