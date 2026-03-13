@@ -351,33 +351,38 @@
   model-name: qwen2.5-72b-instruct
 
 - name: qwen2.5-vl-32b-instruct performance batch-32
-  cmd: HF_MODEL=models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct TT_CACHE_PATH=models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  cmd: |
+    uv pip install -r models/demos/qwen25_vl/requirements.txt
+    CI=true HF_MODEL=models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct TT_CACHE_PATH=models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct MESH_DEVICE=T3K pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
   skus:
     bh_llmbox:
-      timeout: 10
+      timeout: 15
     bh_loudbox:
-      timeout: 10
+      timeout: 15
     bh_quietbox_2:
-      timeout: 10
+      timeout: 15
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
   model-name: qwen2.5-vl-32b-instruct
 
-- name: qwen2.5-vl-72b performance batch-32
-  cmd: HF_MODEL=models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct TT_CACHE_PATH=models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+   name: qwen2.5-vl-72b-instruct performance batch-32
+  cmd: |
+    uv pip install -r models/demos/qwen25_vl/requirements.txt 
+    CI=true HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b MESH_DEVICE=T3K pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
   skus:
     bh_llmbox:
-      timeout: 10
+      timeout: 15
     bh_loudbox:
-      timeout: 10
+      timeout: 15
     bh_quietbox_2:
-      timeout: 10
+      timeout: 15
   owner_id: U08GELBB1AP # Ambrose Ling
   team: models
-  model-name: qwen2.5-vl-72b
+  model-name: qwen2.5-vl-72b-instruct
+
 
 - name: qwen3-vl-32b performance batch-32
-  cmd: HF_MODEL=models/tt_transformers/model_params/Qwen3-VL-32B-Instruct TT_CACHE_PATH=models/tt_transformers/model_params/Qwen3-VL-32B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  cmd: HF_MODEL=models/tt_transformers/model_params/Qwen3-VL-32B-Instruct TT_CACHE_PATH=models/tt_transformers/model_params/Qwen3-VL-32B-Instruct pytest models/demos/qwen3_vl/tests/ --ignore=models/demos/qwen3_vl/tests/test_ci_dispatch.py -v
   skus:
     bh_llmbox:
       timeout: 10
@@ -389,15 +394,15 @@
   team: models
   model-name: qwen3-vl-32b
 
-- name: mistral-small-3.1-24b performance batch-32
-  cmd: HF_MODEL=mistralai/Mistral-Small-3.1-24B-Instruct-2503 TT_CACHE_PATH=mistralai/Mistral-Small-3.1-24B-Instruct-2503 pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+- name: mistral-small-3.1-24b pipeline_tests
+  cmd: HF_MODEL=models/tt_transformers/model_params/Mistral-Small-3.1-24B-Instruct-2503 TT_CACHE_PATH=models/tt_transformers/model_params/Mistral-Small-3.1-24B-Instruct-2503 MESH_DEVICE=T3K pytest --timeout 600 models/experimental/mistral_24b/tests/pipeline_tests
   skus:
     bh_llmbox:
-      timeout: 10
+      timeout: 15
     bh_loudbox:
-      timeout: 10
+      timeout: 15
     bh_quietbox_2:
-      timeout: 10
+      timeout: 15
   owner_id: U03PUAKE719 # Miguel Tairum
   team: models
   model-name: mistral-small-3.1-24b
