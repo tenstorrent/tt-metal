@@ -9,7 +9,7 @@ target_link_libraries(
 )
 
 if(TARGET TT::CommonPCH)
-    target_precompile_headers(distributed_trace_and_events REUSE_FROM TT::CommonPCH)
+    tt_reuse_precompile_headers(distributed_trace_and_events TT::CommonPCH)
 endif()
 
 target_include_directories(distributed_trace_and_events PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
