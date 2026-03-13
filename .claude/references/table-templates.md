@@ -54,6 +54,13 @@ Standard table formats for analyzer and planner outputs.
 | compute | RISCV_2 | N/A | CB_in | CB_out | FPU ops |
 | writer | RISCV_1 | NOC1 | CB_out | DRAM | Write tiles |
 
+## Kernel Metadata Table
+| Property       | Value |
+| -------------- | ----- |
+| File           | "path to kernel source" |
+| Assigned cores |  "which groups" |
+
+
 ## Data Flow Table
 
 | Stage | Kernel | Reads From | Writes To | CB Operations |

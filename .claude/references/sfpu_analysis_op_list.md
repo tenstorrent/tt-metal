@@ -1,0 +1,35 @@
+| Operation Name | Operation Factory or Python Entry Point |
+|----------------|-----------------------------------------|
+| ADD | ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_program_factory.cpp |
+| ADD | ttnn/cpp/ttnn/operations/eltwise/binary/device/element_wise_multi_core_sfpu_pgm_factory.cpp |
+| MUL | ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_program_factory.cpp |
+| MUL | ttnn/cpp/ttnn/operations/eltwise/binary/device/element_wise_multi_core_sfpu_pgm_factory.cpp |
+| RELU | ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp |
+| ABS | ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp |
+| MAXIMUM | ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_program_factory.cpp |
+| MAXIMUM | ttnn/cpp/ttnn/operations/eltwise/binary/device/element_wise_multi_core_sfpu_pgm_factory.cpp |
+| EXP | ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp |
+| RECIP | ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp |
+| SIGMOID | ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp |
+| GELU | ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp |
+| TANH | ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp |
+| SQRT | ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp |
+| LOG | ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp |
+| DIV | ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_program_factory.cpp |
+| DIV | ttnn/cpp/ttnn/operations/eltwise/binary/device/element_wise_multi_core_sfpu_pgm_factory.cpp |
+| SILU | ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp |
+| WHERE | ttnn/cpp/ttnn/operations/eltwise/ternary/device/ternary_program_factory.cpp |
+| TYPECAST | ttnn/cpp/ttnn/operations/copy/typecast/device/typecast_program_factory.cpp |
+| TYPECAST | ttnn/cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp |
+| TYPECAST | ttnn/cpp/ttnn/operations/copy/typecast/device/typecast_rm_chunked_program_factory.cpp |
+| DROPOUT | ttnn/cpp/ttnn/operations/experimental/dropout/device/dropout_program_factory.cpp |
+| LERP | ttnn/cpp/ttnn/operations/eltwise/ternary/device/ternary_program_factory.cpp |
+| POWER | ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_program_factory.cpp |
+| POWER | ttnn/cpp/ttnn/operations/eltwise/binary/device/element_wise_multi_core_sfpu_pgm_factory.cpp |
+| ADDCMUL | ttnn/cpp/ttnn/operations/eltwise/ternary/device/ternary_program_factory.cpp |
+| LOGADDEXP | ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_program_factory.cpp |
+| ERFINV | ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp |
+| ASIN | ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp |
+| GCD | ttnn/cpp/ttnn/operations/eltwise/binary_ng/device/binary_ng_program_factory.cpp |
+| GCD | ttnn/cpp/ttnn/operations/eltwise/binary/device/element_wise_multi_core_sfpu_pgm_factory.cpp |
+| I0 | ttnn/cpp/ttnn/operations/eltwise/unary/device/unary_program_factory.cpp |
