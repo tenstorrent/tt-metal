@@ -26,7 +26,7 @@ void bind_sdpa_decode(nb::module_& mod) {
         Implements Flash-Decode, parallelizing over batch ``b``, query heads ``nh``, and
         key-value heads ``nkv`` (when possible). The op parallelizes over the KV sequence
         length ``s`` across a group of cores associated with a batch/kv head
-        ``max_cores_per_batch_kv_head``, then uses tree reduction to compute softmax correction.
+        ``max_cores_per_head_batch``, then uses tree reduction to compute softmax correction.
         Supports MQA (Multi-Query Attention) and GQA (Grouped-Query Attention).
 
         Accepts a ``SDPAProgramConfig`` which specifies the grid size and chunk tiles in the
@@ -91,7 +91,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             program_config (SDPAProgramConfig, optional): Specifies compute grid size and chunk
                 sizes. Fields: ``compute_with_storage_grid_size`` (tuple), ``q_chunk_size`` (int),
                 ``k_chunk_size`` (int, must be power of 2 and multiple of 32, max 512),
-                ``exp_approx_mode`` (bool). Defaults to ``None`` (auto-configured).
+                ``exp_approx_mode`` (bool). Defaults to ``None`` (auto-configured), ``max_cores_per_head_batch`` (int, optional). Defaults to 16.
             compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute kernel
                 configuration (math fidelity, fp32 accumulation, etc.). Defaults to ``None``.
 
@@ -117,7 +117,7 @@ void bind_sdpa_decode(nb::module_& mod) {
             - Output untilization uses the fast ``pack_untilize`` path only when
               ``Sq_chunk_t * vDHt <= 8`` tiles; otherwise the slower ``untilize`` path is used.
             - Half-tile optimization (16x32 tiles) is automatically enabled when ``is_causal=True``,
-              ``nh <= 16``, and Q dtype is ``bfloat16``. This cannot be manually controlled.
+              ``nh <= 16``, and Q dtype is ``bfloat16``.
 
 
         Example (causal decode with cur_pos_tensor):
