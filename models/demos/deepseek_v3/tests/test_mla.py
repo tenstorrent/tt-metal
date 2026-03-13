@@ -214,8 +214,8 @@ def run_test_forward_pass_mla2d(
 
     # Set up page config
     logger.info("Setting up model configs")
-    user_id = None if mode == "decode" else torch.randint(0, USERS_PER_ROW * mesh_device.shape[0], ()).item()
-    paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, USERS_PER_ROW, mesh_device.shape[1])
+    user_id = None if mode == "decode" else torch.randint(0, batch_size_per_row * mesh_device.shape[0], ()).item()
+    paged_config = MLA2D.get_valid_paged_config(hf_config_short.max_seq_len, batch_size_per_row, mesh_device.shape[1])
     paged_input_cache, torch_page_table = paged_cache_from_torch(
         input_cache, tuple(mesh_device.shape), paged_config, user_id
     )
@@ -232,7 +232,7 @@ def run_test_forward_pass_mla2d(
         real_weights=module_path is not None,
         layer_id=module_path,
     )
-    model_config = get_model_config(MLA2D, mode, hf_config_short, mesh_device)
+    model_config = get_model_config(MLA2D, mode, hf_config_short, mesh_device, batch_size_per_row)
     model_state = MLA2D.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_cache)
     run_config = create_run_config(model_config, weight_config, model_state)
 
