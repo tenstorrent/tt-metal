@@ -12,7 +12,6 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import torch_random
 from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.demos.stable_diffusion_xl_base.tt.tt_feedforward import TtFeedForward
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -37,7 +36,6 @@ def _get_diffusers_pipeline(is_ci_env):
         ((512, 512), (1024, 640), 1, 0, 0.999),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_feedforward(
     device, image_resolution, input_shape, block_id, transformer_block_id, pcc, is_ci_env, reset_seeds, lora_path
 ):

@@ -14,7 +14,6 @@ from models.demos.stable_diffusion_xl_base.demo.demo_base_and_refiner import tes
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     SDXL_BASE_REFINER_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,
-    SDXL_L1_SMALL_SIZE,
 )
 from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
     calculate_accuracy_metrics,

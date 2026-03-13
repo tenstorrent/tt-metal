@@ -9,8 +9,7 @@ from diffusers import UNet2DConditionModel
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import torch_random, is_blackhole
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
+from models.common.utility_functions import is_blackhole, torch_random
 from models.demos.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.demos.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -206,7 +205,6 @@ def run_unet_model(
         ((512, 512), (1, 9, 64, 64), (1,), (1, 77, 2048), (1, 1280), (1, 6), 0.9958),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_unet(
     device,
     image_resolution,

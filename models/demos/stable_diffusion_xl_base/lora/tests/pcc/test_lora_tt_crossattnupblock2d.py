@@ -12,7 +12,6 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import torch_random
 from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.demos.stable_diffusion_xl_base.tt.tt_crossattnupblock2d import TtCrossAttnUpBlock2D
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -81,7 +80,6 @@ def _get_diffusers_pipeline(is_ci_env):
         ),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_crossattnup(
     device,
     image_resolution,

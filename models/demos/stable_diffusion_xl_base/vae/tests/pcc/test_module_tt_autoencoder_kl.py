@@ -10,7 +10,6 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_autoencoder_kl import TtAutoencoderKL
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -30,7 +29,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     ],
     ids=("test_1024x1024_decode", "test_1024x1024_encode", "test_512x512_decode", "test_512x512_encode"),
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_vae(
     device,
     image_resolution,

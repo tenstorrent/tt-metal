@@ -9,7 +9,6 @@ import pytest
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
 from models.demos.stable_diffusion_xl_base.refiner.tests.pcc.test_module_tt_unet import run_refiner_unet_model
 from models.demos.stable_diffusion_xl_base.tests.pcc.test_module_tt_unet import run_unet_model
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.perf.device_perf_utils import run_model_device_perf_test
 
 VAE_DEVICE_TEST_TOTAL_ITERATIONS = 1
@@ -27,7 +26,6 @@ CLIP_ENCODER_DEVICE_TEST_TOTAL_ITERATIONS = 1
     ],
     ids=["1024x1024", "512x512"],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("iterations", [UNET_DEVICE_TEST_TOTAL_ITERATIONS])
 def test_unet(
     device,
@@ -73,7 +71,6 @@ def test_unet(
     ],
     ids=["1024x1024", "512x512"],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 @pytest.mark.parametrize("iterations", [UNET_DEVICE_TEST_TOTAL_ITERATIONS])
 def test_refiner_unet(
     device,

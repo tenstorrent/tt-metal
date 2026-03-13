@@ -9,8 +9,7 @@ from diffusers import AutoencoderKL
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import torch_random, is_blackhole
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
+from models.common.utility_functions import is_blackhole, torch_random
 from models.demos.stable_diffusion_xl_base.vae.tt.model_configs import load_vae_model_optimisations
 from models.demos.stable_diffusion_xl_base.vae.tt.tt_attention import TtAttention
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -32,7 +31,6 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
         ("decoder", 0.997),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_vae_attention(
     device,
     image_resolution,

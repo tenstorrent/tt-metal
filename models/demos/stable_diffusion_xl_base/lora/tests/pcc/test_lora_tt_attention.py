@@ -12,7 +12,6 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import torch_random
 from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.demos.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.demos.stable_diffusion_xl_base.tt.tt_attention import TtAttention
 from tests.ttnn.utils_for_testing import assert_with_pcc
@@ -41,7 +40,6 @@ def _get_diffusers_pipeline(is_ci_env):
         ((512, 512), (1, 256, 1280), (1, 77, 2048), 2, 2, 1280, 20, 1280, 0.999),
     ],
 )
-@pytest.mark.parametrize("device_params", [{"l1_small_size": SDXL_L1_SMALL_SIZE}], indirect=True)
 def test_attention(
     device,
     image_resolution,

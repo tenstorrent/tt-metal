@@ -10,7 +10,6 @@ from loguru import logger
 from transformers import CLIPTextModel, CLIPTextModelWithProjection, CLIPTokenizer
 
 import ttnn
-from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_L1_SMALL_SIZE
 from models.tt_dit.encoders.clip.model_clip import CLIPConfig, CLIPEncoder
 from models.tt_dit.parallel.config import EncoderParallelConfig, ParallelFactor
 from models.tt_dit.utils.check import assert_quality
@@ -25,11 +24,6 @@ from models.tt_dit.utils.check import assert_quality
     ids=["encoder_1", "encoder_2"],
 )
 @pytest.mark.parametrize("mesh_device", [(1, 1)], ids=["n150"], indirect=True)
-@pytest.mark.parametrize(
-    "device_params",
-    [{"l1_small_size": SDXL_L1_SMALL_SIZE}],
-    indirect=["device_params"],
-)
 def test_clip_encoder(
     *,
     mesh_device: ttnn.Device,
