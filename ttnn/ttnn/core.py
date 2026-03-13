@@ -17,6 +17,10 @@ from ttnn.types import (
 )
 
 split_work_to_cores = ttnn._ttnn.operations.core.split_work_to_cores
+round_up = ttnn._ttnn.operations.core.round_up
+div_up = ttnn._ttnn.operations.core.div_up
+find_max_divisor = ttnn._ttnn.operations.core.find_max_divisor
+grid_to_cores = ttnn._ttnn.operations.core.grid_to_cores
 
 set_printoptions = ttnn._ttnn.core.set_printoptions
 
