@@ -630,7 +630,7 @@ class TtTransformer(LightweightModule):
         if packed_in < packed_target:
             pad = torch.full(
                 (bitmask.shape[0], packed_target - packed_in),
-                fill_value=-1,
+                fill_value=0,
                 dtype=bitmask.dtype,
                 device=bitmask.device,
             )
