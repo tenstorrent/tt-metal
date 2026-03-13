@@ -360,16 +360,19 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             .set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, worker_core_ranges, cb_sender_config);
 
-    // L1 receive buffer for 2D padding: fabric-delivered H halo data arrives here
-    // instead of going directly to DRAM, so the reader can copy it with proper barriers.
-    // Buffer must hold ALL outer_dims' sticks (no per-outer_dim reuse) because the
+    // L1 receive buffer for 2D padding: fabric-delivered H halo corner sticks arrive here.
+    // Corners-only optimization: only W-boundary sticks (pad2_left + pad2_right per row) go
+    // to L1; non-corner sticks go directly to neighbor DRAM via fabric.
+    // Buffer must hold ALL outer_dims' corner sticks (no per-outer_dim reuse) because the
     // fabric pipeline can deliver data for outer_dim N+1 before the reader finishes
     // copying outer_dim N.
     uint32_t recv_cb_index = tt::CB::c_in1;
+    uint32_t corner_sticks_per_row =
+        is_2d ? std::min(operation_attributes.pad2_left + operation_attributes.pad2_right, num_sticks_per_halo_dim) : 0;
     if (is_2d) {
         uint32_t max_padding = std::max(operation_attributes.padding_left, operation_attributes.padding_right);
         uint32_t max_outer_dims_per_core = dims_per_core_group_1;
-        uint32_t recv_total_sticks = max_outer_dims_per_core * max_padding * writer_num_sticks_to_read;
+        uint32_t recv_total_sticks = max_outer_dims_per_core * max_padding * corner_sticks_per_row;
         uint32_t recv_buf_size = recv_total_sticks * page_size;
         if (recv_buf_size > 0) {
             CircularBufferConfig recv_cb_config =
@@ -527,7 +530,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 direction ? operation_attributes.padding_right : operation_attributes.padding_left,  // padding
                 (operation_attributes.dim == 0) ? link_dims_to_read : num_sticks_per_halo_dim,  // num_sticks_to_read
                 num_sticks_per_halo_dim,  // num_sticks_per_halo_dim
-                operation_attributes.h_neighbor_semaphore.address()};
+                operation_attributes.h_neighbor_semaphore.address(),
+                corner_sticks_per_row};  // num_l1_recv_sticks_per_row (corners-only for 2D)
             SetRuntimeArgs(program, worker_reader_kernel_id, {core}, reader_rt_args);
 
             // Writer
