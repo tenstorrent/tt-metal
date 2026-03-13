@@ -7,6 +7,7 @@
 #include <tracy/Tracy.hpp>
 #include <cmath>
 #include <cstddef>
+#include <filesystem>
 #include <map>
 #include <string>
 
@@ -173,8 +174,8 @@ void BuildEnvManager::add_build_env_locked(
     if (rtoptions.get_disable_precompiled_fw()) {
         dev_build_env.firmware_precompiled = false;
     } else {
-        auto precompiled_dir =
-            precompiled::find_precompiled_dir(rtoptions.get_root_dir(), dev_build_env.build_env.get_build_key());
+        auto precompiled_dir = precompiled::find_precompiled_firmware_dir(
+            rtoptions.get_root_dir(), dev_build_env.build_env.get_build_key());
         if (precompiled_dir.has_value()) {
             dev_build_env.build_env.set_firmware_binary_root(*precompiled_dir);
             dev_build_env.firmware_precompiled = true;
@@ -267,6 +268,19 @@ std::string BuildEnvManager::get_firmware_binary_path(
     const auto& env = get_device_build_env(device_id).build_env;
     const auto& state = get_firmware_build_state(device_id, programmable_core, processor_class, processor_id);
     return env.get_firmware_binary_root() + state.get_target_full_path();
+}
+
+std::string BuildEnvManager::get_kernel_binary_path(
+    ChipId device_id,
+    uint32_t programmable_core,
+    uint32_t processor_class,
+    int processor_id,
+    const std::string& binary_root,
+    const std::string& kernel_full_name) {
+    const auto& state = get_kernel_build_state(device_id, programmable_core, processor_class, processor_id);
+    auto path = std::filesystem::path(binary_root) / kernel_full_name;
+    path += state.get_target_full_path();
+    return path.string();
 }
 
 // Get build environment info for all devices

@@ -1608,6 +1608,19 @@ void UpdateDynamicCircularBufferAddress(
     circular_buffer->set_global_circular_buffer(global_circular_buffer);
 }
 
+KernelHandle CreateKernelFromPrecompiled(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig>& config,
+    const PrecompiledKernelConfig& precompiled_config) {
+    std::visit([](const auto& cfg) { ValidateKernelConfigDefines(cfg.defines); }, config);
+
+    KernelHandle kernel_handle = CreateKernel(program, file_name, core_spec, config);
+    program.impl().get_kernel(kernel_handle)->set_precompiled_config(precompiled_config);
+    return kernel_handle;
+}
+
 namespace quasar {
 
 std::set<DataMovementProcessor> GetDataMovementProcessorsInUseOnKernelGroup(
