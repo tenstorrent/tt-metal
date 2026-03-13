@@ -25,7 +25,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
 )
 from models.demos.deepseek_v3_b1.demo.weight_provider import WeightProvider
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_15_stages_demo_api import MoEComputeStage
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_decoder_block_api import DecoderBlockStage
 
 
 def create_fabric_router_config(max_payload_size: int) -> Any:
@@ -70,10 +70,10 @@ def create_single_pod_pipeline_configuration(
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
 ) -> PipelineConfiguration:
-    """16-stage single-pod: Embed -> Dense(0,1,2) -> MoE(3..12) -> LMHead -> Token fwd.
+    """16-stage single-pod: Embed -> Dense(0,1,2) -> Decoder(3..12) -> LMHead -> Token fwd.
 
     If dense_layer_id_override is set (e.g. 0), all dense stages use that layer id.
-    If moe_layer_id_override is set (e.g. 3), all MoE stages use that layer id.
+    If moe_layer_id_override is set (e.g. 3), all decoder stages use that layer id.
     """
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
@@ -90,8 +90,11 @@ def create_single_pod_pipeline_configuration(
     def _dense_stage(layer_id: int):
         return lambda d: DenseDecoderStage(weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d))
 
-    def _moe_stage(layer_id: int):
-        return lambda d: MoEComputeStage(weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d))
+    def _decoder_stage(layer_id: int):
+        return lambda d: DecoderBlockStage(
+            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
+            layer_idx=layer_id,
+        )
 
     dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
     moe_layer_id = moe_layer_id_override if moe_layer_id_override is not None else None
@@ -101,7 +104,7 @@ def create_single_pod_pipeline_configuration(
         1: _dense_stage(dense_ids[0]),
         2: _dense_stage(dense_ids[1]),
         3: _dense_stage(dense_ids[2]),
-        **{i: _moe_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 14)},
+        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 14)},
         14: stage_14,
         15: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
     }
@@ -116,10 +119,10 @@ def create_sp4_pipeline_configuration(
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
 ) -> PipelineConfiguration:
-    """64-stage super-pod: Embed -> Dense(0,1,2) -> MoE(3..60) -> LMHead -> Token fwd.
+    """64-stage super-pod: Embed -> Dense(0,1,2) -> Decoder(3..60) -> LMHead -> Token fwd.
 
     If dense_layer_id_override is set (e.g. 0), all dense stages use that layer id.
-    If moe_layer_id_override is set (e.g. 3), all MoE stages use that layer id.
+    If moe_layer_id_override is set (e.g. 3), all decoder stages use that layer id.
     """
 
     def stage_0(device: ttnn.MeshDevice) -> StageKind:
@@ -136,9 +139,11 @@ def create_sp4_pipeline_configuration(
     def _dense_stage(layer_id: int):
         return lambda d: DenseDecoderStage(weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d))
 
-    def _moe_stage(layer_id: int):
-        # TODO: Use this when we have the full decoder: return lambda d: MoEDecoderStage(weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d))
-        return lambda d: MoEComputeStage(weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d))
+    def _decoder_stage(layer_id: int):
+        return lambda d: DecoderBlockStage(
+            weights=weight_provider.load_moe_layer(layer_id=layer_id, device=d),
+            layer_idx=layer_id,
+        )
 
     dense_ids = (dense_layer_id_override,) * 3 if dense_layer_id_override is not None else (0, 1, 2)
     moe_layer_id = moe_layer_id_override if moe_layer_id_override is not None else None
@@ -148,7 +153,7 @@ def create_sp4_pipeline_configuration(
         1: _dense_stage(dense_ids[0]),
         2: _dense_stage(dense_ids[1]),
         3: _dense_stage(dense_ids[2]),
-        **{i: _moe_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 62)},
+        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 62)},
         62: stage_62,
         63: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
     }

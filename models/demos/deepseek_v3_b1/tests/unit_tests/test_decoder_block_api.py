@@ -31,6 +31,7 @@ from models.demos.deepseek_v3_b1.fused_ops.decoder_block.op import DecoderBlock
 from models.demos.deepseek_v3_b1.fused_ops.moe.op import MoeOp
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
+from models.demos.deepseek_v3_b1.prepare_weights import DeepSeekV3MoELayerWeights
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_decoder_block import create_decoder_block_tensors
 from models.demos.deepseek_v3_b1.tests.unit_tests.test_moe_mlp import (
     ROUTED_EXPERT_LAYER_IDX,
@@ -68,7 +69,14 @@ def build_worker_grid_excluding_core(device_grid_size, excluded_core):
 
 
 class DecoderBlockStage(StageKind):
-    """Decoder block compute stage: bcast + fused attention + MoE + reduce-to-one."""
+    """Decoder block compute stage: bcast + fused attention + MoE + reduce-to-one.
+
+    Accepts weights in two forms (mutually exclusive):
+    - ``weights``: a pre-loaded :class:`DeepSeekV3MoELayerWeights` (production path via
+      ``WeightProvider.load_moe_layer``).
+    - ``state_dict``: a raw HF-format state dict (test path; requires ``layer_idx`` and
+      ``num_routed_experts`` for weight processing).
+    """
 
     PIPELINE_CORE = ttnn.CoreCoord(12, 8)
     MOE_SENDER_CORE = ttnn.CoreCoord(12, 9)
@@ -80,18 +88,24 @@ class DecoderBlockStage(StageKind):
 
     def __init__(
         self,
-        state_dict: dict[str, torch.Tensor],
+        state_dict: dict[str, torch.Tensor] | None = None,
         *,
+        weights: DeepSeekV3MoELayerWeights | None = None,
         layer_idx: int = 4,
-        num_routed_experts: int = 8,
+        num_routed_experts: int = 256,
         position_id: int = 0,
         max_seq_len: int = 32 * 1024,
         persistent_mode: bool = True,
-        use_hardcoded_expert_index: bool = True,
+        use_hardcoded_expert_index: bool = False,
         enable_routing: bool = True,
         is_torus: bool = True,
     ) -> None:
+        if state_dict is None and weights is None:
+            raise ValueError("Either state_dict or weights must be provided")
+        if state_dict is not None and weights is not None:
+            raise ValueError("Provide state_dict or weights, not both")
         self._state_dict = state_dict
+        self._weights = weights
         self._layer_idx = layer_idx
         self._num_routed_experts = num_routed_experts
         self._position_id = position_id
@@ -160,8 +174,8 @@ class DecoderBlockStage(StageKind):
             self._layer_idx,
             self._max_seq_len,
             reduce_root_coord=reduce_root_coord,
-            is_moe=True,
             num_routed_experts=self._num_routed_experts,
+            preloaded_weights=self._weights,
         )
         ttnn.synchronize_device(mesh_device)
 
@@ -383,40 +397,38 @@ def test_persistent_decoder_15_stages(
         ttnn.distributed_context_barrier()
 
         # ── Stage 0: drive pipeline with multiple tokens ──
+        token_size_datums = token_size_bytes // dtype_size(ttnn.uint32)
+        num_elements = embedding_size_bytes // 2
+        torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
+        torch_token[0, 0] = 0
+        token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+
+        d2h_output_tensor = ttnn.from_torch(
+            torch.zeros(1, num_elements, dtype=torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
+
         if is_stage0:
-            token_size_datums = token_size_bytes // dtype_size(ttnn.uint32)
-            num_elements = embedding_size_bytes // 2
-            torch_token = torch.zeros(1, token_size_datums, dtype=torch.uint32)
-            torch_token[0, 0] = 0
-            token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
-            start_time = time.time()
-            for iteration in range(iterations):
-                pipeline_block.write_token(token_tensor)
-                logger.info(f"[rank=0] token {iteration} injected")
+            num_tokens_in_flight = 64
 
-                d2h_output_tensor = ttnn.from_torch(
-                    torch.zeros(1, num_elements, dtype=torch.bfloat16),
-                    dtype=ttnn.bfloat16,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                )
-
-                print(f"[rank={my_mesh_id}] iteration {iteration} waiting for D2H result")
-                pipeline_block.read_output(d2h_output_tensor)
-                print(f"[rank={my_mesh_id}] iteration {iteration} D2H result read")
-                d2h_result = ttnn.to_torch(d2h_output_tensor)
-
-                d2h_nonzero = torch.count_nonzero(d2h_result)
-                logger.info(
-                    f"[rank={my_mesh_id}] iteration {iteration}: non-zero={d2h_nonzero}/{d2h_result.numel()}, "
-                    f"first 5={d2h_result[0, :5]}"
-                )
-                assert (
-                    d2h_nonzero > 0
-                ), f"D2H output is all zeros at iteration {iteration} — persistent MoE 15-stage pipeline failed"
-            end_time = time.time()
-            print(f"[rank=0] time taken to move {iterations} tokens: {end_time - start_time} seconds")
-
-            logger.info(f"[rank={my_mesh_id}] all {iterations} iterations passed")
+            for top_iter in range(100):
+                for iteration in range(num_tokens_in_flight):
+                    pipeline_block.write_token(token_tensor)
+                    logger.info(f"[rank=0] token {iteration} injected")
+                for iteration in range(num_tokens_in_flight):
+                    print(f"[rank={my_mesh_id}] iteration {iteration} waiting for D2H result")
+                    pipeline_block.read_output(d2h_output_tensor)
+                    print(f"[rank={my_mesh_id}] iteration {iteration} D2H result read")
+                    d2h_result = ttnn.to_torch(d2h_output_tensor)
+                    d2h_nonzero = torch.count_nonzero(d2h_result)
+                    logger.info(
+                        f"[rank={my_mesh_id}] iteration {iteration}: non-zero={d2h_nonzero}/{d2h_result.numel()}, "
+                        f"first 5={d2h_result[0, :5]}"
+                    )
+                    assert (
+                        d2h_nonzero > 0
+                    ), f"D2H output is all zeros at iteration {iteration} — persistent decoder 15-stage pipeline failed"
 
         logger.info(f"[rank={my_mesh_id}] waiting for barrier")
         ttnn.distributed_context_barrier()
@@ -425,7 +437,7 @@ def test_persistent_decoder_15_stages(
     finally:
         pass
 
-    logger.info(f"[rank={my_mesh_id}] persistent 15-stage MoE test PASSED")
+    logger.info(f"[rank={my_mesh_id}] persistent 15-stage decoder test PASSED")
 
 
 @pytest.mark.parametrize(

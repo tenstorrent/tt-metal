@@ -60,19 +60,24 @@ def create_decoder_block_tensors(
     max_seq_len,
     reduce_root_coord=ttnn.MeshCoordinate(1, 1),
     *,
-    is_moe: bool,
+    is_moe: bool = True,
     num_routed_experts: int = 0,
+    preloaded_weights=None,
 ):
-    """Create all tensors required by DecoderBlock.op() using a single BlitzDecodeWeights.
+    """Create all tensors required by DecoderBlock.op().
 
-    When is_moe=True, loads MoE layer weights and creates gate/routing tensors.
-    When is_moe=False, loads dense layer weights; gate/routing keys are absent from the dict.
+    Three modes of operation:
+    - **preloaded_weights mode** (production): pass a DeepSeekV3MoELayerWeights from
+      load_moe_layer. Skips BDW allocation, weight processing, and golden tensors.
+    - **state_dict + is_moe=True** (MoE tests): allocates BDW, calls
+      prepare_moe_layer_weights, builds MoE golden tensors.
+    - **state_dict + is_moe=False** (dense tests): allocates BDW, calls
+      prepare_dense_layer_weights, builds dense golden tensors.
 
-    This avoids the L1 OOM caused by allocating overlapped attention weights twice
-    (once for MLA, once for MoE's gate_mm/ffn_norm). A single BDW instance ensures
-    the three fused weight groups share L1 without duplication.
     Returns a dict with all attention + FFN + shared expert + reduce tensors.
     """
+    if preloaded_weights is None and state_dict is None:
+        raise ValueError("Either state_dict or preloaded_weights must be provided")
     torch.manual_seed(0)
     num_devices = mesh_rows * mesh_cols
     device_grid_size = submesh.compute_with_storage_grid_size()
@@ -168,19 +173,22 @@ def create_decoder_block_tensors(
     torch_input = torch.randn(shape, dtype=torch.bfloat16)
 
     # ══════════════════════════════════════════════════════════════════════════
-    # All weights via a single BDW instance
+    # All weights via a single BDW instance or preloaded
     # ══════════════════════════════════════════════════════════════════════════
-    bdw = BlitzDecodeWeights(submesh)
-    if is_moe:
-        layer = prepare_moe_layer_weights(
-            bdw,
-            state_dict,
-            layer_idx,
-            num_routed_experts=num_routed_experts,
-            move_to_device=True,
-        )
+    if preloaded_weights is not None:
+        layer = preloaded_weights
     else:
-        layer = prepare_dense_layer_weights(bdw, state_dict, layer_idx, move_to_device=True)
+        bdw = BlitzDecodeWeights(submesh)
+        if is_moe:
+            layer = prepare_moe_layer_weights(
+                bdw,
+                state_dict,
+                layer_idx,
+                num_routed_experts=num_routed_experts,
+                move_to_device=True,
+            )
+        else:
+            layer = prepare_dense_layer_weights(bdw, state_dict, layer_idx, move_to_device=True)
 
     # ── FFN final output config (DRAM streaming matmul output grid) ──
     gate_proj_noc = ttnn.NOC.NOC_0
@@ -625,73 +633,106 @@ def create_decoder_block_tensors(
     mcast_grid = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), sender_core_from_residual)])
 
     # ══════════════════════════════════════════════════════════════════════════
-    # Golden model PyTorch tensors (attention / MLA)
+    # Golden model PyTorch tensors (only when state_dict is available)
     # ══════════════════════════════════════════════════════════════════════════
-    def _sd_key(suffix):
-        return f"model.layers.{layer_idx}.{suffix}"
+    golden = {}
+    if state_dict is not None:
 
-    golden_torch_gamma = state_dict[_sd_key("input_layernorm.weight")].unsqueeze(0)
-    golden_torch_matmul_weights = state_dict[_sd_key("self_attn.q_a_proj.weight")].T.contiguous()
-    golden_torch_rmsnorm2_gamma = state_dict[_sd_key("self_attn.q_a_layernorm.weight")].unsqueeze(0)
-    golden_torch_matmul2_weights = state_dict[_sd_key("self_attn.q_b_proj.weight")].T.contiguous()
-    golden_torch_dkv_matmul_weights = state_dict[_sd_key("self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
-    golden_torch_dkv_rmsnorm_gamma = state_dict[_sd_key("self_attn.kv_a_layernorm.weight")].unsqueeze(0)
-    golden_torch_o_proj_weights = state_dict[_sd_key("self_attn.o_proj.weight")].T.contiguous()
+        def _sd_key(suffix):
+            return f"model.layers.{layer_idx}.{suffix}"
 
-    V_HEAD_DIM = 128
-    KV_B_PROJ_HEAD_DIM = QNOPE_HEAD_DIM + V_HEAD_DIM  # 256
-    kv_b_proj_raw = state_dict[_sd_key("self_attn.kv_b_proj.weight")]
-    kv_b_out, kv_lora_rank = kv_b_proj_raw.shape
-    total_kv_heads = kv_b_out // KV_B_PROJ_HEAD_DIM
-    kv_b_3d = kv_b_proj_raw.reshape(total_kv_heads, KV_B_PROJ_HEAD_DIM, kv_lora_rank).contiguous()
-    golden_kv_b1 = kv_b_3d[:, :QNOPE_HEAD_DIM, :].reshape(-1, kv_lora_rank)
-    golden_kv_b2 = kv_b_3d[:, QNOPE_HEAD_DIM:, :].reshape(-1, kv_lora_rank).T.contiguous()
-    golden_torch_matmul3_weights = golden_kv_b1.reshape(total_kv_heads, QNOPE_HEAD_DIM, kv_lora_rank)
+        golden_torch_gamma = state_dict[_sd_key("input_layernorm.weight")].unsqueeze(0)
+        golden_torch_matmul_weights = state_dict[_sd_key("self_attn.q_a_proj.weight")].T.contiguous()
+        golden_torch_rmsnorm2_gamma = state_dict[_sd_key("self_attn.q_a_layernorm.weight")].unsqueeze(0)
+        golden_torch_matmul2_weights = state_dict[_sd_key("self_attn.q_b_proj.weight")].T.contiguous()
+        golden_torch_dkv_matmul_weights = state_dict[_sd_key("self_attn.kv_a_proj_with_mqa.weight")].T.contiguous()
+        golden_torch_dkv_rmsnorm_gamma = state_dict[_sd_key("self_attn.kv_a_layernorm.weight")].unsqueeze(0)
+        golden_torch_o_proj_weights = state_dict[_sd_key("self_attn.o_proj.weight")].T.contiguous()
 
-    golden_total_qnope_heads = total_kv_heads
-    golden_total_qrope_heads = total_kv_heads
+        V_HEAD_DIM = 128
+        KV_B_PROJ_HEAD_DIM = QNOPE_HEAD_DIM + V_HEAD_DIM  # 256
+        kv_b_proj_raw = state_dict[_sd_key("self_attn.kv_b_proj.weight")]
+        kv_b_out, kv_lora_rank = kv_b_proj_raw.shape
+        total_kv_heads = kv_b_out // KV_B_PROJ_HEAD_DIM
+        kv_b_3d = kv_b_proj_raw.reshape(total_kv_heads, KV_B_PROJ_HEAD_DIM, kv_lora_rank).contiguous()
+        golden_kv_b1 = kv_b_3d[:, :QNOPE_HEAD_DIM, :].reshape(-1, kv_lora_rank)
+        golden_kv_b2 = kv_b_3d[:, QNOPE_HEAD_DIM:, :].reshape(-1, kv_lora_rank).T.contiguous()
+        golden_torch_matmul3_weights = golden_kv_b1.reshape(total_kv_heads, QNOPE_HEAD_DIM, kv_lora_rank)
 
-    # ── Golden FFN tensors (MoE vs dense differ in key paths and weight layout) ──
-    golden_moe_rmsnorm_gamma = (
-        state_dict[_sd_key("post_attention_layernorm.weight")].reshape(1, K).to(torch.bfloat16).float()
-    )
-    if is_moe:
-        golden_moe_shared_gate = state_dict[_sd_key("mlp.shared_experts.gate_proj.weight")].T.contiguous()
-        golden_moe_shared_up = state_dict[_sd_key("mlp.shared_experts.up_proj.weight")].T.contiguous()
-        golden_moe_shared_down = state_dict[_sd_key("mlp.shared_experts.down_proj.weight")].T.contiguous()
-        golden_moe_routing_weights = state_dict[_sd_key("mlp.gate.weight")].T.contiguous()
-        golden_moe_bias = (
-            state_dict[_sd_key("mlp.gate.e_score_correction_bias")].reshape(1, 8, 32).contiguous().to(torch.bfloat16)
+        golden_total_qnope_heads = total_kv_heads
+        golden_total_qrope_heads = total_kv_heads
+
+        # ── Golden FFN tensors (MoE vs dense differ in key paths and weight layout) ──
+        golden_moe_rmsnorm_gamma = (
+            state_dict[_sd_key("post_attention_layernorm.weight")].reshape(1, K).to(torch.bfloat16).float()
         )
-        golden_moe_gate_proj_dict = {}
-        golden_moe_up_proj_dict = {}
-        golden_moe_down_proj_dict = {}
-        for e in range(num_routed_experts):
-            w_g = state_dict[_sd_key(f"mlp.experts.{e}.gate_proj.weight")].T.contiguous()
-            golden_moe_gate_proj_dict[e] = w_g.reshape(1, 1, K, -1)
-            w_u = state_dict[_sd_key(f"mlp.experts.{e}.up_proj.weight")].T.contiguous()
-            golden_moe_up_proj_dict[e] = w_u.reshape(1, 1, K, -1)
-            w_d = state_dict[_sd_key(f"mlp.experts.{e}.down_proj.weight")].T.contiguous()
-            golden_moe_down_proj_dict[e] = w_d.reshape(1, 1, -1, K)
-    else:
-        # Dense MLP: slice first DENSE_SHARED_N as shared, next 8×GATE_PROJ_N as routed experts
-        gate_full = state_dict[_sd_key("mlp.gate_proj.weight")].T.contiguous()  # (K, 18432)
-        up_full = state_dict[_sd_key("mlp.up_proj.weight")].T.contiguous()
-        down_full = state_dict[_sd_key("mlp.down_proj.weight")].T.contiguous()  # (18432, K)
-        golden_moe_shared_gate = gate_full[:, :DENSE_SHARED_N].contiguous()
-        golden_moe_shared_up = up_full[:, :DENSE_SHARED_N].contiguous()
-        golden_moe_shared_down = down_full[:DENSE_SHARED_N, :].contiguous()
-        golden_moe_routing_weights = None
-        golden_moe_bias = None
-        golden_moe_gate_proj_dict = {}
-        golden_moe_up_proj_dict = {}
-        golden_moe_down_proj_dict = {}
-        for e in range(8):
-            start = DENSE_SHARED_N + e * RoutedExpert.GATE_PROJ_N
-            end = start + RoutedExpert.GATE_PROJ_N
-            golden_moe_gate_proj_dict[e] = gate_full[:, start:end].reshape(1, 1, K, -1)
-            golden_moe_up_proj_dict[e] = up_full[:, start:end].reshape(1, 1, K, -1)
-            golden_moe_down_proj_dict[e] = down_full[start:end, :].reshape(1, 1, -1, K)
+        if is_moe:
+            golden_moe_shared_gate = state_dict[_sd_key("mlp.shared_experts.gate_proj.weight")].T.contiguous()
+            golden_moe_shared_up = state_dict[_sd_key("mlp.shared_experts.up_proj.weight")].T.contiguous()
+            golden_moe_shared_down = state_dict[_sd_key("mlp.shared_experts.down_proj.weight")].T.contiguous()
+            golden_moe_routing_weights = state_dict[_sd_key("mlp.gate.weight")].T.contiguous()
+            golden_moe_bias = (
+                state_dict[_sd_key("mlp.gate.e_score_correction_bias")].reshape(1, 8, 32).contiguous().to(torch.bfloat16)
+            )
+            golden_moe_gate_proj_dict = {}
+            golden_moe_up_proj_dict = {}
+            golden_moe_down_proj_dict = {}
+            for e in range(num_routed_experts):
+                w_g = state_dict[_sd_key(f"mlp.experts.{e}.gate_proj.weight")].T.contiguous()
+                golden_moe_gate_proj_dict[e] = w_g.reshape(1, 1, K, -1)
+                w_u = state_dict[_sd_key(f"mlp.experts.{e}.up_proj.weight")].T.contiguous()
+                golden_moe_up_proj_dict[e] = w_u.reshape(1, 1, K, -1)
+                w_d = state_dict[_sd_key(f"mlp.experts.{e}.down_proj.weight")].T.contiguous()
+                golden_moe_down_proj_dict[e] = w_d.reshape(1, 1, -1, K)
+        else:
+            gate_full = state_dict[_sd_key("mlp.gate_proj.weight")].T.contiguous()
+            up_full = state_dict[_sd_key("mlp.up_proj.weight")].T.contiguous()
+            down_full = state_dict[_sd_key("mlp.down_proj.weight")].T.contiguous()
+            golden_moe_shared_gate = gate_full[:, :DENSE_SHARED_N].contiguous()
+            golden_moe_shared_up = up_full[:, :DENSE_SHARED_N].contiguous()
+            golden_moe_shared_down = down_full[:DENSE_SHARED_N, :].contiguous()
+            golden_moe_routing_weights = None
+            golden_moe_bias = None
+            golden_moe_gate_proj_dict = {}
+            golden_moe_up_proj_dict = {}
+            golden_moe_down_proj_dict = {}
+            for e in range(8):
+                start = DENSE_SHARED_N + e * RoutedExpert.GATE_PROJ_N
+                end = start + RoutedExpert.GATE_PROJ_N
+                golden_moe_gate_proj_dict[e] = gate_full[:, start:end].reshape(1, 1, K, -1)
+                golden_moe_up_proj_dict[e] = up_full[:, start:end].reshape(1, 1, K, -1)
+                golden_moe_down_proj_dict[e] = down_full[start:end, :].reshape(1, 1, -1, K)
+
+        golden = {
+            "golden_torch_input": torch_input,
+            "golden_torch_gamma": golden_torch_gamma,
+            "golden_torch_matmul_weights": golden_torch_matmul_weights,
+            "golden_torch_rmsnorm2_gamma": golden_torch_rmsnorm2_gamma,
+            "golden_torch_matmul2_weights": golden_torch_matmul2_weights,
+            "golden_torch_matmul3_weights": golden_torch_matmul3_weights,
+            "golden_torch_sin": torch_sin,
+            "golden_torch_cos": torch_cos,
+            "golden_position_ids": position_ids,
+            "golden_torch_dkv_matmul_weights": golden_torch_dkv_matmul_weights,
+            "golden_torch_dkv_rmsnorm_gamma": golden_torch_dkv_rmsnorm_gamma,
+            "golden_torch_kv_cache": torch_kv_cache,
+            "golden_scale": scale,
+            "golden_torch_kv_b2_proj_weights": golden_kv_b2,
+            "golden_torch_o_proj_weights": golden_torch_o_proj_weights,
+            "golden_total_qnope_heads": golden_total_qnope_heads,
+            "golden_total_qrope_heads": golden_total_qrope_heads,
+            "golden_kv_cache_bfp8_before_op": kv_cache_bfp8_before_op,
+            "golden_sdpa_slice_size": SDPA_INPUT_NUM_CORES * HEADS_PER_ROW,
+            "golden_moe_rmsnorm_gamma": golden_moe_rmsnorm_gamma,
+            "golden_moe_shared_gate": golden_moe_shared_gate,
+            "golden_moe_shared_up": golden_moe_shared_up,
+            "golden_moe_shared_down": golden_moe_shared_down,
+            "golden_moe_routing_weights": golden_moe_routing_weights,
+            "golden_moe_bias": golden_moe_bias,
+            "golden_moe_gate_proj_dict": golden_moe_gate_proj_dict,
+            "golden_moe_up_proj_dict": golden_moe_up_proj_dict,
+            "golden_moe_down_proj_dict": golden_moe_down_proj_dict,
+        }
 
     # ── Routed weight tensors differ between MoE (list) and dense (single tensor) ──
     routed_gate = layer.routed_gate_proj[0] if is_moe else layer.routed_gate_proj
@@ -753,36 +794,7 @@ def create_decoder_block_tensors(
         "num_gate_proj_cores": num_gate_proj_cores,
         "per_core_down_proj_N": per_core_down_proj_N,
         "mcast_grid": mcast_grid,
-        # Golden model PyTorch tensors (attention / MLA)
-        "golden_torch_input": torch_input,
-        "golden_torch_gamma": golden_torch_gamma,
-        "golden_torch_matmul_weights": golden_torch_matmul_weights,
-        "golden_torch_rmsnorm2_gamma": golden_torch_rmsnorm2_gamma,
-        "golden_torch_matmul2_weights": golden_torch_matmul2_weights,
-        "golden_torch_matmul3_weights": golden_torch_matmul3_weights,
-        "golden_torch_sin": torch_sin,
-        "golden_torch_cos": torch_cos,
-        "golden_position_ids": position_ids,
-        "golden_torch_dkv_matmul_weights": golden_torch_dkv_matmul_weights,
-        "golden_torch_dkv_rmsnorm_gamma": golden_torch_dkv_rmsnorm_gamma,
-        "golden_torch_kv_cache": torch_kv_cache,
-        "golden_scale": scale,
-        "golden_torch_kv_b2_proj_weights": golden_kv_b2,
-        "golden_torch_o_proj_weights": golden_torch_o_proj_weights,
-        "golden_total_qnope_heads": golden_total_qnope_heads,
-        "golden_total_qrope_heads": golden_total_qrope_heads,
-        "golden_kv_cache_bfp8_before_op": kv_cache_bfp8_before_op,
-        "golden_sdpa_slice_size": SDPA_INPUT_NUM_CORES * HEADS_PER_ROW,
-        # Golden FFN tensors
-        "golden_moe_rmsnorm_gamma": golden_moe_rmsnorm_gamma,
-        "golden_moe_shared_gate": golden_moe_shared_gate,
-        "golden_moe_shared_up": golden_moe_shared_up,
-        "golden_moe_shared_down": golden_moe_shared_down,
-        "golden_moe_routing_weights": golden_moe_routing_weights,
-        "golden_moe_bias": golden_moe_bias,
-        "golden_moe_gate_proj_dict": golden_moe_gate_proj_dict,
-        "golden_moe_up_proj_dict": golden_moe_up_proj_dict,
-        "golden_moe_down_proj_dict": golden_moe_down_proj_dict,
+        **golden,
     }
     # MoE-only keys
     if is_moe:
