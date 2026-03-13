@@ -12,8 +12,6 @@ from models.demos.stable_diffusion_xl_base.tt.sdxl_utility import (
 )
 
 
-# NOTE: This file is a placeholder for future optimizations of SDXL on Blackhole.
-# For now, it has identical configs as Wormhole_b0.
 class ModelOptimisations1024x1024BH:
     def __init__(
         self,
@@ -21,7 +19,7 @@ class ModelOptimisations1024x1024BH:
         conv_w_dtype=ttnn.bfloat16,
         attention_weights_dtype=ttnn.bfloat8_b,
         ff_weights_dtype=ttnn.bfloat8_b,
-        force_full_grid=False,
+        force_full_grid=False,  # This parameter is not used for BH model configs
     ):
         self.conv_configs = {}
         self.conv_output_dtype = conv_act_dtype

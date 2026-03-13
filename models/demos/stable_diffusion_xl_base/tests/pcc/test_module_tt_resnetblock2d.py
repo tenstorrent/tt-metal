@@ -21,7 +21,7 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "image_resolution, input_shape, temb_shape, down_block_id, resnet_id, conv_shortcut, block, pcc",
     [
         # fmt: off
-        # 1024x1024 image resolution; # == unique+common runtime args error (before 2x reshard)
+        # 1024x1024 image resolution
         ((1024, 1024), (1, 320, 128, 128), (1, 1280), 0, 0, False, "down_blocks", 0.999),
         ((1024, 1024), (1, 320, 64, 64), (1, 1280), 1, 0, True, "down_blocks", 0.999,),
         ((1024, 1024), (1, 640, 64, 64), (1, 1280), 1, 1, False, "down_blocks", 0.999,),
