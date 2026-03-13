@@ -72,6 +72,7 @@ class TtTransformer(LightweightModule):
             )
         self._active_bitmask = None
         self._bitmask_copy_event = None
+        self._last_host_bitmask = None
         self._debug_bitmask = os.getenv("TT_DEBUG_BITMASK", "0") == "1"
         self._debug_bitmask_step = 0
         self._debug_bitmask_max_steps = int(os.getenv("TT_DEBUG_BITMASK_MAX_STEPS", "32"))
@@ -631,6 +632,7 @@ class TtTransformer(LightweightModule):
         ttnn.multiply_(result, 1e9, **op_kwargs)
         if hasattr(self, "_debug_log_device_tensor_slice"):
             self._debug_log_device_tensor_slice("unpacked_penalty_mask", result)
+        self._sanity_check_unpacked_bitmask(bitmask, result)
         return result
 
     def start_bitmask_to_device(self, bitmask):
@@ -647,6 +649,8 @@ class TtTransformer(LightweightModule):
             bitmask = torch.cat([bitmask, pad], dim=-1)
         elif packed_in > packed_target:
             raise ValueError(f"Bitmask has too many packed bits: {packed_in} > {packed_target}")
+        # Cache the exact packed host bitmask that is sent to device.
+        self._last_host_bitmask = bitmask.detach().cpu().to(torch.int32).clone()
         if hasattr(self, "_debug_should_log_bitmask") and self._debug_should_log_bitmask():
             sample = bitmask.reshape(-1)[: min(16, bitmask.numel())].tolist()
             print(
@@ -760,6 +764,61 @@ class TtTransformer(LightweightModule):
 
     def _debug_should_log_bitmask(self):
         return self._debug_bitmask and self._debug_bitmask_step < self._debug_bitmask_max_steps
+
+    def _torch_reference_unpack_local(self, packed_local: torch.Tensor) -> torch.Tensor:
+        structured_output_arange = torch.arange(32, dtype=torch.int32, device=packed_local.device)
+        unpacked = torch.bitwise_right_shift(packed_local[:, :, None], structured_output_arange[None, None, :]) & 1
+        unpacked = unpacked.reshape(packed_local.shape[0], -1).to(torch.float32)
+        return torch.where(unpacked != 0, torch.tensor(0.0), torch.tensor(-1e9))
+
+    def _sanity_check_unpacked_bitmask(self, packed_device_tensor, unpacked_device_tensor):
+        packed_shards = ttnn.get_device_tensors(packed_device_tensor)
+        unpacked_shards = ttnn.get_device_tensors(unpacked_device_tensor)
+        if len(packed_shards) != len(unpacked_shards):
+            raise AssertionError(
+                f"Bitmask sanity check failed: shard count mismatch packed={len(packed_shards)} "
+                f"unpacked={len(unpacked_shards)}"
+            )
+
+        for shard_idx, (packed_shard, unpacked_shard) in enumerate(zip(packed_shards, unpacked_shards)):
+            packed_local = ttnn.to_torch(packed_shard).to(torch.int32)
+            unpacked_local = ttnn.to_torch(unpacked_shard).to(torch.float32)
+
+            # Also compare packed local shard against the exact host bitmask before H2D copy.
+            if self._last_host_bitmask is not None:
+                host = self._last_host_bitmask
+                if packed_local.shape[0] == host.shape[0] and packed_local.shape[1] <= host.shape[1]:
+                    shard_w = packed_local.shape[1]
+                    found_host_match = False
+                    for col_start in range(0, host.shape[1] - shard_w + 1, shard_w):
+                        if torch.equal(packed_local, host[:, col_start : col_start + shard_w]):
+                            found_host_match = True
+                            break
+                    if not found_host_match:
+                        raise AssertionError(
+                            f"Bitmask sanity check failed on shard={shard_idx}: "
+                            "packed device shard does not match any host packed slice"
+                        )
+
+            expected_local = self._torch_reference_unpack_local(packed_local)
+
+            if unpacked_local.shape != expected_local.shape:
+                h = min(unpacked_local.shape[0], expected_local.shape[0])
+                w = min(unpacked_local.shape[1], expected_local.shape[1])
+                unpacked_compare = unpacked_local[:h, :w]
+                expected_compare = expected_local[:h, :w]
+            else:
+                unpacked_compare = unpacked_local
+                expected_compare = expected_local
+
+            if not torch.equal(unpacked_compare, expected_compare):
+                mismatch = unpacked_compare != expected_compare
+                first_idx = torch.nonzero(mismatch, as_tuple=False)[0].tolist()
+                got = unpacked_compare[tuple(first_idx)].item()
+                exp = expected_compare[tuple(first_idx)].item()
+                raise AssertionError(
+                    f"Bitmask sanity check failed on shard={shard_idx} idx={first_idx} " f"got={got} expected={exp}"
+                )
 
     def _debug_log_device_tensor_slice(self, name, tensor, width=16):
         if not self._debug_should_log_bitmask():
