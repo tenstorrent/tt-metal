@@ -333,10 +333,17 @@ MPI_ENV_VALUE_SPECIAL_CHARS = frozenset({" ", "\t", "\n", "\r", '"', "'", "`", "
 # `<hostname>_rank_<rank>`.
 # This reduces shared-path contention (for example, NFS stale handles in multi-host jobs).
 #
-# TT_METAL_CACHE is intentionally NOT rank-scoped: all JIT build writes now go
-# through scratch (local disk) with atomic merge to the shared NFS cache, so
-# a single shared cache maximizes cross-rank cache hits.  Logs and scratch dirs
-# remain rank-scoped since they are per-process by nature.
+# TT_METAL_CACHE is intentionally NOT rank-scoped.  Multiple ranks and hosts
+# share a single NFS cache directory.  This is safe and intentional:
+#   - All JIT compilation writes go to a local scratch directory first
+#     (TT_METAL_JIT_SCRATCH, which IS rank-scoped), then are atomically merged
+#     to the shared NFS cache via temp-file + rename.
+#   - .dephash files record NFS-canonical paths (scratch paths are rewritten
+#     during compilation), so cache-hit checks work regardless of which rank
+#     or host originally compiled the artifact.
+#   - Sharing avoids redundant N-way compilation: the first rank to compile a
+#     kernel populates the cache, and subsequent ranks get cache hits.
+# Logs and scratch dirs remain rank-scoped since they are per-process by nature.
 RANK_SCOPED_PATH_ENV_VARS = frozenset(
     {
         "TT_METAL_LOGS_PATH",
@@ -538,8 +545,10 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
 
     # Ensure TT_METAL_CACHE has a value so the C++ side doesn't fall back to
     # the HOME-based default.  TT_METAL_CACHE is shared (not rank-scoped)
-    # because all JIT build writes now go through scratch (local disk) with
-    # atomic merge to NFS.  This maximizes cross-rank cache hits.
+    # because all JIT build writes go through TT_METAL_JIT_SCRATCH (local disk)
+    # with atomic merge (temp+rename) to NFS.  .dephash files record
+    # NFS-canonical paths, so cache-hit checks work across ranks/hosts.
+    # See RANK_SCOPED_PATH_ENV_VARS and build.hpp for the full rationale.
     if "TT_METAL_CACHE" not in env:
         home = os.environ.get("HOME", "")
         env["TT_METAL_CACHE"] = f"{home}/.cache" if home else "/tmp"

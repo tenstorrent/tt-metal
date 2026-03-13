@@ -114,13 +114,50 @@ void write_dependency_hashes(
         }
         // Always write absolute path to the hash file, so when reading back we don't need to
         // worry about relative paths.
-        // When canonical_dir is set (scratch-mode), rewrite paths under out_dir to canonical_dir
-        // so .dephash files remain valid after the scratch directory is removed.
+        //
+        // Scratch-mode path rewriting (canonical_dir)
+        // --------------------------------------------
+        // When scratch-mode is active, compilation happens in a local scratch directory
+        // that mirrors the NFS cache layout:
+        //   scratch out_dir:     /tmp/scratch/<key>/kernels/<kernel>/<target>/
+        //   NFS canonical_dir:   /nfs/cache/<key>/kernels/<kernel>/<target>/
+        //
+        // GCC's .d file records dependencies as paths relative to the compilation
+        // directory.  After resolution (out_dir / dep_path), deps may contain
+        // non-canonical segments like "../" (e.g. genfiles in the parent kernel
+        // directory: <scratch>/<kernel>/<target>/../chlkc_descriptors.h).
+        //
+        // We normalize the dep path to resolve "../" segments, then derive the
+        // scratch root and cache root from the common suffix of out_dir and
+        // canonical_dir.  Any normalized dep under the scratch root is rewritten
+        // to the corresponding cache path.  This covers:
+        //   - Object files directly under out_dir
+        //   - Genfiles in sibling/parent directories (via ../)
+        //   - Any other dep under the scratch tree
+        // Paths outside the scratch tree (e.g. source files under env_.root_)
+        // are already stable absolute paths and are left unchanged.
+        //
+        // Invariant: the scratch tree mirrors the NFS cache tree, so replacing
+        // the normalized scratch prefix with the normalized cache prefix yields
+        // the correct NFS-canonical path for every dependency.
         std::filesystem::path record_path = dep_path;
         if (!canonical_dir.empty()) {
-            auto dep_str = dep_path.string();
-            if (dep_str.starts_with(out_dir)) {
-                record_path = canonical_dir + dep_str.substr(out_dir.size());
+            auto dep_normal = dep_path.lexically_normal().string();
+            auto out_str = std::filesystem::path(out_dir).lexically_normal().string();
+            auto canon_str = std::filesystem::path(canonical_dir).lexically_normal().string();
+            // Derive scratch_root and cache_root from the common suffix.
+            // out_dir and canonical_dir share the same suffix (build_key/kernels/...)
+            // but have different root prefixes (scratch vs NFS cache).
+            // Walk backwards from the end to find where the paths diverge.
+            size_t suffix_len = 0;
+            while (suffix_len < out_str.size() && suffix_len < canon_str.size() &&
+                   out_str[out_str.size() - 1 - suffix_len] == canon_str[canon_str.size() - 1 - suffix_len]) {
+                ++suffix_len;
+            }
+            auto scratch_root = out_str.substr(0, out_str.size() - suffix_len);
+            auto cache_root = canon_str.substr(0, canon_str.size() - suffix_len);
+            if (!scratch_root.empty() && dep_normal.starts_with(scratch_root)) {
+                record_path = cache_root + dep_normal.substr(scratch_root.size());
             }
         }
         hash_file << record_path << '\t' << hash << '\n';
@@ -167,6 +204,7 @@ void write_dependency_hashes(
     }
     hash_file.close();
     if (hash_file.fail()) {
+        // Don't leave incomplete hash file
         tt::filesystem::safe_remove(hash_path);
     }
 }

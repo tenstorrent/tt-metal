@@ -33,7 +33,7 @@ void sync_filesystem(const std::filesystem::path& path) {
 #ifdef __linux__
     std::error_code ec;
     std::filesystem::path sync_target = path;
-    if (!std::filesystem::is_directory(path, ec)) {
+    if (!std::filesystem::is_directory(path, ec) || ec) {
         sync_target = path.parent_path();
     }
     int fd = ::open(sync_target.c_str(), O_RDONLY | O_DIRECTORY);

@@ -79,6 +79,19 @@ void write_successful_jit_build_marker(const JitBuildState& build, const JitBuil
     }
 }
 
+// NFS write safety
+// -----------------
+// safe_hard_link_or_copy writes directly to the destination path.  When the
+// destination is on a shared NFS filesystem, callers MUST write to a unique
+// temporary path first, then atomically rename to the final name.  This
+// ensures concurrent multi-client writes are safe: each client writes to its
+// own temp file, and the last rename wins.  Last-writer-wins is acceptable
+// because all clients produce equivalent content (same source, same flags).
+//
+// All NFS cache writes in this file follow this pattern:
+//   1. generate_temp_path(final_path) -> unique temp path
+//   2. hard_link_or_copy(source, temp_path)
+//   3. safe_rename(temp_path, final_path)
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
     tt::filesystem::safe_hard_link_or_copy(target, link);
 }

@@ -101,7 +101,18 @@ private:
 
     // Local scratch paths for hybrid map-reduce JIT builds.
     // When set, SFPI compilation happens here (local disk) and results are
-    // merged to out_*_root_ (NFS cache) after success.
+    // atomically merged to out_*_root_ (NFS cache) after success via
+    // temp-file + rename.
+    //
+    // Cache-sharing model: multiple ranks and hosts intentionally share a
+    // single NFS cache directory (out_*_root_).  This is safe because:
+    //   - All writes go through local scratch first, then atomic merge
+    //   - .dephash files record NFS-canonical paths (scratch paths are
+    //     rewritten by write_dependency_hashes), so cache-hit checks work
+    //     regardless of which host compiled the artifact
+    //   - Sharing avoids redundant N-way compilation across ranks
+    // TT_METAL_CACHE is therefore NOT rank-scoped; only scratch and log
+    // directories are per-rank.
     std::string scratch_root_;
     std::string scratch_firmware_root_;
     std::string scratch_kernel_root_;
