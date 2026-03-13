@@ -1,4 +1,4 @@
-name: "Models CI"
+name: "All Model Tests"
 
 on:
   workflow_dispatch:
