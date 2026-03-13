@@ -54,6 +54,9 @@ namespace tt::tt_metal {
 
 namespace {
 
+// Counter for profiling / debugging / unit testing JIT build.
+std::atomic<uint64_t> jit_build_invocation_count{0};
+
 void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
     log_error(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
     std::ifstream file{log_file};
@@ -858,6 +861,7 @@ tt::jit_build::TargetRecipe JitBuildState::export_target_recipe(const JitBuildSe
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     // ZoneScoped;
     auto t0 = std::chrono::steady_clock::now();
+    ++jit_build_invocation_count;
 
     build.build(settings);
     write_successful_jit_build_marker(build, settings);
@@ -868,6 +872,7 @@ void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
 }
 
 void jit_build_for_processors(std::span<const JitBuildState* const> targets, const JitBuildSettings* settings) {
+    ++jit_build_invocation_count;
     TT_ASSERT(!targets.empty());
     auto t0 = std::chrono::steady_clock::now();
 
@@ -881,6 +886,7 @@ void jit_build_for_processors(std::span<const JitBuildState* const> targets, con
 }
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
+    ++jit_build_invocation_count;
     std::vector<std::shared_future<void>> events;
     for (const auto& build : build_subset) {
         // Capture the necessary objects by reference
@@ -913,5 +919,9 @@ void jit_build_cache_clear() {
     JitBuildCache::inst().clear();
     jit_build::clear_file_hash_cache();
 }
+
+uint64_t jit_build_get_invocation_count() { return jit_build_invocation_count; }
+
+void jit_build_reset_invocation_count() { jit_build_invocation_count = 0; }
 
 }  // namespace tt::tt_metal

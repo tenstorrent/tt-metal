@@ -78,6 +78,10 @@
 #include "tt_metal/jit_build/genfiles.hpp"
 #include "tt_metal/jit_build/jit_build_utils.hpp"
 #include "impl/jit_server/remote_compile_coordinator.hpp"
+#include "tt_metal/jit_build/precompiled.hpp"
+#ifdef GENERATE_HASH_LOG
+#include <fstream>
+#endif
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
@@ -150,19 +154,6 @@ using detail::ProgramImpl;
 
 namespace {
 
-void GenerateBinaries(IDevice* device, JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
-    // ZoneScoped;
-    // const std::string tracyPrefix = "GenerateBinaries_";
-    // ZoneName((tracyPrefix + build_options.name).c_str(), build_options.name.length() + tracyPrefix.length());
-    try {
-        jit_build_genfiles_descriptors(
-            BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_env, build_options);
-        kernel->generate_binaries(device, build_options);
-    } catch (std::runtime_error& ex) {
-        TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
-    }
-}
-
 // Similar to Kernel::generate_binaries(), but does not run the compiler.  Used by remote compilation.
 void generate_kernel_source_files(
     IDevice* device, const JitBuildOptions& build_options, const std::shared_ptr<Kernel>& kernel) {
@@ -228,6 +219,51 @@ size_t KernelCompileHash(const std::shared_ptr<Kernel>& kernel, JitBuildOptions&
     }
 #endif
     return compile_hash;
+}
+
+std::string ensure_kernel_binaries(
+    const std::shared_ptr<Kernel>& kernel,
+    IDevice* device,
+    JitBuildOptions& build_options,
+    const DeviceBuildEnv& build_env,
+    size_t kernel_hash) {
+    if (const auto& precompiled_config = kernel->precompiled_config(); precompiled_config.has_value()) {
+        const auto precompiled_dir =
+            precompiled::find_precompiled_kernel_dir(precompiled_config->precompiled_dir, kernel->name(), kernel_hash);
+        if (precompiled_dir.has_value()) {
+            if (kernel->binaries_exist_on_disk(device, precompiled_config->precompiled_dir)) {
+                log_debug(
+                    tt::LogBuildKernels,
+                    "Using precompiled kernel binaries. kernel_name={}, compile_hash={}, precompiled_dir={}",
+                    kernel->name(),
+                    kernel_hash,
+                    precompiled_config->precompiled_dir);
+                return precompiled_config->precompiled_dir;
+            }
+            log_debug(
+                tt::LogBuildKernels,
+                "Precompiled kernel directory found but missing binaries. kernel_name={}, compile_hash={}, "
+                "precompiled_dir={}",
+                kernel->name(),
+                kernel_hash,
+                precompiled_config->precompiled_dir);
+        }
+
+        if (precompiled_config->fallback_policy == decltype(precompiled_config->fallback_policy)::Error) {
+            throw experimental::PrecompiledKernelNotFoundError(
+                kernel->name(), kernel_hash, precompiled_config->precompiled_dir, precompiled_config->fallback_policy);
+        }
+    }
+
+    jit_build_once(kernel_hash, [&] {
+        try {
+            jit_build_genfiles_descriptors(build_env.build_env, build_options);
+            kernel->generate_binaries(device, build_options);
+        } catch (std::runtime_error& ex) {
+            TT_THROW("Failed to generate binaries for {} {}", kernel->name(), ex.what());
+        }
+    });
+    return build_env.build_env.get_out_kernel_root_path();
 }
 }  // namespace
 
@@ -1880,8 +1916,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             for (auto& [id, kernel] : kernels) {
                 validate_kernel_placement(force_slow_dispatch, kernel);
                 auto [build_options, kernel_hash] = prep_kernel(kernel);
-                kernel->register_kernel_elf_paths_with_watcher(*device);
-
                 generate_kernel_source_files(device, build_options, kernel);
                 auto desc = build_kernel_descriptor(device, kernel, build_options, kernel_hash);
                 coordinator.submit(std::move(desc));
@@ -1891,7 +1925,10 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
         coordinator.finish();
 
+        const std::string binary_root = build_env.build_env.get_out_kernel_root_path();
         for (const auto& [kernel, build_options] : submitted_kernels) {
+            kernel->read_binaries(device, binary_root);
+            kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
             Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
         }
     } else {
@@ -1904,8 +1941,10 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                         auto [build_options, kernel_hash] = prep_kernel(kernel);
 
                         if (!is_mock) {
-                            kernel->register_kernel_elf_paths_with_watcher(*device);
-                            jit_build_once(kernel_hash, [&] { GenerateBinaries(device, build_options, kernel); });
+                            const std::string binary_root =
+                                ensure_kernel_binaries(kernel, device, build_options, build_env, kernel_hash);
+                            kernel->read_binaries(device, binary_root);
+                            kernel->register_kernel_elf_paths_with_watcher(*device, binary_root);
                         } else {
                             // Create empty stub binaries for mock devices
                             std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
@@ -1914,17 +1953,6 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
                         Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
                     },
                     events);
-            }
-        }
-        sync_build_steps(events);
-    }
-
-    // Mock/emulated devices don't have binaries to read.
-    if (!is_mock) {
-        for (const auto& kernels : kernels_) {
-            for (const auto& pair : kernels) {
-                const auto& kernel = pair.second;
-                launch_build_step([kernel, device] { kernel->read_binaries(device); }, events);
             }
         }
         sync_build_steps(events);
