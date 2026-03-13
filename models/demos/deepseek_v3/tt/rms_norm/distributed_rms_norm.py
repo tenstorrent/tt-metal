@@ -19,7 +19,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     RMSNormPostAllGatherConfig,
     RMSNormPreAllGatherConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div, get_state_dicts, shard_and_save
+from models.demos.deepseek_v3.utils.config_helpers import even_int_div, get_state_dicts, shard_and_save
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -85,7 +85,7 @@ class DistributedRMSNorm(RMSNormBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        batch_size_per_row: int = USERS_PER_ROW,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
         """Generate decode configuration for this module.
 
