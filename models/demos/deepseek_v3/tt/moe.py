@@ -143,7 +143,9 @@ class MoE(SharedStateAddOn, AbstractModule):
         """
 
         num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
-        expert_mapping_tensor = cls._create_expert_mapping_tensor(mesh_device, mode, num_experts_per_device)
+        expert_mapping_tensor = cls._create_expert_mapping_tensor(
+            mesh_device, fabric_config, mode, num_experts_per_device
+        )
 
         if mode == "decode":
             memory_config = ttnn.L1_MEMORY_CONFIG
@@ -214,7 +216,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             }
 
             # optimized MoE ops only functional for quad torus
-            if ["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING and mesh_device.shape[0] == 16:
+            if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING and mesh_device.shape[0] == 16:
                 batch = USERS_PER_ROW * mesh_device.shape[0]
                 seq_len = 1
 
@@ -297,6 +299,7 @@ class MoE(SharedStateAddOn, AbstractModule):
     def _create_expert_mapping_tensor(
         cls,
         mesh_device: ttnn.Device,
+        fabric_config: ttnn.FabricConfig,
         mode: str,
         num_experts_per_device: int,
     ):
@@ -304,7 +307,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         if mode == "decode":
             # optimized MoE ops only functional for quad torus
             num_dispatch_devices = mesh_device.shape[0]
-            if ["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING and num_dispatch_devices == 16:
+            if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING and num_dispatch_devices == 16:
                 num_experts = num_devices * num_experts_per_device
                 tp_size = mesh_device.shape[1]
                 num_experts_per_cluster = num_experts // tp_size
