@@ -82,14 +82,14 @@ pytest tests/didt/test_duty_cycle.py -k "duty-3 and rep-1000x"  # 3 non-MM ops p
 pytest tests/didt/test_duty_cycle.py -k "duty-6 and rep-10000x"  # Lower duty cycle
 ```
 
-Math fidelity levels: LoFi (faster), HiFi2/HiFi3/HiFi4 (higher precision)
-Data types: BFLOAT16, BFLOAT8_B, BFLOAT4_B (support varies by test)
+Math fidelity levels: LoFi (faster), HiFi2/HiFi3/HiFi4 (higher precision).
+Data types: BFLOAT16, BFLOAT8_B, BFLOAT4_B (support varies by test).
 
 ## Blackhole Features
 
-Default compute grid: runs on full device grid (optimized for Blackhole architecture)
-Supports single-chip (`1chips`) and Galaxy (`galaxy`) configurations
-Some tests require a full 11×10 grid (Deepseek V3, MLA SDPA)
+Default compute grid: runs on full device grid (optimized for Blackhole architecture).
+Supports single-chip (`1chips`) and Galaxy (`galaxy`) configurations.
+Some tests require a full 11×10 grid (Deepseek V3, MLA SDPA).
 
 ```bash
 # Reduced grid size testing (maintains compute per core)
