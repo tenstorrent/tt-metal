@@ -174,8 +174,8 @@ void BuildEnvManager::add_build_env_locked(
     if (rtoptions.get_disable_precompiled_fw()) {
         dev_build_env.firmware_precompiled = false;
     } else {
-        auto precompiled_dir = precompiled::find_precompiled_firmware_dir(
-            rtoptions.get_root_dir(), dev_build_env.build_env.get_build_key());
+        auto precompiled_dir =
+            precompiled::find_precompiled_dir(rtoptions.get_root_dir(), dev_build_env.build_env.get_build_key());
         if (precompiled_dir.has_value()) {
             dev_build_env.build_env.set_firmware_binary_root(*precompiled_dir);
             dev_build_env.firmware_precompiled = true;
