@@ -253,11 +253,10 @@ void Kernel::process_include_paths(const std::function<void(const std::string& p
 }
 
 bool Kernel::binaries_exist_on_disk(const IDevice* device, const std::string& binary_root) const {
+    TT_ASSERT(this->expected_num_binaries() > 0, "Kernel {} expected at least one binary", this->name());
     const uint32_t core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
-    std::optional<std::filesystem::path> success_marker_path = std::nullopt;
-    bool all_elfs_exist = true;
     for (int i = 0; i < this->expected_num_binaries(); ++i) {
         auto elf_path = BuildEnvManager::get_instance().get_kernel_binary_path(
             device->build_id(),
@@ -268,19 +267,10 @@ bool Kernel::binaries_exist_on_disk(const IDevice* device, const std::string& bi
             this->kernel_full_name_);
 
         if (!std::filesystem::exists(elf_path)) {
-            all_elfs_exist = false;
-        }
-        if (!success_marker_path.has_value()) {
-            // ELF path shape is: <binary_root>/<kernel_full_name>/<target>/<target>.elf
-            success_marker_path =
-                std::filesystem::path(elf_path).parent_path().parent_path() / SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
+            return false;
         }
     }
-    // Prefer .SUCCESS when present (current JIT contract), but allow valid precompiled trees without it.
-    if (success_marker_path.has_value() && std::filesystem::exists(*success_marker_path)) {
-        return true;
-    }
-    return all_elfs_exist;
+    return true;
 }
 
 std::vector<std::string> Kernel::file_paths(IDevice& device, const std::string& binary_root) const {
