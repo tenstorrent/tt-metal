@@ -7,16 +7,12 @@
 # Many parameters are exposed to make it easy to add new tests, but are currently
 # set to a single value.
 
-import math
 import pytest
 import torch
 import ttnn
-import sys
 
-from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import comp_allclose_and_pcc
 from loguru import logger
-from models.common.utility_functions import torch_random
 
 
 def _run_topk_with_preallocated(input_tensor, k, dim, device, ttnn_result):
@@ -196,7 +192,6 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
     Note: We do not enforce the same exception type or message.
     """
     torch.manual_seed(0)
-    rank = len(tensor_shape)
 
     torch_tensor = torch.randn(tensor_shape, dtype=dtype)
     pad_value = 1.0 if op == "prod" else None
@@ -266,7 +261,6 @@ def test_topk(device, tensor_shape, dim, dtype, layout, k):
     since torch and ttnn may break ties differently in bfloat16.
     """
     torch.manual_seed(0)
-    rank = len(tensor_shape)
 
     torch_tensor = torch.randn(tensor_shape, dtype=dtype)
     ttnn_tensor = ttnn.from_torch(torch_tensor, layout=layout, device=device)
@@ -496,7 +490,6 @@ def test_accumulation(device, tensor_shape, dim, dtype, layout, op):
     Note: We do not enforce the same exception type or message.
     """
     torch.manual_seed(0)
-    rank = len(tensor_shape)
 
     torch_tensor = torch.randn(tensor_shape, dtype=dtype)
     pad_value = 1.0 if op == "cumprod" else None

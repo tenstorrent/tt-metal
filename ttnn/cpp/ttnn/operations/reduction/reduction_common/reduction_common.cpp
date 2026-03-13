@@ -33,8 +33,9 @@ ttnn::SmallVector<int> generate_reduce_dim(
         } else if (std::holds_alternative<int64_t>(dim_arg.value())) {
             auto dim_as_int64 = std::get<int64_t>(dim_arg.value());
             TT_FATAL(
-                dim_as_int64 <= std::numeric_limits<int>::max(),
-                "Dimension cannot be greater than {}",
+                dim_as_int64 >= std::numeric_limits<int>::lowest() && dim_as_int64 <= std::numeric_limits<int>::max(),
+                "Dimension must be in the range [{}, {}]",
+                std::numeric_limits<int>::lowest(),
                 std::numeric_limits<int>::max());
             dim = ttnn::SmallVector<int>({static_cast<int>(dim_as_int64)});
         } else {
