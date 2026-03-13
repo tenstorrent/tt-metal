@@ -186,7 +186,7 @@ std::string ensure_kernel_binaries(
             return precompiled_config->precompiled_dir;
         }
 
-        if (precompiled_config->fallback_policy == experimental::PrecompiledKernelConfig::BinaryNotFoundPolicy::Error) {
+        if (precompiled_config->fallback_policy == experimental::PrecompiledKernelConfig::FallbackPolicy::Error) {
             throw experimental::PrecompiledKernelNotFoundError(
                 kernel->name(), kernel_hash, precompiled_config->precompiled_dir, precompiled_config->fallback_policy);
         }

@@ -23,7 +23,7 @@ namespace {
 
 namespace fs = std::filesystem;
 
-using BinaryPolicy = experimental::PrecompiledKernelConfig::BinaryNotFoundPolicy;
+using BinaryPolicy = experimental::PrecompiledKernelConfig::FallbackPolicy;
 
 struct ScopedCopiedPrecompiledRoot {
     explicit ScopedCopiedPrecompiledRoot(fs::path root) : root_(std::move(root)) {}
