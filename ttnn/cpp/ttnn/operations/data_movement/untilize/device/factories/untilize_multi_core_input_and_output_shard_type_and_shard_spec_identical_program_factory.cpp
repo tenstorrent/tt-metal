@@ -53,7 +53,6 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     uint32_t num_blocks_per_core = shard_height / tile_height;
     uint32_t num_tiles_per_shard = num_tiles_per_block * num_blocks_per_core;
 
-    // Detect if sharding is uneven
     uint32_t tensor_width = a.padded_shape()[-1];
     uint32_t tensor_height = a.physical_volume() / tensor_width;
     bool has_uneven_sharding = false;
@@ -62,12 +61,12 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
         uint32_t width_remainder = tensor_width % shard_width;
         has_uneven_sharding = (height_remainder != 0) || (width_remainder != 0);
     }
+    bool use_block_reader = has_uneven_sharding || !use_pack_untilize;
 
     // Input CB
     uint32_t input_cb_num_tiles;
     Buffer* cb_backing_buffer = nullptr;
-    if (has_uneven_sharding) {
-        // Double-buffer blocks instead of holding the entire shard
+    if (use_block_reader) {
         input_cb_num_tiles = (num_blocks_per_core == 1) ? num_tiles_per_block : num_tiles_per_block * 2;
     } else {
         input_cb_num_tiles = num_tiles_per_shard;
@@ -95,7 +94,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
 
     // Reader kernel
     KernelHandle unary_reader_kernel_id;
-    if (has_uneven_sharding) {
+    if (use_block_reader) {
         std::vector<uint32_t> reader_compile_time_args = {
             (uint32_t)src0_cb_index,
             (uint32_t)num_tiles_per_block,
@@ -169,7 +168,7 @@ UntilizeMultiCoreInputAndOutputShardTypeAndShardSpecIdenticalProgramFactory::cre
     for (auto core : cores) {
         // Reader run-time args
         std::vector<uint32_t> reader_run_time_args;
-        if (has_uneven_sharding) {
+        if (use_block_reader) {
             reader_run_time_args = {src0_buffer->address(), num_blocks_per_core};
         } else {
             uint32_t num_tiles_to_read = num_tiles_per_block * num_blocks_per_core;
