@@ -6,7 +6,7 @@
 |---|-------|------|--------------|--------|
 | 1 | Host Receiver Per-VC | Migrate host-side receiver channel arrays to per-VC bool/scalar | HR-01 to HR-06 | In Progress |
 | 2 | Device Receiver Per-VC | Migrate device-side receiver channel indexing to per-VC | DR-01 to DR-04 | Pending |
-| 3 | 1/2 | In Progress|  | Pending |
+| 3 | 1/2 | Complete    | 2026-03-13 | Pending |
 | 4 | Device Sender Per-VC | Migrate device-side sender channel indexing to per-VC | DS-01 to DS-02 | Pending |
 | 5 | Channel Allocator | Update allocator to use both per-VC sender and receiver | CA-01 to CA-02 | Pending |
 | 6 | Stream Reg Assignment | Update host stream reg assignment table/map for per-VC | SR-01 to SR-02 | Pending |
@@ -54,7 +54,7 @@
 
 **Requirements:** HS-01, HS-02
 
-**Plans:** 1/2 plans executed
+**Plans:** 2/2 plans complete
 
 Plans:
 - [ ] 03-01-PLAN.md — Remove dead AllocatorConstructionParams; fix is_sender_channel_serviced_ sizing; document num_used_sender_channels as derived
