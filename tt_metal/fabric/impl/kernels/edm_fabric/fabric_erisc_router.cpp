@@ -2233,7 +2233,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             uint32_t tx_progress = 0;
             uint32_t rx_progress = 0;
 
-            if constexpr (is_sender_channel_serviced[0]) {
+            if constexpr (is_sender_channel_serviced[VC0_SENDER_CHANNEL_START]) {
                 open_perf_recording_window(inner_loop_perf_telemetry_collector);
             }
 
@@ -2241,7 +2241,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 loop_start_cycles = get_timestamp();
             }
-            if constexpr (super_speedy_mode && is_sender_channel_serviced[0]) {
+            if constexpr (super_speedy_mode && is_sender_channel_serviced[VC0_SENDER_CHANNEL_START]) {
                 auto check_connection_status =
                     !channel_connection_established[0] ||
                     local_sender_channel_worker_interfaces.template get<0>().has_worker_teardown_request();
@@ -2256,7 +2256,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 if constexpr (super_speedy_mode) {
                     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
 
-                    if constexpr (is_sender_channel_serviced[0]) {
+                    if constexpr (is_sender_channel_serviced[VC0_SENDER_CHANNEL_START]) {
                         tx_progress |= run_sender_channel_step_speedy<
                             0,
                             to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
@@ -2518,7 +2518,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 run_routing_without_noc_sync_coordinated_as_non_master(termination_signal_ptr);
             }
 
-            if constexpr (is_sender_channel_serviced[0]) {
+            if constexpr (is_sender_channel_serviced[VC0_SENDER_CHANNEL_START]) {
                 close_perf_recording_window(inner_loop_perf_telemetry_collector);
                 if constexpr (perf_telemetry_mode != PerfTelemetryRecorderType::NONE) {
                     if (captured_an_event(inner_loop_perf_telemetry_collector) ||
@@ -2867,7 +2867,7 @@ void kernel_main() {
         if constexpr (is_erisc_that_sets_up_second_txq) {
             initialize_state_for_txq1_active_mode();
         }
-        if constexpr (is_sender_channel_serviced[0]) {
+        if constexpr (is_sender_channel_serviced[VC0_SENDER_CHANNEL_START]) {
             initialize_state_for_txq1_active_mode_sender_side();
         }
     }
