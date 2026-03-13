@@ -44,9 +44,18 @@ DeepseekMoEPostCombineTilizeProgramFactory::cached_program_t DeepseekMoEPostComb
     uint32_t num_op_cores = total_tile_height * cores_per_tile_height;
     CoreRangeSet op_cores = tt::tt_metal::num_cores_to_corerangeset(num_op_cores, grid_size, true);
 
+    uint32_t tilize_input_cb_id = 0;     // TODO: (GR)
+    uint32_t tilize_output_cb_id = 0;    // TODO: (GR)
+    uint32_t bytes_to_read_per_row = 0;  // TODO: (GR)
+    uint32_t num_tiles = 0;              // TODO: (GR)
+    uint32_t tile_page_size = 0;         // TODO: (GR)
+    uint32_t input_row_page_size = 0;    // TODO: (GR)
+
     // reader
     std::unordered_map<std::string, uint32_t> reader_named_ct_args = {
-
+        {"tilize_input_cb_id", tilize_input_cb_id},
+        {"input_row_page_size", input_row_page_size},
+        {"bytes_to_read_per_row", bytes_to_read_per_row},
     };
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -59,7 +68,7 @@ DeepseekMoEPostCombineTilizeProgramFactory::cached_program_t DeepseekMoEPostComb
     std::unordered_map<std::string, uint32_t> compute_named_ct_args = {
         {"tilize_input_cb_id", tilize_input_cb_id},
         {"tilize_output_cb_id", tilize_output_cb_id},
-        {"selected_experts_k", num_tiles},
+        {"num_tiles", num_tiles},
     };
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -70,7 +79,9 @@ DeepseekMoEPostCombineTilizeProgramFactory::cached_program_t DeepseekMoEPostComb
 
     // writer
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
-
+        {"tilize_output_cb_id", tilize_output_cb_id},
+        {"output_tile_page_size", tile_page_size},
+        {"num_tiles", num_tiles},
     };
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -84,15 +95,17 @@ DeepseekMoEPostCombineTilizeProgramFactory::cached_program_t DeepseekMoEPostComb
         const auto& core = cores[i];
 
         // reader
+        uint32_t intra_row_byte_offset = 0;  // TODO: (GR)
+        uint32_t row_page_offset = 0;        // TODO: (GR)
         std::vector<uint32_t> reader_rt_args = {
-
+            intra_row_byte_offset,
+            row_page_offset,
         };
         SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
         // writer
-        std::vector<uint32_t> writer_rt_args = {
-
-        };
+        uint32_t output_tile_page_offset = 0;  // TODO: (GR)
+        std::vector<uint32_t> writer_rt_args = {output_tile_page_offset};
         SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
     }
 

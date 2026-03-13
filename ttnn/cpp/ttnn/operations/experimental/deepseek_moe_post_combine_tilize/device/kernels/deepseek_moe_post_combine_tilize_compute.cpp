@@ -6,17 +6,15 @@
 
 #include "api/compute/cb_api.h"
 #include "api/compute/tilize.h"
+#include "tt-metalium/constants.hpp"
 
 void kernel_main() {
-    // Compile-time arguments
     constexpr uint32_t tilize_input_cb_id = get_named_compile_time_arg_val("tilize_input_cb_id");
     constexpr uint32_t tilize_output_cb_id = get_named_compile_time_arg_val("tilize_output_cb_id");
     constexpr uint32_t num_tiles = get_named_compile_time_arg_val("num_tiles");
 
-    // Constants
-    constexpr uint32_t tile_height = 32;  // TODO: (GR)
+    constexpr uint32_t tile_height = tt::constants::TILE_HEIGHT;
 
-    // Setup
     compute_kernel_hw_startup(tilize_input_cb_id, tilize_output_cb_id);
     fast_tilize_init(tilize_input_cb_id, num_tiles, tilize_output_cb_id);
 
