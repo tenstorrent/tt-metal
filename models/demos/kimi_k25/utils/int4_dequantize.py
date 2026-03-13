@@ -28,7 +28,6 @@ from __future__ import annotations
 
 import torch
 
-
 _DEFAULT_GROUP_SIZE = 32  # Kimi K2.5 routed-expert group size
 
 
@@ -48,8 +47,8 @@ def unpack_int4_nibbles(packed: torch.Tensor) -> torch.Tensor:
     Returns:
         Signed int8 tensor with last dim doubled (= in_features).
     """
-    low = (packed & 0x0F).to(torch.int8)           # even column indices
-    high = ((packed >> 4) & 0x0F).to(torch.int8)   # odd column indices
+    low = (packed & 0x0F).to(torch.int8)  # even column indices
+    high = ((packed >> 4) & 0x0F).to(torch.int8)  # odd column indices
 
     # Subtract zero-point to recover signed [-8, 7]
     low = low - 8
@@ -103,16 +102,12 @@ def dequantize_int4_weight(
     in_features = cols_packed * 2
 
     if in_features % group_size != 0:
-        raise ValueError(
-            f"in_features ({in_features}) must be divisible by group_size ({group_size})"
-        )
+        raise ValueError(f"in_features ({in_features}) must be divisible by group_size ({group_size})")
 
     n_groups = in_features // group_size
     expected_scale_shape = (out_features, n_groups)
     if tuple(scales.shape) != expected_scale_shape:
-        raise ValueError(
-            f"Scale shape mismatch: expected {expected_scale_shape}, got {tuple(scales.shape)}"
-        )
+        raise ValueError(f"Scale shape mismatch: expected {expected_scale_shape}, got {tuple(scales.shape)}")
 
     # Unpack to signed int8, cast to float32 for arithmetic
     int4_vals = unpack_int4_nibbles(packed)  # (out_features, in_features), int8

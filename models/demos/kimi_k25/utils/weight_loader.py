@@ -70,7 +70,6 @@ import torch
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.kimi_k25.utils.int4_dequantize import dequantize_int4_weight
 
-
 # ── Constants ────────────────────────────────────────────────────────────────
 
 #: Top-level prefix in HF checkpoint keys for the text backbone.
@@ -166,10 +165,7 @@ def dequantize_i32_packed(
         expected = tuple(int(v) for v in weight_shape.tolist())
         actual = tuple(result.shape)
         if actual != expected:
-            raise ValueError(
-                f"Dequantized shape {actual} does not match "
-                f"weight_shape tensor {expected}."
-            )
+            raise ValueError(f"Dequantized shape {actual} does not match " f"weight_shape tensor {expected}.")
 
     return result
 
@@ -275,9 +271,7 @@ class KimiLazyStateDict(LazyStateDict):
         Dequantized result is cached under ``full_key + _DEQUANT_CACHE_TAG``
         in the shared tensor cache to avoid redundant computation.
         """
-        dequant_cache_key = (
-            self._base_prefix + relative_packed_key + _DEQUANT_CACHE_TAG
-        )
+        dequant_cache_key = self._base_prefix + relative_packed_key + _DEQUANT_CACHE_TAG
         cached = self._cache.get(dequant_cache_key)
         if cached is not None:
             return cached
@@ -289,9 +283,7 @@ class KimiLazyStateDict(LazyStateDict):
 
         # Optionally load weight_shape for validation
         shape_relative = packed_key_to_shape_key(relative_packed_key)
-        weight_shape: Optional[torch.Tensor] = (
-            super().__getitem__(shape_relative) if shape_relative in self else None
-        )
+        weight_shape: Optional[torch.Tensor] = super().__getitem__(shape_relative) if shape_relative in self else None
 
         result = dequantize_i32_packed(packed_i32, scales, weight_shape=weight_shape)
         self._cache[dequant_cache_key] = result

@@ -119,9 +119,7 @@ class KimiGenerator(DeepseekGenerator):
             try:
                 from transformers import AutoConfig
 
-                hf_config = AutoConfig.from_pretrained(
-                    str(model_path), trust_remote_code=True
-                )
+                hf_config = AutoConfig.from_pretrained(str(model_path), trust_remote_code=True)
                 logger.info(f"KimiGenerator: loaded HF config from {model_path}")
             except Exception as exc:
                 logger.warning(
@@ -139,8 +137,7 @@ class KimiGenerator(DeepseekGenerator):
                 logger.info(f"KimiGenerator: config validated\n{kimi_cfg.summary()}")
             except ValueError as exc:
                 raise ValueError(
-                    f"Kimi K2.5 config validation failed — refusing to start "
-                    f"with a mismatched model:\n{exc}"
+                    f"Kimi K2.5 config validation failed — refusing to start " f"with a mismatched model:\n{exc}"
                 ) from exc
 
         # ------------------------------------------------------------------
@@ -177,21 +174,15 @@ class KimiGenerator(DeepseekGenerator):
         """
         if self.random_weights:
             logger.info(
-                "KimiGenerator: random_weights=True — using parent weight prep "
-                "(KimiLazyStateDict not injected)"
+                "KimiGenerator: random_weights=True — using parent weight prep " "(KimiLazyStateDict not injected)"
             )
             super()._prepare_weight_configs(cache_dir)
             return
 
-        weight_cache_path = (
-            Path(cache_dir) if cache_dir is not None else Path(_DEFAULT_CACHE_DIR)
-        )
+        weight_cache_path = Path(cache_dir) if cache_dir is not None else Path(_DEFAULT_CACHE_DIR)
         weight_cache_path.mkdir(parents=True, exist_ok=True)
 
-        logger.info(
-            f"KimiGenerator: loading weights via KimiLazyStateDict "
-            f"from {self.model_path!r}"
-        )
+        logger.info(f"KimiGenerator: loading weights via KimiLazyStateDict " f"from {self.model_path!r}")
         kimi_state_dict = KimiLazyStateDict(self.model_path)
 
         self.model_weight_config = get_weight_config(

@@ -59,8 +59,8 @@ import torch
 from safetensors.torch import save_file
 
 from models.demos.kimi_k25.utils.weight_loader import (
-    KimiLazyStateDict,
     KIMI_MODEL_PREFIX,
+    KimiLazyStateDict,
     dequantize_i32_packed,
     is_int4_packed_key,
     packed_key_to_scale_key,
@@ -124,9 +124,7 @@ def _make_checkpoint(
 
     torch.manual_seed(42)
     weights_i8 = torch.randint(-8, 8, (out_f, in_f), dtype=torch.int8)
-    scales = (torch.randn(out_f, n_groups, dtype=torch.float32).abs() + 0.01).to(
-        torch.bfloat16
-    )
+    scales = (torch.randn(out_f, n_groups, dtype=torch.float32).abs() + 0.01).to(torch.bfloat16)
     attn_weight = torch.randn(out_f, in_f, dtype=torch.bfloat16)
     lm_head_weight = torch.randn(out_f, in_f, dtype=torch.bfloat16)
 
@@ -185,9 +183,7 @@ class TestDequantizeI32Packed:
         torch.manual_seed(7)
         out_f, in_f = 8, 64
         weights_i8 = torch.randint(-8, 8, (out_f, in_f), dtype=torch.int8)
-        scales = (torch.randn(out_f, 2, dtype=torch.float32).abs() + 0.01).to(
-            torch.bfloat16
-        )
+        scales = (torch.randn(out_f, 2, dtype=torch.float32).abs() + 0.01).to(torch.bfloat16)
         packed_i32 = _pack_int4_to_i32(weights_i8)
         return weights_i8, scales, packed_i32
 
@@ -336,9 +332,7 @@ class TestKimiLazyStateDict:
 
     def test_no_weight_shape_still_works(self, tmp_path):
         """KimiLazyStateDict dequantizes correctly even without weight_shape."""
-        weights_i8, scales, _ = _make_checkpoint(
-            tmp_path, include_weight_shape=False
-        )
+        weights_i8, scales, _ = _make_checkpoint(tmp_path, include_weight_shape=False)
         state = KimiLazyStateDict(tmp_path)
         w = state["model.layers.1.mlp.experts.0.gate_proj.weight_packed"]
         assert w.shape == (16, 64)
@@ -355,14 +349,13 @@ class TestKimiLazyStateDict:
         state = KimiLazyStateDict(ckpt["path"])
         # Create sub-view as sub_state_dict(state, "model.layers.1.") would
         sub = state.view_with_prefix("model.layers.1.")
-        assert isinstance(sub, KimiLazyStateDict), (
-            f"view_with_prefix returned {type(sub).__name__}, expected KimiLazyStateDict"
-        )
+        assert isinstance(
+            sub, KimiLazyStateDict
+        ), f"view_with_prefix returned {type(sub).__name__}, expected KimiLazyStateDict"
         # Key relative to the sub-view (model.layers.1. prefix stripped off)
         w = sub["mlp.experts.0.gate_proj.weight_packed"]
         assert w.dtype == torch.bfloat16, (
-            f"Sub-view returned {w.dtype}, expected bfloat16. "
-            "INT4 dequant was lost in the sub-view."
+            f"Sub-view returned {w.dtype}, expected bfloat16. " "INT4 dequant was lost in the sub-view."
         )
         assert w.shape == (ckpt["out_f"], ckpt["in_f"])
 
@@ -371,9 +364,9 @@ class TestKimiLazyStateDict:
         state = KimiLazyStateDict(ckpt["path"])
         sub = state.view_with_prefix("model.layers.1.")
         # Combined prefix should be "language_model." + "model.layers.1."
-        assert sub._base_prefix == "language_model.model.layers.1.", (
-            f"Expected 'language_model.model.layers.1.', got {sub._base_prefix!r}"
-        )
+        assert (
+            sub._base_prefix == "language_model.model.layers.1."
+        ), f"Expected 'language_model.model.layers.1.', got {sub._base_prefix!r}"
 
 
 # ── Integration tests (require real Kimi K2.5 weights) ───────────────────────
@@ -404,8 +397,7 @@ def test_real_weight_not_nan_not_zero():
     assert not torch.isinf(w).any(), "Inf in real dequantized weight"
     assert w.abs().max() > 1e-6, "All-zero dequantized weight (suspicious)"
     print(
-        f"\n[INFO] gate_proj expert 0 layer 1: "
-        f"shape={w.shape}, max={w.abs().max():.5f}, mean={w.abs().mean():.6f}"
+        f"\n[INFO] gate_proj expert 0 layer 1: " f"shape={w.shape}, max={w.abs().max():.5f}, mean={w.abs().mean():.6f}"
     )
 
 

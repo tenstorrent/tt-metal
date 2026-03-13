@@ -36,8 +36,7 @@ from __future__ import annotations
 
 import warnings
 from dataclasses import dataclass, field
-from typing import Any, Dict, Optional
-
+from typing import Any, Dict
 
 # ---------------------------------------------------------------------------
 # Known-good architecture constants (from research doc + HF config.json)
@@ -57,12 +56,12 @@ _KIMI_K25_REFERENCE = {
     "qk_rope_head_dim": 64,
     "v_head_dim": 128,
     # MoE routing
-    "num_experts_per_tok": 8,           # top-k = 8
+    "num_experts_per_tok": 8,  # top-k = 8
     "n_routed_experts": 384,
     "n_shared_experts": 1,
-    "first_k_dense_replace": 1,         # only layer 0 is dense
-    "moe_layer_freq": 1,                # every layer is MoE (except first_k_dense)
-    "n_group": 1,                       # flat routing — no expert grouping
+    "first_k_dense_replace": 1,  # only layer 0 is dense
+    "moe_layer_freq": 1,  # every layer is MoE (except first_k_dense)
+    "n_group": 1,  # flat routing — no expert grouping
     "topk_group": 1,
     "routed_scaling_factor": 2.827,
     "norm_topk_prob": True,
@@ -70,9 +69,9 @@ _KIMI_K25_REFERENCE = {
     "topk_method": "noaux_tc",
     # FFN sizes
     "moe_intermediate_size": 2048,
-    "intermediate_size": 18432,         # dense layer intermediate size
+    "intermediate_size": 18432,  # dense layer intermediate size
     # Normalisation
-    "rms_norm_eps": 1e-5,              # NOTE: 1e-5, not 1e-6 (DSV3)
+    "rms_norm_eps": 1e-5,  # NOTE: 1e-5, not 1e-6 (DSV3)
     # Rotary embeddings
     "rope_theta": 50000.0,
     "rope_scaling": {
@@ -89,15 +88,15 @@ _KIMI_K25_REFERENCE = {
     "vocab_size": 163840,
     # Special tokens
     "bos_token_id": 1,
-    "eos_token_id": 163585,             # generation_config prefers 163586; log warning
+    "eos_token_id": 163585,  # generation_config prefers 163586; log warning
     # Weight quantization
     "quant_method": "compressed-tensors",
-    "quant_type": "int4",               # W4A16 symmetric, group_size=32
+    "quant_type": "int4",  # W4A16 symmetric, group_size=32
     "quant_group_size": 32,
     "quant_targets": "routed_experts",  # only routed expert linears are quantized
     # Architecture deltas from DSV3
-    "num_mtp_layers": 0,               # no multi-token prediction
-    "activation_function": "silu",     # SwiGLU via split gate
+    "num_mtp_layers": 0,  # no multi-token prediction
+    "activation_function": "silu",  # SwiGLU via split gate
     "hidden_act": "silu",
 }
 
@@ -109,6 +108,7 @@ _FLOAT_TOL = 1e-6
 # ---------------------------------------------------------------------------
 # KimiK25Config dataclass
 # ---------------------------------------------------------------------------
+
 
 @dataclass
 class KimiK25Config:
@@ -154,15 +154,17 @@ class KimiK25Config:
 
     # ---- Rotary ----
     rope_theta: float = 50000.0
-    rope_scaling: Dict[str, Any] = field(default_factory=lambda: {
-        "type": "yarn",
-        "factor": 64.0,
-        "beta_fast": 32.0,
-        "beta_slow": 1.0,
-        "mscale": 1.0,
-        "mscale_all_dim": 1.0,
-        "original_max_position_embeddings": 4096,
-    })
+    rope_scaling: Dict[str, Any] = field(
+        default_factory=lambda: {
+            "type": "yarn",
+            "factor": 64.0,
+            "beta_fast": 32.0,
+            "beta_slow": 1.0,
+            "mscale": 1.0,
+            "mscale_all_dim": 1.0,
+            "original_max_position_embeddings": 4096,
+        }
+    )
 
     # ---- Context / vocab ----
     max_position_embeddings: int = 131072
@@ -182,14 +184,14 @@ class KimiK25Config:
 
     # ---- Derived / computed ----
     head_dim: int = field(init=False)
-    experts_per_device_tg: int = field(init=False)   # TG (32 devices): 384 / 32 = 12
+    experts_per_device_tg: int = field(init=False)  # TG (32 devices): 384 / 32 = 12
     experts_per_device_dual: int = field(init=False)  # DUAL (64): 6
     experts_per_device_quad: int = field(init=False)  # QUAD (128): 3
     padded_vocab_size: int = field(init=False)
 
     def __post_init__(self):
         self.head_dim = self.qk_nope_head_dim + self.qk_rope_head_dim  # 192
-        self.experts_per_device_tg = self.n_routed_experts // 32   # 12
+        self.experts_per_device_tg = self.n_routed_experts // 32  # 12
         self.experts_per_device_dual = self.n_routed_experts // 64  # 6
         self.experts_per_device_quad = self.n_routed_experts // 128  # 3
 
@@ -279,8 +281,7 @@ class KimiK25Config:
         )
 
         # Extract quantization metadata from quantization_config if present
-        quant_cfg = getattr(hf_config, "quantization_config", None) or \
-                    getattr(text_cfg, "quantization_config", None)
+        quant_cfg = getattr(hf_config, "quantization_config", None) or getattr(text_cfg, "quantization_config", None)
         if quant_cfg is not None:
             cfg.quant_method = getattr(quant_cfg, "quant_type", "compressed-tensors")
             # compressed-tensors stores per-layer configs; we surface the summary
@@ -311,9 +312,7 @@ class KimiK25Config:
             else:
                 ok = actual == expected
             if not ok:
-                msg = (
-                    f"  {field_name}: got {actual!r}, expected {expected!r}"
-                )
+                msg = f"  {field_name}: got {actual!r}, expected {expected!r}"
                 if critical:
                     errors.append(msg)
                 else:
@@ -338,7 +337,7 @@ class KimiK25Config:
         _check("topk_group", self.topk_group)
         _check("moe_intermediate_size", self.moe_intermediate_size)
         _check("intermediate_size", self.intermediate_size)
-        _check("rms_norm_eps", self.rms_norm_eps)     # 1e-5 not 1e-6 — subtle accuracy risk
+        _check("rms_norm_eps", self.rms_norm_eps)  # 1e-5 not 1e-6 — subtle accuracy risk
         _check("vocab_size", self.vocab_size)
         _check("num_mtp_layers", self.num_mtp_layers)
 
@@ -374,6 +373,7 @@ class KimiK25Config:
     def to_dict(self) -> Dict[str, Any]:
         """Return all config fields as a plain dict."""
         import dataclasses
+
         return dataclasses.asdict(self)
 
     def dsv3_overrides(self) -> Dict[str, Any]:
@@ -383,17 +383,17 @@ class KimiK25Config:
         These are the fields that must be changed when reusing DSV3 components.
         """
         return {
-            "num_attention_heads": self.num_attention_heads,   # 64 (DSV3: 128)
-            "n_routed_experts": self.n_routed_experts,         # 384 (DSV3: 256)
+            "num_attention_heads": self.num_attention_heads,  # 64 (DSV3: 128)
+            "n_routed_experts": self.n_routed_experts,  # 384 (DSV3: 256)
             "first_k_dense_replace": self.first_k_dense_replace,  # 1 (DSV3: 3)
-            "n_group": self.n_group,                           # 1 (DSV3: 8)
-            "topk_group": self.topk_group,                     # 1 (DSV3: 4)
+            "n_group": self.n_group,  # 1 (DSV3: 8)
+            "topk_group": self.topk_group,  # 1 (DSV3: 4)
             "routed_scaling_factor": self.routed_scaling_factor,  # 2.827 (DSV3: 2.5)
-            "rope_theta": self.rope_theta,                     # 50000 (DSV3: 10000)
-            "rope_scaling": self.rope_scaling,                 # YaRN factor=64 (DSV3: different)
-            "rms_norm_eps": self.rms_norm_eps,                 # 1e-5 (DSV3: 1e-6)
-            "vocab_size": self.vocab_size,                     # 163840 (DSV3: ~129280)
-            "num_mtp_layers": self.num_mtp_layers,             # 0 (DSV3: 1)
+            "rope_theta": self.rope_theta,  # 50000 (DSV3: 10000)
+            "rope_scaling": self.rope_scaling,  # YaRN factor=64 (DSV3: different)
+            "rms_norm_eps": self.rms_norm_eps,  # 1e-5 (DSV3: 1e-6)
+            "vocab_size": self.vocab_size,  # 163840 (DSV3: ~129280)
+            "num_mtp_layers": self.num_mtp_layers,  # 0 (DSV3: 1)
         }
 
     def summary(self) -> str:
@@ -418,6 +418,7 @@ class KimiK25Config:
 # Convenience loader
 # ---------------------------------------------------------------------------
 
+
 def load_kimi_config(
     model_name_or_path: str,
     use_fixture: bool = False,
@@ -438,6 +439,7 @@ def load_kimi_config(
     if use_fixture:
         cfg = KimiK25Config.from_fixture()
         import logging
+
         logging.getLogger(__name__).info("KimiK25Config: using hardcoded fixture (no HF download)")
         return cfg
 
