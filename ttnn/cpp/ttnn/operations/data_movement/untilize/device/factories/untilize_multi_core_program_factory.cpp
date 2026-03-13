@@ -111,9 +111,10 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         has_uneven_sharding = (height_remainder != 0) || (width_remainder != 0);
     }
 
-    // Use the block reader (unbacked CB) when:
-    // 1. Uneven sharding: to avoid OOB from CB backing mismatch
-    // 2. Slow untilize (!use_pack_untilize): the llk_unpack_untilize reads slightly past CB boundary
+    // Block reader: unbacked double-buffer CB, reads from L1 shard block-by-block.
+    // Required for uneven sharding (CB backing mismatch) and the slow untilize path
+    // (llk_unpack_untilize reads past CB boundary when CB is backed at L1 edge).
+    // The pack_untilize path with even sharding uses zero-copy backed CB (fast production path).
     bool use_block_reader = input_is_sharded && (has_uneven_sharding || !use_pack_untilize);
 
     // Input CB
