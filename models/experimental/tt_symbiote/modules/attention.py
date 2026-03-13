@@ -669,7 +669,12 @@ class LlamaAttention(TTNNModule):
         new_attn = cls()
         new_attn._fallback_torch_layer = llama_attn
         new_attn.num_key_value_groups = getattr(llama_attn, "num_key_value_groups", 1)
-        # Fuse Q/K/V for self-attention (zero-pad K bias)
+        new_attn._scaling = getattr(llama_attn, "scaling", None)
+        if new_attn._scaling is None:
+            head_dim = getattr(
+                llama_attn, "head_dim", llama_attn.config.hidden_size // llama_attn.config.num_attention_heads
+            )
+            new_attn._scaling = head_dim**-0.5
         new_attn.qkv_same_shape = (
             llama_attn.q_proj.weight.shape == llama_attn.k_proj.weight.shape
             and llama_attn.q_proj.weight.shape == llama_attn.v_proj.weight.shape
@@ -745,7 +750,7 @@ class LlamaAttention(TTNNModule):
             value_states,
             None,
             dropout=0.0,
-            scaling=self.torch_layer.scaling,
+            scaling=self._scaling,
             is_causal=self.torch_layer.is_causal,
             transpose_output=False,
         )
@@ -756,7 +761,7 @@ class LlamaAttention(TTNNModule):
             # Slice: [B, kv_len, D] -> [B, q_len, D]
             attn_out = attn_out[:, -original_q_len:, :]
 
-        return self.o_proj(attn_out), None
+        return self.o_proj(attn_out), None, past_key_values
 
 
 def _get_rel_pos_sam(q_size: int, k_size: int, rel_pos: torch.Tensor) -> torch.Tensor:
@@ -985,14 +990,26 @@ class TTNNSAMAttention(TTNNModule):
         if attn_bias_tt is not None:
             qk = ttnn.add(qk, attn_bias_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(attn_bias_tt)
-        attn_weights = ttnn.softmax(
-            qk,
-            dim=-1,
-            compute_kernel_config=cfg,
-            numeric_stable=True,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        ttnn.deallocate(qk)
+        try:
+            attn_weights = ttnn.softmax(
+                qk,
+                dim=-1,
+                compute_kernel_config=cfg,
+                numeric_stable=True,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(qk)
+        except RuntimeError:
+            qk_torch = ttnn.to_torch(qk)
+            ttnn.deallocate(qk)
+            attn_weights_torch = torch.nn.functional.softmax(qk_torch.float(), dim=-1).to(torch.bfloat16)
+            attn_weights = ttnn.from_torch(
+                attn_weights_torch,
+                dtype=ttnn.bfloat16,
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
         attn_out = ttnn.matmul(
             attn_weights,
             v,

@@ -4,10 +4,13 @@
 
 """Test for DeepSeek-OCR model with TTNN backend.
 
-Includes Saurav's TTNNSAMAttention, TTNNDeepseekV2MoE, and TTNNDeepseekOCRMoEGate
-modules alongside the original leaf-op replacements and ImageEncoderViT wrapper.
+Includes Saurav's TTNN modules: TTNNSAMAttention, TTNNDeepseekV2MoE,
+TTNNDeepseekOCRMoEGate, TTNNClipVisionEmbeddings, TTNNNoTPAttention,
+and TTNNNoTPFeedForward alongside the original leaf-op replacements
+and ImageEncoderViT wrapper.
 """
 
+import os
 import torch
 from torch import nn
 from transformers import AutoModel, AutoTokenizer
@@ -18,6 +21,11 @@ from models.experimental.tt_symbiote.modules.attention import LlamaAttention, TT
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear
 from models.experimental.tt_symbiote.modules.conv import TTNNConv2dNHWC
 from models.experimental.tt_symbiote.modules.moe import TTNNDeepseekV2MoE
+from models.experimental.tt_symbiote.tests.deepseek_ocr_vision_model.ttnn_symbiote_vit_model import (
+    TTNNClipVisionEmbeddings,
+    TTNNNoTPAttention,
+    TTNNNoTPFeedForward,
+)
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
@@ -58,6 +66,28 @@ class LayerNorm2d(nn.Module):
         x = (x - u) / torch.sqrt(s + self.eps)
         x = self.weight * x + self.bias
         return x
+
+
+class TTNNTransformerBlock(nn.Module):
+    """Wrapper for NoTPTransformerBlock that routes submodule calls through __call__
+    instead of .forward(), enabling TTNNModule dispatch and timing."""
+
+    def __init__(self, old_layer) -> None:
+        super().__init__()
+        self.self_attn = old_layer.self_attn
+        self.mlp = old_layer.mlp
+        self.layer_norm1 = old_layer.layer_norm1
+        self.layer_norm2 = old_layer.layer_norm2
+
+    @classmethod
+    def from_torch(cls, old_layer):
+        return cls(old_layer)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        residual = self.self_attn(self.layer_norm1(x))
+        h = x + residual
+        out = h + self.mlp(self.layer_norm2(h))
+        return out
 
 
 class ImageEncoderViT(nn.Module):
@@ -105,14 +135,19 @@ def test_deepseek_ocr(device):
     )
 
     # Module-level replacements (nn_to_nn): custom wrappers that rewrite forward()
+    vit_block_class = model.model.vision_model.transformer.layers[0].__class__
     nn_to_nn = {
         model.model.sam_model.__class__: ImageEncoderViT,
         model.model.layers[0].input_layernorm.__class__: TTNNRMSNorm,
+        vit_block_class: TTNNTransformerBlock,
     }
 
     # Leaf-op and module replacements (nn_to_ttnn): TTNN-backed modules
     sam_attn_class = model.model.sam_model.blocks[0].attn.__class__
     moe_class = model.model.layers[1].mlp.__class__
+    vit_embeddings_class = model.model.vision_model.embeddings.__class__
+    vit_attn_class = model.model.vision_model.transformer.layers[0].self_attn.__class__
+    vit_mlp_class = model.model.vision_model.transformer.layers[0].mlp.__class__
     nn_to_ttnn = {
         nn.Linear: TTNNLinear,
         nn.SiLU: TTNNSilu,
@@ -122,10 +157,14 @@ def test_deepseek_ocr(device):
         model.model.layers[0].self_attn.__class__: LlamaAttention,
         sam_attn_class: TTNNSAMAttention,
         moe_class: TTNNDeepseekV2MoE,
+        vit_embeddings_class: TTNNClipVisionEmbeddings,
+        vit_attn_class: TTNNNoTPAttention,
+        vit_mlp_class: TTNNNoTPFeedForward,
     }
 
     prompt = "<image>\n<|grounding|>Convert the document to markdown. "
-    image_file = "test.jpg"
+    test_dir = os.path.dirname(os.path.abspath(__file__))
+    image_file = os.path.join(test_dir, "deepseek_ocr_vision_model", "test.png")
     output_path = "output_deepseek_ocr/"
 
     modules1 = register_module_replacement_dict(model, nn_to_nn, model_config=None)
