@@ -1092,6 +1092,132 @@ template struct WhereOperationWithScalar<BinaryOpType::WHERE_TTS>;
 
 namespace ttnn {
 
+// Two-layer path (aligned with ternary): free function -> detail::invoke_binary_ng
+template <operations::binary::BinaryOpType Op>
+Tensor binary_op(
+    const Tensor& lhs,
+    const Tensor& rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return operations::binary::detail::invoke_binary_ng(
+        lhs,
+        rhs,
+        Op,
+        output_dtype,
+        memory_config,
+        output,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy,
+        /*fast_and_approximate_mode*/ false,
+        sub_core_grids);
+}
+
+template <operations::binary::BinaryOpType Op>
+Tensor binary_op(
+    const Tensor& lhs,
+    float rhs,
+    const std::optional<const DataType>& output_dtype,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<Tensor>& output,
+    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations,
+    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    const std::optional<bool>& use_legacy,
+    const std::optional<CoreRangeSet>& sub_core_grids) {
+    return operations::binary::detail::invoke_binary_ng(
+        lhs,
+        rhs,
+        Op,
+        output_dtype,
+        memory_config,
+        output,
+        post_activations,
+        lhs_activations,
+        rhs_activations,
+        use_legacy,
+        /*fast_and_approximate_mode*/ false,
+        sub_core_grids);
+}
+
+// Explicit instantiations so binary_op<Op> resolves to the two-layer path (free -> invoke_binary_ng)
+#define TNN_BINARY_OP_EXPLICIT_INST(Op)                                                 \
+    template Tensor binary_op<operations::binary::BinaryOpType::Op>(                    \
+        const Tensor& lhs,                                                              \
+        const Tensor& rhs,                                                              \
+        const std::optional<const DataType>& output_dtype,                              \
+        const std::optional<MemoryConfig>& memory_config,                               \
+        const std::optional<Tensor>& output,                                            \
+        tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations, \
+        tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,  \
+        tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,  \
+        const std::optional<bool>& use_legacy,                                          \
+        const std::optional<CoreRangeSet>& sub_core_grids);                             \
+    template Tensor binary_op<operations::binary::BinaryOpType::Op>(                    \
+        const Tensor& lhs,                                                              \
+        float rhs,                                                                      \
+        const std::optional<const DataType>& output_dtype,                              \
+        const std::optional<MemoryConfig>& memory_config,                               \
+        const std::optional<Tensor>& output,                                            \
+        tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations, \
+        tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations,  \
+        tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations,  \
+        const std::optional<bool>& use_legacy,                                          \
+        const std::optional<CoreRangeSet>& sub_core_grids);
+
+TNN_BINARY_OP_EXPLICIT_INST(ADD)
+TNN_BINARY_OP_EXPLICIT_INST(SUB)
+TNN_BINARY_OP_EXPLICIT_INST(MUL)
+TNN_BINARY_OP_EXPLICIT_INST(GT)
+TNN_BINARY_OP_EXPLICIT_INST(LT)
+TNN_BINARY_OP_EXPLICIT_INST(LE)
+TNN_BINARY_OP_EXPLICIT_INST(GE)
+TNN_BINARY_OP_EXPLICIT_INST(EQ)
+TNN_BINARY_OP_EXPLICIT_INST(NE)
+TNN_BINARY_OP_EXPLICIT_INST(SQUARED_DIFFERENCE)
+TNN_BINARY_OP_EXPLICIT_INST(BIAS_GELU)
+TNN_BINARY_OP_EXPLICIT_INST(LOGADDEXP)
+TNN_BINARY_OP_EXPLICIT_INST(LOGICAL_AND)
+TNN_BINARY_OP_EXPLICIT_INST(LOGICAL_OR)
+TNN_BINARY_OP_EXPLICIT_INST(LOGICAL_XOR)
+TNN_BINARY_OP_EXPLICIT_INST(LDEXP)
+TNN_BINARY_OP_EXPLICIT_INST(LOGADDEXP2)
+TNN_BINARY_OP_EXPLICIT_INST(DIV)
+TNN_BINARY_OP_EXPLICIT_INST(DIV_FLOOR)
+TNN_BINARY_OP_EXPLICIT_INST(DIV_TRUNC)
+TNN_BINARY_OP_EXPLICIT_INST(REMAINDER)
+TNN_BINARY_OP_EXPLICIT_INST(FMOD)
+TNN_BINARY_OP_EXPLICIT_INST(RSUB)
+TNN_BINARY_OP_EXPLICIT_INST(POWER)
+TNN_BINARY_OP_EXPLICIT_INST(BITWISE_XOR)
+TNN_BINARY_OP_EXPLICIT_INST(BITWISE_AND)
+TNN_BINARY_OP_EXPLICIT_INST(BITWISE_OR)
+TNN_BINARY_OP_EXPLICIT_INST(LEFT_SHIFT)
+TNN_BINARY_OP_EXPLICIT_INST(RIGHT_SHIFT)
+TNN_BINARY_OP_EXPLICIT_INST(LOGICAL_RIGHT_SHIFT)
+TNN_BINARY_OP_EXPLICIT_INST(QUANT)
+TNN_BINARY_OP_EXPLICIT_INST(REQUANT)
+TNN_BINARY_OP_EXPLICIT_INST(DEQUANT)
+TNN_BINARY_OP_EXPLICIT_INST(MAXIMUM)
+TNN_BINARY_OP_EXPLICIT_INST(MINIMUM)
+TNN_BINARY_OP_EXPLICIT_INST(GCD)
+TNN_BINARY_OP_EXPLICIT_INST(LCM)
+TNN_BINARY_OP_EXPLICIT_INST(ADDALPHA)
+TNN_BINARY_OP_EXPLICIT_INST(SUBALPHA)
+TNN_BINARY_OP_EXPLICIT_INST(XLOGY)
+TNN_BINARY_OP_EXPLICIT_INST(HYPOT)
+TNN_BINARY_OP_EXPLICIT_INST(WHERE_TST)
+TNN_BINARY_OP_EXPLICIT_INST(WHERE_TTS)
+
+#undef TNN_BINARY_OP_EXPLICIT_INST
+
 Tensor add(
     const Tensor& lhs,
     const Tensor& rhs,

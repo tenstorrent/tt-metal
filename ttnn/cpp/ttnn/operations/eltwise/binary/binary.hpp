@@ -311,6 +311,10 @@ struct WhereOperationWithScalar {
 
 }  // namespace operations::binary
 
+// Binary public API uses the same two-layer pattern as ternary: free function -> implementation
+// (detail::invoke_binary_ng). BinaryOperation<Op> and related structs remain for internal
+// call-sites (composite ops, inplace, nanobind, etc.) and may be migrated away in a follow-up.
+
 template <operations::binary::BinaryOpType Op>
 Tensor binary_op(
     const Tensor& lhs,
@@ -322,19 +326,7 @@ Tensor binary_op(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::BinaryOperation<Op>::invoke(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 template <operations::binary::BinaryOpType Op>
 Tensor binary_op(
@@ -347,19 +339,7 @@ Tensor binary_op(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::BinaryOperation<Op>::invoke(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 
 Tensor add(
     const Tensor& lhs,
