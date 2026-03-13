@@ -28,6 +28,8 @@ void DeepseekMoEPostCombineTilizeDeviceOperation::validate_on_program_cache_miss
 
     const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
 
+    // TODO: (GR) per core row bytes must be L1 aligned
+
     // rank 2+
     TT_FATAL(input_rank >= 2, "DeepseekMoEPostCombineTilize requires rank >= 2, but has {}", input_rank);
 

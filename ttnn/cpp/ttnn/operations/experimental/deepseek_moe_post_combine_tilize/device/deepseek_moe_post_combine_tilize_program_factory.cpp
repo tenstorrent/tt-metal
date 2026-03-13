@@ -49,36 +49,47 @@ DeepseekMoEPostCombineTilizeProgramFactory::cached_program_t DeepseekMoEPostComb
 
     };
     tt::tt_metal::KernelHandle reader_kernel_id = tt::tt_metal::CreateKernel(
-        program, "...", op_cores, tt::tt_metal::ComputeConfig{.named_compile_args = reader_named_ct_args});
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/device/kernels/"
+        "deepseek_moe_post_combine_tilize_reader.cpp",
+        op_cores,
+        tt::tt_metal::ComputeConfig{.named_compile_args = reader_named_ct_args});
 
     // compute
     std::unordered_map<std::string, uint32_t> compute_named_ct_args = {
-
+        {"tilize_input_cb_id", tilize_input_cb_id},
+        {"tilize_output_cb_id", tilize_output_cb_id},
+        {"selected_experts_k", num_tiles},
     };
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
-        program, "...", op_cores, tt::tt_metal::ComputeConfig{.named_compile_args = compute_named_ct_args});
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/device/kernels/"
+        "deepseek_moe_post_combine_tilize_compute.cpp",
+        op_cores,
+        tt::tt_metal::ComputeConfig{.named_compile_args = compute_named_ct_args});
 
     // writer
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
 
     };
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
-        program, "...", op_cores, tt::tt_metal::ComputeConfig{.named_compile_args = writer_named_ct_args});
+        program,
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/device/kernels/"
+        "deepseek_moe_post_combine_tilize_writer.cpp",
+        op_cores,
+        tt::tt_metal::ComputeConfig{.named_compile_args = writer_named_ct_args});
 
     std::vector<tt::tt_metal::CoreCoord> cores = corerange_to_cores(op_cores, std::nullopt, true);
     for (uint32_t i = 0; i < num_op_cores; ++i) {
         const auto& core = cores[i];
 
+        // reader
         std::vector<uint32_t> reader_rt_args = {
 
         };
         SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
 
-        std::vector<uint32_t> compute_rt_args = {
-
-        };
-        SetRuntimeArgs(program, compute_kernel_id, core, compute_rt_args);
-
+        // writer
         std::vector<uint32_t> writer_rt_args = {
 
         };
