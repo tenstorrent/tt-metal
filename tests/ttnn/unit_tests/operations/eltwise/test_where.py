@@ -634,10 +634,13 @@ def test_addcdiv_edgcase_fp32(device):
     assert torch_equal_nan(output_tensor1, golden_tensor)
 
 
-def test_ttnn_where_forge_nan(device):
-    C = torch.ones(1, 4, 1, dtype=torch.float32)
-    T = torch.randn(1, 4, 768, dtype=torch.float32)
-    F = torch.ones(1, 4, 768, dtype=torch.float32) * float("nan")
+@pytest.mark.parametrize(
+    "a_shape, b_shape, c_shape", [((1, 4, 1), (1, 1, 768), (1, 4, 768)), ((1, 4, 768), (1, 4, 768), (1, 4, 768))]
+)
+def test_ttnn_where_forge_nan(device, a_shape, b_shape, c_shape):
+    C = torch.ones(a_shape, dtype=torch.float32)
+    T = torch.randn(b_shape, dtype=torch.float32)
+    F = torch.ones(c_shape, dtype=torch.float32) * float("nan")
     golden = torch.where(C != 0, T, F)
 
     ttnn_C = ttnn.from_torch(C, dtype=ttnn.float32, layout=ttnn.TILE_LAYOUT, device=device)
