@@ -198,12 +198,12 @@ uint32_t PipelineParallelLlama::get_blocks_to_load() const {
 }
 
 autograd::TensorPtr PipelineParallelLlama::operator()(const autograd::TensorPtr& x, const autograd::TensorPtr& mask) {
+    auto distributed_ctx = autograd::ctx().get_distributed_context();
+    int rank = *distributed_ctx->rank();
     auto out = x;
     if (is_first_rank()) {
         out = (*tok_emb)(out);
     } else {
-        auto distributed_ctx = autograd::ctx().get_distributed_context();
-        int rank = *distributed_ctx->rank();
         auto recv_rank = core::distributed::Rank(rank - 1);
 
         auto batch_size = out->get_value().logical_shape()[0];
@@ -228,8 +228,6 @@ autograd::TensorPtr PipelineParallelLlama::operator()(const autograd::TensorPtr&
         out = (*ln_fc)(out);
         out = (*fc)(out);
     } else {
-        auto distributed_ctx = autograd::ctx().get_distributed_context();
-        int rank = *distributed_ctx->rank();
         auto send_rank = core::distributed::Rank(rank + 1);
         out = ttml::ops::distributed::intermesh_send(out, send_rank);
     }
