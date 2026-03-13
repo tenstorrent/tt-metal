@@ -14,7 +14,6 @@ from models.demos.stable_diffusion_xl_base.tests.test_common import (
     SDXL_FABRIC_CONFIG,
     SDXL_L1_SMALL_SIZE,
     SDXL_TRACE_REGION_SIZE,
-    prepare_device,
 )
 from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
     accuracy_assert,
@@ -128,8 +127,6 @@ def test_accuracy_sdxl_lora(
 ):
     if image_resolution == (512, 512):
         pytest.skip("Accuracy target not available for 512x512 image resolution")
-
-    prepare_device(mesh_device, use_cfg_parallel)
 
     start_from, num_prompts = evaluation_range
 
