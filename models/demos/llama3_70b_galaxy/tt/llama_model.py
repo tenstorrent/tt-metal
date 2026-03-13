@@ -621,20 +621,21 @@ class TtTransformer(LightweightModule):
 
     def unpack_bitmask(self, bitmask):
         op_kwargs = {"sub_core_grids": self.args.sub_core_grids} if self.args.sub_core_grids is not None else {}
+        _dump = self._debug_dump_all_shards if hasattr(self, "_debug_dump_all_shards") else (lambda *a, **kw: None)
         batch_dim, vocab_dim = bitmask.shape
         if hasattr(self, "_debug_log_device_tensor_slice"):
             self._debug_log_device_tensor_slice("packed_bitmask_device", bitmask)
-        self._debug_dump_all_shards("packed_bitmask_device", bitmask)
+        _dump("packed_bitmask_device", bitmask)
         bitmask_to_broadcast = ttnn.reshape(bitmask, (batch_dim, vocab_dim, 1), **op_kwargs)
-        self._debug_dump_all_shards("bitmask_to_broadcast", bitmask_to_broadcast)
+        _dump("bitmask_to_broadcast", bitmask_to_broadcast)
         broadcast_unpacked = ttnn.bitwise_right_shift(bitmask_to_broadcast, self.bitmask_arange)
-        self._debug_dump_all_shards("broadcast_unpacked_rshift", broadcast_unpacked)
+        _dump("broadcast_unpacked_rshift", broadcast_unpacked)
         broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
-        self._debug_dump_all_shards("broadcast_unpacked_and1", broadcast_unpacked)
+        _dump("broadcast_unpacked_and1", broadcast_unpacked)
         unpacked_bitmask = ttnn.reshape(broadcast_unpacked, (batch_dim, -1), **op_kwargs)
-        self._debug_dump_all_shards("unpacked_bitmask_reshape", unpacked_bitmask)
+        _dump("unpacked_bitmask_reshape", unpacked_bitmask)
         converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
-        self._debug_dump_all_shards("converted_bitmask_tile", converted_bitmask)
+        _dump("converted_bitmask_tile", converted_bitmask)
         if hasattr(self, "_debug_log_device_tensor_slice"):
             self._debug_log_device_tensor_slice("unpacked_bitmask_01", converted_bitmask)
         converted_bitmask_pre_penalty = None
@@ -648,8 +649,8 @@ class TtTransformer(LightweightModule):
         # converted_bitmask is 0/1. Compute (x - 1) * 1e9 -> {-1e9, 0}.
         result = ttnn.add(converted_bitmask, -1.0, dtype=ttnn.float32, **op_kwargs)
         result = ttnn.multiply(result, 1e9, **op_kwargs)
-        self._debug_dump_all_shards("converted_bitmask_tile_post_penalty", converted_bitmask)
-        self._debug_dump_all_shards("unpacked_penalty_mask", result)
+        _dump("converted_bitmask_tile_post_penalty", converted_bitmask)
+        _dump("unpacked_penalty_mask", result)
         if hasattr(self, "_debug_log_device_tensor_slice"):
             self._debug_log_device_tensor_slice("unpacked_penalty_mask", result)
         if converted_bitmask_pre_penalty is not None:
@@ -721,7 +722,8 @@ class TtTransformer(LightweightModule):
             return tt_logits
         if hasattr(self, "_debug_log_device_tensor_slice"):
             self._debug_log_device_tensor_slice("logits_before_mask", tt_logits)
-        self._debug_dump_all_shards("logits_before_mask", tt_logits)
+        if hasattr(self, "_debug_dump_all_shards"):
+            self._debug_dump_all_shards("logits_before_mask", tt_logits)
         with ttnn.trace_allocation_safe_scope(self.mesh_device):
             bitmask_unpacked = self.unpack_bitmask(self._active_bitmask)
             ttnn.add_(
@@ -732,7 +734,8 @@ class TtTransformer(LightweightModule):
             bitmask_unpacked.deallocate(True)
         if hasattr(self, "_debug_log_device_tensor_slice"):
             self._debug_log_device_tensor_slice("logits_after_mask", tt_logits)
-        self._debug_dump_all_shards("logits_after_mask", tt_logits)
+        if hasattr(self, "_debug_dump_all_shards"):
+            self._debug_dump_all_shards("logits_after_mask", tt_logits)
         if hasattr(self, "_debug_should_log_bitmask") and self._debug_should_log_bitmask():
             self._debug_bitmask_step += 1
         return tt_logits
