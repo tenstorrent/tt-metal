@@ -135,12 +135,12 @@ inline void _llk_unpack_untilize_pass_(const std::uint32_t base_address, const s
     if constexpr (first_pass)
     {
         // Select top faces in the 1st pass
-        TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Z, 0);
+        TTI_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Z, 0);
     }
     else
     {
         // Select bottom faces in the 2nd pass
-        TT_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Z, 2);
+        TTI_SETADC(p_setadc::UNP0, p_setadc::CH_0, p_setadc::SET_Z, 2);
     }
 
     // Wait for free context

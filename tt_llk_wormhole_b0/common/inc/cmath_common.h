@@ -203,16 +203,14 @@ inline void dest_section_flip()
 template <DstStart Dst>
 inline void set_dest_section_base()
 {
-    std::uint32_t base_addr;
     if constexpr (Dst == DstStart::StartZero)
     {
-        base_addr = 0;
+        TTI_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, 0);
     }
     else
     {
-        base_addr = DEST_REGISTER_HALF_SIZE;
+        TTI_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, DEST_REGISTER_HALF_SIZE);
     }
-    TT_SETC16(DEST_TARGET_REG_CFG_MATH_Offset_ADDR32, base_addr);
 }
 
 inline constexpr bool is_high_fidelity(const MathFidelity math_fidelity_desc)

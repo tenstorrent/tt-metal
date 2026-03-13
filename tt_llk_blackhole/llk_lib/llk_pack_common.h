@@ -40,7 +40,7 @@ inline void _llk_pack_dest_section_done_()
 
     if constexpr (Dst == DstSync::SyncFull)
     {
-        TT_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
+        TTI_ZEROACC(p_zeroacc::CLR_ALL, is_fp32_dest_acc_en, 0, ADDR_MOD_1, 0);
     }
     else
     {
@@ -67,8 +67,8 @@ inline void _llk_init_packer_dest_offset_registers_(
     TTI_STALLWAIT(p_stall::STALL_TDMA | p_stall::STALL_THCON, p_stall::PACK); // wait for pack to finish
 
     // RowMajor order
-    TT_SETDMAREG(0, 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
-    TT_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
+    TTI_SETDMAREG(0, 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_LO + 0));
+    TTI_SETDMAREG(0, DEST_REGISTER_HALF_SIZE + 0x00, 0, LO_16(p_gpr_pack::DEST_OFFSET_HI + 0));
 
     TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::THCON);
     select_packer_dest_registers<Dst>();

@@ -442,7 +442,7 @@ inline void zeroacc()
         .dest = {.incr = 0},
     }
         .set(ADDR_MOD_1);
-    TT_ZEROACC(p_zeroacc::CLR_ALL, 0, 0, ADDR_MOD_1, 0);
+    TTI_ZEROACC(p_zeroacc::CLR_ALL, 0, 0, ADDR_MOD_1, 0);
 }
 
 inline void zerosrc()

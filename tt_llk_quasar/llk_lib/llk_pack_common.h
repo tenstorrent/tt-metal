@@ -55,8 +55,14 @@ inline void _llk_pack_dest_dvalid_section_done_()
     TTI_STALLWAIT(p_stall::STALL_MATH, p_stall::NOTHING, p_stall::WAIT_SFPU, p_stall::PACK);
 
     constexpr std::uint32_t ZEROACC_CLR_MODE = (DST == DstSync::SyncHalf) ? p_zeroacc::CLR_HALF : p_zeroacc::CLR_ALL;
-    const std::uint32_t dest_id              = (DST == DstSync::SyncHalf) ? dest_bank_id : 0;
-    TT_ZEROACC(ZEROACC_CLR_MODE, IS_FP32_MATH_DEST_EN, 0, ADDR_MOD_0, dest_id);
+    if constexpr (DST == DstSync::SyncFull)
+    {
+        TTI_ZEROACC(ZEROACC_CLR_MODE, IS_FP32_MATH_DEST_EN, 0, ADDR_MOD_0, 0);
+    }
+    else
+    {
+        TT_ZEROACC(ZEROACC_CLR_MODE, IS_FP32_MATH_DEST_EN, 0, ADDR_MOD_0, dest_bank_id);
+    }
     TTI_CLEARDVALID(0, 0, 0, 0, p_cleardvalid::PACK, 0);
 
     if (DST == DstSync::SyncHalf)
@@ -248,7 +254,7 @@ inline void _llk_pack_dest_semaphore_section_done_()
 
     if constexpr (DST == DstSync::SyncFull)
     {
-        TT_ZEROACC(p_zeroacc::CLR_ALL, IS_FP32_DEST_EN, 0, ADDR_MOD_7, 0);
+        TTI_ZEROACC(p_zeroacc::CLR_ALL, IS_FP32_DEST_EN, 0, ADDR_MOD_7, 0);
     }
     else
     {
