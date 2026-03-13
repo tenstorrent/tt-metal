@@ -162,7 +162,7 @@ class RotarySetup:
                 mesh_shape=self.device.shape,
             ),
             device=None if on_host else self.device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            memory_config=None if on_host else ttnn.DRAM_MEMORY_CONFIG,
         )
 
     def get_position_idxs_tensor(self, position_idxs, on_host: bool = False):
