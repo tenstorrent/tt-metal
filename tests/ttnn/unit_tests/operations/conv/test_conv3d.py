@@ -306,7 +306,7 @@ def test_conv3d_cache_hash(
                 grid_size=grid_size,
             )
 
-    # assert device.cache_entries_counter.total == 2
+    # assert device.num_program_cache_entries() == 2
 
 
 @skip_for_blackhole("C_in blocking not supported on Blackhole - reduction path produces incorrect results")
