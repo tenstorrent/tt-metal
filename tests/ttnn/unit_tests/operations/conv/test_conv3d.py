@@ -144,47 +144,46 @@ def run_conv3d_test(
         compute_with_storage_grid_size=grid_size, C_in_block=32, dilation=dilation, weights_dtype=dtype
     )
 
-    with device.cache_entries_counter.measure():
-        w = conv3d_module.weight.data
-        tt_weight = ttnn.from_torch(w, dtype=dtype, pad_value=0)
-        tt_weight = ttnn.experimental.prepare_conv3d_weights(
-            weight_tensor=tt_weight, groups=groups, C_in_block=config.C_in_block, alignment=ALIGNMENT, device=device
-        )
-        tt_bias = ttnn.from_torch(
-            conv3d_module.bias.data.reshape(1, -1),
-            device=device,
-            dtype=dtype,
-            layout=ttnn.TILE_LAYOUT,
-            pad_value=0,
-        )
+    w = conv3d_module.weight.data
+    tt_weight = ttnn.from_torch(w, dtype=dtype, pad_value=0)
+    tt_weight = ttnn.experimental.prepare_conv3d_weights(
+        weight_tensor=tt_weight, groups=groups, C_in_block=config.C_in_block, alignment=ALIGNMENT, device=device
+    )
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1),
+        device=device,
+        dtype=dtype,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
+    )
 
-        tt_output = ttnn.experimental.conv3d(
-            input_tensor=tt_input,
-            weight_tensor=tt_weight,
-            device=device,
-            bias_tensor=tt_bias,
-            dtype=dtype,
-            output_channels=out_channels,
-            kernel_size=kernel_size,
-            stride=stride,
-            groups=groups,
-            padding=padding,
-            dilation=dilation,
-            padding_mode=padding_mode,
-            config=config,
-            compute_kernel_config=kernel_config,
-        )
+    tt_output = ttnn.experimental.conv3d(
+        input_tensor=tt_input,
+        weight_tensor=tt_weight,
+        device=device,
+        bias_tensor=tt_bias,
+        dtype=dtype,
+        output_channels=out_channels,
+        kernel_size=kernel_size,
+        stride=stride,
+        groups=groups,
+        padding=padding,
+        dilation=dilation,
+        padding_mode=padding_mode,
+        config=config,
+        compute_kernel_config=kernel_config,
+    )
 
-        # Reshape output and verify results
-        tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
+    # Reshape output and verify results
+    tt_output = reshape_output(tt_output, N, D_out, H_out, W_out, out_channels, device)
 
-        print(f"gt output shape = {gt_output.shape}")
-        print(f"tt output shape = {tt_output.shape}")
-        assert tt_output.shape == gt_output.shape
+    print(f"gt output shape = {gt_output.shape}")
+    print(f"tt output shape = {tt_output.shape}")
+    assert tt_output.shape == gt_output.shape
 
-        pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
-        logger.info(f"Compare conv3d torch vs ttnn: {pcc_message}")
-        assert pcc_passed, pcc_message
+    pcc_passed, pcc_message = check_with_pcc(gt_output, tt_output, pcc=0.999)
+    logger.info(f"Compare conv3d torch vs ttnn: {pcc_message}")
+    assert pcc_passed, pcc_message
 
 
 @pytest.mark.parametrize("B", [1, 2])
