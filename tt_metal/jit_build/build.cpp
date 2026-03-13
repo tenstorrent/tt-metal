@@ -218,6 +218,9 @@ void JitBuildEnv::init(
 
     if (rtoptions.get_feature_enabled(tt::llrt::RunTimeDebugFeatureDprint)) {
         this->defines_ += "-DDEBUG_PRINT_ENABLED ";
+        if (rtoptions.get_use_device_print()) {
+            this->defines_ += "-DUSE_DEVICE_PRINT ";
+        }
     }
 
     if (rtoptions.get_record_noc_transfers()) {
@@ -260,8 +263,7 @@ void JitBuildEnv::init(
         this->defines_ += "-DENABLE_LLK_ASSERT ";
     }
 
-    if (!rtoptions.get_watcher_enabled() &&
-        !rtoptions.get_lightweight_kernel_asserts() &&
+    if (!rtoptions.get_watcher_enabled() && !rtoptions.get_lightweight_kernel_asserts() &&
         rtoptions.get_llk_asserts()) {
         this->defines_ += "-DENV_LLK_INFRA ";
     }
