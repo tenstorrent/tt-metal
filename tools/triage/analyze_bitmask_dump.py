@@ -137,18 +137,6 @@ def max_abs_err(a: torch.Tensor, b: torch.Tensor) -> Tuple[float, float]:
     return finite.max().item(), finite.mean().item()
 
 
-def find_host_slice_match(host: torch.Tensor, packed_local: torch.Tensor) -> Optional[int]:
-    if host.ndim != 2 or packed_local.ndim != 2:
-        return None
-    if packed_local.shape[0] != host.shape[0] or packed_local.shape[1] > host.shape[1]:
-        return None
-    shard_w = packed_local.shape[1]
-    for col_start in range(0, host.shape[1] - shard_w + 1, shard_w):
-        if torch.equal(packed_local, host[:, col_start : col_start + shard_w]):
-            return col_start
-    return None
-
-
 def expected01_from_packed(packed_local: torch.Tensor) -> torch.Tensor:
     ar = torch.arange(32, dtype=torch.int32, device=packed_local.device)
     return ((packed_local[:, :, None] >> ar[None, None, :]) & 1).reshape(packed_local.shape[0], -1)
@@ -207,19 +195,59 @@ def analyze_step_grouped(
         print(f"\n=== step={step} ===\n  ! missing packed_bitmask_device")
         return 1
 
-    group_size = _infer_group_size(host_packed, packed_by_shard)
-    groups = _chunked_groups(sorted(packed_by_shard.keys()), group_size)
+    # Llama-galaxy bitmask uses ShardTensor2dMesh(dims=(-1, None), mesh_shape=(8,4)):
+    # - mesh row dim shards tensor last dim
+    # - mesh col dim replicates
+    # get_device_tensors() returns coords in row-major mesh order.
+    shard_ids_all = sorted(packed_by_shard.keys())
+    local_w = packed_by_shard[shard_ids_all[0]].shape[1]
+    if host_packed is not None and host_packed.ndim == 2 and local_w > 0 and host_packed.shape[1] % local_w == 0:
+        mesh_rows = host_packed.shape[1] // local_w
+    else:
+        # Fallback: old grouping heuristic.
+        mesh_rows = _infer_group_size(host_packed, packed_by_shard)
+    mesh_cols = len(shard_ids_all) // mesh_rows if mesh_rows > 0 else 1
+    if mesh_rows <= 0 or mesh_cols <= 0 or mesh_rows * mesh_cols != len(shard_ids_all):
+        print(
+            f"\n=== step={step} ===\n"
+            f"  ! invalid shard mesh inference rows={mesh_rows} cols={mesh_cols} "
+            f"num_shards={len(shard_ids_all)}"
+        )
+        return 1
+
+    # One logical group per step; reassemble via canonical representative col=0 for each row.
+    groups = [shard_ids_all]
 
     for group_idx, shard_ids in enumerate(groups):
         lines = [f"\n=== step={step} group={group_idx} shards={shard_ids[0]}..{shard_ids[-1]} ==="]
         local_errs = 0
+
+        # Strict mesh-semantics ordering:
+        # row-major shard list layout is [r0c0,r0c1..r0cC-1, r1c0...]
+        # canonical logical reconstruction uses c0 from each row in row order.
+        join_order = [shard_ids[r * mesh_cols] for r in range(mesh_rows)]
+        if verbose:
+            lines.append(f"  inferred mesh rows={mesh_rows} cols={mesh_cols}; " f"join_order(c0-per-row)={join_order}")
+
+        # Replica consistency check on packed stage (must be exact across cols).
+        packed_stage = by_name.get("packed_bitmask_device", {})
+        for r in range(mesh_rows):
+            ref = packed_stage[shard_ids[r * mesh_cols]].to(torch.int32)
+            for c in range(1, mesh_cols):
+                sid = shard_ids[r * mesh_cols + c]
+                cur = packed_stage[sid].to(torch.int32)
+                msg = first_mismatch(cur, ref)
+                if msg:
+                    lines.append(f"  ! packed replica mismatch row={r} col={c} shard={sid} -> {msg}")
+                    local_errs += 1
+                    break
 
         joined: Dict[str, torch.Tensor] = {}
         for name in NAMES:
             if name == "packed_bitmask_host":
                 continue
             if name in by_name:
-                j = _join_shards(by_name[name], shard_ids)
+                j = _join_shards(by_name[name], join_order)
                 if j is not None:
                     joined[name] = j
                     if verbose:
@@ -244,13 +272,13 @@ def analyze_step_grouped(
             torch.tensor(-1e9, dtype=torch.float32),
         )
 
-        if host_packed is not None and host_packed.shape == packed_i32.shape:
+        if host_packed is not None:
             msg = first_mismatch(packed_i32, host_packed.to(torch.int32))
             if msg:
-                lines.append(f"  ! packed_bitmask_device(joined) != packed_bitmask_host -> {msg}")
+                lines.append(f"  ! packed_bitmask_device(reassembled) != packed_bitmask_host -> {msg}")
                 local_errs += 1
             elif verbose:
-                lines.append("  packed_bitmask_device(joined) matches packed_bitmask_host")
+                lines.append("  packed_bitmask_device(reassembled) matches packed_bitmask_host")
 
         stage_expected = {
             "bitmask_to_broadcast": torch_bitmask_to_broadcast,
