@@ -1213,7 +1213,6 @@ class DeepseekGenerator(WarmupForwardMixin):
             if profiler is not None:
                 profiler.start(f"trace_execution_{gen_idx}")
             ttnn.execute_trace(self.mesh_device, self._trace_id, cq_id=0, blocking=True)
-            ttnn.synchronize_device(self.mesh_device)
             if profiler is not None:
                 profiler.end(f"trace_execution_{gen_idx}")
                 logger.info(
