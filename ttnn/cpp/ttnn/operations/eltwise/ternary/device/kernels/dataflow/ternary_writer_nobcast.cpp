@@ -5,6 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
@@ -21,6 +24,9 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_out = get_compile_time_arg_val(0);
     constexpr auto dst_args = TensorAccessorArgs<1, 0>();
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_out(cb_id_out);
 
 #if !DST_SHARDED
     constexpr uint32_t onetile = 1;
@@ -55,11 +61,11 @@ void kernel_main() {
                     for (uint32_t th = start_th; th < Ht && num_tiles_written < dst_num_tiles; ++th) {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_written < dst_num_tiles;
                              ++tw, ++num_tiles_written) {
-                            cb_wait_front(cb_id_out, onetile);
-                            uint32_t l1_read_addr = get_read_ptr(cb_id_out);
-                            noc_async_write_page(dst_tile_offset + num_tiles_written, s, l1_read_addr);
-                            noc_async_write_barrier();
-                            cb_pop_front(cb_id_out, onetile);
+                            cb_out.wait_front(onetile);
+                            noc.async_write(
+                                cb_out, s, tile_bytes, {}, {.page_id = dst_tile_offset + num_tiles_written});
+                            noc.async_write_barrier();
+                            cb_out.pop_front(onetile);
                         }
                         if constexpr (has_sharding) {
                             // adjust the output tile offset since we had to skip parts of the row

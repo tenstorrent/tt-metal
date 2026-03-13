@@ -10,8 +10,6 @@
 #include <cstdint>
 #include <ttnn/operations/reduction/generic/generic_reductions.hpp>
 #include <ttnn/tensor/shape/shape.hpp>
-#include <umd/device/cluster.hpp>
-#include <umd/device/types/cluster_descriptor_types.hpp>
 
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
@@ -223,10 +221,6 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyBackward_Large_Backward) {
 }
 
 TEST_F(CrossEntropyBackwardTest, NIGHTLY_CrossEntropyBackward_Huge_Backward) {
-    auto board = tt::umd::Cluster::create_cluster_descriptor()->get_board_type(0);
-    if (board == tt::BoardType::P100 || board == tt::BoardType::P150) {
-        GTEST_SKIP() << "Skipping on P100/P150 boards";
-    }
     using namespace ttml;
 
     const uint32_t N = 64U, C = 1U, H = 64, W = 128000U;
@@ -296,7 +290,8 @@ TEST_F(CrossEntropyBackwardTest, CrossEntropyForwardBackward_ReduceMeanVsNone) {
         }
     }
 
-    auto input = ttml::autograd::create_tensor(core::from_xtensor(input_tensor, &autograd::ctx().get_device()));
+    auto input = ttml::autograd::create_tensor(
+        core::from_xtensor(input_tensor, &autograd::ctx().get_device()), /* requires_grad */ true);
     auto target = ttml::autograd::create_tensor(core::from_xtensor<uint32_t, ttnn::DataType::UINT32>(
         target_tensor, &autograd::ctx().get_device(), ttnn::Layout::ROW_MAJOR));
 

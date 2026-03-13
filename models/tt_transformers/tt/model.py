@@ -208,7 +208,9 @@ class Transformer(LightweightModule):
         )
         return hidden_states
 
-    def prepare_prefill_inputs_trace(self, tokens, page_table=None, chunk_page_table=None):
+    def prepare_prefill_inputs_trace(
+        self, tokens, page_table=None, chunk_page_table=None, batch_size=1, user_id=0, **kwargs
+    ):
         """
         Inputs are torch tensors or python types. This function returns ttnn
         tensors on host.
@@ -232,6 +234,9 @@ class Transformer(LightweightModule):
         trace_enabled=False,
         last_token_idx=None,
         global_user_id=None,
+        batch_size=1,
+        user_id=0,
+        **kwargs,
     ):
         """
         Inputs are torch tensors or python types. This function returns ttnn

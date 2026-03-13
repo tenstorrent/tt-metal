@@ -14,6 +14,7 @@
 #include "api/compute/layernorm.h"
 #include "api/compute/tile_move_copy.h"
 #include "api/compute/eltwise_unary/sfpu_split_includes.h"
+#include "experimental/circular_buffer.h"
 
 // SPLIT REDUCE across Cores
 void kernel_main() {
@@ -83,6 +84,23 @@ void kernel_main() {
     constexpr uint32_t cb_fusion = tt::CBIndex::c_18;     // stream gamma/beta
     constexpr uint32_t cb_out = tt::CBIndex::c_16;
 
+    experimental::CircularBuffer cb_scaler_obj(cb_scaler);
+    experimental::CircularBuffer cb_scaler_global_obj(cb_scaler_global);
+    experimental::CircularBuffer cb_gamma_obj(cb_gamma);
+    experimental::CircularBuffer cb_beta_obj(cb_beta);
+    experimental::CircularBuffer cb_xmm_obj(cb_xmm);
+    experimental::CircularBuffer cb_ex_partial_obj(cb_ex_partial);
+    experimental::CircularBuffer cb_ex_obj(cb_ex);
+    experimental::CircularBuffer cb_ex_external_obj(cb_ex_external);
+    experimental::CircularBuffer cb_ex_partial2_obj(cb_ex_partial2);
+    experimental::CircularBuffer cb_ex2_obj(cb_ex2);
+    experimental::CircularBuffer cb_ex_external2_obj(cb_ex_external2);
+    experimental::CircularBuffer cb_ex_global_obj(cb_ex_global);
+    experimental::CircularBuffer cb_xmm2_obj(cb_xmm2);
+    experimental::CircularBuffer cb_ex2pe_obj(cb_ex2pe);
+    experimental::CircularBuffer cb_fusion_obj(cb_fusion);
+    experimental::CircularBuffer cb_out_obj(cb_out);
+
     binary_op_init_common(cb_in0, cb_in0, cb_x);
 
     // set block_h to volatile to disable automatically unroll of the loops, avoid code overflow
@@ -102,14 +120,17 @@ void kernel_main() {
 #else
     constexpr uint32_t cb_in = cb_in0;
 #endif
+    experimental::CircularBuffer cb_in_obj(cb_in);
     constexpr uint32_t cb_im = do_gamma ? cb_x : (do_beta ? cb_fusion : cb_out);
+    experimental::CircularBuffer cb_im_obj(cb_im);
     constexpr uint32_t cb_outgamma = do_beta ? cb_fusion : cb_out;
+    experimental::CircularBuffer cb_outgamma_obj(cb_outgamma);
 
 // pre-add x + y
 #ifdef FUSE_PRE_ADD
     reconfig_data_format_srcb(cb_in0, cb_in1);
     add_tiles_init(cb_in0, cb_in1);
-    cb_reserve_back(cb_in, num_tiles_per_block);
+    cb_in_obj.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -128,13 +149,13 @@ void kernel_main() {
         }
         index_h_offset += block_w;
     }
-    cb_push_back(cb_in, num_tiles_per_block);
+    cb_in_obj.push_back(num_tiles_per_block);
 #ifndef RMSNORM
     reconfig_data_format(cb_in0, cb_in, cb_in1, cb_scaler);
 #else
     reconfig_data_format(cb_in0, cb_in, cb_in1, cb_in);
 #endif
-    cb_wait_front(cb_in, num_tiles_per_block);
+    cb_in_obj.wait_front(num_tiles_per_block);
 #else
 #ifndef RMSNORM
     reconfig_data_format_srcb(cb_in0, cb_scaler);
@@ -145,8 +166,8 @@ void kernel_main() {
     // E[x],
     index_h_offset = 0;
     reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_in, cb_scaler, cb_ex_partial);
-    cb_wait_front(cb_scaler, 1);
-    cb_reserve_back(cb_ex_partial, block_h);
+    cb_scaler_obj.wait_front(1);
+    cb_ex_partial_obj.reserve_back(block_h);
     for (uint32_t i = 0; i < block_h; i++) {
         tile_regs_acquire();
         for (uint32_t w = 0; w < num_reduce_tiles_per_block_h; w++) {
@@ -159,27 +180,27 @@ void kernel_main() {
         index_h_offset += block_w;
     }
     reduce_uninit();
-    cb_push_back(cb_ex_partial, block_h);
+    cb_ex_partial_obj.push_back(block_h);
 
     reconfig_data_format_srca(cb_in, cb_ex_external);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
         reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_ex_external, cb_scaler_global, cb_ex);
-        cb_reserve_back(cb_ex, num_tiles_per_allgather_worker);
+        cb_ex_obj.reserve_back(num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
-            cb_wait_front(cb_scaler_global, 1);
+            cb_scaler_global_obj.wait_front(1);
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_blocks_reduce; w++) {
-                cb_wait_front(cb_ex_external, 1);
+                cb_ex_external_obj.wait_front(1);
                 reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
                     cb_ex_external, cb_scaler_global, 0, scaler0, dst0);
-                cb_pop_front(cb_ex_external, 1);
+                cb_ex_external_obj.pop_front(1);
             }
             if (use_two_stage_reduce && !is_second_stage_reader) {
-                cb_wait_front(cb_ex_external, num_blocks_second_stage - 1);
-                cb_pop_front(cb_ex_external, num_blocks_second_stage - 1);
+                cb_ex_external_obj.wait_front(num_blocks_second_stage - 1);
+                cb_ex_external_obj.pop_front(num_blocks_second_stage - 1);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -187,8 +208,8 @@ void kernel_main() {
             tile_regs_release();
         }
         reduce_uninit();
-        cb_push_back(cb_ex, num_tiles_per_allgather_worker);
-        cb_wait_front(cb_ex, num_tiles_per_allgather_worker);
+        cb_ex_obj.push_back(num_tiles_per_allgather_worker);
+        cb_ex_obj.wait_front(num_tiles_per_allgather_worker);
     }
 
     // x - E[x]
@@ -198,10 +219,10 @@ void kernel_main() {
     index_h_offset = 0;
     reconfig_data_format_srca(cb_ex_external, cb_in);
     sub_bcast_cols_init_short(cb_in, cb_ex_global);
-    cb_reserve_back(cb_xmm, num_tiles_per_block);
+    cb_xmm_obj.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
-        cb_wait_front(cb_ex_global, 1);
+        cb_ex_global_obj.wait_front(1);
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
@@ -216,20 +237,20 @@ void kernel_main() {
             tile_regs_release();
             index_subblock_w_offset += subblock_w;
         }
-        cb_pop_front(cb_ex_global, 1);
-        cb_pop_front(cb_in, block_w);
+        cb_ex_global_obj.pop_front(1);
+        cb_in_obj.pop_front(block_w);
     }
-    cb_push_back(cb_xmm, num_tiles_per_block);
+    cb_xmm_obj.push_back(num_tiles_per_block);
 #ifndef FUSE_PRE_ADD
     reconfig_data_format_srca(cb_in, cb_xmm);
 #endif
-    cb_wait_front(cb_xmm, num_tiles_per_block);
+    cb_xmm_obj.wait_front(num_tiles_per_block);
 #endif
 
     // (x - E[x])^2, cb_mm2 <-- cb_xmm
     mul_tiles_init(cb_xmm, cb_xmm);
     index_h_offset = 0;
-    cb_reserve_back(cb_xmm2, num_tiles_per_block);
+    cb_xmm2_obj.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -248,7 +269,7 @@ void kernel_main() {
         }
         index_h_offset += block_w;
     }
-    cb_push_back(cb_xmm2, num_tiles_per_block);
+    cb_xmm2_obj.push_back(num_tiles_per_block);
 
 #if defined RMSNORM and not defined FUSED_PRE_ADD
     reconfig_data_format(cb_xmm, cb_xmm2, cb_xmm, cb_scaler);
@@ -258,13 +279,13 @@ void kernel_main() {
     }
 #endif
 
-    cb_wait_front(cb_xmm2, num_tiles_per_block);
+    cb_xmm2_obj.wait_front(num_tiles_per_block);
 
 // Var(x)
 #ifdef RMSNORM
-    cb_wait_front(cb_scaler, 1);
+    cb_scaler_obj.wait_front(1);
 #endif
-    cb_reserve_back(cb_ex_partial2, block_h);
+    cb_ex_partial2_obj.reserve_back(block_h);
     reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_xmm2, cb_scaler, cb_ex_partial2);
     index_h_offset = 0;
     for (uint32_t i = 0; i < block_h; i++) {
@@ -280,27 +301,27 @@ void kernel_main() {
         index_h_offset += block_w;
     }
     reduce_uninit();
-    cb_pop_front(cb_xmm2, num_tiles_per_block);
-    cb_push_back(cb_ex_partial2, block_h);
+    cb_xmm2_obj.pop_front(num_tiles_per_block);
+    cb_ex_partial2_obj.push_back(block_h);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
         reduce_init<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(cb_ex_external2, cb_scaler_global, cb_ex2);
-        cb_reserve_back(cb_ex2, num_tiles_per_allgather_worker);
+        cb_ex2_obj.reserve_back(num_tiles_per_allgather_worker);
 
         for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
-            cb_wait_front(cb_scaler_global, 1);
+            cb_scaler_global_obj.wait_front(1);
 
             tile_regs_acquire();
             for (uint32_t w = 0; w < num_blocks_reduce; w++) {
-                cb_wait_front(cb_ex_external2, 1);
+                cb_ex_external2_obj.wait_front(1);
                 reduce_tile<REDUCE_OP, REDUCE_DIM, FLOAT32_REDUCTION>(
                     cb_ex_external2, cb_scaler_global, 0, scaler0, dst0);
-                cb_pop_front(cb_ex_external2, 1);
+                cb_ex_external2_obj.pop_front(1);
             }
             if (use_two_stage_reduce && !is_second_stage_reader) {
-                cb_wait_front(cb_ex_external2, num_blocks_second_stage - 1);
-                cb_pop_front(cb_ex_external2, num_blocks_second_stage - 1);
+                cb_ex_external2_obj.wait_front(num_blocks_second_stage - 1);
+                cb_ex_external2_obj.pop_front(num_blocks_second_stage - 1);
             }
             tile_regs_commit();
             tile_regs_wait();
@@ -308,13 +329,13 @@ void kernel_main() {
             tile_regs_release();
         }
         reduce_uninit();
-        cb_push_back(cb_ex2, num_tiles_per_allgather_worker);
+        cb_ex2_obj.push_back(num_tiles_per_allgather_worker);
 
         if (enable_sqrt) {
             for (uint32_t i = 0; i < num_tiles_per_allgather_worker; i++) {
                 // 1/[sqrt(Var + eps)],
-                cb_wait_front(cb_ex2, 1);
-                cb_reserve_back(cb_ex2pe, 1);
+                cb_ex2_obj.wait_front(1);
+                cb_ex2pe_obj.reserve_back(1);
                 tile_regs_acquire();
                 add_tiles_init(cb_ex2, cb_eps);
                 add_tiles(cb_ex2, cb_eps, i, 0, dst0);
@@ -324,7 +345,7 @@ void kernel_main() {
                 tile_regs_commit();
                 tile_regs_wait();
                 pack_tile(dst0, cb_ex2pe);
-                cb_push_back(cb_ex2pe, 1);
+                cb_ex2pe_obj.push_back(1);
                 tile_regs_release();
             }
         }
@@ -347,10 +368,10 @@ void kernel_main() {
 #endif
     mul_bcast_cols_init_short(cb_xmm, cb_ex_global);
     index_h_offset = 0;
-    cb_reserve_back(cb_im, num_tiles_per_block);
+    cb_im_obj.reserve_back(num_tiles_per_block);
     for (uint32_t i = 0; i < block_h; i++) {
         index_subblock_w_offset = 0;
-        cb_wait_front(cb_ex_global, 1);
+        cb_ex_global_obj.wait_front(1);
         for (uint32_t j = 0; j < num_subblocks_w; j++) {
             tile_regs_acquire();
             for (uint32_t w = 0; w < subblock_w; w++) {
@@ -378,12 +399,12 @@ void kernel_main() {
             index_subblock_w_offset += subblock_w;
         }
         index_h_offset += block_w;
-        cb_pop_front(cb_ex_global, 1);
+        cb_ex_global_obj.pop_front(1);
     }
-    cb_push_back(cb_im, num_tiles_per_block);
+    cb_im_obj.push_back(num_tiles_per_block);
 
-    cb_pop_front(cb_xmm, num_tiles_per_block);
-    cb_wait_front(cb_im, num_tiles_per_block);
+    cb_xmm_obj.pop_front(num_tiles_per_block);
+    cb_im_obj.wait_front(num_tiles_per_block);
 
     if constexpr (do_gamma) {
         reconfig_data_format(cb_im, cb_gamma);
@@ -391,9 +412,9 @@ void kernel_main() {
             pack_reconfig_data_format(cb_out);
         }
         mul_bcast_rows_init_short(cb_im, cb_gamma);
-        cb_wait_front(cb_gamma, block_w);
+        cb_gamma_obj.wait_front(block_w);
         index_h_offset = 0;
-        cb_reserve_back(cb_outgamma, num_tiles_per_block);
+        cb_outgamma_obj.reserve_back(num_tiles_per_block);
         for (uint32_t i = 0; i < block_h; i++) {
             index_subblock_w_offset = 0;
             for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -421,18 +442,18 @@ void kernel_main() {
             }
             index_h_offset += block_w;
         }
-        cb_push_back(cb_outgamma, num_tiles_per_block);
-        cb_pop_front(cb_im, num_tiles_per_block);
-        cb_wait_front(cb_outgamma, num_tiles_per_block);
+        cb_outgamma_obj.push_back(num_tiles_per_block);
+        cb_im_obj.pop_front(num_tiles_per_block);
+        cb_outgamma_obj.wait_front(num_tiles_per_block);
     }
 
     if constexpr (do_beta) {
         reconfig_data_format(cb_fusion, cb_beta);
         pack_reconfig_data_format(cb_out);
         add_bcast_rows_init_short(cb_fusion, cb_beta);
-        cb_wait_front(cb_beta, block_w);
+        cb_beta_obj.wait_front(block_w);
         index_h_offset = 0;
-        cb_reserve_back(cb_out, num_tiles_per_block);
+        cb_out_obj.reserve_back(num_tiles_per_block);
         for (uint32_t i = 0; i < block_h; i++) {
             index_subblock_w_offset = 0;
             for (uint32_t j = 0; j < num_subblocks_w; j++) {
@@ -455,8 +476,8 @@ void kernel_main() {
             }
             index_h_offset += block_w;
         }
-        cb_push_back(cb_out, num_tiles_per_block);
-        cb_pop_front(cb_fusion, num_tiles_per_block);
-        cb_wait_front(cb_out, num_tiles_per_block);
+        cb_out_obj.push_back(num_tiles_per_block);
+        cb_fusion_obj.pop_front(num_tiles_per_block);
+        cb_out_obj.wait_front(num_tiles_per_block);
     }
 }

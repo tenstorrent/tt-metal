@@ -3,6 +3,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -21,6 +24,9 @@ void kernel_main() {
 
     const auto s = TensorAccessor(src_args, src_addr, page_bytes);
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb(cb_id_in0);
+
 // read a ublock of pages from src to CB, and then push the ublock to unpacker
 #ifdef BACKWARDS
     uint32_t end_id = start_id - num_pages;
@@ -29,10 +35,9 @@ void kernel_main() {
     uint32_t end_id = start_id + num_pages;
     for (uint32_t i = start_id; i < end_id; ++i) {
 #endif
-        cb_reserve_back(cb_id_in0, onepage);
-        uint32_t l1_write_addr = get_write_ptr(cb_id_in0);
-        noc_async_read_page(i, s, l1_write_addr);
-        noc_async_read_barrier();
-        cb_push_back(cb_id_in0, onepage);
+        cb.reserve_back(onepage);
+        noc.async_read(s, cb, page_bytes, {.page_id = i}, {.offset_bytes = 0});
+        noc.async_read_barrier();
+        cb.push_back(onepage);
     }
 }
