@@ -685,8 +685,25 @@ Tensor binary_op_binding_tensor_tensor(
         input_tensor_b_activations);
 }
 
-// Free function template that dispatches to the appropriate ttnn inplace binary operation
-template <BinaryOpType Op>
+using InplaceScalarFn = Tensor (*)(
+    const Tensor&,
+    float,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    std::optional<bool>,
+    const std::optional<CoreRangeSet>&);
+
+using InplaceTensorFn = Tensor (*)(
+    const Tensor&,
+    const Tensor&,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    tt::stl::Span<const unary::EltwiseUnaryWithParam>,
+    std::optional<bool>,
+    const std::optional<CoreRangeSet>&);
+
+template <InplaceScalarFn Fn>
 Tensor inplace_binding_tensor_scalar(
     const Tensor& input_tensor_a,
     float scalar,
@@ -695,49 +712,16 @@ Tensor inplace_binding_tensor_scalar(
     const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    auto act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size());
-    auto lhs_act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(
-        input_tensor_a_activations.data(), input_tensor_a_activations.size());
-    auto rhs_act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(
-        input_tensor_b_activations.data(), input_tensor_b_activations.size());
-    if constexpr (Op == BinaryOpType::ADD) {
-        return ttnn::add_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::SUB) {
-        return ttnn::subtract_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::GT) {
-        return ttnn::gt_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::GE) {
-        return ttnn::ge_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::LT) {
-        return ttnn::lt_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::LE) {
-        return ttnn::le_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::EQ) {
-        return ttnn::eq_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::NE) {
-        return ttnn::ne_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::LDEXP) {
-        return ttnn::ldexp_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::LOGADDEXP) {
-        return ttnn::logaddexp_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::LOGADDEXP2) {
-        return ttnn::logaddexp2_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::SQUARED_DIFFERENCE) {
-        return ttnn::squared_difference_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::RSUB) {
-        return ttnn::rsub_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::BIAS_GELU) {
-        return ttnn::bias_gelu_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::LOGICAL_OR) {
-        return ttnn::logical_or_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::LOGICAL_XOR) {
-        return ttnn::logical_xor_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::LOGICAL_AND) {
-        return ttnn::logical_and_(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    }
+    return with_unary_activations(
+        [&](auto act, auto lhs_act, auto rhs_act) {
+            return Fn(input_tensor_a, scalar, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+        },
+        activations,
+        input_tensor_a_activations,
+        input_tensor_b_activations);
 }
 
-template <BinaryOpType Op>
+template <InplaceTensorFn Fn>
 Tensor inplace_binding_tensor_tensor(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
@@ -746,47 +730,13 @@ Tensor inplace_binding_tensor_tensor(
     const ttnn::SmallVector<unary::EltwiseUnaryWithParam>& input_tensor_b_activations,
     const std::optional<bool>& use_legacy,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    auto act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(activations.data(), activations.size());
-    auto lhs_act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(
-        input_tensor_a_activations.data(), input_tensor_a_activations.size());
-    auto rhs_act = tt::stl::Span<const unary::EltwiseUnaryWithParam>(
-        input_tensor_b_activations.data(), input_tensor_b_activations.size());
-    if constexpr (Op == BinaryOpType::ADD) {
-        return ttnn::add_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::SUB) {
-        return ttnn::subtract_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::GT) {
-        return ttnn::gt_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::GE) {
-        return ttnn::ge_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::LT) {
-        return ttnn::lt_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::LE) {
-        return ttnn::le_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::EQ) {
-        return ttnn::eq_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::NE) {
-        return ttnn::ne_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::LDEXP) {
-        return ttnn::ldexp_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::LOGADDEXP) {
-        return ttnn::logaddexp_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::LOGADDEXP2) {
-        return ttnn::logaddexp2_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::SQUARED_DIFFERENCE) {
-        return ttnn::squared_difference_(
-            input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::RSUB) {
-        return ttnn::rsub_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::BIAS_GELU) {
-        return ttnn::bias_gelu_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::LOGICAL_OR) {
-        return ttnn::logical_or_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::LOGICAL_XOR) {
-        return ttnn::logical_xor_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    } else if constexpr (Op == BinaryOpType::LOGICAL_AND) {
-        return ttnn::logical_and_(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
-    }
+    return with_unary_activations(
+        [&](auto act, auto lhs_act, auto rhs_act) {
+            return Fn(input_tensor_a, input_tensor_b, act, lhs_act, rhs_act, use_legacy, sub_core_grids);
+        },
+        activations,
+        input_tensor_a_activations,
+        input_tensor_b_activations);
 }
 
 template <ttnn::unique_string Name, typename TensorScalarFn, typename TensorTensorFn>
@@ -2403,8 +2353,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Adds :attr:`input_tensor_a` to :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i + \mathrm{{input\_tensor\_b}}_i)doc",
-        &detail::inplace_binding_tensor_scalar<BinaryOpType::ADD>,
-        &detail::inplace_binding_tensor_tensor<BinaryOpType::ADD>,
+        &detail::inplace_binding_tensor_scalar<static_cast<detail::InplaceScalarFn>(&ttnn::add_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<detail::InplaceTensorFn>(&ttnn::add_)>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32 (range: [0, 4294967295]), UINT16 (range: [0, 65535]))doc");
 
     detail::bind_binary_operation<"subtract">(
@@ -2420,8 +2370,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc",
-        &detail::inplace_binding_tensor_scalar<BinaryOpType::SUB>,
-        &detail::inplace_binding_tensor_tensor<BinaryOpType::SUB>,
+        &detail::inplace_binding_tensor_scalar<static_cast<InplaceScalarFn>(&ttnn::subtract_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<InplaceTensorFn>(&ttnn::subtract_)>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
 
     detail::bind_binary_operation<"eq">(
@@ -2693,24 +2643,24 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Computes inplace logical OR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i | \mathrm{{input\_tensor\_b}}_i)doc",
-        &detail::inplace_binding_tensor_scalar<BinaryOpType::LOGICAL_OR>,
-        &detail::inplace_binding_tensor_tensor<BinaryOpType::LOGICAL_OR>,
+        &detail::inplace_binding_tensor_scalar<static_cast<detail::InplaceScalarFn>(&ttnn::logical_or_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<detail::InplaceTensorFn>(&ttnn::logical_or_)>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_inplace_operation<"logical_xor_">(
         mod,
         R"doc(Computes inplace logical XOR of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{input\_tensor\_a}_i \land \lnot \mathrm{input\_tensor\_b}_i) \lor (\lnot \mathrm{input\_tensor\_a}_i \land \mathrm{input\_tensor\_b}_i)doc",
-        &detail::inplace_binding_tensor_scalar<BinaryOpType::LOGICAL_XOR>,
-        &detail::inplace_binding_tensor_tensor<BinaryOpType::LOGICAL_XOR>,
+        &detail::inplace_binding_tensor_scalar<static_cast<detail::InplaceScalarFn>(&ttnn::logical_xor_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<detail::InplaceTensorFn>(&ttnn::logical_xor_)>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_inplace_operation<"logical_and_">(
         mod,
         R"doc(Computes inplace logical AND of :attr:`input_tensor_a` and :attr:`input_tensor_b` and returns the tensor with the same layout as :attr:`input_tensor_a`)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i \& \mathrm{{input\_tensor\_b}}_i)doc",
-        &detail::inplace_binding_tensor_scalar<BinaryOpType::LOGICAL_AND>,
-        &detail::inplace_binding_tensor_tensor<BinaryOpType::LOGICAL_AND>,
+        &detail::inplace_binding_tensor_scalar<static_cast<detail::InplaceScalarFn>(&ttnn::logical_and_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<detail::InplaceTensorFn>(&ttnn::logical_and_)>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_binary_gcd_lcm_operation<"gcd">(
@@ -2829,16 +2779,16 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Performs Greater than in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} > \mathrm{{input\_tensor\_b}})doc",
-        &detail::inplace_binding_tensor_scalar<BinaryOpType::GT>,
-        &detail::inplace_binding_tensor_tensor<BinaryOpType::GT>,
+        &detail::inplace_binding_tensor_scalar<static_cast<detail::InplaceScalarFn>(&ttnn::gt_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<detail::InplaceTensorFn>(&ttnn::gt_)>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation<"ge_">(
         mod,
         R"doc(Performs Greater than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} >= \mathrm{{input\_tensor\_b}})doc",
-        &detail::inplace_binding_tensor_scalar<BinaryOpType::GE>,
-        &detail::inplace_binding_tensor_tensor<BinaryOpType::GE>,
+        &detail::inplace_binding_tensor_scalar<static_cast<detail::InplaceScalarFn>(&ttnn::ge_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<detail::InplaceTensorFn>(&ttnn::ge_)>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation<"lt_">(
@@ -2853,32 +2803,32 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Performs Less than or equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} <= \mathrm{{input\_tensor\_b}})doc",
-        &detail::inplace_binding_tensor_scalar<BinaryOpType::LE>,
-        &detail::inplace_binding_tensor_tensor<BinaryOpType::LE>,
+        &detail::inplace_binding_tensor_scalar<static_cast<detail::InplaceScalarFn>(&ttnn::le_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<detail::InplaceTensorFn>(&ttnn::le_)>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation<"eq_">(
         mod,
         R"doc(Performs Equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} == \mathrm{{input\_tensor\_b}})doc",
-        &detail::inplace_binding_tensor_scalar<BinaryOpType::EQ>,
-        &detail::inplace_binding_tensor_tensor<BinaryOpType::EQ>,
+        &detail::inplace_binding_tensor_scalar<static_cast<detail::InplaceScalarFn>(&ttnn::eq_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<detail::InplaceTensorFn>(&ttnn::eq_)>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation<"ne_">(
         mod,
         R"doc(Performs Not equal to in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}}\: != \mathrm{{input\_tensor\_b}})doc",
-        &detail::inplace_binding_tensor_scalar<BinaryOpType::NE>,
-        &detail::inplace_binding_tensor_tensor<BinaryOpType::NE>,
+        &detail::inplace_binding_tensor_scalar<static_cast<detail::InplaceScalarFn>(&ttnn::ne_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<detail::InplaceTensorFn>(&ttnn::ne_)>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation<"ldexp_">(
         mod,
         R"doc(Performs ldexp in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|ldexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        &detail::inplace_binding_tensor_scalar<BinaryOpType::LDEXP>,
-        &detail::inplace_binding_tensor_tensor<BinaryOpType::LDEXP>,
+        &detail::inplace_binding_tensor_scalar<static_cast<detail::InplaceScalarFn>(&ttnn::ldexp_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<detail::InplaceTensorFn>(&ttnn::ldexp_)>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation<"logaddexp_">(
@@ -2893,16 +2843,16 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Performs logaddexp2 in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|logaddexp2|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        &detail::inplace_binding_tensor_scalar<BinaryOpType::LOGADDEXP2>,
-        &detail::inplace_binding_tensor_tensor<BinaryOpType::LOGADDEXP2>,
+        &detail::inplace_binding_tensor_scalar<static_cast<detail::InplaceScalarFn>(&ttnn::logaddexp2_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<detail::InplaceTensorFn>(&ttnn::logaddexp2_)>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation<"squared_difference_">(
         mod,
         R"doc(Performs squared_difference in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|squared_difference|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        &detail::inplace_binding_tensor_scalar<BinaryOpType::SQUARED_DIFFERENCE>,
-        &detail::inplace_binding_tensor_tensor<BinaryOpType::SQUARED_DIFFERENCE>,
+        &detail::inplace_binding_tensor_scalar<static_cast<detail::InplaceScalarFn>(&ttnn::squared_difference_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<detail::InplaceTensorFn>(&ttnn::squared_difference_)>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT32, UINT16)doc");
 
     detail::bind_inplace_operation_with_fast_approx<"multiply_">(
@@ -2942,8 +2892,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Performs bias_gelu in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|bias_gelu|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        &detail::inplace_binding_tensor_scalar<BinaryOpType::BIAS_GELU>,
-        &detail::inplace_binding_tensor_tensor<BinaryOpType::BIAS_GELU>,
+        &detail::inplace_binding_tensor_scalar<static_cast<detail::InplaceScalarFn>(&ttnn::bias_gelu_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<detail::InplaceTensorFn>(&ttnn::bias_gelu_)>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_power(
