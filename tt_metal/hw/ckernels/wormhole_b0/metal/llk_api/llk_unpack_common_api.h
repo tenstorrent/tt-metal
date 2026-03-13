@@ -59,7 +59,9 @@ inline void llk_unpack_hw_configure(const std::uint32_t unpA_operand) {
 
 inline bool should_reconfigure_cbs(std::uint32_t old_operand, std::uint32_t new_operand) {
     return (unpack_src_format[old_operand] != unpack_src_format[new_operand]) ||
-           (unpack_dst_format[old_operand] != unpack_dst_format[new_operand]);
+           (unpack_dst_format[old_operand] != unpack_dst_format[new_operand]) ||
+           (unpack_tile_face_r_dim[old_operand] != unpack_tile_face_r_dim[new_operand]) ||
+           (unpack_tile_num_faces[old_operand] != unpack_tile_num_faces[new_operand]);
 }
 
 // TODO NC: Clean up as the part of tt-metal#34499
