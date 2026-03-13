@@ -225,7 +225,7 @@ For L1 chain forwarding, K receive is very fast → V might not be free yet → 
 | 2 | 1. Alias c_7 ↔ c_16 | prev_out ↔ output (for multi Q-chunk) | **56 KB** | **Low** | Program factory only | **DONE** ✅ |
 | 3 | 2. Alias c_6 ↔ c_31 | max_in ↔ exp_max_diff | **14 KB** | **Low** | Program factory only | **DONE** ✅ |
 | 4 | 3. Alias c_17 ↔ c_11 | max_out ↔ sum_in | **14 KB** | **Low** | Program factory only | **DONE** ✅ |
-| 5 | 4. Alias c_10 ↔ c_6 | sum_out ↔ max_in (combine with #3) | **14 KB** | **Low** | Program factory only |
+| 5 | 4. Alias c_10 ↔ c_6 | sum_out ↔ max_in (combine with #3) | **14 KB** | **Low** | Program factory only | **DONE** ✅ |
 | 6 | 6. V single-buffer | Halve V CB | **128 KB** | **Medium** | Program factory + verify perf |
 | 7 | 5b. Alias c_7 with inactive accum half | prev_out ↔ c_25 or c_26 | **56 KB** | **High** | Kernel + factory |
 

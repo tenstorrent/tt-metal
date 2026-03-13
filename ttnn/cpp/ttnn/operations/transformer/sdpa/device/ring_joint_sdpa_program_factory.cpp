@@ -561,10 +561,18 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     // stats input (c_6) aliased with exp_max_diff (c_31) — non-overlapping lifetimes save 14 KB.
     // c_6 consumed at start (copy_block to prev.max), c_31 used during K-loop only.
-    auto c_in6_config = CircularBufferConfig(
-                            statistics_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}, {tt::CBIndex::c_31, stats_df}})
+    // In streaming path, also alias c_10 (sum_out) — produced after K-loop, saves another 14 KB.
+    // Lifetime chain: c_6 → freed → c_31 during K-loop → freed → c_10 after K-loop.
+    std::map<uint8_t, tt::DataFormat> c_in6_spec = {{tt::CBIndex::c_6, im_df}, {tt::CBIndex::c_31, stats_df}};
+    if (use_streaming_compute) {
+        c_in6_spec[tt::CBIndex::c_10] = stats_df;
+    }
+    auto c_in6_config = CircularBufferConfig(statistics_tiles * im_tile_size, c_in6_spec)
                             .set_page_size(tt::CBIndex::c_6, im_tile_size)
                             .set_page_size(tt::CBIndex::c_31, stats_tile_size);
+    if (use_streaming_compute) {
+        c_in6_config.set_page_size(tt::CBIndex::c_10, stats_tile_size);
+    }
     CreateCircularBuffer(program, core_grid, c_in6_config);
 
     // previous block output as input — only needed for multi Q-chunk case
@@ -642,14 +650,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     }
 
     // Deferred norm: sum save/restore CBs for multi Q-chunk DRAM round-trip.
-    // cb_sum_out (c_10) = compute pushes sum for writer to save to DRAM.
+    // cb_sum_out (c_10) — already aliased with c_6/c_31 above.
     // cb_sum_in (c_11) = writer pushes restored sum from DRAM for compute to read.
     if (use_streaming_compute) {
-        auto c_sum_out_config =
-            CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_10, stats_df}})
-                .set_page_size(tt::CBIndex::c_10, stats_tile_size);
-        CreateCircularBuffer(program, core_grid, c_sum_out_config);
-
         if (alias_c17_c11) {
             // Alias c_11 (sum_in) with c_17 (max_out) — non-overlapping lifetimes
             auto c_sum_in_config =
