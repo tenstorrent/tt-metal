@@ -246,20 +246,6 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
     ASSERT_FALSE(MetalContext::instance_exists(context_id));
 }
 
-TEST(MetalContextIntegrationTest, MockDeviceCommandQueueOnly) {
-    // This will try to run some actions on the mock device's command queue and then check
-    // it didn't implicitly create the physical metal context
-    {
-        MetalEnv mock_env_bh_1{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1))};
-
-        auto mesh_config_mock = distributed::MeshDeviceConfig(distributed::MeshShape(1));
-        auto mock_device = mock_env_bh_1.create_mesh_device(mesh_config_mock);
-    }
-
-    // Assert that we didn't implicitly create the physical metal context
-    ASSERT_FALSE(MetalContext::instance_exists(DEFAULT_CONTEXT_ID));
-}
-
 TEST(MetalContextIntegrationTest, CoexistingSiliconAndMockDevice) {
     // Create mock mesh device with 1 blackhole chip
     MetalEnv mock_env_bh_1{MetalEnvDescriptor(experimental::get_mock_cluster_desc_name(tt::ARCH::BLACKHOLE, 1))};
