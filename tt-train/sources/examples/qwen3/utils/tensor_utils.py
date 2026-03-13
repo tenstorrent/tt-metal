@@ -45,10 +45,9 @@ def extract_logits(logits, distributed=False):
 
 
 def get_tp_size(shard_dim=None):
-    device = get_device()
-    if shard_dim is not None:
-        return device.shape[shard_dim]
-    return device.num_devices()
+    ctx = ttml.autograd.AutoContext.get_instance()
+    pctx = ctx.get_parallelism_context()
+    return pctx.get_tp_size()
 
 
 def tile_pad(dim: int) -> int:
