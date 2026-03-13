@@ -10,8 +10,10 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import DecoderBlock2DBase
+from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
 from models.demos.deepseek_v3.tt.moe import MoE
+from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
@@ -24,6 +26,47 @@ from models.demos.deepseek_v3.utils.run_config import (
 
 
 class MoEDecoderBlock2D(DecoderBlock2DBase):
+    @classmethod
+    def convert_weights(
+        cls,
+        hf_config: PretrainedConfig,
+        state_dicts: tuple[dict[str, torch.Tensor] | None, ...],
+        output_path: Path,
+        mesh_device: ttnn.MeshDevice,
+    ) -> WeightConfig:
+        (state_dict,) = state_dicts
+        assert state_dict is not None, "Expected a state dict for DecoderBlock."
+        breakpoint()
+        return {
+            "mla_norm": DistributedRMSNorm.convert_weights(
+                hf_config,
+                (sub_state_dict(state_dict, "input_layernorm."),) * mesh_device.shape[0],
+                output_path / "mla_norm",
+                mesh_device,
+            ),
+            "mla": MLA2D.convert_weights(
+                hf_config, (sub_state_dict(state_dict, "self_attn."),), output_path / "mla", mesh_device
+            ),
+            "mlp_norm": DistributedRMSNorm.convert_weights(
+                hf_config,
+                (sub_state_dict(state_dict, "post_attention_layernorm."),) * mesh_device.shape[0],
+                output_path / "mlp_norm",
+                mesh_device,
+            ),
+            "mlp": cls.convert_mlp_weights(
+                hf_config,
+                sub_state_dict(state_dict, "mlp."),
+                output_path / "mlp",
+                mesh_device,
+            ),
+            "moe": MoE.convert_weights(
+                hf_config,
+                sub_state_dict(state_dict, "moe."),
+                output_path / "moe",
+                mesh_device,
+            ),
+        }
+
     @classmethod
     @abstractmethod
     def convert_mlp_weights(
@@ -40,7 +83,6 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
                 output_path / "shared_experts",
                 mesh_device,
             ),
-            "moe": MoE.convert_weights(hf_config, (state_dict,), output_path / "moe", mesh_device),
         }
 
     @classmethod

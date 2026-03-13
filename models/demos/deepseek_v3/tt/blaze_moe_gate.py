@@ -340,6 +340,9 @@ class BlazeMoeGate(AbstractModule):
         assert x.memory_config() == cfg["input_memory_config"]
 
         # Gate projections
+        import pdb
+
+        pdb.set_trace()
         if cfg["linear_fallback"]:
             logits = cls.linear_fallback_op(x, **cfg["linear_fallback_config"], **cfg["gate_proj"])
         else:
@@ -393,25 +396,10 @@ class BlazeMoeGate(AbstractModule):
             # change the memory config of the logits
             cur_logits = ttnn.to_memory_config(cur_logits, memory_config=input_output_mem_config)
 
-            # create the bias tensor
-            scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
-            scores_correction_bias = ttnn.repeat(
-                scores_correction_bias, ttnn.Shape((batch_size_per_device + padding_size, 1))
-            )
-
             # create the output tensor, input indices and output indices
             ttnn_output_tensor = cfg["gate_routing"]["ttnn_output_tensor"]
-
-            scores_correction_bias = ttnn.reshape(scores_correction_bias, reshaped_input_shape)
-            scores_correction_bias = ttnn.to_memory_config(
-                scores_correction_bias, memory_config=input_output_mem_config
-            )
             ttnn_output_tensor = ttnn.repeat(ttnn_output_tensor, (batch_size_per_device + padding_size, 1, 1))
-            # at most here
             ttnn_output_tensor = ttnn.to_memory_config(ttnn_output_tensor, memory_config=input_output_mem_config)
-            import pdb
-
-            pdb.set_trace()
             ttnn_input_indices = cfg["gate_routing"]["ttnn_input_indices"]
             ttnn_input_indices = ttnn.repeat(ttnn_input_indices, (batch_size_per_device + padding_size, 1, 1))
             ttnn_input_indices = ttnn.to_memory_config(ttnn_input_indices, memory_config=input_output_mem_config)
@@ -419,17 +407,14 @@ class BlazeMoeGate(AbstractModule):
             ttnn_output_indices = ttnn.repeat(ttnn_output_indices, (batch_size_per_device + padding_size, 1, 1))
             ttnn_output_indices = ttnn.to_memory_config(ttnn_output_indices, memory_config=input_output_mem_config)
 
-            torch_input_indices = ttnn.to_torch(
-                ttnn_input_indices,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
+            # create the bias tensor (don't put it before line 398)
+            scores_correction_bias = cfg["add_score_correction_bias"]["input_tensor_b"]
+            scores_correction_bias = ttnn.repeat(
+                scores_correction_bias, ttnn.Shape((batch_size_per_device + padding_size, 1))
             )
-            torch_scores_correction_bias = ttnn.to_torch(
-                scores_correction_bias,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
-            )
-            torch_output_indices = ttnn.to_torch(
-                ttnn_output_indices,
-                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
+            scores_correction_bias = ttnn.reshape(scores_correction_bias, reshaped_input_shape)
+            scores_correction_bias = ttnn.to_memory_config(
+                scores_correction_bias, memory_config=input_output_mem_config
             )
 
             eps = 1e-20

@@ -12,6 +12,7 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
 from models.demos.deepseek_v3.tt.blaze_moe_gate import BlazeMoeGate as MoEGate
+from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import get_model_config, get_test_weight_config, run_module_forward
 from tests.ttnn.utils_for_testing import comp_pcc
@@ -50,10 +51,8 @@ def test_forward_pass(
     # Get state dict from actual model - pass directly to convert_weights
     torch.use_deterministic_algorithms(True)
     reference_model = ReferenceMoEGate(hf_config, use_bitonic_sort).eval()
-    # IMPORTANT: Initialize bias to zeros to avoid uninitialized memory values
-    # The default model has uninitialized bias which causes non-deterministic behavior
-    if hasattr(reference_model, "e_score_correction_bias"):
-        reference_model.e_score_correction_bias.data = torch.zeros_like(reference_model.e_score_correction_bias.data)
+    reference_model.to(torch.bfloat16)
+    state_dict = sub_state_dict(reference_model.state_dict(), "model.layers.0.mlp.gate.")
     hf_state_dict = reference_model.state_dict()
 
     weight_config = get_test_weight_config(
@@ -82,8 +81,6 @@ def test_forward_pass(
     torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
 
     # Reference forward pass
-    reference_model.eval()
-    reference_model.to(torch.bfloat16)
     reference_topk_indices, reference_topk_weights = reference_model(torch_input)
 
     # Convert input to TTNN
