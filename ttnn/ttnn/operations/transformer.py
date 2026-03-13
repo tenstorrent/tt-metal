@@ -65,34 +65,6 @@ ttnn.attach_golden_function(
 )
 
 
-def _golden_function(input_tensor: ttnn.Tensor, *, head_size: int, attention_mask, **_):
-    import torch
-
-    if head_size is not None:
-        scaler = 1 / (head_size**0.5)
-    else:
-        scaler = 1.0
-
-    input_tensor = input_tensor * scaler
-
-    if attention_mask is not None:
-        input_tensor += attention_mask
-
-    return torch.softmax(input_tensor, -1)
-
-
-ttnn.attach_golden_function(
-    ttnn.transformer.attention_softmax,
-    golden_function=_golden_function,
-)
-
-
-ttnn.attach_golden_function(
-    ttnn.transformer.attention_softmax_,
-    golden_function=_golden_function,
-)
-
-
 def _golden_function(input_tensor: ttnn.Tensor, **_):
     import torch
 

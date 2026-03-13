@@ -25,11 +25,6 @@ file(
     moreh_fold/device/kernels/*
     moreh_getitem/device/moreh_getitem_kernels/*
     moreh_getitem/device/moreh_getitem_tilized_kernels/*
-    moreh_group_norm/device/kernels/*
-    moreh_group_norm_backward/device/gamma_beta_grad/kernels/*
-    moreh_group_norm_backward/device/input_grad/kernels/*
-    moreh_layer_norm/device/kernels/*
-    moreh_layer_norm_backward/device/kernels/*
     moreh_linear_backward/device/kernels/*
     moreh_matmul/device/kernels/*
     moreh_mean/device/kernels/*
@@ -46,8 +41,6 @@ file(
     moreh_norm/device/ord_other/moreh_norm_w/kernels/*
     moreh_norm_backward/device/kernels/*
     moreh_sgd/device/kernels/*
-    moreh_softmax/device/kernels/*
-    moreh_softmax_backward/device/kernels/*
     moreh_sum/device/moreh_sum_h_impl_kernels/*
     moreh_sum/device/moreh_sum_nc_impl_kernels/*
     moreh_sum/device/moreh_sum_w_impl_kernels/*
@@ -62,9 +55,6 @@ target_sources(
         FILES
             moreh_adamw/moreh_adamw.hpp
             moreh_clip_grad_norm/moreh_clip_grad_norm.hpp
-            moreh_group_norm/moreh_group_norm.hpp
-            moreh_layer_norm/moreh_layer_norm.hpp
-            moreh_layer_norm_backward/moreh_layer_norm_backward.hpp
             moreh_linear_backward/device/moreh_linear_backward_device_operation.hpp
             moreh_linear_backward/moreh_linear_backward.hpp
             moreh_matmul/moreh_matmul.hpp
@@ -72,10 +62,6 @@ target_sources(
             moreh_mean_backward/moreh_mean_backward.hpp
             moreh_nll_loss/moreh_nll_loss.hpp
             moreh_nll_loss_backward/moreh_nll_loss_backward.hpp
-            moreh_softmax/device/moreh_softmax_device_operation.hpp
-            moreh_softmax/moreh_softmax.hpp
-            moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp
-            moreh_softmax_backward/moreh_softmax_backward.hpp
             moreh_sum/moreh_sum.hpp
         FILE_SET kernels
         TYPE HEADERS
@@ -132,24 +118,6 @@ target_sources(
             moreh_getitem/moreh_getitem.hpp
             moreh_getitem/moreh_getitem_nanobind.hpp
             moreh_getitem/device/moreh_getitem_device_operation.hpp
-            # moreh_group_norm/
-            moreh_group_norm/moreh_group_norm.hpp
-            moreh_group_norm/moreh_group_norm_nanobind.hpp
-            moreh_group_norm/device/moreh_group_norm_device_operation.hpp
-            # moreh_group_norm_backward/
-            moreh_group_norm_backward/moreh_group_norm_backward.hpp
-            moreh_group_norm_backward/moreh_group_norm_backward_nanobind.hpp
-            moreh_group_norm_backward/device/gamma_beta_grad/moreh_group_norm_backward_gamma_beta_grad_device_operation.hpp
-            moreh_group_norm_backward/device/input_grad/moreh_group_norm_backward_input_grad_device_operation.hpp
-            # moreh_layer_norm/
-            moreh_layer_norm/moreh_layer_norm.hpp
-            moreh_layer_norm/moreh_layer_norm_nanobind.hpp
-            moreh_layer_norm/device/moreh_layer_norm_device_operation.hpp
-            # moreh_layer_norm_backward/
-            moreh_layer_norm_backward/moreh_layer_norm_backward.hpp
-            moreh_layer_norm_backward/moreh_layer_norm_backward_nanobind.hpp
-            moreh_layer_norm_backward/device/moreh_layer_norm_backward_gamma_beta_grad_device_operation.hpp
-            moreh_layer_norm_backward/device/moreh_layer_norm_backward_input_grad_device_operation.hpp
             # moreh_linear/
             moreh_linear/moreh_linear.hpp
             moreh_linear/moreh_linear_nanobind.hpp
@@ -198,14 +166,6 @@ target_sources(
             moreh_sgd/moreh_sgd.hpp
             moreh_sgd/moreh_sgd_nanobind.hpp
             moreh_sgd/device/moreh_sgd_device_operation.hpp
-            # moreh_softmax/
-            moreh_softmax/moreh_softmax.hpp
-            moreh_softmax/moreh_softmax_nanobind.hpp
-            moreh_softmax/device/moreh_softmax_device_operation.hpp
-            # moreh_softmax_backward/
-            moreh_softmax_backward/moreh_softmax_backward.hpp
-            moreh_softmax_backward/moreh_softmax_backward_nanobind.hpp
-            moreh_softmax_backward/device/moreh_softmax_backward_device_operation.hpp
             # moreh_sum/
             moreh_sum/moreh_sum.hpp
             moreh_sum/moreh_sum_nanobind.hpp
@@ -243,22 +203,6 @@ target_sources(
         moreh_getitem/device/moreh_getitem_rm_factory.cpp
         moreh_getitem/device/moreh_getitem_tilized_factory.cpp
         moreh_getitem/moreh_getitem.cpp
-        moreh_group_norm_backward/device/gamma_beta_grad/moreh_group_norm_backward_gamma_beta_grad_device_operation.cpp
-        moreh_group_norm_backward/device/gamma_beta_grad/moreh_group_norm_backward_gamma_beta_grad_factory.cpp
-        moreh_group_norm_backward/device/input_grad/moreh_group_norm_backward_input_grad_device_operation.cpp
-        moreh_group_norm_backward/device/input_grad/moreh_group_norm_backward_input_grad_factory.cpp
-        moreh_group_norm_backward/moreh_group_norm_backward.cpp
-        moreh_group_norm/device/moreh_group_norm_device_operation.cpp
-        moreh_group_norm/device/moreh_group_norm_program_factory.cpp
-        moreh_group_norm/moreh_group_norm.cpp
-        moreh_layer_norm_backward/device/moreh_layer_norm_backward_gamma_beta_grad_device_operation.cpp
-        moreh_layer_norm_backward/device/moreh_layer_norm_backward_gamma_beta_grad_program_factory.cpp
-        moreh_layer_norm_backward/device/moreh_layer_norm_backward_input_grad_device_operation.cpp
-        moreh_layer_norm_backward/device/moreh_layer_norm_backward_input_grad_program_factory.cpp
-        moreh_layer_norm_backward/moreh_layer_norm_backward.cpp
-        moreh_layer_norm/device/moreh_layer_norm_device_operation.cpp
-        moreh_layer_norm/device/moreh_layer_norm_program_factory.cpp
-        moreh_layer_norm/moreh_layer_norm.cpp
         moreh_linear_backward/device/moreh_linear_backward_device_operation.cpp
         moreh_linear_backward/device/moreh_linear_backward_multi_core_program_factory.cpp
         moreh_linear_backward/device/moreh_linear_backward_single_core_program_factory.cpp
@@ -298,27 +242,6 @@ target_sources(
         moreh_sgd/device/moreh_sgd_device_operation.cpp
         moreh_sgd/device/moreh_sgd_program_factory.cpp
         moreh_sgd/moreh_sgd.cpp
-        moreh_softmax_backward/device/moreh_softmax_backward_device_operation.cpp
-        moreh_softmax_backward/device/softmax_backward_c_large/softmax_backward_c_large.cpp
-        moreh_softmax_backward/device/softmax_backward_h_large/softmax_backward_h_large.cpp
-        moreh_softmax_backward/device/softmax_backward_h_small/softmax_backward_h_small.cpp
-        moreh_softmax_backward/device/softmax_backward_w_large/softmax_backward_w_large.cpp
-        moreh_softmax_backward/device/softmax_backward_w_small/softmax_backward_w_small.cpp
-        moreh_softmax_backward/moreh_softmax_backward.cpp
-        moreh_softmax/device/moreh_softmax_device_operation.cpp
-        moreh_softmax/device/moreh_softmax_device_operation.cpp
-        moreh_softmax/device/softmax_c_large/softmax_c_large.cpp
-        moreh_softmax/device/softmax_c_large/softmax_c_large.cpp
-        moreh_softmax/device/softmax_h_large/softmax_h_large.cpp
-        moreh_softmax/device/softmax_h_large/softmax_h_large.cpp
-        moreh_softmax/device/softmax_h_small/softmax_h_small.cpp
-        moreh_softmax/device/softmax_h_small/softmax_h_small.cpp
-        moreh_softmax/device/softmax_w_large/softmax_w_large.cpp
-        moreh_softmax/device/softmax_w_large/softmax_w_large.cpp
-        moreh_softmax/device/softmax_w_small/softmax_w_small.cpp
-        moreh_softmax/device/softmax_w_small/softmax_w_small.cpp
-        moreh_softmax/moreh_softmax.cpp
-        moreh_softmax/moreh_softmax.cpp
         moreh_sum_backward/device/moreh_sum_backward_device_operation.cpp
         moreh_sum_backward/device/moreh_sum_backward_program_factory.cpp
         moreh_sum_backward/moreh_sum_backward.cpp
