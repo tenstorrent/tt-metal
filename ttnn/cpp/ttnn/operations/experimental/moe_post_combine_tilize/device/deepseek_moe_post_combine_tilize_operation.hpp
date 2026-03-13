@@ -7,8 +7,8 @@
 #include <cstdint>
 #include <optional>
 
-#include "deepseek_moe_fast_reduce_nc_device_operation_types.hpp"
-#include "deepseek_moe_fast_reduce_nc_program_factory.hpp"
+#include "deepseek_moe_post_combine_tilize_device_operation_types.hpp"
+#include "deepseek_moe_post_combine_tilize_program_factory.hpp"
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/device_operation.hpp"
@@ -16,12 +16,12 @@
 
 namespace ttnn::experimental::prim {
 
-struct DeepseekMoEFastReduceNCDeviceOperation {
-    using operation_attributes_t = DeepseekMoEFastReduceNCParams;
-    using tensor_args_t = DeepseekMoEFastReduceNCInputs;
+struct DeepseekMoEPostCombineTilizeDeviceOperation {
+    using operation_attributes_t = DeepseekMoEPostCombineTilizeParams;
+    using tensor_args_t = DeepseekMoEPostCombineTilizeInputs;
     using spec_return_value_t = ttnn::TensorSpec;
     using tensor_return_value_t = std::vector<ttnn::Tensor>;
-    using program_factory_t = std::variant<DeepseekMoEFastReduceNCProgramFactory>;
+    using program_factory_t = std::variant<DeepseekMoEPostCombineTilizeProgramFactory>;
     static void validate_on_program_cache_hit(const operation_attributes_t&, const tensor_args_t&);
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
@@ -33,7 +33,7 @@ struct DeepseekMoEFastReduceNCDeviceOperation {
 
 namespace ttnn::prim {
 
-std::vector<ttnn::Tensor> deepseek_moe_fast_reduce_nc(
+std::vector<ttnn::Tensor> deepseek_moe_post_combine_tilize(
     const ttnn::Tensor& input_tensor,
     uint32_t dim,
     uint64_t split_size,

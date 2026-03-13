@@ -6,7 +6,7 @@
 
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
-namespace ttnn::operations::experimental::reduction::detail {
+namespace ttnn::operations::experimental::deepseek_moe_post_combine_tilize::detail {
 namespace nb = nanobind;
-void bind_deepseek_moe_fast_reduce_nc(nb::module_& mod);
-}  // namespace ttnn::operations::experimental::reduction::detail
+void bind_deepseek_moe_post_combine_tilize(nb::module_& mod);
+}  // namespace ttnn::operations::experimental::deepseek_moe_post_combine_tilize::detail

@@ -13,9 +13,9 @@
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn {
-namespace operations::experimental::reduction {
+namespace operations::experimental::deepseek_moe_post_combine_tilize {
 
-struct DeepseekMoEFastReduceNCOperation {
+struct DeepseekMoEPostCombineTilizeOperation {
     static std::vector<ttnn::Tensor> invoke(
         const ttnn::Tensor& input_tensor,
         int32_t dim,
@@ -24,13 +24,13 @@ struct DeepseekMoEFastReduceNCOperation {
         const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt);
 };
 
-}  // namespace operations::experimental::reduction
+}  // namespace operations::experimental::deepseek_moe_post_combine_tilize
 
-namespace experimental::reduction {
+namespace experimental::deepseek_moe_post_combine_tilize {
 
-constexpr auto deepseek_moe_fast_reduce_nc = ttnn::register_operation<
-    "ttnn::experimental::deepseek_moe_fast_reduce_nc",
-    ttnn::operations::experimental::reduction::DeepseekMoEFastReduceNCOperation>();
+constexpr auto deepseek_moe_post_combine_tilize = ttnn::register_operation<
+    "ttnn::experimental::deepseek_moe_post_combine_tilize",
+    ttnn::operations::experimental::deepseek_moe_post_combine_tilize::DeepseekMoEPostCombineTilizeOperation>();
 
-}  // namespace experimental::reduction
+}  // namespace experimental::deepseek_moe_post_combine_tilize
 }  // namespace ttnn

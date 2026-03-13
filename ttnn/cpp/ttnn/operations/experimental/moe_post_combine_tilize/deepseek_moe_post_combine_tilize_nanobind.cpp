@@ -8,19 +8,20 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "deepseek_moe_fast_reduce_nc_nanobind.hpp"
-#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc.hpp"
+#include "deepseek_moe_post_combine_tilize_nanobind.hpp"
+#include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize.hpp"
 
 #include <ttnn-nanobind/small_vector_caster.hpp>
 #include "ttnn-nanobind/decorators.hpp"
 
-namespace ttnn::operations::experimental::reduction::detail {
+namespace ttnn::operations::experimental::deepseek_moe_post_combine_tilize::detail {
 
-void bind_deepseek_moe_fast_reduce_nc(nb::module_& mod) {
-    using OperationType = decltype(ttnn::experimental::reduction::deepseek_moe_fast_reduce_nc);
+void bind_deepseek_moe_post_combine_tilize(nb::module_& mod) {
+    using OperationType = decltype(ttnn::experimental::deepseek_moe_post_combine_tilize);
     ttnn::bind_registered_operation(
         mod,
-        ttnn::experimental::reduction::deepseek_moe_fast_reduce_nc,
+        ttnn::experimental::deepseek_moe_post_combine_tilize,
+        // TODO: (GR)
         R"doc(
         Performs optimized reduction operation on tensor of at least rank 3, reducing on any of the dims but the last 2
 
@@ -53,4 +54,4 @@ void bind_deepseek_moe_fast_reduce_nc(nb::module_& mod) {
             nb::arg("compute_kernel_config").noconvert() = nb::none()});
 }
 
-}  // namespace ttnn::operations::experimental::reduction::detail
+}  // namespace ttnn::operations::experimental::deepseek_moe_post_combine_tilize::detail

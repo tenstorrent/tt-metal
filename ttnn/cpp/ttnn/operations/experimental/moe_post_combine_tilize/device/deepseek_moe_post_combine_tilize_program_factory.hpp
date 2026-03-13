@@ -6,13 +6,13 @@
 
 #include <cstdint>
 
-#include "deepseek_moe_fast_reduce_nc_device_operation_types.hpp"
+#include "deepseek_moe_post_combine_tilize_device_operation_types.hpp"
 
 #include "ttnn/device_operation.hpp"
 
 namespace ttnn::experimental::prim {
 
-struct DeepseekMoEFastReduceNCProgramFactory {
+struct DeepseekMoEPostCombineTilizeProgramFactory {
     struct shared_variables_t {
         tt::tt_metal::KernelHandle reader_kernel_id;
         tt::tt_metal::KernelHandle writer_kernel_id;
@@ -23,14 +23,14 @@ struct DeepseekMoEFastReduceNCProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const DeepseekMoEFastReduceNCParams& operation_attributes,
-        const DeepseekMoEFastReduceNCInputs& tensor_args,
+        const DeepseekMoEPostCombineTilizeParams& operation_attributes,
+        const DeepseekMoEPostCombineTilizeInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
-        const DeepseekMoEFastReduceNCParams& operation_attributes,
-        const DeepseekMoEFastReduceNCInputs& tensor_args,
+        const DeepseekMoEPostCombineTilizeParams& operation_attributes,
+        const DeepseekMoEPostCombineTilizeInputs& tensor_args,
         std::vector<ttnn::Tensor>& tensor_return_value);
 };
 

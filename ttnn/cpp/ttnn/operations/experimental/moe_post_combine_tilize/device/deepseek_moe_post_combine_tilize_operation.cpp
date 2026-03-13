@@ -5,20 +5,20 @@
 #include <cstdint>
 #include <optional>
 
-#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_device_operation.hpp"
+#include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/device/deepseek_moe_post_combine_tilize_device_operation.hpp"
 
 #include "ttnn/operations/moreh/moreh_helper_functions.hpp"
 #include "ttnn/tensor/tensor.hpp"
 
 namespace ttnn::experimental::prim {
-void DeepseekMoEFastReduceNCDeviceOperation::validate_on_program_cache_hit(
+void DeepseekMoEPostCombineTilizeDeviceOperation::validate_on_program_cache_hit(
     const operation_attributes_t&, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     TT_FATAL(input_tensor.storage_type() == StorageType::DEVICE, "Input tensor must be on device");
     TT_FATAL(input_tensor.buffer() != nullptr, "Input tensor must have a buffer");
 }
 
-void DeepseekMoEFastReduceNCDeviceOperation::validate_on_program_cache_miss(
+void DeepseekMoEPostCombineTilizeDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     validate_on_program_cache_hit(operation_attributes, tensor_args);
 
@@ -53,7 +53,7 @@ void DeepseekMoEFastReduceNCDeviceOperation::validate_on_program_cache_miss(
         num_output_tensors * tt::constants::TILE_WIDTH);
 }
 
-ttnn::TensorSpec DeepseekMoEFastReduceNCDeviceOperation::compute_output_specs(
+ttnn::TensorSpec DeepseekMoEPostCombineTilizeDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const uint32_t reduction_dim = operation_attributes.dim;
     const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
@@ -72,7 +72,7 @@ ttnn::TensorSpec DeepseekMoEFastReduceNCDeviceOperation::compute_output_specs(
         operations::TensorLayout(input_tensor.dtype(), tt::tt_metal::PageConfig(Layout::TILE), output_memory_config));
 }
 
-std::vector<ttnn::Tensor> DeepseekMoEFastReduceNCDeviceOperation::create_output_tensors(
+std::vector<ttnn::Tensor> DeepseekMoEPostCombineTilizeDeviceOperation::create_output_tensors(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
 
@@ -91,13 +91,13 @@ std::vector<ttnn::Tensor> DeepseekMoEFastReduceNCDeviceOperation::create_output_
 
 namespace ttnn::prim {
 
-std::vector<ttnn::Tensor> deepseek_moe_fast_reduce_nc(
+std::vector<ttnn::Tensor> deepseek_moe_post_combine_tilize(
     const ttnn::Tensor& input_tensor,
     uint32_t dim,
     uint64_t split_size,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     const ttnn::DeviceComputeKernelConfig& compute_kernel_config) {
-    using OperationType = ttnn::experimental::prim::DeepseekMoEFastReduceNCDeviceOperation;
+    using OperationType = ttnn::experimental::prim::DeepseekMoEPostCombineTilizeDeviceOperation;
 
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{dim, split_size, output_memory_config, compute_kernel_config},

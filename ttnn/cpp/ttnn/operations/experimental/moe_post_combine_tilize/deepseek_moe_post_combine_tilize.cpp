@@ -7,15 +7,15 @@
 #include <optional>
 #include <vector>
 
-#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/deepseek_moe_fast_reduce_nc.hpp"
-#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_device_operation.hpp"
+#include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/deepseek_moe_post_combine_tilize.hpp"
+#include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/device/deepseek_moe_post_combine_tilize_device_operation.hpp"
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::operations::experimental::deepseek_moe_post_combine_tilize {
 
-std::vector<ttnn::Tensor> DeepseekMoEFastReduceNCOperation::invoke(
+std::vector<ttnn::Tensor> DeepseekMoEPostCombineTilizeOperation::invoke(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     uint64_t split_size,
@@ -30,8 +30,8 @@ std::vector<ttnn::Tensor> DeepseekMoEFastReduceNCOperation::invoke(
 
     uint32_t rank = input_tensor.padded_shape().rank();
     uint32_t normalized_dim = (dim < 0) ? dim + rank : (uint32_t)dim;
-    return ttnn::prim::deepseek_moe_fast_reduce_nc(
+    return ttnn::prim::deepseek_moe_post_combine_tilize(
         input_tensor, normalized_dim, split_size, output_memory_config, config);
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::operations::experimental::deepseek_moe_post_combine_tilize

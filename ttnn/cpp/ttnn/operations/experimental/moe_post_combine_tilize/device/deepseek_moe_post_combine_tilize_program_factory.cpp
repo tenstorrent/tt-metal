@@ -11,7 +11,7 @@
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/tensor_accessor_args.hpp>
 
-#include "ttnn/operations/experimental/reduction/deepseek_moe_fast_reduce_nc/device/deepseek_moe_fast_reduce_nc_program_factory.hpp"
+#include "ttnn/operations/experimental/deepseek_moe_post_combine_tilize/device/deepseek_moe_post_combine_tilize_program_factory.hpp"
 
 using namespace tt;
 using namespace tt::constants;
@@ -19,9 +19,9 @@ using namespace tt::tt_metal;
 
 namespace ttnn::experimental::prim {
 
-DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCProgramFactory::create(
-    const DeepseekMoEFastReduceNCParams& operation_attributes,
-    const DeepseekMoEFastReduceNCInputs& tensor_args,
+DeepseekMoEPostCombineTilizeProgramFactory::cached_program_t DeepseekMoEPostCombineTilizeProgramFactory::create(
+    const DeepseekMoEPostCombineTilizeParams& operation_attributes,
+    const DeepseekMoEPostCombineTilizeInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
     ////////////////////////////////////////////////////////////////////////////
     //                      Device Setup
@@ -260,10 +260,10 @@ DeepseekMoEFastReduceNCProgramFactory::cached_program_t DeepseekMoEFastReduceNCP
         std::move(program), {reader_kernel_id, writer_kernel_id, num_cores_to_be_used, num_cores_x}};
 }
 
-void DeepseekMoEFastReduceNCProgramFactory::override_runtime_arguments(
+void DeepseekMoEPostCombineTilizeProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const DeepseekMoEFastReduceNCParams&,
-    const DeepseekMoEFastReduceNCInputs& tensor_args,
+    const DeepseekMoEPostCombineTilizeParams&,
+    const DeepseekMoEPostCombineTilizeInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     const std::vector<ttnn::Tensor>& output_tensors = tensor_return_value;
