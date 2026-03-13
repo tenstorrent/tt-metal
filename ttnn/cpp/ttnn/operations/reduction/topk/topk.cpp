@@ -281,7 +281,10 @@ std::vector<Tensor> topk(
             auto indices_vec = std::vector<uint16_t>(
                 indices_spec.physical_shape().height() * indices_spec.physical_shape().width(), 0);
             Tensor host_indices(
-                HostBuffer(std::move(indices_vec)), desired_final_shape, DataType::UINT16, indices.layout());
+                tt::tt_metal::HostBuffer(std::move(indices_vec)),
+                desired_final_shape,
+                DataType::UINT16,
+                indices.layout());
             copy_to_device(host_indices, indices);
 
             return {values, indices};

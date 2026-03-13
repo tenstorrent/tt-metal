@@ -97,7 +97,7 @@ Tensor argmax(
         auto result_vec = std::vector<uint32_t>(
             preallocated_spec.physical_shape().height() * preallocated_spec.physical_shape().width(), 0);
         Tensor host_indices(
-            HostBuffer(std::move(result_vec)), input_shape, DataType::UINT32, preallocated_spec.layout());
+            tt::tt_metal::HostBuffer(std::move(result_vec)), input_shape, DataType::UINT32, preallocated_spec.layout());
         copy_to_device(host_indices, preallocated_tensor);
 
         return preallocated_tensor;
