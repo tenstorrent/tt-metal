@@ -178,9 +178,6 @@ void PadDeviceOperation::validate_on_program_cache_miss(
     }
 
     if (input_tensor.is_sharded()) {
-        // TT_FATAL(input_tensor.layout() == Layout::ROW_MAJOR, "ttnn.pad: Only row-major sharded inputs are
-        // supported.");
-
         uint32_t shard_width = input_tensor.shard_spec().has_value()
                                    ? input_tensor.shard_spec().value().shape[1]
                                    : input_tensor.nd_shard_spec().value().shard_shape[-1];
