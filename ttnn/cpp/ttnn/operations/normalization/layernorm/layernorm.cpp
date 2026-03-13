@@ -31,6 +31,15 @@ std::pair<prim::LayerNormParams, prim::LayerNormInputs> prepare_norm(
     const std::optional<const prim::LayerNormProgramConfig>& program_config,
     const std::optional<const DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<const Tensor>& recip_tensor) {
+    auto rank = input_tensor.logical_shape().rank();
+    TT_FATAL(rank > 0, "Normalization not supported for 0D tensors. (rank={})", rank);
+    TT_FATAL(input_tensor.logical_volume() > 0, "Normalization not supported for 0V tensors.");
+    if (norm_type == prim::LayerNormType::RMSNORM) {
+        TT_FATAL(
+            input_tensor.layout() != Layout::ROW_MAJOR,
+            "RMS norm does not support ROW_MAJOR input tensors. Use TILE layout.");
+    }
+
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
     auto kernel_config_val = compute_kernel_config.value_or(default_compute_config);
@@ -79,10 +88,9 @@ Tensor layer_norm(
     const std::optional<const Tensor>& recip_tensor) {
     auto rank = input_tensor.logical_shape().rank();
 
-    // For 0D tensors
+    // 0D and 0V handled here before prepare_norm() which fatals on these cases.
     TT_FATAL(rank > 0, "LayerNorm operation not supported for 0D tensors. (rank={})", rank);
 
-    // For 0V tensors
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     if (input_tensor.logical_volume() == 0) [[unlikely]] {
         return ttnn::clone(input_tensor, /*dtype=*/std::nullopt, output_memory_config, compute_kernel_config);

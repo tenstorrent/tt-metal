@@ -33,16 +33,15 @@ Tensor rms_norm(
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
     auto rank = input_tensor.logical_shape().size();
 
+    // ROW_MAJOR, 0V, 0D handled here before prepare_norm() which fatals on these cases.
     TT_FATAL(
         input_tensor.layout() != Layout::ROW_MAJOR,
         "ttnn::rms_norm does not support ROW_MAJOR input tensors. Use TILE layout.");
 
-    // For 0V tensors
     if (input_tensor.logical_volume() == 0) [[unlikely]] {
         return ttnn::clone(input_tensor, /*dtype=*/std::nullopt, output_memory_config, compute_kernel_config);
     }
 
-    // For 0D tensors
     if (rank == 0) [[unlikely]] {
         auto result = ttnn::divide(
             input_tensor, ttnn::abs(input_tensor, output_memory_config), /*alpha=*/std::nullopt, output_memory_config);
