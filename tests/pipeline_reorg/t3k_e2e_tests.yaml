@@ -115,10 +115,10 @@
 
 - name: t3k_DeepSeek_PREFILL
   cmd: |
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv -tb=short -k random
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv  -tb=short -k random
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv -tb=short -k random
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv -tb=short -k random
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv --tb=short -k random
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv  --tb=short -k random
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv --tb=short -k random
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv --tb=short -k random
   skus:
     wh_llmbox:
       timeout: 15
