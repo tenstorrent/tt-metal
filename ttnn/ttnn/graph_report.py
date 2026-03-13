@@ -29,6 +29,7 @@ from typing import Union
 from loguru import logger
 
 SUPPORTED_REPORT_VERSION = 1
+DATABASE_SCHEMA_VERSION = 2
 
 _BUFFER_TYPE_MAP = {"DRAM": 0, "L1": 1, "SYSTEM_MEMORY": 2, "L1_SMALL": 3, "TRACE": 4}
 
@@ -279,6 +280,13 @@ def create_database_schema(cursor: sqlite3.Cursor) -> None:
             buffer_type int
         )
     """
+    )
+
+
+def save_database_schema_version(cursor: sqlite3.Cursor) -> None:
+    """Save the database schema version to the database."""
+    cursor.execute(
+        "INSERT OR REPLACE INTO report_metadata (key, value) VALUES ('schema_version', ?)", (DATABASE_SCHEMA_VERSION,)
     )
 
 
@@ -1241,6 +1249,7 @@ def import_report(
 
     try:
         create_database_schema(cursor)
+        save_database_schema_version(cursor)
 
         # Handle single file or directory of reports
         if report_path.is_file():
