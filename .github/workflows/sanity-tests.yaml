@@ -89,6 +89,21 @@ on:
         type: string
         default: ""
         description: "Pre-built wheel artifact name (skips build if provided)"
+    secrets:
+      REDIS_CCACHE_PASSWORD:
+        required: false
+      REDIS_PASSWORD:
+        required: false
+      SFTP_BENCHMARK_WRITER_KEY:
+        required: false
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME:
+        required: false
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME:
+        required: false
+      SFTP_FABRIC_LATENCY_WRITER_USERNAME:
+        required: false
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
   workflow_dispatch:
     inputs:
       with-retries:
@@ -174,7 +189,6 @@ on:
 permissions:
   actions: read
   contents: write
-  pull-requests: write
   pages: write
   id-token: write
   packages: write
@@ -185,11 +199,12 @@ jobs:
   # NOTE: build-artifact.yaml handles platform parsing internally.
   # Just pass platform and enable-lto inputs directly.
   build-artifact:
-    if: ${{ inputs.dev-docker-image == '' }}
+    if: inputs.dev-docker-image == ''
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
@@ -202,39 +217,49 @@ jobs:
   resolve-artifacts:
     runs-on: ubuntu-latest
     needs: [build-artifact]
-    if: ${{ !cancelled() && (inputs.dev-docker-image != '' || needs.build-artifact.result == 'success') }}
+    if: "!cancelled() && (inputs.dev-docker-image != '' || needs.build-artifact.result == 'success')"
     outputs:
       dev-docker-image: ${{ steps.resolve.outputs.dev-docker-image }}
       build-artifact-name: ${{ steps.resolve.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ steps.resolve.outputs.wheel-artifact-name }}
     steps:
       - id: resolve
+        env:
+          INPUT_DEV_DOCKER_IMAGE: ${{ inputs.dev-docker-image }}
+          INPUT_BUILD_ARTIFACT_NAME: ${{ inputs.build-artifact-name }}
+          INPUT_WHEEL_ARTIFACT_NAME: ${{ inputs.wheel-artifact-name }}
+          BUILT_DEV_DOCKER_IMAGE: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          BUILT_BUILD_ARTIFACT_NAME: ${{ needs.build-artifact.outputs.build-artifact-name }}
+          BUILT_WHEEL_ARTIFACT_NAME: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
         run: |
           # Validate pre-built artifact inputs - all three must be provided together
-          if [[ -n "${{ inputs.dev-docker-image }}" || -n "${{ inputs.build-artifact-name }}" || -n "${{ inputs.wheel-artifact-name }}" ]]; then
-            if [[ -z "${{ inputs.dev-docker-image }}" || -z "${{ inputs.build-artifact-name }}" || -z "${{ inputs.wheel-artifact-name }}" ]]; then
+          img="$INPUT_DEV_DOCKER_IMAGE"
+          build="$INPUT_BUILD_ARTIFACT_NAME"
+          wheel="$INPUT_WHEEL_ARTIFACT_NAME"
+          if [[ -n "$img" || -n "$build" || -n "$wheel" ]]; then
+            if [[ -z "$img" || -z "$build" || -z "$wheel" ]]; then
               echo "Error: When using pre-built artifacts, all three inputs must be provided:"
-              echo "  - dev-docker-image: '${{ inputs.dev-docker-image }}'"
-              echo "  - build-artifact-name: '${{ inputs.build-artifact-name }}'"
-              echo "  - wheel-artifact-name: '${{ inputs.wheel-artifact-name }}'"
+              echo "  - dev-docker-image: '$INPUT_DEV_DOCKER_IMAGE'"
+              echo "  - build-artifact-name: '$INPUT_BUILD_ARTIFACT_NAME'"
+              echo "  - wheel-artifact-name: '$INPUT_WHEEL_ARTIFACT_NAME'"
               exit 1
             fi
           fi
 
           # Use provided artifacts if available, otherwise use built artifacts
-          if [[ -n "${{ inputs.dev-docker-image }}" ]]; then
-            echo "dev-docker-image=${{ inputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
-            echo "build-artifact-name=${{ inputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
-            echo "wheel-artifact-name=${{ inputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
+          if [[ -n "$INPUT_DEV_DOCKER_IMAGE" ]]; then
+            printf '%s\n' "dev-docker-image=${INPUT_DEV_DOCKER_IMAGE}" >> "${GITHUB_OUTPUT}"
+            printf '%s\n' "build-artifact-name=${INPUT_BUILD_ARTIFACT_NAME}" >> "${GITHUB_OUTPUT}"
+            printf '%s\n' "wheel-artifact-name=${INPUT_WHEEL_ARTIFACT_NAME}" >> "${GITHUB_OUTPUT}"
           else
-            echo "dev-docker-image=${{ needs.build-artifact.outputs.dev-docker-image }}" >> "$GITHUB_OUTPUT"
-            echo "build-artifact-name=${{ needs.build-artifact.outputs.build-artifact-name }}" >> "$GITHUB_OUTPUT"
-            echo "wheel-artifact-name=${{ needs.build-artifact.outputs.wheel-artifact-name }}" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "dev-docker-image=${BUILT_DEV_DOCKER_IMAGE}" >> "${GITHUB_OUTPUT}"
+            printf '%s\n' "build-artifact-name=${BUILT_BUILD_ARTIFACT_NAME}" >> "${GITHUB_OUTPUT}"
+            printf '%s\n' "wheel-artifact-name=${BUILT_WHEEL_ARTIFACT_NAME}" >> "${GITHUB_OUTPUT}"
           fi
 
   tests-to-run:
     needs: [resolve-artifacts]
-    if: ${{ always() && !cancelled() }}
+    if: always() && !cancelled()
     runs-on: ubuntu-latest
     outputs:
       ttnn-unit-tests: ${{ steps.set-ttnn-unit-tests.outputs.should-run }}
@@ -245,29 +270,42 @@ jobs:
       ops-unit-tests: ${{ steps.set-ops-unit-tests.outputs.should-run }}
     steps:
       - id: set-ttnn-unit-tests
+        env:
+          SHOULD_RUN: ${{ github.event_name == 'push' || inputs.run-ttnn-unit-tests }}
         run: |
-          echo "should-run=${{ github.event_name == 'push' || inputs.run-ttnn-unit-tests }}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "should-run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
       - id: set-models-unit-tests
+        env:
+          SHOULD_RUN: ${{ github.event_name == 'push' || inputs.run-models-unit-tests }}
         run: |
-          echo "should-run=${{ github.event_name == 'push' || inputs.run-models-unit-tests }}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "should-run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
       - id: set-tt-train-cpp-unit-tests
+        env:
+          SHOULD_RUN: ${{ github.event_name == 'push' || inputs.run-tt-train-cpp-unit-tests }}
         run: |
-          echo "should-run=${{ github.event_name == 'push' || inputs.run-tt-train-cpp-unit-tests }}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "should-run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
       - id: set-run-profiler-regression
+        env:
+          SHOULD_RUN: ${{ github.event_name == 'push' || inputs.run-profiler-regression }}
         run: |
-          echo "should-run=${{ github.event_name == 'push' || inputs.run-profiler-regression }}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "should-run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
       - id: set-t3000-apc-fast-tests
+        env:
+          SHOULD_RUN: ${{ github.event_name == 'push' || inputs.run-t3000-apc-fast-tests }}
         run: |
-          echo "should-run=${{ github.event_name == 'push' || inputs.run-t3000-apc-fast-tests }}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "should-run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
       - id: set-ops-unit-tests
+        env:
+          SHOULD_RUN: ${{ github.event_name == 'push' || inputs.run-ops-unit-tests }}
         run: |
-          echo "should-run=${{ github.event_name == 'push' || inputs.run-ops-unit-tests }}" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "should-run=${SHOULD_RUN}" >> "${GITHUB_OUTPUT}"
 
   # TTNN FD Unit tests
   ttnn-unit-tests:
     needs: [resolve-artifacts, tests-to-run]
-    secrets: inherit
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ttnn-unit-tests == 'true' }}
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/ttnn-post-commit.yaml
     with:
       enabled-skus: "wh_n300_civ2"
@@ -282,14 +320,13 @@ jobs:
   # FD Model Tests
   models-unit-tests:
     needs: [resolve-artifacts, tests-to-run]
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.models-unit-tests == 'true' }}
+        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
     uses: ./.github/workflows/models-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -304,21 +341,19 @@ jobs:
 
   tt-train-cpp-unit-tests:
     needs: [resolve-artifacts, tests-to-run]
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.tt-train-cpp-unit-tests == 'true' }}
+        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
+    if: always() && !cancelled() && needs.tests-to-run.outputs.tt-train-cpp-unit-tests == 'true'
     uses: ./.github/workflows/tt-train-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.resolve-artifacts.outputs.build-artifact-name }}
-      gtest_filter: "*-*NIGHTLY_*"
       enable-watcher: ${{ inputs.enable-watcher || false }}
       enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
@@ -330,12 +365,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.run-profiler-regression == 'true'}}
+        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
+    if: always() && !cancelled() && needs.tests-to-run.outputs.run-profiler-regression == 'true'
     uses: ./.github/workflows/run-profiler-regression.yaml
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     with:
       arch: ${{ matrix.test-group.arch}}
       runner-label: ${{ matrix.test-group.runner-label}}
@@ -348,9 +382,13 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       ref: ${{ inputs.ref || github.sha }}
   t3000-apc-fast-tests:
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.t3000-apc-fast-tests == 'true' }}
     needs: [resolve-artifacts, tests-to-run]
-    secrets: inherit
+    secrets:
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+      SFTP_FABRIC_LATENCY_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
       docker-image: ${{ needs.resolve-artifacts.outputs.dev-docker-image }}
@@ -363,14 +401,17 @@ jobs:
 
   ops-unit-tests:
     needs: [resolve-artifacts, tests-to-run]
-    secrets: inherit
+    secrets:
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+      SFTP_FABRIC_LATENCY_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
-    if: ${{ always() && !cancelled() && needs.tests-to-run.outputs.ops-unit-tests == 'true' }}
+        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
+    if: always() && !cancelled() && needs.tests-to-run.outputs.ops-unit-tests == 'true'
     uses: ./.github/workflows/ops-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}

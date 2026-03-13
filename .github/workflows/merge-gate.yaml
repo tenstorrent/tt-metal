@@ -47,10 +47,10 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
-  pull-requests: write
-  checks: write
-  packages: write
+  contents: write  # NOLINT(24) - inherited by all-static-checks for pre-commit
+  pull-requests: write  # NOLINT(24) - inherited by all-static-checks for PR comments
+  checks: write  # NOLINT(24) - required for posting check results
+  packages: write  # NOLINT(24) - required for GHCR push in build jobs
 
 jobs:
   static-checks:
@@ -59,13 +59,11 @@ jobs:
     # But we don't actually WANT to run it on PRs -- that's the whole point.  GitHub strikes again.
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/all-static-checks.yaml
-    secrets: inherit
 
   # Build all Docker images ONCE at the start, then share with all downstream jobs
   docker-images:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     uses: ./.github/workflows/build-all-docker-images.yaml
-    secrets: inherit
 
   code-analysis:
     # Workaround for https://github.com/orgs/community/discussions/46757?sort=old#discussioncomment-4909336
@@ -74,7 +72,9 @@ jobs:
     if: github.event.action != 'destroyed' && github.event_name != 'pull_request'
     needs: docker-images
     uses: ./.github/workflows/code-analysis.yaml
-    secrets: inherit
+    secrets:
+      CLANGSA_RESULTS_PAT: ${{ secrets.CLANGSA_RESULTS_PAT }}
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: "Ubuntu 24.04"
       ci-build-docker-image: ${{ needs.docker-images.outputs.ubuntu-2404-ci-build-tag }}
@@ -85,7 +85,7 @@ jobs:
     runs-on: ubuntu-latest
     needs: [code-analysis]
     permissions:
-      actions: write
+      actions: write  # NOLINT(24) - required for cancelling failed workflows
     steps:
       - uses: action-pack/cancel@bb57491c99942855e9da36ffbe86a686b2bd35a3
 
@@ -106,16 +106,17 @@ jobs:
 
   build:
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true' ||
-            needs.find-changes.outputs.docs-changed == 'true' ||
-            needs.find-changes.outputs.build-workflows-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.any-code-changed == 'true' ||
+      needs.find-changes.outputs.docs-changed == 'true' ||
+      needs.find-changes.outputs.build-workflows-changed == 'true'
+      }}
     needs: [find-changes, docker-images]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: Release
       build-wheel: true
@@ -131,15 +132,16 @@ jobs:
 
   build-tsan:
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true' ||
-            needs.find-changes.outputs.build-workflows-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.any-code-changed == 'true' ||
+      needs.find-changes.outputs.build-workflows-changed == 'true'
+      }}
     needs: [find-changes, docker-images]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: TSan
       platform: "Ubuntu 24.04"
@@ -155,14 +157,15 @@ jobs:
 
   build-sweeps:
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.any-code-changed == 'true'
+      }}
     needs: [find-changes, docker-images]
     uses: ./.github/workflows/build-wrapper.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       ubuntu-2204-ci-build-tag: ${{ needs.docker-images.outputs.ubuntu-2204-ci-build-tag }}
       ubuntu-2204-dev-tag: ${{ needs.docker-images.outputs.ubuntu-2204-dev-tag }}
@@ -174,18 +177,18 @@ jobs:
   metalium-smoke-tests:
     needs: [find-changes, build-tsan]
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
     strategy:
       fail-fast: false
       matrix:
         platform: [
-          "N300-viommu",
-          "in-service-dedicated-merge-gate", # run t3k tests on CIv1 for now in order to have dedicated machine
-          "p150b-viommu-prio",
-        ]
+            "N300-viommu",
+            "in-service-dedicated-merge-gate", # run t3k tests on CIv1 for now in order to have dedicated machine
+            "p150b-viommu-prio",
+          ]
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
@@ -197,19 +200,19 @@ jobs:
   ttnn-smoke-tests:
     needs: [find-changes, build-tsan]
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changes.outputs.tt-nn-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
     strategy:
       fail-fast: false
       matrix:
         platform: [
-          "N300-viommu",
-          "in-service-dedicated-merge-gate", # run t3k tests on CIv1 for now in order to have dedicated machine
-          "p150b-viommu-prio",
-        ]
+            "N300-viommu",
+            "in-service-dedicated-merge-gate", # run t3k tests on CIv1 for now in order to have dedicated machine
+            "p150b-viommu-prio",
+          ]
     uses: ./.github/workflows/smoke.yaml
     with:
       docker-image: ${{ needs.build-tsan.outputs.dev-docker-image }}
@@ -220,15 +223,16 @@ jobs:
 
   build-asan:
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.any-code-changed == 'true' ||
-            needs.find-changes.outputs.build-workflows-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.any-code-changed == 'true' ||
+      needs.find-changes.outputs.build-workflows-changed == 'true'
+      }}
     needs: [find-changes, docker-images]
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ASan
       platform: "Ubuntu 22.04"
@@ -244,19 +248,16 @@ jobs:
 
   metalium-basic-tests:
     if: ${{
-        github.ref_name == 'main' ||
-        needs.find-changes.outputs.cmake-changed == 'true' ||
-        needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-        needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      github.ref_name == 'main' ||
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
       }}
-    needs: [ build-asan, find-changes ]
+    needs: [build-asan, find-changes]
     strategy:
       fail-fast: false
       matrix:
-        platform: [
-          "N150-viommu",
-          "p150b-viommu-prio",
-        ]
+        platform: ["N150-viommu", "p150b-viommu-prio"]
     uses: ./.github/workflows/basic.yaml
     with:
       docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
@@ -268,18 +269,15 @@ jobs:
   ttnn-basic-tests:
     needs: [build-asan, find-changes]
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changes.outputs.tt-nn-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
     strategy:
       fail-fast: false
       matrix:
-        platform: [
-          "N150-viommu",
-          "p150b-viommu-prio",
-        ]
+        platform: ["N150-viommu", "p150b-viommu-prio"]
     uses: ./.github/workflows/basic.yaml
     with:
       docker-image: ${{ needs.build-asan.outputs.dev-docker-image }}
@@ -291,13 +289,15 @@ jobs:
   ttnn-merge-gate-tests:
     needs: [build, find-changes]
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changes.outputs.tt-nn-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
     uses: ./.github/workflows/ttnn-post-commit.yaml
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     with:
       enabled-skus: "wh_n300_civ2"
       docker-image: ${{ needs.build.outputs.dev-docker-image }}
@@ -308,18 +308,18 @@ jobs:
   tt-cnn-unit-tests:
     needs: [build, find-changes]
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
-    secrets: inherit
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changes.outputs.tt-nn-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
+        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
     uses: ./.github/workflows/tt-cnn-post-commit.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -330,18 +330,17 @@ jobs:
   fabric-unit-tests:
     needs: [build, find-changes]
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.cmake-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-changed == 'true' ||
-            needs.find-changes.outputs.tt-nn-changed == 'true' ||
-            needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
-        }}
-    secrets: inherit
+      needs.find-changes.outputs.cmake-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-changed == 'true' ||
+      needs.find-changes.outputs.tt-nn-changed == 'true' ||
+      needs.find-changes.outputs.tt-metalium-or-tt-nn-tests-changed == 'true'
+      }}
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
+        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -353,15 +352,14 @@ jobs:
   fabric-cpu-only-unit-tests:
     needs: [build, find-changes]
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.any-code-changed == 'true'
-        }}
-    secrets: inherit
+      needs.find-changes.outputs.any-code-changed == 'true'
+      }}
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0 },
-        ]
+        test-group: [{ arch: wormhole_b0 }]
     uses: ./.github/workflows/fabric-cpu-only-tests-impl.yaml
     with:
       arch: ${{ matrix.test-group.arch }}
@@ -371,8 +369,8 @@ jobs:
 
   ttsim-unit-tests:
     if: ${{ github.ref_name == 'main' ||
-            needs.find-changes.outputs.any-code-changed == 'true'
-        }}
+      needs.find-changes.outputs.any-code-changed == 'true'
+      }}
     needs: [build, find-changes]
     strategy:
       fail-fast: false
@@ -386,14 +384,11 @@ jobs:
       run-metal-cpp-unit-tests: true
 
   triage-tests:
-    needs: [ build, find-changes ]
+    needs: [build, find-changes]
     strategy:
       fail-fast: false
       matrix:
-        platform: [
-          "N150-viommu",
-          "P150b-viommu-prio",
-        ]
+        platform: ["N150-viommu", "P150b-viommu-prio"]
     uses: ./.github/workflows/triage.yaml
     with:
       runner-label: ${{ matrix.platform }}
@@ -415,7 +410,26 @@ jobs:
         contains(join(needs.*.result, ','), 'success') ||
         contains(join(needs.*.result, ','), 'failure')
       }}
-    needs: [static-checks, docker-images, code-analysis, find-changes, build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests]
+    needs:
+      [
+        static-checks,
+        docker-images,
+        code-analysis,
+        find-changes,
+        build,
+        build-tsan,
+        build-sweeps,
+        metalium-smoke-tests,
+        ttnn-smoke-tests,
+        ttnn-basic-tests,
+        metalium-basic-tests,
+        ttnn-merge-gate-tests,
+        tt-cnn-unit-tests,
+        ttsim-unit-tests,
+        triage-tests,
+        fabric-unit-tests,
+        fabric-cpu-only-unit-tests,
+      ]
     runs-on: ubuntu-latest
     steps:
       - name: Check if all jobs passed
@@ -424,7 +438,7 @@ jobs:
           required-jobs: "static-checks, code-analysis, find-changes"
           optional-jobs: "build, build-tsan, build-sweeps, metalium-smoke-tests, ttnn-smoke-tests, ttnn-basic-tests, metalium-basic-tests, ttnn-merge-gate-tests, tt-cnn-unit-tests, ttsim-unit-tests, triage-tests, fabric-unit-tests, fabric-cpu-only-unit-tests"
         env:
-          NEEDS_CONTEXT: '${{ toJSON(needs) }}'
+          NEEDS_CONTEXT: "${{ toJSON(needs) }}"
       - if: (failure() && contains(join(needs.*.result, ','), 'failure') && github.event_name == 'merge_group')
         uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate@main
         with:

@@ -1,28 +1,29 @@
-name: 'Prepare Tracy Reports'
-description: 'Cleans up intermediate Tracy files and renames CSV reports with model name'
+name: "Prepare Tracy Reports"
+description: "Cleans up intermediate Tracy files and renames CSV reports with model name"
 
 inputs:
   profiler-dir:
-    description: 'Path to the profiler directory'
+    description: "Path to the profiler directory"
     required: true
   model-name:
-    description: 'Model name to include in the report filename'
+    description: "Model name to include in the report filename"
     required: true
   card:
-    description: 'Card type (e.g., N150, N300)'
+    description: "Card type (e.g., N150, N300)"
     required: false
-    default: ''
+    default: ""
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Prepare Tracy reports
       shell: bash
+      env:
+        PROFILER_DIR: ${{ inputs.profiler-dir }}
+        MODEL_NAME: ${{ inputs.model-name }}
+        CARD: ${{ inputs.card }}
       run: |
-        PROFILER_DIR="${{ inputs.profiler-dir }}"
         REPORTS_DIR="${PROFILER_DIR}/reports"
-        MODEL_NAME="${{ inputs.model-name }}"
-        CARD="${{ inputs.card }}"
 
         # Clean up large intermediate files
         find "$PROFILER_DIR" -name "profile_log_device.csv" -type f -delete 2>/dev/null || true

@@ -4,45 +4,45 @@ inputs:
   build-artifact-name:
     required: false
     description: Name of the build artifact
-    default: ''
+    default: ""
   wheel-artifact-name:
     required: false
     description: Name of the wheel artifact
-    default: ''
+    default: ""
   path:
     required: false
     description: Where to checkout
     default: docker-job
   enable-watcher:
-    description: 'Enable watcher'
+    description: "Enable watcher"
     default: false
     type: boolean
   enable-lightweight-kernel-asserts:
-    description: 'Enable lightweight kernel asserts'
+    description: "Enable lightweight kernel asserts"
     default: false
     type: boolean
   enable-llk-asserts:
-    description: 'Enable LLK asserts'
+    description: "Enable LLK asserts"
     default: false
     type: boolean
   enable-kernel-ccache:
-    description: 'Enable kernel ccache for JIT compilation at runtime'
+    description: "Enable kernel ccache for JIT compilation at runtime"
     default: false
     type: boolean
   redis-ccache-storage:
-    description: 'Redis storage for kernel ccache (runtime JIT compilation). Uses separate Redis instance from build ccache (REDIS_USER/REDIS_PASSWORD) to allow different retention/performance policies. Format: redis://user:password@host:port|read-only=false'
+    description: "Redis storage for kernel ccache (runtime JIT compilation). Uses separate Redis instance from build ccache (REDIS_USER/REDIS_PASSWORD) to allow different retention/performance policies. Format: redis://user:password@host:port|read-only=false"
     required: false
-    default: ''
+    default: ""
   use-evaluation-image:
-    description: 'Skip download and installation of build artifacts and wheel as theyre pre-installed in evaluation image'
+    description: "Skip download and installation of build artifacts and wheel as theyre pre-installed in evaluation image"
     default: false
     type: boolean
   auto-triage:
-    description: 'Enable detection of timeout on fast dispatch and automatically call tt-triage'
+    description: "Enable detection of timeout on fast dispatch and automatically call tt-triage"
     default: true
     type: boolean
   hang-detection-timeout:
-    description: 'Timeout in seconds when dispatcher is not making progress before tt-triage is called automatically'
+    description: "Timeout in seconds when dispatcher is not making progress before tt-triage is called automatically"
     default: 5.0
     type: float
 runs:
@@ -56,27 +56,27 @@ runs:
       shell: bash
 
     - name: 📦 Download Build Artifact
-      if: ${{ inputs.build-artifact-name != '' && inputs.use-evaluation-image == 'false' }}
+      if: inputs.build-artifact-name != '' && inputs.use-evaluation-image == 'false'
       uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
       with:
         name: ${{ inputs.build-artifact-name }}
         path: ${{ inputs.path }}
 
     - name: 📂 Extract Build Files
-      if: ${{ inputs.build-artifact-name != '' && inputs.use-evaluation-image == 'false' }}
+      if: inputs.build-artifact-name != '' && inputs.use-evaluation-image == 'false'
       working-directory: ${{ inputs.path }}
       run: tar --zstd -xf ttm_any.tar.zst
       shell: bash
 
     - name: 🧪 Download Python Wheel
-      if: ${{ inputs.wheel-artifact-name != '' && inputs.use-evaluation-image == 'false' }}
+      if: inputs.wheel-artifact-name != '' && inputs.use-evaluation-image == 'false'
       uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
       with:
         name: ${{ inputs.wheel-artifact-name }}
         path: ${{ inputs.path }}
 
     - name: 💿 Install Wheel
-      if: ${{ inputs.wheel-artifact-name != '' && inputs.use-evaluation-image == 'false' }}
+      if: inputs.wheel-artifact-name != '' && inputs.use-evaluation-image == 'false'
       working-directory: ${{ inputs.path }}
       run: |
         echo "📂 In directory: $(pwd)"
@@ -88,29 +88,29 @@ runs:
       shell: bash
 
     - name: Set up env vars for watcher
-      if: ${{ inputs.enable-watcher == 'true' }}
+      if: inputs.enable-watcher == 'true'
       working-directory: ${{ inputs.path }}
       run: |
         echo "Enabling TT Metal Watcher"
-        echo "TT_METAL_WATCHER=2" >> $GITHUB_ENV
-        echo "TT_METAL_WATCHER_APPEND=1" >> $GITHUB_ENV
-        echo "TT_METAL_WATCHER_NOINLINE=1" >> $GITHUB_ENV
+        printf '%s\n' "TT_METAL_WATCHER=2" >> "${GITHUB_ENV}"
+        printf '%s\n' "TT_METAL_WATCHER_APPEND=1" >> "${GITHUB_ENV}"
+        printf '%s\n' "TT_METAL_WATCHER_NOINLINE=1" >> "${GITHUB_ENV}"
       shell: bash
 
     - name: Set up env vars for lightweight kernel asserts
-      if: ${{ inputs.enable-lightweight-kernel-asserts == 'true' }}
+      if: inputs.enable-lightweight-kernel-asserts == 'true'
       working-directory: ${{ inputs.path }}
       run: |
         echo "Enabling TT Metal Lightweight Kernel Asserts"
-        echo "TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1" >> $GITHUB_ENV
+        printf '%s\n' "TT_METAL_LIGHTWEIGHT_KERNEL_ASSERTS=1" >> "${GITHUB_ENV}"
       shell: bash
 
     - name: Set up env vars for LLK asserts
-      if: ${{ inputs.enable-llk-asserts == 'true' }}
+      if: inputs.enable-llk-asserts == 'true'
       working-directory: ${{ inputs.path }}
       run: |
         echo "Enabling TT Metal LLK Asserts"
-        echo "TT_METAL_LLK_ASSERTS=1" >> $GITHUB_ENV
+        printf '%s\n' "TT_METAL_LLK_ASSERTS=1" >> "${GITHUB_ENV}"
       shell: bash
 
     # Kernel ccache configuration for JIT compilation at test runtime
@@ -119,34 +119,46 @@ runs:
     # - Build ccache: Large binaries, infrequent changes, high retention
     # - Kernel ccache: Smaller JIT objects, frequent compilations, different eviction policies
     - name: Set up kernel ccache
-      if: ${{ inputs.enable-kernel-ccache == 'true' && github.event_name != 'pull_request' }}
+      if: inputs.enable-kernel-ccache == 'true' && github.event_name != 'pull_request'
       working-directory: ${{ inputs.path }}
+      env:
+        REDIS_CCACHE_STORAGE: ${{ inputs.redis-ccache-storage }}
       run: |
         echo "Enabling TT Metal kernel ccache"
-        echo "CCACHE_COMPILERCHECK=content" >> $GITHUB_ENV
-        echo "CCACHE_REMOTE_ONLY=true" >> $GITHUB_ENV
-        echo "CCACHE_NOHASHDIR=true" >> $GITHUB_ENV
-        echo "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> $GITHUB_ENV
-        echo "CCACHE_TEMPDIR=/tmp/ccache" >> $GITHUB_ENV
+        printf '%s\n' "CCACHE_COMPILERCHECK=content" >> "${GITHUB_ENV}"
+        printf '%s\n' "CCACHE_REMOTE_ONLY=true" >> "${GITHUB_ENV}"
+        printf '%s\n' "CCACHE_NOHASHDIR=true" >> "${GITHUB_ENV}"
+        printf '%s\n' "TT_METAL_CCACHE_KERNEL_SUPPORT=1" >> "${GITHUB_ENV}"
+        printf '%s\n' "CCACHE_TEMPDIR=/tmp/ccache" >> "${GITHUB_ENV}"
 
-        if [ -z "${{ inputs.redis-ccache-storage }}" ]; then
+        if [ -z "$REDIS_CCACHE_STORAGE" ]; then
           echo "Redis ccache storage is missing. Did you forget to pass redis-ccache-storage?"
           exit 1
         fi
-        echo "CCACHE_REMOTE_STORAGE=${{ inputs.redis-ccache-storage }}" >> $GITHUB_ENV
+        if [[ ! "${REDIS_CCACHE_STORAGE}" =~ ^redis(s)?:// ]]; then
+          echo "::error::Invalid redis-ccache-storage format"
+          exit 1
+        fi
+        printf '%s\n' "CCACHE_REMOTE_STORAGE=${REDIS_CCACHE_STORAGE}" >> "${GITHUB_ENV}"
 
         mkdir -p /tmp/ccache
       shell: bash
 
     - name: Set up env vars for auto-triage
-      if: ${{ inputs.auto-triage == 'true' }}
+      if: inputs.auto-triage == 'true'
       working-directory: ${{ inputs.path }}
+      env:
+        HANG_DETECTION_TIMEOUT: ${{ inputs.hang-detection-timeout }}
       run: |
         echo "Enabling detection of timeout on fast dispatch and automatically call tt-triage"
+        if [[ ! "${HANG_DETECTION_TIMEOUT}" =~ ^[0-9]+\.?[0-9]*$ ]]; then
+          echo "::error::Invalid hang-detection-timeout: ${HANG_DETECTION_TIMEOUT}"
+          exit 1
+        fi
         TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH=/work/generated/debug_bus_signal_groups.json
-        echo "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=/opt/venv/bin/python3 $(pwd)/tools/tt-triage.py --disable-progress --path=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH 1>&2" >> $GITHUB_ENV
-        echo "TT_METAL_OPERATION_TIMEOUT_SECONDS=${{ inputs.hang-detection-timeout }}" >> $GITHUB_ENV
-        echo "TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS=1" >> $GITHUB_ENV
-        echo "TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1" >> $GITHUB_ENV
-        echo "TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH=$TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH" >> $GITHUB_ENV
+        printf '%s\n' "TT_METAL_DISPATCH_TIMEOUT_COMMAND_TO_EXECUTE=/opt/venv/bin/python3 $(pwd)/tools/tt-triage.py --disable-progress --path=${TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH} 1>&2" >> "${GITHUB_ENV}"
+        printf '%s\n' "TT_METAL_OPERATION_TIMEOUT_SECONDS=${HANG_DETECTION_TIMEOUT}" >> "${GITHUB_ENV}"
+        printf '%s\n' "TT_TRIAGE_ENABLE_AGGREGATED_CALLSTACKS=1" >> "${GITHUB_ENV}"
+        printf '%s\n' "TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI=1" >> "${GITHUB_ENV}"
+        printf '%s\n' "TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH=${TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH}" >> "${GITHUB_ENV}"
       shell: bash

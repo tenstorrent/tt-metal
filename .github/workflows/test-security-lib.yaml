@@ -1,0 +1,41 @@
+name: "[internal] Security Library Tests"
+
+on:
+  pull_request:
+    paths:
+      - ".github/scripts/security/**"
+  push:
+    branches: [main]
+    paths:
+      - ".github/scripts/security/**"
+
+permissions:
+  contents: read
+
+jobs:
+  test-validation-library:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Run validation library tests
+        run: bash .github/scripts/security/tests/test-validation.sh
+
+      - name: Run security linter smoke tests
+        run: bash .github/scripts/security/tests/test-check-actions-security.sh
+
+      - name: Run security linter (informational)
+        run: bash .github/scripts/security/check-actions-security.sh
+
+      - name: Shellcheck security scripts
+        run: |
+          if command -v shellcheck &>/dev/null; then
+            shellcheck -x \
+              .github/scripts/security/input-validation.sh \
+              .github/scripts/security/check-actions-security.sh \
+              .github/scripts/security/check-actions-security-parallel.sh \
+              .github/scripts/security/tests/test-check-actions-security.sh
+          else
+            echo "shellcheck not available, skipping"
+          fi

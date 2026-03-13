@@ -1,5 +1,5 @@
-name: 'Calculate Version'
-description: 'Calculates the next semantic version based on commit messages and tag type'
+name: "Calculate Version"
+description: "Calculates the next semantic version based on commit messages and tag type"
 inputs:
   tag-type:
     description: "Type of tag to create: 'rc' for release candidate, 'dev' for dev development, or '' for normal release"
@@ -15,20 +15,20 @@ inputs:
     default: ""
 outputs:
   latest_semver:
-    description: 'The latest semver tag found'
+    description: "The latest semver tag found"
     value: ${{ steps.get-latest-semver.outputs.latest_semver }}
   bump_type:
-    description: 'The type of version bump determined from commits (major, minor, patch, none)'
+    description: "The type of version bump determined from commits (major, minor, patch, none)"
     value: ${{ steps.analyze-commits.outputs.bump_type }}
   new_version:
-    description: 'The calculated new version'
+    description: "The calculated new version"
     value: ${{ steps.calculate-version.outputs.new_version }}
   final_version:
-    description: 'The final version with tag type suffix (rc/dev) if applicable'
+    description: "The final version with tag type suffix (rc/dev) if applicable"
     value: ${{ steps.format-final-version.outputs.final_version }}
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Get latest semver tag
       id: get-latest-semver
@@ -63,11 +63,35 @@ runs:
     - name: Analyze commits for version bump
       id: analyze-commits
       shell: bash
+      env:
+        LATEST_TAG: ${{ steps.get-latest-semver.outputs.latest_semver }}
+        LATEST_RC: ${{ steps.get-latest-semver.outputs.latest_rc }}
+        FORCE_BUMP_INPUT: ${{ inputs.force-bump-type }}
+        IGNORE_COMMITS_INPUT: ${{ inputs.ignore-commits }}
       run: |
-        latest_tag="${{ steps.get-latest-semver.outputs.latest_semver }}"
-        latest_rc="${{ steps.get-latest-semver.outputs.latest_rc }}"
-        force_bump="${{ inputs.force-bump-type }}"
-        ignore_commits="${{ inputs.ignore-commits }}"
+        latest_tag="$LATEST_TAG"
+        latest_rc="$LATEST_RC"
+        force_bump="$FORCE_BUMP_INPUT"
+        ignore_commits="$IGNORE_COMMITS_INPUT"
+
+        # Validate force-bump-type if provided
+        if [ -n "$force_bump" ]; then
+          if [[ ! "$force_bump" =~ ^(major|minor|patch|none)$ ]]; then
+            echo "::error::Invalid force-bump-type: must be major, minor, patch, or none"
+            exit 1
+          fi
+        fi
+
+        # Validate ignore-commits format (comma-separated hex SHAs)
+        if [ -n "$ignore_commits" ]; then
+          for sha in $(echo "$ignore_commits" | tr ',' ' '); do
+            sha=$(echo "$sha" | xargs)
+            if [ -n "$sha" ] && [[ ! "$sha" =~ ^[a-fA-F0-9]+$ ]]; then
+              echo "::error::Invalid commit SHA format in ignore-commits: $sha"
+              exit 1
+            fi
+          done
+        fi
 
         # Check if a forced bump type is provided
         if [ -n "$force_bump" ]; then
@@ -138,11 +162,16 @@ runs:
     - name: Calculate new version
       id: calculate-version
       shell: bash
+      env:
+        LATEST_SEMVER: ${{ steps.get-latest-semver.outputs.latest_semver }}
+        LATEST_RC: ${{ steps.get-latest-semver.outputs.latest_rc }}
+        BUMP_TYPE: ${{ steps.analyze-commits.outputs.bump_type }}
+        TAG_TYPE: ${{ inputs.tag-type }}
       run: |
-        latest_tag="${{ steps.get-latest-semver.outputs.latest_semver }}"
-        latest_rc="${{ steps.get-latest-semver.outputs.latest_rc }}"
-        bump_type="${{ steps.analyze-commits.outputs.bump_type }}"
-        tag_type="${{ inputs.tag-type }}"
+        latest_tag="$LATEST_SEMVER"
+        latest_rc="$LATEST_RC"
+        bump_type="$BUMP_TYPE"
+        tag_type="$TAG_TYPE"
 
         if [ "$tag_type" = "dev" ]; then
           echo "Dev tag type - forcing minor version bump"
@@ -221,9 +250,12 @@ runs:
     - name: Format final version with tag type
       id: format-final-version
       shell: bash
+      env:
+        BASE_VERSION: ${{ steps.calculate-version.outputs.new_version }}
+        TAG_TYPE: ${{ inputs.tag-type }}
       run: |
-        baseVersion="${{ steps.calculate-version.outputs.new_version }}"
-        tagType="${{ inputs.tag-type }}"
+        baseVersion="$BASE_VERSION"
+        tagType="$TAG_TYPE"
 
         if [ "$tagType" = "rc" ]; then
           rcTags=$(git tag | grep "$baseVersion"-rc || true)

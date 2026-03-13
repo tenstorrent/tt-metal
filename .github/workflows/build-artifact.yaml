@@ -83,7 +83,7 @@ on:
         required: false
         type: string
         default: ""
-        description: 'Commit SHA to test (default: HEAD)'
+        description: "Commit SHA to test (default: HEAD)"
       use-artifacts-from-run:
         required: false
         type: string
@@ -120,6 +120,9 @@ on:
         type: string
         default: ""
         description: "Pre-built ManyLinux Docker image tag"
+    secrets:
+      REDIS_PASSWORD:
+        required: false
     outputs:
       ci-build-docker-image:
         description: >-
@@ -239,7 +242,7 @@ jobs:
       toolchain: ${{ steps.parse.outputs.toolchain }}
       enable-lto: ${{ steps.parse.outputs.enable-lto }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -265,16 +268,15 @@ jobs:
 
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
-    if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
+    if: always() && !failure() && !cancelled() && inputs.ci-build-docker-image == ''
     uses: ./.github/workflows/build-docker-artifact.yaml
-    secrets: inherit
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       architecture: ${{ inputs.architecture }}
       ref: ${{ inputs.ref }}
 
   download-artifacts:
-    if: ${{ inputs.use-artifacts-from-run != '' }}
+    if: inputs.use-artifacts-from-run != ''
     runs-on: ubuntu-latest
     outputs:
       build_artifact_name: ${{ steps.download.outputs.build-artifact-name }}
@@ -282,7 +284,7 @@ jobs:
       packages-artifact-name: ${{ steps.download.outputs.packages-artifact-name }}
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
@@ -298,7 +300,7 @@ jobs:
           tracy: ${{ inputs.tracy }}
 
       - name: Upload build artifact for downstream jobs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ steps.download.outputs.build-artifact-name }}
           path: ${{ github.workspace }}/artifacts/ttm_any.tar.zst
@@ -306,8 +308,8 @@ jobs:
           retention-days: 1
 
       - name: Upload wheel artifact
-        if: ${{ steps.download.outputs.wheel-artifact-name != '' }}
-        uses: actions/upload-artifact@v4
+        if: steps.download.outputs.wheel-artifact-name != ''
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ steps.download.outputs.wheel-artifact-name }}
           path: ${{ github.workspace }}/artifacts/*.whl
@@ -315,8 +317,8 @@ jobs:
           retention-days: 1
 
       - name: Upload packages artifact
-        if: ${{ steps.download.outputs.packages-artifact-name != '' }}
-        uses: actions/upload-artifact@v4
+        if: steps.download.outputs.packages-artifact-name != ''
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ${{ steps.download.outputs.packages-artifact-name }}
           path: ${{ github.workspace }}/artifacts/*.deb
@@ -325,7 +327,7 @@ jobs:
 
   build-artifact:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
-    if: ${{ always() && !failure() && !cancelled() && inputs.use-artifacts-from-run == '' }}
+    if: always() && !failure() && !cancelled() && inputs.use-artifacts-from-run == ''
     name: >-
       🛠️ Build ${{ inputs.build-type }}
       ${{ needs.parse-platform.outputs.distro }}
@@ -372,19 +374,18 @@ jobs:
       - name: Check Redis credentials
         # Failing internal jobs draws attention immediately so we can fix them and make them fast.
         # Forks will never have secrets; don't fail the job for them, they'll just run slower
-        if: ${{ github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false }}
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.fork == false
+        env:
+          REDIS_USER: ${{ vars.REDIS_USER }}
+          REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+          REDIS_HOST: ${{ vars.REDIS_HOST }}
+          REDIS_PORT: ${{ vars.REDIS_PORT }}
+          REDIS_READONLY: ${{ vars.REDIS_IS_READONLY }}
         run: |
-          if [ -z "${{ secrets.REDIS_PASSWORD }}" ]; then
-            echo "Redis password is missing. Did you forget 'secrets: inherit'?"
+          if [ -z "$REDIS_PASSWORD" ]; then
+            echo "Redis password is missing. Did you forget to pass secrets explicitly?"
             exit 1
           fi
-          # Conditionally set this here so that it remains unset on forks,
-          # otherwise it resolves an invalid URL and the job fails
-          REDIS_USER="${{ vars.REDIS_USER }}"
-          REDIS_PASSWORD="${{ secrets.REDIS_PASSWORD }}"
-          REDIS_HOST="${{ vars.REDIS_HOST }}"
-          REDIS_PORT="${{ vars.REDIS_PORT }}"
-          REDIS_READONLY="${{ vars.REDIS_IS_READONLY }}"
           CCACHE_PARTS=(
             "redis://${REDIS_USER}:${REDIS_PASSWORD}"
             "@${REDIS_HOST}:${REDIS_PORT}"
@@ -396,19 +397,23 @@ jobs:
 
       - name: Set artifact name
         id: set-artifact-name
+        env:
+          INPUT_REF: ${{ inputs.ref || github.sha }}
+          INPUT_TRACY: ${{ inputs.tracy }}
+          INPUT_DISTRIBUTED: ${{ inputs.distributed }}
+          INPUT_ARCHITECTURE: ${{ inputs.architecture }}
+          INPUT_BUILD_TYPE: ${{ inputs.build-type }}
+          WF_RUN_ID: ${{ github.run_id }}
         run: |
-          TOOLCHAIN_CLEANED=$(echo "${{ env.TOOLCHAIN }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
-          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness
-          # Sanitize ref/SHA by replacing invalid characters with hyphens
-          RAW_REF="${{ inputs.ref || github.sha }}"
+          TOOLCHAIN_CLEANED=$(echo "$TOOLCHAIN" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
+          RAW_REF="$INPUT_REF"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
-          TRACY_SUFFIX="${{ (inputs.tracy && '-profiler') || '' }}"
-          DIST_SUFFIX="${{ (inputs.distributed == false && '-no-distributed') || '' }}"
-          DISTRO="${{ env.DISTRO }}"
-          VERSION="${{ env.VERSION }}"
-          ARCH="${{ inputs.architecture }}"
-          BUILD_TYPE="${{ inputs.build-type }}"
-          RUN_ID="${{ github.run_id }}"
+          TRACY_SUFFIX="${INPUT_TRACY:+"-profiler"}"
+          DIST_SUFFIX=""
+          if [[ "$INPUT_DISTRIBUTED" == "false" ]]; then DIST_SUFFIX="-no-distributed"; fi
+          ARCH="$INPUT_ARCHITECTURE"
+          BUILD_TYPE="$INPUT_BUILD_TYPE"
+          RUN_ID="$WF_RUN_ID"
           ARTIFACT_PARTS=(
             "packages"
             "${DISTRO}"
@@ -425,7 +430,7 @@ jobs:
           echo "ARTIFACT_NAME=$ARTIFACT_NAME" >> "$GITHUB_ENV"
 
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           ref: ${{ inputs.ref || github.sha }}
@@ -450,18 +455,31 @@ jobs:
           git config --global --add safe.directory /work
 
       - name: 📦 Restore CPM source cache
-        uses: actions/cache@v4
+        uses: actions/cache@cdf6c1fa76f9f475f3d7449005a359c84ca0f306 # v5.0.3
         with:
           path: .cpmcache
-          key: cpm-${{ hashFiles('third_party/CMakeLists.txt', 'tt_metal/third_party/umd/third_party/CMakeLists.txt', 'tt-train/cmake/dependencies.cmake') }}
+          key: >-
+            cpm-${{ hashFiles(
+              'third_party/CMakeLists.txt',
+              'tt_metal/third_party/umd/third_party/CMakeLists.txt',
+              'tt-train/cmake/dependencies.cmake'
+            ) }}
           restore-keys: |
             cpm-
 
       - name: 🔧 CMake configure
+        env:
+          INPUT_SKIP_TT_TRAIN: ${{ inputs.skip-tt-train }}
+          INPUT_BUILD_TYPE: ${{ inputs.build-type }}
+          INPUT_TRACY: ${{ inputs.tracy }}
+          INPUT_DISTRIBUTED: ${{ inputs.distributed }}
+          INPUT_PROFILE: ${{ inputs.profile }}
+          INPUT_BUILD_UMD_TESTS: ${{ inputs.build-umd-tests }}
+          INPUT_ENABLE_LTO: ${{ inputs.enable-lto }}
         run: |
-          set -eu # basic shell hygiene
+          set -eu
 
-          if [ "${{ inputs.skip-tt-train }}" = "true" ]; then
+          if [ "$INPUT_SKIP_TT_TRAIN" = "true" ]; then
             args_fixme="--build-metal-tests --build-ttnn-tests --build-programming-examples"
           else
             args_fixme="--build-all"
@@ -471,28 +489,28 @@ jobs:
           build_args=(
             "./build_metal.sh"
             "--build-dir" "build"
-            "--build-type" "${{ inputs.build-type }}"
-            "--toolchain-path" "${{ env.TOOLCHAIN }}"
+            "--build-type" "$INPUT_BUILD_TYPE"
+            "--toolchain-path" "$TOOLCHAIN"
             ${args_fixme}
             "--enable-ccache"
             "--configure-only"
           )
 
-          echo "Build tracy: ${{ inputs.tracy }}"
-          if [ "${{ inputs.tracy }}" = "false" ]; then
+          echo "Build tracy: $INPUT_TRACY"
+          if [ "$INPUT_TRACY" = "false" ]; then
             build_args+=("--disable-profiler")
           fi
-          echo "Build distributed: ${{ inputs.distributed }}"
-          if [ "${{ inputs.distributed }}" = "false" ]; then
+          echo "Build distributed: $INPUT_DISTRIBUTED"
+          if [ "$INPUT_DISTRIBUTED" = "false" ]; then
             build_args+=("--without-distributed")
           fi
-          if [ "${{ inputs.profile }}" = "true" ]; then
+          if [ "$INPUT_PROFILE" = "true" ]; then
             build_args+=("--enable-time-trace" "--disable-unity-builds")
           fi
-          if [ "${{ inputs.build-umd-tests }}" = "true" ]; then
+          if [ "$INPUT_BUILD_UMD_TESTS" = "true" ]; then
             build_args+=("--build-umd-tests")
           fi
-          if [ "${{ inputs.enable-lto }}" = "true" ]; then
+          if [ "$INPUT_ENABLE_LTO" = "true" ]; then
             build_args+=("--enable-lto")
           fi
           echo "build-artifact.yaml running: ${build_args[*]}"
@@ -505,7 +523,7 @@ jobs:
           cmake --build build --target install
 
       - name: 🛠️ Profile
-        if: ${{ inputs.profile }}
+        if: inputs.profile
         run: |
           echo "maxNameLength = 300" > ClangBuildAnalyzer.ini
           ClangBuildAnalyzer --all build capture.bin
@@ -516,7 +534,7 @@ jobs:
         run: |
           cmake --build build --target package
 
-          if [[ "${{ env.DISTRO }}" == "fedora" ]]; then
+          if [[ "$DISTRO" == "fedora" ]]; then
             ls -1sh build/*.rpm || true
           else
             ls -1sh build/*.deb build/*.ddeb || true
@@ -530,8 +548,8 @@ jobs:
           echo '```' >> $GITHUB_STEP_SUMMARY
 
       - name: ☁️ Upload packages
-        if: ${{ inputs.publish-package }}
-        uses: actions/upload-artifact@v4
+        if: inputs.publish-package
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
           name: ${{ env.ARTIFACT_NAME }}
@@ -541,28 +559,34 @@ jobs:
           compression-level: 0
           if-no-files-found: error
 
-      - name: 'Tar files'
-        if: ${{ inputs.publish-artifact }}
+      - name: "Tar files"
+        if: inputs.publish-artifact
+        env:
+          INPUT_SKIP_TT_TRAIN: ${{ inputs.skip-tt-train }}
         run: |
           ARTIFACT_PATHS="ttnn/ttnn/*.so build/lib build/programming_examples build/test build/tools runtime tt_metal/pre-compiled"
-          if [[ "${{ inputs.skip-tt-train }}" != "true" ]]; then
+          if [[ "$INPUT_SKIP_TT_TRAIN" != "true" ]]; then
             ARTIFACT_PATHS="$ARTIFACT_PATHS build/tt-train data"
           fi
           tar -I 'zstd --adapt=min=9 -T0' -cvhf /work/ttm_any.tar.zst $ARTIFACT_PATHS
 
       - name: Set build artifact name
         id: set_build_artifact_name
+        env:
+          INPUT_REF: ${{ inputs.ref || github.sha }}
+          INPUT_TRACY: ${{ inputs.tracy }}
+          INPUT_DISTRIBUTED: ${{ inputs.distributed }}
+          INPUT_ARCHITECTURE: ${{ inputs.architecture }}
+          WF_RUN_ID: ${{ github.run_id }}
         run: |
-          TOOLCHAIN_CLEANED=$(echo "${{ env.TOOLCHAIN }}" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
-          # Use full sanitized ref/SHA and workflow run ID to ensure uniqueness
-          # Sanitize ref/SHA by replacing invalid characters with hyphens
-          RAW_REF="${{ inputs.ref || github.sha }}"
+          TOOLCHAIN_CLEANED=$(echo "$TOOLCHAIN" | sed -E 's/^cmake\///; s/-toolchain\.cmake$//')
+          RAW_REF="$INPUT_REF"
           SANITIZED_REF=$(echo "$RAW_REF" | sed 's/[\/:"<>|*?\r\n\\]/-/g')
-          TRACY_SUFFIX="${{ (inputs.tracy && '_profiler') || '' }}"
-          DIST_SUFFIX="${{ (inputs.distributed == false && '_no_distributed') || '' }}"
-          VERSION="${{ env.VERSION }}"
-          ARCH="${{ inputs.architecture }}"
-          RUN_ID="${{ github.run_id }}"
+          TRACY_SUFFIX="${INPUT_TRACY:+"_profiler"}"
+          DIST_SUFFIX=""
+          if [[ "$INPUT_DISTRIBUTED" == "false" ]]; then DIST_SUFFIX="_no_distributed"; fi
+          ARCH="$INPUT_ARCHITECTURE"
+          RUN_ID="$WF_RUN_ID"
           BUILD_ARTIFACT_PARTS=(
             "TTMetal_build_any"
             "${VERSION}"
@@ -576,8 +600,8 @@ jobs:
           echo "build_artifact_name=$BUILD_ARTIFACT_NAME" >> "$GITHUB_OUTPUT"
 
       - name: ☁️ Upload tarball
-        if: ${{ inputs.publish-artifact }}
-        uses: actions/upload-artifact@v4
+        if: inputs.publish-artifact
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
           name: ${{ env.build_artifact_name }}
@@ -593,10 +617,11 @@ jobs:
       python-version: ${{ steps.set-python-version.outputs.version }}
     steps:
       - id: set-python-version
+        env:
+          DISTRO: ${{ needs.parse-platform.outputs.distro }}
+          VERSION: ${{ needs.parse-platform.outputs.version }}
         run: |
           # Get distro and version from parse-platform outputs (which handles both workflow_dispatch and workflow_call)
-          DISTRO="${{ needs.parse-platform.outputs.distro }}"
-          VERSION="${{ needs.parse-platform.outputs.version }}"
 
           # Use Python 3.12 for Ubuntu 24.04, Python 3.10 for Ubuntu 22.04
           if [ "$VERSION" = "24.04" ]; then
@@ -610,11 +635,11 @@ jobs:
 
   build-wheel:
     # Use always() so this job runs even when build-docker-image is skipped (pre-built tags provided)
-    if: ${{ always() && !failure() && !cancelled() && inputs.build-wheel && inputs.use-artifacts-from-run == '' }}
-    name: 🐍 Build wheel (Python ${{ needs.determine-python-version.outputs.python-version }})
-    uses: ./.github/workflows/wheels.yaml
+    if: always() && !failure() && !cancelled() && inputs.build-wheel && inputs.use-artifacts-from-run == ''
     needs: [parse-platform, build-docker-image, determine-python-version]
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+    uses: ./.github/workflows/wheels.yaml
     with:
       python-version: ${{ needs.determine-python-version.outputs.python-version }}
       docker-image: >-

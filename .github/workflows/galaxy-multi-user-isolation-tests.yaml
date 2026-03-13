@@ -3,22 +3,22 @@ on:
   workflow_dispatch:
     inputs:
       galaxy-multi-user-isolation-tests:
-        description: 'Run Galaxy multi-host job (not actually used in logic yet)'
+        description: Run Galaxy multi-host job (not actually used in logic yet)
         required: false
         default: true
         type: boolean
       extra-tag:
         required: false
         type: string
-        default: "in-service"
+        default: in-service
       platform:
         required: false
         type: choice
-        default: "Ubuntu 22.04"
+        default: Ubuntu 22.04
         options:
-          - "Ubuntu 22.04"
-          - "Ubuntu 24.04"
-        description: "Platform to build and test"
+          - Ubuntu 22.04
+          - Ubuntu 24.04
+        description: Platform to build and test
       build-type:
         required: false
         type: choice
@@ -29,27 +29,26 @@ on:
           - RelWithDebInfo
           - ASan
           - TSan
-        description: "Build type configuration"
+        description: Build type configuration
       enable-lto:
         required: false
         type: boolean
         default: false
-        description: "Enable Link Time Optimization (LTO)"
+        description: Enable Link Time Optimization (LTO)
   schedule:
-    - cron: '0 0 * * *' # This cron schedule runs the workflow every day at 12am UTC
-
+    - cron: 0 0 * * * # This cron schedule runs the workflow every day at 12am UTC
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       enable-lto: ${{ inputs.enable-lto || false }}
       build-wheel: true
-
   galaxy-multi-user-isolation-tests:
     needs: build-artifact
     strategy:
@@ -66,7 +65,7 @@ jobs:
             container_prefix: chip
             mesh_descriptor: n150_mesh_graph_descriptor.textproto
             test_path: tests/ttnn/unit_tests/operations/eltwise/test_fill.py
-            test_args: "-k test_fill"
+            test_args: -k test_fill
           - arch: wormhole_b0
             scenario: tp2
             num_containers: 16
@@ -87,28 +86,29 @@ jobs:
       - topology-6u
       - arch-${{ matrix.arch }}
       - ${{ inputs.extra-tag || 'in-service' }}
-    name: "${{ matrix.arch }} - ${{ matrix.scenario }} (${{ matrix.num_containers }}x${{ matrix.chips_per_container }})"
+    name: ${{ matrix.arch }} - ${{ matrix.scenario }} (${{ matrix.num_containers }}x${{
+      matrix.chips_per_container }})
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: ⬇️ Download Build
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       - name: Extract files
         run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Set up Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: '3.10'
+          python-version: "3.10"
       - name: Install Wheel
         run: |
           python3 -m pip install --force-reinstall ttnn-*.whl
@@ -116,25 +116,35 @@ jobs:
         run: |
           python3 .github/scripts/utils/generate_tray_mapping.py
       - name: Create Docker Compose file
+        env:
+          MATRIX_SCENARIO: ${{ matrix.scenario }}
+          DEV_DOCKER_IMAGE: ${{ needs.build-artifact.outputs.dev-docker-image }}
+          NUM_CONTAINERS: ${{ matrix.num_containers }}
+          CHIPS_PER_CONTAINER: ${{ matrix.chips_per_container }}
+          MESH_DESCRIPTOR: ${{ matrix.mesh_descriptor }}
+          CONTAINER_PREFIX: ${{ matrix.container_prefix }}
         run: |
           TRAY_MAPPING_ARG=""
-          if [ "${{ matrix.scenario }}" = "tray" ] || [ "${{ matrix.scenario }}" = "tp2" ]; then
+          if [ "$MATRIX_SCENARIO" = "tray" ] || [ "$MATRIX_SCENARIO" = "tp2" ]; then
             TRAY_MAPPING_ARG="--tray-mapping-file tray_to_pcie_device_mapping.yaml"
           fi
           python3 .github/scripts/utils/multi-user-create-files.py \
-            --image "${{ needs.build-artifact.outputs.dev-docker-image }}" \
-            --num-containers ${{ matrix.num_containers }} \
-            --chips-per-container ${{ matrix.chips_per_container }} \
+            --image "$DEV_DOCKER_IMAGE" \
+            --num-containers "$NUM_CONTAINERS" \
+            --chips-per-container "$CHIPS_PER_CONTAINER" \
             $TRAY_MAPPING_ARG \
-            --mesh-descriptor ${{ matrix.mesh_descriptor }} \
-            --container-prefix ${{ matrix.container_prefix }}
+            --mesh-descriptor "$MESH_DESCRIPTOR" \
+            --container-prefix "$CONTAINER_PREFIX"
       - name: Run Docker Compose
         timeout-minutes: 10
+        env:
+          NUM_CONTAINERS: ${{ matrix.num_containers }}
+          CONTAINER_PREFIX: ${{ matrix.container_prefix }}
         run: |
           CONTAINERS_DIR=".multi-user-galaxy-docker-files"
-          REQUIRED_CONTAINERS=${{ matrix.num_containers }}
+          REQUIRED_CONTAINERS="$NUM_CONTAINERS"
           TIMEOUT=300
-          CONTAINER_PREFIX="${{ matrix.container_prefix }}"
+          CONTAINER_PREFIX="$CONTAINER_PREFIX"
 
           rm -rf "$CONTAINERS_DIR"
           mkdir -p "$CONTAINERS_DIR"
@@ -159,14 +169,15 @@ jobs:
           done
 
           echo "All $REQUIRED_CONTAINERS docker containers have started (found $count)."
-
       - name: Run the tests
         timeout-minutes: 15
+        env:
+          NUM_CONTAINERS: ${{ matrix.num_containers }}
+          CONTAINER_PREFIX: ${{ matrix.container_prefix }}
+          TEST_PATH: ${{ matrix.test_path }}
+          TEST_ARGS: ${{ matrix.test_args }}
+          MATRIX_SCENARIO: ${{ matrix.scenario }}
         run: |
-          NUM_CONTAINERS=${{ matrix.num_containers }}
-          CONTAINER_PREFIX="${{ matrix.container_prefix }}"
-          TEST_PATH="${{ matrix.test_path }}"
-          TEST_ARGS="${{ matrix.test_args }}"
           RESULTS_DIR=".multi-user-test-results"
 
           mkdir -p "$RESULTS_DIR"
@@ -179,7 +190,16 @@ jobs:
               container="${CONTAINER_PREFIX}-${i}"
               echo ">>> Running $testname in $container"
               (
-                docker exec "$container" bash -c "$command" | sed "s/^/[$container] /"
+                # Write command to script file to safely handle quotes and special characters
+                # Copy script to container and execute it
+                cat > /tmp/container_cmd.sh << 'SCRIPT_EOF'
+                #!/bin/bash
+                set -euo pipefail
+                SCRIPT_EOF
+                printf '%s\n' "$command" >> /tmp/container_cmd.sh
+                chmod +x /tmp/container_cmd.sh
+                docker cp /tmp/container_cmd.sh "$container":/tmp/container_cmd.sh
+                docker exec "$container" bash /tmp/container_cmd.sh | sed "s/^/[$container] /"
                 status=${PIPESTATUS[0]}
                 echo $status > "$RESULTS_DIR/${container}.status"
                 exit $status
@@ -206,13 +226,13 @@ jobs:
 
           TEST_NAME=$(basename "${TEST_PATH}" .py)
           # Output: ">>> Running single/test_fill in chip-0" etc.
-          run_test "${{ matrix.scenario }}/${TEST_NAME}" "pytest -v ${TEST_PATH} ${TEST_ARGS}" || true
-
+          run_test "${MATRIX_SCENARIO}/${TEST_NAME}" "pytest -v ${TEST_PATH} ${TEST_ARGS}" || true
       - name: Check test results
+        env:
+          NUM_CONTAINERS: ${{ matrix.num_containers }}
+          CONTAINER_PREFIX: ${{ matrix.container_prefix }}
         run: |
           RESULTS_DIR=".multi-user-test-results"
-          NUM_CONTAINERS=${{ matrix.num_containers }}
-          CONTAINER_PREFIX="${{ matrix.container_prefix }}"
 
           failed=0
           for i in $(seq 0 $(( NUM_CONTAINERS - 1 ))); do
@@ -232,7 +252,6 @@ jobs:
           if [ $failed -ne 0 ]; then
             exit 1
           fi
-
       - name: Tear down containers
         if: always()
         run: |

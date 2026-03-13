@@ -4,66 +4,67 @@ on:
   workflow_dispatch:
     inputs:
       mirrored_branch:
-        description: 'Mirrored branch name (e.g., mirror/branch-name)'
+        description: "Mirrored branch name (e.g., mirror/branch-name)"
         required: true
         type: string
       run_all_post_commit:
-        description: 'Run all post-commit tests'
+        description: "Run all post-commit tests"
         required: false
         type: boolean
         default: false
       run_blackhole_post_commit:
-        description: 'Run Blackhole post-commit tests'
+        description: "Run Blackhole post-commit tests"
         required: false
         type: boolean
         default: false
       workflow_timeout:
-        description: 'Timeout for workflows in minutes'
+        description: "Timeout for workflows in minutes"
         required: false
         type: number
         default: 720
   workflow_call:
     inputs:
       mirrored_branch:
-        description: 'Mirrored branch name (e.g., mirror/branch-name)'
+        description: "Mirrored branch name (e.g., mirror/branch-name)"
         required: true
         type: string
       run_all_post_commit:
-        description: 'Run all post-commit tests'
+        description: "Run all post-commit tests"
         required: false
         type: boolean
         default: false
       run_blackhole_post_commit:
-        description: 'Run Blackhole post-commit tests'
+        description: "Run Blackhole post-commit tests"
         required: false
         type: boolean
         default: false
       workflow_timeout:
-        description: 'Timeout for workflows in minutes'
+        description: "Timeout for workflows in minutes"
         required: false
         type: number
         default: 720
     outputs:
       run-tests-result:
-        description: 'Overall result of all test workflows (success/failure/cancelled)'
+        description: "Overall result of all test workflows (success/failure/cancelled)"
         value: ${{ jobs.run-tests.result }}
       branch-exists:
-        description: 'Whether the mirrored branch exists'
+        description: "Whether the mirrored branch exists"
         value: ${{ jobs.setup.outputs.branch-exists }}
       test-branch-name:
-        description: 'Name of the test branch created'
+        description: "Name of the test branch created"
         value: ${{ jobs.setup.outputs.test-branch-name }}
       all-post-commit-result:
-        description: 'Result of Sanity tests (status:url format)'
+        description: "Result of Sanity tests (status:url format)"
+
         value: ${{ jobs.run-tests.outputs.all-post-commit-result }}
       blackhole-result:
-        description: 'Result of Blackhole post-commit tests (status:url format)'
+        description: "Result of Blackhole post-commit tests (status:url format)"
         value: ${{ jobs.run-tests.outputs.blackhole-result }}
       tt-metal-l2-nightly-result:
-        description: 'Result of All post-commit C++ tests (status:url format)'
+        description: "Result of All post-commit C++ tests (status:url format)"
         value: ${{ jobs.run-tests.outputs.tt-metal-l2-nightly-result }}
       perf-device-models-result:
-        description: 'Result of Device perf regressions (status:url format)'
+        description: "Result of Device perf regressions (status:url format)"
         value: ${{ jobs.run-tests.outputs.perf-device-models-result }}
 
 # NOTE: Concurrency is intentionally NOT set here.
@@ -103,7 +104,7 @@ jobs:
       should-run-perf: ${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}
     steps:
       - name: Setup
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           repository: tenstorrent/tt-metal
           submodules: recursive
@@ -120,9 +121,10 @@ jobs:
       - name: Cancel any previous spawned workflows
         env:
           GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
+          MIRRORED_BRANCH: ${{ inputs.mirrored_branch }}
+          METAL_REPO: ${{ env.METAL_REPO }}
         run: |
           echo "🔍 Proactively cancelling any previous spawned workflows for this branch..."
-          MIRRORED_BRANCH="${{ inputs.mirrored_branch }}"
           SPAWNED_WORKFLOWS=("sanity-tests.yaml" "blackhole-post-commit.yaml" "tt-metal-l2-nightly.yaml" "perf-device-models.yaml")
           STATUSES=("queued" "in_progress")
 
@@ -134,7 +136,7 @@ jobs:
                 --status "$status" \
                 --limit 100 \
                 --json databaseId,headBranch \
-                --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "[]")
+                --repo "$METAL_REPO" 2>/dev/null || echo "[]")
 
               run_ids=$(echo "$run_data" | jq -r --arg pattern "test-llk-$MIRRORED_BRANCH-" \
                 '.[] | select(.headBranch | startswith($pattern)) | .databaseId')
@@ -142,7 +144,7 @@ jobs:
               if [ -n "$run_ids" ]; then
                 for run_id in $run_ids; do
                   echo "🛑 Cancelling previous spawned workflow run $run_id ($workflow)..."
-                  if gh run cancel "$run_id" --repo "${{ env.METAL_REPO }}"; then
+                  if gh run cancel "$run_id" --repo "$METAL_REPO"; then
                     echo "✅ Successfully cancelled run $run_id"
                   else
                     echo "⚠️ Failed to cancel run $run_id (may have already completed)"
@@ -156,14 +158,14 @@ jobs:
 
           # Clean up old parent branches
           echo "🧹 Cleaning up old parent branches..."
-          OLD_BRANCHES=$(gh api "repos/${{ env.METAL_REPO }}/branches" --paginate --jq \
+          OLD_BRANCHES=$(gh api "repos/$METAL_REPO/branches" --paginate --jq \
             --arg pattern "test-llk-$MIRRORED_BRANCH-" \
             '.[] | select(.name | startswith($pattern)) | .name' 2>/dev/null || echo "")
 
           if [ -n "$OLD_BRANCHES" ]; then
             for branch in $OLD_BRANCHES; do
               echo "🗑️ Deleting old parent branch: $branch"
-              gh api --method DELETE "repos/${{ env.METAL_REPO }}/git/refs/heads/$branch" 2>/dev/null || \
+              gh api --method DELETE "repos/$METAL_REPO/git/refs/heads/$branch" 2>/dev/null || \
                 echo "⚠️ Failed to delete branch $branch (may not exist)"
             done
           else
@@ -174,19 +176,23 @@ jobs:
 
       - name: Setup test branch and parent repository
         id: check-branch
+        env:
+          MIRRORED_BRANCH: ${{ inputs.mirrored_branch }}
+          SUBMODULE_PATH: ${{ env.SUBMODULE_PATH }}
+          PARENT_BRANCH_NAME: ${{ env.PARENT_BRANCH_NAME }}
+          LLK_UPLIFT_PAT: ${{ secrets.LLK_UPLIFT_PAT }}
+          GITHUB_WORKSPACE: ${{ github.workspace }}
         run: |
-          MIRRORED_BRANCH="${{ inputs.mirrored_branch }}"
           TEST_BRANCH_NAME="test-llk-$MIRRORED_BRANCH-$(date +%s)"
-          SUBMODULE_PATH="${{ env.SUBMODULE_PATH }}"
           cd "$SUBMODULE_PATH"
 
           # Ensure correct remote and fetch mirrored branch
-          git remote set-url origin https://${{ secrets.LLK_UPLIFT_PAT }}@github.com/tenstorrent/tt-llk.git
+          git remote set-url origin https://$LLK_UPLIFT_PAT@github.com/tenstorrent/tt-llk.git
           if git fetch origin "$MIRRORED_BRANCH:$MIRRORED_BRANCH" 2>/dev/null; then
             echo "branch-exists=true" >> $GITHUB_OUTPUT
             echo "✅ Mirrored branch '$MIRRORED_BRANCH' exists in submodule"
 
-            cd "${{ github.workspace }}"
+            cd "$GITHUB_WORKSPACE"
             PARENT_PINNED_COMMIT=$(git ls-tree main "$SUBMODULE_PATH" | awk '{print $3}')
             cd "$SUBMODULE_PATH"
 
@@ -212,11 +218,11 @@ jobs:
               exit 1
             fi
 
-            cd "${{ github.workspace }}"
-            git checkout -b "${{ env.PARENT_BRANCH_NAME }}"
+            cd "$GITHUB_WORKSPACE"
+            git checkout -b "$PARENT_BRANCH_NAME"
             git add "$SUBMODULE_PATH"
             git commit -m "test: update LLK submodule to test branch $TEST_BRANCH_NAME from mirrored branch $MIRRORED_BRANCH"
-            if ! git push origin "${{ env.PARENT_BRANCH_NAME }}"; then
+            if ! git push origin "$PARENT_BRANCH_NAME"; then
               echo "❌ Failed to push parent branch to origin"
               exit 1
             fi
@@ -244,22 +250,22 @@ jobs:
             name: "Sanity tests"
             output-key: "all-post-commit-result"
             should-run: ${{ inputs.run_all_post_commit }}
-            arch: ""  # all-post-commit doesn't use architecture parameter
+            arch: "" # all-post-commit doesn't use architecture parameter
           - workflow: "blackhole-post-commit.yaml"
             name: "Blackhole Post Commit"
             output-key: "blackhole-result"
             should-run: ${{ inputs.run_blackhole_post_commit }}
-            arch: ""  # blackhole-post-commit doesn't use architecture parameter
+            arch: "" # blackhole-post-commit doesn't use architecture parameter
           - workflow: "tt-metal-l2-nightly.yaml"
             name: "TT-Metal L2 Nightly and Sanity"
             output-key: "tt-metal-l2-nightly-result"
             should-run: ${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}
-            arch: "dynamic"  # architecture determined at runtime based on enabled tests
+            arch: "dynamic" # architecture determined at runtime based on enabled tests
           - workflow: "perf-device-models.yaml"
             name: "Device Perf Regressions"
             output-key: "perf-device-models-result"
             should-run: ${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}
-            arch: "dynamic"  # architecture determined at runtime based on enabled tests
+            arch: "dynamic" # architecture determined at runtime based on enabled tests
     outputs:
       all-post-commit-result: ${{ steps.monitor.outputs.all-post-commit-result }}
       blackhole-result: ${{ steps.monitor.outputs.blackhole-result }}
@@ -268,8 +274,10 @@ jobs:
     steps:
       - name: Skip if not enabled
         if: matrix.should-run != true && matrix.should-run != 'true'
+        env:
+          MATRIX_NAME: ${{ matrix.name }}
         run: |
-          echo "⚪ Skipping ${{ matrix.name }} - not enabled for this run"
+          echo "⚪ Skipping $MATRIX_NAME - not enabled for this run"
 
       - name: Trigger and monitor workflow
         id: monitor
@@ -280,19 +288,26 @@ jobs:
           MAX_RETRIES: 3
           POLL_INTERVAL: ${{ env.POLL_INTERVAL }}
           PARENT_BRANCH_NAME: ${{ needs.setup.outputs.parent-branch-name }}
+          RUN_ALL_POST_COMMIT: ${{ inputs.run_all_post_commit }}
+          RUN_BLACKHOLE_POST_COMMIT: ${{ inputs.run_blackhole_post_commit }}
+          MATRIX_WORKFLOW: ${{ matrix.workflow }}
+          MATRIX_NAME: ${{ matrix.name }}
+          MATRIX_OUTPUT_KEY: ${{ matrix.output-key }}
+          MATRIX_ARCH: ${{ matrix.arch }}
+          METAL_REPO: ${{ env.METAL_REPO }}
         run: |
-          WORKFLOW="${{ matrix.workflow }}"
-          DISPLAY_NAME="${{ matrix.name }}"
-          OUTPUT_KEY="${{ matrix.output-key }}"
-          ARCH_TYPE="${{ matrix.arch }}"
+          WORKFLOW="$MATRIX_WORKFLOW"
+          DISPLAY_NAME="$MATRIX_NAME"
+          OUTPUT_KEY="$MATRIX_OUTPUT_KEY"
+          ARCH_TYPE="$MATRIX_ARCH"
 
           echo "🚀 Triggering $DISPLAY_NAME ($WORKFLOW)..."
 
           # Build architecture parameter dynamically if needed
           if [ "$ARCH_TYPE" = "dynamic" ]; then
-            if [ "${{ inputs.run_all_post_commit }}" = "true" ] && [ "${{ inputs.run_blackhole_post_commit }}" = "true" ]; then
+            if [ "$RUN_ALL_POST_COMMIT" = "true" ] && [ "$RUN_BLACKHOLE_POST_COMMIT" = "true" ]; then
               ARCH_PARAM='["wormhole_b0", "blackhole"]'
-            elif [ "${{ inputs.run_all_post_commit }}" = "true" ]; then
+            elif [ "$RUN_ALL_POST_COMMIT" = "true" ]; then
               ARCH_PARAM='["wormhole_b0"]'
             else
               ARCH_PARAM='["blackhole"]'
@@ -302,7 +317,7 @@ jobs:
 
           # Trigger workflow with appropriate inputs
           if [ "$WORKFLOW" = "tt-metal-l2-nightly.yaml" ]; then
-            gh workflow run "$WORKFLOW" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}" \
+            gh workflow run "$WORKFLOW" --ref "$PARENT_BRANCH_NAME" --repo "$METAL_REPO" \
               -f architecture="$ARCH_PARAM" \
               -f run_cpp_tests=true \
               -f run_metal_iommu_tests=true \
@@ -313,10 +328,10 @@ jobs:
               -f run_models_unit_tests=true \
               -f run_tt_cnn_unit_tests=true
           elif [ "$WORKFLOW" = "perf-device-models.yaml" ]; then
-            gh workflow run "$WORKFLOW" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}" \
+            gh workflow run "$WORKFLOW" --ref "$PARENT_BRANCH_NAME" --repo "$METAL_REPO" \
               -f architecture="$ARCH_PARAM"
           else
-            gh workflow run "$WORKFLOW" --ref "$PARENT_BRANCH_NAME" --repo "${{ env.METAL_REPO }}"
+            gh workflow run "$WORKFLOW" --ref "$PARENT_BRANCH_NAME" --repo "$METAL_REPO"
           fi
 
           # Poll for run ID
@@ -325,7 +340,7 @@ jobs:
             sleep 5
             run_data=$(gh run list --workflow "$WORKFLOW" --branch "$PARENT_BRANCH_NAME" --limit 1 \
               --json databaseId,url --jq '.[0] | select(.databaseId != null) | "\(.databaseId)|\(.url)"' \
-              --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "")
+              --repo "$METAL_REPO" 2>/dev/null || echo "")
             if [ -n "$run_data" ] && [ "$run_data" != "null" ]; then
               run_id=$(echo "$run_data" | cut -d'|' -f1)
               run_url=$(echo "$run_data" | cut -d'|' -f2)
@@ -339,7 +354,7 @@ jobs:
             exit 1
           fi
 
-          run_url="https://github.com/${{ env.METAL_REPO }}/actions/runs/$run_id"
+          run_url="https://github.com/$METAL_REPO/actions/runs/$run_id"
           echo "✅ $DISPLAY_NAME triggered (run ID: $run_id): $run_url"
 
           # Monitor workflow with retry logic for failed jobs
@@ -355,7 +370,7 @@ jobs:
             while [ $elapsed -lt $timeout_seconds ]; do
               status=$(gh run view "$run_id" --json status,conclusion \
                 --jq '.status + ":" + (.conclusion // "")' \
-                --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "unknown:")
+                --repo "$METAL_REPO" 2>/dev/null || echo "unknown:")
               run_status=$(echo "$status" | cut -d: -f1)
               conclusion=$(echo "$status" | cut -d: -f2)
 
@@ -371,7 +386,7 @@ jobs:
                   if [ $attempt -lt $max_attempts ]; then
                     echo "🔄 Retrying failed jobs only (will be attempt $((attempt + 1))/$max_attempts)..."
 
-                    if gh run rerun "$run_id" --failed --repo "${{ env.METAL_REPO }}"; then
+                    if gh run rerun "$run_id" --failed --repo "$METAL_REPO"; then
                       echo "✅ Rerun triggered for run ID: $run_id"
                       sleep 30  # Wait for rerun to start
                       should_retry=true
@@ -428,6 +443,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
           PARENT_BRANCH_NAME: ${{ needs.setup.outputs.parent-branch-name }}
+          METAL_REPO: ${{ env.METAL_REPO }}
         run: |
           echo "🔄 Parent workflow cancelled - cleaning up spawned workflows..."
           SPAWNED_WORKFLOWS=("sanity-tests.yaml" "blackhole-post-commit.yaml" "tt-metal-l2-nightly.yaml" "perf-device-models.yaml")
@@ -443,11 +459,11 @@ jobs:
                 --limit 100 \
                 --json databaseId \
                 --jq '.[].databaseId' \
-                --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "")
+                --repo "$METAL_REPO" 2>/dev/null || echo "")
               if [ -n "$run_ids" ]; then
                 for run_id in $run_ids; do
                   echo "🛑 Cancelling $status spawned workflow run $run_id ($workflow)..."
-                  if gh run cancel "$run_id" --repo "${{ env.METAL_REPO }}"; then
+                  if gh run cancel "$run_id" --repo "$METAL_REPO"; then
                     echo "✅ Successfully cancelled run $run_id"
                   else
                     echo "⚠️ Failed to cancel run $run_id (may have already completed)"
@@ -470,15 +486,16 @@ jobs:
         if: needs.setup.outputs.branch-exists == 'true'
         env:
           GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
+          TEST_BRANCH_NAME: ${{ needs.setup.outputs.test-branch-name }}
+          PARENT_BRANCH_NAME: ${{ needs.setup.outputs.parent-branch-name }}
+          LLK_REPO: ${{ env.LLK_REPO }}
+          METAL_REPO: ${{ env.METAL_REPO }}
         run: |
-          TEST_BRANCH_NAME="${{ needs.setup.outputs.test-branch-name }}"
-          PARENT_BRANCH_NAME="${{ needs.setup.outputs.parent-branch-name }}"
-
           # Clean up test branch in submodule
-          gh api --method DELETE "repos/${{ env.LLK_REPO }}/git/refs/heads/$TEST_BRANCH_NAME" 2>/dev/null || echo "Test branch already deleted or doesn't exist"
+          gh api --method DELETE "repos/$LLK_REPO/git/refs/heads/$TEST_BRANCH_NAME" 2>/dev/null || echo "Test branch already deleted or doesn't exist"
 
           # Clean up parent branch
-          gh api --method DELETE "repos/${{ env.METAL_REPO }}/git/refs/heads/$PARENT_BRANCH_NAME" 2>/dev/null || echo "Parent branch already deleted or doesn't exist"
+          gh api --method DELETE "repos/$METAL_REPO/git/refs/heads/$PARENT_BRANCH_NAME" 2>/dev/null || echo "Parent branch already deleted or doesn't exist"
 
           echo "✅ Cleaned up test branches"
 
@@ -486,18 +503,28 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.LLK_UPLIFT_PAT }}
           PARENT_BRANCH_NAME: ${{ needs.setup.outputs.parent-branch-name }}
+          MIRRORED_BRANCH: ${{ inputs.mirrored_branch }}
+          RUN_ALL_POST_COMMIT: ${{ inputs.run_all_post_commit }}
+          RUN_BLACKHOLE_POST_COMMIT: ${{ inputs.run_blackhole_post_commit }}
+          RUN_ALL_POST_COMMIT_DISPLAY: ${{ inputs.run_all_post_commit && '🟢 Enabled' || '⚪ Disabled' }}
+          RUN_BLACKHOLE_POST_COMMIT_DISPLAY: ${{ inputs.run_blackhole_post_commit && '🟢 Enabled' || '⚪ Disabled' }}
+          SHOULD_RUN_L2_AND_PERF: ${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}
+          BRANCH_EXISTS: ${{ needs.setup.outputs.branch-exists }}
+          TEST_BRANCH_NAME: ${{ needs.setup.outputs.test-branch-name }}
+          RUN_TESTS_RESULT: ${{ needs.run-tests.result }}
+          METAL_REPO: ${{ env.METAL_REPO }}
         run: |
           echo "## Test Results Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "**Branch:** ${{ inputs.mirrored_branch }}" >> $GITHUB_STEP_SUMMARY
+          echo "**Branch:** $MIRRORED_BRANCH" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
 
-          if [ "${{ needs.setup.outputs.branch-exists }}" = "true" ]; then
-            echo "**Test Branch:** ${{ needs.setup.outputs.test-branch-name }}" >> $GITHUB_STEP_SUMMARY
+          if [ "$BRANCH_EXISTS" = "true" ]; then
+            echo "**Test Branch:** $TEST_BRANCH_NAME" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "**Test Configuration:**" >> $GITHUB_STEP_SUMMARY
-            echo "- Sanity tests: ${{ inputs.run_all_post_commit && '🟢 Enabled' || '⚪ Disabled' }}" >> $GITHUB_STEP_SUMMARY
-            echo "- Blackhole Post-Commit Tests: ${{ inputs.run_blackhole_post_commit && '🟢 Enabled' || '⚪ Disabled' }}" >> $GITHUB_STEP_SUMMARY
+            echo "- Sanity tests: $RUN_ALL_POST_COMMIT_DISPLAY" >> $GITHUB_STEP_SUMMARY
+            echo "- Blackhole Post-Commit Tests: $RUN_BLACKHOLE_POST_COMMIT_DISPLAY" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
 
             echo "**Test Results:**" >> $GITHUB_STEP_SUMMARY
@@ -520,7 +547,7 @@ jobs:
                 --limit 1 \
                 --json conclusion,url,status \
                 --jq '.[0] // empty' \
-                --repo "${{ env.METAL_REPO }}" 2>/dev/null || echo "")
+                --repo "$METAL_REPO" 2>/dev/null || echo "")
 
               if [ -z "$run_data" ] || [ "$run_data" = "null" ]; then
                 echo "- ⚪ **$test_name:** No run found" >> $GITHUB_STEP_SUMMARY
@@ -547,26 +574,26 @@ jobs:
             }
 
             # Check results for each workflow type
-            check_workflow_result "sanity-tests.yaml" "Sanity tests" "${{ inputs.run_all_post_commit }}"
-            check_workflow_result "blackhole-post-commit.yaml" "Blackhole Post-Commit Tests" "${{ inputs.run_blackhole_post_commit }}"
-            check_workflow_result "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly Tests and Sanity" "${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}"
-            check_workflow_result "perf-device-models.yaml" "Device Perf Regressions" "${{ inputs.run_all_post_commit == true || inputs.run_blackhole_post_commit == true }}"
+            check_workflow_result "sanity-tests.yaml" "Sanity tests" "$RUN_ALL_POST_COMMIT"
+            check_workflow_result "blackhole-post-commit.yaml" "Blackhole Post-Commit Tests" "$RUN_BLACKHOLE_POST_COMMIT"
+            check_workflow_result "tt-metal-l2-nightly.yaml" "TT-Metal L2 Nightly Tests and Sanity" "$SHOULD_RUN_L2_AND_PERF"
+            check_workflow_result "perf-device-models.yaml" "Device Perf Regressions" "$SHOULD_RUN_L2_AND_PERF"
 
             echo "" >> $GITHUB_STEP_SUMMARY
 
             # Overall status
-            if [ "${{ needs.run-tests.result }}" = "success" ]; then
+            if [ "$RUN_TESTS_RESULT" = "success" ]; then
               echo "### ✅ All tests passed!" >> $GITHUB_STEP_SUMMARY
-            elif [ "${{ needs.run-tests.result }}" = "failure" ]; then
+            elif [ "$RUN_TESTS_RESULT" = "failure" ]; then
               echo "### ❌ Some tests failed" >> $GITHUB_STEP_SUMMARY
-            elif [ "${{ needs.run-tests.result }}" = "cancelled" ]; then
+            elif [ "$RUN_TESTS_RESULT" = "cancelled" ]; then
               echo "### ⏹️ Tests were cancelled" >> $GITHUB_STEP_SUMMARY
-            elif [ "${{ needs.run-tests.result }}" = "skipped" ]; then
+            elif [ "$RUN_TESTS_RESULT" = "skipped" ]; then
               echo "### ⚪ Tests were skipped" >> $GITHUB_STEP_SUMMARY
             fi
 
           else
-            echo "❌ **Branch Setup:** Mirrored branch '${{ inputs.mirrored_branch }}' does not exist" >> $GITHUB_STEP_SUMMARY
+            echo "❌ **Branch Setup:** Mirrored branch '${MIRRORED_BRANCH}' does not exist" >> $GITHUB_STEP_SUMMARY
             echo "" >> $GITHUB_STEP_SUMMARY
             echo "Please ensure the branch has been mirrored using the mirror workflow first." >> $GITHUB_STEP_SUMMARY
           fi

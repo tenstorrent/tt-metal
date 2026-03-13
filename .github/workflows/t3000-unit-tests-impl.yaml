@@ -1,5 +1,4 @@
 name: "[internal] T3000 unit tests impl"
-
 on:
   workflow_call:
     inputs:
@@ -18,18 +17,21 @@ on:
       model:
         required: false
         type: string
-        default: "all"
-
+        default: all
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.filter-matrix.outputs.matrix || steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.filter-matrix.outputs.matrix || steps.build-matrix.outputs.matrix
+        }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/t3k_unit_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github
@@ -42,27 +44,29 @@ jobs:
           set -e
           echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
           python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
+            "$TESTS_YAML_PATH" \
             ./.github/time_budget.yaml \
             "unit"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
+        env:
+          INPUT_ENABLED_SKUS: ${{ inputs.enabled-skus }}
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
+            "$TESTS_YAML_PATH" \
+            "$INPUT_ENABLED_SKUS" \
             ./.github/sku_config.yaml
       - name: Filter test matrix by model
         id: filter-matrix
         if: inputs.model != 'all'
         env:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          INPUT_MODEL: ${{ inputs.model }}
         run: |
-          filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+          filtered=$(echo "$MATRIX" | jq -c --arg model "$INPUT_MODEL" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$filtered" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-
   t3000-unit-tests:
     needs: load-test-matrix
     strategy:
@@ -86,14 +90,14 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: "--device /dev/tenstorrent"
+      options: --device /dev/tenstorrent
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -103,14 +107,22 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
           mkdir -p generated/test_reports
           source tests/scripts/t3000/run_t3000_unit_tests.sh
-          echo ${{ matrix.test-group.cmd }}
-          ${{ matrix.test-group.cmd }}
+          echo "$TEST_CMD"
+          # Write command to script file to safely handle quotes and special characters
+          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SCRIPT_EOF
+          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
+          chmod +x /tmp/test_cmd.sh
+          bash /tmp/test_cmd.sh
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
@@ -120,10 +132,9 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          prefix: "test_reports_"
+          prefix: test_reports_
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
-
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

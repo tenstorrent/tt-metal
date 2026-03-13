@@ -1,54 +1,64 @@
 # Create allocation object in Kubernetes & wait
 
-name: 'Create Allocation'
-description: 'Composable action that creates Allocation object in Kubernetes'
+name: "Create Allocation"
+description: "Composable action that creates Allocation object in Kubernetes"
 
 inputs:
   allocationName:
-    description: 'Allocation name'
+    description: "Allocation name"
     required: true
   spec:
-    description: 'Allocation spec'
+    description: "Allocation spec"
     required: false
-    default: ''
+    default: ""
   explicit:
-    description: 'List of explicit nodes (ignored when spec is provided)'
+    description: "List of explicit nodes (ignored when spec is provided)"
     required: false
-    default: ''
+    default: ""
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Construct allocation manifest (explicit)
       shell: bash
       id: explicit
-      if: ${{ inputs.explicit != '' }}
+      if: inputs.explicit != ''
+      env:
+        ALLOCATION_NAME: ${{ inputs.allocationName }}
+        EXPLICIT_NODES: ${{ inputs.explicit }}
       run: |
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        validate_allocation_name "$ALLOCATION_NAME" || exit 1
         cat <<EOF >> $GITHUB_ENV
         ALLOCATION_MANIFEST<<ALLOCATION_EOF
         apiVersion: tenstorrent.com/v1alpha1
         kind: Allocation
         metadata:
-          name: ${{ inputs.allocationName }}
+          name: ${ALLOCATION_NAME}
         spec:
           retryPolicy: Always
           allocationType: Explicit
-          explicit: [${{ inputs.explicit }}]
+          explicit: [${EXPLICIT_NODES}]
         ALLOCATION_EOF
         EOF
 
     - name: Construct allocation manifest (spec)
       shell: bash
       id: spec
-      if: ${{ inputs.spec != '' }}
+      if: inputs.spec != ''
+      env:
+        ALLOCATION_NAME: ${{ inputs.allocationName }}
+        SPEC_INPUT: ${{ inputs.spec }}
       run: |
-        SPEC=$(printf '%s\n' '${{ inputs.spec }}' | sed 's/^/  /')
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        validate_allocation_name "$ALLOCATION_NAME" || exit 1
+        SPEC=$(printf '%s\n' "$SPEC_INPUT" | sed 's/^/  /')
         cat <<EOF >> $GITHUB_ENV
         ALLOCATION_MANIFEST<<ALLOCATION_EOF
         apiVersion: tenstorrent.com/v1alpha1
         kind: Allocation
         metadata:
-          name: ${{ inputs.allocationName }}
+          name: ${ALLOCATION_NAME}
         spec:
           retryPolicy: Always
         ${SPEC}
@@ -59,10 +69,14 @@ runs:
       shell: bash
       run: |
         echo "Creating allocation..."
-        printf "%s" "${{ env.ALLOCATION_MANIFEST }}" | kubectl apply -f -
+        printf "%s" "$ALLOCATION_MANIFEST" | kubectl apply -f -
 
     - name: Wait for allocation
       shell: bash
+      env:
+        ALLOCATION_NAME: ${{ inputs.allocationName }}
       run: |
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        validate_allocation_name "$ALLOCATION_NAME" || exit 1
         echo "Waiting for allocation to be ready..."
-        kubectl wait --for=jsonpath='{.status.phase}'=Allocated allocation/${{ inputs.allocationName }} --timeout=999m
+        kubectl wait --for=jsonpath='{.status.phase}'=Allocated "allocation/$ALLOCATION_NAME" --timeout=999m

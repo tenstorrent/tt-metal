@@ -1,5 +1,4 @@
 name: "[internal] Blackhole Multi-card unit tests impl"
-
 on:
   workflow_call:
     inputs:
@@ -18,17 +17,28 @@ on:
       runner-label:
         required: false
         type: string
-        default: "BH-LLMBox"
+        default: BH-LLMBox
       fast-only:
         required: false
         type: boolean
         default: false
-        description: "If true, run only tests with test-type == fast; otherwise run all tests."
+        description: If true, run only tests with test-type == fast; otherwise run
+          all tests.
       enable-watcher:
-        description: 'Enable watcher'
+        description: Enable watcher
         default: false
         type: boolean
-
+    secrets:
+      SFTP_BENCHMARK_WRITER_KEY:
+        required: false
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME:
+        required: false
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME:
+        required: false
+      SFTP_FABRIC_LATENCY_WRITER_USERNAME:
+        required: false
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   generate-matrix:
     runs-on: ubuntu-latest
@@ -153,7 +163,8 @@ jobs:
       # so we try not to get hanging machines
       fail-fast: false
       matrix: ${{ fromJSON(needs.generate-matrix.outputs.matrix) }}
-    name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name }}
+    name: ${{ inputs.arch }} ${{ inputs.runner-label }} ${{ matrix.test-group.name
+      }}
     runs-on:
       - in-service
       - arch-blackhole
@@ -169,15 +180,16 @@ jobs:
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - ${{ (!contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
-      options: "--device /dev/tenstorrent"
+        - ${{ (!contains(inputs.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G')
+          || '/no_hugepages' }}
+      options: --device /dev/tenstorrent
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -194,20 +206,32 @@ jobs:
           runner-label: ${{ inputs.runner-label }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
-          ${{ matrix.test-group.cmd }}
+          # Write command to script file to safely handle quotes and special characters
+          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SCRIPT_EOF
+          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
+          chmod +x /tmp/test_cmd.sh
+          bash /tmp/test_cmd.sh
       - name: Check latency/BW results
         id: check-data
-        if: ${{ !cancelled() && matrix.test-group.name == 'fabric sanity benchmark' }}
+        if: ${{ !cancelled() && matrix.test-group.name == 'fabric sanity benchmark'
+          }}
         uses: ./docker-job/.github/actions/check-latency-bw-results
         with:
           path: /work
           arch: blackhole
           check_bw: "true"
           check_latency: "true"
-      - name: Upload BW results
-        ## Only upload fabric benchmark data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-data.outputs.has_benchmark_data == 'true' }}
+      - name:
+          Upload BW results
+          ## Only upload fabric benchmark data for main branch
+        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-data.outputs.has_benchmark_data
+          == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -215,9 +239,11 @@ jobs:
           username: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
-      - name: Upload latency data
-        ## Only upload fabric latency data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-data.outputs.has_latency_data == 'true' }}
+      - name:
+          Upload latency data
+          ## Only upload fabric latency data for main branch
+        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-data.outputs.has_latency_data
+          == 'true' }}
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -238,7 +264,7 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          prefix: "test_reports_"
+          prefix: test_reports_
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}

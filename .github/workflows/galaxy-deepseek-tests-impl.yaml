@@ -44,9 +44,17 @@ jobs:
     outputs:
       matrix: ${{ steps.generate.outputs.matrix }}
     steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/scripts/security
+          sparse-checkout-cone-mode: false
       - name: Generate test matrix
         id: generate
+        env:
+          INPUT_TEST_TYPE: ${{ inputs.test-type }}
+          INPUT_ENABLE_TRACY: ${{ inputs.enable-tracy }}
         run: |
+          source .github/scripts/security/input-validation.sh
           all_tests=$(jq -n '[
             { "name": "(Galaxy) DeepSeek unit tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "unit", "timeout": 15, "owner_id": "U03HY7MK4BT" },
             { "name": "(Galaxy) DeepSeek module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "module", "timeout": 150, "owner_id": "U03HY7MK4BT" },
@@ -54,24 +62,24 @@ jobs:
             { "name": "(Galaxy) DeepSeek long-seq module tests", "arch": "wormhole_b0", "model": "deepseek", "test-type": "long-seq-module", "timeout": 115, "owner_id": "U0896VBAKFC" }
           ]')
 
-          # Filter matrix based on test-type selection
-          if [ "${{ inputs.test-type }}" = "all" ]; then
+          INPUT_TEST_TYPE="${INPUT_TEST_TYPE:-all}"
+          if [ "$INPUT_TEST_TYPE" = "all" ]; then
             matrix="$all_tests"
           else
-            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.\"test-type\" == \"${{ inputs.test-type }}\")]")
+            matrix=$(echo "$all_tests" | jq -c "[.[] | select(.\"test-type\" == \"$INPUT_TEST_TYPE\")]")
           fi
 
           # Remove final-op-unit tests when Tracy profiling is not enabled
-          if [ "${{ inputs.enable-tracy }}" != "true" ]; then
+          if [ "${INPUT_ENABLE_TRACY}" != "true" ]; then
             matrix=$(echo "$matrix" | jq -c '[.[] | select(."test-type" != "final-op-unit")]')
           fi
 
           # Fail fast if the matrix is empty (invalid test-type selected)
           if [ "$(echo "$matrix" | jq length)" -eq 0 ]; then
-            echo "Error: Invalid test-type selected: '${{ inputs.test-type }}'"
+            validation_error "Invalid test-type selected: '$INPUT_TEST_TYPE'"
             exit 1
           fi
-          echo "matrix=$(echo "$matrix" | jq -c .)" >> $GITHUB_OUTPUT
+          set_github_output "matrix" "$(echo "$matrix" | jq -c .)"
 
   galaxy-deepseek-tests:
     needs: generate-matrix
@@ -114,7 +122,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -125,28 +133,29 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Prepare custom weights cache directory
-        if: ${{ inputs.recreate_weights_cache == 'Yes' }}
+        if: inputs.recreate_weights_cache == 'Yes'
         env:
           INPUT_CACHE_DIR: ${{ inputs.new_cache_dir }}
         run: |
+          source .github/scripts/security/input-validation.sh
           CACHE_BASE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache"
           if [[ -z "${INPUT_CACHE_DIR}" ]]; then
-            echo "::error::recreate_weights_cache is Yes but new_cache_dir is empty. Please provide a cache directory name."
+            validation_error "recreate_weights_cache is Yes but new_cache_dir is empty. Please provide a cache directory name."
             exit 1
           fi
           DIR_NAME="${INPUT_CACHE_DIR}"
           if [[ "${DIR_NAME}" =~ [/[:space:][:cntrl:]] || "${DIR_NAME}" == "." || "${DIR_NAME}" == ".." ]]; then
-            echo "::error::new_cache_dir contains invalid characters (slashes, spaces, control chars) or is '.'/'..'"
+            validation_error "new_cache_dir contains invalid characters (slashes, spaces, control chars) or is '.'/'..'"
             exit 1
           fi
           if [[ "${DIR_NAME}" == "CI" ]]; then
-            echo "::error::new_cache_dir cannot be 'CI' — this would overwrite the production cache."
+            validation_error "new_cache_dir cannot be 'CI' — this would overwrite the production cache."
             exit 1
           fi
           NEW_DIR="${CACHE_BASE}/${DIR_NAME}"
           RESOLVED=$(realpath -m "${NEW_DIR}")
           if [[ "${RESOLVED}" != "${CACHE_BASE}/"* || "${RESOLVED}" == "${CACHE_BASE}/CI" ]]; then
-            echo "::error::new_cache_dir resolves outside the allowed cache base or to the CI directory."
+            validation_error "new_cache_dir resolves outside the allowed cache base or to the CI directory."
             exit 1
           fi
           echo "Creating new cache directory: ${NEW_DIR}"
@@ -155,26 +164,26 @@ jobs:
           rm -rf "${NEW_DIR}/test_io_cache"
           cp -r "${CACHE_BASE}/CI/test_io_cache" "${NEW_DIR}/test_io_cache"
           chmod -R a+rwX "${NEW_DIR}"
-          echo "DEEPSEEK_V3_CACHE=${NEW_DIR}" >> $GITHUB_ENV
+          set_github_env "DEEPSEEK_V3_CACHE" "${NEW_DIR}"
       - name: Run DeepSeek unit tests
-        if: ${{ matrix.test-group.test-type == 'unit' }}
+        if: matrix.test-group.test-type == 'unit'
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests/unit --timeout 60 --durations=0
       - name: Validate weight cache
-        if: ${{ matrix.test-group.test-type == 'module' || matrix.test-group.test-type == 'final-op-unit' }}
+        if: matrix.test-group.test-type == 'module' || matrix.test-group.test-type == 'final-op-unit'
         timeout-minutes: 10
         run: |
           python3 models/demos/deepseek_v3/scripts/validate_weight_cache.py --root "$DEEPSEEK_V3_CACHE/tests_cache" || true
       - name: Run DeepSeek module tests
-        if: ${{ matrix.test-group.test-type == 'module' }}
+        if: matrix.test-group.test-type == 'module'
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
           pytest models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests --timeout 600  --durations=0
       - name: Run DeepSeek op unit tests (Device Performance)
-        if: ${{ matrix.test-group.test-type == 'final-op-unit' }}
+        if: matrix.test-group.test-type == 'final-op-unit'
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -203,7 +212,7 @@ jobs:
           echo "All device perf tests completed!"
           echo "=============================================="
       - name: Run DeepSeek long seq len module tests
-        if: ${{ matrix.test-group.test-type == 'long-seq-module' }}
+        if: matrix.test-group.test-type == 'long-seq-module'
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           uv pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
@@ -213,7 +222,7 @@ jobs:
           DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=1024 pytest models/demos/deepseek_v3/tests/test_model.py -k "mode_decode" --timeout 1250 --durations=0
           DEEPSEEK_MAX_SEQ_LEN_OVERRIDE=32768 pytest models/demos/deepseek_v3/tests/test_model.py -k "mode_prefill" --timeout 1250 --durations=0
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
+        if: failure()
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
@@ -239,7 +248,7 @@ jobs:
       #     path: /work
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         with:
           prefix: "test_reports_"
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main

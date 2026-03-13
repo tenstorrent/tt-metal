@@ -40,30 +40,37 @@ jobs:
       image_digest: ${{ steps.get-digest.outputs.IMAGE_DIGEST }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Extract Ubuntu version
         id: extract-version
+        env:
+          PLATFORM: ${{ inputs.platform }}
         run: |
-          PLATFORM="${{ inputs.platform }}"
           UBUNTU_VERSION="${PLATFORM#ubuntu-}"
           echo "version=$UBUNTU_VERSION" >> $GITHUB_OUTPUT
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@4d04d5d9486b7bd6fa91e7baf45bbb4f8b9deedd # v4.0.0
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Download wheels
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.wheel-artifact-name }}
       - name: Get the name of the wheel and set up env variables
         id: generate-tag-name
+        env:
+          EXTRACT_VERSION: ${{ steps.extract-version.outputs.version }}
+          PLATFORM: ${{ inputs.platform }}
+          IMAGE: ${{ inputs.image }}
+          VERSION: ${{ inputs.version }}
+          REPOSITORY: ${{ github.repository }}
         run: |
           echo "WHEEL_FILENAME=$(ls -1 *.whl)" >> $GITHUB_ENV
-          UBUNTU_VERSION="${{ steps.extract-version.outputs.version }}"
+          UBUNTU_VERSION="$EXTRACT_VERSION"
           echo "UBUNTU_VERSION=$UBUNTU_VERSION" >> $GITHUB_ENV
           echo "UBUNTU_VERSION=$UBUNTU_VERSION" >> $GITHUB_OUTPUT
           # Determine Python version based on Ubuntu version
@@ -74,14 +81,14 @@ jobs:
           fi
           echo "PYTHON_VERSION=$PYTHON_VERSION" >> $GITHUB_ENV
           echo "PYTHON_VERSION=$PYTHON_VERSION" >> $GITHUB_OUTPUT
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ inputs.platform }}-${{ inputs.image }}-amd64
+          REPO_IMAGE_NAME=ghcr.io/${REPOSITORY}/tt-metalium-${PLATFORM}-${IMAGE}-amd64
           echo "REPO_IMAGE_NAME=$REPO_IMAGE_NAME" >> $GITHUB_ENV
-          TAG_NAME=$REPO_IMAGE_NAME:${{ inputs.version }}
+          TAG_NAME=$REPO_IMAGE_NAME:${VERSION}
           echo "TAG_NAME=$TAG_NAME" >> $GITHUB_ENV
       - name: Build and push (skipped for dry run)
-        if: ${{ !inputs.dry-run }}
+        if: inputs.dry-run != true
         id: build-push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           push: true
           build-args: |
@@ -96,31 +103,34 @@ jobs:
           outputs: |
             type=image,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Get image digest
-        if: ${{ !inputs.dry-run }}
+        if: inputs.dry-run != true
         id: get-digest
+        env:
+          DIGEST: ${{ steps.build-push.outputs.digest }}
+          REPO_IMAGE_NAME: ${{ env.REPO_IMAGE_NAME }}
         run: |
           # Output format: repo@sha256:digest
-          IMAGE_ID="${{ env.REPO_IMAGE_NAME }}@${{ steps.build-push.outputs.digest }}"
+          IMAGE_ID="${REPO_IMAGE_NAME}@${DIGEST}"
           echo "Built image: $IMAGE_ID"
           echo "IMAGE_DIGEST=$IMAGE_ID" >> $GITHUB_OUTPUT
 
   smoke-test-docker-image:
-    if: ${{ !inputs.dry-run }}
+    if: inputs.dry-run != true
     needs: create-docker-release-image
     strategy:
       matrix:
         test_group:
           [
-              {
-                runs-on: ["cloud-virtual-machine", "N150", "in-service"],
-                cmd: pytest tests/end_to_end_tests,
-                arch: wormhole_b0,
-              },
-              {
-                runs-on: ["cloud-virtual-machine", "N300", "in-service"],
-                cmd: pytest tests/end_to_end_tests,
-                arch: wormhole_b0,
-              },
+            {
+              runs-on: ["cloud-virtual-machine", "N150", "in-service"],
+              cmd: pytest tests/end_to_end_tests,
+              arch: wormhole_b0,
+            },
+            {
+              runs-on: ["cloud-virtual-machine", "N300", "in-service"],
+              cmd: pytest tests/end_to_end_tests,
+              arch: wormhole_b0,
+            },
           ]
     runs-on: ${{ matrix.test_group.runs-on }}
     container:
@@ -142,46 +152,53 @@ jobs:
         run: |
           apt-get update && apt-get install -y git
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
       - name: Test ttnn import
         timeout-minutes: 1
         run: |
-            python -c "import ttnn"
+          python -c "import ttnn"
       - name: Run frequent regression tests
         timeout-minutes: ${{ inputs.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test_group.cmd }}
         run: |
-            uv pip install --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match 'torch>=2.7.1'
-            uv pip install 'numpy>=1.24.4,<2' pytest
-            ${{ matrix.test_group.cmd }}
+          uv pip install --extra-index-url https://download.pytorch.org/whl/cpu --index-strategy unsafe-best-match 'torch>=2.7.1'
+          uv pip install 'numpy>=1.24.4,<2' pytest
+          $TEST_CMD
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
   tag-docker-image-as-latest:
-    if: ${{ !inputs.dry-run }}
+    if: inputs.dry-run != true
     needs: [smoke-test-docker-image, create-docker-release-image]
     runs-on: ubuntu-latest
     steps:
       - name: Docker login
-        uses: docker/login-action@v3
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Tag latest if this is a major version release
+        env:
+          TAG_LATEST: ${{ inputs.tag-latest }}
+          PLATFORM: ${{ inputs.platform }}
+          IMAGE: ${{ inputs.image }}
+          REPOSITORY: ${{ github.repository }}
+          IMAGE_DIGEST: ${{ needs.create-docker-release-image.outputs.image_digest }}
         run: |
           set -eu # basic shell hygiene
           LATEST_TAG=latest
-          if [ "${{ inputs.tag-latest }}" = "true" ]; then
+          if [ "$TAG_LATEST" = "true" ]; then
             LATEST_TAG=latest
           else
             LATEST_TAG=latest-rc
           fi
           echo "Determined that the current tag is " $LATEST_TAG
-          REPO_IMAGE_NAME=ghcr.io/${{ github.repository }}/tt-metalium-${{ inputs.platform }}-${{ inputs.image }}-amd64
+          REPO_IMAGE_NAME=ghcr.io/${REPOSITORY}/tt-metalium-${PLATFORM}-${IMAGE}-amd64
           # Pull by digest to ensure we tag the exact image we built and tested
-          IMAGE_DIGEST="${{ needs.create-docker-release-image.outputs.image_digest }}"
           docker pull "$IMAGE_DIGEST"
           echo "Tagging image $IMAGE_DIGEST as $REPO_IMAGE_NAME:$LATEST_TAG"
           docker tag "$IMAGE_DIGEST" "$REPO_IMAGE_NAME:$LATEST_TAG"

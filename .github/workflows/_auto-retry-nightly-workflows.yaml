@@ -26,21 +26,27 @@ jobs:
     if: ${{ github.event.workflow_run.conclusion == 'failure' }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions
           sparse-checkout-cone-mode: true
       - name: Get workflow run_id attempt number to analyze
         id: get-run-id-and-attempt
         shell: bash
+        env:
+          TEST_WORKFLOW_RUN_ID: ${{ inputs.test_workflow_run_id }}
+          TEST_WORKFLOW_RUN_ATTEMPT: ${{ inputs.test_workflow_run_attempt }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }} # NOLINT(22) - only used to query run metadata and re-run failed jobs via API, no artifact download
+          WORKFLOW_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
         run: |
-          event_name="${{ github.event_name }}"
+          event_name="$EVENT_NAME"
           if [[ "$event_name" == "workflow_dispatch" ]]; then
-            run_id="${{ inputs.test_workflow_run_id }}"
-            attempt_number="${{ inputs.test_workflow_run_attempt }}"
+            run_id="$TEST_WORKFLOW_RUN_ID"
+            attempt_number="$TEST_WORKFLOW_RUN_ATTEMPT"
           elif [[ "$event_name" == "workflow_run" ]]; then
-            run_id="${{ github.event.workflow_run.id }}"
-            attempt_number="${{ github.event.workflow_run.run_attempt }}"
+            run_id="$WORKFLOW_RUN_ID"
+            attempt_number="$WORKFLOW_RUN_ATTEMPT"
             [[ -z "$run_id" ]] && { echo "run_id is empty" ; exit 1; }
             [[ -z "$attempt_number" ]] && { echo "attempt_number is empty" ; exit 1; }
           else
@@ -58,11 +64,13 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.get-run-id-and-attempt.outputs.run-id }}
+          ATTEMPT_NUMBER: ${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
         run: |
           MAX_ATTEMPTS=2
           CURRENT_HOUR=$(date +"%H")
-          read original_trigger conclusion <<< $(gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} --jq '.event + " " + .conclusion')
-          if [[ "${{ steps.get-run-id-and-attempt.outputs.attempt-number }}" -ge "$MAX_ATTEMPTS" ]]; then
+          read original_trigger conclusion <<< $(gh api /repos/tenstorrent/tt-metal/actions/runs/${RUN_ID}/attempts/${ATTEMPT_NUMBER} --jq '.event + " " + .conclusion')
+          if [[ "$ATTEMPT_NUMBER" -ge "$MAX_ATTEMPTS" ]]; then
             echo "::notice title=no-continue-max-tries::This workflow has exceeded max tries. Not re-trying"
             should_continue=false
           elif [[ "$original_trigger" == "workflow_dispatch" ]]; then
@@ -83,13 +91,14 @@ jobs:
         if: ${{ steps.determine-should-continue.outputs.should-continue == 'true' }}
         env:
           GH_TOKEN: ${{ secrets.RETRY_WORKFLOW_TOKEN }}
+          RERUN_RUN_ID: ${{ steps.get-run-id-and-attempt.outputs.run-id }}
         run: |
           echo "Re-running jobs here"
-          # gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/timing
+          # gh api /repos/tenstorrent/tt-metal/actions/runs/${RERUN_RUN_ID}/timing
           gh api --method POST \
             -H "Accept: application/vnd.github+json" \
             -H "X-GitHub-Api-Version: 2022-11-28" \
-            /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/rerun-failed-jobs
+            /repos/tenstorrent/tt-metal/actions/runs/${RERUN_RUN_ID}/rerun-failed-jobs
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

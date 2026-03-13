@@ -1,5 +1,5 @@
-name: 'Run Multi-Process Tests'
-description: 'Runs multi-process fabric tests with various mesh configurations'
+name: "Run Multi-Process Tests"
+description: "Runs multi-process fabric tests with various mesh configurations"
 runs:
   using: "composite"
   steps:

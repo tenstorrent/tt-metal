@@ -21,6 +21,15 @@ on:
         type: string
         default: "in-service"
 
+    secrets:
+      SFTP_BENCHMARK_WRITER_HOSTNAME:
+        required: false
+      SFTP_BENCHMARK_WRITER_KEY:
+        required: false
+      SFTP_BENCHMARK_WRITER_USERNAME:
+        required: false
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   models-perf:
     strategy:
@@ -29,13 +38,48 @@ jobs:
       fail-fast: false
       matrix:
         test-info: [
-          {name: "N300 WH B0", model-group: "llm_javelin", timeout: 20, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
-          {name: "N300 WH B0", model-group: "cnn_javelin", timeout: 10, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
-          {name: "N300 WH B0", model-group: "other_magic_env", timeout: 45, arch: wormhole_b0, runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
-          # Doesn't work on blackhole P150 {name: "P150 BH", model-group: "llm_javelin", timeout: 20, arch: blackhole, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine"},
-          {name: "P150 BH", model-group: "cnn_javelin", timeout: 10, arch: blackhole, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine"},
-          {name: "P150 BH", model-group: "other_magic_env", timeout: 45, arch: blackhole, runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"], machine-type: "bare_metal"},
-        ]
+            {
+              name: "N300 WH B0",
+              model-group: "llm_javelin",
+              timeout: 20,
+              arch: wormhole_b0,
+              runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"],
+              machine-type: "bare_metal",
+            },
+            {
+              name: "N300 WH B0",
+              model-group: "cnn_javelin",
+              timeout: 10,
+              arch: wormhole_b0,
+              runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"],
+              machine-type: "bare_metal",
+            },
+            {
+              name: "N300 WH B0",
+              model-group: "other_magic_env",
+              timeout: 45,
+              arch: wormhole_b0,
+              runs-on: ["N300", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"],
+              machine-type: "bare_metal",
+            },
+            # Doesn't work on blackhole P150 {name: "P150 BH", model-group: "llm_javelin", timeout: 20, arch: blackhole, runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"], machine-type: "virtual_machine"},
+            {
+              name: "P150 BH",
+              model-group: "cnn_javelin",
+              timeout: 10,
+              arch: blackhole,
+              runs-on: ["P150", "pipeline-functional", "cloud-virtual-machine", "${{ inputs.extra-tag }}"],
+              machine-type: "virtual_machine",
+            },
+            {
+              name: "P150 BH",
+              model-group: "other_magic_env",
+              timeout: 45,
+              arch: blackhole,
+              runs-on: ["P150", "pipeline-perf", "bare-metal", "${{ inputs.extra-tag }}"],
+              machine-type: "bare_metal",
+            },
+          ]
 
     name: "${{ matrix.test-info.model-group }} ${{ matrix.test-info.name }}"
     runs-on: ${{ matrix.test-info.runs-on }}
@@ -61,7 +105,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -76,25 +120,25 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           commands: pytest models/demos/falcon7b_common/tests -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'llm_javelin' && (inputs.model == 'all' || inputs.model == 'falcon7b') }}
+        if: "!cancelled() && matrix.test-info.model-group == 'llm_javelin' && (inputs.model == 'all' || inputs.model == 'falcon7b')"
       - name: Run vanilla_unet model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           commands: pytest models/demos/vision/segmentation/vanilla_unet/tests/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'vanilla_unet') }}
+        if: "!cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'vanilla_unet')"
       - name: Run functional_unet model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           commands: pytest models/experimental/functional_unet/tests -m models_performance_bare_metal --timeout=480
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'functional_unet') }}
+        if: "!cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'functional_unet')"
       - name: Run stable_diffusion model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           commands: pytest models/demos/vision/generative/stable_diffusion/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'stable_diffusion') }}
+        if: "!cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'stable_diffusion')"
       # Disabled until the test is fixed; issue #35263
       # - name: Run sentence_bert model_perf test
       #   timeout-minutes: ${{ matrix.test-info.timeout }}
@@ -107,73 +151,73 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           commands: pytest models/demos/vision/classification/resnet50/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests/test_perf_e2e_resnet50.py -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'resnet50') }}
+        if: "!cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'resnet50')"
 
       - name: Run bert_tiny model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           commands: pytest models/demos/wormhole/bert_tiny/tests/test_performance.py -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'bert_tiny') }}
+        if: "!cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'bert_tiny')"
 
       - name: Run distilbert model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           commands: pytest models/demos/wormhole/distilbert/tests/test_perf_distilbert.py -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'distilbert') }}
+        if: "!cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'distilbert')"
       - name: Run segformer model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           commands: pytest models/demos/vision/segmentation/segformer/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'segformer') }}
+        if: "!cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'segformer')"
       - name: Run metal_BERT_large_11 model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           commands: pytest models/demos/metal_BERT_large_11/tests/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'metal_BERT_large_11') }}
+        if: "!cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'metal_BERT_large_11')"
 
       - name: Run mobilenetv2 model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           commands: pytest models/demos/vision/classification/mobilenetv2/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'mobilenetv2') }}
+        if: "!cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'mobilenetv2')"
       - name: Run vgg_unet model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           commands: pytest models/demos/vision/segmentation/vgg_unet/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'vgg_unet') }}
+        if: "!cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'vgg_unet')"
 
       - name: Run swin_v2 model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           commands: pytest models/experimental/swin_v2/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'swin_v2') }}
+        if: "!cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'swin_v2')"
       - name: Run swin_s model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           commands: pytest models/experimental/swin_s/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'swin_s') }}
+        if: "!cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'swin_s')"
 
       - name: Run vovnet model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           commands: pytest models/experimental/vovnet/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'vovnet') }}
+        if: "!cancelled() && matrix.test-info.model-group == 'other_magic_env' && (inputs.model == 'all' || inputs.model == 'vovnet')"
 
       - name: Run ufld_v2 model_perf test
         timeout-minutes: ${{ matrix.test-info.timeout }}
         uses: tenstorrent/tt-metal/.github/actions/single-card-perf-test@main
         with:
           commands: pytest models/demos/vision/segmentation/ufld_v2/${{ matrix.test-info.arch == 'blackhole' && 'blackhole' || 'wormhole' }}/tests/perf/ -m models_performance_bare_metal
-        if: ${{ !cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'ufld_v2') }}
+        if: "!cancelled() && matrix.test-info.model-group == 'cnn_javelin' && (inputs.model == 'all' || inputs.model == 'ufld_v2')"
       # Disabled until the test is fixed Issue: #35171
       # - name: Run efficientnetb0 model_perf test
       #   timeout-minutes: ${{ matrix.test-info.timeout }}
@@ -186,11 +230,11 @@ jobs:
         run: |
           # Merge all the generated reports
           env python3 models/perf/merge_perf_results.py
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
 
       - name: Save environment data
         id: save-environment-data
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         shell: bash
         env:
           ARCH_NAME: ${{ matrix.test-info.arch }}
@@ -204,7 +248,7 @@ jobs:
           fi
 
       - name: Upload benchmark data
-        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        if: "!cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true'"
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -220,7 +264,7 @@ jobs:
       #    slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
       - name: Check perf report exists
         id: check-perf-report
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         run: |
           ls -hal
           export PERF_REPORT_FILENAME=Models_Perf_$(date +%Y_%m_%d).csv
@@ -229,15 +273,15 @@ jobs:
           echo "Full report location: $FULL_REPORT_PATH"
           echo "perf_report_full_path=$FULL_REPORT_PATH" >> "$GITHUB_OUTPUT"
       - name: Upload perf report
-        if: ${{ !cancelled() && steps.check-perf-report.conclusion == 'success' }}
-        uses: actions/upload-artifact@v4
+        if: "!cancelled() && steps.check-perf-report.conclusion == 'success'"
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
           name: perf-report-csv-${{ matrix.test-info.model-group }}-${{ matrix.test-info.arch }}-${{ matrix.test-info.machine-type }}
           path: "${{ steps.check-perf-report.outputs.perf_report_full_path }}"
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         with:
           path: generated/test_reports/
           prefix: "test_reports_"

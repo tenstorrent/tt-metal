@@ -12,8 +12,9 @@ runs:
   steps:
     - name: Report Github Pipeline Status Slack Action
       if: ${{ github.ref == 'refs/heads/main' }}
-      uses: slackapi/slack-github-action@v1.26.0
+      uses: slackapi/slack-github-action@91efab103c0de0a537f72a35f6b8cda0ee76bf0a # v2.1.1
       with:
+        webhook-type: incoming-webhook
         payload: |
           {
             "text": "<@${{ inputs.owner }}> just so you know `${{ github.event.sender.login }}` broke ${{ github.workflow }} with https://github.com/tenstorrent/tt-metal/commit/${{ github.sha }} at ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}/job/${{ job.check_run_id }}"

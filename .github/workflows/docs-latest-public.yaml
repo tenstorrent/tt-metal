@@ -41,12 +41,12 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job # Here be dragons; keep it scoped to our desired volume, yet must be under github.workspace and be sure to clean up at the end
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ inputs.wheel-artifact-name }}
           path: /work
@@ -61,12 +61,14 @@ jobs:
         run: |
           ./tests/scripts/run_build_docs.sh
       - name: Prepare artifact - move output
+        env:
+          VERSION: ${{ inputs.version }}
         run: |
           mkdir gh_pages
-          mv docs/build/html gh_pages/${{ inputs.version }}
+          mv docs/build/html gh_pages/${VERSION}
       - name: Upload docs artifact (skipped for dry run)
-        if: ${{ !inputs.dry-run }}
-        uses: actions/upload-artifact@v4
+        if: "!inputs.dry-run"
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: gh_pages_${{ inputs.version }}
           path: /work/gh_pages/${{ inputs.version }}/
@@ -74,7 +76,7 @@ jobs:
 
   deploy-docs:
     needs: build-docs
-    if: ${{ !inputs.dry-run && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v')) }}
+    if: "!inputs.dry-run && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/stable' || startsWith(github.ref, 'refs/tags/v'))"
     runs-on: ubuntu-latest
     concurrency:
       # Note that people may spam the post-commit pipeline on their branch, and
@@ -90,14 +92,14 @@ jobs:
       - name: ⬇️ Checkout
         # This is needed by the pages-deploy action so
         # that the folder is initialized for .git
-        uses: actions/checkout@v4
-      - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: gh_pages_${{ inputs.version }}
           path: gh_pages/${{ inputs.version }}
       - name: Deploy to GitHub Pages
-        uses: JamesIves/github-pages-deploy-action@v4
+        uses: JamesIves/github-pages-deploy-action@d92aa235d04922e8f08b40ce78cc5442fcfbfa2f # v4.8.0
         id: deployment
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -110,13 +112,13 @@ jobs:
         # and the next attempt (!) run will cause an error.
         # See more:
         # https://github.com/tenstorrent/tt-metal/issues/17623
-        if: ${{ failure() }}
-        uses: geekyeggo/delete-artifact@v5
+        if: failure()
+        uses: geekyeggo/delete-artifact@f275313e70c08f6120db482d7a6b98377786765b # v5.1.0
         continue-on-error: true
         with:
-            name: github-pages
+          name: github-pages
       - name: Check the docs deployment is up
-        if: ${{ github.ref == 'refs/heads/main' }}
+        if: github.ref == 'refs/heads/main'
         # TODO: Enhance this by looping over all the published versions in docs/published_versions.json
         run: |
           set -eu # basic shell hygiene

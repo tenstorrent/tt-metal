@@ -1,15 +1,19 @@
-name: 'Delete Allocation'
-description: 'A composable action to delete an allocation'
+name: "Delete Allocation"
+description: "A composable action to delete an allocation"
 
 inputs:
   allocationName:
-    description: 'Allocation name'
+    description: "Allocation name"
     required: true
 
 runs:
-  using: 'composite'
+  using: "composite"
   steps:
     - name: Delete Allocation
       shell: bash
+      env:
+        ALLOCATION_NAME: ${{ inputs.allocationName }}
       run: |
-        kubectl delete allocation/${{ inputs.allocationName }} --ignore-not-found
+        source "$GITHUB_ACTION_PATH/../../scripts/security/input-validation.sh"
+        validate_allocation_name "$ALLOCATION_NAME" || exit 1
+        kubectl delete "allocation/$ALLOCATION_NAME" --ignore-not-found

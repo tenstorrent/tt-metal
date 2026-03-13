@@ -77,33 +77,37 @@ jobs:
       manylinux-needs-build: ${{ steps.manylinux-check.outputs.needs-build }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 1
 
       # Compute Ubuntu 22.04 tags
       - name: Compute Ubuntu 22.04 tags
         id: ubuntu-2204-tags
+        env:
+          REPO_NAME: ${{ github.repository }}
         run: |
           # Extra files not in COPY but affect the image
           EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
 
           HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
           ARCH="amd64"
-          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-ci-build-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
-          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-ci-test-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
-          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-dev-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
+          echo "ci-build-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-22.04-ci-build-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
+          echo "ci-test-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-22.04-ci-test-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
+          echo "dev-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-22.04-dev-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
 
           BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-basic-dev-${ARCH}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
+          echo "basic-dev-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-22.04-basic-dev-${ARCH}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
 
           BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-22.04-basic-ttnn-runtime-${ARCH}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
+          echo "basic-ttnn-runtime-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-22.04-basic-ttnn-runtime-${ARCH}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
 
       - name: Check Ubuntu 22.04 images exist
         id: ubuntu-2204-check
+        env:
+          DEV_TAG: ${{ steps.ubuntu-2204-tags.outputs.dev-tag }}
         run: |
-          if docker manifest inspect ${{ steps.ubuntu-2204-tags.outputs.dev-tag }} > /dev/null 2>&1; then
+          if docker manifest inspect $DEV_TAG > /dev/null 2>&1; then
             echo "Ubuntu 22.04 images exist"
             echo "needs-build=false" >> $GITHUB_OUTPUT
           else
@@ -114,25 +118,29 @@ jobs:
       # Compute Ubuntu 24.04 tags
       - name: Compute Ubuntu 24.04 tags
         id: ubuntu-2404-tags
+        env:
+          REPO_NAME: ${{ github.repository }}
         run: |
           EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
 
           HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
           ARCH="amd64"
-          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-ci-build-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
-          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-ci-test-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
-          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-dev-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
+          echo "ci-build-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-24.04-ci-build-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
+          echo "ci-test-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-24.04-ci-test-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
+          echo "dev-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-24.04-dev-${ARCH}:${HASH}" >> $GITHUB_OUTPUT
 
           BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-basic-dev-${ARCH}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
+          echo "basic-dev-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-24.04-basic-dev-${ARCH}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
 
           BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/ubuntu-24.04-basic-ttnn-runtime-${ARCH}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
+          echo "basic-ttnn-runtime-tag=ghcr.io/${REPO_NAME}/tt-metalium/ubuntu-24.04-basic-ttnn-runtime-${ARCH}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
 
       - name: Check Ubuntu 24.04 images exist
         id: ubuntu-2404-check
+        env:
+          DEV_TAG: ${{ steps.ubuntu-2404-tags.outputs.dev-tag }}
         run: |
-          if docker manifest inspect ${{ steps.ubuntu-2404-tags.outputs.dev-tag }} > /dev/null 2>&1; then
+          if docker manifest inspect $DEV_TAG > /dev/null 2>&1; then
             echo "Ubuntu 24.04 images exist"
             echo "needs-build=false" >> $GITHUB_OUTPUT
           else
@@ -143,16 +151,20 @@ jobs:
       # Compute ManyLinux tags
       - name: Compute ManyLinux tags
         id: manylinux-tags
+        env:
+          REPO_NAME: ${{ github.repository }}
         run: |
           EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
 
           MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $EXTRA_FILES)
-          echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/manylinux-amd64:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
+          echo "manylinux-tag=ghcr.io/${REPO_NAME}/tt-metalium/manylinux-amd64:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
 
       - name: Check ManyLinux image exists
         id: manylinux-check
+        env:
+          MANYLINUX_TAG: ${{ steps.manylinux-tags.outputs.manylinux-tag }}
         run: |
-          if docker manifest inspect ${{ steps.manylinux-tags.outputs.manylinux-tag }} > /dev/null 2>&1; then
+          if docker manifest inspect $MANYLINUX_TAG > /dev/null 2>&1; then
             echo "ManyLinux image exists"
             echo "needs-build=false" >> $GITHUB_OUTPUT
           else
@@ -169,18 +181,18 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push CI Build image
         id: build-ci-build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
@@ -193,7 +205,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
         id: build-ci-test
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
@@ -206,7 +218,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
         id: build-dev
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
@@ -219,7 +231,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
         id: build-basic-dev
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
@@ -232,7 +244,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
         id: build-basic-ttnn-runtime
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
@@ -253,18 +265,18 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push CI Build image
         id: build-ci-build
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
@@ -277,7 +289,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
         id: build-ci-test
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
@@ -290,7 +302,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
         id: build-dev
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
@@ -303,7 +315,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
         id: build-basic-dev
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
@@ -316,7 +328,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
         id: build-basic-ttnn-runtime
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
@@ -337,18 +349,18 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push ManyLinux image
         id: build-manylinux
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.manylinux
@@ -364,7 +376,7 @@ jobs:
     if: always() && github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions/push-latest-image-to-ghcr
           sparse-checkout-cone-mode: false

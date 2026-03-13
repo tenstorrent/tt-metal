@@ -62,15 +62,15 @@ on:
         type: choice
         default: "Ubuntu 22.04"
         options:
-            - "Ubuntu 22.04"
-            - "Ubuntu 24.04"
+          - "Ubuntu 22.04"
+          - "Ubuntu 24.04"
         description: "Platform to build Docker images for"
       architecture:
         required: false
         type: choice
         default: "amd64"
         options:
-            - "amd64"
+          - "amd64"
 
 jobs:
   check-docker-images:
@@ -93,7 +93,7 @@ jobs:
       python-version: ${{ steps.python-version.outputs.version }}
     steps:
       - name: Checkout repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
           fetch-depth: 1
@@ -106,86 +106,102 @@ jobs:
 
       - name: Determine Python version
         id: python-version
+        env:
+          VERSION: ${{ steps.platform.outputs.version }}
         run: |
-          VERSION="${{ steps.platform.outputs.version }}"
           # Use Python 3.12 for Ubuntu 24.04, Python 3.10 for Ubuntu 22.04
           if [ "$VERSION" = "24.04" ]; then
             PYTHON_VERSION="3.12"
           else
             PYTHON_VERSION="3.10"
           fi
-          echo "version=$PYTHON_VERSION" >> "$GITHUB_OUTPUT"
+          printf '%s\n' "version=${PYTHON_VERSION}" >> "${GITHUB_OUTPUT}"
           echo "Determined Python version: $PYTHON_VERSION for version=$VERSION"
 
       - name: Set environment variables
+        env:
+          DISTRO: ${{ steps.platform.outputs.distro }}
+          VERSION: ${{ steps.platform.outputs.version }}
+          ARCH: ${{ inputs.architecture || 'amd64' }}
         run: |
-          DISTRO="${{ steps.platform.outputs.distro }}"
-          VERSION="${{ steps.platform.outputs.version }}"
-          ARCH="${{ inputs.architecture || 'amd64' }}"
-
-          echo "CI_BUILD_IMAGE_NAME=${DISTRO}-${VERSION}-ci-build-${ARCH}" >> $GITHUB_ENV
-          echo "CI_TEST_IMAGE_NAME=${DISTRO}-${VERSION}-ci-test-${ARCH}" >> $GITHUB_ENV
-          echo "DEV_IMAGE_NAME=${DISTRO}-${VERSION}-dev-${ARCH}" >> $GITHUB_ENV
-          echo "BASIC_DEV_IMAGE_NAME=${DISTRO}-${VERSION}-basic-dev-${ARCH}" >> $GITHUB_ENV
-          echo "BASIC_TTNN_RUNTIME_IMAGE_NAME=${DISTRO}-${VERSION}-basic-ttnn-runtime-${ARCH}" >> $GITHUB_ENV
-          echo "MANYLINUX_IMAGE_NAME=manylinux-${ARCH}" >> $GITHUB_ENV
+          source .github/scripts/security/input-validation.sh
+          validate_no_newlines "DISTRO" "$DISTRO" "VERSION" "$VERSION" "ARCH" "$ARCH"
+          printf '%s\n' "CI_BUILD_IMAGE_NAME=${DISTRO}-${VERSION}-ci-build-${ARCH}" >> "${GITHUB_ENV}"
+          printf '%s\n' "CI_TEST_IMAGE_NAME=${DISTRO}-${VERSION}-ci-test-${ARCH}" >> "${GITHUB_ENV}"
+          printf '%s\n' "DEV_IMAGE_NAME=${DISTRO}-${VERSION}-dev-${ARCH}" >> "${GITHUB_ENV}"
+          printf '%s\n' "BASIC_DEV_IMAGE_NAME=${DISTRO}-${VERSION}-basic-dev-${ARCH}" >> "${GITHUB_ENV}"
+          printf '%s\n' "BASIC_TTNN_RUNTIME_IMAGE_NAME=${DISTRO}-${VERSION}-basic-ttnn-runtime-${ARCH}" >> "${GITHUB_ENV}"
+          printf '%s\n' "MANYLINUX_IMAGE_NAME=manylinux-${ARCH}" >> "${GITHUB_ENV}"
 
       - name: Compute tags
         id: tags
+        env:
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          CI_BUILD_IMAGE_NAME: ${{ env.CI_BUILD_IMAGE_NAME }}
+          CI_TEST_IMAGE_NAME: ${{ env.CI_TEST_IMAGE_NAME }}
+          DEV_IMAGE_NAME: ${{ env.DEV_IMAGE_NAME }}
+          BASIC_DEV_IMAGE_NAME: ${{ env.BASIC_DEV_IMAGE_NAME }}
+          BASIC_TTNN_RUNTIME_IMAGE_NAME: ${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}
+          MANYLINUX_IMAGE_NAME: ${{ env.MANYLINUX_IMAGE_NAME }}
         run: |
           EXTRA_FILES=".github/workflows/build-docker-artifact.yaml"
 
           HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile $EXTRA_FILES)
-          echo "ci-build-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_BUILD_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
-          echo "ci-test-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.CI_TEST_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
-          echo "dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.DEV_IMAGE_NAME }}:${HASH}" >> $GITHUB_OUTPUT
+          printf '%s\n' "ci-build-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${CI_BUILD_IMAGE_NAME}:${HASH}" >> "${GITHUB_OUTPUT}"
+          printf '%s\n' "ci-test-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${CI_TEST_IMAGE_NAME}:${HASH}" >> "${GITHUB_OUTPUT}"
+          printf '%s\n' "dev-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${DEV_IMAGE_NAME}:${HASH}" >> "${GITHUB_OUTPUT}"
 
           BASIC_DEV_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-dev-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_DEV_IMAGE_NAME }}:${BASIC_DEV_HASH}" >> $GITHUB_OUTPUT
+          printf '%s\n' "basic-dev-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${BASIC_DEV_IMAGE_NAME}:${BASIC_DEV_HASH}" >> "${GITHUB_OUTPUT}"
 
           BASIC_TTNN_RUNTIME_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.basic-dev)
-          echo "basic-ttnn-runtime-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.BASIC_TTNN_RUNTIME_IMAGE_NAME }}:${BASIC_TTNN_RUNTIME_HASH}" >> $GITHUB_OUTPUT
+          printf '%s\n' "basic-ttnn-runtime-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${BASIC_TTNN_RUNTIME_IMAGE_NAME}:${BASIC_TTNN_RUNTIME_HASH}" >> "${GITHUB_OUTPUT}"
 
           MANYLINUX_HASH=$(.github/scripts/dockerfile-hash.sh dockerfile/Dockerfile.manylinux $EXTRA_FILES)
-          echo "manylinux-tag=ghcr.io/${{ github.repository }}/tt-metalium/${{ env.MANYLINUX_IMAGE_NAME }}:${MANYLINUX_HASH}" >> $GITHUB_OUTPUT
+          printf '%s\n' "manylinux-tag=ghcr.io/${GITHUB_REPOSITORY}/tt-metalium/${MANYLINUX_IMAGE_NAME}:${MANYLINUX_HASH}" >> "${GITHUB_OUTPUT}"
 
       # Assume if dev-tag exists, the others will exist too
       - name: Query images exist
         id: images
+        env:
+          DEV_TAG: ${{ steps.tags.outputs.dev-tag }}
+          BASIC_DEV_TAG: ${{ steps.tags.outputs.basic-dev-tag }}
+          BASIC_TTNN_RUNTIME_TAG: ${{ steps.tags.outputs.basic-ttnn-runtime-tag }}
+          MANYLINUX_TAG: ${{ steps.tags.outputs.manylinux-tag }}
         run: |
-          if docker manifest inspect ${{ steps.tags.outputs.dev-tag }} > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.dev-tag }} exists"
-            echo "ci-build-exists=true" >> $GITHUB_OUTPUT
-            echo "ci-test-exists=true" >> $GITHUB_OUTPUT
-            echo "dev-exists=true" >> $GITHUB_OUTPUT
+          if docker manifest inspect "$DEV_TAG" > /dev/null 2>&1; then
+            echo "$DEV_TAG exists"
+            printf '%s\n' "ci-build-exists=true" >> "${GITHUB_OUTPUT}"
+            printf '%s\n' "ci-test-exists=true" >> "${GITHUB_OUTPUT}"
+            printf '%s\n' "dev-exists=true" >> "${GITHUB_OUTPUT}"
           else
-            echo "${{ steps.tags.outputs.dev-tag }} does not exist"
-            echo "ci-build-exists=false" >> $GITHUB_OUTPUT
-            echo "ci-test-exists=false" >> $GITHUB_OUTPUT
-            echo "dev-exists=false" >> $GITHUB_OUTPUT
+            echo "$DEV_TAG does not exist"
+            printf '%s\n' "ci-build-exists=false" >> "${GITHUB_OUTPUT}"
+            printf '%s\n' "ci-test-exists=false" >> "${GITHUB_OUTPUT}"
+            printf '%s\n' "dev-exists=false" >> "${GITHUB_OUTPUT}"
           fi
 
-          if docker manifest inspect ${{ steps.tags.outputs.basic-dev-tag }} > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.basic-dev-tag }} exists"
-            echo "basic-dev-exists=true" >> $GITHUB_OUTPUT
+          if docker manifest inspect "$BASIC_DEV_TAG" > /dev/null 2>&1; then
+            echo "$BASIC_DEV_TAG exists"
+            printf '%s\n' "basic-dev-exists=true" >> "${GITHUB_OUTPUT}"
           else
-            echo "${{ steps.tags.outputs.basic-dev-tag }} does not exist"
-            echo "basic-dev-exists=false" >> $GITHUB_OUTPUT
+            echo "$BASIC_DEV_TAG does not exist"
+            printf '%s\n' "basic-dev-exists=false" >> "${GITHUB_OUTPUT}"
           fi
-          if docker manifest inspect ${{ steps.tags.outputs.basic-ttnn-runtime-tag }} > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.basic-ttnn-runtime-tag }} exists"
-            echo "basic-ttnn-runtime-exists=true" >> $GITHUB_OUTPUT
+          if docker manifest inspect "$BASIC_TTNN_RUNTIME_TAG" > /dev/null 2>&1; then
+            echo "$BASIC_TTNN_RUNTIME_TAG exists"
+            printf '%s\n' "basic-ttnn-runtime-exists=true" >> "${GITHUB_OUTPUT}"
           else
-            echo "${{ steps.tags.outputs.basic-ttnn-runtime-tag }} does not exist"
-            echo "basic-ttnn-runtime-exists=false" >> $GITHUB_OUTPUT
+            echo "$BASIC_TTNN_RUNTIME_TAG does not exist"
+            printf '%s\n' "basic-ttnn-runtime-exists=false" >> "${GITHUB_OUTPUT}"
           fi
 
-          if docker manifest inspect ${{ steps.tags.outputs.manylinux-tag }} > /dev/null 2>&1; then
-            echo "${{ steps.tags.outputs.manylinux-tag }} exists"
-            echo "manylinux-exists=true" >> $GITHUB_OUTPUT
+          if docker manifest inspect "$MANYLINUX_TAG" > /dev/null 2>&1; then
+            echo "$MANYLINUX_TAG exists"
+            printf '%s\n' "manylinux-exists=true" >> "${GITHUB_OUTPUT}"
           else
-            echo "${{ steps.tags.outputs.manylinux-tag }} does not exist"
-            echo "manylinux-exists=false" >> $GITHUB_OUTPUT
+            echo "$MANYLINUX_TAG does not exist"
+            printf '%s\n' "manylinux-exists=false" >> "${GITHUB_OUTPUT}"
           fi
 
   # Build Ubuntu images
@@ -197,19 +213,19 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push CI Build image
         if: needs.check-docker-images.outputs.dev-exists != 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
@@ -224,7 +240,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push CI Test image
         if: needs.check-docker-images.outputs.dev-exists != 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
@@ -239,7 +255,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Dev image
         if: needs.check-docker-images.outputs.dev-exists != 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile
@@ -254,7 +270,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic Dev image
         if: needs.check-docker-images.outputs.basic-dev-exists != 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
@@ -269,7 +285,7 @@ jobs:
             type=registry,push=true,compression=zstd,compression-level=3,force-compression=true,oci-mediatypes=true
       - name: Build and push Basic TTNN runtime image
         if: needs.check-docker-images.outputs.basic-ttnn-runtime-exists != 'true'
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.basic-dev
@@ -292,18 +308,18 @@ jobs:
     runs-on: tt-ubuntu-2204-large-stable
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
         with:
           registry: https://ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Build and push ManyLinux image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           context: ${{ github.workspace }}
           file: dockerfile/Dockerfile.manylinux
@@ -323,7 +339,7 @@ jobs:
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: .github/actions/push-latest-image-to-ghcr
           sparse-checkout-cone-mode: false

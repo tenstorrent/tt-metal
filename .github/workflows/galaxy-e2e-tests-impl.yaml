@@ -1,5 +1,4 @@
 name: "[internal] Galaxy e2e tests impl"
-
 on:
   workflow_call:
     inputs:
@@ -15,7 +14,9 @@ on:
       enabled-skus:
         required: true
         type: string
-
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
@@ -25,7 +26,7 @@ jobs:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/galaxy_e2e_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github
@@ -39,17 +40,18 @@ jobs:
           set -e
           echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
           python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
+            "${TESTS_YAML_PATH}" \
             ./.github/time_budget.yaml \
             "e2e"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
+        env:
+          ENABLED_SKUS: ${{ inputs.enabled-skus }}
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
+            "${TESTS_YAML_PATH}" \
+            "$ENABLED_SKUS" \
             ./.github/sku_config.yaml
-
   galaxy-e2e-tests:
     needs: load-test-matrix
     strategy:
@@ -69,14 +71,14 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf:ro
-      options: "--device /dev/tenstorrent"
+      options: --device /dev/tenstorrent
     defaults:
       run:
         shell: bash
         working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -91,9 +93,18 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
-          echo "${{ matrix.test-group.cmd }}"
-          ${{ matrix.test-group.cmd }}
+          echo "$TEST_CMD"
+          # Write command to script file to safely handle quotes and special characters
+          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SCRIPT_EOF
+          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
+          chmod +x /tmp/test_cmd.sh
+          bash /tmp/test_cmd.sh
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
@@ -103,6 +114,6 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          prefix: "test_reports_"
+          prefix: test_reports_
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

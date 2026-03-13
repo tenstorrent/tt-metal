@@ -4,20 +4,20 @@ on:
   workflow_dispatch:
     inputs:
       model:
-        description: 'Select model to test'
+        description: "Select model to test"
         required: false
-        default: 'all'
+        default: "all"
         type: choice
         options:
           - all
-#          - cnn
-#          - llama70b
-#          - llama_unit_tests
-#          - llama70b_prefill
+          #          - cnn
+          #          - llama70b
+          #          - llama_unit_tests
+          #          - llama70b_prefill
           - sd35
           - flux1-dev
           - motif
-#          - sentence_bert
+          #          - sentence_bert
           - wan2-2
           - mochi
           - qwenimage
@@ -48,14 +48,15 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 10 * * *"  # Every day at 10:00 UTC
+    - cron: "0 10 * * *" # Every day at 10:00 UTC
 
 jobs:
   build-artifact-profiler:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
@@ -65,7 +66,8 @@ jobs:
       toolchain: "cmake/x86_64-linux-clang-20-libcpp-toolchain.cmake" # stopgap until issue 20140 is resolved
   galaxy-perf-tests:
     needs: build-artifact-profiler
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     uses: ./.github/workflows/galaxy-perf-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}

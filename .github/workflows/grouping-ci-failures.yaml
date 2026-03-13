@@ -3,19 +3,19 @@ name: (triage) Grouping CI Failures
 on:
   schedule:
     # Run every hour at minute 0
-    - cron: '0 * * * *'
+    - cron: "0 * * * *"
   workflow_dispatch:
     inputs:
       update_mode:
-        description: 'Mode: update (sync new errors) or rebuild (recreate all issues)'
+        description: "Mode: update (sync new errors) or rebuild (recreate all issues)"
         required: false
-        default: 'update'
+        default: "update"
         type: choice
         options:
           - update
           - rebuild
       start_date:
-        description: 'Start date for fetching Slack messages (format: January 1, 2026). Defaults to 3 days ago if empty.'
+        description: "Start date for fetching Slack messages (format: January 1, 2026). Defaults to 3 days ago if empty."
         required: false
         type: string
       end_date:
@@ -31,13 +31,13 @@ jobs:
       issues: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 1
 
       - name: Calculate start date (default to 3 days ago)
         id: calc-date
-        if: ${{ !inputs.start_date }}
+        if: "!inputs.start_date"
         shell: bash
         run: |
           # Calculate date 3 days ago and format as "January 1, 2026"
@@ -52,7 +52,7 @@ jobs:
           echo "Using calculated start date: $START_DATE"
 
       - name: Run grouping ci failures
-        uses: tenstorrent/tt-auto-triage/.github/actions/slack_output_analysis@main
+        uses: tenstorrent/tt-auto-triage/.github/actions/slack_output_analysis@c9f8174b83de73fe68769f2e724280ac0e339e06 # main
         with:
           # TODO: Configure these secrets in repository settings -> Secrets and variables -> Actions
           # github_token: Personal Access Token for creating/updating GitHub issues
@@ -68,21 +68,21 @@ jobs:
           github_repo_name: "tt-auto-triage"
           project_owner: "tenstorrent"
           project_name: "issue dump"
-          workflow_file: '.github/workflows/grouping-ci-failures.yaml'
+          workflow_file: ".github/workflows/grouping-ci-failures.yaml"
 
       - name: Install infra dependencies
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         run: pip install -r infra/requirements-infra.txt
 
       - name: Create job failure cluster JSON
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         env:
           PYTHONPATH: ${{ github.workspace }}
         run: python3 .github/scripts/data_analysis/create_job_failure_cluster_json.py
 
       - name: Check if incremental JSON is empty
         id: check-json
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         shell: bash
         run: |
           if [ -f "incremental_error_report.json" ]; then
@@ -101,7 +101,7 @@ jobs:
           fi
 
       - name: Upload job failure cluster data
-        if: ${{ !cancelled() && steps.check-json.outputs.is_empty == 'false' }}
+        if: "!cancelled() && steps.check-json.outputs.is_empty == 'false'"
         uses: ./.github/actions/upload-data-via-sftp
         with:
           ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}

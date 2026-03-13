@@ -1,5 +1,4 @@
 name: "[internal] TM Fabric tests"
-
 on:
   workflow_call:
     inputs:
@@ -20,72 +19,78 @@ on:
         required: false
         type: boolean
         default: true
-        description: "Run Wormhole N300 fabric tests"
+        description: Run Wormhole N300 fabric tests
       run-wh-t3k-fabric-tests:
         required: false
         type: boolean
         default: true
-        description: "Run Wormhole T3K fabric tests"
+        description: Run Wormhole T3K fabric tests
       run-wh-6u-fabric-tests:
         required: false
         type: boolean
         default: true
-        description: "Run Wormhole 6U fabric tests"
+        description: Run Wormhole 6U fabric tests
       run-bh-multi-card-unit-tests:
         required: false
         type: boolean
         default: true
-        description: "Run Blackhole multi-card unit tests"
+        description: Run Blackhole multi-card unit tests
       bh-runner-llmbox:
         required: false
         type: boolean
         default: true
-        description: "Run tests on BH-LLMBox"
+        description: Run tests on BH-LLMBox
       bh-runner-deskbox:
         required: false
         type: boolean
         default: true
-        description: "Run tests on BH-DeskBox"
+        description: Run tests on BH-DeskBox
       bh-runner-loudbox:
         required: false
         type: boolean
         default: true
-        description: "Run tests on BH-LoudBox"
+        description: Run tests on BH-LoudBox
       bh-runner-p300:
         required: false
         type: boolean
         default: true
-        description: "Run tests on P300-viommu"
+        description: Run tests on P300-viommu
       bh-runner-qb-ge:
         required: false
         type: boolean
         default: true
-        description: "Run tests on BH-QB-GE"
-
+        description: Run tests on BH-QB-GE
+    secrets:
+      SFTP_BENCHMARK_WRITER_KEY:
+        required: false
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME:
+        required: false
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME:
+        required: false
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   # Wormhole N300 - Fabric tests
   wh-n300-fabric-tests:
-    if: ${{ inputs.run-wh-n300-fabric-tests }}
-    secrets: inherit
+    if: inputs.run-wh-n300-fabric-tests
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     strategy:
       fail-fast: false
       matrix:
-        test-group: [
-          { arch: wormhole_b0, runner-label: N300 },
-        ]
+        test-group: [{ arch: wormhole_b0, runner-label: N300 }]
     uses: ./.github/workflows/fabric-build-and-unit-tests.yaml
     with:
-      arch: ${{ matrix.test-group.arch }}
       runner-label: ${{ matrix.test-group.runner-label }}
       docker-image: ${{ inputs.docker-image }}
       build-artifact-name: ${{ inputs.build-artifact-name }}
       wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
-
   # Wormhole T3K - Fabric tests
   wh-t3k-fabric-tests:
-    if: ${{ inputs.run-wh-t3k-fabric-tests }}
-    secrets: inherit
+    if: inputs.run-wh-t3k-fabric-tests
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/t3000-fast-tests-impl.yaml
     with:
       docker-image: ${{ inputs.docker-image }}
@@ -93,13 +98,12 @@ jobs:
       wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       enable-watcher: ${{ inputs.enable-watcher || false }}
       timeout: 20
-      run-fabric-tests: 'true'
-      run-multiprocess-tests: 'false'
-      run-ccl-tests: 'false'
-
+      run-fabric-tests: "true"
+      run-multiprocess-tests: "false"
+      run-ccl-tests: "false"
   # Wormhole T3K - UDM tests (separate from t3000-fast-tests to avoid affecting other pipelines)
   wh-t3k-udm-tests:
-    if: ${{ inputs.run-wh-t3k-fabric-tests }}
+    if: inputs.run-wh-t3k-fabric-tests
     runs-on:
       - tt-ubuntu-2204-N300-llmbox-stable
     container:
@@ -122,7 +126,7 @@ jobs:
     name: Wormhole T3K UDM tests
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -139,22 +143,21 @@ jobs:
           ./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter="NightlyFabric2DUDMModeFixture.*"
           ./build/test/ttnn/unit_tests_ttnn_udm
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
+        if: failure()
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U06MJ6CVCGZ # Yu Gao
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         with:
-          prefix: "test_reports_"
+          prefix: test_reports_
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
-        if: ${{ failure() }}
-
+        if: failure()
   # Wormhole 6U - Galaxy Quick Health (most of quick-6u-health, skipping 2 tests)
   wh-6u-fabric-tests:
-    if: ${{ inputs.run-wh-6u-fabric-tests }}
+    if: inputs.run-wh-6u-fabric-tests
     runs-on:
       - topology-6u
       - arch-wormhole_b0
@@ -176,7 +179,7 @@ jobs:
         working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -192,7 +195,7 @@ jobs:
         run: |
           ./build/tools/scaleout/run_cluster_validation --cabling-descriptor-path tt_metal/fabric/cabling_descriptors/wh_galaxy_xy_torus.textproto --hard-fail --send-traffic
       - name: Run 6u Fabric Tests (Quick)
-        if: ${{ !cancelled() && steps.cluster-validation.outcome == 'success' }}
+        if: "!cancelled() && steps.cluster-validation.outcome == 'success'"
         timeout-minutes: 15
         # NOTE: These tests do not automatically get added to upstream tests. Please refer to dockerfile/upstream_test_images/.
         # Skipping UnitMeshCQSingleCardProgramFixture.* and UnitMeshCQSingleCardBufferFixture.ShardedBufferLarge*ReadWrites as per issue #31319
@@ -205,7 +208,7 @@ jobs:
           ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_deadlock_stability_6U_galaxy.yaml
           TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_6U_galaxy_quick.yaml
       - name: Run Multi-Process tests
-        if: ${{ !cancelled() && steps.cluster-validation.outcome == 'success' }}
+        if: "!cancelled() && steps.cluster-validation.outcome == 'success'"
         timeout-minutes: 10
         run: |
           python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
@@ -218,12 +221,12 @@ jobs:
           tt-run --rank-binding 4x2_multi_mesh_rank_binding.yaml --mpi-args "--allow-run-as-root" ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_multi_mesh_sanity_common.yaml
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         with:
-          prefix: "test_reports_"
+          prefix: test_reports_
       - name: Check for benchmark data
         id: check-benchmark-data
-        if: ${{ !cancelled() && github.ref_name == 'main' }}
+        if: "!cancelled() && github.ref_name == 'main'"
         shell: bash
         run: |
           if [ -f "generated/fabric/bandwidth_summary_results_wormhole_b0_upload.csv" ]; then
@@ -233,9 +236,10 @@ jobs:
             echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
             echo "Benchmark files not found, database upload will be skipped"
           fi
-      - name: Upload benchmark data
-        ## Only upload fabric benchmark data for main branch
-        if: ${{ !cancelled() && github.ref_name == 'main' && steps.check-benchmark-data.outputs.has_benchmark_data == 'true' }}
+      - name:
+          Upload benchmark data
+          ## Only upload fabric benchmark data for main branch
+        if: "!cancelled() && github.ref_name == 'main' && steps.check-benchmark-data.outputs.has_benchmark_data == 'true'"
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -245,37 +249,42 @@ jobs:
           path: /work
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
-
   # Blackhole - Multi-card unit tests
   generate-bh-matrix:
-    if: ${{ inputs.run-bh-multi-card-unit-tests }}
+    if: inputs.run-bh-multi-card-unit-tests
     runs-on: ubuntu-latest
     outputs:
       runner-matrix: ${{ steps.set-runner-matrix.outputs.matrix }}
     steps:
       - id: set-runner-matrix
         shell: bash
+        env:
+          BH_RUNNER_LLMBOX: ${{ inputs.bh-runner-llmbox }}
+          BH_RUNNER_DESKBOX: ${{ inputs.bh-runner-deskbox }}
+          BH_RUNNER_LOUDBOX: ${{ inputs.bh-runner-loudbox }}
+          BH_RUNNER_P300: ${{ inputs.bh-runner-p300 }}
+          BH_RUNNER_QB_GE: ${{ inputs.bh-runner-qb-ge }}
         run: |
           runner_items=()
 
           # Check which runner labels should be included
-          if [[ "${{ inputs.bh-runner-llmbox }}" == "true" ]]; then
+          if [[ "$BH_RUNNER_LLMBOX" == "true" ]]; then
             runner_items+=('{"name":"LLMBox unit tests","runner-label":"BH-LLMBox"}')
           fi
 
-          if [[ "${{ inputs.bh-runner-deskbox }}" == "true" ]]; then
+          if [[ "$BH_RUNNER_DESKBOX" == "true" ]]; then
             runner_items+=('{"name":"DeskBox unit tests","runner-label":"BH-DeskBox"}')
           fi
 
-          if [[ "${{ inputs.bh-runner-loudbox }}" == "true" ]]; then
+          if [[ "$BH_RUNNER_LOUDBOX" == "true" ]]; then
             runner_items+=('{"name":"LoudBox unit tests","runner-label":"BH-LoudBox"}')
           fi
 
-          if [[ "${{ inputs.bh-runner-p300 }}" == "true" ]]; then
+          if [[ "$BH_RUNNER_P300" == "true" ]]; then
             runner_items+=('{"name":"P300 unit tests","runner-label":"P300-viommu"}')
           fi
 
-          if [[ "${{ inputs.bh-runner-qb-ge }}" == "true" ]]; then
+          if [[ "$BH_RUNNER_QB_GE" == "true" ]]; then
             runner_items+=('{"name":"QuietBox Global Edition unit tests","runner-label":"BH-QB-GE"}')
           fi
 
@@ -298,14 +307,15 @@ jobs:
           echo "matrix=$matrix_json" >> $GITHUB_OUTPUT
           echo "Generated runner matrix: $matrix_json"
   bh-multi-card-unit-tests:
-    if: ${{ inputs.run-bh-multi-card-unit-tests }}
+    if: inputs.run-bh-multi-card-unit-tests
     needs: generate-bh-matrix
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
       fail-fast: false
       matrix:
-        runner-group: ${{ fromJson(needs.generate-bh-matrix.outputs.runner-matrix) }}
+        runner-group: ${{ fromJson(needs.generate-bh-matrix.outputs.runner-matrix)
+          }}
         test-group:
           - name: fabric 1D unit tests
             cmd: |
@@ -329,7 +339,9 @@ jobs:
             cmd: ./build/test/tt_metal/tt_fabric/test_system_health
             timeout: 15
           - name: fabric stability nightly tests
-            cmd: TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ./tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_short_running.yaml
+            cmd: TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric
+              --test_config
+              ./tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_stability_short_running.yaml
             timeout: 30
           - name: ccl nightly tests
             cmd: pytest tests/ttnn/unit_tests/operations/ccl/blackhole_CI/box/nightly
@@ -340,7 +352,8 @@ jobs:
               TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_sanity_at_least_2x2_mesh.yaml
               TT_FABRIC_PROFILE_RX_CH_FWD=1 TT_METAL_CLEAR_L1=1 ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_code_profiling.yaml
             timeout: 15
-    name: Blackhole ${{ matrix.runner-group.runner-label }} ${{ matrix.test-group.name }}
+    name: Blackhole ${{ matrix.runner-group.runner-label }} ${{ matrix.test-group.name
+      }}
     runs-on:
       - in-service
       - arch-blackhole
@@ -356,15 +369,16 @@ jobs:
         GTEST_OUTPUT: xml:/work/generated/test_reports/
       volumes:
         - ${{ github.workspace }}/docker-job:/work
-        - ${{ (!contains(matrix.runner-group.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
-      options: "--device /dev/tenstorrent"
+        - ${{ (!contains(matrix.runner-group.runner-label, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G')
+          || '/no_hugepages' }}
+      options: --device /dev/tenstorrent
     defaults:
       run:
         shell: bash
         working-directory: /work
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -380,26 +394,37 @@ jobs:
           runner-label: ${{ matrix.runner-group.runner-label }}
       - name: ${{ matrix.test-group.name }} tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
+          TEST_GROUP_NAME: ${{ matrix.test-group.name }}
+          RUNNER_LABEL: ${{ matrix.runner-group.runner-label }}
         run: |
-          if [[ "${{ matrix.test-group.name }}" == "fabric system health tests" && "${{ matrix.runner-group.runner-label }}" == "BH-DeskBox" ]]; then
-            ${{ matrix.test-group.cmd }} --min-connections 4
+          # Write command to script file to safely handle quotes and special characters
+          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SCRIPT_EOF
+          if [[ "$TEST_GROUP_NAME" == "fabric system health tests" && "$RUNNER_LABEL" == "BH-DeskBox" ]]; then
+            printf '%s --min-connections 4\n' "$TEST_CMD" >> /tmp/test_cmd.sh
           else
-            ${{ matrix.test-group.cmd }}
+            printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
           fi
+          chmod +x /tmp/test_cmd.sh
+          bash /tmp/test_cmd.sh
       - name: Print tt-smi data on failure
-        if: ${{ failure() }}
+        if: failure()
         run: |
           tt-smi -s
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
+        if: failure()
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U0883RN6CRE # William Ly
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         with:
-          prefix: "test_reports_"
+          prefix: test_reports_
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
-        if: ${{ failure() }}
+        if: failure()

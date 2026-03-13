@@ -1,11 +1,11 @@
 name: DeepSeek V3 Multi-Host Tests
 on:
   schedule:
-    - cron: '0 4 * * *'  # 11pm EST (4am UTC)
+    - cron: "0 4 * * *" # 11pm EST (4am UTC)
   workflow_dispatch:
     inputs:
       setup:
-        description: 'Galaxy setup to test'
+        description: "Galaxy setup to test"
         required: true
         type: choice
         default: both
@@ -14,32 +14,32 @@ on:
           - quad
           - both
       deepseekv3_unit_tests:
-        description: 'Run DeepSeek V3 unit tests'
+        description: "Run DeepSeek V3 unit tests"
         required: false
         default: false
         type: boolean
       deepseekv3_module_tests:
-        description: 'Run DeepSeek V3 module tests'
+        description: "Run DeepSeek V3 module tests"
         required: false
         default: false
         type: boolean
       teacher_forced:
-        description: 'Run teacher forced accuracy test'
+        description: "Run teacher forced accuracy test"
         required: false
         default: false
         type: boolean
       demo:
-        description: 'Run demo test'
+        description: "Run demo test"
         required: false
         default: false
         type: boolean
       demo_stress:
-        description: 'Run demo stress test'
+        description: "Run demo stress test"
         required: false
         default: false
         type: boolean
       recalculate_weights_cache:
-        description: 'Recalculate weights cache in a new directory'
+        description: "Recalculate weights cache in a new directory"
         required: false
         type: choice
         default: "No"
@@ -47,10 +47,10 @@ on:
           - "No"
           - "Yes"
       new_cache_dir:
-        description: 'New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recalculate_weights_cache is Yes.'
+        description: "New cache subdirectory name (under DeepSeek-R1-0528-Cache/). Required when recalculate_weights_cache is Yes."
         required: false
         type: string
-        default: ''
+        default: ""
       platform:
         required: false
         type: choice
@@ -83,7 +83,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
@@ -91,7 +92,7 @@ jobs:
       build-wheel: true
 
   deepseekv3-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.deepseekv3_unit_tests || inputs.deepseekv3_module_tests || inputs.teacher_forced || inputs.demo || inputs.demo_stress }}
+    if: github.event_name == 'schedule' || inputs.deepseekv3_unit_tests || inputs.deepseekv3_module_tests || inputs.teacher_forced || inputs.demo || inputs.demo_stress
     runs-on:
       - multi-host-glx-4x
       - arch-wormhole_b0
@@ -100,47 +101,53 @@ jobs:
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: ⬇️ Download Build
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       - name: Extract files
         run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: Capture runner's home directory
         id: capture-home
-        run: echo "home=${HOME}" >> $GITHUB_OUTPUT
+        run: |
+          source .github/scripts/security/input-validation.sh
+          set_github_output "home" "${HOME}"
 
       - name: Prepare custom weights cache directory
         id: cache-config
+        env:
+          RECALCULATE_CACHE: ${{ inputs.recalculate_weights_cache }}
+          INPUT_CACHE_DIR: ${{ inputs.new_cache_dir }}
         run: |
+          source .github/scripts/security/input-validation.sh
           CACHE_BASE="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache"
-          if [[ "${{ inputs.recalculate_weights_cache }}" == "Yes" ]]; then
-            if [[ -z "${{ inputs.new_cache_dir }}" ]]; then
-              echo "::error::recalculate_weights_cache is Yes but new_cache_dir is empty. Please provide a cache directory name."
+          if [[ "$RECALCULATE_CACHE" == "Yes" ]]; then
+            if [[ -z "${INPUT_CACHE_DIR}" ]]; then
+              validation_error "recalculate_weights_cache is Yes but new_cache_dir is empty. Please provide a cache directory name."
               exit 1
             fi
-            DIR_NAME="${{ inputs.new_cache_dir }}"
+            DIR_NAME="${INPUT_CACHE_DIR}"
             if [[ "${DIR_NAME}" =~ [/[:space:][:cntrl:]] || "${DIR_NAME}" == "." || "${DIR_NAME}" == ".." ]]; then
-              echo "::error::new_cache_dir contains invalid characters (slashes, spaces, control chars) or is '.'/'..'"
+              validation_error "new_cache_dir contains invalid characters (slashes, spaces, control chars) or is '.'/'..'"
               exit 1
             fi
             if [[ "${DIR_NAME}" == "CI" ]]; then
-              echo "::error::new_cache_dir cannot be 'CI' — this would overwrite the production cache."
+              validation_error "new_cache_dir cannot be 'CI' — this would overwrite the production cache."
               exit 1
             fi
             NEW_DIR="${CACHE_BASE}/${DIR_NAME}"
             RESOLVED=$(realpath -m "${NEW_DIR}")
             if [[ "${RESOLVED}" != "${CACHE_BASE}/"* || "${RESOLVED}" == "${CACHE_BASE}/CI" ]]; then
-              echo "::error::new_cache_dir resolves outside the allowed cache base or to the CI directory."
+              validation_error "new_cache_dir resolves outside the allowed cache base or to the CI directory."
               exit 1
             fi
             echo "Creating new cache directory: ${NEW_DIR}"
@@ -149,14 +156,14 @@ jobs:
             rm -rf "${NEW_DIR}/test_io_cache"
             cp -r "${CACHE_BASE}/CI/test_io_cache" "${NEW_DIR}/test_io_cache"
             chmod -R a+rwX "${NEW_DIR}"
-            echo "cache_override=${NEW_DIR}" >> $GITHUB_OUTPUT
+            set_github_output "cache_override" "${NEW_DIR}"
           else
-            echo "cache_override=" >> $GITHUB_OUTPUT
+            set_github_output "cache_override" ""
           fi
 
       # ── DeepSeek V3 unit tests ──────────────────────────────────────────
       - name: Run dual DeepSeek V3 unit tests
-        if: ${{ inputs.deepseekv3_unit_tests && (inputs.setup == 'dual' || inputs.setup == 'both') }}
+        if: inputs.deepseekv3_unit_tests && (inputs.setup == 'dual' || inputs.setup == 'both')
         uses: ./.github/actions/docker-run
         timeout-minutes: 60
         with:
@@ -176,11 +183,13 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            deactivate 2>/dev/null || true
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_deepseekv3_unit_tests
 
       - name: Run quad DeepSeek V3 unit tests
-        if: ${{ inputs.deepseekv3_unit_tests && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: inputs.deepseekv3_unit_tests && (inputs.setup == 'quad' || inputs.setup == 'both')
         uses: ./.github/actions/docker-run
         timeout-minutes: 60
         with:
@@ -200,12 +209,14 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            deactivate 2>/dev/null || true
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_deepseekv3_unit_tests
 
       # ── DeepSeek V3 module tests ────────────────────────────────────────
       - name: Run dual DeepSeek V3 module tests
-        if: ${{ (inputs.deepseekv3_module_tests && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+        if: (inputs.deepseekv3_module_tests && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule'
         uses: ./.github/actions/docker-run
         timeout-minutes: 150
         with:
@@ -225,11 +236,13 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            deactivate 2>/dev/null || true
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_deepseekv3_module_tests
 
       - name: Run quad DeepSeek V3 module tests
-        if: ${{ (inputs.deepseekv3_module_tests && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+        if: (inputs.deepseekv3_module_tests && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule'
         uses: ./.github/actions/docker-run
         timeout-minutes: 150
         with:
@@ -249,12 +262,14 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            deactivate 2>/dev/null || true
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_deepseekv3_module_tests
 
       # ── Teacher forced accuracy tests ───────────────────────────────────
       - name: Run dual teacher forced accuracy test
-        if: ${{ (inputs.teacher_forced && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+        if: (inputs.teacher_forced && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule'
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
@@ -274,12 +289,14 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            deactivate 2>/dev/null || true
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_teacher_forced
 
       - name: Upload dual teacher forced accuracy artifacts
-        if: ${{ always() && ((inputs.teacher_forced && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
-        uses: actions/upload-artifact@v4
+        if: always() && ((inputs.teacher_forced && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule')
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: dual-teacher-forced-accuracy-${{ github.run_id }}
           path: |
@@ -288,7 +305,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run quad teacher forced accuracy test
-        if: ${{ (inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+        if: (inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule'
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
@@ -308,12 +325,14 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            deactivate 2>/dev/null || true
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_teacher_forced
 
       - name: Upload quad teacher forced accuracy artifacts
-        if: ${{ always() && ((inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
-        uses: actions/upload-artifact@v4
+        if: always() && ((inputs.teacher_forced && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule')
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: quad-teacher-forced-accuracy-${{ github.run_id }}
           path: |
@@ -323,7 +342,7 @@ jobs:
 
       # ── Demo tests ──────────────────────────────────────────────────────
       - name: Run dual demo test (256 prompts, 1 batch)
-        if: ${{ (inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+        if: (inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule'
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 400 || 40 }}
         with:
@@ -343,12 +362,14 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            deactivate 2>/dev/null || true
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo
 
       - name: Upload dual demo output artifacts
-        if: ${{ always() && ((inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
-        uses: actions/upload-artifact@v4
+        if: always() && ((inputs.demo && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule')
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: dual-demo-output-${{ github.run_id }}
           path: |
@@ -357,7 +378,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run quad demo test (512 prompts, 1 batch)
-        if: ${{ (inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+        if: (inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule'
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 420 || 60 }}
         with:
@@ -377,12 +398,14 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            deactivate 2>/dev/null || true
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo
 
       - name: Upload quad demo output artifacts
-        if: ${{ always() && ((inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
-        uses: actions/upload-artifact@v4
+        if: always() && ((inputs.demo && (inputs.setup == 'quad' || inputs.setup == 'both')) || github.event_name == 'schedule')
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: quad-demo-output-${{ github.run_id }}
           path: |
@@ -392,7 +415,7 @@ jobs:
 
       # ── Demo stress tests ───────────────────────────────────────────────
       - name: Run dual demo stress test (56 prompts, 20 batches)
-        if: ${{ (inputs.demo_stress && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule' }}
+        if: (inputs.demo_stress && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule'
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 480 || 120 }}
         with:
@@ -412,12 +435,14 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            deactivate 2>/dev/null || true
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh dual_demo_stress
 
       - name: Upload dual demo stress output artifacts
-        if: ${{ always() && ((inputs.demo_stress && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule') }}
-        uses: actions/upload-artifact@v4
+        if: always() && ((inputs.demo_stress && (inputs.setup == 'dual' || inputs.setup == 'both')) || github.event_name == 'schedule')
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: dual-demo-stress-output-${{ github.run_id }}
           path: |
@@ -426,7 +451,7 @@ jobs:
           if-no-files-found: warn
 
       - name: Run quad demo stress test (56 prompts, 20 batches)
-        if: ${{ inputs.demo_stress && (inputs.setup == 'quad' || inputs.setup == 'both') }}
+        if: inputs.demo_stress && (inputs.setup == 'quad' || inputs.setup == 'both')
         uses: ./.github/actions/docker-run
         timeout-minutes: ${{ inputs.recalculate_weights_cache == 'Yes' && 480 || 120 }}
         with:
@@ -446,12 +471,14 @@ jobs:
             --hostname=mpirun-host
           install_wheel: true
           run_args: |
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            deactivate 2>/dev/null || true
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh quad_demo_stress
 
       - name: Upload quad demo stress output artifacts
-        if: ${{ always() && inputs.demo_stress && (inputs.setup == 'quad' || inputs.setup == 'both') }}
-        uses: actions/upload-artifact@v4
+        if: always() && inputs.demo_stress && (inputs.setup == 'quad' || inputs.setup == 'both')
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: quad-demo-stress-output-${{ github.run_id }}
           path: |

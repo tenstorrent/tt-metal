@@ -4,12 +4,12 @@ on:
   workflow_dispatch:
     inputs:
       run_bh_multi_card_unit_tests:
-        description: 'Run Blackhole multi card unit tests'
+        description: "Run Blackhole multi card unit tests"
         required: false
         type: boolean
         default: true
       bh_multi_card_system_type:
-        description: 'Select system type to test (for multi-card unit tests only)'
+        description: "Select system type to test (for multi-card unit tests only)"
         required: false
         default: "all"
         type: choice
@@ -21,12 +21,12 @@ on:
           - P300 (1xP300)
           - QuietBox 2 (2xP300)
       run_grid_override_tests:
-        description: 'Run Blackhole grid override tests (20 cores/110 cores tests on 1xP150b)'
+        description: "Run Blackhole grid override tests (20 cores/110 cores tests on 1xP150b)"
         required: false
         type: boolean
         default: false
       run_bh_ttnn_stress_tests:
-        description: 'Run Blackhole ttnn stress tests'
+        description: "Run Blackhole ttnn stress tests"
         required: false
         type: boolean
         default: false
@@ -57,22 +57,22 @@ on:
   workflow_call:
     inputs:
       run_bh_multi_card_unit_tests:
-        description: 'Run Blackhole multi card unit tests'
+        description: "Run Blackhole multi card unit tests"
         required: false
         type: boolean
         default: true
       bh_multi_card_system_type:
-        description: 'Select system type to test (for multi-card unit tests only)'
+        description: "Select system type to test (for multi-card unit tests only)"
         required: false
         default: "all"
         type: string
       run_grid_override_tests:
-        description: 'Run Blackhole grid override tests (20 cores/110 cores tests on 1xP150b)'
+        description: "Run Blackhole grid override tests (20 cores/110 cores tests on 1xP150b)"
         required: false
         type: boolean
         default: false
       run_bh_ttnn_stress_tests:
-        description: 'Run Blackhole ttnn stress tests'
+        description: "Run Blackhole ttnn stress tests"
         required: false
         type: boolean
         default: false
@@ -92,14 +92,15 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 */8 * * *"  # Every 8 hours at 0:00, 8:00, and 16:00 UTC
+    - cron: "0 */8 * * *" # Every 8 hours at 0:00, 8:00, and 16:00 UTC
 
 jobs:
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
@@ -113,6 +114,9 @@ jobs:
     steps:
       - name: Set matrix
         id: set-matrix
+        env:
+          BH_MULTI_CARD_SYSTEM_TYPE: ${{ inputs.bh_multi_card_system_type || 'all' }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           all_systems='[
             {"name": "Quietbox (4xP150)", "runner-label": "BH-LLMBox", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "llmbox"},
@@ -122,8 +126,8 @@ jobs:
             {"name": "QuietBox 2 (2xP300)", "runner-label": "BH-QB-GE", "extra-tag": "pipeline-perf", "num_devices": 4, "key": "quietbox_2"}
           ]'
           # Schedule or "all": use all systems; otherwise filter by selected system name
-          selected_system_type="${{ inputs.bh_multi_card_system_type || 'all' }}"
-          if [[ "${{ github.event_name }}" == "schedule" || "$selected_system_type" == "all" ]]; then
+          selected_system_type="$BH_MULTI_CARD_SYSTEM_TYPE"
+          if [[ "$EVENT_NAME" == "schedule" || "$selected_system_type" == "all" ]]; then
             matrix_output=$(echo "{\"test-group\": $all_systems}" | jq -c .)
           else
             filtered=$(echo "$all_systems" | jq -c --arg name "$selected_system_type" '[.[] | select(.name == $name)]')
@@ -137,13 +141,18 @@ jobs:
           echo "Matrix output: $matrix_output"
           echo "matrix=$matrix_output" >> $GITHUB_OUTPUT
   blackhole-multi-card-unit-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_bh_multi_card_unit_tests }}
+    if: github.event_name == 'schedule' || inputs.run_bh_multi_card_unit_tests
     needs: [build-artifact, blackhole-multi-card-tests-matrix]
-    secrets: inherit
+    secrets:
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+      SFTP_FABRIC_LATENCY_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.blackhole-multi-card-tests-matrix.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.blackhole-multi-card-tests-matrix.outputs.matrix) }} # NOLINT(26) - matrix is built from hardcoded values in a prior job
     with:
       arch: blackhole
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -152,9 +161,14 @@ jobs:
       runner-label: ${{ matrix.test-group.runner-label }}
       fast-only: false
   blackhole-grid-override-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_grid_override_tests }}
+    if: github.event_name == 'schedule' || inputs.run_grid_override_tests
     needs: build-artifact
-    secrets: inherit
+    secrets:
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+      SFTP_FABRIC_LATENCY_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/blackhole-grid-override-tests-impl.yaml
     with:
       arch_name: blackhole
@@ -163,9 +177,10 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       runner-label: P150b
   blackhole-ttnn-stress-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.run_bh_ttnn_stress_tests }}
+    if: github.event_name == 'schedule' || inputs.run_bh_ttnn_stress_tests
     needs: build-artifact
-    secrets: inherit
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
     uses: ./.github/workflows/ttnn-stress-tests-impl.yaml
     strategy:
       fail-fast: false

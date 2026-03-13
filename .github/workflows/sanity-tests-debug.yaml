@@ -44,22 +44,26 @@ jobs:
       enable-watcher: ${{ steps.check.outputs.enable-watcher }}
     steps:
       - id: check
+        env:
+          ENABLE_WATCHER: ${{ inputs.enable-watcher }}
+          EVENT_SCHEDULE: ${{ github.event.schedule }}
         run: |
-          if [[ "${{ github.event.schedule }}" == "0 1 * * *" || "${{ inputs.enable-watcher }}" == "true" ]]; then
-            echo "enable-watcher=true" >> "$GITHUB_OUTPUT"
+          if [[ "${EVENT_SCHEDULE}" == "0 1 * * *" || "$ENABLE_WATCHER" == "true" ]]; then
+            printf '%s\n' "enable-watcher=true" >> "$GITHUB_OUTPUT"
           else
-            echo "enable-watcher=false" >> "$GITHUB_OUTPUT"
+            printf '%s\n' "enable-watcher=false" >> "$GITHUB_OUTPUT"
           fi
 
   # Shared build jobs - one per platform to enable artifact forwarding
   build-artifacts-ubuntu-22:
     name: Build artifacts (Ubuntu 22.04)
     needs: determine-watcher
-    if: ${{ github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests }}
+    if: github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: RelWithDebInfo
       build-wheel: true
@@ -72,11 +76,12 @@ jobs:
   build-artifacts-ubuntu-24:
     name: Build artifacts (Ubuntu 24.04)
     needs: determine-watcher
-    if: ${{ github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests }}
+    if: github.event_name == 'schedule' || inputs.run-wormhole-tests || inputs.run-blackhole-tests
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: RelWithDebInfo
       build-wheel: true
@@ -90,9 +95,16 @@ jobs:
   wormhole-nightly-debug-ubuntu-22:
     name: Sanity tests nightly debug run (Ubuntu 22.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: [determine-watcher, build-artifacts-ubuntu-22]
-    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests) }}
+    if: always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests)
     uses: ./.github/workflows/sanity-tests.yaml
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+      SFTP_FABRIC_LATENCY_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     with:
       build-type: RelWithDebInfo
       platform: "Ubuntu 22.04"
@@ -108,9 +120,12 @@ jobs:
   blackhole-nightly-debug-ubuntu-22:
     name: blackhole nightly debug run (Ubuntu 22.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: [determine-watcher, build-artifacts-ubuntu-22]
-    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-blackhole-tests) }}
+    if: always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-blackhole-tests)
     uses: ./.github/workflows/blackhole-post-commit.yaml
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     with:
       build-type: RelWithDebInfo
       platform: "Ubuntu 22.04"
@@ -125,9 +140,16 @@ jobs:
   wormhole-nightly-debug-ubuntu-24:
     name: Sanity tests nightly debug run (Ubuntu 24.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: [determine-watcher, build-artifacts-ubuntu-24]
-    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests) }}
+    if: always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-wormhole-tests)
     uses: ./.github/workflows/sanity-tests.yaml
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+      SFTP_FABRIC_LATENCY_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     with:
       build-type: RelWithDebInfo
       platform: "Ubuntu 24.04"
@@ -143,9 +165,12 @@ jobs:
   blackhole-nightly-debug-ubuntu-24:
     name: blackhole nightly debug run (Ubuntu 24.04${{ needs.determine-watcher.outputs.enable-watcher == 'true' && ' with watcher' || '' }})
     needs: [determine-watcher, build-artifacts-ubuntu-24]
-    if: ${{ always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-blackhole-tests) }}
+    if: always() && !cancelled() && (github.event_name == 'schedule' || inputs.run-blackhole-tests)
     uses: ./.github/workflows/blackhole-post-commit.yaml
-    secrets: inherit
+    secrets:
+      REDIS_CCACHE_PASSWORD: ${{ secrets.REDIS_CCACHE_PASSWORD }}
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     with:
       build-type: RelWithDebInfo
       platform: "Ubuntu 24.04"

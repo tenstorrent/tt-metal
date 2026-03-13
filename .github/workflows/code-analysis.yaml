@@ -48,6 +48,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+    secrets:
+      CLANGSA_RESULTS_PAT:
+        required: false
+      REDIS_PASSWORD:
+        required: false
   workflow_dispatch:
     inputs:
       architecture:
@@ -103,7 +108,7 @@ jobs:
       merge-base: ${{ steps.compute-outputs.outputs.merge-base }}
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -116,17 +121,22 @@ jobs:
 
       - id: compute-outputs
         shell: bash
+        env:
+          REF_NAME: ${{ github.ref_name }}
+          CLANG_TIDY_CONFIG_CHANGED: ${{ steps.find-changes.outputs.clang-tidy-config-changed }}
+          ANY_CODE_CHANGED: ${{ steps.find-changes.outputs.any-code-changed }}
+          CMAKE_CHANGED: ${{ steps.find-changes.outputs.cmake-changed }}
         run: |
-          if [[ "${{ github.ref_name }}" == "main" ]] || \
-             [[ "${{ steps.find-changes.outputs.clang-tidy-config-changed }}" == "true" ]]; then
+          if [[ "$REF_NAME" == "main" ]] || \
+             [[ "$CLANG_TIDY_CONFIG_CHANGED" == "true" ]]; then
             do_full_scan="true"
           else
             do_full_scan="false"
           fi
 
           if [[ "$do_full_scan" == "true" ]] || \
-             [[ "${{ steps.find-changes.outputs.any-code-changed }}" == "true" ]] || \
-             [[ "${{ steps.find-changes.outputs.cmake-changed }}" == "true" ]]; then
+             [[ "$ANY_CODE_CHANGED" == "true" ]] || \
+             [[ "$CMAKE_CHANGED" == "true" ]]; then
             do_scan="true"
           else
             do_scan="false"
@@ -134,8 +144,8 @@ jobs:
 
           merge_base=""
           if [[ "$do_full_scan" != "true" ]]; then
-            merge_base=$(git merge-base ${{ github.ref_name }} origin/main)
-            echo "Merge base between ${{ github.ref_name }} and main: $merge_base"
+            merge_base=$(git merge-base "$REF_NAME" origin/main)
+            echo "Merge base between $REF_NAME and main: $merge_base"
           fi
 
           echo "Do a scan: $do_scan"
@@ -146,11 +156,10 @@ jobs:
 
   # Only build docker images if pre-built tags are not provided
   build-docker-image:
-    if: ${{ always() && !failure() && !cancelled() && inputs.ci-build-docker-image == '' }}
+    if: always() && !failure() && !cancelled() && inputs.ci-build-docker-image == ''
     uses: ./.github/workflows/build-docker-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
@@ -158,13 +167,14 @@ jobs:
   # Full scan: single job that analyzes everything
   clang-tidy-full:
     name: 🤖 Clang Tidy (Full)
-    needs: [ build-docker-image, determine-scan-type ]
+    needs: [build-docker-image, determine-scan-type]
     if: >-
-      ${{ always() && !failure() && !cancelled() &&
-          needs.determine-scan-type.outputs.do-scan == 'true' &&
-          needs.determine-scan-type.outputs.do-full-scan == 'true' }}
+      always() && !failure() && !cancelled() &&
+      needs.determine-scan-type.outputs.do-scan == 'true' &&
+      needs.determine-scan-type.outputs.do-full-scan == 'true'
     uses: ./.github/workflows/clang-tidy-reusable.yaml
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
@@ -172,21 +182,22 @@ jobs:
         ${{ inputs.ci-build-docker-image ||
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
-      do-full-scan: 'true'
-      merge-base: ''
-      prereq-targets: ''
-      scan-targets: ''
+      do-full-scan: "true"
+      merge-base: ""
+      prereq-targets: ""
+      scan-targets: ""
 
   # Incremental scan: parallel jobs for different targets
   clang-tidy-incremental-tt-metal:
     name: 🤖 Clang Tidy (Metalium)
-    needs: [ build-docker-image, determine-scan-type ]
+    needs: [build-docker-image, determine-scan-type]
     if: >-
-      ${{ always() && !failure() && !cancelled() &&
-          needs.determine-scan-type.outputs.do-scan == 'true' &&
-          needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+      always() && !failure() && !cancelled() &&
+      needs.determine-scan-type.outputs.do-scan == 'true' &&
+      needs.determine-scan-type.outputs.do-full-scan != 'true'
     uses: ./.github/workflows/clang-tidy-reusable.yaml
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
@@ -194,20 +205,21 @@ jobs:
         ${{ inputs.ci-build-docker-image ||
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
-      do-full-scan: 'false'
+      do-full-scan: "false"
       merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
-      prereq-targets: ''
-      scan-targets: 'tt_metal'
+      prereq-targets: ""
+      scan-targets: "tt_metal"
 
   clang-tidy-incremental-ttnn:
     name: 🤖 Clang Tidy (TTNN)
-    needs: [ build-docker-image, determine-scan-type ]
+    needs: [build-docker-image, determine-scan-type]
     if: >-
-      ${{ always() && !failure() && !cancelled() &&
-          needs.determine-scan-type.outputs.do-scan == 'true' &&
-          needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+      always() && !failure() && !cancelled() &&
+      needs.determine-scan-type.outputs.do-scan == 'true' &&
+      needs.determine-scan-type.outputs.do-full-scan != 'true'
     uses: ./.github/workflows/clang-tidy-reusable.yaml
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
@@ -215,20 +227,21 @@ jobs:
         ${{ inputs.ci-build-docker-image ||
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
-      do-full-scan: 'false'
+      do-full-scan: "false"
       merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
-      prereq-targets: 'tt_metal'
-      scan-targets: 'ttnn'
+      prereq-targets: "tt_metal"
+      scan-targets: "ttnn"
 
   clang-tidy-incremental-catchall:
     name: 🤖 Clang Tidy (catchall)
-    needs: [ build-docker-image, determine-scan-type ]
+    needs: [build-docker-image, determine-scan-type]
     if: >-
-      ${{ always() && !failure() && !cancelled() &&
-          needs.determine-scan-type.outputs.do-scan == 'true' &&
-          needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+      always() && !failure() && !cancelled() &&
+      needs.determine-scan-type.outputs.do-scan == 'true' &&
+      needs.determine-scan-type.outputs.do-full-scan != 'true'
     uses: ./.github/workflows/clang-tidy-reusable.yaml
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
       architecture: ${{ inputs.architecture || 'amd64' }}
@@ -236,17 +249,17 @@ jobs:
         ${{ inputs.ci-build-docker-image ||
             needs.build-docker-image.outputs.ci-build-tag ||
             'docker-image-unresolved!' }}
-      do-full-scan: 'false'
+      do-full-scan: "false"
       merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
-      prereq-targets: 'tt_metal ttnn'
-      scan-targets: ''
+      prereq-targets: "tt_metal ttnn"
+      scan-targets: ""
 
   clang-static-analyzer:
     name: 🔬 Clang Static Analyzer
-    needs: [ build-docker-image ]
+    needs: [build-docker-image]
     if: >-
-      ${{ always() && !failure() && !cancelled() &&
-          (inputs.enable-static-analysis == true || github.event_name == 'schedule') }}
+      always() && !failure() && !cancelled() &&
+      (inputs.enable-static-analysis == true || github.event_name == 'schedule')
     timeout-minutes: 300
     runs-on: tt-ubuntu-2204-xlarge-stable
     container:
@@ -266,7 +279,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: Check out repo
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 1
           submodules: recursive
@@ -293,6 +306,8 @@ jobs:
 
       - name: 🔬 Analyze with CodeChecker
         id: codechecker
+        env:
+          DEBUG_FILE_FILTER: ${{ inputs.debug-file-filter }}
         run: |
           set -euo pipefail
 
@@ -301,20 +316,20 @@ jobs:
 
           echo "=== Starting CodeChecker analysis ==="
 
-          # Build command with optional file filter
-          ANALYZE_CMD="CodeChecker analyze \
-            /work/.build/clang-static-analyzer/compile_commands.json \
-            --output $OUTPUT_DIR \
-            --jobs $(nproc) \
-            --config /work/.codechecker.json"
+          ANALYZE_ARGS=(
+            /work/.build/clang-static-analyzer/compile_commands.json
+            --output "$OUTPUT_DIR"
+            --jobs "$(nproc)"
+            --config /work/.codechecker.json
+          )
 
-          if [ -n "${{ inputs.debug-file-filter }}" ]; then
-            echo "🐛 DEBUG MODE: Analyzing only: ${{ inputs.debug-file-filter }}"
-            ANALYZE_CMD="$ANALYZE_CMD --file '${{ inputs.debug-file-filter }}'"
+          if [ -n "$DEBUG_FILE_FILTER" ]; then
+            echo "🐛 DEBUG MODE: Analyzing only: $DEBUG_FILE_FILTER"
+            ANALYZE_ARGS+=(--file "$DEBUG_FILE_FILTER")
           fi
 
           # Run analysis (don't fail on analyzer crashes - common with static analysis)
-          eval "$ANALYZE_CMD" || echo "⚠️ Analysis completed with warnings"
+          CodeChecker analyze "${ANALYZE_ARGS[@]}" || echo "⚠️ Analysis completed with warnings"
 
           # Set output for downstream steps
           echo "analyze-output=$OUTPUT_DIR" >> "$GITHUB_OUTPUT"
@@ -324,10 +339,12 @@ jobs:
           echo "✅ Generated $PLIST_COUNT plist files"
 
       - name: Generate JSON and HTML reports from analysis results
+        env:
+          ANALYZE_OUTPUT: ${{ steps.codechecker.outputs.analyze-output }}
         run: |
           set -euo pipefail
 
-          OUTPUT_DIR="${{ steps.codechecker.outputs.analyze-output }}"
+          OUTPUT_DIR="$ANALYZE_OUTPUT"
           JSON_OUTPUT="/work/.build/codechecker_issues.json"
           HTML_OUTPUT="/work/.build/codechecker_html"
 
@@ -356,14 +373,14 @@ jobs:
           fi
 
       - name: Upload JSON report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         with:
           name: CodeChecker-JSON-Report
           path: /work/.build/codechecker_issues.json
 
       - name: Upload HTML report
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         if: always()
         timeout-minutes: 10
         with:
@@ -372,22 +389,21 @@ jobs:
 
   publish-clangsa-pages:
     name: 📄 Publish CSA HTML to GitHub Pages
-    needs: [ clang-static-analyzer ]
+    needs: [clang-static-analyzer]
     # Only publish on full scans (skip when debug-file-filter is used)
     if: >-
-      ${{ always() && needs.clang-static-analyzer.result == 'success' &&
-          inputs.debug-file-filter == '' }}
+      always() && needs.clang-static-analyzer.result == 'success' &&
+      inputs.debug-file-filter == ''
     runs-on: ubuntu-latest
-
     steps:
       - name: Download CodeChecker HTML report
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: CodeChecker-HTML-Report
           path: site
 
       - name: Download CodeChecker JSON report
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: CodeChecker-JSON-Report
           path: site
@@ -396,7 +412,7 @@ jobs:
         run: touch site/.nojekyll
 
       - name: Publish to tenstorrent/tt-metal-clangsa-results (gh-pages)
-        uses: peaceiris/actions-gh-pages@v4
+        uses: peaceiris/actions-gh-pages@4f9cc6602d3f66b9c108549d475ec49e8ef4d45e # v4.0.0
         with:
           personal_token: ${{ secrets.CLANGSA_RESULTS_PAT }}
           external_repository: tenstorrent/tt-metal-clangsa-results

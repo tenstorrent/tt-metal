@@ -1,5 +1,4 @@
 name: "[internal] Blackhole demo tests impl reorg"
-
 on:
   workflow_call:
     inputs:
@@ -18,26 +17,26 @@ on:
       weights-cache-mode:
         required: false
         type: string
-        default: "local-disk"
+        default: local-disk
       model:
         required: false
         type: string
-        default: "all"
+        default: all
       regenerate-ttnn-cache:
         required: false
         type: boolean
         default: false
-
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
     outputs:
-      matrix: ${{ steps.filter-matrix.outputs.matrix || steps.build-matrix.outputs.matrix }}
+      matrix: ${{ steps.filter-matrix.outputs.matrix || steps.build-matrix.outputs.matrix
+        }}
     env:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/blackhole_demo_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github
@@ -50,27 +49,29 @@ jobs:
           set -e
           echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
           python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
+            "$TESTS_YAML_PATH" \
             ./.github/time_budget.yaml \
             "demo"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
+        env:
+          INPUT_ENABLED_SKUS: ${{ inputs.enabled-skus }}
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
+            "$TESTS_YAML_PATH" \
+            "$INPUT_ENABLED_SKUS" \
             ./.github/sku_config.yaml
       - name: Filter test matrix by model
         id: filter-matrix
         if: inputs.model != 'all'
         env:
           MATRIX: ${{ steps.build-matrix.outputs.matrix }}
+          INPUT_MODEL: ${{ inputs.model }}
         run: |
-          filtered=$(echo "$MATRIX" | jq -c --arg model "${{ inputs.model }}" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
+          filtered=$(echo "$MATRIX" | jq -c --arg model "$INPUT_MODEL" '[.[] | select(.["model-name"] == $model or (.["model-name"] == null))]')
           echo "matrix<<EOF" >> $GITHUB_OUTPUT
           echo "$filtered" >> $GITHUB_OUTPUT
           echo "EOF" >> $GITHUB_OUTPUT
-
   blackhole-demo-tests:
     needs: load-test-matrix
     strategy:
@@ -89,19 +90,23 @@ jobs:
         HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
-        - ${{ (!contains(matrix.test-group.runs_on, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G') || '/no_hugepages' }}
-        # If weights-cache-mode is lfc, we don't need to mount the model cache volume because it will download via LFC (P300s in CIv1-style env on Proxmox with LFC endpoint)
-        # If weights-cache-mode is cloud-mlperf, we need to mount the model cache volume from /mnt/MLPerf/tt_dnn-models because it should be a Cloud machine
-        # If weights-cache-mode is local-disk, we need to mount the model cache volume from /localdev/blackhole_demos/huggingface_data because it's in CIv1 GH VLAN, so not on Cloud
-        - "${{ inputs.weights-cache-mode != 'lfc' && format('{0}:/localdev/blackhole_demos/huggingface_data{1}', inputs.weights-cache-mode == 'cloud-mlperf' && '/mnt/MLPerf/tt_dnn-models' || '/localdev/blackhole_demos/huggingface_data', inputs.regenerate-ttnn-cache == true && ':rw' || ':ro') || '/no_hf_cache' }}"
-      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
+        - ${{ (!contains(matrix.test-group.runs_on, 'viommu') && '/dev/hugepages-1G:/dev/hugepages-1G')
+          || '/no_hugepages' }}
+          # If weights-cache-mode is lfc, we don't need to mount the model cache volume because it will download via LFC (P300s in CIv1-style env on Proxmox with LFC endpoint)
+          # If weights-cache-mode is cloud-mlperf, we need to mount the model cache volume from /mnt/MLPerf/tt_dnn-models because it should be a Cloud machine
+          # If weights-cache-mode is local-disk, we need to mount the model cache volume from /localdev/blackhole_demos/huggingface_data because it's in CIv1 GH VLAN, so not on Cloud
+        - ${{ inputs.weights-cache-mode != 'lfc' && format('{0}:/localdev/blackhole_demos/huggingface_data{1}',
+          inputs.weights-cache-mode == 'cloud-mlperf' && '/mnt/MLPerf/tt_dnn-models'
+          || '/localdev/blackhole_demos/huggingface_data', inputs.regenerate-ttnn-cache
+          == true && ':rw' || ':ro') || '/no_hf_cache' }}
+      options: --device /dev/tenstorrent -e TT_GH_CI_INFRA
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -114,21 +119,23 @@ jobs:
         with:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
-      - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
-        # Skip this on single-card systems
-        if: ${{ matrix.test-group.sku != 'bh_p150' && matrix.test-group.sku != 'bh_p150_perf' }}
+      - uses:
+          tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
+          # Skip this on single-card systems
+        if: matrix.test-group.sku != 'bh_p150' && matrix.test-group.sku != 'bh_p150_perf'
         timeout-minutes: 10
         with:
-          runner-label: ${{ matrix.test-group.sku == 'bh_deskbox' && 'BH-DeskBox' || '' }}
+          runner-label: ${{ matrix.test-group.sku == 'bh_deskbox' && 'BH-DeskBox' ||
+            '' }}
       - name: Download Llama model weights from LFC
-        if: ${{ inputs.weights-cache-mode == 'lfc' && contains(matrix.test-group.name, 'llama') }}
+        if: inputs.weights-cache-mode == 'lfc' && contains(matrix.test-group.name, 'llama')
         timeout-minutes: 15
         run: |
           set -e
           mkdir -p /localdev/blackhole_demos/huggingface_data/meta-llama
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/meta-llama http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/meta-llama/Llama-3.1-8B-Instruct/
       - name: Download Flux.1-dev model weights from LFC
-        if: ${{ inputs.weights-cache-mode == 'lfc' && contains(matrix.test-group.name, 'Flux.1-dev') }}
+        if: inputs.weights-cache-mode == 'lfc' && contains(matrix.test-group.name, 'Flux.1-dev')
         timeout-minutes: 15
         run: |
           set -e
@@ -137,12 +144,21 @@ jobs:
           wget -r -nH -x --cut-dirs=5 -np --progress=dot:giga -R "index.html*" -P /localdev/blackhole_demos/huggingface_data/black-forest-labs http://yyz2-lfcache564.yyz2.tenstorrent.com/mldata/model_checkpoints/pytorch/huggingface/black-forest-labs/models--black-forest-labs--FLUX.1-dev/.no_exist/
       - name: Run demo regression tests
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
-          echo ${{ matrix.test-group.cmd }}
-          ${{ matrix.test-group.cmd }}
+          echo "$TEST_CMD"
+          # Write command to script file to safely handle quotes and special characters
+          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SCRIPT_EOF
+          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
+          chmod +x /tmp/test_cmd.sh
+          bash /tmp/test_cmd.sh
       - name: Save environment data
         id: save-environment-data
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         timeout-minutes: 15
         env:
           ARCH_NAME: ${{ matrix.test-group.arch }}
@@ -154,9 +170,8 @@ jobs:
             echo "::warning::Benchmark data directory 'generated/benchmark_data' does not exist"
             echo "has_benchmark_data=false" >> $GITHUB_OUTPUT
           fi
-
       - name: Upload benchmark data
-        if: ${{ !cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true' }}
+        if: "!cancelled() && steps.save-environment-data.conclusion == 'success' && steps.save-environment-data.outputs.has_benchmark_data == 'true'"
         uses: tenstorrent/tt-metal/.github/actions/upload-data-via-sftp@main
         with:
           ssh-private-key: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
@@ -164,14 +179,13 @@ jobs:
           username: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
           path: /work
-
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         with:
-          prefix: "test_reports_"
+          prefix: test_reports_
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
+        if: failure()
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}

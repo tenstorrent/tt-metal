@@ -23,6 +23,9 @@ on:
         type: string
         default: "in-service"
 
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   profiler-tests:
     strategy:
@@ -56,7 +59,7 @@ jobs:
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -68,8 +71,10 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Run profiler regression tests
         timeout-minutes: 35
+        env:
+          TEST_SCRIPT: ${{ inputs.test-script }}
         run: |
-          ${{ inputs.test-script }}
+          bash "$TEST_SCRIPT"
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:

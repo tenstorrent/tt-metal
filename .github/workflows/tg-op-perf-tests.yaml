@@ -32,7 +32,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       tracy: true
       build-wheel: true
@@ -41,7 +42,8 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   tg-op-perf-tests:
     needs: build-artifact-profiler
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     uses: ./.github/workflows/tg-op-perf-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact-profiler.outputs.dev-docker-image }}

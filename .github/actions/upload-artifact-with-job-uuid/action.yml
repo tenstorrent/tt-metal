@@ -16,19 +16,21 @@ runs:
     - name: Generate artifact name
       id: generate-artifact-name
       shell: bash
+      env:
+        PREFIX: ${{ inputs.prefix }}
       run: |
         uuid=$(uuidgen)
-        artifact_name="${{ inputs.prefix }}$uuid"
+        artifact_name="${PREFIX}$uuid"
         echo "[UPLOAD-ARTIFACT-UUID] $artifact_name"
         echo "artifact-name=$artifact_name" >> "$GITHUB_OUTPUT"
-    - uses: actions/upload-artifact@v4
+    - uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
       with:
         name: "${{ steps.generate-artifact-name.outputs.artifact-name }}"
         path: ${{ inputs.path }}
 
     - name: Upload triage debug bus signals
       if: ${{ env.TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH != '' }}
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
       with:
         name: "debug_bus_signals_${{ steps.generate-artifact-name.outputs.artifact-name }}"
         path: ${{ env.TT_TRIAGE_DUMP_RISC_DEBUG_SIGNALS_PATH }}

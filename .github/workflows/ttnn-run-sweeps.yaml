@@ -670,41 +670,63 @@ jobs:
     if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
     steps:
       - name: Display selected workflow options
+        env:
+          DISPLAY_SWEEP_NAME: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name || 'ALL SWEEPS (Nightly)') || (github.event_name == 'schedule' && (github.event.schedule == '30 4 * * 0,1,2,4,5' && 'ALL SWEEPS (Nightly)' || github.event.schedule == '0 4 * * 3,6' && 'ALL SWEEPS (Comprehensive)' || github.event.schedule == '0 3 * * *' && 'ALL SWEEPS (Model Traced)' || github.event.schedule == '0 2 * * *' && 'ALL SWEEPS (Lead Models)' || format('scheduled ({0})', github.event.schedule))) || 'ALL SWEEPS (Nightly)' }}
+          DISPLAY_SUITE_NAME: ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.suite_name || 'Not specified') || 'Not specified' }}
+          DISPLAY_SKIP_ON_TIMEOUT: ${{ github.event_name == 'schedule' && 'true' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false') || 'false') }}
+          DISPLAY_UPLOAD_RESULTS: ${{ github.event_name == 'schedule' && 'true' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.upload_results == 'true' && 'true' || 'false') || 'false') }}
+          DISPLAY_MEASURE_DEVICE_PERF: ${{ github.event_name == 'schedule' && 'true' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.measure_device_perf == 'true' && 'true' || 'false') || 'false') }}
+          DISPLAY_MEASURE_E2E_PERF: ${{ github.event_name == 'schedule' && 'false' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false') || 'false') }}
+          DISPLAY_MEASURE_MEMORY: ${{ github.event_name == 'schedule' && 'true' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.measure_memory == 'true' && 'true' || 'false') || 'false') }}
+          DISPLAY_ARCH: ${{ github.event.inputs.arch || 'wormhole_b0' }}
+          DISPLAY_RUNNER_LABEL: ${{ github.event.inputs['runner-label'] || 'N150' }}
+          DISPLAY_LOG_LEVEL: ${{ github.event.inputs['log-level'] || 'INFO' }}
+          DISPLAY_USE_DATABASE: ${{ github.event_name == 'schedule' && ((github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *') && 'true' || 'false') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.use_database == 'true' && 'true' || 'false') || 'false') }}
+          DISPLAY_MESH_SHAPE: ${{ github.event.inputs.mesh_shape || 'none' }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule || 'N/A' }}
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
+          GITHUB_ACTOR: ${{ github.actor }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
+          GITHUB_REF_NAME: ${{ github.ref_name }}
         run: |
           echo "::group::🔧 Workflow Configuration Options"
           echo "┌─────────────────────────────────────────────────────────────┐"
           echo "│                    TTNN Run Sweeps Configuration            │"
           echo "├─────────────────────────────────────────────────────────────┤"
-          echo "│ Trigger:              ${{ github.event_name }}"
-          echo "│ Sweep Name:           ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.sweep_name || 'ALL SWEEPS (Nightly)') || (github.event_name == 'schedule' && (github.event.schedule == '30 4 * * 0,1,2,4,5' && 'ALL SWEEPS (Nightly)' || github.event.schedule == '0 4 * * 3,6' && 'ALL SWEEPS (Comprehensive)' || github.event.schedule == '0 3 * * *' && 'ALL SWEEPS (Model Traced)' || github.event.schedule == '0 2 * * *' && 'ALL SWEEPS (Lead Models)' || format('scheduled ({0})', github.event.schedule))) || 'ALL SWEEPS (Nightly)' }}"
-          echo "│ Suite Name:           ${{ github.event_name == 'workflow_dispatch' && (github.event.inputs.suite_name || 'Not specified') || 'Not specified' }}"
-          echo "│ Skip on Timeout:      ${{ github.event_name == 'schedule' && 'true' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false') || 'false') }}"
-          echo "│ Upload Results:       ${{ github.event_name == 'schedule' && 'true' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.upload_results == 'true' && 'true' || 'false') || 'false') }}"
-          echo "│ Measure Device Perf:  ${{ github.event_name == 'schedule' && 'true' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.measure_device_perf == 'true' && 'true' || 'false') || 'false') }}"
-          echo "│ Measure E2E Perf:     ${{ github.event_name == 'schedule' && 'false' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false') || 'false') }}"
-          echo "│ Measure Memory:       ${{ github.event_name == 'schedule' && 'true' || (github.event_name == 'workflow_dispatch' && (github.event.inputs.measure_memory == 'true' && 'true' || 'false') || 'false') }}"
-          echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
-          echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N150' }}"
-          echo "│ Log Level:            ${{ github.event.inputs['log-level'] || 'INFO' }}"
-          echo "│ Use Database:         ${{ github.event_name == 'schedule' && ((github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *') && 'true' || 'false') || (github.event_name == 'workflow_dispatch' && (github.event.inputs.use_database == 'true' && 'true' || 'false') || 'false') }}"
-          echo "│ Mesh Shape Filter:    ${{ github.event.inputs.mesh_shape || 'none' }}"
-          echo "│ Cron (if scheduled): ${{ github.event.schedule || 'N/A' }}"
+          echo "│ Trigger:              $GITHUB_EVENT_NAME"
+          echo "│ Sweep Name:           $DISPLAY_SWEEP_NAME"
+          echo "│ Suite Name:           $DISPLAY_SUITE_NAME"
+          echo "│ Skip on Timeout:      $DISPLAY_SKIP_ON_TIMEOUT"
+          echo "│ Upload Results:       $DISPLAY_UPLOAD_RESULTS"
+          echo "│ Measure Device Perf:  $DISPLAY_MEASURE_DEVICE_PERF"
+          echo "│ Measure E2E Perf:     $DISPLAY_MEASURE_E2E_PERF"
+          echo "│ Measure Memory:       $DISPLAY_MEASURE_MEMORY"
+          echo "│ Architecture:         $DISPLAY_ARCH"
+          echo "│ Runner Label:         $DISPLAY_RUNNER_LABEL"
+          echo "│ Log Level:            $DISPLAY_LOG_LEVEL"
+          echo "│ Use Database:         $DISPLAY_USE_DATABASE"
+          echo "│ Mesh Shape Filter:    $DISPLAY_MESH_SHAPE"
+          echo "│ Cron (if scheduled): $GITHUB_EVENT_SCHEDULE"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
 
           echo "::group::📊 Workflow Context Information"
-          echo "Run ID: ${{ github.run_id }}"
-          echo "Run Number: ${{ github.run_number }}"
-          echo "Run Attempt: ${{ github.run_attempt }}"
-          echo "Triggered by: ${{ github.actor }}"
-          echo "Repository: ${{ github.repository }}"
-          echo "Branch/Ref: ${{ github.ref_name }}"
+          echo "Run ID: $GITHUB_RUN_ID"
+          echo "Run Number: $GITHUB_RUN_NUMBER"
+          echo "Run Attempt: $GITHUB_RUN_ATTEMPT"
+          echo "Triggered by: $GITHUB_ACTOR"
+          echo "Repository: $GITHUB_REPOSITORY"
+          echo "Branch/Ref: $GITHUB_REF_NAME"
           echo "::endgroup::"
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
@@ -720,12 +742,12 @@ jobs:
       github.event.schedule == '0 2 * * *'
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: '3.10'
+          python-version: "3.10"
 
       - name: Install dependencies
         run: |
@@ -750,7 +772,7 @@ jobs:
             ttnn_ops_v2
 
       - name: Upload master JSON artifacts
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: ttnn-operations-master-json
           path: |
@@ -801,7 +823,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -816,7 +838,7 @@ jobs:
           github.event.inputs.use_database == 'true' ||
           github.event.schedule == '0 3 * * *' ||
           github.event.schedule == '0 2 * * *'
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ttnn-operations-master-json
           path: docker-job/model_tracer/traced_operations/
@@ -829,8 +851,10 @@ jobs:
           github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' &&
           github.event.inputs.sweep_name != 'ALL SWEEPS (Lead Models)' &&
           matrix.generate_mode == 'all'
+        env:
+          SWEEP_NAME: ${{ github.event.inputs.sweep_name }}
         run: |
-          python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name ${{ github.event.inputs.sweep_name }} --tag ci-main
+          python3 tests/sweep_framework/sweeps_parameter_generator.py --module-name "$SWEEP_NAME" --tag ci-main
       - name: Run ttnn sweeps generation (all sweeps - model traced)
         if: |
           ((github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name == 'ALL SWEEPS (Model Traced)') ||
@@ -856,7 +880,7 @@ jobs:
           SKIP_MODULES_FLAG="--skip-modules ccl.generality.all_broadcast,ccl.generality.all_gather,ccl.generality.all_reduce,ccl.generality.all_to_all_combine,ccl.generality.all_to_all_dispatch,ccl.generality.all_to_all,ccl.generality.point_to_point,ccl.generality.reduce_scatter"
           python3 tests/sweep_framework/sweeps_parameter_generator.py --tag ci-main $SKIP_MODULES_FLAG
       - name: Upload sweep vectors
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-vectors-${{ matrix.generate_mode }}
           path: /work/tests/sweep_framework/vectors_export/
@@ -896,7 +920,7 @@ jobs:
     runs-on: tt-ubuntu-2204-n300-llmbox-viommu-stable
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -921,7 +945,7 @@ jobs:
           SKIP_MODULES_FLAG="--skip-modules $NON_CCL_MODULES"
           python3 tests/sweep_framework/sweeps_parameter_generator.py --tag ci-main $SKIP_MODULES_FLAG
       - name: Upload sweep vectors
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-vectors-ccl_only
           path: /work/tests/sweep_framework/vectors_export/
@@ -946,10 +970,14 @@ jobs:
       matrix: ${{ steps.set-matrix.outputs.matrix }}
     steps:
       - name: Show run identifiers
+        env:
+          GITHUB_RUN_ID: ${{ github.run_id }}
+          GITHUB_RUN_NUMBER: ${{ github.run_number }}
+          GITHUB_RUN_ATTEMPT: ${{ github.run_attempt }}
         run: |
-          echo "Run ID: ${{ github.run_id }}"
-          echo "Run Number: ${{ github.run_number }}"
-          echo "Run Attempt: ${{ github.run_attempt }}"
+          echo "Run ID: $GITHUB_RUN_ID"
+          echo "Run Number: $GITHUB_RUN_NUMBER"
+          echo "Run Attempt: $GITHUB_RUN_ATTEMPT"
       - uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
         with:
           pattern: sweeps-vectors-*
@@ -962,7 +990,7 @@ jobs:
           mkdir -p /tmp/vectors
           # Move all JSON files from subdirectories to /tmp/vectors
           find /tmp/vectors-download -name "*.json" -exec mv {} /tmp/vectors/ \;
-      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           clean: false
       - id: set-matrix
@@ -981,7 +1009,7 @@ jobs:
     needs:
       - ttnn-generate-sweeps
       - build-artifact
-    if: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Lead Models)' }}
+    if: github.event_name == 'workflow_dispatch' && github.event.inputs.sweep_name != 'ALL SWEEPS (Nightly)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Comprehensive)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Model Traced)' && github.event.inputs.sweep_name != 'ALL SWEEPS (Lead Models)'
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
@@ -1025,7 +1053,7 @@ jobs:
       }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -1036,21 +1064,32 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: 📋 Display single sweep configuration
+        env:
+          DISPLAY_SWEEP_NAME: ${{ github.event.inputs.sweep_name }}
+          DISPLAY_SUITE_NAME: ${{ github.event.inputs.suite_name || 'Default' }}
+          DISPLAY_ARCH: ${{ github.event.inputs.arch || 'wormhole_b0' }}
+          DISPLAY_RUNNER_LABEL: ${{ github.event.inputs['runner-label'] || 'N150' }}
+          DISPLAY_LOG_LEVEL: ${{ github.event.inputs['log-level'] || 'INFO' }}
+          DISPLAY_SKIP_ON_TIMEOUT: ${{ github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false' }}
+          DISPLAY_MEASURE_DEVICE_PERF: ${{ github.event.inputs.measure_device_perf == 'true' && 'true' || 'false' }}
+          DISPLAY_UPLOAD_RESULTS: ${{ github.event.inputs.upload_results == 'true' && 'true' || 'false' }}
+          DISPLAY_USE_DATABASE: ${{ github.event.inputs.use_database == 'true' && 'true' || 'false' }}
+          DISPLAY_MESH_SHAPE: ${{ github.event.inputs.mesh_shape || 'none' }}
         run: |
           echo "::group::🔧 Single Sweep Execution - Configuration"
           echo "┌─────────────────────────────────────────────────────────────┐"
           echo "│                 Single Sweep Configuration                  │"
           echo "├─────────────────────────────────────────────────────────────┤"
-          echo "│ Target Sweep:         ${{ github.event.inputs.sweep_name }}"
-          echo "│ Suite Name:           ${{ github.event.inputs.suite_name || 'Default' }}"
-          echo "│ Architecture:         ${{ github.event.inputs.arch || 'wormhole_b0' }}"
-          echo "│ Runner Label:         ${{ github.event.inputs['runner-label'] || 'N150' }}"
-          echo "│ Log Level:            ${{ github.event.inputs['log-level'] || 'INFO' }}"
-          echo "│ Skip on Timeout:      ${{ github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false' }}"
-          echo "│ Measure Device Perf:  ${{ github.event.inputs.measure_device_perf == 'true' && 'true' || 'false' }}"
-          echo "│ Upload Results:       ${{ github.event.inputs.upload_results == 'true' && 'true' || 'false' }}"
-          echo "│ Use Database:         ${{ github.event.inputs.use_database == 'true' && 'true' || 'false' }}"
-          echo "│ Mesh Shape Filter:    ${{ github.event.inputs.mesh_shape || 'none' }}"
+          echo "│ Target Sweep:         $DISPLAY_SWEEP_NAME"
+          echo "│ Suite Name:           $DISPLAY_SUITE_NAME"
+          echo "│ Architecture:         $DISPLAY_ARCH"
+          echo "│ Runner Label:         $DISPLAY_RUNNER_LABEL"
+          echo "│ Log Level:            $DISPLAY_LOG_LEVEL"
+          echo "│ Skip on Timeout:      $DISPLAY_SKIP_ON_TIMEOUT"
+          echo "│ Measure Device Perf:  $DISPLAY_MEASURE_DEVICE_PERF"
+          echo "│ Upload Results:       $DISPLAY_UPLOAD_RESULTS"
+          echo "│ Use Database:         $DISPLAY_USE_DATABASE"
+          echo "│ Mesh Shape Filter:    $DISPLAY_MESH_SHAPE"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
       - name: Download sweep vectors
@@ -1060,32 +1099,39 @@ jobs:
           path: /work/tests/sweep_framework/vectors_export
           merge-multiple: true
       - name: Run ttnn sweeps (single sweep) ${{ github.event.inputs.runner_label }} ${{ github.event.inputs.sweep_name }} ${{ github.event.inputs.suite_name }}
+        env:
+          SUITE_NAME_INPUT: ${{ github.event.inputs.suite_name }}
+          SKIP_ON_TIMEOUT_INPUT: ${{ github.event.inputs.skip_on_timeout }}
+          MEASURE_DEVICE_PERF_INPUT: ${{ github.event.inputs.measure_device_perf }}
+          MEASURE_MEMORY_INPUT: ${{ github.event.inputs.measure_memory }}
+          MEASURE_E2E_PERF_INPUT: ${{ github.event.inputs.measure_e2e_perf }}
+          SWEEP_NAME_INPUT: ${{ github.event.inputs.sweep_name }}
         run: |
-          SUITE_NAME="${{ github.event.inputs.suite_name }}"
+          SUITE_NAME="$SUITE_NAME_INPUT"
 
           SKIP_ON_TIMEOUT_FLAG=""
-          if [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
+          if [[ "$SKIP_ON_TIMEOUT_INPUT" == "true" ]]; then
             SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
           fi
 
           DEVICE_PERF_FLAG=""
-          if [[ "${{ github.event.inputs.measure_device_perf }}" == "true" ]]; then
+          if [[ "$MEASURE_DEVICE_PERF_INPUT" == "true" ]]; then
             DEVICE_PERF_FLAG="--device-perf"
           fi
 
           MEMORY_FLAG=""
-          if [[ "${{ github.event.inputs.measure_memory }}" == "true" ]]; then
+          if [[ "$MEASURE_MEMORY_INPUT" == "true" ]]; then
             MEMORY_FLAG="--measure-memory"
           fi
 
           E2E_PERF_FLAG=""
-          if [[ "${{ github.event.inputs.measure_e2e_perf }}" == "true" ]]; then
+          if [[ "$MEASURE_E2E_PERF_INPUT" == "true" ]]; then
             E2E_PERF_FLAG="--perf-with-cache"
           fi
 
           CMD=(
             python3 tests/sweep_framework/sweeps_runner.py
-            --module-name ${{ github.event.inputs.sweep_name }}
+            --module-name "$SWEEP_NAME_INPUT"
             --vector-source vectors_export
             --result-dest results_export
             --tag ci-main
@@ -1114,8 +1160,8 @@ jobs:
 
           "${CMD[@]}"
       - name: Upload sweep results
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-run-result
           path: /work/tests/sweep_framework/results_export/
@@ -1139,7 +1185,7 @@ jobs:
       fail-fast: false
       max-parallel: 20
       matrix:
-        include: ${{ fromJSON(needs.ttnn-compute-module-matrix.outputs.matrix).include }}
+        include: ${{ fromJSON(needs.ttnn-compute-module-matrix.outputs.matrix).include }} # NOLINT(26) - matrix is computed from trusted prior job outputs
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -1167,7 +1213,7 @@ jobs:
     runs-on: ${{ matrix.runs_on }}
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -1178,24 +1224,38 @@ jobs:
           build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
           wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       - name: 📋 Display parallel sweep configuration
+        env:
+          DISPLAY_SKIP_ON_TIMEOUT: ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false') }}
+          DISPLAY_MEASURE_DEVICE_PERF: ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.measure_device_perf == 'true' && 'true' || 'false') }}
+          DISPLAY_MEASURE_E2E_PERF: ${{ github.event_name != 'schedule' && github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false' }}
+          DISPLAY_MEASURE_MEMORY: ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.measure_memory == 'true' && 'true' || 'false') }}
+          DISPLAY_UPLOAD_RESULTS: ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.upload_results == 'true' && 'true' || 'false') }}
+          DISPLAY_USE_DATABASE: ${{ (github.event.inputs.use_database == 'true' || github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *') && 'true' || 'false' }}
+          DISPLAY_MESH_SHAPE: ${{ github.event.inputs.mesh_shape || 'none' }}
+          DISPLAY_RUNS_ON: ${{ toJSON(matrix.runs_on) }}
+          DISPLAY_TEST_GROUP_NAME: ${{ matrix.test_group_name }}
+          DISPLAY_BATCH: ${{ matrix.batch_display }}
+          DISPLAY_MODULE_SELECTOR: ${{ matrix.module_selector }}
+          DISPLAY_SUITE_OVERRIDE: ${{ matrix.suite_name || 'none' }}
+          DISPLAY_ARCH: ${{ matrix.arch }}
         run: |
           echo "::group::🔧 Parallel Sweeps Execution - Configuration"
           echo "┌─────────────────────────────────────────────────────────────┐"
           echo "│              Parallel Sweeps Configuration                  │"
           echo "├─────────────────────────────────────────────────────────────┤"
-          echo "│ Run Mode:             Parallel Execution (${{ matrix.test_group_name }})"
-          echo "│ Batch:                ${{ matrix.batch_display }}"
-          echo "│ Module Selector:      ${{ matrix.module_selector }}"
-          echo "│ Suite Override:       ${{ matrix.suite_name || 'none' }}"
-          echo "│ Architecture:         ${{ matrix.arch }}"
-          echo "│ Runner:               ${{ toJSON(matrix.runs_on) }}"
-          echo "│ Skip on Timeout:      ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false') }}"
-          echo "│ Measure Device Perf:  ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.measure_device_perf == 'true' && 'true' || 'false') }}"
-          echo "│ Measure E2E Perf:     ${{ github.event_name != 'schedule' && github.event.inputs.measure_e2e_perf == 'true' && 'true' || 'false' }}"
-          echo "│ Measure Memory:       ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.measure_memory == 'true' && 'true' || 'false') }}"
-          echo "│ Upload Results:       ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.upload_results == 'true' && 'true' || 'false') }}"
-          echo "│ Use Database:         ${{ (github.event.inputs.use_database == 'true' || github.event.schedule == '0 3 * * *' || github.event.schedule == '0 2 * * *') && 'true' || 'false' }}"
-          echo "│ Mesh Shape Filter:    ${{ github.event.inputs.mesh_shape || 'none' }}"
+          echo "│ Run Mode:             Parallel Execution ($DISPLAY_TEST_GROUP_NAME)"
+          echo "│ Batch:                $DISPLAY_BATCH"
+          echo "│ Module Selector:      $DISPLAY_MODULE_SELECTOR"
+          echo "│ Suite Override:       $DISPLAY_SUITE_OVERRIDE"
+          echo "│ Architecture:         $DISPLAY_ARCH"
+          echo "│ Runner:               $DISPLAY_RUNS_ON"
+          echo "│ Skip on Timeout:      $DISPLAY_SKIP_ON_TIMEOUT"
+          echo "│ Measure Device Perf:  $DISPLAY_MEASURE_DEVICE_PERF"
+          echo "│ Measure E2E Perf:     $DISPLAY_MEASURE_E2E_PERF"
+          echo "│ Measure Memory:       $DISPLAY_MEASURE_MEMORY"
+          echo "│ Upload Results:       $DISPLAY_UPLOAD_RESULTS"
+          echo "│ Use Database:         $DISPLAY_USE_DATABASE"
+          echo "│ Mesh Shape Filter:    $DISPLAY_MESH_SHAPE"
           echo "└─────────────────────────────────────────────────────────────┘"
           echo "::endgroup::"
       - name: Download sweep vectors
@@ -1205,39 +1265,45 @@ jobs:
           path: /work/tests/sweep_framework/vectors_export
           merge-multiple: true
       - name: Run ttnn sweeps (batch)
+        env:
+          SKIP_ON_TIMEOUT_INPUT: ${{ github.event.inputs.skip_on_timeout }}
+          MEASURE_DEVICE_PERF_INPUT: ${{ github.event.inputs.measure_device_perf }}
+          MEASURE_E2E_PERF_INPUT: ${{ github.event.inputs.measure_e2e_perf }}
+          MEASURE_MEMORY_INPUT: ${{ github.event.inputs.measure_memory }}
+          MODULE_SELECTOR: ${{ matrix.module_selector }}
+          SUITE_NAME: ${{ matrix.suite_name }}
+          GITHUB_EVENT_NAME: ${{ github.event_name }}
         run: |
-          MODULE_SELECTOR="${{ matrix.module_selector }}"
-          SUITE_NAME="${{ matrix.suite_name }}"
 
           # Set skip-on-timeout flag based on input (default to true for all scheduled runs)
           SKIP_ON_TIMEOUT_FLAG=""
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
             # For scheduled runs: skip on timeout for both nightly and comprehensive runs
             SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
-          elif [[ "${{ github.event.inputs.skip_on_timeout }}" == "true" ]]; then
+          elif [[ "$SKIP_ON_TIMEOUT_INPUT" == "true" ]]; then
             # For manual dispatch: use the input parameter
             SKIP_ON_TIMEOUT_FLAG="--skip-on-timeout"
           fi
 
           # Enable device performance for scheduled runs and when requested on manual dispatch
           DEVICE_PERF_FLAG=""
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
             DEVICE_PERF_FLAG="--device-perf"
-          elif [[ "${{ github.event.inputs.measure_device_perf }}" == "true" ]]; then
+          elif [[ "$MEASURE_DEVICE_PERF_INPUT" == "true" ]]; then
             DEVICE_PERF_FLAG="--device-perf"
           fi
 
           # Enable e2e performance for manual dispatch only (not scheduled runs)
           E2E_PERF_FLAG=""
-          if [[ "${{ github.event.inputs.measure_e2e_perf }}" == "true" ]]; then
+          if [[ "$MEASURE_E2E_PERF_INPUT" == "true" ]]; then
             E2E_PERF_FLAG="--perf-with-cache"
           fi
 
           # Enable memory measurement for scheduled runs and when requested on manual dispatch
           MEMORY_FLAG=""
-          if [[ "${{ github.event_name }}" == "schedule" ]]; then
+          if [[ "$GITHUB_EVENT_NAME" == "schedule" ]]; then
             MEMORY_FLAG="--measure-memory"
-          elif [[ "${{ github.event.inputs.measure_memory }}" == "true" ]]; then
+          elif [[ "$MEASURE_MEMORY_INPUT" == "true" ]]; then
             MEMORY_FLAG="--measure-memory"
           fi
 
@@ -1273,18 +1339,19 @@ jobs:
           "${CMD[@]}"
       - name: Compute artifact suffix
         shell: bash
+        env:
+          DISPLAY_LABEL: ${{ matrix.batch_display }}
+          SUITE_LABEL: ${{ matrix.suite_name }}
+          GROUP_LABEL: ${{ matrix.test_group_name }}
         run: |
-          DISPLAY_LABEL="${{ matrix.batch_display }}"
-          SUITE_LABEL="${{ matrix.suite_name }}"
-          GROUP_LABEL="${{ matrix.test_group_name }}"
           FINGERPRINT="$GROUP_LABEL|$DISPLAY_LABEL"
           if [[ -n "$SUITE_LABEL" ]]; then
             FINGERPRINT="$FINGERPRINT|$SUITE_LABEL"
           fi
           echo "BATCH_SUFFIX=$(echo -n "$FINGERPRINT" | sha256sum | cut -d' ' -f1 | cut -c1-12)" >> $GITHUB_ENV
       - name: Upload sweep results
-        if: ${{ always() }}
-        uses: actions/upload-artifact@v4
+        if: always()
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-results-${{ matrix.test_group_name }}-batch-${{ env.BATCH_SUFFIX }}
           path: /work/tests/sweep_framework/results_export/
@@ -1294,7 +1361,7 @@ jobs:
     needs:
       - build-artifact
       - ttnn-run-sweeps-parallel
-    if: ${{ !cancelled() && needs.ttnn-run-sweeps-parallel.result != 'skipped' && needs.ttnn-run-sweeps-parallel.result != 'cancelled' }}
+    if: "!cancelled() && needs.ttnn-run-sweeps-parallel.result != 'skipped' && needs.ttnn-run-sweeps-parallel.result != 'cancelled'"
     container:
       image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       env:
@@ -1312,7 +1379,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -1329,20 +1396,23 @@ jobs:
           path: /work/tests/sweep_framework/results_export
           merge-multiple: true
       - name: Homogenize sweep results
+        env:
+          SWEEP_NAME_INPUT: ${{ github.event.inputs.sweep_name }}
+          GITHUB_EVENT_SCHEDULE: ${{ github.event.schedule }}
         run: |
           # Determine run type based on schedule or input
           RUN_TYPE="nightly"
-          if [[ "${{ github.event.schedule }}" == "0 4 * * 3,6" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Comprehensive)" ]]; then
+          if [[ "$GITHUB_EVENT_SCHEDULE" == "0 4 * * 3,6" ]] || [[ "$SWEEP_NAME_INPUT" == "ALL SWEEPS (Comprehensive)" ]]; then
             RUN_TYPE="comprehensive"
-          elif [[ "${{ github.event.schedule }}" == "0 3 * * *" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Model Traced)" ]]; then
+          elif [[ "$GITHUB_EVENT_SCHEDULE" == "0 3 * * *" ]] || [[ "$SWEEP_NAME_INPUT" == "ALL SWEEPS (Model Traced)" ]]; then
             RUN_TYPE="model_traced"
-          elif [[ "${{ github.event.schedule }}" == "0 2 * * *" ]] || [[ "${{ github.event.inputs.sweep_name }}" == "ALL SWEEPS (Lead Models)" ]]; then
+          elif [[ "$GITHUB_EVENT_SCHEDULE" == "0 2 * * *" ]] || [[ "$SWEEP_NAME_INPUT" == "ALL SWEEPS (Lead Models)" ]]; then
             RUN_TYPE="lead_models"
           fi
           echo "RUN_TYPE=$RUN_TYPE" >> $GITHUB_ENV
           python3 tests/sweep_framework/run_collective_update.py --run-type "$RUN_TYPE"
       - name: Upload runs
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         with:
           name: sweeps-run-result
           path: /work/tests/sweep_framework/results_export/oprun_*.json
@@ -1365,11 +1435,11 @@ jobs:
     needs:
       - ttnn-homogenize-run-result
       - ttnn-run-single-sweep
-    if: ${{ !cancelled() && (needs.ttnn-homogenize-run-result.result != 'skipped' || needs.ttnn-run-single-sweep.result != 'skipped') && (needs.ttnn-homogenize-run-result.result != 'cancelled' || needs.ttnn-run-single-sweep.result != 'cancelled') && (github.event_name == 'schedule' || github.event.inputs.upload_results) }}
+    if: "!cancelled() && (needs.ttnn-homogenize-run-result.result != 'skipped' || needs.ttnn-run-single-sweep.result != 'skipped') && (needs.ttnn-homogenize-run-result.result != 'cancelled' || needs.ttnn-run-single-sweep.result != 'cancelled') && (github.event_name == 'schedule' || github.event.inputs.upload_results)"
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository (actions only)
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github/actions

@@ -1,12 +1,12 @@
 name: "[internal] ttnn unit tests impl"
-
 on:
   workflow_call:
     inputs:
       enabled-skus:
         required: true
         type: string
-        description: "Comma-separated SKUs (e.g. wh_n300_civ2). Maps to runs_on via .github/sku_config.yaml."
+        description: Comma-separated SKUs (e.g. wh_n300_civ2). Maps to runs_on via
+          .github/sku_config.yaml.
       docker-image:
         required: true
         type: string
@@ -18,12 +18,12 @@ on:
         type: boolean
         default: false
       enable-lightweight-kernel-asserts:
-        description: 'Enable lightweight kernel asserts'
+        description: Enable lightweight kernel asserts
         required: false
         type: boolean
         default: false
       enable-llk-asserts:
-        description: 'Enable LLK asserts'
+        description: Enable LLK asserts
         required: false
         type: boolean
         default: false
@@ -40,8 +40,13 @@ on:
         required: false
         type: number
         default: 0
-        description: "If > 0, skip time budget verification and use this as job timeout (e.g. 240 for APC watcher, 120 for BHPC watcher)."
-
+        description: If > 0, skip time budget verification and use this as job timeout
+          (e.g. 240 for APC watcher, 120 for BHPC watcher).
+    secrets:
+      REDIS_CCACHE_PASSWORD:
+        required: false
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT:
+        required: false
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
@@ -51,40 +56,41 @@ jobs:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/ttnn-tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
           sparse-checkout: |
             .github
             tests/pipeline_reorg
           sparse-checkout-cone-mode: true
-
       - name: Install dependencies
         run: |
           pip3 install PyYAML
-
       - name: Verify test timeouts against budget
-        if: ${{ inputs.timeout-minutes-override == 0 }}
+        if: inputs.timeout-minutes-override == 0
         run: |
           set -e
           python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
+            "${TESTS_YAML_PATH}" \
             ./.github/time_budget.yaml \
             "sanity"
-
       - name: Build test matrix based on enabled SKUs
         id: build-matrix
+        env:
+          ENABLED_SKUS: ${{ inputs.enabled-skus }}
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
+            "${TESTS_YAML_PATH}" \
+            "$ENABLED_SKUS" \
             ./.github/sku_config.yaml
-
       - name: Filter matrix by merge_gate
         id: filter-matrix
+        env:
+          MERGE_GATE_CALL: ${{ inputs.merge-gate-call }}
+          BUILD_MATRIX: ${{ steps.build-matrix.outputs.matrix }}
         run: |
-          merge_gate="${{ inputs.merge-gate-call }}"
-          matrix='${{ steps.build-matrix.outputs.matrix }}'
+          merge_gate="$MERGE_GATE_CALL"
+          matrix="$BUILD_MATRIX"
           filtered=$(echo "$matrix" | jq -c --argjson mg "$merge_gate" 'map(select((.merge_gate // false) == $mg))')
           len=$(echo "$filtered" | jq 'length')
           if [ "$len" -eq 0 ]; then
@@ -94,7 +100,6 @@ jobs:
           echo "matrix<<EOF" >> "$GITHUB_OUTPUT"
           echo "$filtered" >> "$GITHUB_OUTPUT"
           echo "EOF" >> "$GITHUB_OUTPUT"
-
   ttnn:
     needs: load-test-matrix
     strategy:
@@ -105,21 +110,22 @@ jobs:
     runs-on: ${{ matrix.test-group.runs_on }}
     environment: ${{ github.ref == 'refs/heads/main' && 'mainline' || '' }}
     container:
-      image: ${{ matrix.test-group.sku != 'bh_p100' && format('harbor.ci.tenstorrent.net/{0}', inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!'}}
+      image: ${{ matrix.test-group.sku != 'bh_p100' && format('harbor.ci.tenstorrent.net/{0}',
+        inputs.docker-image) || inputs.docker-image || 'docker-image-unresolved!'}}
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
       volumes:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
-      options: "--device /dev/tenstorrent -e TT_GH_CI_INFRA"
+      options: --device /dev/tenstorrent -e TT_GH_CI_INFRA
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           ref: ${{ inputs.ref || github.sha }}
           submodules: recursive
@@ -130,42 +136,50 @@ jobs:
         with:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
-          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts || false }}
+          enable-lightweight-kernel-asserts: ${{ inputs.enable-lightweight-kernel-asserts
+            || false }}
           enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
-          enable-kernel-ccache: true
-          # Kernel ccache uses separate Redis backend (REDIS_CCACHE_*) from build ccache (REDIS_*)
-          # This allows different retention policies for runtime JIT vs. C++ build artifacts
-          redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}|read-only=${{ vars.REDIS_CCACHE_IS_READONLY }}
+          enable-kernel-ccache:
+            true
+            # Kernel ccache uses separate Redis backend (REDIS_CCACHE_*) from build ccache (REDIS_*)
+            # This allows different retention policies for runtime JIT vs. C++ build artifacts
+          redis-ccache-storage: redis://${{ vars.REDIS_CCACHE_USER }}:${{ secrets.REDIS_CCACHE_PASSWORD
+            }}@${{ vars.REDIS_CCACHE_HOST }}:${{ vars.REDIS_CCACHE_PORT }}|read-only=${{
+            vars.REDIS_CCACHE_IS_READONLY }}
           auto-triage: ${{ !inputs.enable-watcher }}
-
       - name: Set ttnn fast runtime if exists in config
-        if: ${{ matrix.test-group.fast_runtime_mode_off }}
+        if: matrix.test-group.fast_runtime_mode_off
         run: |
           echo "TTNN_CONFIG_OVERRIDES={\"enable_fast_runtime_mode\": false}" >> $GITHUB_ENV
-
       - name: ${{ matrix.test-group.name }} tests
-        timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override || matrix.test-group.timeout }}
+        timeout-minutes: ${{ inputs.timeout-minutes-override > 0 && inputs.timeout-minutes-override
+          || matrix.test-group.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
-          ${{ matrix.test-group.cmd }}
-
+          # Write command to script file to safely handle quotes and special characters
+          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SCRIPT_EOF
+          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
+          chmod +x /tmp/test_cmd.sh
+          bash /tmp/test_cmd.sh
       - name: 📊 CCache Report
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         run: |
           echo "::group::CCache Statistics"
           ccache --show-stats || echo "ccache stats not available"
           echo "::endgroup::"
-
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
+        if: failure()
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: ${{ matrix.test-group.owner_id }}
-
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
-        if: ${{ !cancelled() }}
+        if: "!cancelled()"
         with:
-          prefix: "test_reports_"
-
+          prefix: test_reports_
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()

@@ -93,45 +93,61 @@ jobs:
     # Check if triggered by `workflow_run` with specific conclusion states,
     # or if it's triggered by `workflow_call` or `workflow_dispatch`
     if: >-
-      ${{ (github.event_name == 'workflow_run' &&
+      (github.event_name == 'workflow_run' &&
            (github.event.workflow_run.conclusion == 'success' ||
             github.event.workflow_run.conclusion == 'failure' ||
             github.event.workflow_run.conclusion == 'cancelled')) ||
           github.event_name == 'workflow_call' ||
-          github.event_name == 'workflow_dispatch' }}
+          github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github
             infra
           sparse-checkout-cone-mode: true
       - name: Output (safe) pipeline values
+        env:
+          RUN_ID: ${{ github.run_id }}
+          RUN_ATTEMPT: ${{ github.run_attempt }}
+          WORKFLOW: ${{ github.workflow }}
+          WORKFLOW_REF: ${{ github.workflow_ref }}
+          EVENT_NAME: ${{ github.event_name }}
+          SHA: ${{ github.sha }}
+          ACTOR: ${{ github.actor }}
+          TRIGGERING_ACTOR: ${{ github.triggering_actor }}
+          JOB_CONTAINER_IMAGE: ${{ job.container.image }}
         run: |
-          echo "pipeline_id (id / run #): ${{ github.run_id }}/${{ github.run_attempt }}"
+          echo "pipeline_id (id / run #): $RUN_ID/$RUN_ATTEMPT"
           echo "submissions_ts: "
           echo "start_ts: "
           echo "end_ts: "
-          echo "name: ${{ github.workflow }}, but rk recommended name w/out @: ${{ github.workflow_ref }}"
-          echo "trigger: ${{ github.event_name }}"
-          echo "sha: ${{ github.sha }}"
-          echo "(triggering) author/actor: ${{ github.actor }}"
-          echo "author/actor: ${{ github.triggering_actor }}"
+          echo "name: $WORKFLOW, but rk recommended name w/out @: $WORKFLOW_REF"
+          echo "trigger: $EVENT_NAME"
+          echo "sha: $SHA"
+          echo "(triggering) author/actor: $ACTOR"
+          echo "author/actor: $TRIGGERING_ACTOR"
           echo "orchestrator: github (Static)"
-          echo "docker_image: ${{ job.container.image }}"
+          echo "docker_image: $JOB_CONTAINER_IMAGE"
           echo "build duration is post-process"
       - name: Get workflow run_id attempt number to analyze
         id: get-run-id-and-attempt
         shell: bash
+        env:
+          INPUT_TEST_WORKFLOW_RUN_ID: ${{ inputs.test_workflow_run_id }}
+          INPUT_TEST_WORKFLOW_RUN_ATTEMPT: ${{ inputs.test_workflow_run_attempt }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }} # NOLINT(22) - only used to query run metadata for data collection, no artifact download
+          WORKFLOW_RUN_ATTEMPT: ${{ github.event.workflow_run.run_attempt }}
         run: |
-          event_name="${{ github.event_name }}"
+          event_name="$EVENT_NAME"
           if [[ "$event_name" == "workflow_dispatch" ]]; then
-            run_id="${{ inputs.test_workflow_run_id }}"
-            attempt_number="${{ inputs.test_workflow_run_attempt }}"
+            run_id="$INPUT_TEST_WORKFLOW_RUN_ID"
+            attempt_number="$INPUT_TEST_WORKFLOW_RUN_ATTEMPT"
           elif [[ "$event_name" == "workflow_run" ]]; then
-            run_id="${{ github.event.workflow_run.id }}"
-            attempt_number="${{ github.event.workflow_run.run_attempt }}"
+            run_id="$WORKFLOW_RUN_ID"
+            attempt_number="$WORKFLOW_RUN_ATTEMPT"
             [[ -z "$run_id" ]] && { echo "run_id is empty" ; exit 1; }
             [[ -z "$attempt_number" ]] && { echo "attempt_number is empty" ; exit 1; }
           else
@@ -153,23 +169,27 @@ jobs:
       - name: Output auxiliary values
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.get-run-id-and-attempt.outputs.run-id }}
+          ATTEMPT_NUMBER: ${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
         run: |
           echo "Sleeping for 60 seconds for github to fully sync the workflow run before calling the API"
           sleep 60
           echo "[Info] Workflow run attempt"
-          gh api /repos/tenstorrent/tt-metal/actions/runs/${{ steps.get-run-id-and-attempt.outputs.run-id }}/attempts/${{ steps.get-run-id-and-attempt.outputs.attempt-number }} | tee workflow.json
+          gh api /repos/tenstorrent/tt-metal/actions/runs/${RUN_ID}/attempts/${ATTEMPT_NUMBER} | tee workflow.json
       - name: Collect workflow artifact and job logs
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.get-run-id-and-attempt.outputs.run-id }}
+          ATTEMPT_NUMBER: ${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
         run: |
-          ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --workflow-run-id ${{ steps.get-run-id-and-attempt.outputs.run-id }} --attempt-number ${{ steps.get-run-id-and-attempt.outputs.attempt-number }}
+          ./infra/data_collection/github/download_cicd_logs_and_artifacts.sh --workflow-run-id "$RUN_ID" --attempt-number "$ATTEMPT_NUMBER"
           find generated/cicd/ -type f
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: '3.10'
-          cache: 'pip'
-          cache-dependency-path: 'infra/requirements-infra.txt'
+          python-version: "3.10"
+          cache: "pip"
+          cache-dependency-path: "infra/requirements-infra.txt"
       - name: Install infra dependencies
         run: pip install -r infra/requirements-infra.txt
       - name: Create JSON
@@ -180,15 +200,15 @@ jobs:
         run: ls -hal
       - name: Upload cicd data
         uses: ./.github/actions/upload-data-via-sftp
-        if: ${{ github.event_name == 'workflow_run' || inputs.upload_data }}
+        if: github.event_name == 'workflow_run' || inputs.upload_data
         with:
           ssh-private-key: ${{ secrets.SFTP_CICD_WRITER_KEY }}
           sftp-batchfile: .github/actions/upload-data-via-sftp/cicd_data_batchfile.txt
           username: ${{ secrets.SFTP_CICD_WRITER_USERNAME }}
           hostname: ${{ secrets.SFTP_CICD_WRITER_HOSTNAME }}
       - name: Upload workflow run data, even on failure
-        if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        if: "!cancelled()"
+        uses: actions/upload-artifact@bbbca2ddaa5d8feaa63e36b76fdaad77386f024f # v7.0.0
         timeout-minutes: 10
         with:
           name: workflow-run-data
@@ -199,7 +219,7 @@ jobs:
               workflow.json
               workflow_jobs.json
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
-        if: ${{ failure() }}
+        if: failure()
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
           owner: U0883RN6CRE # William Ly
@@ -207,25 +227,25 @@ jobs:
     # Check if triggered by `workflow_run` with specific conclusion states,
     # or if it's triggered by `workflow_call` or `workflow_dispatch`
     if: >-
-      ${{ (github.event_name == 'workflow_run' &&
+      (github.event_name == 'workflow_run' &&
            (github.event.workflow_run.conclusion == 'success' ||
             github.event.workflow_run.conclusion == 'failure' ||
             github.event.workflow_run.conclusion == 'cancelled')) ||
           github.event_name == 'workflow_call' ||
-          github.event_name == 'workflow_dispatch' }}
+          github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github
             infra
           sparse-checkout-cone-mode: true
-      - uses: actions/setup-python@v5.0.0
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
-          python-version: '3.10'
-          cache: 'pip'
-          cache-dependency-path: 'infra/requirements-infra.txt'
+          python-version: "3.10"
+          cache: "pip"
+          cache-dependency-path: "infra/requirements-infra.txt"
       - name: Install infra dependencies
         run: pip install -r infra/requirements-infra.txt
       - name: create dummy partial benchmark JSON

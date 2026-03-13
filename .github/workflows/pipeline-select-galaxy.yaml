@@ -24,7 +24,7 @@ on:
         type: boolean
         default: false
       galaxy-unit:
-        description: 'Unit tests: Select all, specific model, or disabled'
+        description: "Unit tests: Select all, specific model, or disabled"
         required: false
         type: choice
         options:
@@ -37,9 +37,9 @@ on:
           - prefetcher
           - distributed-ops
           - gpt-oss
-        default: 'disabled'
+        default: "disabled"
       galaxy-demo:
-        description: 'Demo tests: Select all, specific model, or disabled'
+        description: "Demo tests: Select all, specific model, or disabled"
         required: false
         type: choice
         options:
@@ -63,9 +63,9 @@ on:
           - qwen3_32b_long_context
           - deepseek_v3
           - qwenimage
-        default: 'disabled'
+        default: "disabled"
       galaxy-integration:
-        description: 'Integration tests: Select all, specific model, or disabled'
+        description: "Integration tests: Select all, specific model, or disabled"
         required: false
         type: choice
         options:
@@ -80,26 +80,26 @@ on:
           - flux1
           - motif
           - qwenimage
-        default: 'disabled'
+        default: "disabled"
       galaxy-perf:
-        description: 'Perf tests: Select all, specific model, or disabled'
+        description: "Perf tests: Select all, specific model, or disabled"
         required: false
         type: choice
         options:
           - disabled
           - all
-#          - cnn
-#          - llama70b
-#          - llama_unit_tests
-#          - llama70b_prefill
+          #          - cnn
+          #          - llama70b
+          #          - llama_unit_tests
+          #          - llama70b_prefill
           - sd35
           - flux1-dev
           - motif
-#          - sentence_bert
+          #          - sentence_bert
           - wan2-2
           - mochi
           - qwenimage
-        default: 'disabled'
+        default: "disabled"
       platform:
         required: false
         type: choice
@@ -135,66 +135,87 @@ jobs:
       run-demo: ${{ steps.logic.outputs.run-demo }}
       run-model-perf: ${{ steps.logic.outputs.run-model-perf }}
     steps:
+      - name: Checkout security scripts
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          sparse-checkout: .github/scripts/security
+          sparse-checkout-cone-mode: true
       - name: Determine test execution
         id: logic
         # Skip all but galaxy-quick if trigger-type is not manual
+        env:
+          INPUT_TRIGGER_TYPE: ${{ inputs.trigger_type }}
+          INPUT_GALAXY_QUICK: ${{ inputs.galaxy-quick }}
+          INPUT_GALAXY_UNIT: ${{ inputs.galaxy-unit }}
+          INPUT_GALAXY_INTEGRATION: ${{ inputs.galaxy-integration }}
+          INPUT_GALAXY_DEMO: ${{ inputs.galaxy-demo }}
+          INPUT_GALAXY_PERF: ${{ inputs.galaxy-perf }}
         run: |
-          case "${{ inputs.trigger_type }}" in
+          source .github/scripts/security/input-validation.sh
+          validate_no_newlines \
+              "INPUT_TRIGGER_TYPE" "$INPUT_TRIGGER_TYPE" \
+              "INPUT_GALAXY_QUICK" "$INPUT_GALAXY_QUICK" \
+              "INPUT_GALAXY_UNIT" "$INPUT_GALAXY_UNIT" \
+              "INPUT_GALAXY_INTEGRATION" "$INPUT_GALAXY_INTEGRATION" \
+              "INPUT_GALAXY_DEMO" "$INPUT_GALAXY_DEMO" \
+              "INPUT_GALAXY_PERF" "$INPUT_GALAXY_PERF"
+          case "$INPUT_TRIGGER_TYPE" in
             "manual")
-              echo "run-quick=${{ inputs.galaxy-quick }}" >> $GITHUB_OUTPUT
-              echo "run-unit=${{ inputs.galaxy-unit != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-integration=${{ inputs.galaxy-integration != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-demo=${{ inputs.galaxy-demo != 'disabled' }}" >> $GITHUB_OUTPUT
-              echo "run-model-perf=${{ inputs.galaxy-perf != 'disabled' }}" >> $GITHUB_OUTPUT
+              printf '%s\n' "run-quick=${INPUT_GALAXY_QUICK}" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-unit=$([[ "$INPUT_GALAXY_UNIT" != "disabled" ]] && echo "true" || echo "false")" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-integration=$([[ "$INPUT_GALAXY_INTEGRATION" != "disabled" ]] && echo "true" || echo "false")" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-demo=$([[ "$INPUT_GALAXY_DEMO" != "disabled" ]] && echo "true" || echo "false")" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-model-perf=$([[ "$INPUT_GALAXY_PERF" != "disabled" ]] && echo "true" || echo "false")" >> "${GITHUB_OUTPUT}"
               ;;
             "models-mandatory")
-              echo "run-quick=true" >> $GITHUB_OUTPUT
-              echo "run-unit=false" >> $GITHUB_OUTPUT
-              echo "run-integration=false" >> $GITHUB_OUTPUT
-              echo "run-demo=false" >> $GITHUB_OUTPUT
-              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              printf '%s\n' "run-quick=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-unit=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-integration=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-demo=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-model-perf=false" >> "${GITHUB_OUTPUT}"
               ;;
             "models-extended")
-              echo "run-quick=true" >> $GITHUB_OUTPUT
-              echo "run-unit=false" >> $GITHUB_OUTPUT
-              echo "run-integration=false" >> $GITHUB_OUTPUT
-              echo "run-demo=true" >> $GITHUB_OUTPUT
-              echo "run-model-perf=true" >> $GITHUB_OUTPUT
+              printf '%s\n' "run-quick=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-unit=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-integration=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-demo=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-model-perf=true" >> "${GITHUB_OUTPUT}"
               ;;
             "op-pr")
-              echo "run-quick=false" >> $GITHUB_OUTPUT
-              echo "run-unit=true" >> $GITHUB_OUTPUT
-              echo "run-integration=false" >> $GITHUB_OUTPUT
-              echo "run-demo=false" >> $GITHUB_OUTPUT
-              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              printf '%s\n' "run-quick=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-unit=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-integration=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-demo=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-model-perf=false" >> "${GITHUB_OUTPUT}"
               ;;
             "nightly")
-              echo "run-quick=false" >> $GITHUB_OUTPUT
-              echo "run-unit=true" >> $GITHUB_OUTPUT
-              echo "run-integration=true" >> $GITHUB_OUTPUT
-              echo "run-demo=true" >> $GITHUB_OUTPUT
-              echo "run-model-perf=true" >> $GITHUB_OUTPUT
+              printf '%s\n' "run-quick=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-unit=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-integration=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-demo=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-model-perf=true" >> "${GITHUB_OUTPUT}"
               ;;
             "hw-self-test")
-              echo "run-quick=false" >> $GITHUB_OUTPUT
-              echo "run-unit=false" >> $GITHUB_OUTPUT
-              echo "run-integration=true" >> $GITHUB_OUTPUT
-              echo "run-demo=false" >> $GITHUB_OUTPUT
-              echo "run-model-perf=true" >> $GITHUB_OUTPUT
+              printf '%s\n' "run-quick=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-unit=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-integration=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-demo=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-model-perf=true" >> "${GITHUB_OUTPUT}"
               ;;
             *)
-              echo "run-quick=true" >> $GITHUB_OUTPUT
-              echo "run-unit=false" >> $GITHUB_OUTPUT
-              echo "run-integration=false" >> $GITHUB_OUTPUT
-              echo "run-demo=false" >> $GITHUB_OUTPUT
-              echo "run-model-perf=false" >> $GITHUB_OUTPUT
+              printf '%s\n' "run-quick=true" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-unit=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-integration=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-demo=false" >> "${GITHUB_OUTPUT}"
+              printf '%s\n' "run-model-perf=false" >> "${GITHUB_OUTPUT}"
               ;;
           esac
   build-artifact:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     needs: determine-tests
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -206,7 +227,8 @@ jobs:
   galaxy-quick:
     if: ${{ needs.determine-tests.outputs.run-quick == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     uses: ./.github/workflows/galaxy-quick-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
@@ -216,7 +238,12 @@ jobs:
   galaxy-unit-tests:
     if: ${{ needs.determine-tests.outputs.run-unit == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_FABRIC_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_BENCHMARK_WRITER_USERNAME }}
+      SFTP_FABRIC_LATENCY_WRITER_USERNAME: ${{ secrets.SFTP_FABRIC_LATENCY_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/galaxy-unit-tests-impl.yaml
     with:
       extra-tag: ${{ inputs.extra-tag }}
@@ -224,11 +251,12 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       model: ${{ inputs.trigger_type == 'manual' && inputs.galaxy-unit || 'all' }}
-      topology: 'topology-6u'
+      topology: "topology-6u"
   galaxy-integration-tests:
     if: ${{ needs.determine-tests.outputs.run-integration == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/galaxy-integration-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -239,7 +267,8 @@ jobs:
   galaxy-demo-tests:
     if: ${{ needs.determine-tests.outputs.run-demo == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/galaxy-demo-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
@@ -250,7 +279,11 @@ jobs:
   galaxy-model-perf-tests:
     if: ${{ needs.determine-tests.outputs.run-model-perf == 'true' }}
     needs: [build-artifact, determine-tests]
-    secrets: inherit
+    secrets:
+      SFTP_BENCHMARK_WRITER_HOSTNAME: ${{ secrets.SFTP_BENCHMARK_WRITER_HOSTNAME }}
+      SFTP_BENCHMARK_WRITER_KEY: ${{ secrets.SFTP_BENCHMARK_WRITER_KEY }}
+      SFTP_BENCHMARK_WRITER_USERNAME: ${{ secrets.SFTP_BENCHMARK_WRITER_USERNAME }}
+      SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
     uses: ./.github/workflows/galaxy-perf-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

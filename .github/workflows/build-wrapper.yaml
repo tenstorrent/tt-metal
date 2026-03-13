@@ -49,6 +49,9 @@ on:
         type: string
         default: ""
         description: "Git ref to checkout (defaults to github.sha if not provided)"
+    secrets:
+      REDIS_PASSWORD:
+        required: false
   workflow_dispatch:
     inputs:
       platform:
@@ -90,11 +93,12 @@ jobs:
 
   # build-dispatch is for direct workflow_dispatch calls only
   build-dispatch:
-    if: ${{ inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != '' }}
+    if: inputs.ubuntu-2204-ci-build-tag == '' && inputs.platform != ''
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform }}
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -108,11 +112,12 @@ jobs:
   # build job runs the matrix - either when called from merge-gate with pre-built tags,
   # or when called via workflow_call without the platform dropdown
   build:
-    if: ${{ inputs.ubuntu-2204-ci-build-tag != '' || inputs.platform == '' }}
+    if: inputs.ubuntu-2204-ci-build-tag != '' || inputs.platform == ''
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     strategy:
       fail-fast: false
       matrix:

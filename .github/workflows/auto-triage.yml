@@ -24,9 +24,8 @@ on:
       slack_channel_id:
         description: "Slack channel ID for sending notifications"
         required: false
-        default: ''
+        default: ""
         type: string
-
 
 jobs:
   auto-triage:
@@ -38,12 +37,12 @@ jobs:
       actions: write
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
 
       - name: Run auto triage
-        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@main
+        uses: tenstorrent/tt-auto-triage/.github/actions/auto-triage@c9f8174b83de73fe68769f2e724280ac0e339e06 # main
         with:
           workflow-name: ${{ inputs.workflow_name }}
           job-name: ${{ inputs.job_name }}

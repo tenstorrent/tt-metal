@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       requested-models:
-        description: "List of requested models as JSON array, for example: [\"resnet\", \"sdxl\"]. Default is 'all'"
+        description: 'List of requested models as JSON array, for example: ["resnet", "sdxl"]. Default is ''all'''
         default: "all"
         type: string
       run-perf-tests:
@@ -54,7 +54,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       build-wheel: true
@@ -63,7 +64,8 @@ jobs:
       tracy: ${{ inputs.enable-ops-recording || false }}
   single-card-demo-tests:
     needs: build-artifact
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     uses: ./.github/workflows/single-card-demo-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}

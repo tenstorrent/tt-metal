@@ -3,17 +3,17 @@ on:
   workflow_dispatch:
     inputs:
       t3k_multihost:
-        description: 'Run T3K multi-host job'
+        description: "Run T3K multi-host job"
         required: false
         default: true
         type: boolean
       glx_2x_multihost:
-        description: 'Run Galaxy 2x multi-host job'
+        description: "Run Galaxy 2x multi-host job"
         required: false
         default: true
         type: boolean
       glx_4x_unit_tests:
-        description: 'Run Galaxy 4x unit tests'
+        description: "Run Galaxy 4x unit tests"
         required: false
         default: false
         type: boolean
@@ -42,8 +42,8 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: '0 4 * * *'  # 8 PM PST (4 AM UTC) - 4x6U schedule
-    - cron: '0 */3 * * *'  # Every 3 hours - T3K and 2x6U schedule
+    - cron: "0 4 * * *" # 8 PM PST (4 AM UTC) - 4x6U schedule
+    - cron: "0 */3 * * *" # Every 3 hours - T3K and 2x6U schedule
 
 run-name: >
   ${{ github.event_name == 'schedule' &&
@@ -57,7 +57,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
@@ -65,7 +66,7 @@ jobs:
       build-wheel: true
 
   multi-host-t3k:
-    if: ${{ github.event.inputs.t3k_multihost == 'true' || github.event.schedule == '0 */3 * * *' }}
+    if: github.event.inputs.t3k_multihost == 'true' || github.event.schedule == '0 */3 * * *'
     runs-on:
       # A physical, multi-host WH T3K that's in service
       - multi-host-t3000
@@ -75,18 +76,18 @@ jobs:
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: ⬇️ Download Build
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       - name: Extract files
         run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -113,11 +114,13 @@ jobs:
           install_wheel: true
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            deactivate 2>/dev/null || true
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_dual_t3k_tests.sh
 
   multi-host-glx-2x:
-    if: ${{ github.event.inputs.glx_2x_multihost == 'true' || github.event.schedule == '0 */3 * * *' }}
+    if: github.event.inputs.glx_2x_multihost == 'true' || github.event.schedule == '0 */3 * * *'
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-galaxy
@@ -127,18 +130,18 @@ jobs:
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: ⬇️ Download Build
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       - name: Extract files
         run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -165,11 +168,13 @@ jobs:
           install_wheel: true
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            deactivate 2>/dev/null || true
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_dual_galaxy_tests.sh
 
   multi-host-glx-4x:
-    if: ${{ github.event.inputs.glx_4x_unit_tests == 'true' || github.event.schedule == '0 4 * * *' }}
+    if: github.event.inputs.glx_4x_unit_tests == 'true' || github.event.schedule == '0 4 * * *'
     runs-on:
       # A physical, multi-host WH Galaxy that's in service
       - multi-host-glx-4x
@@ -179,18 +184,18 @@ jobs:
     needs: build-artifact
     steps:
       - name: ⬇️ Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
       - name: ⬇️ Download Build
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       - name: Extract files
         run: tar --zstd -xvf ttm_any.tar.zst
       - name: ⬇️ Download Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         timeout-minutes: 10
         with:
           name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
@@ -198,7 +203,7 @@ jobs:
         id: capture-home
         run: echo "home=${HOME}" >> $GITHUB_OUTPUT
       - name: Run quad galaxy unit tests
-        if: ${{ github.event.inputs.glx_4x_unit_tests == 'true' || github.event.schedule == '0 4 * * *' }}
+        if: github.event.inputs.glx_4x_unit_tests == 'true' || github.event.schedule == '0 4 * * *'
         uses: ./.github/actions/docker-run
         timeout-minutes: 30
         with:
@@ -218,5 +223,7 @@ jobs:
           install_wheel: true
           run_args: |
             # Setup shared venv and switch to it (handles multi-host race conditions)
-            eval "$(./tests/scripts/multihost/setup_shared_venv.sh --activate)"
+            ./tests/scripts/multihost/setup_shared_venv.sh
+            deactivate 2>/dev/null || true
+            source ./python_env/bin/activate
             ./tests/scripts/multihost/run_quad_galaxy_tests.sh unit_tests

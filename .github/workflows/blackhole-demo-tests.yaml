@@ -9,9 +9,9 @@ on:
         type: boolean
         default: false
       model:
-        description: 'Select model to test'
+        description: "Select model to test"
         required: false
-        default: 'llama3.1-8b'
+        default: "llama3.1-8b"
         type: choice
         options:
           - all
@@ -23,7 +23,7 @@ on:
           - flux.1-dev
           - wan2.2-t2v-a14b
       system-type:
-        description: 'Select system type to test'
+        description: "Select system type to test"
         required: false
         default: "P150 (1xP150)"
         type: choice
@@ -69,10 +69,10 @@ on:
       model:
         required: false
         type: string
-        default: 'all'
+        default: "all"
         description: "Select model to test"
       system-type:
-        description: 'Select system type to test'
+        description: "Select system type to test"
         required: false
         default: "all"
         type: string
@@ -92,7 +92,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: "0 4 * * *"  # Every day at 4:00 UTC
+    - cron: "0 4 * * *" # Every day at 4:00 UTC
 
 jobs:
   generate-card-matrix:
@@ -102,6 +102,9 @@ jobs:
     steps:
       - name: Set matrix
         id: set-matrix
+        env:
+          SYSTEM_TYPE: ${{ inputs.system-type || 'all' }}
+          EVENT_NAME: ${{ github.event_name }}
         run: |
           all_systems='[
             {"name": "P150 (1xP150)", "weights-cache-mode": "local-disk", "num_devices": 1, "sku": "bh_p150_perf"},
@@ -113,8 +116,8 @@ jobs:
             {"name": "QuietBox 2 (2xP300)", "weights-cache-mode": "local-disk", "num_devices": 4, "sku": "bh_quietbox_2"}
           ]'
           # Schedule or "all": use all systems; otherwise filter by selected system name
-          selected_system_type="${{ inputs.system-type || 'all' }}"
-          if [[ "${{ github.event_name }}" == "schedule" || "$selected_system_type" == "all" ]]; then
+          selected_system_type="$SYSTEM_TYPE"
+          if [[ "$EVENT_NAME" == "schedule" || "$selected_system_type" == "all" ]]; then
             matrix_output=$(echo "{\"test-group\": $all_systems}" | jq -c .)
           else
             filtered=$(echo "$all_systems" | jq -c --arg name "$selected_system_type" '[.[] | select(.name == $name)]')
@@ -131,7 +134,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       build-type: ${{ inputs.build-type || 'Release' }}
       tracy: true
@@ -140,11 +144,12 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
   blackhole-demo-tests:
     needs: [build-artifact, generate-card-matrix]
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     uses: ./.github/workflows/blackhole-demo-tests-impl.yaml
     strategy:
       fail-fast: false
-      matrix: ${{ fromJSON(needs.generate-card-matrix.outputs.matrix) }}
+      matrix: ${{ fromJSON(needs.generate-card-matrix.outputs.matrix) }} # NOLINT(26) - matrix is built from hardcoded values in a prior job
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}

@@ -34,7 +34,7 @@ on:
         default: false
         description: "Enable Link Time Optimization (LTO)"
   schedule:
-    - cron: '0 12 * * *'
+    - cron: "0 12 * * *"
 
 # any reason to bake the test script in as entrypoint??? WHY NOT ONE IMAGE
 # well, that's because of the two builds...
@@ -55,7 +55,8 @@ jobs:
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
-    secrets: inherit
+    secrets:
+      REDIS_PASSWORD: ${{ secrets.REDIS_PASSWORD }}
     with:
       platform: ${{ inputs.platform || 'Ubuntu 22.04' }}
       build-type: ${{ inputs.build-type || 'Release' }}
@@ -78,7 +79,7 @@ jobs:
       bh-qb-ge-image-tag: ${{ steps.set-image-tags.outputs.bh-qb-ge-image-tag }}
       bh-glx-image-tag: ${{ steps.set-image-tags.outputs.bh-glx-image-tag }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           fetch-depth: 0
           fetch-tags: true
@@ -87,25 +88,37 @@ jobs:
         run: echo "image-tag-suffix=$(git describe)" >> "$GITHUB_OUTPUT"
       - name: Set image tags
         id: set-image-tags
+        env:
+          IMAGE_TAG_SUFFIX: ${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}
+          WH_6U_IMAGE_NAME: ${{ env.WH_6U_IMAGE_NAME }}
+          WH_6U_PROFILER_IMAGE_NAME: ${{ env.WH_6U_PROFILER_IMAGE_NAME }}
+          BLACKHOLE_IMAGE_NAME: ${{ env.BLACKHOLE_IMAGE_NAME }}
+          BLACKHOLE_PROFILER_IMAGE_NAME: ${{ env.BLACKHOLE_PROFILER_IMAGE_NAME }}
+          BLACKHOLE_LLMBOX_IMAGE_NAME: ${{ env.BLACKHOLE_LLMBOX_IMAGE_NAME }}
+          BLACKHOLE_DESKBOX_IMAGE_NAME: ${{ env.BLACKHOLE_DESKBOX_IMAGE_NAME }}
+          BLACKHOLE_LOUDBOX_IMAGE_NAME: ${{ env.BLACKHOLE_LOUDBOX_IMAGE_NAME }}
+          BLACKHOLE_P300_IMAGE_NAME: ${{ env.BLACKHOLE_P300_IMAGE_NAME }}
+          BLACKHOLE_QB_GE_IMAGE_NAME: ${{ env.BLACKHOLE_QB_GE_IMAGE_NAME }}
+          BLACKHOLE_GLX_IMAGE_NAME: ${{ env.BLACKHOLE_GLX_IMAGE_NAME }}
         run: |
-          image_suffix="${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}"
-          echo "wh-6u-image-tag=${{ env.WH_6U_IMAGE_NAME }}:${image_suffix}" >> "$GITHUB_OUTPUT"
-          echo "wh-6u-profiler-image-tag=${{ env.WH_6U_PROFILER_IMAGE_NAME }}:${image_suffix}" \
+          image_suffix="$IMAGE_TAG_SUFFIX"
+          echo "wh-6u-image-tag=${WH_6U_IMAGE_NAME}:${image_suffix}" >> "$GITHUB_OUTPUT"
+          echo "wh-6u-profiler-image-tag=${WH_6U_PROFILER_IMAGE_NAME}:${image_suffix}" \
             >> "$GITHUB_OUTPUT"
-          echo "bh-image-tag=${{ env.BLACKHOLE_IMAGE_NAME }}:${image_suffix}" >> "$GITHUB_OUTPUT"
-          echo "bh-profiler-image-tag=${{ env.BLACKHOLE_PROFILER_IMAGE_NAME }}:${image_suffix}" \
+          echo "bh-image-tag=${BLACKHOLE_IMAGE_NAME}:${image_suffix}" >> "$GITHUB_OUTPUT"
+          echo "bh-profiler-image-tag=${BLACKHOLE_PROFILER_IMAGE_NAME}:${image_suffix}" \
             >> "$GITHUB_OUTPUT"
-          echo "bh-llmbox-image-tag=${{ env.BLACKHOLE_LLMBOX_IMAGE_NAME }}:${image_suffix}" \
+          echo "bh-llmbox-image-tag=${BLACKHOLE_LLMBOX_IMAGE_NAME}:${image_suffix}" \
             >> "$GITHUB_OUTPUT"
-          echo "bh-deskbox-image-tag=${{ env.BLACKHOLE_DESKBOX_IMAGE_NAME }}:${image_suffix}" \
+          echo "bh-deskbox-image-tag=${BLACKHOLE_DESKBOX_IMAGE_NAME}:${image_suffix}" \
             >> "$GITHUB_OUTPUT"
-          echo "bh-loudbox-image-tag=${{ env.BLACKHOLE_LOUDBOX_IMAGE_NAME }}:${image_suffix}" \
+          echo "bh-loudbox-image-tag=${BLACKHOLE_LOUDBOX_IMAGE_NAME}:${image_suffix}" \
             >> "$GITHUB_OUTPUT"
-          echo "bh-p300-image-tag=${{ env.BLACKHOLE_P300_IMAGE_NAME }}:${image_suffix}" \
+          echo "bh-p300-image-tag=${BLACKHOLE_P300_IMAGE_NAME}:${image_suffix}" \
             >> "$GITHUB_OUTPUT"
-          echo "bh-qb-ge-image-tag=${{ env.BLACKHOLE_QB_GE_IMAGE_NAME }}:${image_suffix}" \
+          echo "bh-qb-ge-image-tag=${BLACKHOLE_QB_GE_IMAGE_NAME}:${image_suffix}" \
             >> "$GITHUB_OUTPUT"
-          echo "bh-glx-image-tag=${{ env.BLACKHOLE_GLX_IMAGE_NAME }}:${image_suffix}" \
+          echo "bh-glx-image-tag=${BLACKHOLE_GLX_IMAGE_NAME}:${image_suffix}" \
             >> "$GITHUB_OUTPUT"
   build-images:
     needs:
@@ -188,10 +201,10 @@ jobs:
             techdebt-install-ttt-reqs: true
     runs-on: tt-ubuntu-2204-large-stable
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Download artifacts from metal
         id: download-artifacts
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           # 22.04 artifact... we'll probably need to key on that in the original action in metal
           name: ${{ matrix.image-config.build-artifact-name }}
@@ -199,7 +212,7 @@ jobs:
       - run: tar --zstd -xvf ttm_any.tar.zst -C _tt-metal/
       - run: ls -hal _tt-metal
       - name: 🧪 Download Python Wheel
-        uses: actions/download-artifact@634f93cb2916e3fdff6788551b99b062d0335ce0 # v5.0
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
           name: ${{ matrix.image-config.wheel-artifact-name }}
       - name: 💿 Verify Wheel exists
@@ -210,25 +223,29 @@ jobs:
           ls -la .
       # Do not set up docker buildx because of https://github.com/docker/setup-buildx-action/issues/57
       - name: Login to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@b45d80f862d83dbcd57f89517bcf500b2ab88fb2 # v4.0.0
         with:
           registry: ghcr.io
           username: ${{ github.repository_owner }}
           password: ${{ secrets.GITHUB_TOKEN }}
       - name: Generate Dockerfile
         shell: bash
+        env:
+          TEST_COMMAND: ${{ matrix.image-config.test-command }}
+          HW_TOPOLOGY: ${{ matrix.image-config.hw-topology }}
+          TT_METAL_COMMIT_SHA: ${{ github.sha }}
         run: |
           sudo apt update
           sudo apt install -y gettext
-          export TEST_COMMAND=${{ matrix.image-config.test-command }}
-          export HW_TOPOLOGY=${{ matrix.image-config.hw-topology }}
+          export TEST_COMMAND="$TEST_COMMAND"
+          export HW_TOPOLOGY="$HW_TOPOLOGY"
           export TT_METAL_DEV_VERSION=latest
-          export TT_METAL_COMMIT_SHA=${{ github.sha }}
+          export TT_METAL_COMMIT_SHA="$TT_METAL_COMMIT_SHA"
           envsubst < dockerfile/upstream_test_images/Dockerfile.template \
             > dockerfile/upstream_test_images/Dockerfile-generated
           cat dockerfile/upstream_test_images/Dockerfile-generated
       - name: Build and push
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@d08e5c354a6adb9ed34480a06d141179aa583294 # v7.0.0
         with:
           file: dockerfile/upstream_test_images/Dockerfile-generated
           platforms: linux/amd64
@@ -253,22 +270,27 @@ jobs:
       # on the build number and whether to only pull
       - name: Pull image
         timeout-minutes: 10
-        run: docker pull ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+        env:
+          IMAGE_TAG: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+        run: docker pull "$IMAGE_TAG"
       - name: Run image
         timeout-minutes: 45
         env:
           SOURCE_LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
           LLAMA_DIR: /mnt/MLPerf/tt_dnn-models/llama/Llama3.3-70B-Instruct
+          IMAGE_TAG: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
         run: |
           docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
             --device /dev/tenstorrent -v $SOURCE_LLAMA_DIR:$LLAMA_DIR:ro \
-            -e LLAMA_DIR ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+            -e LLAMA_DIR "$IMAGE_TAG"
       - name: Run profiler image
         timeout-minutes: 10
+        env:
+          PROFILER_IMAGE_TAG: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
         run: |
           docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
             --device /dev/tenstorrent \
-            ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+            "$PROFILER_IMAGE_TAG"
   test-bh-glx-image:
     needs:
       - get-image-tags
@@ -283,17 +305,20 @@ jobs:
       # on the build number and whether to only pull
       - name: Pull image
         timeout-minutes: 10
-        run: docker pull ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
+        env:
+          IMAGE_TAG: ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
+        run: docker pull "$IMAGE_TAG"
       - name: Run image
         timeout-minutes: 65
         env:
           HF_MODEL: /mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct
           TT_CACHE_PATH: /mnt/MLPerf/tt_dnn-models/meta-llama/Llama-3.1-8B-Instruct
+          IMAGE_TAG: ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
         run: |
           docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
             --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro \
             -e HF_MODEL -e TT_CACHE_PATH \
-            ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
+            "$IMAGE_TAG"
   test-bh-multicard-image:
     needs:
       - get-image-tags
@@ -331,10 +356,11 @@ jobs:
             ${{ matrix.bh-config.extra-tag == 'pipeline-perf'
             && '/localdev/blackhole_demos/huggingface_data'
             || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
+          IMAGE_NAME: ${{ matrix.bh-config.image-name }}
         run: |
           docker run --network none -v /dev/hugepages-1G:/dev/hugepages-1G \
             --device /dev/tenstorrent -v $HF_MODEL:$HF_MODEL:ro \
-            -e HF_MODEL -e TT_CACHE_PATH ${{ matrix.bh-config.image-name }}
+            -e HF_MODEL -e TT_CACHE_PATH "$IMAGE_NAME"
   test-bh-p300-image:
     needs:
       - get-image-tags
@@ -364,10 +390,11 @@ jobs:
         env:
           HF_MODEL: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
           TT_CACHE_PATH: /localdev/blackhole_demos/huggingface_data/meta-llama/Llama-3.1-8B-Instruct
+          IMAGE_NAME: ${{ matrix.bh-config.image-name }}
         run: |
           docker run --network none --device /dev/tenstorrent \
             -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL -e TT_CACHE_PATH \
-            ${{ matrix.bh-config.image-name }}
+            "$IMAGE_NAME"
   test-bh-image:
     needs:
       - get-image-tags
@@ -398,15 +425,18 @@ jobs:
             ${{ contains(runner.name, 'gh')
             && '/localdev/blackhole_demos/huggingface_data'
             || '/mnt/MLPerf/tt_dnn-models' }}/meta-llama/Llama-3.1-8B-Instruct
+          IMAGE_TAG: ${{ needs.get-image-tags.outputs.bh-image-tag }}
         run: |
           docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent \
             -v $HF_MODEL:$HF_MODEL:ro -e HF_MODEL -e TT_CACHE_PATH \
-            ${{ needs.get-image-tags.outputs.bh-image-tag }}
+            "$IMAGE_TAG"
       - name: Run profiler image
         timeout-minutes: 10
+        env:
+          PROFILER_IMAGE_TAG: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
         run: |
           docker run -v /dev/hugepages-1G:/dev/hugepages-1G --device /dev/tenstorrent \
-            ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
+            "$PROFILER_IMAGE_TAG"
   calculate-to-publish:
     if: ${{ !cancelled() }}
     needs:
@@ -420,10 +450,27 @@ jobs:
     outputs:
       images-to-push: ${{ steps.calculate-images.outputs.images-to-push }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - name: Calculate images to publish
         id: calculate-images
         shell: bash
+        env:
+          REQUEST_FORCE_PUBLISH: ${{ inputs.request-force-publish || 'passing-only' }}
+          BH_IMAGE_TAG: ${{ needs.get-image-tags.outputs.bh-image-tag }}
+          BH_PROFILER_IMAGE_TAG: ${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}
+          WH_6U_IMAGE_TAG: ${{ needs.get-image-tags.outputs.wh-6u-image-tag }}
+          WH_6U_PROFILER_IMAGE_TAG: ${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}
+          BH_LLMBOX_IMAGE_TAG: ${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}
+          BH_DESKBOX_IMAGE_TAG: ${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}
+          BH_LOUDBOX_IMAGE_TAG: ${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}
+          BH_P300_IMAGE_TAG: ${{ needs.get-image-tags.outputs.bh-p300-image-tag }}
+          BH_QB_GE_IMAGE_TAG: ${{ needs.get-image-tags.outputs.bh-qb-ge-image-tag }}
+          BH_GLX_IMAGE_TAG: ${{ needs.get-image-tags.outputs.bh-glx-image-tag }}
+          TEST_BH_IMAGE_RESULT: ${{ needs.test-bh-image.result }}
+          TEST_WH_6U_IMAGE_RESULT: ${{ needs.test-wh-6u-image.result }}
+          TEST_BH_MULTICARD_IMAGE_RESULT: ${{ needs.test-bh-multicard-image.result }}
+          TEST_BH_P300_IMAGE_RESULT: ${{ needs.test-bh-p300-image.result }}
+          TEST_BH_GLX_IMAGE_RESULT: ${{ needs.test-bh-glx-image.result }}
         run: |
           set -euo pipefail
 
@@ -441,33 +488,32 @@ jobs:
 
           # Create mapping of image output names to actual image tags
           declare -A image_output_to_tag=(
-            ["bh-image-tag"]="${{ needs.get-image-tags.outputs.bh-image-tag }}"
-            ["bh-profiler-image-tag"]="${{ needs.get-image-tags.outputs.bh-profiler-image-tag }}"
-            ["wh-6u-image-tag"]="${{ needs.get-image-tags.outputs.wh-6u-image-tag }}"
-            ["wh-6u-profiler-image-tag"]="${{ needs.get-image-tags.outputs.wh-6u-profiler-image-tag }}"
-            ["bh-llmbox-image-tag"]="${{ needs.get-image-tags.outputs.bh-llmbox-image-tag }}"
-            ["bh-deskbox-image-tag"]="${{ needs.get-image-tags.outputs.bh-deskbox-image-tag }}"
-            ["bh-loudbox-image-tag"]="${{ needs.get-image-tags.outputs.bh-loudbox-image-tag }}"
-            ["bh-p300-image-tag"]="${{ needs.get-image-tags.outputs.bh-p300-image-tag }}"
-            ["bh-qb-ge-image-tag"]="${{ needs.get-image-tags.outputs.bh-qb-ge-image-tag }}"
-            ["bh-glx-image-tag"]="${{ needs.get-image-tags.outputs.bh-glx-image-tag }}"
+            ["bh-image-tag"]="$BH_IMAGE_TAG"
+            ["bh-profiler-image-tag"]="$BH_PROFILER_IMAGE_TAG"
+            ["wh-6u-image-tag"]="$WH_6U_IMAGE_TAG"
+            ["wh-6u-profiler-image-tag"]="$WH_6U_PROFILER_IMAGE_TAG"
+            ["bh-llmbox-image-tag"]="$BH_LLMBOX_IMAGE_TAG"
+            ["bh-deskbox-image-tag"]="$BH_DESKBOX_IMAGE_TAG"
+            ["bh-loudbox-image-tag"]="$BH_LOUDBOX_IMAGE_TAG"
+            ["bh-p300-image-tag"]="$BH_P300_IMAGE_TAG"
+            ["bh-qb-ge-image-tag"]="$BH_QB_GE_IMAGE_TAG"
+            ["bh-glx-image-tag"]="$BH_GLX_IMAGE_TAG"
           )
 
           # Get test job results
           declare -A test_job_results=(
-            ["test-bh-image"]="${{ needs.test-bh-image.result }}"
-            ["test-wh-6u-image"]="${{ needs.test-wh-6u-image.result }}"
-            ["test-bh-multicard-image"]="${{ needs.test-bh-multicard-image.result }}"
-            ["test-bh-p300-image"]="${{ needs.test-bh-p300-image.result }}"
-            ["test-bh-glx-image"]="${{ needs.test-bh-glx-image.result }}"
+            ["test-bh-image"]="$TEST_BH_IMAGE_RESULT"
+            ["test-wh-6u-image"]="$TEST_WH_6U_IMAGE_RESULT"
+            ["test-bh-multicard-image"]="$TEST_BH_MULTICARD_IMAGE_RESULT"
+            ["test-bh-p300-image"]="$TEST_BH_P300_IMAGE_RESULT"
+            ["test-bh-glx-image"]="$TEST_BH_GLX_IMAGE_RESULT"
           )
 
           # Initialize array for images to push (optimized approach)
           images_to_push_array=()
 
           # Parse the request-force-publish input
-          # Single-quotes because of the doubles in this string for JSON
-          request_input='${{ inputs.request-force-publish || 'passing-only' }}'
+          request_input="$REQUEST_FORCE_PUBLISH"
 
           echo "Processing request: $request_input"
 
@@ -585,7 +631,7 @@ jobs:
         image-config: ${{ fromJSON(needs.calculate-to-publish.outputs.images-to-push) }}
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
       - uses: ./.github/actions/push-latest-image-to-ghcr
         with:
           docker-image-tag: ${{ matrix.image-config.image-tag }}

@@ -1,5 +1,4 @@
 name: "[internal] Models end-to-end tests impl"
-
 on:
   workflow_call:
     inputs:
@@ -18,17 +17,16 @@ on:
       model:
         required: false
         type: string
-        default: "all"
+        default: all
       mlperf-read-only:
         required: false
         type: boolean
         default: true
-        description: "Set to false to allow write access to MLPerf mount"
+        description: Set to false to allow write access to MLPerf mount
       tier:
         required: true
         type: string
-        description: "Model tier to filter tests (1, 2, or 3)"
-
+        description: Model tier to filter tests (1, 2, or 3)
 jobs:
   load-test-matrix:
     runs-on: ubuntu-latest
@@ -38,7 +36,7 @@ jobs:
       TESTS_YAML_PATH: ./tests/pipeline_reorg/models_e2e_tests.yaml
     steps:
       - name: Checkout the repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           sparse-checkout: |
             .github
@@ -51,35 +49,39 @@ jobs:
           set -e
           echo "Verifying that timeouts defined in tests.yaml are within the allowed limits..."
           python3 .github/scripts/utils/verify_time_budget.py \
-            ${{ env.TESTS_YAML_PATH }} \
+            "${TESTS_YAML_PATH}" \
             ./.github/time_budget.yaml \
             "e2e"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
+        env:
+          INPUT_ENABLED_SKUS: ${{ inputs.enabled-skus }}
         run: |
           python3 .github/scripts/utils/prepare_test_matrix.py \
-            ${{ env.TESTS_YAML_PATH }} \
-            "${{ inputs.enabled-skus }}" \
+            "${TESTS_YAML_PATH}" \
+            "$INPUT_ENABLED_SKUS" \
             ./.github/sku_config.yaml
       - name: Apply tier and model filters
         id: apply-filters
+        env:
+          INPUT_MODEL: ${{ inputs.model }}
+          INPUT_TIER: ${{ inputs.tier }}
+          MATRIX: ${{ steps.build-matrix.outputs.matrix }}
         run: |
-          MATRIX='${{ steps.build-matrix.outputs.matrix }}'
           # Filter by tier
-          FILTERED=$(echo "$MATRIX" | jq -c --argjson tier ${{ inputs.tier }} '[.[] | select(.tier == $tier)]')
+          FILTERED=$(echo "$MATRIX" | jq -c --argjson tier $INPUT_TIER '[.[] | select(.tier == $tier)]')
           # Filter by model
-          if [ "${{ inputs.model }}" != "all" ]; then
-            FILTERED=$(echo "$FILTERED" | jq -c --arg m "${{ inputs.model }}" '[.[] | select(.model == $m)]')
+          if [ "$INPUT_MODEL" != "all" ]; then
+            FILTERED=$(echo "$FILTERED" | jq -c --arg m "$INPUT_MODEL" '[.[] | select(.model == $m)]')
           fi
           if [ "$FILTERED" = "[]" ]; then
-            echo "::warning::No tests found for tier=${{ inputs.tier }}, model=${{ inputs.model }}. Pipeline will be skipped."
+            echo "::warning::No tests found for tier=$INPUT_TIER, model=$INPUT_MODEL. Pipeline will be skipped."
             echo "matrix=[]" >> $GITHUB_OUTPUT
           else
             echo "matrix<<EOF" >> $GITHUB_OUTPUT
             echo "$FILTERED" >> $GITHUB_OUTPUT
             echo "EOF" >> $GITHUB_OUTPUT
           fi
-
   models-e2e-tests:
     needs: load-test-matrix
     if: ${{ needs.load-test-matrix.outputs.matrix != '[]' }}
@@ -103,14 +105,14 @@ jobs:
         - ${{ github.workspace }}/docker-job:/work # Subdir to workaround https://github.com/actions/runner/issues/691
         - /dev/hugepages-1G:/dev/hugepages-1G
         - /mnt/MLPerf:/mnt/MLPerf${{ inputs.mlperf-read-only && ':ro' || ':rw' }}
-      options: "--device /dev/tenstorrent --privileged -v /sys:/sys"
+      options: --device /dev/tenstorrent --privileged -v /sys:/sys
     defaults:
       run:
         shell: bash
         working-directory: /work # https://github.com/actions/runner/issues/878
     steps:
       - name: 🧬 Checkout Repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
           submodules: recursive
           path: docker-job
@@ -122,10 +124,19 @@ jobs:
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: ${{ matrix.test-group.name }}
         timeout-minutes: ${{ matrix.test-group.timeout }}
+        env:
+          TEST_CMD: ${{ matrix.test-group.cmd }}
         run: |
           mkdir -p generated/test_reports
-          echo "${{ matrix.test-group.cmd }}"
-          ${{ matrix.test-group.cmd }}
+          echo "$TEST_CMD"
+          # Write command to script file to safely handle quotes and special characters
+          cat > /tmp/test_cmd.sh << 'SCRIPT_EOF'
+          #!/bin/bash
+          set -euo pipefail
+          SCRIPT_EOF
+          printf '%s\n' "$TEST_CMD" >> /tmp/test_cmd.sh
+          chmod +x /tmp/test_cmd.sh
+          bash /tmp/test_cmd.sh
       - uses: tenstorrent/tt-metal/.github/actions/slack-report@main
         if: ${{ failure() }}
         with:
@@ -135,7 +146,7 @@ jobs:
         timeout-minutes: 10
         if: ${{ !cancelled() }}
         with:
-          prefix: "test_reports_"
+          prefix: test_reports_
       - name: Generate gtest annotations on failure
         uses: tenstorrent/tt-metal/.github/actions/generate-gtest-failure-message@main
         if: ${{ failure() }}
