@@ -194,11 +194,9 @@ void bind_unary_backward_rsqrt(
             nb::arg("input_grad") = nb::none()));
 }
 
-template <ttnn::unique_string Name, typename Func1, typename Func2>
+template <ttnn::unique_string Name>
 void bind_unary_backward_op_reciprocal(
     nb::module_& mod,
-    Func1 func1,
-    Func2 func2,
     const std::string& description,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
@@ -242,20 +240,26 @@ void bind_unary_backward_op_reciprocal(
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            func1,
+            static_cast<std::vector<ttnn::Tensor> (*)(
+                const ttnn::Tensor&, const ttnn::Tensor&, const std::optional<ttnn::MemoryConfig>&)>(
+                &ttnn::reciprocal_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()),
         ttnn::overload_t(
-            func2, nb::arg("grad_tensor"), nb::arg("input_tensor"), nb::kw_only(), nb::arg("memory_config")));
+            static_cast<std::vector<ttnn::ComplexTensor> (*)(
+                const ttnn::ComplexTensor&, const ttnn::ComplexTensor&, const ttnn::MemoryConfig&)>(
+                &ttnn::reciprocal_bw),
+            nb::arg("grad_tensor"),
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("memory_config")));
 }
 
-template <ttnn::unique_string Name, typename Func1, typename Func2>
+template <ttnn::unique_string Name>
 void bind_unary_backward_op_overload_abs(
     nb::module_& mod,
-    Func1 func1,
-    Func2 func2,
     const std::string_view description,
     const std::string& supported_dtype = "BFLOAT16",
     const std::string& note = "") {
@@ -299,13 +303,19 @@ void bind_unary_backward_op_overload_abs(
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            func1,
+            static_cast<std::vector<ttnn::Tensor> (*)(
+                const ttnn::Tensor&, const ttnn::Tensor&, const std::optional<ttnn::MemoryConfig>&)>(&ttnn::abs_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()),
         ttnn::overload_t(
-            func2, nb::arg("grad_tensor"), nb::arg("input_tensor"), nb::kw_only(), nb::arg("memory_config")));
+            static_cast<std::vector<ttnn::ComplexTensor> (*)(
+                const ttnn::Tensor&, const ttnn::ComplexTensor&, const ttnn::MemoryConfig&)>(&ttnn::abs_bw),
+            nb::arg("grad_tensor"),
+            nb::arg("input_tensor"),
+            nb::kw_only(),
+            nb::arg("memory_config")));
 }
 
 template <ttnn::unique_string Name, typename Func>
@@ -1324,10 +1334,6 @@ void py_module(nb::module_& mod) {
 
     bind_unary_backward_op_overload_abs<"abs_bw">(
         mod,
-        static_cast<std::vector<ttnn::Tensor> (*)(
-            const ttnn::Tensor&, const ttnn::Tensor&, const std::optional<ttnn::MemoryConfig>&)>(&ttnn::abs_bw),
-        static_cast<std::vector<ttnn::ComplexTensor> (*)(
-            const ttnn::Tensor&, const ttnn::ComplexTensor&, const ttnn::MemoryConfig&)>(&ttnn::abs_bw),
         R"doc(Performs backward operations for abs on :attr:`input_tensor` with given :attr:`grad_tensor`)doc",
         R"doc(BFLOAT16, BFLOAT8_B)doc",
         R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");
@@ -1463,10 +1469,6 @@ void py_module(nb::module_& mod) {
 
     bind_unary_backward_op_reciprocal<"reciprocal_bw">(
         mod,
-        static_cast<std::vector<ttnn::Tensor> (*)(
-            const ttnn::Tensor&, const ttnn::Tensor&, const std::optional<ttnn::MemoryConfig>&)>(&ttnn::reciprocal_bw),
-        static_cast<std::vector<ttnn::ComplexTensor> (*)(
-            const ttnn::ComplexTensor&, const ttnn::ComplexTensor&, const ttnn::MemoryConfig&)>(&ttnn::reciprocal_bw),
         R"doc(Performs backward operations for reciprocal on :attr:`input_tensor` with given :attr:`grad_tensor`)doc",
         R"doc(BFLOAT16)doc",
         R"doc(For more details about BFLOAT8_B, refer to the `BFLOAT8_B limitations <../tensor.html#limitation-of-bfloat8-b>`_.)doc");

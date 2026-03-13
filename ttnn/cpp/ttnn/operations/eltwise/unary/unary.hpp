@@ -204,8 +204,7 @@ Tensor xielu(
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt);
 
-operations::unary::ComplexTensor reciprocal(
-    const operations::unary::ComplexTensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
+ComplexTensor reciprocal(const ComplexTensor& input, const tt::tt_metal::MemoryConfig& output_mem_config);
 
 Tensor unary_fmod(
     const Tensor& t,
@@ -236,7 +235,7 @@ Tensor abs(
     const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
     const std::optional<Tensor>& o = std::nullopt);
 
-Tensor abs(const operations::unary::ComplexTensor& input_tensor, const tt::tt_metal::MemoryConfig& output_mem_config);
+Tensor abs(const ComplexTensor& input_tensor, const tt::tt_metal::MemoryConfig& output_mem_config);
 
 Tensor eqz(
     const Tensor& t,
@@ -391,7 +390,7 @@ Tensor unary_chain(
     const std::optional<Tensor>& o = std::nullopt);
 
 template <typename T>
-inline Tensor rsub_sfpu(
+Tensor rsub_sfpu(
     const Tensor& t,
     T param,
     const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,

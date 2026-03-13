@@ -93,7 +93,7 @@ Tensor unary_impl(
 
 namespace ttnn {
 
-Tensor abs(const operations::unary::ComplexTensor& input_tensor, const MemoryConfig& output_mem_config) {
+Tensor abs(const ComplexTensor& input_tensor, const MemoryConfig& output_mem_config) {
     return ttnn::hypot(input_tensor[0], input_tensor[1], output_mem_config);
 }
 
@@ -450,16 +450,16 @@ Tensor unary_chain(
 
 template <typename T>
 Tensor rsub_sfpu(
-    const Tensor& t,
-    T param,
-    const std::optional<tt::tt_metal::MemoryConfig>& m = std::nullopt,
-    const std::optional<Tensor>& o = std::nullopt) {
+    const Tensor& t, T param, const std::optional<tt::tt_metal::MemoryConfig>& m, const std::optional<Tensor>& o) {
     return operations::unary::detail::unary_impl(
         t, {operations::unary::EltwiseUnaryWithParam{operations::unary::UnaryOpType::RSUB, {param}}}, m, o);
 }
 
-extern template Tensor rsub_sfpu<Tensor>(
-    const Tensor&, Tensor, const std::optional<tt::tt_metal::MemoryConfig>&, const std::optional<Tensor>&);
+template Tensor ttnn::rsub_sfpu<float>(
+    const Tensor&, float, const std::optional<tt::tt_metal::MemoryConfig>&, const std::optional<Tensor>&);
+
+template Tensor ttnn::rsub_sfpu<int>(
+    const Tensor&, int, const std::optional<tt::tt_metal::MemoryConfig>&, const std::optional<Tensor>&);
 
 Tensor add_sfpu(
     const Tensor& t, float p, const std::optional<tt::tt_metal::MemoryConfig>& m, const std::optional<Tensor>& o) {
