@@ -564,10 +564,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                             .set_page_size(tt::CBIndex::c_6, im_tile_size);
     CreateCircularBuffer(program, core_grid, c_in6_config);
 
-    // previous block output as input
-    auto c_in7_config = CircularBufferConfig(out_im_tiles * out_tile_size, {{tt::CBIndex::c_7, out_df}})
-                            .set_page_size(tt::CBIndex::c_7, out_tile_size);
-    CreateCircularBuffer(program, core_grid, c_in7_config);
+    // previous block output as input — only needed for multi Q-chunk case
+    if (max_q_per_core > 1) {
+        auto c_in7_config = CircularBufferConfig(out_im_tiles * out_tile_size, {{tt::CBIndex::c_7, out_df}})
+                                .set_page_size(tt::CBIndex::c_7, out_tile_size);
+        CreateCircularBuffer(program, core_grid, c_in7_config);
+    }
 
     // column identity input
     auto c_in8_config = CircularBufferConfig(scale_tiles * scalar_tile_size, {{tt::CBIndex::c_8, scalar_df}})
