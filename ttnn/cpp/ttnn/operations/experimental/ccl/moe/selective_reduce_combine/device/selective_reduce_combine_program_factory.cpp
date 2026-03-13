@@ -343,9 +343,8 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     const auto end_coord =
         mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().end_coord);
 
-    // Force init semaphore ON even in persistent mode — needed for multi-layer
-    // to ensure all devices are synchronized before combine starts
-    const bool use_init_semaphore = true;
+    const bool use_init_semaphore = !tensor_args.optional_output_tensor.has_value() ||
+                                    !operation_attributes.optional_cross_device_semaphore.has_value();
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
         {"data_cb_id", data_cb_id},
@@ -507,9 +506,6 @@ void UnifiedSelectReduce::override_runtime_arguments(
         const auto& writer_kernel_id = shared_variables.writer_kernel_id;
         const auto& data_cb_handle = shared_variables.data_cb_handle;
         const auto& cores = shared_variables.cores;
-        // Update the input CB's globally allocated address for the new input tensor
-        UpdateDynamicCircularBufferAddress(
-            program, shared_variables.data_cb_handle, *tensor_args.dense_input_tensor.buffer());
 
         tt::tt_metal::UpdateDynamicCircularBufferAddress(
             program, data_cb_handle, *tensor_args.dense_input_tensor.buffer());
