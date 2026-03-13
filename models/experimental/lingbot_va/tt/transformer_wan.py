@@ -390,21 +390,26 @@ class WanTransformer3DModel(Module):
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         pop_substate(state, "rope")
 
-        # Map reference patch_embedding_mlp (Linear) -> patch_embedding (WanPatchEmbed expects conv-form weight)
+        # Map reference patch_embedding_mlp (Linear) -> patch_embedding. Ref uses input order (C, p0, p1, p2);
+        # WanPatchEmbed.forward does input @ proj_weight, so proj_weight must be (in_dim, embed_dim) with rows (C, p0, p1, p2) = ref_weight.T.
         rename_substate(state, "patch_embedding_mlp", "patch_embedding")
         patch_weight = state.get("patch_embedding.weight")
         if patch_weight is not None:
             p0, p1, p2 = self.patch_size
-            # Reference Linear: (embed_dim, in_channels * p0*p1*p2); some checkpoints: (embed_dim, in_c, p0, p1, p2)
             if patch_weight.ndim == 2:
                 embed_dim, flat = patch_weight.shape
                 assert flat == self.in_channels * p0 * p1 * p2
-                state["patch_embedding.weight"] = patch_weight.reshape(embed_dim, self.in_channels, p0, p1, p2)
-            elif patch_weight.ndim != 5:
+                # (embed_dim, in_dim) -> (in_dim, embed_dim) with rows (C, p0, p1, p2) so TT matches ref
+                state["patch_embedding.proj_weight"] = patch_weight.T.contiguous()
+                del state["patch_embedding.weight"]
+            elif patch_weight.ndim == 5:
+                embed_dim = patch_weight.shape[0]
+                state["patch_embedding.proj_weight"] = patch_weight.reshape(embed_dim, -1).T.contiguous()
+                del state["patch_embedding.weight"]
+            else:
                 raise ValueError(
                     f"patch_embedding.weight must be 2D (Linear) or 5D (conv), got ndim={patch_weight.ndim}"
                 )
-            # 5D: already conv form, use as-is
         patch_bias = state.get("patch_embedding.bias")
         if patch_bias is not None and patch_bias.ndim == 1:
             state["patch_embedding.bias"] = patch_bias.reshape(1, -1)
@@ -484,7 +489,9 @@ class WanTransformer3DModel(Module):
         return tt_temb_11BD, tt_timestep_proj_1BTD, tt_prompt_1BLP
 
     def preprocess_spatial_input_host(self, spatial: torch.Tensor):
-        """Patchify video (B, C, F, H, W) -> (1, B, N, C*p0*p1*p2) and pad for sequence parallel."""
+        """Patchify video (B, C, F, H, W) -> (1, B, N, C*p0*p1*p2) and pad for sequence parallel.
+        Patch vector order must match reference: (C, p0, p1, p2) as in rearrange
+        'b c (f p1) (h p2) (w p3) -> b (f h w) (c p1 p2 p3)'."""
         B, C, F, H, W = spatial.shape
         if B != 1:
             raise NotImplementedError("Batch size > 1 is not currently supported")
@@ -493,7 +500,8 @@ class WanTransformer3DModel(Module):
         patch_F, patch_H, patch_W = F // pF, H // pH, W // pW
         N = patch_F * patch_H * patch_W
         spatial = spatial.reshape(B, C, patch_F, pF, patch_H, pH, patch_W, pW)
-        spatial = spatial.permute(0, 2, 4, 6, 3, 5, 7, 1).reshape(1, B, N, pF * pH * pW * C)
+        # (B, patch_F, patch_H, patch_W, C, pF, pH, pW) -> patch order (C, p0, p1, p2) to match ref
+        spatial = spatial.permute(0, 2, 4, 6, 1, 3, 5, 7).reshape(1, B, N, C * pF * pH * pW)
         spatial = pad_vision_seq_parallel(spatial, num_devices=self.parallel_config.sequence_parallel.factor)
         return spatial, N
 

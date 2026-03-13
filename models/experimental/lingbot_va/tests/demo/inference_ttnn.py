@@ -51,19 +51,19 @@ from reference.utils import (
     load_vae,
     logger,
     save_async,
+    WanVAEStreamingWrapper,
 )
 
 import gc
 
 import ttnn
-from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor
+from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 from tt.utils import (
     load_text_encoder as load_text_encoder_tt,
     load_transformer as load_transformer_tt,
-    WanVAEStreamingWrapper,
+    WanVAEStreamingWrapper as TTWanVAEStreamingWrapper,
 )
-from models.tt_dit.parallel.config import VaeHWParallelConfig
 
 # Keys the server uses (va_robotwin_cfg.obs_cam_keys)
 OBS_CAM_HIGH = "observation.images.cam_high"
@@ -119,9 +119,9 @@ class _TTTransformerAdapter:
         timesteps = input_dict["timesteps"]
         grid_id = input_dict["grid_id"]
         if timesteps.dim() == 2:
-            timestep = timesteps[:, 0]
+            timestep = timesteps[:, 0].clone().to(torch.float32)
         else:
-            timestep = timesteps.squeeze()
+            timestep = timesteps.squeeze().clone().to(torch.float32)
         if timestep.dim() == 0:
             timestep = timestep.unsqueeze(0)
         return self._tt_model(
@@ -219,10 +219,11 @@ def load_message_from_files(
 
 def _load_models_phase1(config):
     """
-    Load VAE, tokenizer, TTNN text encoder, and open mesh device. No transformer.
-    Used so only one TT model (text encoder) is on device at a time; after encoding
-    the prompt and saving to cache, call _free_tt_model(models, "text_encoder") then
-    _load_transformer_into_models() to load the TT transformer and avoid OOM.
+    Load VAE (PyTorch), tokenizer, TTNN text encoder, and open mesh device. No transformer, no TT VAE.
+    Only one TT model is on device at a time: phase1 = text encoder; phase2 = TT VAE (optional, if cache miss);
+    phase3 = TT transformer. After encoding the prompt, call _free_tt_model(models, "text_encoder"), then
+    optionally run TT VAE encode via _load_tt_vae_into_models / _encode_obs / _free_tt_vae_from_models,
+    then _load_transformer_into_models().
     """
     init_logger()
     device = torch.device("cpu")
@@ -238,7 +239,7 @@ def _load_models_phase1(config):
         cfg_parallel=None,
     )
 
-    # Load TTNN text encoder only (no transformer yet) to avoid OOM.
+    # Load TTNN text encoder only (no transformer, no TT VAE) to avoid OOM.
     text_encoder = load_text_encoder_tt(
         os.path.join(ckpt, "text_encoder"),
         mesh_device,
@@ -246,17 +247,14 @@ def _load_models_phase1(config):
         torch_dtype=dtype,
         max_prompt_length=512,
     )
-    vae_parallel_config = VaeHWParallelConfig(
-        height_parallel=ParallelFactor(factor=1, mesh_axis=0),
-        width_parallel=ParallelFactor(factor=1, mesh_axis=1),
-    )
 
     vae = load_vae(
         os.path.join(ckpt, "vae"),
         torch_dtype=dtype,
         torch_device="cpu" if enable_offload else device,
     )
-    streaming_vae = WanVAEStreamingWrapper(vae, mesh_device, ccl_manager, vae_parallel_config)
+    # PyTorch VAE wrapper (CPU); do not load TT VAE so only one TT sub-network is on device.
+    streaming_vae = WanVAEStreamingWrapper(vae)
 
     tokenizer = load_tokenizer(os.path.join(ckpt, "tokenizer"))
 
@@ -266,15 +264,17 @@ def _load_models_phase1(config):
     action_scheduler.set_timesteps(1000, training=True)
 
     streaming_vae_half = None
+    vae_half = None
     if config.env_type == "robotwin_tshape":
         vae_half = load_vae(
             os.path.join(ckpt, "vae"),
             torch_dtype=dtype,
             torch_device="cpu" if enable_offload else device,
         )
-        streaming_vae_half = WanVAEStreamingWrapper(vae_half, mesh_device, ccl_manager, vae_parallel_config)
+        streaming_vae_half = WanVAEStreamingWrapper(vae_half)
     return {
         "vae": vae,
+        "vae_half": vae_half,
         "streaming_vae": streaming_vae,
         "tokenizer": tokenizer,
         "text_encoder": text_encoder,
@@ -298,6 +298,51 @@ def _free_tt_model(models: dict, key: str) -> None:
     if key in models:
         del models[key]
     gc.collect()
+
+
+def _prepare_state_for_vae_encode(state: dict, config) -> None:
+    """Set state keys required by _encode_obs (height, width, latent_height, latent_width)."""
+    state["height"] = config.height
+    state["width"] = config.width
+    if config.env_type == "robotwin_tshape":
+        state["latent_height"] = ((config.height // 16) * 3) // 2
+        state["latent_width"] = ((config.width // 16) * 3) // 2
+    else:
+        state["latent_height"] = config.height // 16
+        state["latent_width"] = config.width // 16
+
+
+def _load_tt_vae_into_models(models: dict, config) -> None:
+    """Load TTNN VAE (streaming encoder + quant_conv) into models. Only one TT sub-network on device."""
+    vae_parallel_config = VaeHWParallelConfig(
+        height_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        width_parallel=ParallelFactor(factor=1, mesh_axis=1),
+    )
+    models["streaming_vae"] = TTWanVAEStreamingWrapper(
+        models["vae"],
+        models["mesh_device"],
+        models["ccl_manager"],
+        vae_parallel_config,
+    )
+    if config.env_type == "robotwin_tshape" and models.get("vae_half") is not None:
+        models["streaming_vae_half"] = TTWanVAEStreamingWrapper(
+            models["vae_half"],
+            models["mesh_device"],
+            models["ccl_manager"],
+            vae_parallel_config,
+        )
+    logger.info("Loaded TT VAE encoder (streaming_vae) on device.")
+
+
+def _free_tt_vae_from_models(models: dict, config) -> None:
+    """Replace TT VAE in models with PyTorch wrappers and run gc to free device memory."""
+    models["streaming_vae"] = WanVAEStreamingWrapper(models["vae"])
+    if config.env_type == "robotwin_tshape" and models.get("vae_half") is not None:
+        models["streaming_vae_half"] = WanVAEStreamingWrapper(models["vae_half"])
+    else:
+        models["streaming_vae_half"] = None
+    gc.collect()
+    logger.info("Freed TT VAE from device; using PyTorch VAE wrapper for rest of run.")
 
 
 def _load_transformer_into_models(models: dict, config) -> None:
@@ -513,7 +558,9 @@ def _prepare_latent_input(
         }
         if latent_cond is not None:
             input_dict["latent_res_lst"]["noisy_latents"][:, :, 0:1] = latent_cond[:, :, 0:1]
-            input_dict["latent_res_lst"]["timesteps"][0:1] *= 0
+            # TT transformer uses timesteps[:, 0]; only zero when ref so ref matches TT (constant t).
+            if not models.get("transformer_is_tt", False):
+                input_dict["latent_res_lst"]["timesteps"][0:1] *= 0
 
     if action_model_input is not None:
         input_dict["action_res_lst"] = {
@@ -532,7 +579,7 @@ def _prepare_latent_input(
         }
         if action_cond is not None:
             input_dict["action_res_lst"]["noisy_latents"][:, :, 0:1] = action_cond[:, :, 0:1]
-            input_dict["action_res_lst"]["timesteps"][0:1] *= 0
+        # Use constant timestep for action path so ref and TT match (TT uses timesteps[:, 0]; do not zero).
         input_dict["action_res_lst"]["noisy_latents"][:, ~action_mask] *= 0
     return input_dict
 
@@ -695,6 +742,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
         init_latent = _encode_obs(models, state, obs)
         state["init_latent"] = init_latent
 
+    _set_seed()
     latents = torch.randn(1, 48, frame_chunk_size, latent_height, latent_width, device=device, dtype=dtype)
     actions = torch.randn(
         1,
@@ -745,6 +793,8 @@ def _infer_impl(models, state, obs, frame_st_id=0):
                 cache_name=cache_name,
                 action_mode=False,
             )
+            if models.get("transformer_is_tt", False) and video_noise_pred.dtype != torch.float32:
+                video_noise_pred = video_noise_pred.float()
             if not last_step or video_step != -1:
                 if not models.get("transformer_is_tt", False):
                     video_noise_pred = data_seq_to_patch(
@@ -793,6 +843,10 @@ def _infer_impl(models, state, obs, frame_st_id=0):
                 cache_name=cache_name,
                 action_mode=True,
             )
+            if models.get("transformer_is_tt", False):
+                if action_noise_pred.dtype != torch.float32:
+                    action_noise_pred = action_noise_pred.float()
+                action_noise_pred = action_noise_pred.contiguous()
             if not last_step:
                 action_noise_pred = rearrange(action_noise_pred, "b (f n) c -> b c f n 1", f=frame_chunk_size)
                 if config.action_guidance_scale > 1:
@@ -802,6 +856,8 @@ def _infer_impl(models, state, obs, frame_st_id=0):
                 else:
                     action_noise_pred = action_noise_pred[:1]
                 actions = action_scheduler.step(action_noise_pred, t, actions, return_dict=False)
+                if models.get("transformer_is_tt", False):
+                    actions = actions.to(dtype)
             actions[:, :, 0:1] = action_cond if frame_st_id == 0 else actions[:, :, 0:1]
 
     actions[:, ~action_mask] *= 0
@@ -926,7 +982,7 @@ def run_inference(
     config.vae_enc_cache_path = os.path.join(config.save_root, VAE_ENC_CACHE_FILENAME)
     config.text_emb_cache_path = os.path.join(config.save_root, TEXT_EMB_CACHE_FILENAME)
 
-    # Phase 1: load only TT text encoder (no transformer) to avoid OOM.
+    # Phase 1: load only TT text encoder (no transformer, no TT VAE) to avoid OOM.
     models = _load_models_phase1(config)
     state = {}
     prompt = message.get("prompt", "")
@@ -938,6 +994,15 @@ def run_inference(
         max_sequence_length=512,
     )
     _free_tt_model(models, "text_encoder")
+
+    # Phase 2: load only TT VAE encoder; run _encode_obs if cache miss, then free.
+    _prepare_state_for_vae_encode(state, config)
+    if not (getattr(config, "vae_enc_cache_path", None) and os.path.isfile(config.vae_enc_cache_path)):
+        _load_tt_vae_into_models(models, config)
+        _encode_obs(models, state, message)
+        _free_tt_vae_from_models(models, config)
+
+    # Phase 3: load TT transformer and run inference.
     _load_transformer_into_models(models, config)
 
     reset_message = build_reset_message(prompt)
@@ -983,7 +1048,7 @@ def run_generate(
     config.prompt = prompt
     config.num_chunks_to_infer = num_chunks
 
-    # Phase 1: load only TT text encoder (no transformer) to avoid OOM.
+    # Phase 1: load only TT text encoder (no transformer, no TT VAE) to avoid OOM.
     models = _load_models_phase1(config)
     state = {}
     _encode_prompt(
@@ -994,10 +1059,19 @@ def run_generate(
         max_sequence_length=512,
     )
     _free_tt_model(models, "text_encoder")
+
+    # Phase 2: load only TT VAE encoder; run _encode_obs if cache miss, then free.
+    _prepare_state_for_vae_encode(state, config)
+    init_obs = _load_init_obs(config, config.input_img_path)
+    if not (getattr(config, "vae_enc_cache_path", None) and os.path.isfile(config.vae_enc_cache_path)):
+        _load_tt_vae_into_models(models, config)
+        _encode_obs(models, state, init_obs)
+        _free_tt_vae_from_models(models, config)
+
+    # Phase 3: load TT transformer and run generation.
     _load_transformer_into_models(models, config)
 
     _reset_state(models, state, prompt)
-    init_obs = _load_init_obs(config, config.input_img_path)
 
     pred_latent_lst = []
     pred_action_lst = []

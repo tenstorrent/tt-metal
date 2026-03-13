@@ -232,9 +232,9 @@ va_robotwin_cfg.obs_cam_keys = [
 ]
 va_robotwin_cfg.guidance_scale = 1
 va_robotwin_cfg.action_guidance_scale = 1
-va_robotwin_cfg.num_inference_steps = 25
+va_robotwin_cfg.num_inference_steps = 1
 va_robotwin_cfg.video_exec_step = -1
-va_robotwin_cfg.action_num_inference_steps = 50
+va_robotwin_cfg.action_num_inference_steps = 1
 va_robotwin_cfg.snr_shift = 5.0
 va_robotwin_cfg.action_snr_shift = 1.0
 va_robotwin_cfg.used_action_channel_ids = (
