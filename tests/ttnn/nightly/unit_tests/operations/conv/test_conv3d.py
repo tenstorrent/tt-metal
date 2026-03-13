@@ -169,6 +169,7 @@ def run_conv3d_with_memory_config(
     stride,
     padding,
     padding_mode,
+    groups=1,
     input_mem_config=None,
     output_mem_config=None,
     C_in_block=0,
@@ -184,15 +185,27 @@ def run_conv3d_with_memory_config(
         out_channels,
         kernel_size,
         stride,
+        groups,
         padding,
         padding_mode,
         device,
     )
     N, D_out, H_out, W_out = output_dims
-    C = input_shape[1]
 
-    # Prepare weights and bias (always interleaved for simplicity)
-    tt_weight, tt_bias = prepare_weights(conv3d_module, C, out_channels, device, C_in_block=C_in_block)
+    # Keep the default path aligned with the unit tests: unprepared weights when auto-blocking,
+    # prepared weights only when an explicit input blocking is requested.
+    tt_weight = ttnn.from_torch(conv3d_module.weight.data, dtype=ttnn.DataType.BFLOAT16, pad_value=0)
+    if C_in_block > 0:
+        tt_weight = ttnn.experimental.prepare_conv3d_weights(
+            weight_tensor=tt_weight, groups=groups, C_in_block=C_in_block, alignment=ALIGNMENT, device=device
+        )
+    tt_bias = ttnn.from_torch(
+        conv3d_module.bias.data.reshape(1, -1),
+        device=device,
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        pad_value=0,
+    )
 
     # Convert input to specified memory config if provided
     if input_mem_config is not None:
@@ -209,6 +222,7 @@ def run_conv3d_with_memory_config(
     conv3d_kwargs = {
         "input_tensor": tt_input,
         "weight_tensor": tt_weight,
+        "device": device,
         "bias_tensor": tt_bias,
         "dtype": ttnn.bfloat16,
         "output_channels": out_channels,
@@ -216,6 +230,7 @@ def run_conv3d_with_memory_config(
         "stride": stride,
         "padding": padding,
         "padding_mode": padding_mode,
+        "groups": groups,
         "config": config,
         "compute_kernel_config": kernel_config,
     }
