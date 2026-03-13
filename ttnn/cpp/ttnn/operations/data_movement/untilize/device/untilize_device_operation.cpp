@@ -320,24 +320,10 @@ UntilizeDeviceOperation::program_factory_t UntilizeDeviceOperation::select_progr
     if (input_is_sharded && output_is_sharded && input_buffer_type == BufferType::L1 &&
         output_buffer_type == BufferType::L1 && input_memory_layout == output_memory_layout) {
         // Optimized special case: both input and output are sharded in L1 with identical specs.
-        // The identical factories use backed CBs (zero-copy). Skip them for uneven sharding
-        // because the slow untilize unpack can read past the backed CB boundary.
-        // Uneven cases fall through to the multi-core/ND-shard factories that handle this.
-        bool is_uneven = false;
-        {
-            uint32_t tw = input_tensor_a.padded_shape()[-1];
-            uint32_t th = input_tensor_a.physical_volume() / tw;
-            if (input_tensor_a.shard_spec().has_value()) {
-                auto ss = input_tensor_a.shard_spec().value().shape;
-                is_uneven = (th % ss[0] != 0) || (tw % ss[1] != 0);
-            } else if (input_tensor_a.nd_shard_spec().has_value()) {
-                auto sh = input_tensor_a.nd_shard_spec().value().shard_shape[-2];
-                auto sw = input_tensor_a.nd_shard_spec().value().shard_shape[-1];
-                is_uneven = (th % sh != 0) || (tw % sw != 0);
-            }
-        }
-
-        if (!is_uneven && operation_attributes.use_pack_untilize) {
+        // The identical factories use backed CBs (zero-copy) which work correctly on device.
+        // For the slow untilize path (!use_pack_untilize), the unpack can read past the backed CB
+        // boundary in tt-sim, so fall through to the multi-core/ND-shard factories instead.
+        if (operation_attributes.use_pack_untilize) {
             bool identical_shard_specs = false;
             identical_shard_specs |= input_tensor_a.shard_spec().has_value() &&
                                      output_tensor.shard_spec().has_value() &&
