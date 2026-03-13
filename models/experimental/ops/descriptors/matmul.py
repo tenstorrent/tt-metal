@@ -8,10 +8,14 @@ Matmul operation descriptor.
 Creates an OpDescriptor for matrix multiplication using the
 MatmulMultiCoreReuseOptimizedProgramFactory descriptor path.
 
-Note: This descriptor always uses MatmulMultiCoreReuseOptimizedProgramFactory.
+WARNING: This descriptor always uses MatmulMultiCoreReuseOptimizedProgramFactory.
 The ttnn.matmul() path may select a different factory (e.g. multicast) for the
-same shapes. This will converge when descriptors support factory selection via
-the device op variant pattern.
+same shapes.
+Further, it computes a simplified program config that does not guarantee parity
+with the ttnn.matmul() path. This descriptor is currently for demonstration purposes only.
+When all variants of matmul have a create_descriptor(), and have the ability
+to construct a program config from a CoreRangeSet so it can be offset from core 0,0,
+then this descriptor interface can be made general.
 """
 
 import math
