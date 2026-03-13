@@ -632,7 +632,7 @@ class TtTransformer(LightweightModule):
         ttnn.multiply_(result, 1e9, **op_kwargs)
         if hasattr(self, "_debug_log_device_tensor_slice"):
             self._debug_log_device_tensor_slice("unpacked_penalty_mask", result)
-        self._sanity_check_unpacked_bitmask(bitmask, result)
+        self._sanity_check_unpacked_bitmask(bitmask, converted_bitmask, result)
         return result
 
     def start_bitmask_to_device(self, bitmask):
@@ -771,18 +771,22 @@ class TtTransformer(LightweightModule):
         unpacked = unpacked.reshape(packed_local.shape[0], -1).to(torch.float32)
         return torch.where(unpacked != 0, torch.tensor(0.0), torch.tensor(-1e9))
 
-    def _sanity_check_unpacked_bitmask(self, packed_device_tensor, unpacked_device_tensor):
+    def _sanity_check_unpacked_bitmask(self, packed_device_tensor, unpacked01_device_tensor, penalty_device_tensor):
         packed_shards = ttnn.get_device_tensors(packed_device_tensor)
-        unpacked_shards = ttnn.get_device_tensors(unpacked_device_tensor)
-        if len(packed_shards) != len(unpacked_shards):
+        unpacked01_shards = ttnn.get_device_tensors(unpacked01_device_tensor)
+        penalty_shards = ttnn.get_device_tensors(penalty_device_tensor)
+        if len(packed_shards) != len(unpacked01_shards) or len(packed_shards) != len(penalty_shards):
             raise AssertionError(
                 f"Bitmask sanity check failed: shard count mismatch packed={len(packed_shards)} "
-                f"unpacked={len(unpacked_shards)}"
+                f"unpacked01={len(unpacked01_shards)} penalty={len(penalty_shards)}"
             )
 
-        for shard_idx, (packed_shard, unpacked_shard) in enumerate(zip(packed_shards, unpacked_shards)):
+        for shard_idx, (packed_shard, unpacked01_shard, penalty_shard) in enumerate(
+            zip(packed_shards, unpacked01_shards, penalty_shards)
+        ):
             packed_local = ttnn.to_torch(packed_shard).to(torch.int32)
-            unpacked_local = ttnn.to_torch(unpacked_shard).to(torch.float32)
+            unpacked01_local = ttnn.to_torch(unpacked01_shard).to(torch.int32)
+            penalty_local = ttnn.to_torch(penalty_shard).to(torch.float32)
 
             # Also compare packed local shard against the exact host bitmask before H2D copy.
             if self._last_host_bitmask is not None:
@@ -800,24 +804,49 @@ class TtTransformer(LightweightModule):
                             "packed device shard does not match any host packed slice"
                         )
 
-            expected_local = self._torch_reference_unpack_local(packed_local)
+            expected_penalty_local = self._torch_reference_unpack_local(packed_local)
+            expected01_local = torch.where(
+                expected_penalty_local == 0.0,
+                torch.tensor(1, dtype=torch.int32),
+                torch.tensor(0, dtype=torch.int32),
+            )
 
-            if unpacked_local.shape != expected_local.shape:
-                h = min(unpacked_local.shape[0], expected_local.shape[0])
-                w = min(unpacked_local.shape[1], expected_local.shape[1])
-                unpacked_compare = unpacked_local[:h, :w]
-                expected_compare = expected_local[:h, :w]
+            if unpacked01_local.shape != expected01_local.shape:
+                h01 = min(unpacked01_local.shape[0], expected01_local.shape[0])
+                w01 = min(unpacked01_local.shape[1], expected01_local.shape[1])
+                unpacked01_compare = unpacked01_local[:h01, :w01]
+                expected01_compare = expected01_local[:h01, :w01]
             else:
-                unpacked_compare = unpacked_local
-                expected_compare = expected_local
+                unpacked01_compare = unpacked01_local
+                expected01_compare = expected01_local
 
-            if not torch.equal(unpacked_compare, expected_compare):
-                mismatch = unpacked_compare != expected_compare
-                first_idx = torch.nonzero(mismatch, as_tuple=False)[0].tolist()
-                got = unpacked_compare[tuple(first_idx)].item()
-                exp = expected_compare[tuple(first_idx)].item()
+            if not torch.equal(unpacked01_compare, expected01_compare):
+                mismatch01 = unpacked01_compare != expected01_compare
+                first_idx01 = torch.nonzero(mismatch01, as_tuple=False)[0].tolist()
+                got01 = unpacked01_compare[tuple(first_idx01)].item()
+                exp01 = expected01_compare[tuple(first_idx01)].item()
                 raise AssertionError(
-                    f"Bitmask sanity check failed on shard={shard_idx} idx={first_idx} " f"got={got} expected={exp}"
+                    f"Bitmask sanity check failed (unpacked01) on shard={shard_idx} idx={first_idx01} "
+                    f"got={got01} expected={exp01}"
+                )
+
+            if penalty_local.shape != expected_penalty_local.shape:
+                h = min(penalty_local.shape[0], expected_penalty_local.shape[0])
+                w = min(penalty_local.shape[1], expected_penalty_local.shape[1])
+                penalty_compare = penalty_local[:h, :w]
+                expected_penalty_compare = expected_penalty_local[:h, :w]
+            else:
+                penalty_compare = penalty_local
+                expected_penalty_compare = expected_penalty_local
+
+            if not torch.equal(penalty_compare, expected_penalty_compare):
+                mismatch = penalty_compare != expected_penalty_compare
+                first_idx = torch.nonzero(mismatch, as_tuple=False)[0].tolist()
+                got = penalty_compare[tuple(first_idx)].item()
+                exp = expected_penalty_compare[tuple(first_idx)].item()
+                raise AssertionError(
+                    f"Bitmask sanity check failed (penalty) on shard={shard_idx} idx={first_idx} "
+                    f"got={got} expected={exp}"
                 )
 
     def _debug_log_device_tensor_slice(self, name, tensor, width=16):
