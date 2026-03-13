@@ -1,5 +1,9 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """
-PCC test for TtSharedExpert module.
+PCC test for TtSharedExpert module (TP=4).
 
 Compares TorchSharedExpert (reference) against TtSharedExpert (multi-chip TTNN)
 to verify correctness of multi-chip sharding and CCL operations.
@@ -21,7 +25,9 @@ from tests.ttnn.utils_for_testing import assert_with_pcc
     "batch_seq_len, emb_dim, hidden_dim",
     [
         (4096, 7 * 1024, 2 * 1024),
+        (3200, 7 * 1024, 2 * 1024),
     ],
+    ids=["4K", "3.2K"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -64,23 +70,27 @@ def test_shared_expert_pcc(
     4. Proper reduce-scatter after final matmul
     5. Output matches torch reference with PCC > 0.97
     """
+
+    activations_dtype = ttnn.bfloat8_b
+    weights_dtype = ttnn.bfloat4_b
+
     num_devices = mesh_device.get_num_devices()
     mesh_shape = mesh_device.shape
-    logger.info(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
-    logger.info(f"batch_seq_len={batch_seq_len}, emb_dim={emb_dim}, hidden_dim={hidden_dim}")
+    logger.debug(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
+    logger.debug(f"batch_seq_len={batch_seq_len}, emb_dim={emb_dim}, hidden_dim={hidden_dim}")
 
     # Add Tracy signpost for profiling
-    signpost(f"SharedExpert PCC test - mesh {mesh_shape}, batch_seq={batch_seq_len}")
+    signpost(f"SharedExpert PCC test - {mesh_shape=} {batch_seq_len=} {num_links=} {topology=}")
 
     # Query available ethernet links
     actual_num_links = get_num_links(mesh_device, cluster_axis=1)  # Query along mesh columns
-    logger.info(f"Available ethernet links along mesh columns: {actual_num_links}")
-    logger.info(f"Using num_links={num_links}, topology={topology}")
+    logger.debug(f"Available ethernet links along mesh columns: {actual_num_links}")
+    logger.debug(f"Using num_links={num_links}, topology={topology}")
 
     # ========================================
     # Step 1: Create PyTorch reference model
     # ========================================
-    logger.info("Creating TorchSharedExpert reference")
+    logger.debug("Creating TorchSharedExpert reference")
     torch_model = TorchSharedExpert(emb_dim=emb_dim, hidden_dim=hidden_dim)
 
     # Extract weights for TTNN model
@@ -93,7 +103,7 @@ def test_shared_expert_pcc(
     # ========================================
     # Step 2: Create TTNN model with same weights
     # ========================================
-    logger.info("Creating TtSharedExpert with same weights")
+    logger.debug("Creating TtSharedExpert with same weights")
     tt_model = TtSharedExpert(
         mesh_device=mesh_device,
         emb_dim=emb_dim,
@@ -101,6 +111,8 @@ def test_shared_expert_pcc(
         torch_weights=torch_weights,
         num_links=num_links,
         topology=topology,
+        activations_dtype=activations_dtype,
+        weights_dtype=weights_dtype,
     )
 
     # ========================================
@@ -108,7 +120,7 @@ def test_shared_expert_pcc(
     # ========================================
     # For torch: full tensor [batch_seq_len, emb_dim]
     torch_input = torch.randn(batch_seq_len, emb_dim, dtype=torch.float32)
-    logger.info(f"Created torch input: {torch_input.shape}")
+    logger.debug(f"Created torch input: {torch_input.shape}")
 
     # For ttnn: replicated tensor [batch_seq_len, emb_dim] on all devices
     tt_input = ttnn.from_torch(
@@ -116,40 +128,40 @@ def test_shared_expert_pcc(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         layout=ttnn.TILE_LAYOUT,
         device=mesh_device,
-        dtype=ttnn.bfloat8_b,
+        dtype=activations_dtype,
     )
-    logger.info(f"Created ttnn input (replicated): {tt_input.shape}")
+    logger.debug(f"Created ttnn input (replicated): {tt_input.shape}")
 
     # ========================================
     # Step 4: Run forward passes
     # ========================================
-    logger.info("Running torch forward pass")
+    logger.debug("Running torch forward pass")
     torch_output = torch_model(torch_input)
-    logger.info(f"Torch output shape: {torch_output.shape}")
+    logger.debug(f"Torch output shape: {torch_output.shape}")
 
-    logger.info("Running ttnn forward pass")
+    logger.debug("Running ttnn forward pass")
     tt_output = tt_model(tt_input)
-    logger.info(f"TTNN output shape (sharded): {tt_output.shape}")
+    logger.debug(f"TTNN output shape (sharded): {tt_output.shape}")
 
     # ========================================
     # Step 5: Convert TTNN output back to torch and compare
     # ========================================
-    logger.info("Converting TTNN output to torch for comparison")
+    logger.debug("Converting TTNN output to torch for comparison")
     tt_output_torch = ttnn.to_torch(
         tt_output,
         mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=mesh_device.shape, dims=(0, -1)),
     )
-    logger.info(f"TTNN output converted to torch: {tt_output_torch.shape}")
+    logger.debug(f"TTNN output converted to torch: {tt_output_torch.shape}")
 
     # Compare with PCC
-    logger.info("Comparing outputs with PCC")
+    logger.debug("Comparing outputs with PCC")
     pcc_passed, pcc_message = assert_with_pcc(
         torch_output.to(torch.float32),
         tt_output_torch.to(torch.float32),
         pcc=0.97,
     )
 
-    logger.info(f"PCC comparison: {pcc_message}")
+    logger.debug(f"PCC comparison: {pcc_message}")
     assert pcc_passed, f"PCC test failed: {pcc_message}"
 
-    logger.info("PCC test passed!")
+    logger.debug("PCC test passed!")

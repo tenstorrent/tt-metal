@@ -78,16 +78,16 @@ class TtDistributedRmsNorm(LightweightModule):
         self.sharded_progcfg = sharded_progcfg
         self.stats_memcfg = stats_memcfg
 
-        logger.info(f"Initializing TtDistributedRmsNorm with hidden_dim={hidden_dim}, epsilon={epsilon}")
-        logger.info(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}")
-        logger.info(f"CCL config: cluster_axis={cluster_axis}, num_links={num_links}, topology={topology}")
+        logger.debug(f"Initializing TtDistributedRmsNorm with hidden_dim={hidden_dim}, epsilon={epsilon}")
+        logger.debug(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}")
+        logger.debug(f"CCL config: cluster_axis={cluster_axis}, num_links={num_links}, topology={topology}")
 
         # Create sharded weight
         if torch_weight is not None:
-            logger.info("Creating weight from provided torch tensor")
+            logger.debug("Creating weight from provided torch tensor")
             self.weight = self._create_sharded_weight_from_torch(torch_weight)
         else:
-            logger.info("Creating random sharded weight")
+            logger.debug("Creating random sharded weight")
             self.weight = self._create_random_sharded_weight()
 
     def _create_sharded_weight_from_torch(self, torch_weight: torch.Tensor) -> ttnn.Tensor:
@@ -106,7 +106,7 @@ class TtDistributedRmsNorm(LightweightModule):
 
         # Reshape weight to [1, 1, hidden_dim // 32, 32] for optimal performance
         torch_weight_reshaped = torch_weight.reshape(1, 1, self.hidden_dim // 32, 32)
-        logger.info(f"Weight reshaped from {torch_weight.shape} to {torch_weight_reshaped.shape}")
+        logger.debug(f"Weight reshaped from {torch_weight.shape} to {torch_weight_reshaped.shape}")
 
         # Create mesh mapper: replicate across mesh rows (dim 0), shard along dim 2 across mesh cols
         mesh_mapper = ttnn.ShardTensor2dMesh(
@@ -123,7 +123,7 @@ class TtDistributedRmsNorm(LightweightModule):
             dtype=ttnn.bfloat16,
         )
 
-        logger.info(f"Created sharded weight: {tt_weight.shape}")
+        logger.debug(f"Created sharded weight: {tt_weight.shape}")
         return tt_weight
 
     def _create_random_sharded_weight(self) -> ttnn.Tensor:
@@ -143,12 +143,12 @@ class TtDistributedRmsNorm(LightweightModule):
             Output tensor [batch, seq_len, hidden_dim / num_devices]
             Normalized with same sharding as input.
         """
-        logger.info(f"Forward pass: input shape={x.shape}")
+        logger.debug(f"Forward pass: input shape={x.shape}")
 
         # Optional: Move input to specified memory config
         if self.input_memcfg is not None:
             x = ttnn.to_memory_config(x, memory_config=self.input_memcfg)
-            logger.info("Moved input to specified memory config")
+            logger.debug("Moved input to specified memory config")
 
         # Step 1: Pre-all-gather - each device computes local sum(x^2)
         tt_stats = ttnn.rms_norm_pre_all_gather(
@@ -156,7 +156,7 @@ class TtDistributedRmsNorm(LightweightModule):
             dtype=ttnn.bfloat16,
             program_config=self.sharded_progcfg,
         )
-        logger.info(f"Pre-all-gather stats shape: {tt_stats.shape}")
+        logger.debug(f"Pre-all-gather stats shape: {tt_stats.shape}")
 
         # Step 2: All-gather stats across cluster_axis
         all_gather_kwargs = {
@@ -171,7 +171,7 @@ class TtDistributedRmsNorm(LightweightModule):
 
         tt_gathered_stats = ttnn.all_gather(**all_gather_kwargs)
         ttnn.deallocate(tt_stats)
-        logger.info(f"Gathered stats shape: {tt_gathered_stats.shape}")
+        logger.debug(f"Gathered stats shape: {tt_gathered_stats.shape}")
 
         # Step 3: Post-all-gather - normalize using gathered global stats
         tt_output = ttnn.rms_norm_post_all_gather(
@@ -183,6 +183,6 @@ class TtDistributedRmsNorm(LightweightModule):
             program_config=self.sharded_progcfg,
         )
         ttnn.deallocate(tt_gathered_stats)
-        logger.info(f"Output shape: {tt_output.shape}")
+        logger.debug(f"Output shape: {tt_output.shape}")
 
         return tt_output

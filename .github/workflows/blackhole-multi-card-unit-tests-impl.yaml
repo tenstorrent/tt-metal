@@ -138,18 +138,13 @@ jobs:
             test-type: qb
             owner_id: U08E1JCMAJF # Marko Bezulj
             model-name: deepseek_prefill
-          - name: bh_DeepSeek_TP4_FFN_SHARED_EXPERT
+          - name: bh_DeepSeek_TP4_FFN_SHARED_EXPERT_RMSNORM
             cmd: |
               pytest models/demos/deepseek_v3_d_p/tests/pcc/test_shared_expert.py -vvv --tb=short
               pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ffn.py -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_rmsnorm.py -vvv --tb=short
             timeout: 5
             test-type: qb-only
-            owner_id: U08E1JCMAJF
-            model-name: deepseek_prefill
-          - name: bh_DeepSeek_RMSNORM
-            cmd: pytest models/demos/deepseek_v3_d_p/tests/pcc/test_rmsnorm.py -vvv
-            timeout: 5
-            test-type: fast
             owner_id: U08E1JCMAJF
             model-name: deepseek_prefill
           YAML_EOF
