@@ -4,9 +4,6 @@
 
 from utils.lora import (  # noqa: F401
     LORA_TARGETS_ALL,
-    LoRAAdapter,
-    DistributedLoRAColumnAdapter,
-    DistributedLoRARowAdapter,
     LoRALinearProjection,
     LoRAColumnParallelLinear,
     LoRARowParallelLinear,
