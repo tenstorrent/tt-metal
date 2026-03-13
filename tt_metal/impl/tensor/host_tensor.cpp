@@ -6,6 +6,8 @@
 
 namespace tt::tt_metal {
 
+/*
+
 // TODO: Implement once HostStorage is migrated (#37692)
 // HostTensor::HostTensor(HostStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology)
 
@@ -74,5 +76,7 @@ std::size_t HostTensor::element_size() const {
 }
 
 Strides HostTensor::strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
+
+*/
 
 }  // namespace tt::tt_metal

@@ -6,6 +6,8 @@
 
 namespace tt::tt_metal {
 
+/*
+
 // TODO: Implement once DeviceStorage is migrated (#37692)
 // MeshTensor::MeshTensor(DeviceStorage storage, TensorSpec tensor_spec, TensorTopology tensor_topology)
 
@@ -66,5 +68,7 @@ std::size_t MeshTensor::element_size() const {
 }
 
 Strides MeshTensor::strides() const { return tensor_spec().tensor_layout().compute_strides(logical_shape()); }
+
+*/
 
 }  // namespace tt::tt_metal
