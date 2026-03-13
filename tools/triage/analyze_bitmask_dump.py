@@ -12,7 +12,7 @@ import argparse
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Dict, Optional
+from typing import Dict, Optional, Tuple
 
 import torch
 
@@ -94,7 +94,7 @@ def tensor_stats(t: torch.Tensor) -> str:
     return s
 
 
-def first_mismatch(a: torch.Tensor, b: torch.Tensor) -> Optional[str]:
+def first_mismatch(a: torch.Tensor, b: torch.Tensor, atol: float = 0.0, rtol: float = 0.0) -> Optional[str]:
     # Compare with trailing dims flattened so tensors like
     # (B, W, 32) can be directly compared against (B, W*32).
     if a.ndim >= 2:
@@ -110,13 +110,28 @@ def first_mismatch(a: torch.Tensor, b: torch.Tensor) -> Optional[str]:
     w = min(a.shape[1], b.shape[1])
     a2 = a[:h, :w]
     b2 = b[:h, :w]
-    neq = a2 != b2
+    if a2.is_floating_point() or b2.is_floating_point():
+        close = torch.isclose(a2.to(torch.float32), b2.to(torch.float32), atol=atol, rtol=rtol)
+        neq = ~close
+    else:
+        neq = a2 != b2
     if not torch.any(neq):
         return None
     idx = torch.nonzero(neq, as_tuple=False)[0].tolist()
     got = a2[idx[0], idx[1]].item()
     exp = b2[idx[0], idx[1]].item()
     return f"first mismatch idx={idx} got={got} expected={exp}"
+
+
+def max_abs_err(a: torch.Tensor, b: torch.Tensor) -> Tuple[float, float]:
+    a = a.reshape(a.shape[0], -1) if a.ndim >= 2 else a.reshape(1, -1)
+    b = b.reshape(b.shape[0], -1) if b.ndim >= 2 else b.reshape(1, -1)
+    h = min(a.shape[0], b.shape[0])
+    w = min(a.shape[1], b.shape[1])
+    d = (a[:h, :w].to(torch.float32) - b[:h, :w].to(torch.float32)).abs()
+    if d.numel() == 0:
+        return 0.0, 0.0
+    return d.max().item(), d.mean().item()
 
 
 def find_host_slice_match(host: torch.Tensor, packed_local: torch.Tensor) -> Optional[int]:
@@ -136,26 +151,28 @@ def expected01_from_packed(packed_local: torch.Tensor) -> torch.Tensor:
     return ((packed_local[:, :, None] >> ar[None, None, :]) & 1).reshape(packed_local.shape[0], -1)
 
 
-def analyze_step_shard(step: int, shard: int, data: StepShard) -> int:
+def analyze_step_shard(step: int, shard: int, data: StepShard, verbose: bool, show_ok: bool) -> int:
     errs = 0
     t = data.tensors
-    print(f"\n=== step={step} shard={shard} ===")
-    for name in NAMES:
-        if name in t:
-            print(f"  {name}: {tensor_stats(t[name])}")
+    lines = [f"\n=== step={step} shard={shard} ==="]
+    if verbose:
+        for name in NAMES:
+            if name in t:
+                lines.append(f"  {name}: {tensor_stats(t[name])}")
 
     packed = t.get("packed_bitmask_device")
     if packed is None:
-        print("  ! missing packed_bitmask_device")
+        lines.append("  ! missing packed_bitmask_device")
+        print("\n".join(lines))
         return 1
 
     if data.host_packed is not None:
         col = find_host_slice_match(data.host_packed.to(torch.int32), packed.to(torch.int32))
         if col is None:
-            print("  ! packed shard does NOT match any host packed slice")
+            lines.append("  ! packed shard does NOT match any host packed slice")
             errs += 1
-        else:
-            print(f"  host slice match at col_start={col}")
+        elif verbose:
+            lines.append(f"  host slice match at col_start={col}")
 
     expected01 = expected01_from_packed(packed.to(torch.int32))
     expected_penalty = torch.where(
@@ -169,19 +186,19 @@ def analyze_step_shard(step: int, shard: int, data: StepShard) -> int:
             got = t[name].to(torch.int32)
             msg = first_mismatch(got, expected01)
             if msg:
-                print(f"  ! {name} != expected01 -> {msg}")
+                lines.append(f"  ! {name} != expected01 -> {msg}")
                 errs += 1
-            else:
-                print(f"  {name} matches expected01")
+            elif verbose:
+                lines.append(f"  {name} matches expected01")
 
     if "unpacked_penalty_mask" in t:
         got = t["unpacked_penalty_mask"].to(torch.float32)
         msg = first_mismatch(got, expected_penalty)
         if msg:
-            print(f"  ! unpacked_penalty_mask != expected_penalty -> {msg}")
+            lines.append(f"  ! unpacked_penalty_mask != expected_penalty -> {msg}")
             errs += 1
-        else:
-            print("  unpacked_penalty_mask matches expected_penalty")
+        elif verbose:
+            lines.append("  unpacked_penalty_mask matches expected_penalty")
 
     if "logits_before_mask" in t and "logits_after_mask" in t and "unpacked_penalty_mask" in t:
         before = t["logits_before_mask"].to(torch.float32)
@@ -191,12 +208,25 @@ def analyze_step_shard(step: int, shard: int, data: StepShard) -> int:
         w = min(before.shape[-1], penalty.shape[-1]) if before.ndim >= 1 else None
         if h is not None and w is not None and before.ndim == 4 and penalty.ndim == 2:
             delta = after[0, 0, :h, :w] - before[0, 0, :h, :w]
-            msg = first_mismatch(delta, penalty[:h, :w])
+            # delta is bf16-derived in dumps; allow quantization noise around large magnitudes.
+            msg = first_mismatch(delta, penalty[:h, :w], atol=2.0e6, rtol=0.0)
             if msg:
-                print(f"  ! logits delta != penalty -> {msg}")
+                max_err, mean_err = max_abs_err(delta, penalty[:h, :w])
+                lines.append(
+                    f"  ! logits delta != penalty -> {msg} " f"(max_abs_err={max_err:.6g}, mean_abs_err={mean_err:.6g})"
+                )
                 errs += 1
-            else:
-                print("  logits_after - logits_before matches penalty")
+            elif verbose:
+                max_err, mean_err = max_abs_err(delta, penalty[:h, :w])
+                lines.append(
+                    "  logits_after - logits_before matches penalty "
+                    f"(within tol, max_abs_err={max_err:.6g}, mean_abs_err={mean_err:.6g})"
+                )
+
+    if errs > 0 or verbose or show_ok:
+        if errs == 0 and not verbose and show_ok:
+            lines.append("  OK")
+        print("\n".join(lines))
 
     return errs
 
@@ -205,6 +235,8 @@ def main() -> None:
     ap = argparse.ArgumentParser()
     ap.add_argument("--dump-dir", type=Path, required=True, help="Directory containing stepXXXX_*.pt files")
     ap.add_argument("--step", type=int, default=None, help="Analyze only one step")
+    ap.add_argument("--verbose", action="store_true", help="Print full per-shard stats")
+    ap.add_argument("--show-ok", action="store_true", help="Print one line for passing shards")
     args = ap.parse_args()
 
     by_step = load_dump_dir(args.dump_dir)
@@ -222,7 +254,9 @@ def main() -> None:
 
     for step in steps:
         for shard in sorted(by_step[step].keys()):
-            total_errs += analyze_step_shard(step, shard, by_step[step][shard])
+            total_errs += analyze_step_shard(
+                step, shard, by_step[step][shard], verbose=args.verbose, show_ok=args.show_ok
+            )
 
     print(f"\nDone. Total issues found: {total_errs}")
 
