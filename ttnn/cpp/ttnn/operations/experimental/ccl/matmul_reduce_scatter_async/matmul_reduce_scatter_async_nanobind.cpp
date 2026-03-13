@@ -24,6 +24,58 @@
 
 namespace ttnn::operations::experimental::ccl {
 
+namespace {
+
+std::vector<ttnn::Tensor> matmul_reduce_scatter_async_wrapper(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& weight_tensor,
+    ttnn::Tensor& persistent_intermediate_buffer,
+    ttnn::Tensor& persistent_output_buffer,
+    const uint32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const tt::tt_metal::CoreCoord reduce_scatter_core_grid_offset,
+    const std::optional<GlobalSemaphore>& barrier_semaphore,
+    const std::optional<const Tensor>& bias,
+    const uint32_t num_links,
+    const std::optional<ttnn::MemoryConfig>& memory_config_rs,
+    const std::optional<ttnn::MemoryConfig>& intermediate_memory_config_rs,
+    const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    const std::optional<ttnn::MemoryConfig>& memory_config_mm,
+    const bool transpose_a,
+    const bool transpose_b,
+    const std::optional<const DataType> dtype,
+    const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
+    const std::optional<const std::string>& activation,
+    const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+    const std::optional<const ttnn::CoreGrid> core_grid) {
+    return ttnn::experimental::matmul_reduce_scatter_async(
+        input_tensor,
+        weight_tensor,
+        persistent_intermediate_buffer,
+        persistent_output_buffer,
+        dim,
+        multi_device_global_semaphore,
+        reduce_scatter_core_grid_offset,
+        barrier_semaphore,
+        bias,
+        num_links,
+        memory_config_rs,
+        intermediate_memory_config_rs,
+        topology,
+        sub_device_id,
+        memory_config_mm,
+        transpose_a,
+        transpose_b,
+        dtype,
+        program_config,
+        activation,
+        compute_kernel_config,
+        core_grid);
+}
+
+}  // namespace
+
 void bind_matmul_reduce_scatter_async(nb::module_& mod) {
     ttnn::bind_function<"matmul_reduce_scatter_async", "ttnn.experimental.">(
         mod,
@@ -51,52 +103,7 @@ void bind_matmul_reduce_scatter_async(nb::module_& mod) {
             * :attr:`core_grid` (Optional[ttnn.CoreGrid])
         )doc",
         ttnn::overload_t(
-            +[](const ttnn::Tensor& input_tensor,
-                const ttnn::Tensor& weight_tensor,
-                ttnn::Tensor& persistent_intermediate_buffer,
-                ttnn::Tensor& persistent_output_buffer,
-                const uint32_t dim,
-                const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-                const tt::tt_metal::CoreCoord reduce_scatter_core_grid_offset,
-                const std::optional<GlobalSemaphore>& barrier_semaphore,
-                const std::optional<const Tensor>& bias,
-                const uint32_t num_links,
-                const std::optional<ttnn::MemoryConfig>& memory_config_rs,
-                const std::optional<ttnn::MemoryConfig>& intermediate_memory_config_rs,
-                const ttnn::ccl::Topology topology,
-                std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-                const std::optional<ttnn::MemoryConfig>& memory_config_mm,
-                const bool transpose_a,
-                const bool transpose_b,
-                const std::optional<const DataType> dtype,
-                const std::optional<const operations::matmul::MatmulProgramConfig>& program_config,
-                const std::optional<const std::string>& activation,
-                const std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
-                const std::optional<const ttnn::CoreGrid> core_grid) -> std::vector<ttnn::Tensor> {
-                return ttnn::experimental::matmul_reduce_scatter_async(
-                    input_tensor,
-                    weight_tensor,
-                    persistent_intermediate_buffer,
-                    persistent_output_buffer,
-                    dim,
-                    multi_device_global_semaphore,
-                    reduce_scatter_core_grid_offset,
-                    barrier_semaphore,
-                    bias,
-                    num_links,
-                    memory_config_rs,
-                    intermediate_memory_config_rs,
-                    topology,
-                    sub_device_id,
-                    memory_config_mm,
-                    transpose_a,
-                    transpose_b,
-                    dtype,
-                    program_config,
-                    activation,
-                    compute_kernel_config,
-                    core_grid);
-            },
+            matmul_reduce_scatter_async_wrapper,
             nb::arg("input_tensor"),
             nb::arg("weight_tensor"),
             nb::arg("persistent_intermediate_buffer"),

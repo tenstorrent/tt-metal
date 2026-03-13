@@ -20,6 +20,34 @@
 
 namespace ttnn::operations::experimental::ccl {
 
+namespace {
+
+std::vector<ttnn::Tensor> ring_attention_all_gather_async_wrapper(
+    const std::vector<ttnn::Tensor>& input_tensor,
+    std::vector<ttnn::Tensor>& persistent_output_buffer,
+    const int32_t dim,
+    const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
+    const std::optional<uint32_t>& num_links,
+    const uint32_t cluster_axis,
+    const MeshDevice& mesh_device,
+    const std::optional<MemoryConfig>& memory_config,
+    const ttnn::ccl::Topology topology,
+    std::optional<tt::tt_metal::SubDeviceId> subdevice_id) {
+    return ttnn::experimental::ring_attention_all_gather_async(
+        input_tensor,
+        persistent_output_buffer,
+        dim,
+        multi_device_global_semaphore,
+        cluster_axis,
+        mesh_device,
+        topology,
+        num_links.value_or(1),
+        memory_config,
+        subdevice_id);
+}
+
+}  // namespace
+
 void bind_ring_attention_all_gather_async(nb::module_& mod) {
     ttnn::bind_function<"ring_attention_all_gather_async", "ttnn.experimental.">(
         mod,
@@ -58,28 +86,7 @@ void bind_ring_attention_all_gather_async(nb::module_& mod) {
 
         )doc",
         ttnn::overload_t(
-            +[](const std::vector<ttnn::Tensor>& input_tensor,
-                std::vector<ttnn::Tensor>& persistent_output_buffer,
-                const int32_t dim,
-                const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-                const std::optional<uint32_t>& num_links,
-                const uint32_t cluster_axis,
-                const MeshDevice& mesh_device,
-                const std::optional<MemoryConfig>& memory_config,
-                const ttnn::ccl::Topology topology,
-                std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> std::vector<ttnn::Tensor> {
-                return ttnn::experimental::ring_attention_all_gather_async(
-                    input_tensor,
-                    persistent_output_buffer,
-                    dim,
-                    multi_device_global_semaphore,
-                    cluster_axis,
-                    mesh_device,
-                    topology,
-                    num_links.value_or(1),
-                    memory_config,
-                    subdevice_id);
-            },
+            ring_attention_all_gather_async_wrapper,
             nb::arg("input_tensor"),
             nb::arg("persistent_output_buffer"),
             nb::arg("dim"),
