@@ -13,6 +13,7 @@ from loguru import logger
 
 import ttnn
 from models.common.sampling.sampling_params import SamplingParams
+from models.demos.deepseek_v3.tt.generator import DEFAULT_MAX_SEQ_LEN
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
 from models.demos.deepseek_v3.utils.config_helpers import (
     DEFAULT_SAMPLING_TEMPERATURE,
@@ -168,6 +169,12 @@ def create_parser() -> argparse.ArgumentParser:
         help="Path to local HF DeepSeek-V3 model (safetensors)",
     )
     p.add_argument("--max-new-tokens", type=int, default=32, help="Number of tokens to generate")
+    p.add_argument(
+        "--max-seq-len",
+        type=int,
+        default=DEFAULT_MAX_SEQ_LEN,
+        help=f"Maximum configured sequence length for the demo runtime (default: {DEFAULT_MAX_SEQ_LEN}).",
+    )
     p.add_argument(
         "--sampling-temperature",
         type=float,
@@ -402,6 +409,7 @@ def run_demo(
     *,
     model_path: str | Path | None = None,
     max_new_tokens: int = 32,
+    max_seq_len: int = DEFAULT_MAX_SEQ_LEN,
     max_users_per_row: int = USERS_PER_ROW,
     cache_dir: str | Path | None = None,
     random_weights: bool = False,
@@ -549,6 +557,7 @@ def run_demo(
                 enable_trace=enable_trace,
                 enable_mem_profile=enable_mem_profile,
                 signpost=signpost,
+                max_seq_len=max_seq_len,
                 prefill_max_tokens=prefill_max_tokens,
                 force_recalculate=force_recalculate,
                 profile_decode=profile_decode,
@@ -762,6 +771,7 @@ def main() -> None:
         args.prompts,
         model_path=args.model_path,
         max_new_tokens=args.max_new_tokens,
+        max_seq_len=args.max_seq_len,
         max_users_per_row=args.max_users_per_row,
         cache_dir=args.cache_dir,
         random_weights=bool(args.random_weights),
