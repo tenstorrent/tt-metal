@@ -119,6 +119,155 @@ std::vector<Tensor> atan2_bw(
     return grad;
 }
 
+std::vector<std::optional<Tensor>> addalpha_bw(
+    const Tensor& grad_tensor,
+    const Tensor& input_a,
+    const Tensor& other,
+    float alpha,
+    const std::vector<bool>& are_required_outputs,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
+
+    operations::binary_backward::detail::preallocated_tensors_check(
+        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]});
+
+    if (are_required_outputs[0]) {
+        ttnn::assign(grad_tensor, input_grad.value());
+        result[0] = input_grad;
+    }
+    if (are_required_outputs[1]) {
+        ttnn::multiply(grad_tensor, alpha, std::nullopt, output_mem_config, other_grad);
+        result[1] = other_grad;
+    }
+    return result;
+}
+
+std::vector<std::optional<Tensor>> subalpha_bw(
+    const Tensor& grad_tensor,
+    const Tensor& input_a,
+    const Tensor& other,
+    float alpha,
+    const std::vector<bool>& are_required_outputs,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
+    operations::binary_backward::detail::preallocated_tensors_check(
+        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]});
+    if (are_required_outputs.at(0)) {
+        ttnn::assign(grad_tensor, input_grad.value());
+        result[0] = input_grad;
+    }
+    if (are_required_outputs.at(1)) {
+        ttnn::neg(grad_tensor, output_mem_config, other_grad);
+        ttnn::multiply(other_grad.value(), alpha, std::nullopt, output_mem_config, other_grad);
+        result[1] = other_grad;
+    }
+
+    return result;
+}
+
+std::vector<std::optional<Tensor>> add_bw(
+    const Tensor& grad_tensor,
+    const Tensor& input_tensor,
+    float /*alpha*/,
+    const std::optional<MemoryConfig>& /*output_mem_config*/,
+    std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> result;
+    input_grad = input_grad.value_or(ttnn::empty_like(input_tensor));
+    ttnn::assign(grad_tensor, input_grad.value());
+    result.emplace_back(input_grad);
+    return result;
+}
+
+std::vector<std::optional<Tensor>> add_bw(
+    const Tensor& grad_tensor,
+    const Tensor& input_a,
+    const Tensor& other,
+    const std::vector<bool>& are_required_outputs,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
+    operations::binary_backward::detail::preallocated_tensors_check(
+        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]});
+    if (are_required_outputs.at(0)) {
+        ttnn::assign(grad_tensor, input_grad.value());
+        result[0] = input_grad;
+    }
+    if (are_required_outputs.at(1)) {
+        ttnn::multiply(grad_tensor, 1.0f, std::nullopt, output_mem_config, other_grad);
+        result[1] = other_grad;
+    }
+    return result;
+}
+
+std::vector<ComplexTensor> add_bw(
+    const ComplexTensor& grad_tensor,
+    const ComplexTensor& /*input_a*/,
+    const ComplexTensor& /*other*/,
+    float alpha,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<ComplexTensor> grad_tensor_res;
+    ComplexTensor grad_a = grad_tensor;
+    grad_tensor_res.emplace_back(grad_a);
+    const Tensor& grad_r = grad_tensor.real();
+    const Tensor& grad_i = grad_tensor.imag();
+    ComplexTensor grad_b = ComplexTensor(
+        {ttnn::multiply(grad_r, alpha, std::nullopt, output_mem_config),
+         ttnn::multiply(grad_i, alpha, std::nullopt, output_mem_config)});
+    grad_tensor_res.emplace_back(grad_b);
+    return grad_tensor_res;
+}
+
+std::vector<std::optional<Tensor>> sub_bw(
+    const Tensor& grad_tensor,
+    const Tensor& input_tensor,
+    float /*alpha*/,
+    const std::optional<MemoryConfig>& /*output_mem_config*/,
+    std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> result;
+    result.emplace_back(
+        input_grad.has_value() ? ttnn::assign(grad_tensor, input_grad.value())
+                               : ttnn::assign(grad_tensor, ttnn::empty_like(input_tensor)));
+    return result;
+}
+
+std::vector<std::optional<Tensor>> sub_bw(
+    const Tensor& grad_tensor,
+    const Tensor& input_a,
+    const Tensor& other,
+    const std::vector<bool>& are_required_outputs,
+    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<Tensor>& input_grad,
+    const std::optional<Tensor>& other_grad) {
+    return ttnn::subalpha_bw(
+        grad_tensor, input_a, other, 1.0f, are_required_outputs, output_mem_config, input_grad, other_grad);
+}
+
+std::vector<ComplexTensor> sub_bw(
+    const ComplexTensor& grad_tensor,
+    const ComplexTensor& /*input_a*/,
+    const ComplexTensor& /*other*/,
+    float alpha,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<ComplexTensor> grad_tensor_res;
+    grad_tensor_res.emplace_back(grad_tensor);
+    const Tensor& grad_r = grad_tensor.real();
+    const Tensor& grad_i = grad_tensor.imag();
+    using ttnn::operations::unary::EltwiseUnaryWithParam;
+    using ttnn::operations::unary::UnaryOpType;
+    std::vector<EltwiseUnaryWithParam> ops_chain = {
+        EltwiseUnaryWithParam{UnaryOpType::NEG}, EltwiseUnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, alpha}};
+    ComplexTensor grad_b = ComplexTensor(
+        {ttnn::unary_chain(grad_r, ops_chain, output_mem_config),
+         ttnn::unary_chain(grad_i, ops_chain, output_mem_config)});
+    grad_tensor_res.emplace_back(grad_b);
+    return grad_tensor_res;
+}
+
 std::vector<Tensor> xlogy_bw(
     const Tensor& grad_tensor,
     const Tensor& input_a,
@@ -264,6 +413,52 @@ std::vector<Tensor> logaddexp2_bw(
     return grad;
 }
 
+std::vector<Tensor> remainder_bw(
+    const Tensor& grad_tensor,
+    const Tensor& /*input_tensor*/,
+    float /*scalar*/,
+    const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    std::vector<Tensor> grad;
+    grad.emplace_back(grad_tensor);
+    return grad;
+}
+
+std::vector<Tensor> remainder_bw(
+    const Tensor& grad_tensor,
+    const Tensor& input_a,
+    const Tensor& other,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad;
+    grad.emplace_back(grad_tensor);
+    Tensor result_div = ttnn::div(input_a, other, false, "floor", std::nullopt, output_mem_config);
+    Tensor grad_b = ttnn::multiply(ttnn::neg(grad_tensor), result_div, std::nullopt, output_mem_config);
+    grad.emplace_back(grad_b);
+    return grad;
+}
+
+std::vector<Tensor> fmod_bw(
+    const Tensor& grad_tensor,
+    const Tensor& /*input_tensor*/,
+    float /*scalar*/,
+    const std::optional<MemoryConfig>& /*output_mem_config*/) {
+    std::vector<Tensor> grad;
+    grad.emplace_back(grad_tensor);
+    return grad;
+}
+
+std::vector<Tensor> fmod_bw(
+    const Tensor& grad_tensor,
+    const Tensor& input_a,
+    const Tensor& other,
+    const std::optional<MemoryConfig>& output_mem_config) {
+    std::vector<Tensor> grad;
+    grad.emplace_back(grad_tensor);
+    Tensor result_div = ttnn::div(input_a, other, false, "trunc", std::nullopt, output_mem_config);
+    Tensor grad_b = ttnn::multiply(ttnn::neg(grad_tensor), result_div, std::nullopt, output_mem_config);
+    grad.emplace_back(grad_b);
+    return grad;
+}
+
 std::vector<Tensor> squared_difference_bw(
     const Tensor& grad_tensor,
     const Tensor& input_a,
@@ -279,68 +474,38 @@ std::vector<Tensor> squared_difference_bw(
     return grad;
 }
 
-std::vector<Tensor> min_bw(
+std::vector<std::optional<Tensor>> assign_bw(
     const Tensor& grad_tensor,
-    const Tensor& input_a,
-    const Tensor& other,
-    const std::optional<MemoryConfig>& output_mem_config) {
-    return operations::binary_backward::_min_or_max_bw<false>(grad_tensor, input_a, other, output_mem_config);
+    const Tensor& /*input_tensor*/,
+    const std::optional<MemoryConfig>& /*output_mem_config*/,
+    std::optional<Tensor> input_grad) {
+    std::vector<std::optional<ttnn::Tensor>> grad_tensor_res = {std::nullopt};
+    grad_tensor_res[0] = input_grad.has_value() ? ttnn::assign(grad_tensor, input_grad.value()) : grad_tensor;
+    return grad_tensor_res;
 }
 
-std::vector<Tensor> max_bw(
+std::vector<std::optional<Tensor>> assign_bw(
     const Tensor& grad_tensor,
-    const Tensor& input_a,
-    const Tensor& other,
-    const std::optional<MemoryConfig>& output_mem_config) {
-    return operations::binary_backward::_min_or_max_bw<true>(grad_tensor, input_a, other, output_mem_config);
-}
-
-std::vector<std::optional<Tensor>> subalpha_bw(
-    const Tensor& grad_tensor,
-    const Tensor& input_a,
-    const Tensor& other,
-    float alpha,
+    const Tensor& input_tensor,
+    const Tensor& other_tensor,
     const std::vector<bool>& are_required_outputs,
-    const std::optional<MemoryConfig>& output_mem_config,
+    const std::optional<MemoryConfig>& /*output_mem_config*/,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
-    std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
+    std::vector<std::optional<ttnn::Tensor>> grad_tensor_res = {std::nullopt, std::nullopt};
+
     operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]});
-    if (are_required_outputs.at(0)) {
+        input_grad, other_grad, input_tensor, other_tensor, {are_required_outputs[0], are_required_outputs[1]});
+
+    if (are_required_outputs[0]) {
         ttnn::assign(grad_tensor, input_grad.value());
-        result[0] = input_grad;
+        grad_tensor_res[0] = input_grad;
     }
-    if (are_required_outputs.at(1)) {
-        ttnn::neg(grad_tensor, output_mem_config, other_grad);
-        ttnn::multiply(other_grad.value(), alpha, std::nullopt, output_mem_config, other_grad);
-        result[1] = other_grad;
-    }
-
-    return result;
-}
-
-std::vector<std::optional<Tensor>> rsub_bw(
-    const Tensor& grad_tensor,
-    const Tensor& /*input_a*/,
-    const Tensor& /*other*/,
-    const std::vector<bool>& are_required_outputs,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    std::vector<std::optional<ttnn::Tensor>> result = {std::nullopt, std::nullopt};
-
-    operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, grad_tensor, grad_tensor, {are_required_outputs[0], are_required_outputs[1]});
-    if (are_required_outputs.at(0)) {
-        ttnn::neg(grad_tensor, output_mem_config, input_grad);
-        result[0] = input_grad;
-    }
-    if (are_required_outputs.at(1)) {
+    if (are_required_outputs[1]) {
         ttnn::assign(grad_tensor, other_grad.value());
-        result[1] = other_grad;
+        grad_tensor_res[1] = other_grad;
     }
-    return result;
+    return grad_tensor_res;
 }
 
 std::vector<std::optional<Tensor>> concat_bw(
@@ -393,91 +558,27 @@ std::vector<std::optional<Tensor>> concat_bw(
     return grad_tensor;
 }
 
-std::vector<std::optional<Tensor>> mul_bw(
-    const Tensor& grad_tensor_arg,
-    const Tensor& /*input_tensor_arg*/,
-    float scalar,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad) {
-    std::vector<std::optional<Tensor>> result;
-    if (!input_grad.has_value()) {
-        input_grad = ttnn::empty_like(grad_tensor_arg);
-    }
-    ttnn::multiply(grad_tensor_arg, scalar, std::nullopt, output_mem_config, input_grad);
-    result.push_back(input_grad);
-    return result;
-}
-
-std::vector<std::optional<Tensor>> mul_bw(
-    const Tensor& grad_tensor_arg,
-    const Tensor& input_tensor_arg,
-    const Tensor& other_tensor_arg,
+std::vector<std::optional<Tensor>> rsub_bw(
+    const Tensor& grad_tensor,
+    const Tensor& /*input_a*/,
+    const Tensor& /*other*/,
     const std::vector<bool>& are_required_outputs,
     const std::optional<MemoryConfig>& output_mem_config,
     std::optional<Tensor> input_grad,
     std::optional<Tensor> other_grad) {
-    std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
-    operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, input_tensor_arg, other_tensor_arg, {are_required_outputs[0], are_required_outputs[1]});
+    std::vector<std::optional<ttnn::Tensor>> result = {std::nullopt, std::nullopt};
 
+    operations::binary_backward::detail::preallocated_tensors_check(
+        input_grad, other_grad, grad_tensor, grad_tensor, {are_required_outputs[0], are_required_outputs[1]});
     if (are_required_outputs.at(0)) {
-        ttnn::multiply(grad_tensor_arg, other_tensor_arg, std::nullopt, output_mem_config, input_grad);
+        ttnn::neg(grad_tensor, output_mem_config, input_grad);
         result[0] = input_grad;
     }
     if (are_required_outputs.at(1)) {
-        ttnn::multiply(grad_tensor_arg, input_tensor_arg, std::nullopt, output_mem_config, other_grad);
+        ttnn::assign(grad_tensor, other_grad.value());
         result[1] = other_grad;
     }
     return result;
-}
-
-std::vector<ComplexTensor> mul_bw(
-    const ComplexTensor& grad_tensor,
-    const ComplexTensor& input_a,
-    const ComplexTensor& other,
-    const MemoryConfig& output_mem_config) {
-    std::vector<ComplexTensor> grad_tensor_res;
-    ComplexTensor grad_a =
-        ttnn::operations::complex_binary::_mul(grad_tensor, ttnn::conj(other, output_mem_config), output_mem_config);
-    grad_tensor_res.emplace_back(grad_a);
-    ComplexTensor grad_b =
-        ttnn::operations::complex_binary::_mul(grad_tensor, ttnn::conj(input_a, output_mem_config), output_mem_config);
-    grad_tensor_res.emplace_back(grad_b);
-    return grad_tensor_res;
-}
-
-std::vector<std::optional<Tensor>> assign_bw(
-    const Tensor& grad_tensor,
-    const Tensor& /*input_tensor*/,
-    const std::optional<MemoryConfig>& /*output_mem_config*/,
-    std::optional<Tensor> input_grad) {
-    std::vector<std::optional<ttnn::Tensor>> grad_tensor_res = {std::nullopt};
-    grad_tensor_res[0] = input_grad.has_value() ? ttnn::assign(grad_tensor, input_grad.value()) : grad_tensor;
-    return grad_tensor_res;
-}
-
-std::vector<std::optional<Tensor>> assign_bw(
-    const Tensor& grad_tensor,
-    const Tensor& input_tensor,
-    const Tensor& other_tensor,
-    const std::vector<bool>& are_required_outputs,
-    const std::optional<MemoryConfig>& /*output_mem_config*/,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    std::vector<std::optional<ttnn::Tensor>> grad_tensor_res = {std::nullopt, std::nullopt};
-
-    operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, input_tensor, other_tensor, {are_required_outputs[0], are_required_outputs[1]});
-
-    if (are_required_outputs[0]) {
-        ttnn::assign(grad_tensor, input_grad.value());
-        grad_tensor_res[0] = input_grad;
-    }
-    if (are_required_outputs[1]) {
-        ttnn::assign(grad_tensor, other_grad.value());
-        grad_tensor_res[1] = other_grad;
-    }
-    return grad_tensor_res;
 }
 
 std::vector<Tensor> bias_gelu_bw(
@@ -517,128 +618,20 @@ std::vector<Tensor> bias_gelu_bw(
     return grad_tensor_res;
 }
 
-std::vector<std::optional<Tensor>> addalpha_bw(
+std::vector<Tensor> max_bw(
     const Tensor& grad_tensor,
     const Tensor& input_a,
     const Tensor& other,
-    float alpha,
-    const std::vector<bool>& are_required_outputs,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
-
-    operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]});
-
-    if (are_required_outputs[0]) {
-        ttnn::assign(grad_tensor, input_grad.value());
-        result[0] = input_grad;
-    }
-    if (are_required_outputs[1]) {
-        ttnn::multiply(grad_tensor, alpha, std::nullopt, output_mem_config, other_grad);
-        result[1] = other_grad;
-    }
-    return result;
-}
-
-std::vector<std::optional<Tensor>> add_bw(
-    const Tensor& grad_tensor,
-    const Tensor& input_tensor,
-    float /*alpha*/,
-    const std::optional<MemoryConfig>& /*output_mem_config*/,
-    std::optional<Tensor> input_grad) {
-    std::vector<std::optional<Tensor>> result;
-    input_grad = input_grad.value_or(ttnn::empty_like(input_tensor));
-    ttnn::assign(grad_tensor, input_grad.value());
-    result.emplace_back(input_grad);
-    return result;
-}
-
-std::vector<std::optional<Tensor>> add_bw(
-    const Tensor& grad_tensor,
-    const Tensor& input_a,
-    const Tensor& other,
-    const std::vector<bool>& are_required_outputs,
-    const std::optional<MemoryConfig>& output_mem_config,
-    std::optional<Tensor> input_grad,
-    std::optional<Tensor> other_grad) {
-    std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
-    operations::binary_backward::detail::preallocated_tensors_check(
-        input_grad, other_grad, input_a, other, {are_required_outputs[0], are_required_outputs[1]});
-    if (are_required_outputs.at(0)) {
-        ttnn::assign(grad_tensor, input_grad.value());
-        result[0] = input_grad;
-    }
-    if (are_required_outputs.at(1)) {
-        ttnn::multiply(grad_tensor, 1.0f, std::nullopt, output_mem_config, other_grad);
-        result[1] = other_grad;
-    }
-    return result;
-}
-
-std::vector<ComplexTensor> add_bw(
-    const ComplexTensor& grad_tensor,
-    const ComplexTensor& /*input_a*/,
-    const ComplexTensor& /*other*/,
-    float alpha,
     const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<ComplexTensor> grad_tensor_res;
-    ComplexTensor grad_a = grad_tensor;
-    grad_tensor_res.emplace_back(grad_a);
-    const Tensor& grad_r = grad_tensor.real();
-    const Tensor& grad_i = grad_tensor.imag();
-    ComplexTensor grad_b = ComplexTensor(
-        {ttnn::multiply(grad_r, alpha, std::nullopt, output_mem_config),
-         ttnn::multiply(grad_i, alpha, std::nullopt, output_mem_config)});
-    grad_tensor_res.emplace_back(grad_b);
-    return grad_tensor_res;
+    return operations::binary_backward::_min_or_max_bw<true>(grad_tensor, input_a, other, output_mem_config);
 }
 
-std::vector<std::optional<Tensor>> sub_bw(
-    const Tensor& grad_tensor,
-    const Tensor& input_tensor,
-    float /*alpha*/,
-    const std::optional<MemoryConfig>& /*output_mem_config*/,
-    std::optional<Tensor> input_grad) {
-    std::vector<std::optional<Tensor>> result;
-    result.emplace_back(
-        input_grad.has_value() ? ttnn::assign(grad_tensor, input_grad.value())
-                               : ttnn::assign(grad_tensor, ttnn::empty_like(input_tensor)));
-    return result;
-}
-
-std::vector<std::optional<Tensor>> sub_bw(
+std::vector<Tensor> min_bw(
     const Tensor& grad_tensor,
     const Tensor& input_a,
     const Tensor& other,
-    const std::vector<bool>& are_required_outputs,
-    const std::optional<MemoryConfig>& output_mem_config,
-    const std::optional<Tensor>& input_grad,
-    const std::optional<Tensor>& other_grad) {
-    return ttnn::subalpha_bw(
-        grad_tensor, input_a, other, 1.0f, are_required_outputs, output_mem_config, input_grad, other_grad);
-}
-
-std::vector<ComplexTensor> sub_bw(
-    const ComplexTensor& grad_tensor,
-    const ComplexTensor& /*input_a*/,
-    const ComplexTensor& /*other*/,
-    float alpha,
     const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<ComplexTensor> grad_tensor_res;
-    grad_tensor_res.emplace_back(grad_tensor);
-    const Tensor& grad_r = grad_tensor.real();
-    const Tensor& grad_i = grad_tensor.imag();
-    using ttnn::operations::unary::EltwiseUnaryWithParam;
-    using ttnn::operations::unary::UnaryOpType;
-    std::vector<EltwiseUnaryWithParam> ops_chain = {
-        EltwiseUnaryWithParam{UnaryOpType::NEG}, EltwiseUnaryWithParam{UnaryOpType::MUL_UNARY_SFPU, alpha}};
-    ComplexTensor grad_b = ComplexTensor(
-        {ttnn::unary_chain(grad_r, ops_chain, output_mem_config),
-         ttnn::unary_chain(grad_i, ops_chain, output_mem_config)});
-    grad_tensor_res.emplace_back(grad_b);
-    return grad_tensor_res;
+    return operations::binary_backward::_min_or_max_bw<false>(grad_tensor, input_a, other, output_mem_config);
 }
 
 std::vector<std::optional<Tensor>> div_bw(
@@ -798,50 +791,57 @@ std::vector<ComplexTensor> div_bw(
     return grad_tensor_res;
 }
 
-std::vector<Tensor> remainder_bw(
-    const Tensor& grad_tensor,
-    const Tensor& /*input_tensor*/,
-    float /*scalar*/,
-    const std::optional<MemoryConfig>& /*output_mem_config*/) {
-    std::vector<Tensor> grad;
-    grad.emplace_back(grad_tensor);
-    return grad;
+std::vector<std::optional<Tensor>> mul_bw(
+    const Tensor& grad_tensor_arg,
+    const Tensor& /*input_tensor_arg*/,
+    float scalar,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> input_grad) {
+    std::vector<std::optional<Tensor>> result;
+    if (!input_grad.has_value()) {
+        input_grad = ttnn::empty_like(grad_tensor_arg);
+    }
+    ttnn::multiply(grad_tensor_arg, scalar, std::nullopt, output_mem_config, input_grad);
+    result.push_back(input_grad);
+    return result;
 }
 
-std::vector<Tensor> remainder_bw(
-    const Tensor& grad_tensor,
-    const Tensor& input_a,
-    const Tensor& other,
-    const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad;
-    grad.emplace_back(grad_tensor);
-    Tensor result_div = ttnn::div(input_a, other, false, "floor", std::nullopt, output_mem_config);
-    Tensor grad_b = ttnn::multiply(ttnn::neg(grad_tensor), result_div, std::nullopt, output_mem_config);
-    grad.emplace_back(grad_b);
-    return grad;
+std::vector<std::optional<Tensor>> mul_bw(
+    const Tensor& grad_tensor_arg,
+    const Tensor& input_tensor_arg,
+    const Tensor& other_tensor_arg,
+    const std::vector<bool>& are_required_outputs,
+    const std::optional<MemoryConfig>& output_mem_config,
+    std::optional<Tensor> input_grad,
+    std::optional<Tensor> other_grad) {
+    std::vector<std::optional<Tensor>> result = {std::nullopt, std::nullopt};
+    operations::binary_backward::detail::preallocated_tensors_check(
+        input_grad, other_grad, input_tensor_arg, other_tensor_arg, {are_required_outputs[0], are_required_outputs[1]});
+
+    if (are_required_outputs.at(0)) {
+        ttnn::multiply(grad_tensor_arg, other_tensor_arg, std::nullopt, output_mem_config, input_grad);
+        result[0] = input_grad;
+    }
+    if (are_required_outputs.at(1)) {
+        ttnn::multiply(grad_tensor_arg, input_tensor_arg, std::nullopt, output_mem_config, other_grad);
+        result[1] = other_grad;
+    }
+    return result;
 }
 
-std::vector<Tensor> fmod_bw(
-    const Tensor& grad_tensor,
-    const Tensor& /*input_tensor*/,
-    float /*scalar*/,
-    const std::optional<MemoryConfig>& /*output_mem_config*/) {
-    std::vector<Tensor> grad;
-    grad.emplace_back(grad_tensor);
-    return grad;
-}
-
-std::vector<Tensor> fmod_bw(
-    const Tensor& grad_tensor,
-    const Tensor& input_a,
-    const Tensor& other,
-    const std::optional<MemoryConfig>& output_mem_config) {
-    std::vector<Tensor> grad;
-    grad.emplace_back(grad_tensor);
-    Tensor result_div = ttnn::div(input_a, other, false, "trunc", std::nullopt, output_mem_config);
-    Tensor grad_b = ttnn::multiply(ttnn::neg(grad_tensor), result_div, std::nullopt, output_mem_config);
-    grad.emplace_back(grad_b);
-    return grad;
+std::vector<ComplexTensor> mul_bw(
+    const ComplexTensor& grad_tensor,
+    const ComplexTensor& input_a,
+    const ComplexTensor& other,
+    const MemoryConfig& output_mem_config) {
+    std::vector<ComplexTensor> grad_tensor_res;
+    ComplexTensor grad_a =
+        ttnn::operations::complex_binary::_mul(grad_tensor, ttnn::conj(other, output_mem_config), output_mem_config);
+    grad_tensor_res.emplace_back(grad_a);
+    ComplexTensor grad_b =
+        ttnn::operations::complex_binary::_mul(grad_tensor, ttnn::conj(input_a, output_mem_config), output_mem_config);
+    grad_tensor_res.emplace_back(grad_b);
+    return grad_tensor_res;
 }
 
 }  // namespace ttnn
