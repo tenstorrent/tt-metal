@@ -222,9 +222,7 @@ graph_descriptors {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 31 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 32 } }
     channels { count: 4 policy: STRICT }
-    assign_z_direction: true
   }
-
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 32 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 33 } }
@@ -299,13 +297,11 @@ graph_descriptors {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 46 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 47 } }
     channels { count: 8 policy: STRICT }
-    assign_z_direction: true
   }
   connections {
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 47 } }
     nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
     channels { count: 4 policy: STRICT }
-    assign_z_direction: true
   }
 }
 # --- Instantiation ----------------------------------------------------------

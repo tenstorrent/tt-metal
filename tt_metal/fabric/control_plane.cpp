@@ -1101,36 +1101,6 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
     this->router_port_directions_to_physical_eth_chan_map_.clear();
 
     const auto& intra_mesh_connectivity = this->mesh_graph_->get_intra_mesh_connectivity();
-    const auto& inter_mesh_connectivity = this->mesh_graph_->get_inter_mesh_connectivity();
-
-    // Debug: print mesh graph nodes with 4+ directions (before assignment)
-    for (std::uint32_t mesh_id_val = 0; mesh_id_val < intra_mesh_connectivity.size(); mesh_id_val++) {
-        MeshId mesh_id{mesh_id_val};
-        for (ChipId chip_id = 0; chip_id < static_cast<ChipId>(intra_mesh_connectivity[mesh_id_val].size());
-             chip_id++) {
-            std::unordered_set<RoutingDirection> directions;
-            for (const auto& [_, edge] : intra_mesh_connectivity[mesh_id_val][chip_id]) {
-                directions.insert(edge.port_direction);
-            }
-            if (chip_id < static_cast<ChipId>(inter_mesh_connectivity[mesh_id_val].size())) {
-                for (const auto& [_, edge] : inter_mesh_connectivity[mesh_id_val][chip_id]) {
-                    directions.insert(edge.port_direction);
-                }
-            }
-            if (directions.size() >= 4) {
-                std::string dirs_str;
-                for (const auto& dir : directions) {
-                    if (!dirs_str.empty()) {
-                        dirs_str += ", ";
-                    }
-                    dirs_str += enchantum::to_string(dir);
-                }
-                std::cerr << "Mesh graph node " << FabricNodeId(mesh_id, chip_id) << " has " << directions.size()
-                          << " directions (before assignment): " << dirs_str << std::endl;
-            }
-        }
-    }
-
     // Initialize the bookkeeping for mapping from mesh/chip/direction to physical ethernet channels
     for (const auto& [fabric_node_id, _] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
         if (!this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id)) {
@@ -2660,81 +2630,11 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
     const auto& mesh_edge_ports_to_chip_id = this->mesh_graph_->get_mesh_edge_ports_to_chip_id();
 
     bool should_assign_z = this->mesh_graph_->should_assign_z_direction(my_mesh_id, neighbor_mesh_id);
-    // Debug: Build lists of all available ports grouped by direction (Z and non-Z)
-    std::unordered_set<FabricNodeId> fabric_nodes_with_z_ports;
-    size_t z_port_count = 0;
-    size_t non_z_port_count = 0;
-    std::unordered_map<RoutingDirection, std::vector<std::string>> ports_by_direction;
-    for (const auto& [port_id, chip_id] : mesh_edge_ports_to_chip_id[*my_mesh_id]) {
-        if (port_id.first == RoutingDirection::Z) {
-            fabric_nodes_with_z_ports.insert(FabricNodeId(my_mesh_id, chip_id));
-            z_port_count++;
-        } else {
-            non_z_port_count++;
-        }
-        std::string dir_str = std::string(enchantum::to_string(port_id.first));
-        ports_by_direction[port_id.first].push_back(
-            fmt::format("{}{}@M{}D{}", dir_str, port_id.second, *my_mesh_id, chip_id));
-    }
-    std::string fabric_nodes_z_str;
-    for (const auto& fn : fabric_nodes_with_z_ports) {
-        if (!fabric_nodes_z_str.empty()) {
-            fabric_nodes_z_str += ", ";
-        }
-        // Include physical location from topology mapper when available
-        std::string phys_loc;
-        if (topology_mapper_ != nullptr) {
-            try {
-                auto hostname = topology_mapper_->get_hostname_for_fabric_node_id(fn);
-                auto tray_id = topology_mapper_->get_tray_id_for_fabric_node_id(fn);
-                auto asic_location = topology_mapper_->get_asic_location_for_fabric_node_id(fn);
-                phys_loc = fmt::format(" (host={}, tray={}, loc={})", hostname, *tray_id, *asic_location);
-            } catch (const std::exception&) {
-                phys_loc = " (physical_location_unavailable)";
-            }
-        }
-        fabric_nodes_z_str += fmt::format("M{}D{}{}", *fn.mesh_id, fn.chip_id, phys_loc);
-    }
-    std::string all_ports_str;
-    for (const auto& dir :
-         {RoutingDirection::Z, RoutingDirection::N, RoutingDirection::S, RoutingDirection::E, RoutingDirection::W}) {
-        if (ports_by_direction.contains(dir)) {
-            std::sort(ports_by_direction[dir].begin(), ports_by_direction[dir].end());
-            if (!all_ports_str.empty()) {
-                all_ports_str += " ";
-            }
-            std::string dir_ports;
-            for (size_t i = 0; i < ports_by_direction[dir].size(); ++i) {
-                if (i > 0) {
-                    dir_ports += ",";
-                }
-                dir_ports += ports_by_direction[dir][i];
-            }
-            all_ports_str += fmt::format("{}:[{}]", enchantum::to_string(dir), dir_ports);
-        }
-    }
-
-    log_info(
-        tt::LogFabric,
-        "assign_logical_ports_to_exit_nodes: mesh {} -> {}, should_assign_z={}, total_exit_nodes={}, "
-        "Z_ports_in_mesh={}, non_Z_ports_in_mesh={}, fabric_nodes_with_Z_ports=[{}]",
-        *my_mesh_id,
-        *neighbor_mesh_id,
-        should_assign_z,
-        exit_nodes.size(),
-        z_port_count,
-        non_z_port_count,
-        fabric_nodes_z_str);
-    log_info(
-        tt::LogFabric,
-        "assign_logical_ports_to_exit_nodes: mesh {} -> {} all_available_ports=[{}]",
-        *my_mesh_id,
-        *neighbor_mesh_id,
-        all_ports_str);
 
     std::vector<PortDescriptor> ports_to_neighbor;
 
     std::unordered_map<uint64_t, RoutingDirection> curr_exit_node_direction;
+    int z_fallback_count = 0;
     for (const auto& exit_node : exit_nodes) {
         FabricNodeId exit_node_fabric_node_id = this->get_fabric_node_id_from_asic_id(*exit_node.src_exit_node);
 
@@ -2749,23 +2649,24 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
         auto src_eth_chan = exit_node.eth_conn.src_chan;
         auto exit_node_chip = exit_node_fabric_node_id.chip_id;
 
-        for (const auto& [port_id, chip_id] : mesh_edge_ports_to_chip_id[*my_mesh_id]) {
-            if (exit_node_chip == chip_id) {
-                auto port_direction = port_id.first;
-                auto logical_chan_id = port_id.second;
+        auto try_assign_port = [&](bool use_z_direction) -> bool {
+            for (const auto& [port_id_pair, port_chip_id] : mesh_edge_ports_to_chip_id[*my_mesh_id]) {
+                if (exit_node_chip != port_chip_id) {
+                    continue;
+                }
+                auto port_direction = port_id_pair.first;
+                auto logical_chan_id = port_id_pair.second;
 
                 // Blackhole Z-channels must be assigned the Z Routing Direction.
                 // All other channels must avoid using the Z-direction (they are used for routing along the X/Y
                 // directions). This is to ensure that logical and physical channel assignments are consistent.
                 bool is_z_direction = (port_direction == RoutingDirection::Z);
-                if (should_assign_z != is_z_direction) {
+                if (use_z_direction != is_z_direction) {
                     continue;
                 }
 
-                // Override direction to Z BEFORE creating port_id if needed
-                RoutingDirection final_direction = (should_assign_z) ? RoutingDirection::Z : port_direction;
+                RoutingDirection final_direction = use_z_direction ? RoutingDirection::Z : port_direction;
                 port_id_t port_id = {final_direction, logical_chan_id};
-                // Assign this port id to the exit node if it is not already assigned
                 bool valid_direction = !curr_exit_node_direction.contains(exit_node_hash) ||
                                        curr_exit_node_direction.at(exit_node_hash) == final_direction;
                 if (!assigned_port_ids.contains(port_id) && valid_direction) {
@@ -2774,18 +2675,24 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
                     exit_node_directions_[exit_node_fabric_node_id][src_eth_chan] = final_direction;
                     logical_port_to_eth_chan_[exit_node_fabric_node_id][port_id] = src_eth_chan;
                     curr_exit_node_direction[exit_node_hash] = final_direction;
-                    break;
+                    return true;
                 }
             }
+            return false;
+        };
+
+        bool assigned = try_assign_port(should_assign_z);
+        if (!assigned && !should_assign_z) {
+            if (z_fallback_count++ == 0) {
+                log_warning(
+                    tt::LogFabric,
+                    "Ran out of NESW ports for mesh {} -> {}, falling back to Z direction for remaining connections",
+                    *my_mesh_id,
+                    *neighbor_mesh_id);
+            }
+            assigned = try_assign_port(true);
         }
     }
-    log_info(
-        tt::LogFabric,
-        "assign_logical_ports_to_exit_nodes: mesh {} -> {} completed: assigned {} ports (out of {} exit nodes)",
-        *my_mesh_id,
-        *neighbor_mesh_id,
-        ports_to_neighbor.size(),
-        exit_nodes.size());
     return ports_to_neighbor;
 }
 
@@ -2859,15 +2766,6 @@ void ControlPlane::validate_requested_intermesh_connections(
                 port_directions_str += fmt::format("{}", enchantum::to_string(ports[i].port_id.first)) +
                                        std::to_string(ports[i].port_id.second);
             }
-            log_info(
-                tt::LogFabric,
-                "validate_requested_intermesh_connections: mesh {} -> {}: requested_channels={}, actual_ports={}, "
-                "port_directions=[{}]",
-                src_mesh,
-                dst_mesh,
-                num_channels,
-                ports.size(),
-                port_directions_str);
             TT_FATAL(
                 num_channels <= ports.size(),
                 "Requested {} channels between {} and {}, but only have {} physical links. "
