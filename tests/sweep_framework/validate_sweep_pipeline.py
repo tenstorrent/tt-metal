@@ -194,12 +194,15 @@ def step_print_validation_pairs(
     print(f"  Model-only (not tested): {len(model_only)}")
 
     if matched:
-        print("\n  Ready for validation (use validate-sweep-trace cursor rule):\n")
+        print("\n  Ready for validation. Copy/paste the exact chat input below:\n")
         for op_dir_name, model_file, sweep_file in matched:
             op_display = op_dir_name.replace("_", ".")
+            chat_input = (
+                f"Use the validate-sweep-trace cursor rule to validate {op_display}. "
+                f"Model: {model_file} Sweep: {sweep_file}"
+            )
             print(f"    {op_display}:")
-            print(f"      Model: {model_file}")
-            print(f"      Sweep: {sweep_file}")
+            print(f"      Chat input: {chat_input}")
 
     if sweep_only:
         print("\n  Operations in sweep trace but NOT in model trace split:")
