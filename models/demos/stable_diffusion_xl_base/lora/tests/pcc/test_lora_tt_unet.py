@@ -9,7 +9,7 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import is_wormhole_b0, torch_random
+from models.common.utility_functions import is_blackhole, is_wormhole_b0, torch_random
 from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
 from models.demos.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.demos.stable_diffusion_xl_base.tt.tt_unet import TtUNet2DConditionModel
@@ -224,6 +224,9 @@ def test_unet(
     reset_seeds,
     lora_path,
 ):
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
+
     run_unet_model(
         device,
         image_resolution,

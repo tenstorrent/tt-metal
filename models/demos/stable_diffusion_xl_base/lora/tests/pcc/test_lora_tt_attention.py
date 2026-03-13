@@ -10,7 +10,7 @@ from diffusers import DiffusionPipeline
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import is_blackhole, torch_random
 from models.demos.stable_diffusion_xl_base.lora.tt_lora_weights_manager import TtLoRAWeightsManager
 from models.demos.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.demos.stable_diffusion_xl_base.tt.tt_attention import TtAttention
@@ -55,6 +55,9 @@ def test_attention(
     reset_seeds,
     lora_path,
 ):
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
+
     pipeline = _get_diffusers_pipeline(is_ci_env)
     pipeline.unet.eval()
 
