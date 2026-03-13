@@ -28,16 +28,16 @@ void kernel_main() {
         uint32_t l1_read_addr = get_read_ptr(cb_out0);
 
         for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
-            uint32_t row_l1_start =
+            uint32_t tmp_addr =
                 l1_read_addr;  // AL: maybe change the inner loop to use and update a tmp_addr instead of l1_read_addr
             for (uint32_t p = 0; p < num_output_pages_in_row - 1; p++) {
                 uint64_t write_noc_addr = s.get_noc_addr(i_page + p);
-                noc_async_write(l1_read_addr, write_noc_addr, output_page_size);
-                l1_read_addr += output_page_size;
+                noc_async_write(tmp_addr, write_noc_addr, output_page_size);
+                tmp_addr += output_page_size;
             }
             uint64_t write_noc_addr = s.get_noc_addr(i_page + num_output_pages_in_row - 1);
-            noc_async_write(l1_read_addr, write_noc_addr, size_of_valid_data_in_last_output_page_in_row);
-            l1_read_addr = row_l1_start + stick_size_padded_aligned;
+            noc_async_write(tmp_addr, write_noc_addr, size_of_valid_data_in_last_output_page_in_row);
+            l1_read_addr += stick_size_padded_aligned;
             i_page += num_output_pages_in_row;
         }
         noc_async_write_barrier();
