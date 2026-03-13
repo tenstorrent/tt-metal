@@ -603,7 +603,12 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         .stacking_level = stacking_level});
 
     if (buffer == nullptr) {
-        log_debug(tt::LogAlways, "Tensor doesn't have buffer, but storage is {}", t.storage_type());
+        switch (t.storage_type()) {
+            case StorageType::DEVICE:
+                log_debug(tt::LogAlways, "Tensor does not have buffer (on device but deallocated)");
+                break;
+            case StorageType::HOST: log_debug(tt::LogAlways, "Tensor does not have buffer (on host)"); break;
+        }
     } else {
         node_id buffer_node_id = add_buffer(buffer);
         graph[buffer_node_id].connections.push_back(tensor_counter);
