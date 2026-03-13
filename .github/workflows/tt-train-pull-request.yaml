@@ -1,0 +1,130 @@
+name: "[tt-train] Pull Request Validation"
+
+on:
+  pull_request:
+    paths:
+      - 'tt-train/**'
+
+jobs:
+  validate-pr:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Fetch origin/main
+        run: git fetch origin main
+
+      - name: Run pre-commit hooks (check only)
+        run: |
+          python3 -m venv venv
+          source venv/bin/activate
+          pip install pre-commit
+          pre-commit install
+          pre-commit run --all-files
+          if ! git diff --exit-code; then
+            echo "Pre-commit hooks made changes, please commit them."
+            exit 1
+          fi
+
+  clang-tidy:
+    runs-on: ubuntu-24.04
+    env:
+      CC: clang-20
+      CXX: clang++-20
+    permissions:
+      pull-requests: write
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+          submodules: recursive
+
+      - name: Set safe directory for Git
+        run: git config --global --add safe.directory $GITHUB_WORKSPACE
+
+      - name: Fetch base branch
+        run: |
+          git remote add upstream "https://github.com/${{ github.event.pull_request.base.repo.full_name }}"
+          git fetch --no-tags upstream "${{ github.event.pull_request.base.ref }}"
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo DEBIAN_FRONTEND=noninteractive apt-get install -y \
+            clang-20 clang-tidy-20 \
+            libc++-20-dev libc++abi-20-dev \
+            python3-dev python3-numpy python3.12-venv \
+            ninja-build jq \
+            libnuma-dev libhwloc-dev
+          sudo ln -s $(which clang-tidy-20) /usr/local/bin/clang-tidy
+
+      - name: Prepare compile_commands.json
+        timeout-minutes: 15
+        run: |
+          cmake -B build \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DCMAKE_EXPORT_COMPILE_COMMANDS=ON \
+            -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
+            -DTT_METAL_BUILD_TESTS=ON \
+            -DTTNN_BUILD_TESTS=ON \
+            -DTT_UNITY_BUILDS=OFF \
+            -DBUILD_TT_TRAIN=ON \
+            -DENABLE_DISTRIBUTED=OFF \
+            -GNinja
+          cmake --build build --target all_generated_files
+
+      - name: Create results directory
+        run: mkdir clang-tidy-result
+
+      - name: Analyze tt-train files
+        timeout-minutes: 30
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+
+          # Find tt-train files in compile_commands.json
+          PREFIX=$(pwd)
+          jq --arg prefix "$PREFIX/" -r \
+            '.[].file | sub("^" + $prefix; "")' \
+            build/compile_commands.json | grep '^tt-train/' > tt_train_files_in_build.txt || true
+
+          # Get changed tt-train files
+          BASE_REF="${{ github.event.pull_request.base.ref }}"
+          git diff --name-only \
+            "$(git merge-base HEAD "upstream/${BASE_REF}")..." | grep '^tt-train/' > changed_tt_train_files.txt || true
+
+          # Find intersection
+          grep -F -f tt_train_files_in_build.txt changed_tt_train_files.txt > common_files.txt || true
+
+          # Exit if no tt-train files to analyze
+          if [[ ! -s common_files.txt ]]; then
+            echo "No tt-train files to analyze"
+            exit 0
+          fi
+
+          echo "Analyzing the following tt-train files:"
+          cat common_files.txt
+
+          # Analyze only tt-train changes
+          git diff -U0 "$(git merge-base HEAD "upstream/${BASE_REF}")" \
+            -- $(cat common_files.txt) \
+            | clang-tidy-diff-20.py -p1 -path build \
+              -export-fixes clang-tidy-result/fixes.yml -j$(nproc)
+
+      - name: Run clang-tidy-pr-comments action
+        if: ${{ !cancelled() && github.event.pull_request.head.repo.fork == false }}
+        uses: platisd/clang-tidy-pr-comments@28cfb84edafa771c044bde7e4a2a3fae57463818
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          clang_tidy_fixes: clang-tidy-result/fixes.yml
+          request_changes: true
+          suggestions_per_comment: 10
+        continue-on-error: true
+
+      - name: Final step to signal success
+        run: echo "Clang-tidy analysis complete."

@@ -21,7 +21,7 @@ training_config:
   model_save_interval: 50
   tokenizer_type: "bpe"
   checkpoint_dir: "checkpoints_gsm8k"
-  model_config: "model_configs/gpt2s.yaml"
+  model_config: "configs/model_configs/gpt2s.yaml"
 
 scheduler_config:
   max_lr : 1e-4
