@@ -472,7 +472,6 @@ struct WorkerToFabricEdmSenderBase {
             invalidate_l1_cache();
         }
         WAYPOINT("FCFD");
-
         noc_async_write_barrier(get_fabric_worker_noc());
         *(this->worker_teardown_addr) = 0;
     }
