@@ -287,7 +287,7 @@ MoEGPTMeshWorkloadFactory::create_at(
         named_compile_time_args["height_shard_dim"] = operation_attributes.output_height_shard_dim;
         named_compile_time_args["width_shard_dim"] = operation_attributes.output_width_shard_dim;
         named_compile_time_args["combine_shard_width_tiles"] =
-            tensor_args.w2_tensor.logical_shape()[4] / operation_attributes.output_width_shard_dim;
+            operation_attributes.hidden_size / 32 / operation_attributes.output_width_shard_dim;
         named_compile_time_args["tile_width"] = 32u;
         named_compile_time_args["tile_width_size_bytes"] = 64u;
         named_compile_time_args["num_tokens_total"] = total_tokens;

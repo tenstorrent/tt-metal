@@ -206,7 +206,7 @@ def fused_decode_forward(
     # output is [select_experts_k, M, H] instead of [experts_per_ring, M, H].
     # ------------------------------------------------------------------
     tt_combine_output = ttnn.experimental.selective_reduce_combine(
-        moe_gpt_outputs[3],
+        moe_gpt_outputs[4],
         moe_gpt_outputs[1],
         moe_gpt_outputs[2],
         moe_gpt_outputs[0],
@@ -222,11 +222,13 @@ def fused_decode_forward(
         data_parallel_core_dim=fused_config.combine_data_parallel_core_dim,
         worker_cores=fused_config.combine_worker_cores,
         mux_core_range_set=fused_config.combine_mux_cores,
+        # output_tensor=fused_config.combine_preallocated,
+        # optional_cross_device_semaphore=fused_config.combine_semaphore,
     )
     ttnn.synchronize_device(mesh_device)
     logger.info("fused_decode: Step 3 sync done")
 
-    for i in range(4):
+    for i in range(5):
         ttnn.deallocate(moe_gpt_outputs[i])
 
     # ------------------------------------------------------------------
@@ -242,7 +244,8 @@ def fused_decode_forward(
     # ------------------------------------------------------------------
     logger.info("fused_decode: Step 4 - post-processing (tilize, score weighting, sum, all_reduce)")
     tt_combine_tile = ttnn.to_layout(tt_combine_output, ttnn.TILE_LAYOUT)
-    ttnn.deallocate(tt_combine_output)
+    # Note: do NOT deallocate tt_combine_output — it aliases fused_config.combine_preallocated
+    # which must persist across layers for program cache reuse.
 
     tt_4d = ttnn.unsqueeze(tt_combine_tile, dim=1)  # [K, 1, M, H]
 

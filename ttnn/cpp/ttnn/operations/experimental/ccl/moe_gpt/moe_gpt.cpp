@@ -16,6 +16,7 @@ std::vector<ttnn::Tensor> ExecuteMoEGPT::invoke(
     const ttnn::Tensor& w2_tensor,
     uint32_t output_height_shard_dim,
     uint32_t output_width_shard_dim,
+    uint32_t hidden_size,
     std::optional<uint32_t> cluster_axis) {
     return ttnn::prim::moe_gpt(
         input_tensor,
@@ -26,6 +27,7 @@ std::vector<ttnn::Tensor> ExecuteMoEGPT::invoke(
         w2_tensor,
         output_height_shard_dim,
         output_width_shard_dim,
+        hidden_size,
         cluster_axis);
 }
 

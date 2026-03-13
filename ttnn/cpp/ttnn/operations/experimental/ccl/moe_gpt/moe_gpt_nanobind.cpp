@@ -40,6 +40,7 @@ void bind_moe_gpt(nb::module_& mod) {
             nb::arg("w2_tensor"),
             nb::arg("output_height_shard_dim") = 4,
             nb::arg("output_width_shard_dim") = 3,
+            nb::arg("hidden_size") = 2880,
             nb::arg("cluster_axis") = nb::none(),
         });
 }

@@ -52,8 +52,8 @@ void MoEGPTDeviceOperation::validate_on_program_cache_miss(
         w0_w1_shape[5]);
 
     // --- w2 weight tensor validation ---
-    // Expected logical shape: (num_cores, L, E, 2, N, 4*TILE_SIZE)
     const auto& w2_shape = tensor_args.w2_tensor.logical_shape();
+    // Expected logical shape: (num_cores, L, E, 2, N, 4*TILE_SIZE)
     TT_FATAL(
         w2_shape.rank() == 6,
         "w2_tensor must have rank 6 (num_cores, L, E, 2, N, 4*TILE_SIZE), got rank {}",
@@ -107,7 +107,7 @@ void MoEGPTDeviceOperation::validate_on_program_cache_miss(
 }
 
 MoEGPTDeviceOperation::spec_return_value_t MoEGPTDeviceOperation::compute_output_specs(
-    const operation_attributes_t&, const tensor_args_t& tensor_args) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto l1_alignment = tt::tt_metal::hal::get_l1_alignment();
 
     const auto& w0_w1_shape = tensor_args.w0_w1_tensor.logical_shape();
@@ -152,11 +152,8 @@ MoEGPTDeviceOperation::spec_return_value_t MoEGPTDeviceOperation::compute_output
     // Output 3/4: Shared tilize output (HEIGHT_SHARDED on all worker cores)
     // Matches moe_compute output format: TILE layout on output[3], ROW_MAJOR alias on output[4].
     auto* device = tensor_args.w0_w1_tensor.device();
-    const auto& w2_shape = tensor_args.w2_tensor.logical_shape();
-    // hidden_size from w2 tensor: w2 shape is (num_cores, L, E, 2, N, 4*TILE_SIZE)
-    // N = hidden_size / tile_width, so hidden_size = N * tile_width where tile_width = 32
-    // But more directly: w2 packs N tiles of width 32 across 2 groups, so hidden_size = w2_shape[4] * 32
-    uint32_t hidden_size = w2_shape[4] * 32;
+    // Use hidden_size from operation attributes (avoids w2 padding issues)
+    uint32_t hidden_size = args.hidden_size;
 
     CoreCoord worker_grid_size = device->compute_with_storage_grid_size();
     CoreRangeSet shard_cores({CoreRange({0, 0}, {worker_grid_size.x - 1, worker_grid_size.y - 1})});
@@ -214,11 +211,13 @@ MoEGPTDeviceOperation::invoke(
     const Tensor& w2_tensor,
     uint32_t output_height_shard_dim,
     uint32_t output_width_shard_dim,
+    uint32_t hidden_size,
     std::optional<uint32_t> cluster_axis) {
     return {
         operation_attributes_t{
             .output_height_shard_dim = output_height_shard_dim,
             .output_width_shard_dim = output_width_shard_dim,
+            .hidden_size = hidden_size,
             .cluster_axis = cluster_axis},
         tensor_args_t{
             .input_tensor = input_tensor,

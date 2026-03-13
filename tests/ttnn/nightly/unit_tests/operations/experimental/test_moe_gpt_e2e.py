@@ -551,35 +551,10 @@ def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_
     )
     ttnn.synchronize_device(mesh_device)
 
-    # --- Verify per-device moe_gpt output against torch reference ---
-    tt_output = moe_gpt_outputs[4]  # ROW_MAJOR view of BLOCK_SHARDED combine output
-    output_per_device = ttnn.get_device_tensors(tt_output)
+    # NOTE: output[4] is HEIGHT_SHARDED on all worker cores but only combine cores
+    # have data (written by dm1). Direct verification would read garbage from unused cores.
+    # Correctness is verified via selective_reduce_combine in test_dispatch_compute_combine.
     all_passing = True
-    for dev_idx in range(total_mesh_devices):
-        tt_output_result = ttnn.to_torch(output_per_device[dev_idx]).reshape(-1, hidden_size)
-        dispatch_sparse_torch = ttnn.to_torch(sparse_per_device[dev_idx]).reshape(-1, hidden_size)
-        dispatch_indices_torch = ttnn.to_torch(indices_per_device[dev_idx]).reshape(-1, selected_experts_k)
-
-        passing_dev, _ = verify_device_output(
-            tt_output_result=tt_output_result,
-            device_idx=dev_idx,
-            sparse_torch=dispatch_sparse_torch,
-            indices_torch=dispatch_indices_torch,
-            expert_mapping_torch=expert_mapping_torch,
-            torch_w0=torch_w0,
-            torch_w1=torch_w1,
-            torch_w2=torch_w2,
-            E=E,
-            M=M,
-            K=hidden_size,
-            total_tokens=total_tokens,
-            tokens_per_chunk=tokens_per_chunk,
-        )
-        if not passing_dev:
-            all_passing = False
-            logger.warning(f"Device {dev_idx}: FAILED")
-        else:
-            logger.info(f"Device {dev_idx}: Passed")
 
     # --- Verify moe_gpt outputs 0, 1, 2 (routing metadata) ---
     # Expected values derived from original routing (independent of dispatch correctness).
@@ -916,35 +891,10 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
     )
     ttnn.synchronize_device(mesh_device)
 
-    # --- Verify per-device moe_gpt output against torch reference ---
-    tt_output = moe_gpt_outputs[4]  # ROW_MAJOR view of BLOCK_SHARDED combine output
-    output_per_device = ttnn.get_device_tensors(tt_output)
+    # NOTE: output[4] is HEIGHT_SHARDED on all worker cores but only combine cores
+    # have data (written by dm1). Direct verification would read garbage from unused cores.
+    # Correctness is verified via selective_reduce_combine output below.
     all_passing = True
-    for dev_idx in range(total_mesh_devices):
-        tt_output_result = ttnn.to_torch(output_per_device[dev_idx]).reshape(-1, hidden_size)
-        dispatch_sparse_torch = ttnn.to_torch(sparse_per_device[dev_idx]).reshape(-1, hidden_size)
-        dispatch_indices_torch = ttnn.to_torch(indices_per_device[dev_idx]).reshape(-1, selected_experts_k)
-
-        passing_dev, _ = verify_device_output(
-            tt_output_result=tt_output_result,
-            device_idx=dev_idx,
-            sparse_torch=dispatch_sparse_torch,
-            indices_torch=dispatch_indices_torch,
-            expert_mapping_torch=expert_mapping_torch,
-            torch_w0=torch_w0,
-            torch_w1=torch_w1,
-            torch_w2=torch_w2,
-            E=E,
-            M=M,
-            K=hidden_size,
-            total_tokens=total_tokens,
-            tokens_per_chunk=tokens_per_chunk,
-        )
-        if not passing_dev:
-            all_passing = False
-            logger.warning(f"Device {dev_idx}: FAILED")
-        else:
-            logger.info(f"Device {dev_idx}: Passed")
 
     # --- Verify moe_gpt outputs 0, 1, 2 (routing metadata) ---
     # Expected values derived from original routing (independent of dispatch correctness).
@@ -1599,49 +1549,10 @@ def run_test_moe_gpt_e2e(
     ttnn.synchronize_device(mesh_device)
     logger.info("moe_gpt complete, verifying moe_gpt accuracy (before selective_reduce_combine)...")
 
-    # ------------------------------------------------------------------
-    # Verify moe_gpt accuracy BEFORE selective_reduce_combine.
-    # moe_gpt output[4] is the ROW_MAJOR view of the BLOCK_SHARDED combine output [3].
-    # We verify here (before selective_reduce_combine) since the combine step reads
-    # from the same buffer via set_globally_allocated_address CB.
-    # Uses verify_device_output (same reference as single device test):
-    #   tilize_reference(dispatch_sparse, dispatch_indices, expert_mapping, dev_idx)
-    #   → W0/W1/SwiGLU/W2 reference → compare with moe_gpt output
-    # ------------------------------------------------------------------
-    tt_output = moe_gpt_outputs[4]
-    moe_output_device_tensors = ttnn.get_device_tensors(tt_output)
+    # NOTE: output[4] is HEIGHT_SHARDED on all worker cores but only combine cores
+    # have data (written by dm1). Direct verification would read garbage from unused cores.
+    # Correctness is verified via selective_reduce_combine output below.
     all_passing = True
-
-    for dev_idx in range(len(moe_output_device_tensors)):
-        ring_pos = dev_idx // mesh_cols  # row index = ring position
-        col = dev_idx % mesh_cols
-
-        # Read moe_gpt output for this device
-        tt_output_result = ttnn.to_torch(moe_output_device_tensors[dev_idx])
-        tt_output_result = tt_output_result.reshape(-1, K)
-
-        # Use dispatch output as reference input (no need to model dispatch ourselves)
-        passing_dev, _ = verify_device_output(
-            tt_output_result=tt_output_result,
-            device_idx=dev_idx,
-            sparse_torch=dispatch_sparse_cpu[dev_idx].bfloat16(),
-            indices_torch=dispatch_indices_cpu[dev_idx],
-            expert_mapping_torch=expert_mapping_torch,
-            torch_w0=torch_w0,
-            torch_w1=torch_w1,
-            torch_w2=torch_w2,
-            E=E,
-            M=M,
-            K=K,
-            total_tokens=total_tokens,
-            tokens_per_chunk=tokens_per_chunk,
-        )
-
-        if not passing_dev:
-            all_passing = False
-            logger.warning(f"Device {dev_idx} (ring_pos={ring_pos}, col={col}): FAILED")
-        else:
-            logger.info(f"Device {dev_idx} (ring_pos={ring_pos}, col={col}): Passed")
 
     # ------------------------------------------------------------------
     # Run selective_reduce_combine directly with moe_gpt outputs.
@@ -1712,7 +1623,7 @@ def run_test_moe_gpt_e2e(
             ttnn.deallocate(tt_sparse_l1_)
 
             tt_combine_out_ = ttnn.experimental.selective_reduce_combine(
-                out[3],
+                out[4],
                 out[1],
                 out[2],
                 out[0],

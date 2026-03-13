@@ -39,6 +39,7 @@ struct MoEGPTDeviceOperation {
         const Tensor& w2_tensor,
         uint32_t output_height_shard_dim = 4,
         uint32_t output_width_shard_dim = 3,
+        uint32_t hidden_size = 2880,
         std::optional<uint32_t> cluster_axis = std::nullopt);
 };
 
