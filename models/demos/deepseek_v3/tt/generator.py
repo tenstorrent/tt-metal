@@ -667,7 +667,10 @@ class DeepseekGenerator(WarmupForwardMixin):
         repeat_batches: Number of times to repeat the prefill+decode pass. Only the
                         last pass's tokens are returned; timings aggregate.
 
-        stop_at_eos: If True, stop recording output tokens for a user after EOS.
+        stop_at_eos: If True and teacher_forcing is not enabled, stop recording output
+                     tokens for a user after EOS. When teacher_forcing is active,
+                     EOS-based early stopping is disabled and all teacher-forced tokens
+                     are recorded.
         on_user_finished: Optional callback with signature (user_index, output_tokens).
 
         Returns: (list of generated token id lists for the provided prompts (order preserved), statistics dictionary)
