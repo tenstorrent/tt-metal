@@ -62,7 +62,7 @@ void bind_neighbor_pad_async(nb::module_& mod) {
             padding_mode (string): zeros, replicate.
             cluster_axis (List[int]): Cluster axes for each padding dim.
             neighbor_semaphore (List[GlobalSemaphore]): Neighbor semaphores, one per dim. Length 1 for 1D (H only), length 2 for fused 2D ([H, W]).
-            barrier_semaphore (List[GlobalSemaphore]): Barrier semaphores. Length 1 for 1D, length 2 for fused 2D ([H barrier, W barrier]).
+            barrier_semaphore (List[GlobalSemaphore]): Barrier semaphores (length 1).
 
         Keyword Args:
             num_links (List[int], optional): Number of links per dim. Defaults to `[1, ...]`.

@@ -52,10 +52,6 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
     // For 1D padding, reuse [0] as the W semaphore (it won't be used).
     const auto& h_neighbor_sem = neighbor_semaphore[0];
     const auto& w_neighbor_sem = neighbor_semaphore.size() >= 2 ? neighbor_semaphore[1] : neighbor_semaphore[0];
-    // barrier_semaphore[0] = H-axis startup barrier (also used for H-corner dir=0 signaling on W cores).
-    // barrier_semaphore[1] = W-axis startup barrier (separate address to avoid conflict with W reader sems).
-    // For 1D padding, reuse [0] (W barrier not used).
-    const auto& w_barrier_sem = barrier_semaphore.size() >= 2 ? barrier_semaphore[1] : barrier_semaphore[0];
 
     // Unpack secondary dimension if present
     std::optional<uint32_t> pad_dim2;
@@ -82,7 +78,6 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
         h_neighbor_sem,
         w_neighbor_sem,
         barrier_semaphore[0],
-        w_barrier_sem,
         links[0],
         memory_config,
         topology,
