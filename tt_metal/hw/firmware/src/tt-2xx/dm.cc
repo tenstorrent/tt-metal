@@ -104,9 +104,11 @@ void deassert_trisc() {
     subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_INIT;
     deassert_trisc_reset();
 }
-// Definition of the global DFB interface array (declared extern in dataflow_buffer_init.h)
+
 thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS] __attribute__((used));
 RemapperAPI g_remapper_configurator __attribute__((used));
+
+volatile experimental::TxnDFBDescriptor experimental::g_txn_dfb_descriptor[32] __attribute__((used));
 
 void device_setup() {
     // instn_buf
