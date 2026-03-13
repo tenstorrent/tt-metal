@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 #include <core_descriptor.hpp>
 #include <device.hpp>
-#include "context/context_types.hpp"
-#include "context/metal_env_accessor.hpp"
 #include "distributed/mesh_device_impl.hpp"
 #include "impl/dispatch/dispatch_core_common.hpp"
 #include <host_api.hpp>
@@ -39,7 +37,9 @@
 #include "core_coord.hpp"
 #include "hal_types.hpp"
 #include "hostdevcommon/profiler_common.h"
+#include "context/context_types.hpp"
 #include "context/metal_context.hpp"
+#include "context/metal_env_accessor.hpp"
 #include "kernel_types.hpp"
 #include "llrt.hpp"
 #include "llrt/hal.hpp"
@@ -101,7 +101,7 @@ void setControlBuffer(
 
 void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreCoord logical_core, bool doHeader) {
     ZoneScopedC(tracy::Color::Tomato3);
-    ContextId context_id = extract_context_id(mesh_device, nullptr);
+    ContextId context_id = extract_context_id(mesh_device, device);
     if (!MetalContext::instance(context_id).rtoptions().get_profiler_sync_enabled()) {
         return;
     }
@@ -682,6 +682,7 @@ void ProfilerSync(ProfilerSyncState state) {
             } catch (const std::exception&) {
                 log_info(
                     tt::LogMetal, "Device {} is not managed by MeshDevice. Skipping host-device sync.", root_device_id);
+                continue;
             }
             syncDeviceHost(mesh_device, root_device, ProfilerStateManager::SYNC_CORE, true);
             if (num_devices > 1) {
@@ -699,6 +700,7 @@ void ProfilerSync(ProfilerSyncState state) {
             } catch (const std::exception&) {
                 log_info(
                     tt::LogMetal, "Device {} is not managed by MeshDevice. Skipping host-device sync.", root_device_id);
+                continue;
             }
             syncDeviceHost(mesh_device, root_device, ProfilerStateManager::SYNC_CORE, false);
             if (num_devices > 1) {
