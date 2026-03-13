@@ -3,17 +3,21 @@
 # SPDX-License-Identifier: Apache-2.0
 
 """
-Generate weight cache for a single DeepSeek V3 layer from HuggingFace safetensors.
+Generate weight cache for DeepSeek V3 from HuggingFace safetensors.
+
+Runs in fast dispatch; weights are prepared and saved to disk (no device placement).
 
 Modes:
-  dense   - Full dense layer (layers 0-2). Requires slow dispatch.
-  moe     - Attention + shared experts only (layers 3-60). Requires slow dispatch.
-  experts - Routed experts only (layers 3-60). Can run in fast dispatch.
+  dense     - Full dense layer (layers 0-2).
+  moe       - Full MoE layer (layers 3-60): attention + shared experts + routed experts.
+  embedding - Embedding layer (model.embed_tokens). No --layer-num needed.
+  lm_head   - LM head + final RMSNorm. No --layer-num needed.
 
 Usage:
   python generate_cache.py --model-path /path/to/DeepSeek-V3 --output-path /path/to/cache --layer-num 0 --type dense
   python generate_cache.py --model-path /path/to/DeepSeek-V3 --output-path /path/to/cache --layer-num 4 --type moe
-  python generate_cache.py --model-path /path/to/DeepSeek-V3 --output-path /path/to/cache --layer-num 4 --type experts
+  python generate_cache.py --model-path /path/to/DeepSeek-V3 --output-path /path/to/cache --type embedding
+  python generate_cache.py --model-path /path/to/DeepSeek-V3 --output-path /path/to/cache --type lm_head
 """
 
 from __future__ import annotations
@@ -31,22 +35,25 @@ import ttnn
 
 # Same mesh device setup as test_prepare_weights.py (bh_2d_mesh_device fixture).
 from conftest import bh_2d_mesh_device_context
-from models.common.utility_functions import is_slow_dispatch
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 from models.demos.deepseek_v3_b1.blitz_decode_weights import BlitzDecodeWeights
 from models.demos.deepseek_v3_b1.prepare_weights import (
     NUM_ROUTED_EXPERTS,
     DeepSeekV3DenseLayerWeights,
+    DeepSeekV3EmbeddingLayerWeights,
+    DeepSeekV3LMHeadWeights,
     DeepSeekV3MoELayerWeights,
-    load_layer,
-    prepare_attention_weights,
-    prepare_dense_decoder_layer_weights,
-    prepare_routed_expert_weights,
-    prepare_shared_expert_weights,
-    save_attention_weights,
-    save_layer,
-    save_routed_expert_weights,
-    save_shared_expert_weights,
+    load_dense_decoder_layer,
+    load_embedding_weights,
+    load_lm_head_weights,
+    load_moe_decoder_layer,
+    prepare_dense_layer_weights,
+    prepare_embedding_weights,
+    prepare_lm_head_weights,
+    prepare_moe_layer_weights,
+    save_decoder_layer,
+    save_embedding_weights,
+    save_lm_head_weights,
 )
 
 NUM_LAYERS = 61
@@ -55,14 +62,6 @@ DEVICE_MESH_SHAPE = (4, 2)
 MANIFEST_VERSION = 1
 HF_MODEL_NAME = "deepseek-ai/DeepSeek-V3"
 HF_STATE_DICT_NAME = "lazy"
-
-# Fusion group tensorbin names written by save_attention_weights / save_shared_expert_weights (moe mode)
-MOE_FUSION_FILES = (
-    "q_ab_kv_a.tensorbin",
-    "o_proj_gate_mm_norms.tensorbin",
-    "kv_b12.tensorbin",
-    "gate_up.tensorbin",
-)
 
 # Expected tensor_topology() placements for 4x2 mesh (mla_tp=2, moe_tp=8); used by verify device load.
 _PLACEMENTS_SHARD_NONE_1 = [ttnn.PlacementReplicate(), ttnn.PlacementShard(1)]  # q_ab_kv_a, o_proj_gate_mm_norms
@@ -90,15 +89,15 @@ def _create_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--layer-num",
         type=int,
-        required=True,
-        help="Layer index (0-60)",
+        default=None,
+        help="Layer index (0-60); required for dense/moe, ignored for embedding/lm_head",
     )
     parser.add_argument(
         "--type",
         dest="mode",
-        choices=("dense", "moe", "experts"),
+        choices=("dense", "moe", "embedding", "lm_head"),
         required=True,
-        help="Cache type: dense (layers 0-2), moe (attn+shared for 3-60), experts (routed only for 3-60)",
+        help="Cache type: dense (layers 0-2), moe (full layer for 3-60), embedding, lm_head",
     )
     parser.add_argument(
         "--force",
@@ -119,44 +118,58 @@ def _validate_args(args: argparse.Namespace) -> None:
     mode = args.mode
     output_path = args.output_path.resolve()
 
-    if layer_num < 0 or layer_num >= NUM_LAYERS:
-        logger.error("layer-num must be in [0, {}], got {}", NUM_LAYERS - 1, layer_num)
-        sys.exit(1)
-
-    if mode == "dense":
-        if layer_num >= FIRST_K_DENSE_REPLACE:
-            logger.error(
-                "type=dense requires layer-num < {} (dense layers are 0-{}), got {}",
-                FIRST_K_DENSE_REPLACE,
-                FIRST_K_DENSE_REPLACE - 1,
-                layer_num,
-            )
+    # Layer-num required and validated only for layer-based modes
+    if mode in ("dense", "moe"):
+        if layer_num is None:
+            logger.error("--layer-num is required for type={}", mode)
             sys.exit(1)
-    else:
-        if layer_num < FIRST_K_DENSE_REPLACE:
-            logger.error(
-                "type={} requires layer-num >= {} (MoE layers are {}-{}), got {}",
-                mode,
-                FIRST_K_DENSE_REPLACE,
-                FIRST_K_DENSE_REPLACE,
-                NUM_LAYERS - 1,
-                layer_num,
-            )
+        if layer_num < 0 or layer_num >= NUM_LAYERS:
+            logger.error("layer-num must be in [0, {}], got {}", NUM_LAYERS - 1, layer_num)
             sys.exit(1)
+        if mode == "dense":
+            if layer_num >= FIRST_K_DENSE_REPLACE:
+                logger.error(
+                    "type=dense requires layer-num < {} (dense layers are 0-{}), got {}",
+                    FIRST_K_DENSE_REPLACE,
+                    FIRST_K_DENSE_REPLACE - 1,
+                    layer_num,
+                )
+                sys.exit(1)
+        else:
+            if layer_num < FIRST_K_DENSE_REPLACE:
+                logger.error(
+                    "type=moe requires layer-num >= {} (MoE layers are {}-{}), got {}",
+                    FIRST_K_DENSE_REPLACE,
+                    FIRST_K_DENSE_REPLACE,
+                    NUM_LAYERS - 1,
+                    layer_num,
+                )
+                sys.exit(1)
 
     if args.verify:
-        # Verify mode: no model-path; require output_path and that layer dir exists
+        # Verify mode: no model-path; require output_path and cache dir/manifest
         if not output_path.exists():
             logger.error("output-path must exist for verify: {}", output_path)
             sys.exit(1)
-        layer_dir = output_path / f"layer_{layer_num:03d}"
-        if not layer_dir.is_dir():
-            logger.error("Layer directory must exist for verify: {}", layer_dir)
-            sys.exit(1)
-        manifest_path = layer_dir / "manifest.json"
-        if not manifest_path.is_file():
-            logger.error("manifest.json not found for verify: {}", manifest_path)
-            sys.exit(1)
+        if mode == "embedding":
+            manifest_path = output_path / "embedding" / "manifest.json"
+            if not manifest_path.is_file():
+                logger.error("embedding/manifest.json not found for verify: {}", manifest_path)
+                sys.exit(1)
+        elif mode == "lm_head":
+            manifest_path = output_path / "lm_head" / "manifest.json"
+            if not manifest_path.is_file():
+                logger.error("lm_head/manifest.json not found for verify: {}", manifest_path)
+                sys.exit(1)
+        else:
+            layer_dir = output_path / f"layer_{layer_num:03d}"
+            if not layer_dir.is_dir():
+                logger.error("Layer directory must exist for verify: {}", layer_dir)
+                sys.exit(1)
+            manifest_path = layer_dir / "manifest.json"
+            if not manifest_path.is_file():
+                logger.error("manifest.json not found for verify: {}", manifest_path)
+                sys.exit(1)
         return
 
     # Generate mode: require model-path and index
@@ -174,8 +187,18 @@ def _validate_args(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     if not args.force:
-        layer_dir = output_path / f"layer_{layer_num:03d}"
-        if mode == "dense":
+        if mode == "embedding":
+            emb_dir = output_path / "embedding"
+            if emb_dir.is_dir() and (emb_dir / "manifest.json").is_file():
+                logger.error("embedding cache already exists. Use --force to overwrite.")
+                sys.exit(1)
+        elif mode == "lm_head":
+            lm_dir = output_path / "lm_head"
+            if lm_dir.is_dir() and (lm_dir / "manifest.json").is_file():
+                logger.error("lm_head cache already exists. Use --force to overwrite.")
+                sys.exit(1)
+        else:
+            layer_dir = output_path / f"layer_{layer_num:03d}"
             manifest = layer_dir / "manifest.json"
             if manifest.exists():
                 logger.error(
@@ -183,38 +206,6 @@ def _validate_args(args: argparse.Namespace) -> None:
                     layer_num,
                 )
                 sys.exit(1)
-        elif mode == "moe":
-            for name in MOE_FUSION_FILES:
-                f = layer_dir / name
-                if f.exists():
-                    logger.error(
-                        "Layer {} already has {} (moe cache). Use --force to overwrite.",
-                        layer_num,
-                        name,
-                    )
-                    sys.exit(1)
-        else:
-            experts_dir = layer_dir / "experts"
-            if experts_dir.exists():
-                logger.error(
-                    "Layer {} already has experts/ directory. Use --force to overwrite.",
-                    layer_num,
-                )
-                sys.exit(1)
-
-    # Dispatch mode: dense and moe require slow dispatch; experts can use either, warn if slow
-    if mode in ("dense", "moe"):
-        if not is_slow_dispatch():
-            logger.warning(
-                "type={} requires slow dispatch mode. Set TT_METAL_SLOW_DISPATCH_MODE=1 and rerun.",
-                mode,
-            )
-    else:
-        assert mode == "experts"
-        if is_slow_dispatch():
-            logger.warning(
-                "experts mode can run in fast dispatch; you have TT_METAL_SLOW_DISPATCH_MODE=1 set (slow dispatch)."
-            )
 
 
 def _check_file(path: Path, layer_dir: Path) -> bool:
@@ -337,6 +328,101 @@ def _verify_layer_on_4x2_grid(
     return True
 
 
+def _verify_embedding_cache(output_path: Path) -> bool:
+    """Verify embedding cache: manifest, file existence, and optionally load to device. Returns True if all checks pass."""
+    emb_dir = output_path / "embedding"
+    manifest_path = emb_dir / "manifest.json"
+    logger.info("Verifying embedding cache...")
+
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        logger.error("Failed to load manifest: {}", e)
+        return False
+    version = manifest.get("version", 0)
+    if version > MANIFEST_VERSION:
+        logger.error("Unsupported manifest version {} (max {})", version, MANIFEST_VERSION)
+        return False
+    logger.info("Manifest OK (version={})", version)
+
+    if not _check_file(Path("embedding.tensorbin"), emb_dir):
+        return False
+    logger.info("All embedding files present")
+
+    logger.info("Loading to device for sanity check...")
+    if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
+        os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
+    device_params = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
+    try:
+        with bh_2d_mesh_device_context(device_params) as mesh_device:
+            submesh = mesh_device.create_submesh(ttnn.MeshShape(*DEVICE_MESH_SHAPE))
+            loaded = load_embedding_weights(output_path, submesh)
+        if not isinstance(loaded, DeepSeekV3EmbeddingLayerWeights):
+            logger.error("Expected DeepSeekV3EmbeddingLayerWeights, got {}", type(loaded).__name__)
+            return False
+        if loaded.embedding.shape != (129280, 7168):
+            logger.error("embedding shape mismatch: expected (129280, 7168), got {}", loaded.embedding.shape)
+            return False
+        if not _check_on_device(loaded.embedding, "embedding"):
+            return False
+        logger.info("Device load OK (shape and on-device checks passed)")
+    except Exception as e:
+        logger.error("Device load failed: {}", e)
+        return False
+
+    logger.info("Verify OK")
+    return True
+
+
+def _verify_lm_head_cache(output_path: Path) -> bool:
+    """Verify LM head cache: manifest, file existence, and optionally load to device. Returns True if all checks pass."""
+    lm_dir = output_path / "lm_head"
+    manifest_path = lm_dir / "manifest.json"
+    logger.info("Verifying lm_head cache...")
+
+    try:
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+    except (OSError, json.JSONDecodeError) as e:
+        logger.error("Failed to load manifest: {}", e)
+        return False
+    version = manifest.get("version", 0)
+    if version > MANIFEST_VERSION:
+        logger.error("Unsupported manifest version {} (max {})", version, MANIFEST_VERSION)
+        return False
+    logger.info("Manifest OK (version={})", version)
+
+    if not _check_file(Path("lm_head.tensorbin"), lm_dir):
+        return False
+    if not _check_file(Path("final_norm.tensorbin"), lm_dir):
+        return False
+    logger.info("All lm_head files present")
+
+    logger.info("Loading to device for sanity check...")
+    if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
+        os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
+    device_params = {"fabric_config": ttnn.FabricConfig.FABRIC_2D}
+    try:
+        with bh_2d_mesh_device_context(device_params) as mesh_device:
+            submesh = mesh_device.create_submesh(ttnn.MeshShape(*DEVICE_MESH_SHAPE))
+            loaded = load_lm_head_weights(output_path, submesh)
+        if not isinstance(loaded, DeepSeekV3LMHeadWeights):
+            logger.error("Expected DeepSeekV3LMHeadWeights, got {}", type(loaded).__name__)
+            return False
+        if not _check_on_device(loaded.lm_head, "lm_head"):
+            return False
+        if not _check_on_device(loaded.final_norm, "final_norm"):
+            return False
+        logger.info("Device load OK (on-device checks passed)")
+    except Exception as e:
+        logger.error("Device load failed: {}", e)
+        return False
+
+    logger.info("Verify OK")
+    return True
+
+
 def _verify_cache(output_path: Path, layer_num: int, mode: str) -> bool:
     """Verify existing cache: manifest, file existence, and optionally load to device. Returns True if all checks pass."""
     layer_dir = output_path / f"layer_{layer_num:03d}"
@@ -361,8 +447,9 @@ def _verify_cache(output_path: Path, layer_num: int, mode: str) -> bool:
             logger.error("Expected layer_type 'dense', got '{}'", layer_type)
             return False
     else:
+        assert mode == "moe"
         if layer_type != "moe":
-            logger.error("Expected layer_type 'moe' for mode {}, got '{}'", mode, layer_type)
+            logger.error("Expected layer_type 'moe', got '{}'", layer_type)
             return False
 
     fusion_groups = manifest.get("fusion_groups", {})
@@ -387,21 +474,20 @@ def _verify_cache(output_path: Path, layer_num: int, mode: str) -> bool:
             if not _check_file(Path(standalone_tensors[name]), layer_dir):
                 return False
         logger.info("All dense layer files present")
-    elif mode == "moe":
+    else:
+        # Full MoE layer: fusion groups + standalone (incl. gate_bias) + routed experts
         for name in ("q_ab_kv_a", "o_proj_gate_mm_norms", "kv_b12", "gate_up"):
             if name not in fusion_groups:
                 logger.error("Missing fusion_groups['{}']", name)
                 return False
             if not _check_file(Path(fusion_groups[name]["tensorbin"]), layer_dir):
                 return False
-        if "shared_down_proj" not in standalone_tensors:
-            logger.error("Missing standalone_tensors['shared_down_proj']")
-            return False
-        if not _check_file(Path(standalone_tensors["shared_down_proj"]), layer_dir):
-            return False
-        logger.info("All moe (attn+shared) files present")
-    else:
-        assert mode == "experts"
+        for name in ("shared_down_proj", "gate_bias"):
+            if name not in standalone_tensors:
+                logger.error("Missing standalone_tensors['{}']", name)
+                return False
+            if not _check_file(Path(standalone_tensors[name]), layer_dir):
+                return False
         routed = manifest.get("routed_experts", {})
         num_experts = routed.get("num_experts", 0)
         if num_experts != NUM_ROUTED_EXPERTS:
@@ -419,20 +505,10 @@ def _verify_cache(output_path: Path, layer_num: int, mode: str) -> bool:
             for fname in ("gate_proj.tensorbin", "up_proj.tensorbin", "down_proj.tensorbin"):
                 if not _check_file(expert_dir / fname, layer_dir):
                     return False
-        logger.info("All {} expert files present", NUM_ROUTED_EXPERTS)
+        logger.info("All MoE layer files present (attn+shared+experts)")
 
     # 3. Optional device load when cache is a complete layer
-    full_layer = False
-    if mode == "dense":
-        full_layer = True
-    elif mode == "moe":
-        experts_dir = layer_dir / "experts"
-        if experts_dir.is_dir():
-            n = sum(1 for _ in experts_dir.iterdir() if _.is_dir())
-            if n >= NUM_ROUTED_EXPERTS:
-                full_layer = True
-
-    if full_layer:
+    if True:
         logger.info("Cache is complete layer; loading to device for sanity check...")
         if not os.environ.get("TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"):
             os.environ["TT_METAL_FABRIC_ROUTER_SYNC_TIMEOUT_MS"] = "30000"
@@ -440,7 +516,11 @@ def _verify_cache(output_path: Path, layer_num: int, mode: str) -> bool:
         try:
             with bh_2d_mesh_device_context(device_params) as mesh_device:
                 submesh = mesh_device.create_submesh(ttnn.MeshShape(*DEVICE_MESH_SHAPE))
-                loaded = load_layer(output_path, submesh, layer_num)
+                layer_type = manifest.get("layer_type")
+                if layer_type == "dense":
+                    loaded = load_dense_decoder_layer(output_path, submesh, layer_num)
+                else:
+                    loaded = load_moe_decoder_layer(output_path, submesh, layer_num)
             if manifest.get("layer_type") == "dense":
                 if not isinstance(loaded, DeepSeekV3DenseLayerWeights):
                     logger.error("Expected DeepSeekV3DenseLayerWeights, got {}", type(loaded).__name__)
@@ -474,8 +554,6 @@ def _verify_cache(output_path: Path, layer_num: int, mode: str) -> bool:
         except Exception as e:
             logger.error("Device load failed: {}", e)
             return False
-    else:
-        logger.info("Cache is partial (moe-only or experts-only); skipping device load")
 
     logger.info("Verify OK")
     return True
@@ -491,7 +569,12 @@ def main() -> int:
     output_path = args.output_path.resolve()
 
     if args.verify:
-        ok = _verify_cache(output_path, layer_num, mode)
+        if mode == "embedding":
+            ok = _verify_embedding_cache(output_path)
+        elif mode == "lm_head":
+            ok = _verify_lm_head_cache(output_path)
+        else:
+            ok = _verify_cache(output_path, layer_num, mode)
         return 0 if ok else 1
 
     model_path = args.model_path.resolve()
@@ -534,11 +617,11 @@ def main() -> int:
             if mode == "dense":
                 logger.info("Preparing dense decoder layer weights...")
                 t0 = time.perf_counter()
-                layer = prepare_dense_decoder_layer_weights(bdw, state_dict, layer_num)
-                logger.info("prepare_dense_decoder_layer_weights took {:.3f}s", time.perf_counter() - t0)
+                layer = prepare_dense_layer_weights(bdw, state_dict, layer_num)
+                logger.info("prepare_dense_layer_weights took {:.3f}s", time.perf_counter() - t0)
                 logger.info("Saving dense layer to disk...")
                 t0 = time.perf_counter()
-                save_layer(
+                save_decoder_layer(
                     layer,
                     output_path,
                     layer_num,
@@ -546,61 +629,47 @@ def main() -> int:
                     hf_state_dict_name=manifest_kw["hf_state_dict_name"],
                     device_mesh_shape=manifest_kw["device_mesh_shape"],
                 )
-                logger.info("save_layer took {:.3f}s", time.perf_counter() - t0)
+                logger.info("save_decoder_layer took {:.3f}s", time.perf_counter() - t0)
             elif mode == "moe":
-                logger.info("Preparing attention weights (MoE)...")
+                logger.info("Preparing full MoE layer weights...")
                 t0 = time.perf_counter()
-                attn = prepare_attention_weights(bdw, state_dict, layer_num, is_moe=True)
-                logger.info("prepare_attention_weights took {:.3f}s", time.perf_counter() - t0)
-                logger.info("Saving attention weights...")
+                layer = prepare_moe_layer_weights(bdw, state_dict, layer_num)
+                logger.info("prepare_moe_layer_weights took {:.3f}s", time.perf_counter() - t0)
+                logger.info("Saving MoE layer to disk...")
                 t0 = time.perf_counter()
-                save_attention_weights(
-                    attn,
+                save_decoder_layer(
+                    layer,
                     output_path,
                     layer_num,
-                    is_moe=True,
-                    **manifest_kw,
+                    hf_model_name=manifest_kw["hf_model_name"],
+                    hf_state_dict_name=manifest_kw["hf_state_dict_name"],
+                    device_mesh_shape=manifest_kw["device_mesh_shape"],
                 )
-                logger.info("save_attention_weights took {:.3f}s", time.perf_counter() - t0)
-                logger.info("Preparing shared expert weights...")
+                logger.info("save_decoder_layer took {:.3f}s", time.perf_counter() - t0)
+            elif mode == "embedding":
+                logger.info("Preparing embedding weights...")
                 t0 = time.perf_counter()
-                shared = prepare_shared_expert_weights(bdw, state_dict, layer_num, is_moe=True)
-                logger.info("prepare_shared_expert_weights took {:.3f}s", time.perf_counter() - t0)
-                logger.info("Saving shared expert weights...")
+                weights = prepare_embedding_weights(state_dict, submesh)
+                logger.info("prepare_embedding_weights took {:.3f}s", time.perf_counter() - t0)
+                logger.info("Saving embedding weights...")
                 t0 = time.perf_counter()
-                save_shared_expert_weights(
-                    shared,
-                    output_path,
-                    layer_num,
-                    is_moe=True,
-                    **manifest_kw,
-                )
-                logger.info("save_shared_expert_weights took {:.3f}s", time.perf_counter() - t0)
-            else:
-                assert mode == "experts"
-                logger.info("Preparing routed expert weights (num_routed_experts={})...", NUM_ROUTED_EXPERTS)
+                save_embedding_weights(weights, output_path, **manifest_kw)
+                logger.info("save_embedding_weights took {:.3f}s", time.perf_counter() - t0)
+            elif mode == "lm_head":
+                logger.info("Preparing LM head and final norm weights...")
                 t0 = time.perf_counter()
-                routed = prepare_routed_expert_weights(
-                    bdw,
-                    state_dict,
-                    layer_num,
-                    is_moe=True,
-                    num_routed_experts=NUM_ROUTED_EXPERTS,
-                )
-                logger.info("prepare_routed_expert_weights took {:.3f}s", time.perf_counter() - t0)
-                logger.info("Saving routed expert weights...")
+                weights = prepare_lm_head_weights(state_dict, submesh)
+                logger.info("prepare_lm_head_weights took {:.3f}s", time.perf_counter() - t0)
+                logger.info("Saving LM head weights...")
                 t0 = time.perf_counter()
-                save_routed_expert_weights(
-                    routed,
-                    output_path,
-                    layer_num,
-                    is_moe=True,
-                    **manifest_kw,
-                )
-                logger.info("save_routed_expert_weights took {:.3f}s", time.perf_counter() - t0)
+                save_lm_head_weights(weights, output_path, **manifest_kw)
+                logger.info("save_lm_head_weights took {:.3f}s", time.perf_counter() - t0)
 
     elapsed = time.perf_counter() - total_t0
-    logger.info("Cache generation complete for layer {} (mode={}) in {:.3f}s", layer_num, mode, elapsed)
+    if mode in ("embedding", "lm_head"):
+        logger.info("Cache generation complete (mode={}) in {:.3f}s", mode, elapsed)
+    else:
+        logger.info("Cache generation complete for layer {} (mode={}) in {:.3f}s", layer_num, mode, elapsed)
     return 0
 
 

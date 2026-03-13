@@ -15,13 +15,12 @@
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 #include "api/debug/ring_buffer.h"
-#if !defined(UCK_CHLKC_MATH)
-#include "internal/circular_buffer_interface.h"
-#include "internal/circular_buffer_init.h"
-#endif
+#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
 #include "internal/dataflow_buffer_init.h"
+#endif
 #include "tt-metalium/circular_buffer_constants.h"
 // clang-format on
 
@@ -42,7 +41,9 @@ uint8_t my_logical_y_ __attribute__((used));
 uint8_t my_relative_x_ __attribute__((used));
 uint8_t my_relative_y_ __attribute__((used));
 
+#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
 thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS] __attribute__((used));
+#endif
 
 namespace ckernel {
 
@@ -83,7 +84,7 @@ constexpr bool cb_init_write = false;
 using namespace ckernel;
 
 void init_sync_registers() {
-    // TODO: check if this is needed with tranistion to DFBs
+    // TODO: check if this is needed with transition to DFBs
     // https://github.com/tenstorrent/tt-metal/issues/36889
     // volatile tt_reg_ptr uint* tiles_received_ptr;
     // volatile tt_reg_ptr uint* tiles_acked_ptr;
@@ -135,23 +136,13 @@ extern "C" uint32_t _start1() {
 
         uint32_t kernel_config_base = launch_msg->kernel_config.kernel_config_base[ProgrammableCoreType::TENSIX];
 
-#if !defined(UCK_CHLKC_MATH)
-        // uint32_t tt_l1_ptr* cb_l1_base =
-        //     (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.local_cb_offset);
-        // uint32_t local_cb_mask = launch_msg->kernel_config.local_cb_mask;
-        // setup_local_cb_read_write_interfaces<cb_init_read, cb_init_write, cb_init_write>(cb_l1_base, 0,
-        // local_cb_mask);
 
-        // cb_l1_base = (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.remote_cb_offset);
-        // uint32_t end_cb_index = launch_msg->kernel_config.min_remote_cb_start_index;
-        // // NOC argument is unused
-        // experimental::setup_remote_cb_interfaces<false>(cb_l1_base, end_cb_index, 0, 0, 0, 0);
-#endif
-
+#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
         uint32_t tt_l1_ptr* dfb_l1_base = (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                                                 launch_msg->kernel_config.local_cb_offset);
         uint32_t num_local_dfbs = launch_msg->kernel_config.local_cb_mask;
         experimental::setup_local_dfb_interfaces(dfb_l1_base, num_local_dfbs);
+#endif
 
         rta_l1_base =
             (uint32_t tt_l1_ptr*)(kernel_config_base + launch_msg->kernel_config.rta_offset[hartid].rta_offset);
@@ -168,6 +159,7 @@ extern "C" uint32_t _start1() {
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
         WAYPOINT("D");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         // Signal completion
         DPRINT << "SIGNALING COMPLETION " << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();

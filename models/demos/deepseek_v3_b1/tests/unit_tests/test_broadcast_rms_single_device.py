@@ -15,7 +15,7 @@ from loguru import logger
 import ttnn
 from models.common.utility_functions import comp_pcc, is_slow_dispatch
 from models.demos.deepseek_v3_b1.fused_ops.broadcast_rms.op import BroadcastRMSNorm
-from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import SocketInterface
+from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 
@@ -174,7 +174,8 @@ def test_broadcast_rms_single_device(
             intermed_mesh_core_1,
             upstream_socket=host_io.get_downstream_socket(),
             downstream_core_coord=bcast_mesh_core,
-            mesh_device=mesh_device,
+            sender_mesh=MeshWrapper(mesh_device),
+            receiver_mesh=MeshWrapper(mesh_device),
         )
 
         recv_socket = socket_interface_1.get_downstream_socket()

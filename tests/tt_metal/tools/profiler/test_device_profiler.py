@@ -300,7 +300,9 @@ def test_full_buffer():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(setupAutoExtract=True)
+    devicesData = run_device_profiler_test(
+        testName="build/test/tt_metal/tools/profiler/test_full_buffer", setupAutoExtract=True
+    )
 
     stats = devicesData["data"]["devices"]["0"]["cores"]["DEVICE"]["analysis"]
     statName = "Marker Repeat"
@@ -317,168 +319,6 @@ def test_full_buffer():
         assert stats[statNameEth]["stats"]["Count"] % (OP_COUNT * ZONE_COUNT) == 0, "Wrong Eth Marker Repeat count"
     else:
         assert stats[statName]["stats"]["Count"] in REF_COUNT_DICT[ENV_VAR_ARCH_NAME], "Wrong Marker Repeat count"
-
-
-@pytest.mark.skip(reason="Skipped due to issue in Profiler CI. Issue #36371")
-def test_device_api_debugger_non_dropping():
-    ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
-    assert ENV_VAR_ARCH_NAME in ["grayskull", "wormhole_b0", "blackhole"]
-
-    testCommand = f"build/{PROG_EXMP_DIR}/test_device_api_debugger"
-    clear_profiler_runtime_artifacts()
-
-    envVars = "TT_METAL_NOC_DEBUG_DUMP=1 "
-
-    profilerRun = os.system(f"cd {TT_METAL_HOME} && {envVars} {testCommand}")
-    assert profilerRun == 0, f"Test command failed with exit code {profilerRun}"
-
-    # Verify the NOC trace JSON file exists
-    expected_trace_file = f"{PROFILER_LOGS_DIR}/noc_trace_dev0_ID0.json"
-    assert os.path.isfile(expected_trace_file), f"Expected trace file '{expected_trace_file}' does not exist"
-
-    # Read and parse the JSON file
-    with open(expected_trace_file, "r") as nocTraceJson:
-        try:
-            noc_trace_data = json.load(nocTraceJson)
-        except json.JSONDecodeError:
-            raise ValueError(f"noc trace file '{expected_trace_file}' is not a valid JSON file")
-
-    assert isinstance(noc_trace_data, list), f"noc trace file '{expected_trace_file}' format is incorrect"
-    assert len(noc_trace_data) > 0, f"noc trace file '{expected_trace_file}' is empty"
-
-    # Track READ and WRITE events separately for each RISC
-    brisc_read_dst_addrs_found = set()
-    brisc_write_dst_addrs_found = set()
-    ncrisc_read_dst_addrs_found = set()
-    ncrisc_write_dst_addrs_found = set()
-
-    # Track barrier events
-    read_barrier_start_count = 0
-    read_barrier_end_count = 0
-    write_barrier_start_count = 0
-    write_barrier_end_count = 0
-
-    for event in noc_trace_data:
-        assert isinstance(event, dict), f"noc trace file format error; found event that is not a dict"
-        event_type = event.get("type")
-
-        # Count barrier events
-        if event_type == "READ_BARRIER_START":
-            read_barrier_start_count += 1
-        elif event_type == "READ_BARRIER_END":
-            read_barrier_end_count += 1
-        elif event_type == "WRITE_BARRIER_START":
-            write_barrier_start_count += 1
-        elif event_type == "WRITE_BARRIER_END":
-            write_barrier_end_count += 1
-
-        if "dst_addr" in event and "proc" in event:
-            proc = event["proc"]
-            dst_addr = event["dst_addr"]
-
-            if proc == "BRISC":
-                if event_type == "READ":
-                    brisc_read_dst_addrs_found.add(dst_addr)
-                elif event_type == "WRITE_":
-                    brisc_write_dst_addrs_found.add(dst_addr)
-            elif proc == "NCRISC":
-                if event_type == "READ":
-                    ncrisc_read_dst_addrs_found.add(dst_addr)
-                elif event_type == "WRITE_":
-                    ncrisc_write_dst_addrs_found.add(dst_addr)
-
-    expected_dst_addrs = set(range(10000))  # 0 to 9999
-
-    # Verify BRISC READ has all expected dst_addr values
-    missing_brisc_read_dst_addrs = expected_dst_addrs - brisc_read_dst_addrs_found
-    assert len(missing_brisc_read_dst_addrs) == 0, (
-        f"Missing dst_addr values in BRISC READ JSON events: {sorted(missing_brisc_read_dst_addrs)[:20]}"
-        f"{'...' if len(missing_brisc_read_dst_addrs) > 20 else ''} "
-        f"(found {len(brisc_read_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
-    )
-
-    # Verify BRISC WRITE has all expected dst_addr values
-    missing_brisc_write_dst_addrs = expected_dst_addrs - brisc_write_dst_addrs_found
-    assert len(missing_brisc_write_dst_addrs) == 0, (
-        f"Missing dst_addr values in BRISC WRITE JSON events: {sorted(missing_brisc_write_dst_addrs)[:20]}"
-        f"{'...' if len(missing_brisc_write_dst_addrs) > 20 else ''} "
-        f"(found {len(brisc_write_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
-    )
-
-    # Verify NCRISC READ has all expected dst_addr values
-    missing_ncrisc_read_dst_addrs = expected_dst_addrs - ncrisc_read_dst_addrs_found
-    assert len(missing_ncrisc_read_dst_addrs) == 0, (
-        f"Missing dst_addr values in NCRISC READ JSON events: {sorted(missing_ncrisc_read_dst_addrs)[:20]}"
-        f"{'...' if len(missing_ncrisc_read_dst_addrs) > 20 else ''} "
-        f"(found {len(ncrisc_read_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
-    )
-
-    # Verify NCRISC WRITE has all expected dst_addr values
-    missing_ncrisc_write_dst_addrs = expected_dst_addrs - ncrisc_write_dst_addrs_found
-    assert len(missing_ncrisc_write_dst_addrs) == 0, (
-        f"Missing dst_addr values in NCRISC WRITE JSON events: {sorted(missing_ncrisc_write_dst_addrs)[:20]}"
-        f"{'...' if len(missing_ncrisc_write_dst_addrs) > 20 else ''} "
-        f"(found {len(ncrisc_write_dst_addrs_found)} out of {len(expected_dst_addrs)} expected)"
-    )
-
-    # Verify barrier event counts
-    expected_barrier_count = 20000
-    assert (
-        read_barrier_start_count == expected_barrier_count
-    ), f"Expected {expected_barrier_count} READ_BARRIER_START events, found {read_barrier_start_count}"
-    assert (
-        read_barrier_end_count == expected_barrier_count
-    ), f"Expected {expected_barrier_count} READ_BARRIER_END events, found {read_barrier_end_count}"
-    assert (
-        write_barrier_start_count == expected_barrier_count
-    ), f"Expected {expected_barrier_count} WRITE_BARRIER_START events, found {write_barrier_start_count}"
-    assert (
-        write_barrier_end_count == expected_barrier_count
-    ), f"Expected {expected_barrier_count} WRITE_BARRIER_END events, found {write_barrier_end_count}"
-
-    # There is a read/write barrier after each noc_async_read/write call.
-    # Verify that the noc counters are being tracked properly
-    NOC_COUNTER_BITS = 12
-    prev_counters = {}  # (proc, noc, type) -> previous counter value
-    read_event_count = 0
-    write_event_count = 0
-
-    for event in noc_trace_data:
-        event_type = event.get("type")
-        if event_type in ["READ", "WRITE_"]:
-            assert (
-                "noc_status_counter" in event
-            ), f"noc_status_counter missing in {event_type} event at timestamp {event.get('timestamp')}"
-            assert "proc" in event, f"proc missing in {event_type} event at timestamp {event.get('timestamp')}"
-            assert "noc" in event, f"noc missing in {event_type} event at timestamp {event.get('timestamp')}"
-
-            noc_status_counter = event.get("noc_status_counter")
-            proc = event.get("proc")
-            noc = event.get("noc")
-
-            assert isinstance(
-                noc_status_counter, int
-            ), f"noc_status_counter must be an integer, found {type(noc_status_counter)} in {event_type} event"
-
-            counter_key = (proc, noc, event_type)
-
-            if counter_key in prev_counters:
-                prev_counter = prev_counters[counter_key]
-                expected_counter = (prev_counter + 1) % (2**NOC_COUNTER_BITS)
-                assert noc_status_counter == expected_counter, (
-                    f"noc_status_counter should increment by 1 for consecutive {event_type} events "
-                    f"for {proc} {noc}. Previous counter: {prev_counter}, current counter: {noc_status_counter}, "
-                    f"expected: {expected_counter} at timestamp {event.get('timestamp')}"
-                )
-
-            prev_counters[counter_key] = noc_status_counter
-
-            if event_type == "READ":
-                read_event_count += 1
-            else:
-                write_event_count += 1
-
-    assert read_event_count > 0 or write_event_count > 0, "No READ or WRITE_ events found to verify noc_status_counter"
 
 
 def wildcard_match(pattern, words):
@@ -1146,7 +986,9 @@ def test_timestamped_events():
     ENV_VAR_ARCH_NAME = os.getenv("ARCH_NAME")
     assert ENV_VAR_ARCH_NAME in REF_COUNT_DICT.keys()
 
-    devicesData = run_device_profiler_test(setupAutoExtract=True)
+    devicesData = run_device_profiler_test(
+        testName="build/test/tt_metal/tools/profiler/test_timestamped_events", setupAutoExtract=True
+    )
 
     if ENV_VAR_ARCH_NAME in REF_ERISC_COUNT.keys():
         eventCount = len(

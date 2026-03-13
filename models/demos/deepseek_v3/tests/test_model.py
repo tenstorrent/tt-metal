@@ -16,12 +16,11 @@ import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN, build_test_cases_and_ids
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
-from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
+from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel, get_fabric_config
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
-    dequantize_state_dict,
     get_model_config,
     get_rope_tensors,
     get_test_weight_config,
@@ -207,7 +206,7 @@ def _generate_reference_case_entry(
     with torch.device("meta"):
         reference_model = DeepseekV3ForCausalLM(hf_config).eval()
     reference_model = reference_model.to_empty(device=torch.device("cpu"))
-    reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
+    reference_model.load_state_dict(state_dict)
     reference_model = reference_model.to(torch.bfloat16)
 
     decode_input_caches = None
@@ -439,7 +438,14 @@ def run_test_forward_pass_dpmodel(
         )
 
     weight_config = get_test_weight_config(
-        RowBatchedModel, hf_config_short, (state_dict,), cache_path, mesh_device, force_recalculate_weight_config
+        RowBatchedModel,
+        hf_config_short,
+        (state_dict,),
+        cache_path,
+        mesh_device,
+        force_recalculate_weight_config,
+        test_name="test_model",
+        real_weights=True,
     )
     model_config = get_model_config(RowBatchedModel, mode, hf_config_short, mesh_device)
     model_state = RowBatchedModel.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_caches)
@@ -521,7 +527,7 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": get_fabric_config()},
     ],
     indirect=True,
 )

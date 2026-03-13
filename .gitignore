@@ -116,6 +116,7 @@ tests/sweep_framework/results_export/*
 
 # Exclude files that should not be here
 tt_metal/device/
+tt_metal/pre-compiled/
 /device/
 src/firmware/riscv/targets/erisc/src/api/
 src/firmware/riscv/targets/erisc/src/eth_routing.cpp

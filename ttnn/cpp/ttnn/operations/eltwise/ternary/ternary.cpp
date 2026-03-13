@@ -132,14 +132,7 @@ Tensor invoke_impl(
     std::optional<DataType> output_dtype = ternary_utils::determine_output_dtype(output, t_true.dtype());
     log_debug(tt::LogOp, "Where LLK - TTT");
     return ttnn::prim::ternary(
-        TernaryOpType::WHERE,
-        condition,
-        t_true,
-        t_false,
-        output_dtype,
-        ternary_utils::determine_memory_config(memory_config, t_true.memory_config()),
-        output,
-        sub_core_grids);
+        TernaryOpType::WHERE, condition, t_true, t_false, output_dtype, memory_config, output, sub_core_grids);
 }
 
 // TTS: tensor, tensor, scalar
@@ -255,10 +248,18 @@ Tensor AddcmulOperation::invoke(
     const Tensor& input_a,
     const Tensor& input_b,
     const Tensor& input_c,
-    float value,
+    ScalarVariant value,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output) {
     log_debug(tt::LogOp, "Addcmul LLK - TTT");
+
+    bool is_supported_dtype =
+        (input_a.dtype() == DataType::BFLOAT16 || input_a.dtype() == DataType::FLOAT32 ||
+         input_a.dtype() == DataType::INT32 || input_a.dtype() == DataType::BFLOAT8_B);  // TODO(#38972): UINT32 support
+    TT_FATAL(
+        is_supported_dtype,
+        "Addcmul supports only BFLOAT16, BFLOAT8_B, FLOAT32, and INT32 dtypes. Got {}",
+        input_a.dtype());
 
     // Only TTT variant is supported for addcmul
     auto broadcast_type = ttnn::operations::ternary::get_broadcast_type(
@@ -269,15 +270,13 @@ Tensor AddcmulOperation::invoke(
     bool is_subtile_bcast = (broadcast_type == TernaryBroadcastType::ROW_BCAST) ||
                             (broadcast_type == TernaryBroadcastType::COL_BCAST) ||
                             (broadcast_type == TernaryBroadcastType::SCALAR_BCAST);
-    bool is_input_int32 = (input_a.dtype() == DataType::INT32) && (input_b.dtype() == DataType::INT32) &&
-                          (input_c.dtype() == DataType::INT32);
 
-    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast) || is_input_int32) {
+    if (is_invalid_bcast(broadcast_type) || (is_any_input_block_format && is_subtile_bcast)) {
         log_debug(tt::LogOp, "Addcmul Fallback - TTT");
         // Fall back to composite implementation for unsupported cases
         // For block-format ROW bcast of ttnn.mul, legacy binary bcast implementation is used.
-        // For int32 inputs, composite implementation is used.
-        return _addcmul(input_a, input_b, input_c, value, memory_config);
+        float value_f = std::visit([](auto&& v) { return static_cast<float>(v); }, value);
+        return _addcmul(input_a, input_b, input_c, value_f, memory_config);
     }
 
     // Use LLK implementation - pass value as scalar parameter
@@ -289,7 +288,7 @@ Tensor AddcmulOperation::invoke(
         input_c,
         value,
         ternary_utils::determine_output_dtype(output, input_a.dtype()),
-        ternary_utils::determine_memory_config(memory_config, input_a.memory_config()),
+        memory_config,
         output,
         std::nullopt);
 }
@@ -329,7 +328,7 @@ Tensor AddcdivOperation::invoke(
         input_c,
         value,
         ternary_utils::determine_output_dtype(output, input_a.dtype()),
-        ternary_utils::determine_memory_config(memory_config, input_a.memory_config()),
+        memory_config,
         output,
         std::nullopt);
 }

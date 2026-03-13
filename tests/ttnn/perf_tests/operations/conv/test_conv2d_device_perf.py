@@ -30,7 +30,7 @@ CONV_PERF_CONFIGS = [
         "act_block_h_override": 0, "act_block_w_div": 1,
         "enable_activation_reuse": False, "enable_act_double_buffer": False,
         "enable_weights_double_buffer": False, "fp32_accum": False,
-        "perf_targets": {"wh": 67, "bh_p150": 25},
+        "perf_targets": {"wh": 67, "bh_p150": 28},
     },
     # HEIGHT SHARDED, Unet - dm bound (activation reuse)
     {

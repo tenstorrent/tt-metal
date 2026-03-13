@@ -302,7 +302,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     auto metadata_ready_semaphore_id = tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
 
     // Matmul cores signal to tilize drain-sync-core that the input chunk is free to be written to
-    // Tilize drain-sync-core propogates this to the tilize non-drain-sync cores
+    // Tilize drain-sync-core propagates this to the tilize non-drain-sync cores
     auto matmul_chunk_available_semaphore_id =
         tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
 
@@ -598,7 +598,7 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Used by drain core to read from non-drain cores, and non-drain to write to drain
     std::vector<CoreCoord> tilize_cores_physical(tilize_num_cores);
     for (uint32_t i = 0; i < tilize_num_cores; i++) {
-        tilize_cores_physical.push_back(mesh_device->worker_core_from_logical_core(tilize_cores.at(i)));
+        tilize_cores_physical.at(i) = mesh_device->worker_core_from_logical_core(tilize_cores.at(i));
     }
 
     // tile_width_bytes = TILE_WIDTH * element_size

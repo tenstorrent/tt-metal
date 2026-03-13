@@ -15,6 +15,7 @@ void ModuleBase::register_tensor(const autograd::TensorPtr& tensor_ptr, const st
     if (!is_inserted) {
         throw std::logic_error("Names of two tensors coincide");
     }
+    tensor_ptr->set_requires_grad(true);
 }
 
 void ModuleBase::register_module(const ModuleBasePtr& module_ptr, const std::string& name) {
@@ -30,6 +31,7 @@ void ModuleBase::register_module(const ModuleBasePtr& module_ptr, const std::str
 void ModuleBase::override_tensor(const autograd::TensorPtr& tensor_ptr, const std::string& name) {
     if (auto it = m_named_tensors.find(name); it != m_named_tensors.end()) {
         it->second = tensor_ptr;
+        tensor_ptr->set_requires_grad(true);
     } else {
         throw std::logic_error(fmt::format("Tensor with such name does not exist. Name {}", name));
     }
@@ -116,6 +118,13 @@ autograd::TensorPtr ModuleBase::operator()(const autograd::TensorPtr& tensor, co
     throw std::logic_error(
         "ModuleBase::operator()(const autograd::TensorPtr& tensor, const autograd::TensorPtr& other) is Not "
         "implemented");
+}
+
+autograd::TensorPtr ModuleBase::operator()(
+    const autograd::TensorPtr& tensor, const std::optional<autograd::TensorPtr>& other) {
+    throw std::logic_error(
+        "ModuleBase::operator()(const autograd::TensorPtr& tensor, const std::optional<autograd::TensorPtr>& other) "
+        "is Not implemented");
 }
 
 }  // namespace ttml::modules

@@ -102,14 +102,14 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
             core_range,                               // Available core grid
             device->l1_size_per_core(),               // L1 memory per core
             value_tile_size,                          // Value tile memory size
-            index_tile_size);                         // Index tile memory size
+            index_tile_size,                          // Index tile memory size
+            input_tensor.tensor_spec().tile().get_width());
     }
 
     // Select program factory based on feasibility analysis
     if (multicore_supported) {
         return TopKMultiCoreProgramFactory{};
     }
-
     return TopKSingleCoreProgramFactory{};
 }
 
@@ -205,8 +205,9 @@ void TopKDeviceOperation::validate_on_program_cache_miss(
             args.k,                                   // Top-K value
             core_range,                               // Available cores
             device->allocator()->get_statistics(tt::tt_metal::BufferType::L1).largest_free_block_bytes,  // L1 memory
-            value_tile_size,   // Value tile size
-            index_tile_size);  // Index tile size
+            value_tile_size,  // Value tile size
+            index_tile_size,  // Index tile size
+            input_tensor.tensor_spec().tile().get_width());
 
         // Fallback to single-core if multi-core is not feasible
         if (!can_run) {

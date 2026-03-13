@@ -46,13 +46,13 @@ void kernel_main() {
     //               Send Global Average to all Receiver cores
     //     Second Read of data:
     //       If Receiver:
-    //           Send partial reduction of Varience to Sender Core
+    //           Send partial reduction of Variance to Sender Core
     //       If Sender:
     //           Pack Partials:
     //               Accumulate partial reductions into single tile
-    //               Calculates the Global Varience sum
+    //               Calculates the Global Variance sum
     //           Send Global:
-    //               Send Global Varience to all Receiver cores
+    //               Send Global Variance to all Receiver cores
     //          Third Read of data:
     //
     //      // clang-format on
@@ -68,7 +68,7 @@ void kernel_main() {
     const uint32_t per_core_N_bytes = get_named_compile_time_arg_val("per_core_N_bytes");
     const uint32_t per_core_N_bytes_with_stride = get_named_compile_time_arg_val("per_core_N_bytes_with_stride");
     constexpr uint32_t per_core_M = get_named_compile_time_arg_val("per_core_M");
-    constexpr uint32_t TILE_HEIGHT = get_named_compile_time_arg_val("TILE_HEIGHT");
+    constexpr uint32_t tile_height = get_named_compile_time_arg_val("TILE_HEIGHT");
 
     constexpr uint32_t block_h = get_named_compile_time_arg_val("block_h");
     constexpr uint32_t block_w = get_named_compile_time_arg_val("block_w");
@@ -89,8 +89,8 @@ void kernel_main() {
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
-    constexpr uint32_t TILE_WIDTH = 32;
-    constexpr uint32_t tile_w_minux_group_size = TILE_WIDTH - num_cols_per_group;
+    constexpr uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
+    constexpr uint32_t tile_w_minux_group_size = tile_width - num_cols_per_group;
     uint32_t row_offset = num_cols_per_group;
     uint32_t index_g_offset = 0;
     uint32_t index_b_offset = 0;
@@ -133,7 +133,7 @@ void kernel_main() {
     for (uint32_t m = 0; m < per_core_M; ++m) {
         cb_reserve_back(cb_repack, per_core_N);
         uint32_t l1_write_addr_repack = get_write_ptr(cb_repack);
-        for (uint32_t i = 0; i < TILE_HEIGHT; ++i) {
+        for (uint32_t i = 0; i < tile_height; ++i) {
             noc_async_read(noc_addr_in0, l1_write_addr_repack, per_core_N_bytes);
             noc_addr_in0 += per_core_N_bytes;
             l1_write_addr_repack += per_core_N_bytes_with_stride;
@@ -204,7 +204,7 @@ void kernel_main() {
 
 #endif
                     if (cur_read_iteration == 0 || cur_read_iteration == 1) {
-                        //Section for wating for local reduce to be pushed to a cb_ex_partial
+                        //Section for waiting for local reduce to be pushed to a cb_ex_partial
                         noc_semaphore_set(reduce_sender_semaphore_addr_ptr, INVALID);
                         if (cur_read_iteration == 0) {
                             //Wait for local avg calculation
@@ -263,7 +263,7 @@ void kernel_main() {
             }
 
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
-                if (row_offset == TILE_WIDTH) {
+                if (row_offset == tile_width) {
                     index_g_offset += block_w;
                     row_offset = num_cols_per_group;
 
@@ -272,11 +272,11 @@ void kernel_main() {
                     row_offset += num_cols_per_group;
                 }
             } else if constexpr (GROUP_SIZE_SMALLER_THAN_TILE_W) {
-                if (row_offset == TILE_WIDTH) {
+                if (row_offset == tile_width) {
                     index_g_offset += block_w_minus_one;
                     row_offset = num_cols_per_group;
 
-                } else if (row_offset > TILE_WIDTH) {
+                } else if (row_offset > tile_width) {
                     index_g_offset += block_w_minus_one;
                     row_offset = row_offset + group_row_offset;
 
@@ -284,7 +284,7 @@ void kernel_main() {
                     row_offset += num_cols_per_group;
                 }
             } else {
-                if (row_offset > TILE_WIDTH) {
+                if (row_offset > tile_width) {
                     index_g_offset += block_w_minus_one;
                     row_offset = row_offset - tile_w_minux_group_size;
                 } else {
@@ -302,7 +302,7 @@ void kernel_main() {
         cb_wait_front(cb_repack_out, per_core_N);
         uint32_t in0_l1_read_addr = get_read_ptr(cb_repack_out);
         uint64_t noc_addr_in0 = get_noc_addr(in0_l1_read_addr);
-        for (uint32_t i = 0; i < TILE_HEIGHT; ++i) {
+        for (uint32_t i = 0; i < tile_height; ++i) {
             noc_async_read(noc_addr_in0, l1_write_addr_repack, per_core_N_bytes);
             noc_addr_in0 += per_core_N_bytes_with_stride;
             l1_write_addr_repack += per_core_N_bytes;

@@ -7,6 +7,7 @@ import statistics
 import numpy as np
 import pytest
 import torch
+from diffusers.utils import export_to_video
 from loguru import logger
 from PIL import Image
 
@@ -22,15 +23,23 @@ from ....utils.test import line_params, ring_params
 def t2v_metrics(mesh_device, height):
     expected_metrics = {}
     if tuple(mesh_device.shape) == (2, 4) and height == 480:
-        expected_metrics = {
-            "encoder": 19.0,
-            "denoising": 800.0,
-            "vae": 9.0,
-            "total": 850.0,
-        }
+        if is_blackhole():
+            expected_metrics = {
+                "encoder": 0.08,
+                "denoising": 240.0,
+                "vae": 5.0,
+                "total": 255.0,
+            }
+        else:
+            expected_metrics = {
+                "encoder": 0.1,
+                "denoising": 800.0,
+                "vae": 9.0,
+                "total": 850.0,
+            }
     elif tuple(mesh_device.shape) == (4, 8) and height == 480:
         expected_metrics = {
-            "encoder": 15.0,
+            "encoder": 0.1,
             "denoising": 163.0,
             "vae": 18.2,
             "total": 192.0,
@@ -38,34 +47,26 @@ def t2v_metrics(mesh_device, height):
     elif tuple(mesh_device.shape) == (4, 8) and height == 720:
         if is_blackhole():
             expected_metrics = {
-                "encoder": 15.0,
-                "denoising": 185.0,
-                "vae": 8.0,
-                "total": 208.0,
+                "encoder": 0.1,
+                "denoising": 162.0,
+                "vae": 7.0,
+                "total": 168.0,
             }
         else:
             expected_metrics = {
-                "encoder": 15.0,
-                "denoising": 440.0,
-                "vae": 8.0,
-                "total": 463.0,
+                "encoder": 0.1,
+                "denoising": 370.0,
+                "vae": 7.0,
+                "total": 375.0,
             }
     elif tuple(mesh_device.shape) == (2, 2):
         assert height == 480, "2x2 is only supported for 480p"
         assert is_blackhole(), "2x2 is only supported for blackhole"
         expected_metrics = {
-            "encoder": 27.0,
+            "encoder": 0.06,
             "denoising": 680.0,
             "vae": 60.0,
             "total": 760.0,
-        }
-    elif tuple(mesh_device.shape) == (1, 8) and height == 480:
-        assert is_blackhole(), "1x8 is only supported for blackhole"
-        expected_metrics = {
-            "encoder": 23.0,
-            "denoising": 426.6,
-            "vae": 10.0,
-            "total": 449.3,
         }
     else:
         assert False, f"Unknown mesh device for performance comparison: {mesh_device}"
@@ -85,7 +86,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
     else:
         pipeline_cls = WanPipelineI2V
         expected_metrics = i2v_metrics(mesh_device, height)
-        image_prompt = Image.fromarray(np.random.randint(0, 256, (height, width, 3)), "RGB")
+        image_prompt = Image.fromarray(np.random.randint(0, 256, (height, width, 3), dtype=np.uint8), "RGB")
 
     return pipeline_cls, image_prompt, expected_metrics
 
@@ -93,9 +94,11 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
+        # FSDP is needed for 2x2 with encoder now on device
+        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
         [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
-        [(1, 8), (1, 8), 0, 1, 2, False, line_params, ttnn.Topology.Linear, False],
+        # BH on 2x4 with dynamic_load to avoid init-time DRAM OOM
+        [(2, 4), (2, 4), 1, 0, 2, True, line_params, ttnn.Topology.Linear, False],
         # WH (ring) on 4x8
         [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
         # BH (linear) on 4x8
@@ -104,7 +107,7 @@ def wan_pipeline_metrics_condimg(mesh_device, width, height, model_type):
     ids=[
         "2x2sp0tp1",
         "2x4sp0tp1",
-        "1x8sp0tp1",
+        "bh_2x4sp1tp0",
         "wh_4x8sp1tp0",
         "bh_4x8sp1tp0",
     ],
@@ -202,7 +205,7 @@ def test_pipeline_performance(
 
     with benchmark_profiler("run", iteration=0):
         with torch.no_grad():
-            result = pipeline(
+            pipeline(
                 prompt=prompts[0],
                 image_prompt=image_prompt,
                 height=height,
@@ -224,7 +227,7 @@ def test_pipeline_performance(
         prompt_idx = (i + 1) % len(prompts)
         with benchmark_profiler("run", iteration=i):
             with torch.no_grad():
-                pipeline(
+                result = pipeline(
                     prompt=prompts[prompt_idx],
                     image_prompt=image_prompt,
                     height=height,
@@ -236,6 +239,31 @@ def test_pipeline_performance(
                 )
 
         logger.info(f"  Run {i+1} completed in {benchmark_profiler.get_duration('run', i):.2f}s")
+        # Check output
+    if hasattr(result, "frames"):
+        frames = result.frames
+    else:
+        frames = result[0] if isinstance(result, tuple) else result
+
+    print(f"✓ Inference completed successfully")
+    print(f"  Output shape: {frames.shape if hasattr(frames, 'shape') else 'Unknown'}")
+    print(f"  Output type: {type(frames)}")
+
+    # Basic validation
+    if isinstance(frames, np.ndarray):
+        print(f"  Video data range: [{frames.min():.3f}, {frames.max():.3f}]")
+    elif isinstance(frames, torch.Tensor):
+        print(f"  Video data range: [{frames.min().item():.3f}, {frames.max().item():.3f}]")
+
+    # Save video using diffusers utility
+    # Remove batch dimension
+    frames = frames[0]
+    try:
+        if not is_ci_env:
+            export_to_video(frames, f"wan_output_video_{model_type}.mp4", fps=16)
+            print(f"✓ Saved video to: wan_output_video_{model_type}.mp4")
+    except AttributeError as e:
+        logger.info(f"AttributeError: {e}")
 
     # Calculate statistics
     text_encoder_times = [benchmark_profiler.get_duration("encoder", i) for i in range(num_perf_runs)]
@@ -296,8 +324,7 @@ def test_pipeline_performance(
                 )
         device_name_map = {
             (2, 2): "BH_QB",
-            (2, 4): "WH_T3K",
-            (1, 8): "BH_LB",
+            (2, 4): "BH_LB" if is_blackhole() else "WH_T3K",
             (4, 8): "BH_GLX" if is_blackhole() else "WH_GLX",
         }
         benchmark_data.save_partial_run_json(

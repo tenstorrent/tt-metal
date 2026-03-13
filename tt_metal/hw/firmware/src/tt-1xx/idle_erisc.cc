@@ -24,6 +24,7 @@
 #include "internal/debug/watcher_common.h"
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
+#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 
 uint8_t noc_index;
@@ -136,12 +137,13 @@ int main() {
         noc_local_state_init(n);
     }
 
+    DEVICE_PRINT_INITIALIZE_LOCK();
     deassert_all_reset();  // Bring all riscs on eth cores out of reset
     // Wait for all subordinate ERISCs to be ready before reporting the core is done initializing.
     wait_subordinate_eriscs(heartbeat);
     mailboxes->go_messages[0].signal = RUN_MSG_DONE;
     mailboxes->launch_msg_rd_ptr = 0;  // Initialize the rdptr to 0
-    // Cleanup profiler buffer incase we never get the go message
+    // Cleanup profiler buffer in case we never get the go message
 
     DeviceProfilerInit();
     while (1) {
@@ -187,6 +189,7 @@ int main() {
             wait_subordinate_eriscs(heartbeat);
 
             mailboxes->go_messages[0].signal = RUN_MSG_DONE;
+            DEVICE_PRINT_KERNEL_FINISHED();
 
             // Notify dispatcher core that it has completed
             if (launch_msg_address->kernel_config.mode == DISPATCH_MODE_DEV) {

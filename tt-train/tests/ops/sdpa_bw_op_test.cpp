@@ -6,7 +6,6 @@
 #include <sys/types.h>
 
 #include <cmath>
-#include <core/ttnn_all_includes.hpp>
 #include <xtensor-blas/xlinalg.hpp>
 
 #include "autograd/auto_context.hpp"
@@ -14,6 +13,13 @@
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "metal/operations.hpp"
+#include "ttnn/operations/data_movement/concat/concat.hpp"
+#include "ttnn/operations/data_movement/repeat/repeat.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/moreh/moreh_softmax_backward/moreh_softmax_backward.hpp"
+#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/tensor/tensor.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 
@@ -677,7 +683,7 @@ TEST_F(SDPABackwardTest, SmallBatch) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, NanoGPTConfig) {
+TEST_F(SDPABackwardTest, NIGHTLY_NanoGPTConfig) {
     // Match nano_gpt training config
     SDPABackwardTestConfig config{
         .batch_size = 64U,
@@ -693,7 +699,7 @@ TEST_F(SDPABackwardTest, NanoGPTConfig) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, LargerSequence) {
+TEST_F(SDPABackwardTest, NIGHTLY_LargerSequence) {
     SDPABackwardTestConfig config{
         .batch_size = 4U,
         .sequence_length = 1024U,
@@ -779,19 +785,34 @@ TEST_F(SDPABackwardTest, CausalMask_GQA) {
     run_sdpa_backward_test(config);
 }
 
-TEST_F(SDPABackwardTest, CausalMask_LargerSequence) {
-    // Test causal mask with larger sequence length
+TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_NanoGPTConfig) {
     SDPABackwardTestConfig config{
-        .batch_size = 1U,
-        .sequence_length = 512U,
-        .query_dim = 64U,
-        .key_value_dim = 64U,
-        .num_query_heads = 4U,
-        .num_kv_heads = 4U,
+        .batch_size = 64U,
+        .sequence_length = 256U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 6U,
+        .num_kv_heads = 6U,
         .dropout_prob = 0.0F,
         .atol = 3e-2F,
         .rtol = 3e-2F,
-        .test_name = "CausalMask_LargerSeq (B=1, S=512, D=64, H=4)",
+        .test_name = "CausalMask_NanoGPTConfig (B=64, S=256, D=128, H=6)",
+        .mask_type = ttml::metal::AttentionMaskType::Causal};
+    run_sdpa_backward_test(config);
+}
+
+TEST_F(SDPABackwardTest, NIGHTLY_CausalMask_LargerSequence) {
+    SDPABackwardTestConfig config{
+        .batch_size = 4U,
+        .sequence_length = 1024U,
+        .query_dim = 128U,
+        .key_value_dim = 128U,
+        .num_query_heads = 8U,
+        .num_kv_heads = 8U,
+        .dropout_prob = 0.0F,
+        .atol = 3e-2F,
+        .rtol = 3e-2F,
+        .test_name = "CausalMask_LargerSeq (B=4, S=1024, D=128, H=8)",
         .mask_type = ttml::metal::AttentionMaskType::Causal};
     run_sdpa_backward_test(config);
 }

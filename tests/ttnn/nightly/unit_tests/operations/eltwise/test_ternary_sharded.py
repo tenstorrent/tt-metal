@@ -5,7 +5,7 @@
 import torch
 import ttnn
 import pytest
-from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.utils_for_testing import assert_with_pcc, assert_with_ulp
 
 
 @pytest.mark.parametrize(
@@ -1639,3 +1639,105 @@ def test_ternary_ttt_sharded_shardspec_mixed_buffer_type(dtype_pt, dtype_tt, dev
     out_pt = golden_fn(input1_pt, input2_pt, input3_pt)
     out_tt = ttnn_op(input1_tt, input2_tt, input3_tt)
     assert assert_with_pcc(ttnn.to_torch(out_tt), out_pt)
+
+
+def test_ternary_sharded_output_uneven(device):
+    h_dim = 544
+    torch.manual_seed(0)
+    width_sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5))]),
+            [h_dim, 64],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+
+    pt_a = torch.randn(h_dim, 3072, dtype=torch.bfloat16)
+    pt_b = torch.randn(h_dim, 3072, dtype=torch.bfloat16)
+    pt_c = torch.randn(h_dim, 3072, dtype=torch.bfloat16)
+    tt_a = ttnn.from_torch(
+        pt_a, device=device, layout=ttnn.TILE_LAYOUT, memory_config=width_sharded, dtype=ttnn.bfloat16
+    )
+    tt_b = ttnn.from_torch(
+        pt_b, device=device, layout=ttnn.TILE_LAYOUT, memory_config=width_sharded, dtype=ttnn.bfloat16
+    )
+    tt_c = ttnn.from_torch(
+        pt_c, device=device, layout=ttnn.TILE_LAYOUT, memory_config=width_sharded, dtype=ttnn.bfloat16
+    )
+    block_sharded = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.BLOCK_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(7, 5))]),
+            [96, 384],
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    torch_output = torch.addcmul(pt_a, pt_b, pt_c, value=1.0)
+    result = ttnn.addcmul(tt_a, tt_b, tt_c, value=1.0, memory_config=block_sharded)
+    result = ttnn.to_torch(result)
+    assert_with_pcc(torch_output, result)
+
+
+@pytest.mark.parametrize(
+    "memory_config",
+    [ttnn.L1_HEIGHT_SHARDED_MEMORY_CONFIG, ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG, ttnn.L1_BLOCK_SHARDED_MEMORY_CONFIG],
+)
+def test_ternary_sharded_half_mem_config_interleaved(device, memory_config):
+    torch.manual_seed(0)
+    input1_shape = [1, 1, 1, 395]
+    input2_shape = [395, 395]
+    input3_shape = [395, 395]
+
+    torch_input1 = torch.randn(*input1_shape, dtype=torch.bfloat16)
+    torch_input2 = torch.randn(*input2_shape, dtype=torch.bfloat16)
+    torch_input3 = torch.randn(*input3_shape, dtype=torch.bfloat16)
+
+    # Convert to TTNN tensors with tile layout
+    ttnn_input1 = ttnn.from_torch(torch_input1, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_input2 = ttnn.from_torch(torch_input2, device=device, layout=ttnn.TILE_LAYOUT)
+    ttnn_input3 = ttnn.from_torch(torch_input3, device=device, layout=ttnn.TILE_LAYOUT)
+
+    # Perform the addcmul operation with the specified memory config
+    torch_output = torch.addcmul(torch_input1, torch_input2, torch_input3)
+    ttnn_result = ttnn.addcmul(ttnn_input1, ttnn_input2, ttnn_input3, memory_config=memory_config)
+    ttnn_result = ttnn.to_torch(ttnn_result)
+
+    assert_with_pcc(torch_output, ttnn_result)
+
+
+def test_ternary_sharded_program_cache_sequence(device):
+    torch.manual_seed(0)
+    # Same volume (4096) but different shapes and grids
+    test_params = [
+        ((1, 1, 32, 128), (3, 0)),
+        ((1, 1, 64, 64), (1, 1)),
+    ]
+    for shape, grid_size in test_params:
+        core_grid = ttnn.CoreGrid(x=grid_size[0] + 1, y=grid_size[1] + 1)
+        mem_cfg = ttnn.create_sharded_memory_config(
+            shape=shape,
+            core_grid=core_grid,
+            strategy=ttnn.ShardStrategy.BLOCK,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+        )
+        torch_pred = torch.randint(0, 2, shape, dtype=torch.bfloat16)
+        torch_true = torch.ones(shape, dtype=torch.bfloat16) * 4.0
+        torch_false = torch.ones(shape, dtype=torch.bfloat16) * 5.0
+        pred = ttnn.from_torch(
+            torch_pred, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_cfg
+        )
+        true_t = ttnn.from_torch(
+            torch_true, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_cfg
+        )
+        false_t = ttnn.from_torch(
+            torch_false, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=mem_cfg
+        )
+        out = ttnn.where(pred, true_t, false_t)
+        out_torch = ttnn.to_torch(out)
+        golden = torch.where(torch_pred.bool(), torch_true, torch_false)
+        golden = golden.to(out_torch.dtype)
+        assert_with_ulp(out_torch, golden)
+    assert device.num_program_cache_entries() == 2

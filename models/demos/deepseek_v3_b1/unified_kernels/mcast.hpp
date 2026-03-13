@@ -368,6 +368,8 @@ struct Mcast {
                     mcast_is_shared_write_cmd_buf,
                     write_reg_cmd_buf>(args.data_sender_semaphore_addr, args.data_receiver_semaphore_addr, 4);
 
+                noc_async_posted_writes_flushed();
+
                 // Pop the source CB after sending
                 if constexpr (pop_src) {
                     cb_pop_front(args.src_cb, args.src_num_pages);
