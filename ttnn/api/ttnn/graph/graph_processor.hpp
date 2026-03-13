@@ -158,6 +158,8 @@ private:
     void track_device(const tt::tt_metal::IDevice* device);
 
 public:
+    // NOTE: Graph capture is NOT thread-safe. begin/end_graph_capture (and all
+    // track_* callbacks) must be called from a single thread at a time.
     static void begin_graph_capture(RunMode mode);
     static nlohmann::json end_graph_capture();
 
@@ -169,17 +171,25 @@ public:
     static void track_error(
         const std::string& error_type, const std::string& error_message, const std::string& operation_name = "");
 
-    // Stack trace capture control
+    // Stack trace capture control.
+    // These are process-wide settings that apply to all capture sessions.
+    // Access is thread-safe (backed by std::atomic), but note that
+    // concurrent graph capture sessions are not supported — begin/end_graph_capture
+    // must only be called from a single thread at a time.
     static void enable_stack_traces();
     static void disable_stack_traces();
     static bool is_stack_trace_enabled();
 
-    // Detailed buffer page capture control
+    // Detailed buffer page capture control.
+    // Same thread-safety caveats as above.
     static void enable_buffer_pages();
     static void disable_buffer_pages();
     static bool is_buffer_pages_enabled();
 
 private:
+    // Process-wide settings flags.  std::atomic ensures safe access from any
+    // thread (e.g. a Python thread configuring options before a single-threaded
+    // capture), but does NOT imply that concurrent graph captures are supported.
     static std::atomic<bool> capture_stack_traces_;
     static std::atomic<bool> capture_buffer_pages_;
     static std::vector<std::string> capture_stack_trace();
