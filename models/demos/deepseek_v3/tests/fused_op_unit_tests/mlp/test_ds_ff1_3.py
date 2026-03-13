@@ -253,6 +253,7 @@ def _build_ff1_3_inputs(
     use_real_weights: bool,
     mode: str,
     seq_len: int,
+    fabric_config: ttnn.FabricConfig,
 ):
     weights = _build_ff1_3_weights(hf_config, use_real_weights)
 
@@ -272,7 +273,7 @@ def _build_ff1_3_inputs(
         mesh_device,
         force_recalculate_weight_config,
     )
-    model_config = get_model_config(MLP, mode, hf_config, mesh_device)
+    model_config = get_model_config(MLP, mode, hf_config, mesh_device, fabric_config)
     model_state = {
         "mesh_device": mesh_device,
         "mesh_shape": mesh_device.shape,
@@ -384,6 +385,7 @@ def test_ds_ff1_3(
     use_real_weights,
     program_cache_enabled,
     trace_mode,
+    device_params,
     hf_config,
     cache_path,
     mesh_device,
@@ -420,6 +422,7 @@ def test_ds_ff1_3(
         use_real_weights,
         mode,
         seq_len,
+        device_params["fabric_config"],
     )
     _run_ds_ff1_3_test(
         mesh_device,
