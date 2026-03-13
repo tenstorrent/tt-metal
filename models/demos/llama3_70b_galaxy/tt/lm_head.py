@@ -180,14 +180,38 @@ class LMHead(LightweightModule):
                 outputs.append(output)
 
         outputs_reduced = []
+        is_olmo = getattr(self.args, "is_olmo", False)
         for output in outputs:
-            output_reduced = self.tt_ccl.line_all_reduce(
-                output,
-                cluster_axis=1,
-                num_links=num_links,
-                memory_config=output.memory_config(),
-                lm_head=True,
-                buffer_key="LM_HEAD",
-            )  # self.output_memory_config
-            outputs_reduced.append(ttnn.sharded_to_interleaved(output_reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG))
+            if is_olmo:
+                output_dram = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
+                ttnn.deallocate(output)
+                rs_output = self.tt_ccl.line_reduce_scatter(
+                    output_dram,
+                    cluster_axis=1,
+                    num_links=num_links,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    use_noc1_only=False,
+                )
+                ttnn.deallocate(output_dram)
+                ag_output = self.tt_ccl.line_all_gather(
+                    rs_output,
+                    dim=3,
+                    cluster_axis=1,
+                    num_links=num_links,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(rs_output)
+                outputs_reduced.append(ag_output)
+            else:
+                output_reduced = self.tt_ccl.line_all_reduce(
+                    output,
+                    cluster_axis=1,
+                    num_links=num_links,
+                    memory_config=output.memory_config(),
+                    lm_head=True,
+                    buffer_key="LM_HEAD",
+                )
+                outputs_reduced.append(
+                    ttnn.sharded_to_interleaved(output_reduced, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+                )
         return outputs_reduced

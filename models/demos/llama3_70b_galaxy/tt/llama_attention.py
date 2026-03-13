@@ -130,40 +130,33 @@ class TtLlamaAttention(LightweightModule):
             configuration.dim, configuration.qkv_size // configuration.num_devices
         )
 
-        qkv_list = []
+        qkv_list_unpadded = []
+        qkv_list_padded = []
+        need_padding = self.is_olmo and self.n_local_heads < 8
         for i in range(self.num_devices_per_group):
-            # Chunk weights
             wq_selected = torch.chunk(self.state_dict[wq_str], self.num_devices_per_group, dim=0)[i]
             wk_selected = torch.chunk(self.state_dict[wk_str], self.num_devices_per_group, dim=0)[i]
             wv_selected = torch.chunk(self.state_dict[wv_str], self.num_devices_per_group, dim=0)[i]
 
-            # OLMo decode fix: Pad Q from 5 to 8 heads per device
-            # This is required because fused RoPE needs num_heads * head_dim = 1024
-            # OLMo: 5 local Q heads × 128 = 640 (doesn't meet constraint)
-            # Padded: 8 local Q heads × 128 = 1024 (meets constraint)
-            if self.is_olmo and self.n_local_heads < 8:
-                # wq_selected shape: [n_local_heads * head_dim, dim] = [640, 5120]
-                # Pad to [8 * head_dim, dim] = [1024, 5120]
-                pad_heads = 8 - self.n_local_heads  # 8 - 5 = 3 heads to pad
-                pad_size = pad_heads * self.head_dim  # 3 * 128 = 384
-                old_shape = wq_selected.shape
-                wq_selected = torch.nn.functional.pad(wq_selected, (0, 0, 0, pad_size), value=0.0)
-                if i == 0:
-                    print(
-                        f"OLMo Q padding: {old_shape} -> {wq_selected.shape} (added {pad_size} for {pad_heads} extra heads)"
-                    )
-
-            # Transpose the selected chunks
             wq = torch.transpose(wq_selected, -2, -1)
             wk = torch.transpose(wk_selected, -2, -1)
             wv = torch.transpose(wv_selected, -2, -1)
+            qkv_list_unpadded.append(torch.cat([wq, wk, wv], dim=-1))
 
-            qkv = torch.cat([wq, wk, wv], dim=-1)
-            qkv_list.append(qkv)
+            if need_padding:
+                pad_heads = 8 - self.n_local_heads
+                pad_size = pad_heads * self.head_dim
+                wq_padded = torch.transpose(
+                    torch.nn.functional.pad(wq_selected, (0, 0, 0, pad_size), value=0.0), -2, -1
+                )
+                qkv_list_padded.append(torch.cat([wq_padded, wk, wv], dim=-1))
 
-        qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
+        qkv_cat_unpadded = torch.cat(qkv_list_unpadded, dim=-1).unsqueeze(0).unsqueeze(0)
+        qkv_cat_padded = (
+            torch.cat(qkv_list_padded, dim=-1).unsqueeze(0).unsqueeze(0) if need_padding else qkv_cat_unpadded
+        )
         if self.is_olmo:
-            print(f"OLMo qkv_cat shape: {qkv_cat.shape} (expected [1, 1, 5120, 10240] for padded Q)")
+            print(f"OLMo qkv_cat unpadded: {qkv_cat_unpadded.shape}, padded: {qkv_cat_padded.shape}")
 
         # Ring stuff
         # Llama3: 9216, 12288
@@ -172,7 +165,7 @@ class TtLlamaAttention(LightweightModule):
         # Llama3: [1, 1, 8192, 10240] -> [2304, 1536]
         # Qwen3: [1, 1, 5120, 10240] -> [1280, 1536]
         self.wqkv = ttnn.as_tensor(
-            qkv_cat,
+            qkv_cat_padded,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
@@ -183,7 +176,7 @@ class TtLlamaAttention(LightweightModule):
             cache_file_name=cache_name("wqkv_sharded_2d_prefetcher"),  ## TODO: Fix caching
         )
         self.wqkv_interleaved = ttnn.as_tensor(
-            qkv_cat,
+            qkv_cat_unpadded,
             dtype=self.dtype,
             layout=ttnn.TILE_LAYOUT,
             device=self.mesh_device,
@@ -473,17 +466,13 @@ class TtLlamaAttention(LightweightModule):
         current_pos: (batch_size), current token position in the sequence for each user
         """
         # Ensure input is tilized for matmul (fused_rms_minimal may output ROW_MAJOR)
-        print(f"DEBUG forward_decode: x layout before tilize = {x.get_layout()}, shape = {x.shape}")
         if x.get_layout() != ttnn.TILE_LAYOUT:
-            print(f"DEBUG: Converting x to TILE_LAYOUT")
             x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
-        print(f"DEBUG forward_decode: x layout after tilize = {x.get_layout()}")
 
         ###
         # QKV matmuls
         # Use HiFi2 for DRAM-sharded matmuls as they are otherwise flop-bound. Loses 1 bit of activation precision.
         ###
-        print(f"DEBUG: wqkv layout = {self.wqkv.get_layout()}, shape = {self.wqkv.shape}")
         xqkv_fused_sharded = ttnn.matmul(  # [1, 1, 32, 1280]
             x,  # [1, 1, 32, 1280]
             self.wqkv,
@@ -583,20 +572,15 @@ class TtLlamaAttention(LightweightModule):
         # Llama/Qwen have 8 local Q heads (8*128=1024) ✓
         # OLMo has 5 local Q heads padded to 8 (8*128=1024) ✓ for Q, but K has 1 head (1*128=128) ✗
         # For OLMo, use non-fused RoPE to handle different Q/K head counts
-        print(f"DEBUG RoPE: Q shape={q_heads_pre_rot_1BQD.shape}, K shape={k_heads_pre_rot_1BKD.shape}")
-        print(f"DEBUG RoPE: Q layout={q_heads_pre_rot_1BQD.get_layout()}, K layout={k_heads_pre_rot_1BKD.get_layout()}")
         if self.is_olmo:
             # OLMo: Fused RoPE requires K[-2] * K[-1] == 1024
             # K has 1 KV head: [1, batch, 1, 128] -> 1*128 = 128 ≠ 1024
             # Expand K heads from 1 to 8, apply fused RoPE, then slice back to 1 head
-            print("DEBUG: OLMo decode - expanding K from 1 to 8 heads for fused RoPE")
             k_shape = k_heads_pre_rot_1BKD.shape
             k_mem_config = k_heads_pre_rot_1BKD.memory_config()
 
             # Get K's original shard grid (non-overlapping with Q)
             k_shard_grid = k_mem_config.shard_spec.grid
-            print(f"DEBUG: K original shard grid: {k_shard_grid}")
-
             # Move K to DRAM (interleaved) to allow repeat without sharding constraints
             k_interleaved = ttnn.to_memory_config(k_heads_pre_rot_1BKD, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(k_heads_pre_rot_1BKD)
@@ -604,7 +588,6 @@ class TtLlamaAttention(LightweightModule):
             # Tile K along the num_heads dimension: repeat 8 times [1, 8, 1, 128] -> [1, 8, 8, 128]
             k_expanded = ttnn.repeat(k_interleaved, ttnn.Shape([1, 1, 8, 1]))
             ttnn.deallocate(k_interleaved)
-            print(f"DEBUG: K expanded shape={k_expanded.shape}")
 
             # Create a HEIGHT_SHARDED memory config for K using its ORIGINAL non-overlapping grid
             # Shard shape changes from [1, 128] to [8, 128] to accommodate 8 heads
@@ -619,9 +602,6 @@ class TtLlamaAttention(LightweightModule):
             )
             k_expanded_sharded = ttnn.to_memory_config(k_expanded, k_expanded_mem_config)
             ttnn.deallocate(k_expanded)
-
-            print(f"DEBUG: Q shard grid: {q_heads_pre_rot_1BQD.memory_config().shard_spec.grid}")
-            print(f"DEBUG: K expanded shard grid: {k_expanded_sharded.memory_config().shard_spec.grid}")
 
             # Apply fused RoPE (now K[-2]*K[-1] = 8*128 = 1024 ✓)
             q_heads_1BQD, k_heads_expanded = ttnn.experimental.rotary_embedding_llama_fused_qk(
@@ -638,7 +618,6 @@ class TtLlamaAttention(LightweightModule):
             ttnn.deallocate(k_heads_expanded_dram)
             # Move back to original memory config
             k_heads_1BKD = ttnn.to_memory_config(k_heads_1BKD, k_mem_config)
-            print(f"DEBUG: K sliced back shape={k_heads_1BKD.shape}")
         else:
             # Llama/Qwen: Use fused RoPE (both Q and K have 8 heads)
             q_heads_1BQD, k_heads_1BKD = ttnn.experimental.rotary_embedding_llama_fused_qk(
@@ -743,68 +722,26 @@ class TtLlamaAttention(LightweightModule):
         ttnn.deallocate(q_heads_1BQD)
         self._debug_check_attn("sdpa_output", attn_output_1G4D_sharded)
 
-        print(f"DEBUG SDPA output shape: {attn_output_1G4D_sharded.shape}")
-        print(f"DEBUG SDPA output mem_config: {attn_output_1G4D_sharded.memory_config()}")
-
         # OLMo decode: Use 8 padded heads to match fused RoPE (num_heads * head_dim = 1024)
         # For other models with 8 local heads, n_local_heads == 8 already
         decode_num_heads = 8 if (self.is_olmo and self.n_local_heads < 8) else self.n_local_heads
 
-        print(f"DEBUG all_gather_concat: num_heads={decode_num_heads}")
-
-        # OLMo decode: all_gather_concat segfaults with small batches (batch=32, batch_per_column=8)
-        # Use host-side all_gather + slice + reshape workaround
         if self.is_olmo:
-            # SDPA output per device: [1, 8, 32, 128] (batch_per_column=8, 32_padded_heads, head_dim=128)
-            # Note: SDPA pads heads to tile size (32), but only decode_num_heads (8) are valid
-            print(f"DEBUG OLMo decode: SDPA output shape = {attn_output_1G4D_sharded.shape}")
-            print(f"DEBUG OLMo decode: SDPA output mem_config = {attn_output_1G4D_sharded.memory_config()}")
-
-            # Step 1: all_gather across column axis (4 devices) to get all 32 users
-            # [1, 8, 32, 128] × 4 → [1, 32, 32, 128]
-            attn_gathered = self.tt_ccl.line_all_gather_host(
+            attn_gathered = self.tt_ccl.line_all_gather(
                 attn_output_1G4D_sharded,
                 dim=1,
                 cluster_axis=1,
                 num_links=self.model_config["GALAXY_NUM_LINKS"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,  # Output to DRAM for slice/reshape
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
             ttnn.deallocate(attn_output_1G4D_sharded)
-            print(f"DEBUG OLMo decode: after all_gather shape = {attn_gathered.shape}")
 
-            # Step 2: slice to keep only valid heads (8 out of 32 padded)
-            # [1, 32, 32, 128] -> [1, 32, 8, 128]
             batch = attn_gathered.shape[1]  # 32
             head_dim = attn_gathered.shape[3]  # 128
             attn_sliced = ttnn.slice(attn_gathered, [0, 0, 0, 0], [1, batch, decode_num_heads, head_dim])
-            ttnn.deallocate(attn_gathered)
-            print(f"DEBUG OLMo decode: after slice shape = {attn_sliced.shape}")
-
-            # Step 3: reshape [1, 32, 8, 128] -> [1, 1, 32, 1024]
-            # Combine local_heads (8) with head_dim (128) to get 1024
             attn_reshaped = ttnn.reshape(attn_sliced, [1, 1, batch, decode_num_heads * head_dim])
-            ttnn.deallocate(attn_sliced)
-            print(f"DEBUG OLMo decode: after reshape shape = {attn_reshaped.shape}")
-            print(f"DEBUG OLMo decode: after reshape layout = {attn_reshaped.get_layout()}")
-
-            # Step 4: tilize if needed (from_torch in all_gather_host uses TILE, but reshape might change it)
-            if attn_reshaped.get_layout() != ttnn.TILE_LAYOUT:
-                print("DEBUG OLMo decode: tilizing...")
-                # First move to DRAM interleaved for tilize
-                attn_dram = ttnn.to_memory_config(attn_reshaped, ttnn.DRAM_MEMORY_CONFIG)
-                ttnn.deallocate(attn_reshaped)
-                attn_tiled = ttnn.to_layout(attn_dram, ttnn.TILE_LAYOUT)
-                ttnn.deallocate(attn_dram)
-            else:
-                print("DEBUG OLMo decode: already tiled")
-                attn_tiled = attn_reshaped
-
-            # Step 5: Keep in DRAM for WO matmul (avoid sharding grid mismatch)
-            # This is slower but avoids complex grid matching issues
-            print(f"DEBUG OLMo decode: using DRAM for WO matmul input")
-            attn_output_cat = ttnn.to_memory_config(attn_tiled, ttnn.DRAM_MEMORY_CONFIG)
-            if attn_tiled is not attn_reshaped:
-                ttnn.deallocate(attn_tiled)
+            attn_output_cat = ttnn.to_memory_config(attn_reshaped, ttnn.DRAM_MEMORY_CONFIG)
+            ttnn.deallocate(attn_gathered)
         else:
             # Standard path for Llama/Qwen - use all_gather_concat
             attn_output_cat = self.tt_ccl.all_gather_concat(  # [1, 1, 32, 1024]

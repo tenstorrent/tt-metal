@@ -324,19 +324,22 @@ class TT_CCL:
         persistent_buffers["LOGPROBS_LOGITS"] = tt_buffer
 
         # Binary Mult + Silu
-        # OLMo: 3840 (padded intermediate_dim_per_tp), Qwen: 3200, Llama: 3584
+        # OLMo: 3456 (unpadded intermediate_dim_per_tp), Qwen: 3200, Llama: 3584
         if self.is_olmo:
-            binary_mul_width = 3840  # intermediate_dim_per_tp_padded_24_cores
+            binary_mul_width = 3456  # intermediate_dim_per_tp (unpadded)
+            binary_mul_mem_config = ttnn.DRAM_MEMORY_CONFIG
         elif self.is_qwen:
             binary_mul_width = 3200
+            binary_mul_mem_config = self.model_config["FF2_IN_RING_MEMCFG"]
         else:
             binary_mul_width = 3584  # Llama default
+            binary_mul_mem_config = self.model_config["FF2_IN_RING_MEMCFG"]
         tt_buffer = ttnn.from_torch(
             torch.zeros((1, 1, self.max_batch_size, binary_mul_width)),
             device=self.mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat8_b,
-            memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
+            memory_config=binary_mul_mem_config,
             mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
         )
         persistent_buffers["BINARY_MUL"] = tt_buffer
@@ -515,7 +518,7 @@ class TT_CCL:
 
             if self.is_olmo:
                 buffers_dict = {
-                    "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
+                    "QKV": [(1, 1, seqlen, 896), (1, 1, seqlen, 896 // 4)],
                     # "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                     "FF1": [(1, 1, seqlen, 3456), (1, 1, seqlen, 3456 // 4)],
                     "FF3": [(1, 1, seqlen, 3456), (1, 1, seqlen, 3456 // 4)],
@@ -591,12 +594,12 @@ class TT_CCL:
             # https://github.com/tenstorrent/tt-metal/issues/35319 gets resolved
             if self.is_olmo:
                 buffers_dict = {
-                    "QKV": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 4)],
+                    "QKV": [(1, 1, seqlen, 896), (1, 1, seqlen, 896 // 4)],
                     # "WO": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
                     "FF1": [(1, 1, seqlen, 3456), (1, 1, seqlen, 3456 // 4)],
                     "FF3": [(1, 1, seqlen, 3456), (1, 1, seqlen, 3456 // 4)],
                     "FF2": [(1, 1, seqlen, 1280), (1, 1, seqlen, 1280 // 8)],
-                    "QKV_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 4)],
+                    "QKV_batched": [(1, 32, seqlen // 32, 896), (1, 32, seqlen // 32, 896 // 4)],
                     # "WO_batched": [(1, 32, seqlen // 32, 1280), (1, 32, seqlen // 32, 1280 // 8)],
                     "FF1_batched": [(1, 32, seqlen // 32, 3456), (1, 32, seqlen // 32, 3456 // 4)],
                     "FF3_batched": [(1, 32, seqlen // 32, 3456), (1, 32, seqlen // 32, 3456 // 4)],
@@ -1192,8 +1195,7 @@ class TT_CCL:
 
         else:
             topology = self.model_config["CCL_TOPOLOGY"]
-            assert buffer_key is not None, "buffer_key is None"
-            persistent_buffer = self.all_gather_buffers.get(buffer_key, None)
+            persistent_buffer = self.all_gather_buffers.get(buffer_key, None) if buffer_key is not None else None
         # ttnn.synchronize_device(self.mesh_device, sub_device_ids=[self.worker_sub_device_id])
         barrier_semaphore = None
         if persistent_buffer is None:

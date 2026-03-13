@@ -134,7 +134,7 @@ class TtTransformer(LightweightModule):
                 self.setup_prefill()
             self.is_prefill_setup = True
 
-        if mode == "decode":
+        if mode == "decode" and self.prefetcher_setup is not None:
             self.tt_tensors = self.prefetcher_setup.get_input_tensors()
         self.tt_rot_mats_prefill = None
 
@@ -163,6 +163,33 @@ class TtTransformer(LightweightModule):
             self.tt_ccl = self.tt_ccl_prefill
 
     def setup_decode(self, mesh_sub_device_manager_id_decode=None):
+        use_prefetcher = getattr(self.args, "use_prefetcher", True)
+        if not use_prefetcher:
+            self.prefetcher_setup = None
+            all_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
+            all_sub_device = ttnn.SubDevice([all_core_range_set])
+            worker_sub_device_id = ttnn.SubDeviceId(0)
+            sub_device_manager = self.mesh_device.create_sub_device_manager([all_sub_device], 0)
+            self.mesh_device.load_sub_device_manager(sub_device_manager)
+            self.mesh_device.set_sub_device_stall_group([worker_sub_device_id])
+            self.mesh_sub_device_manager_id_decode = sub_device_manager
+            self._worker_sub_device_id = worker_sub_device_id
+            if mesh_sub_device_manager_id_decode is None:
+                self.tt_ccl = TT_CCL(
+                    self.mesh_device,
+                    self.args,
+                    worker_sub_device_id=worker_sub_device_id,
+                    is_olmo=getattr(self.args, "is_olmo", False),
+                )
+                self.sampling = SamplingGenerator(
+                    args=self.args,
+                    mesh_device=self.mesh_device,
+                    tt_ccl=self.tt_ccl,
+                )
+            else:
+                self.tt_ccl = self.tt_ccl_decode
+            return
+
         self.prefetcher_setup = TtLlamaPrefetcherSetup(
             self.mesh_device,
             n_tensors=5,
@@ -659,14 +686,13 @@ class TtTransformer(LightweightModule):
             if self.is_decode_setup is False:
                 self.setup_decode(self.mesh_sub_device_manager_id_decode)
                 self.is_decode_setup = True
-                # prefetch
                 for layer in self.layers:
                     layer.prefetch(self.prefetcher_setup, self.tt_ccl)
                 self.norm.tt_ccl = self.tt_ccl
                 self.lm_head.tt_ccl = self.tt_ccl
-                self.tt_tensors = self.prefetcher_setup.get_input_tensors()
-                # Re-create global CB for decode (if it was not already created)
-                self.prefetcher_setup.create_global_cb()
+                if self.prefetcher_setup is not None:
+                    self.tt_tensors = self.prefetcher_setup.get_input_tensors()
+                    self.prefetcher_setup.create_global_cb()
 
         else:
             if self.is_decode_setup:
@@ -696,7 +722,7 @@ class TtTransformer(LightweightModule):
         kv_cache=None,
         batch_size=1,
     ):
-        if mode == "decode":
+        if mode == "decode" and self.prefetcher_setup is not None:
             self.prefetcher_setup.create_global_cb()
             garbage_tensor = ttnn.dram_prefetcher(
                 self.tt_tensors,
@@ -723,10 +749,10 @@ class TtTransformer(LightweightModule):
                 batch_size=batch_size,
             )
         # ttnn.deallocate(h)
-        if mode == "decode":
+        if mode == "decode" and self.prefetcher_setup is not None:
             ttnn.deallocate(garbage_tensor)
 
-            # Pre-allocated output of AllReduce in LM Head to avoid memory cloberring
+        if mode == "decode" and self.prefetcher_setup is not None:
             self.tt_ccl.tt_lm_head_buffer_l1 = ttnn.to_memory_config(
                 self.tt_ccl.tt_lm_head_buffer, self.tt_ccl.lm_head_buffer_mem_cfg
             )
@@ -739,9 +765,12 @@ class TtTransformer(LightweightModule):
         if get_last_token != -1:
             x = x[:, :, get_last_token:, :]
 
-        lm_head_output = self.lm_head(
-            x, None if mode == "prefill" else self.prefetcher_setup.worker_sub_device_id, mode=mode
-        )
+        worker_sub_device_id = None
+        if mode != "prefill" and self.prefetcher_setup is not None:
+            worker_sub_device_id = self.prefetcher_setup.worker_sub_device_id
+        elif mode != "prefill" and hasattr(self, "_worker_sub_device_id"):
+            worker_sub_device_id = self._worker_sub_device_id
+        lm_head_output = self.lm_head(x, worker_sub_device_id, mode=mode)
         # if mode is decode and Qwen model
         if mode == "decode" and self.args.is_qwen:
             ttnn.to_memory_config(self.tt_ccl.tt_lm_head_buffer, ttnn.DRAM_MEMORY_CONFIG)

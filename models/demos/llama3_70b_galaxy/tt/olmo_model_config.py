@@ -740,6 +740,11 @@ class TtOlmoModelArgs(TtModelArgs):
         qkv_size_per_device = qkv_size_padded // 8  # 1280
         qkv_size_per_device_padded = ((qkv_size_per_device + 767) // 768) * 768  # 1280 → 1536
 
+        # Unpadded QKV/WO sizes for prefill (original 5 Q heads, no padding)
+        qkv_size_prefill = self.head_dim * (2 * self.n_kv_heads + self.n_heads)  # 128 * 56 = 7168
+        qkv_size_per_device_prefill = qkv_size_prefill // 8  # 896
+        wo_k_prefill = self.n_heads * self.head_dim // 8  # 40 * 128 / 8 = 640
+
         qkv_shape_ring = (self.dim // 4, qkv_size_per_device_padded)  # (1280, 896)
         self.model_config["SHARDED_QKV_RING_MEMCFG"] = self.create_dram_sharded_mem_config(
             k=qkv_shape_ring[0],
@@ -906,29 +911,28 @@ class TtOlmoModelArgs(TtModelArgs):
             1, 32, wo_shape_ring[0], wo_shape_ring[1], RING_SIZE, prefetch=self.use_prefetcher
         )
 
-        # QKV prefill config
-        # OLMo: qkv_size_per_device_padded=1536 (48 tiles). Use 6 cores for N (48/6=8 tiles/core)
-        # Avoid 8 cores - column 7 (0-indexed) is dispatch core
-        qkv_n_tiles = qkv_size_per_device_padded // 32  # 48 tiles
-        qkv_n_cores = 6  # 48 / 6 = 8 evenly
-        qkv_per_core_n = qkv_n_tiles // qkv_n_cores  # 8
+        # QKV prefill config (uses unpadded QKV weights: 5 Q heads, N=896 per device)
+        # 896 / 32 = 28 tiles. Use 4 cores for N (28/4=7 tiles/core)
+        qkv_pf_n_tiles = qkv_size_per_device_prefill // 32  # 28 tiles
+        qkv_pf_n_cores = 4  # 28 / 4 = 7 evenly
+        qkv_pf_per_core_n = qkv_pf_n_tiles // qkv_pf_n_cores  # 7
         self.model_config["XQKV_PREFILL_PROGCFG"] = (
             lambda seq_len: self.matmul_1d_config(
                 seq_len,
                 self.dim // 4,
-                qkv_size_per_device_padded,
+                qkv_size_per_device_prefill,
                 grid=ttnn.CoreGrid(x=4, y=10),
                 overwrite_per_core_k=8,
             )
             if seq_len == 128
             else (
                 ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-                    compute_with_storage_grid_size=(qkv_n_cores, 10),
+                    compute_with_storage_grid_size=(qkv_pf_n_cores, 10),
                     in0_block_w=8,
                     out_subblock_h=1,
-                    out_subblock_w=2,  # 6 % 2 == 0 ✓
+                    out_subblock_w=1,
                     per_core_M=max(1, 8 if seq_len >= 2048 else seq_len // self.tile_size // 8),
-                    per_core_N=qkv_per_core_n,
+                    per_core_N=qkv_pf_per_core_n,
                     transpose_mcast=False,
                     fused_activation=None,
                     fuse_batch=seq_len <= 2048,
@@ -936,15 +940,14 @@ class TtOlmoModelArgs(TtModelArgs):
             )
         )
 
-        # WO prefill config
-        # OLMo: dim=5120, N=1280 (40 tiles). Use 5 cores for N (40/5=8 tiles/core)
-        # Avoid 8 cores - column 7 (0-indexed) is dispatch core
+        # WO prefill config (uses unpadded WO: K=640, N=1280)
+        # 640/32 = 20 tiles for K, 1280/32 = 40 tiles for N
         wo_n_tiles = self.dim // 4 // 32  # 40 tiles
         wo_n_cores = 5  # 40 / 5 = 8 evenly
         wo_per_core_n = wo_n_tiles // wo_n_cores  # 8
         self.model_config["WO_PREFILL_PROGCFG"] = (
             lambda seq_len: self.matmul_1d_config(
-                seq_len, wo_shape_ring[0], self.dim // 4, grid=ttnn.CoreGrid(x=4, y=10), overwrite_per_core_k=4
+                seq_len, wo_k_prefill, self.dim // 4, grid=ttnn.CoreGrid(x=4, y=10), overwrite_per_core_k=4
             )
             if seq_len == 128
             else (
@@ -1042,9 +1045,14 @@ class TtOlmoModelArgs(TtModelArgs):
         # Padded shape for ring matmul - already properly aligned via RING_TILE_ALIGN above
         lm_head_out_padded = padded_vocab_per_device  # Already multiple of 768
 
+        lm_head_input_n_cores = 10
+        lm_head_input_shard_w = self.dim_per_tp // lm_head_input_n_cores  # 1280 // 10 = 128 (tile-aligned)
+        lm_head_input_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            self.start_core, lm_head_input_n_cores, self.sub_core_grids, row_wise=True
+        )
         self.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
-            shape=(32, max(32, self.lm_head_shape[0] // LM_HEAD_RING_SIZE)),  # (32, 54) -> pad to (32, 64)
-            core_grid=lm_head_ring_core_input_range_set,
+            shape=(32, lm_head_input_shard_w),
+            core_grid=lm_head_input_core_grid,
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -1064,7 +1072,7 @@ class TtOlmoModelArgs(TtModelArgs):
             use_height_and_width_as_shard_shape=True,
         )
         self.model_config["LM_HEAD_OUT_RING_RESHARD_MEMCFG"] = ttnn.create_sharded_memory_config(
-            shape=(32, max(32, self.lm_head_shape[1] // 32)),
+            shape=(32, max(32, lm_head_out_padded // LM_HEAD_RING_SIZE)),
             core_grid=lm_head_ring_core_range_set,
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,

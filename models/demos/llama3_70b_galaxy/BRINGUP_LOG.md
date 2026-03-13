@@ -1,15 +1,17 @@
 # OLMo-3.1-32B Bring-up Log
 
-## Current Status (2026-03-11)
+## Current Status (2026-03-13)
 
 ### Summary
 | Component | Status | Performance |
 |-----------|--------|-------------|
-| **Prefill (64 layers)** | ✅ DONE | TTFT: 400 ms @ 4k (traced), 51 ms @ 128 (traced) |
-| **Decode (64 layers)** | ✅ DONE | 10 iterations pass, hybrid CCL |
-| **Device-side CCL** | 🟡 PARTIAL | 3/5 operations on device |
-| **End-to-End Demo** | 🟡 CREATED | Needs full model testing |
+| **Prefill (1 layer)** | ✅ DONE | PCC=0.9998, 50s total (cache gen + run) |
+| **Decode (64 layers, traced)** | ✅ DONE | 40.6 ms/iter, 789 tok/s (traced). Inf in output due to QK-norm weight mismatch |
+| **Decode (1 layer, traced)** | ✅ DONE | 0.7 ms/iter, 44.7k tok/s (traced) |
+| **Device-side CCL** | ✅ DONE | ALL 5/5 operations on device (no host ops) |
+| **End-to-End Demo** | 🟡 IN PROGRESS | Prefill + decode both working separately; need transition validation |
 | **Tracing (Prefill)** | ✅ DONE | Added enable_trace flag to skip input deallocation |
+| **Tracing (Decode)** | ✅ DONE | All host ops removed; trace capture works |
 
 ---
 
@@ -28,67 +30,64 @@
 | 128 | 323 ms | **51 ms** | **6.38x** |
 | 4096 | 707 ms | **400 ms** | **1.77x** |
 
-### Decode Mode (Complete - Hybrid CCL)
-- [x] 10 decode iterations pass with reasonable output (mean=0.0022, std=0.58)
-- [x] Q head padding (5→8) for fused RoPE compatibility
+### Decode Mode (Complete - All Device-side CCL, Traced)
+- [x] Q head padding (5→8) for fused RoPE compatibility (decode only)
 - [x] K head expansion/slicing for RoPE
 - [x] MLP weight dimension fix (was reading garbage)
 - [x] Sliding window in decode SDPA
+- [x] All CCL operations converted to device-side (enables trace)
+- [x] Trace capture working: 1-layer 0.7ms/iter (44.7k tok/s), 64-layer 40.6ms/iter (789 tok/s)
+- [x] Fabric reliability: RELAXED_INIT required for this Galaxy cluster
 
-### Device-side CCL Operations (3/5 Complete)
+### Device-side CCL Operations (5/5 Complete)
 | Operation | Status | Location | Notes |
 |-----------|--------|----------|-------|
-| MLP FF1/FF3 all_gather | ✅ Device | `llama_mlp.py:306` | Uses BINARY_MUL buffer (3840 width) |
-| MLP W2 all_reduce | ✅ Device | `llama_mlp.py:369` | Uses FF2_OUT_RING_MEMCFG_OLMO |
-| Attention WO all_reduce | ✅ Device | `llama_attention.py:828` | Uses SHARDED_WO_OUT_RING_MEMCFG_OLMO |
-| MLP W1/W3 reduce_scatter | ❌ Host | `llama_mlp.py:185` | Kernel shard constraint |
-| Attention post-SDPA all_gather | ❌ Host | `llama_attention.py:736` | all_gather_concat crashes |
+| MLP FF1/FF3 all_gather | ✅ Device | `llama_mlp.py` | Uses BINARY_MUL buffer (3456 unpadded width, DRAM) |
+| MLP W2 all_reduce | ✅ Device | `llama_mlp.py` | Uses FF2_OUT_RING_MEMCFG_OLMO |
+| MLP W1/W3 reduce_scatter | ✅ Device | `llama_mlp.py` | Slice 3840→3456, then device reduce_scatter to DRAM |
+| Attention WO all_reduce | ✅ Device | `llama_attention.py` | Uses device line_all_reduce |
+| Attention post-SDPA all_gather | ✅ Device | `llama_attention.py` | Device line_all_gather to DRAM |
+| LM Head all_reduce | ✅ Device | `lm_head.py` | Decomposed: device reduce_scatter + all_gather |
+
+### Key Fix: ttnn.slice Aliasing
+`ttnn.slice` creates memory aliases (views). Deallocating the parent tensor before using the alias causes "Buffer is not allocated" errors. Fix: reorder deallocations to keep parent alive until alias operations complete.
 
 ### OLMo-specific Memory Configs Added
 ```python
 FF2_OUT_RING_MEMCFG_OLMO      # 10 cores × 128 = 1280 (dim_per_tp)
 SHARDED_WO_OUT_RING_MEMCFG_OLMO  # 10 cores × 128 = 1280 (dim_per_tp)
-REDUCE_SCATTER_OUT_MEMCFG_OLMO   # 15 cores × 32 = 480 (for scatter output)
-BINARY_MUL buffer (OLMo)         # 3840 width (padded intermediate)
+BINARY_MUL buffer (OLMo)         # 3456 width (unpadded intermediate), DRAM
 ```
 
 ---
 
 ## What's NOT DONE ❌
 
-### Device-side CCL (Blocked by Kernel Constraints)
-| Operation | Blocker | Details |
-|-----------|---------|---------|
-| MLP W1/W3 reduce_scatter | Shard count mismatch | Kernel expects input/output shard counts to match. OLMo: 24 input shards → 15 output shards |
-| Attention all_gather | Kernel crash | `all_gather_concat` crashes with "bad optional access" for OLMo dimensions (batch=32, dim=1280) |
-
-**Root Cause**: OLMo's unique dimensions don't fit existing kernel constraints:
-- 5:1 GQA ratio (vs 8:1 for Llama/Qwen)
-- 3456 intermediate per TP (vs 3584 Llama, 3200 Qwen)
-- 1280 dim per TP (vs 2048 Llama/Qwen)
-
-**Potential Fixes** (require kernel work):
-1. `reduce_scatter_minimal_async` - more flexible but still has shape constraints
-2. Modify `llama_reduce_scatter` to handle different input/output shard counts
-3. Modify `all_gather_concat` to handle OLMo's smaller batch size
+### Prefill QKV Weight Fix (DONE)
+- QKV weights were padded (5→8 Q heads) for decode fused RoPE compatibility
+- This broke prefill: `nlp_create_qkv_heads` expects unpadded 5 Q heads (1280 % 7 ≠ 0)
+- **Fix**: Separate padded (decode: `self.wqkv`) / unpadded (prefill: `self.wqkv_interleaved`) QKV weights
+- Updated prefill matmul program configs for unpadded N=896 (`XQKV_PREFILL_PROGCFG`, `WO_PREFILL_PROGCFG`)
+- Updated CCL persistent buffer sizes from 1280→896 for QKV
+- **Stale cache was root cause** of "Num output blocks along x (6)" error — nuked entire tensor cache to fix
 
 ### End-to-End Demo
-- [ ] Full model decode test (demo_olmo_decode.py created but not validated)
+- [x] Fix prefill QKV unpadding (matmul grid config) — PCC=0.9998
+- [ ] Validate prefill → decode transition
 - [ ] Performance benchmark (tok/s measurement)
-- [ ] Trace capture for decode
+
+### Numerical Accuracy
+- [ ] 64-layer decode produces Inf in output (QK-norm weight mismatch during model loading)
+- [ ] "Removed incompatible OLMo QK-norm weight" messages during load need investigation
 
 ### Code Cleanup
 - [ ] Remove DEBUG print statements from `llama_attention.py` and `llama_mlp.py`
 - [ ] Clean up `_debug_check_*` functions
-- [ ] Update test files to use proper assertions
 
 ### Performance Optimization
 - [x] Enable tracing for prefill
-  - **Fixed**: Added `enable_trace` flag to skip input deallocation during trace capture
-  - **Fixed**: CCL ring_reduce_scatter buffer fix (use only output buffer, not intermediate)
-  - All 4 trace tests pass (1/64 layers × 128/4k seq_len)
-- [ ] Enable tracing for decode
-- [ ] Measure decode tok/s
+- [x] Enable tracing for decode (all host ops removed)
+- [x] Measured decode tok/s: 789 tok/s (64 layers, traced)
 
 ---
 
@@ -237,10 +236,10 @@ Run: `pytest models/demos/llama3_70b_galaxy/tests/test_olmo_decode_numerical.py 
 - `test_olmo_decode_numerical.py`: 6/6 PASSED (CPU reference tests)
 
 ### Next Steps
-1. Run numerical overflow tests to identify overflow source
-2. Verify prefill works after CCL fix
-3. Fix overflow (likely bfloat8_b precision or weight scaling)
-4. Performance optimization (reduce host-side ops)
+1. Get end-to-end demo working (prefill → decode transition)
+2. Measure decode tok/s without trace
+3. Fix device-side reduce_scatter for trace (padded 3840 vs unpadded 3456 mismatch)
+4. Performance optimization
 
 ## Key Paths
 | File | Path |
@@ -826,10 +825,50 @@ OLMo has 40 Q heads → 5 local Q heads per device (40/8=5), but the fused RoPE 
 4. Or: Implement non-fused RoPE path for decode (needs tile-aligned shards)
 
 ### Phase 3: Optimization (After Decode)
-- [ ] Tracing for prefill
-- [ ] Tracing for decode
+- [x] Tracing for prefill - **DONE**
+- [x] Tracing for decode - **DONE** (all host ops removed)
 - [ ] Memory optimization
 - [x] Ring SDPA kernel extension for sliding_window - **DONE**
+
+### 2026-03-13 (All Device-side CCL + Decode Trace)
+**Status**: Decode trace WORKING, prefill QKV fix IN PROGRESS
+**PCC**: N/A (functional validation)
+
+**Completed**:
+- [x] Converted ALL CCL operations to device-side (no host ops):
+  - MLP W1/W3: `line_reduce_scatter` (slice 3840→3456 unpadded, then device RS to DRAM)
+  - MLP FF1*FF3: `line_all_gather` with BINARY_MUL buffer (3456 width, DRAM)
+  - Attention post-SDPA: `line_all_gather` to DRAM (removed `_host` variant)
+  - LM Head: Decomposed `line_all_reduce_host` → device `line_reduce_scatter` + `line_all_gather`
+- [x] Fixed `ttnn.slice` aliasing bugs (premature deallocation of parent tensors)
+- [x] Fixed fabric init: `RELAXED_INIT` mode for Galaxy cluster topology
+- [x] 1-layer decode with trace: **0.7 ms/iter, 44.7k tok/s**
+- [x] 64-layer decode with trace: **40.4 ms/iter, 792 tok/s** (functional, Inf in output)
+- [x] Started prefill QKV weight separation (padded for decode, unpadded for prefill)
+
+**Key Fixes**:
+1. `llama_mlp.py`: W1/W3 device RS path - move to DRAM, slice to unpadded width, then reduce_scatter
+2. `llama_ccl.py`: BINARY_MUL buffer → 3456 width (unpadded), DRAM memory config
+3. `llama_attention.py`: Reordered deallocations for `ttnn.slice` aliases
+4. `lm_head.py`: Device-side all_reduce = reduce_scatter + all_gather
+5. `llama_attention.py`: Separate padded/unpadded QKV weights (padded for decode, unpadded for prefill)
+6. `olmo_model_config.py`: Separate prefill QKV program config (N=896 unpadded)
+7. `llama_ccl.py`: Updated QKV persistent buffers to 896 (unpadded) for prefill
+
+**Current Blocker**:
+- Prefill matmul grid mismatch: `Num output blocks along x (6) must be <= columns in compute grid (4)`
+- Need to fix `XQKV_PREFILL_PROGCFG` or `WO_PREFILL_PROGCFG` grid dimensions for unpadded sizes
+
+**Test Commands**:
+```bash
+# Decode (working)
+export HF_MODEL=/home/tt-admin/.cache/huggingface/hub/models--allenai--Olmo-3.1-32B-Think
+export LINE_RS=1
+pytest models/demos/llama3_70b_galaxy/tests/test_olmo_decode.py -v -s -k "num_layers_64"
+
+# Prefill (in progress)
+pytest models/demos/llama3_70b_galaxy/tests/test_olmo_prefill.py -v -s
+```
 
 ### 2026-03-11 (Device-side CCL Verification)
 **Status**: Hybrid CCL Approach VERIFIED

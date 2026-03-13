@@ -79,7 +79,13 @@ def olmo_config_and_weights():
 )
 @pytest.mark.parametrize(
     "device_params",
-    [{"dispatch_core_axis": ttnn.DispatchCoreAxis.COL, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}],
+    [
+        {
+            "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
+            "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            "reliability_mode": ttnn.FabricReliabilityMode.RELAXED_INIT,
+        }
+    ],
     indirect=True,
 )
 class TestOlmoPrefill:

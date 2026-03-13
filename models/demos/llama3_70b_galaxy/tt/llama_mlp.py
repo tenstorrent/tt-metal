@@ -165,60 +165,52 @@ class TtLlamaMLP(LightweightModule):
             # Ring matmul requires sharded output, so use SHARDED_FF12_OUT_RING_MEMCFG
             # OLMo uses host-side reduce_scatter due to L1/memory config constraints
             if is_olmo:
-                # W1 matmul - use sharded weight with program config, output to DRAM
-                # (host-side reduce_scatter needs DRAM input)
+                unpadded_width = self.args.intermediate_dim_per_tp  # 3456
+
                 w1_out = ttnn.linear(
                     x,
-                    self.w1,  # Sharded weight has K=1280 matching decode input
+                    self.w1,
                     compute_kernel_config=self.args.compute_kernel_config_lofi
                     if self.four_bit_mlp
                     else self.args.compute_kernel_config_hifi2,
                     dtype=ttnn.bfloat8_b,
-                    program_config=pc_1_3,  # Ring matmul config
-                    memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],  # Ring matmul needs sharded output
+                    program_config=pc_1_3,
+                    memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
                 )
-                self._debug_check_mlp("w1_out", w1_out)
-                # Reshard to DRAM for host-side reduce_scatter
                 w1_out_dram = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(w1_out)
-                # OLMo: Use host-side reduce_scatter (device-side has shape compatibility issues)
-                w1_out_reduced = self.tt_ccl.line_reduce_scatter_host(
-                    w1_out_dram,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    dim=3,
+                w1_out_unpadded = ttnn.slice(w1_out_dram, [0, 0, 0, 0], [1, 1, 32, unpadded_width])
+                w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+                    w1_out_unpadded,
                     cluster_axis=1,
                     num_links=self.model_config["GALAXY_NUM_LINKS"],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    use_noc1_only=False,
                 )
                 ttnn.deallocate(w1_out_dram)
-                self._debug_check_mlp("w1_out_reduced", w1_out_reduced)
 
-                # W3 matmul - use sharded weight with program config
                 w3_out = ttnn.linear(
                     x,
-                    self.w3,  # Sharded weight has K=1280 matching decode input
+                    self.w3,
                     compute_kernel_config=self.args.compute_kernel_config_lofi
                     if self.four_bit_mlp
                     else self.args.compute_kernel_config_hifi2,
                     dtype=ttnn.bfloat8_b,
-                    program_config=pc_1_3,  # Ring matmul config
-                    memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],  # Ring matmul needs sharded output
+                    program_config=pc_1_3,
+                    memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
                 )
                 ttnn.deallocate(x)
-                self._debug_check_mlp("w3_out", w3_out)
-
-                # Reshard to DRAM for host-side reduce_scatter
                 w3_out_dram = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(w3_out)
-                # OLMo: Use host-side reduce_scatter (device-side has shape compatibility issues)
-                w3_out_reduced = self.tt_ccl.line_reduce_scatter_host(
-                    w3_out_dram,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    dim=3,
+                w3_out_unpadded = ttnn.slice(w3_out_dram, [0, 0, 0, 0], [1, 1, 32, unpadded_width])
+                w3_out_reduced = self.tt_ccl.line_reduce_scatter(
+                    w3_out_unpadded,
                     cluster_axis=1,
                     num_links=self.model_config["GALAXY_NUM_LINKS"],
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    use_noc1_only=False,
                 )
                 ttnn.deallocate(w3_out_dram)
-                self._debug_check_mlp("w3_out_reduced", w3_out_reduced)
             else:
                 # W1 matmul
                 w1_out = ttnn.linear(
@@ -316,14 +308,12 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
         if is_olmo and mode == "decode":
-            # OLMo decode: Use device-side CCL with OLMo-specific BINARY_MUL buffer (3840 width)
-            ff2_in_mem_config = self.model_config["FF2_IN_RING_MEMCFG"]
             w2_in = self.tt_ccl.line_all_gather(
                 ff1ff3,
                 dim=3,
                 cluster_axis=1,
                 num_links=self.model_config["GALAXY_NUM_LINKS"],
-                memory_config=ff2_in_mem_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="BINARY_MUL",
                 use_optimal_ccl_for_llama=True,
             )
@@ -341,24 +331,15 @@ class TtLlamaMLP(LightweightModule):
 
         ttnn.deallocate(ff1ff3)
 
-        # OLMo: FF1/FF3 outputs are padded to 3840 but W2 expects 3456
-        # Slice off the padding before W2
         if is_olmo and mode == "decode":
-            # Move to DRAM for slice operation (sharded tensors may have issues with slice)
-            w2_in_dram = ttnn.to_memory_config(w2_in, ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(w2_in)
-            # Slice from [1, 1, 32, 3840] to [1, 1, 32, 3456]
-            w2_in_sliced = ttnn.slice(w2_in_dram, [0, 0, 0, 0], [1, 1, 32, 3456])
-            ttnn.deallocate(w2_in_dram)
-            # Use interleaved weight and default config for OLMo
             w2_out = ttnn.linear(
-                w2_in_sliced,
+                w2_in,
                 self.w2_interleaved,
                 compute_kernel_config=self.args.compute_kernel_config_hifi2,
                 dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-            ttnn.deallocate(w2_in_sliced)
+            ttnn.deallocate(w2_in)
             self._debug_check_mlp("w2_out", w2_out)
             # OLMo: Use device-side all_reduce with OLMo-specific sharded config
             # Reshard to FF2_OUT_RING_MEMCFG_OLMO (10 cores × 128 = 1280)
