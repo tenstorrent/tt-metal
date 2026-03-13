@@ -140,10 +140,14 @@ class ResBlock(Module):
             768: {
                 8: 4,  # 28 padded up to 32, divided by 8
                 4: 7,  # 28/4
+                2: 8,
+                1: 8,
             },
             512: {
                 8: 5,
                 4: 8,
+                2: 8,
+                1: 8,
             },
         }
         self.num_out_blocks_map = {
