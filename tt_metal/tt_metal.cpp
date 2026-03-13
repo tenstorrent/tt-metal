@@ -45,6 +45,8 @@
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
+#include <tt-metalium/experimental/offline_kernel_compile.hpp>
+#include <fmt/format.h>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_metal_profiler.hpp>
@@ -1607,6 +1609,23 @@ void UpdateDynamicCircularBufferAddress(
     TT_FATAL(circular_buffer->is_global_circular_buffer(), "CircularBuffer must be linked to a GlobalCircularBuffer!");
     circular_buffer->set_global_circular_buffer(global_circular_buffer);
 }
+
+PrecompiledKernelNotFoundError::PrecompiledKernelNotFoundError(
+    std::string kernel_name,
+    size_t compile_hash,
+    std::string precompiled_dir,
+    PrecompiledKernelConfig::FallbackPolicy fallback_policy) :
+    std::runtime_error(fmt::format(
+        "Precompiled kernel binary not found. Kernel: \"{}\", compile_hash: {:#x}, searched in: \"{}\". "
+        "Either build/install the offline binaries there, set PrecompiledKernelConfig::fallback_policy to "
+        "JitCompile, or catch PrecompiledKernelNotFoundError for details.",
+        kernel_name,
+        compile_hash,
+        precompiled_dir)),
+    kernel_name_(std::move(kernel_name)),
+    compile_hash_(compile_hash),
+    precompiled_dir_(std::move(precompiled_dir)),
+    fallback_policy_(fallback_policy) {}
 
 KernelHandle CreateKernelFromPrecompiled(
     Program& program,
