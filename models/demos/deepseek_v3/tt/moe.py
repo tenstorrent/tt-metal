@@ -41,6 +41,9 @@ class MoE(SharedStateAddOn, AbstractModule):
     See the `AbstractModule` docstring for usage info.
     """
 
+    PREFILL_TOKEN_CHUNK_SIZE = 16384
+    PREFILL_BATCH_CHUNK_SIZE = 256
+
     @classmethod
     def convert_weights(
         cls,
@@ -314,8 +317,8 @@ class MoE(SharedStateAddOn, AbstractModule):
     def forward(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
         # Chunk the full MoE prefill path at 16K tokens to avoid OOM.
         # Use global token count (local seq_len * num_dispatch_devices) to decide.
-        chunk_tokens = int(cfg.get("prefill_chunk_size", 16384))
-        num_dispatch_devices = int(cfg.get("num_dispatch_devices", 1))
+        chunk_tokens = cls.PREFILL_TOKEN_CHUNK_SIZE
+        num_dispatch_devices = cfg["num_dispatch_devices"]
         global_tokens = x.shape[2] * num_dispatch_devices
         if global_tokens > chunk_tokens:
             chunk_size = max(1, chunk_tokens // max(1, num_dispatch_devices))
@@ -344,8 +347,8 @@ class MoE(SharedStateAddOn, AbstractModule):
     def _forward_impl(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
         # Validate input dimensions
         hidden_size = cfg["hidden_size"]
-        mesh_device = cfg.get("mesh_device")
-        tp_size = mesh_device.shape[1] if mesh_device else 1
+        mesh_device = cfg["mesh_device"]
+        tp_size = mesh_device.shape[1]
 
         x_dim = x.shape[-1]
         expected_dims = [hidden_size, hidden_size // tp_size] if tp_size > 1 else [hidden_size]
@@ -425,7 +428,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         )
 
         # Chunk along local batch dimension to keep prefill intermediates (especially topk tilize) small.
-        chunk_size = min(batch_size_per_device, max(1, int(cfg.get("moe_chunk_size", min(batch_size_per_device, 256)))))
+        chunk_size = min(batch_size_per_device, cls.PREFILL_BATCH_CHUNK_SIZE)
         output_chunks: list[ttnn.Tensor] = []
 
         def _slice_topk_weights(batch_start: int, batch_end: int) -> ttnn.Tensor:
