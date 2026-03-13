@@ -154,6 +154,12 @@ def create_parser() -> argparse.ArgumentParser:
         default=False,
         help="Force regeneration of cached TTNN weight files and config.",
     )
+    p.add_argument(
+        "--max-users-per-row",
+        type=int,
+        default=None,
+        help="Override the maximum number of active users per row for demo decode.",
+    )
     return p
 
 
@@ -256,6 +262,7 @@ def run_demo(
     *,
     model_path: str | Path | None = None,
     max_new_tokens: int = 32,
+    max_users_per_row: int | None = None,
     cache_dir: str | Path | None = None,
     random_weights: bool = False,
     single_layer: str | None = None,
@@ -375,6 +382,7 @@ def run_demo(
                 force_recalculate=force_recalculate,
                 profile_decode=profile_decode,
                 sample_on_device=sample_on_device,
+                batch_size_per_row=max_users_per_row,
             )
         else:
             raise ValueError(f"Unsupported generator: {generator}")
@@ -466,6 +474,7 @@ def main() -> None:
         args.prompts,
         model_path=args.model_path,
         max_new_tokens=args.max_new_tokens,
+        max_users_per_row=args.max_users_per_row,
         cache_dir=args.cache_dir,
         random_weights=bool(args.random_weights),
         single_layer=args.single_layer,

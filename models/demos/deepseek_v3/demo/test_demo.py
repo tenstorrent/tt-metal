@@ -8,6 +8,7 @@ from pathlib import Path
 import pytest
 
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json, run_demo
+from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
 MODEL_PATH = Path(
     os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized")
@@ -16,10 +17,11 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
 
 
 @pytest.mark.parametrize(
-    "max_prompts,repeat_batches,max_new_tokens,override_num_layers,enable_trace,artifact_name,profile_decode",
+    "max_prompts,max_users_per_row,repeat_batches,max_new_tokens,override_num_layers,enable_trace,artifact_name,profile_decode",
     [
         pytest.param(
-            56,
+            32,
+            8,
             2,
             128,
             5,
@@ -31,6 +33,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
         ),
         pytest.param(
             256,
+            32,
             1,
             129,
             None,
@@ -42,6 +45,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
         ),
         pytest.param(
             56,
+            32,
             20,
             129,
             None,
@@ -53,6 +57,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
         ),
         pytest.param(
             512,
+            32,
             1,
             129,
             None,
@@ -64,6 +69,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
         ),
         pytest.param(
             56,
+            32,
             20,
             129,
             None,
@@ -75,6 +81,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
         ),
         pytest.param(
             1,
+            32,
             1,
             13,
             5,
@@ -88,6 +95,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
 )
 def test_demo(
     max_prompts: int,
+    max_users_per_row: int,
     repeat_batches: int,
     max_new_tokens: int,
     override_num_layers: int,
@@ -100,7 +108,7 @@ def test_demo(
     DeepSeek v3 demo test with prompts loaded from JSON file.
 
     Test variants:
-    - tg_stress (TG): 56 prompts, 2 batches, 5 layers - stress test for CI
+    - tg_stress (TG): request 32 prompts with users_per_row=8, 2 batches, 5 layers - exercises reduced-row decode on single-host TG
     - dual_full_demo (DUAL): 256 prompts, 1 batch - tests full prompt capacity
     - dual_stress_demo (DUAL): 56 prompts, 20 batches - tests stability under repeated execution
     - quad_full_demo (QUAD): 512 prompts, 1 batch - tests full prompt capacity
@@ -120,6 +128,7 @@ def test_demo(
         cache_dir=CACHE_DIR,
         random_weights=False,
         max_new_tokens=max_new_tokens,
+        max_users_per_row=max_users_per_row,
         repeat_batches=repeat_batches,
         profile_decode=profile_decode,
         force_recalculate=force_recalculate_weight_config,
@@ -132,7 +141,13 @@ def test_demo(
 
     results = run_demo(**run_kwargs)
 
+    requested_system_name = os.getenv("MESH_DEVICE")
+    assert requested_system_name is not None, "MESH_DEVICE must be set for demo tests"
+    mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
+    expected_generations = min(len(prompts), max_users_per_row * int(mesh_shape[0]))
+
     # Check output
+    assert len(results["generations"]) == expected_generations
     assert len(results["generations"][0]["tokens"]) == max_new_tokens
 
     # Save results to JSON for artifact upload (QUAD tests only)

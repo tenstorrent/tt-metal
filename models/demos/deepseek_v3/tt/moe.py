@@ -142,6 +142,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
         mode: str,
+        batch_size_per_row: int = USERS_PER_ROW,
         topk_fallback: bool = False,
     ) -> ModelDecodeConfig | ModelPrefillConfig:
         """Generate decode configuration for this module.
@@ -165,7 +166,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             per_core_width = (HIDDEN_SIZE // TP_SIZE) // shard_core_grid.num_cores
             input_output_memory_config = ttnn.create_sharded_memory_config(
                 shape=(
-                    ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE),
+                    ttnn.core.roundup(batch_size_per_row, ttnn.TILE_SIZE),
                     ttnn.core.roundup(per_core_width, ttnn.TILE_SIZE),
                 ),
                 core_grid=shard_core_grid,
@@ -202,7 +203,9 @@ class MoE(SharedStateAddOn, AbstractModule):
                     memory_config=input_output_memory_config,
                 ),
                 "ring_sum_experts_output_memory_config": DeepseekMoEReduceScatterConfig.create_default_input_memory_config(
-                    USERS_PER_ROW, HIDDEN_SIZE, TP_SIZE
+                    batch_size_per_row,
+                    HIDDEN_SIZE,
+                    TP_SIZE,
                 ),
                 "ring_final_output_reduce_scatter": DeepseekMoEReduceScatterConfig(
                     cluster_axis=1,
@@ -264,9 +267,17 @@ class MoE(SharedStateAddOn, AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int = USERS_PER_ROW,
         topk_fallback: bool = False,
     ) -> ModelDecodeConfig:
-        return cls.model_config(hf_config, mesh_device, fabric_config, "decode", topk_fallback=topk_fallback)
+        return cls.model_config(
+            hf_config,
+            mesh_device,
+            fabric_config,
+            "decode",
+            batch_size_per_row=batch_size_per_row,
+            topk_fallback=topk_fallback,
+        )
 
     @classmethod
     def prefill_model_config(

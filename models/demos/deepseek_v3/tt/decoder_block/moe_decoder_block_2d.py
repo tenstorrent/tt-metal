@@ -63,10 +63,21 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
         return {
-            "shared_expert": SharedExpert.decode_model_config(hf_config, mesh_device, fabric_config),
-            "moe": MoE.decode_model_config(hf_config, mesh_device, fabric_config),
+            "shared_expert": SharedExpert.decode_model_config(
+                hf_config,
+                mesh_device,
+                fabric_config,
+                batch_size_per_row=batch_size_per_row,
+            ),
+            "moe": MoE.decode_model_config(
+                hf_config,
+                mesh_device,
+                fabric_config,
+                batch_size_per_row=batch_size_per_row,
+            ),
         }
 
     @classmethod
