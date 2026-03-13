@@ -559,9 +559,12 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                             .set_page_size(tt::CBIndex::c_5, scalar_tile_size);
     CreateCircularBuffer(program, core_grid, c_in5_config);
 
-    // stats input
-    auto c_in6_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}})
-                            .set_page_size(tt::CBIndex::c_6, im_tile_size);
+    // stats input (c_6) aliased with exp_max_diff (c_31) — non-overlapping lifetimes save 14 KB.
+    // c_6 consumed at start (copy_block to prev.max), c_31 used during K-loop only.
+    auto c_in6_config = CircularBufferConfig(
+                            statistics_tiles * im_tile_size, {{tt::CBIndex::c_6, im_df}, {tt::CBIndex::c_31, stats_df}})
+                            .set_page_size(tt::CBIndex::c_6, im_tile_size)
+                            .set_page_size(tt::CBIndex::c_31, stats_tile_size);
     CreateCircularBuffer(program, core_grid, c_in6_config);
 
     // previous block output as input — only needed for multi Q-chunk case
@@ -616,10 +619,7 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                                   .set_page_size(tt::CBIndex::c_30, stats_tile_size);
     CreateCircularBuffer(program, core_grid, c_intermed6_config);
 
-    // cb_exp_max_diff
-    auto c_intermed7_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_31, stats_df}})
-                                  .set_page_size(tt::CBIndex::c_31, stats_tile_size);
-    CreateCircularBuffer(program, core_grid, c_intermed7_config);
+    // cb_exp_max_diff (c_31) — already aliased with c_6 above
 
     // Output — for single Q-chunk, allocate standalone; for multi Q-chunk, already aliased with c_7 above
     if (max_q_per_core == 1) {
