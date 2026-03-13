@@ -33,7 +33,7 @@ Note: Neither the build nor the sanity test should hang. Any hang is a regressio
 
 ## Current Phase
 
-**Phase 3: Host Sender Per-VC — Plan 01 Complete (2026-03-13)**
+**Phase 3: Host Sender Per-VC — Plan 02 Complete (2026-03-13)**
 
 Plan 01 completed:
 - Removed dead `AllocatorConstructionParams` struct from `fabric_builder_config.hpp` (flat-only, never instantiated)
@@ -42,12 +42,17 @@ Plan 01 completed:
 - Updated `num_used_sender_channels` comment to document it as derived from `num_used_sender_channels_per_vc`
 - Build: PASSED (213/213 targets, zero errors)
 
+Plan 02 completed:
+- `compute_mesh_router_builder.cpp`: replaced flat `edm_config.num_used_sender_channels` with explicit per-VC sum `num_used_sender_channels_per_vc[0] + num_used_sender_channels_per_vc[1]`
+- Build: PASSED (127/127 targets, zero errors)
+- Sanity test: PASSED (all 12 latency tests passed golden comparison, no hangs)
+
 Key decisions:
 - `MAX_RISC_CORES_PER_ETH_CHAN` added as separate constant (not alias) from `MAX_NUM_VCS` to distinguish RISC core indexing from VC indexing
 - `AllocatorConstructionParams` removal confirmed safe via grep — only definition existed, no users
+- CT arg emission loops in `erisc_datamover_builder.cpp` left with flat guard — semantically equivalent, plan deferred
 
 ## Next Plan
 
-**Phase 3 Plan 02: Host Sender Per-VC Logic**
-Migrate host-side sender channel arrays to per-VC indexing.
-Key files: `erisc_datamover_builder.hpp/cpp`, `fabric_builder_context.hpp/cpp`
+**Phase 3 complete — all 2 plans done**
+Ready for Phase 4 (host-sender-per-vc-logic) or next PR preparation.
