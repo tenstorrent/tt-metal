@@ -79,8 +79,13 @@ class TtTransformer(LightweightModule):
         self._debug_bitmask_dump = os.getenv("TT_DEBUG_BITMASK_DUMP", "0") == "1"
         self._debug_bitmask_dump_dir = Path(os.getenv("TT_DEBUG_BITMASK_DUMP_DIR", "/tmp/tt_debug_bitmask"))
         self._debug_bitmask_dump_dir.mkdir(parents=True, exist_ok=True)
-        self.bitmask_arange = ttnn.arange(
-            start=0, end=32, step=1, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
+        # Keep bit shifts identical on every mesh device.
+        self.bitmask_arange = ttnn.from_torch(
+            torch.arange(32, dtype=torch.int32),
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
 
         self.embd = TtLlamaEmbedding(
