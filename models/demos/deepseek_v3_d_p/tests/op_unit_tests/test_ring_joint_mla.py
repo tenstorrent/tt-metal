@@ -4,6 +4,7 @@
 
 import pathlib
 
+from models.common.utility_functions import is_blackhole
 import pytest
 import torch
 from loguru import logger
@@ -569,6 +570,7 @@ def test_mla_sdpa(
     "b, nhq, nhk, nhv, base_seq_len, head_dim_q, head_dim_k, head_dim_v, is_balanced, q_chunk_size, k_chunk_size",
     [
         (1, 128, 1, 128, 128 * 1024, 576, 576, 128, True, 256, 128),
+        (1, 128, 1, 128, 100 * 1024, 576, 576, 128, True, 320, 64),
     ],
 )
 @pytest.mark.timeout(1200)
