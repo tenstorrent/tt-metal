@@ -146,7 +146,7 @@ def test_deepseek_device_sampling_stochastic_behavior(mesh_device, ccl, hf_confi
     finally:
         if use_tracing:
             # Release cached trace metadata/tensors before exiting the test.
-            sampling.reset_trace()
+            sampling.cleanup()
         ttnn.deallocate(tt_input)
 
     candidate_set = set(candidate_tokens.tolist())
