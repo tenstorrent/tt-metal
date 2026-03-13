@@ -244,22 +244,32 @@ class NanoExabox1x8FabricFixture : public Fixture {
     }
 };
 
-// Generic Fixture for BigMesh 1x16 dual T3K systems using Fabric (two T3Ks as a single mesh)
-template <typename Fixture>
-class BigMesh1x16FabricFixture : public Fixture {
+// BigMesh 1x16: a single mesh spanning two T3K hosts (no inter-mesh connections).
+class IntermeshBigMesh1x16FabricFixture : public BaseFabricFixture {
+public:
+    static void SetUpTestSuite() {}
+    static void TearDownTestSuite() {}
+
     void SetUp() override {
-        tt::tt_fabric::SetFabricConfig(
-            tt::tt_fabric::FabricConfig::FABRIC_2D,
-            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
-        Fixture::SetUp();
+        if (not system_supported()) {
+            GTEST_SKIP() << "Skipping since this is not a supported BigMesh system.";
+        }
+        this->DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_2D);
     }
 
-    std::string get_path_to_mesh_graph_desc() override {
-        return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_1x16_experimental_bigmesh_mgd.textproto";
+    void TearDown() override {
+        if (system_supported()) {
+            const auto& distributed_context = tt::tt_metal::MetalContext::instance().global_distributed_context();
+            distributed_context.barrier();
+            BaseFabricFixture::DoTearDownTestSuite();
+        }
     }
 
-    std::vector<std::vector<EthCoord>> get_eth_coord_mapping() override {
-        return get_eth_coords_for_1x16_bigmesh_t3k();
+private:
+    bool system_supported() {
+        const auto& cluster = tt::tt_metal::MetalContext::instance().get_cluster();
+        return *(tt::tt_metal::MetalContext::instance().global_distributed_context().size()) == 2 &&
+               cluster.user_exposed_chip_ids().size() == 8;
     }
 };
 
@@ -281,9 +291,6 @@ using MeshDeviceNanoExabox2x4Fixture = NanoExabox2x4FabricFixture<MultiMeshDevic
 
 using IntermeshNanoExabox1x8FabricFixture = NanoExabox1x8FabricFixture<InterMeshRoutingFabric2DFixture>;
 using MeshDeviceNanoExabox1x8Fixture = NanoExabox1x8FabricFixture<MultiMeshDeviceFabricFixture>;
-
-using IntermeshBigMesh1x16FabricFixture = BigMesh1x16FabricFixture<InterMeshRoutingFabric2DFixture>;
-using MeshDeviceBigMesh1x16Fixture = BigMesh1x16FabricFixture<MultiMeshDeviceFabricFixture>;
 
 // Fixture for Exabox systems using Fabric
 class IntermeshExaboxFabricFixture : public BaseFabricFixture {
