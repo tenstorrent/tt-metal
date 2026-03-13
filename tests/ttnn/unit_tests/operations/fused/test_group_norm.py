@@ -456,11 +456,7 @@ def run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inpla
     if device.core_grid.y == 7:
         pytest.skip()
 
-    # Use 5x5 grid for shape (1, 640, 16, 16) (temporary workaround for issue #36408)
-    if (C, H, W) == (640, 16, 16):
-        core_grid = ttnn.CoreGrid(y=4, x=4)
-    else:
-        core_grid = ttnn.CoreGrid(y=8, x=8)
+    core_grid = ttnn.CoreGrid(y=8, x=8)
 
     # Generate torch tensor
     torch_input_tensor = torch.rand((N, C, H, W), dtype=torch.bfloat16)
