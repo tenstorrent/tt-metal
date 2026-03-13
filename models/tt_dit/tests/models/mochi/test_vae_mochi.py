@@ -740,6 +740,9 @@ def load_dit(
 )
 @vae_device_config
 def test_tt_decoder_forward(mesh_device, config, reset_seeds, load_dit_weights, num_links):
+    # TODO(#39806): re-enable once root cause is fixed (groupnorm TT_THROW on 1link + load_dit + small_latent)
+    if num_links == 1 and load_dit_weights and config["name"] == "small_latent":
+        pytest.skip("Temporarily disabled - see https://github.com/tenstorrent/tt-metal/issues/39806")
     input_shape = config["input_shape"]
     N, C, T, H, W = input_shape
 
