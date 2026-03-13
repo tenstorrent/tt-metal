@@ -39,8 +39,12 @@ An example with the different features available is shown below:
     #include "api/debug/dprint.h"  // required in all kernels using DPRINT
 
     void kernel_main() {
-        // Direct printing is supported for const char*/char/uint32_t/float
+        // Supported scalar types: bool (prints 0/1), char, all fixed-width integer types
+        // (uint8_t–uint64_t, int8_t–int64_t), float, and const char*.
         DPRINT << "Test string" << 'a' << 5 << 0.123456f << ENDL();
+        // bool prints as 0 or 1
+        bool flag = true;
+        DPRINT << flag << ENDL();  // prints: 1
         // BF16 type printing is supported via a macro
         uint16_t my_bf16_val = 0x3dfb; // Equivalent to 0.122559
         DPRINT << BF16(my_bf16_val) << ENDL();
