@@ -5,14 +5,12 @@
 import pytest
 
 import ttnn
-from models.common.utility_functions import skip_with_llk_assert
 from models.perf.device_perf_utils import run_device_perf_detailed
 
 MARGIN = 0.015
 USE_PERF_TEST_MODE = True
 
 
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_dram_group_norm_welford_reciprocal_vae(device):
     from tests.ttnn.unit_tests.operations.fused.test_group_norm_DRAM import test_group_norm_DRAM
@@ -20,7 +18,6 @@ def test_dram_group_norm_welford_reciprocal_vae(device):
     test_group_norm_DRAM(device, 1, 256, 256, 256, 32, 4, 8, 8, "welford_reciprocal", perf_test_mode=USE_PERF_TEST_MODE)
 
 
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_block_sharded_group_norm_sdxl(device):
     from tests.ttnn.unit_tests.operations.fused.test_group_norm import test_sdxl_base_group_norm
@@ -28,7 +25,6 @@ def test_block_sharded_group_norm_sdxl(device):
     test_sdxl_base_group_norm(device, (1, 1920, 32, 32), use_welford=False, perf_test_mode=USE_PERF_TEST_MODE)
 
 
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 47000}], indirect=True)
 def test_block_sharded_group_norm_negative_mask_sdxl(device):
     from tests.ttnn.unit_tests.operations.fused.test_group_norm import test_sdxl_base_group_norm_negative_mask
@@ -36,7 +32,6 @@ def test_block_sharded_group_norm_negative_mask_sdxl(device):
     test_sdxl_base_group_norm_negative_mask(device, (1, 640, 128, 128), perf_test_mode=USE_PERF_TEST_MODE)
 
 
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
 def test_ff_matmul_with_gelu_sdxl(device):
     from tests.ttnn.nightly.unit_tests.operations.matmul.test_matmul import test_sdxl_matmul
@@ -57,7 +52,6 @@ def test_ff_matmul_with_gelu_sdxl(device):
     )
 
 
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 2 * 16384}], indirect=True)
 def test_conv2d_block_sharded_sdxl(device):
     from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import test_conv2d_sdxl
@@ -90,7 +84,6 @@ def test_conv2d_block_sharded_sdxl(device):
     )
 
 
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 27 * 1024}], indirect=True)
 def test_conv2d_auto_sliced_vae(device):
     from tests.ttnn.nightly.unit_tests.operations.conv.test_conv2d import test_conv2d_vae_sdxl
@@ -121,7 +114,6 @@ def test_conv2d_auto_sliced_vae(device):
     )
 
 
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 @pytest.mark.models_device_performance_bare_metal
 def test_dram_group_norm_vae_welford_reciprocal_performance():
     # Create a command that runs the specific test
@@ -158,7 +150,6 @@ def test_dram_group_norm_vae_welford_reciprocal_performance():
     ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± {MARGIN * 100}% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
 
 
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 @pytest.mark.models_device_performance_bare_metal
 def test_block_sharded_group_norm_sdxl_performance():
     # Create a command that runs the specific test
@@ -195,7 +186,6 @@ def test_block_sharded_group_norm_sdxl_performance():
     ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± {MARGIN * 100}% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
 
 
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 @pytest.mark.models_device_performance_bare_metal
 def test_block_sharded_group_norm_negative_mask_sdxl_performance():
     # Create a command that runs the specific test
@@ -232,7 +222,6 @@ def test_block_sharded_group_norm_negative_mask_sdxl_performance():
     ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± {MARGIN * 100}% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
 
 
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 @pytest.mark.models_device_performance_bare_metal
 def test_ff_matmul_with_gelu_sdxl_performance():
     # Create a command that runs the specific test
@@ -269,7 +258,6 @@ def test_ff_matmul_with_gelu_sdxl_performance():
     ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± {MARGIN * 100}% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
 
 
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 @pytest.mark.models_device_performance_bare_metal
 def test_conv2d_block_sharded_sdxl_performance():
     # Create a command that runs the specific test
@@ -306,7 +294,6 @@ def test_conv2d_block_sharded_sdxl_performance():
     ), f"Performance outside expected range. Got {device_kernel_duration:.2f} ns, expected {expected_duration_ns} ± {MARGIN * 100}% ({lower_bound:.2f}-{upper_bound:.2f} ns)"
 
 
-@skip_with_llk_assert("Performance measurements are different with LLK asserts enabled.")
 @pytest.mark.models_device_performance_bare_metal
 def test_conv2d_auto_sliced_vae_performance():
     # Create a command that runs the specific test
