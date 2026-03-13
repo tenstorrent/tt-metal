@@ -73,25 +73,13 @@ namespace tt::tt_metal {
 
 namespace detail {
 
-ContextId getContextIdSafe(distributed::MeshDevice* mesh_device, IDevice* device) {
-    ContextId context_id = DEFAULT_CONTEXT_ID;
-    if (mesh_device != nullptr) {
-        context_id = extract_context_id(mesh_device);
-    } else if (device != nullptr) {
-        context_id = extract_context_id(device);
-    } else {
-        TT_FATAL(false, "Both MeshDevice and Device are nullptr");
-    }
-    return context_id;
-}
-
 void setControlBuffer(
     distributed::MeshDevice* mesh_device,
     IDevice* device,
     std::vector<uint32_t>& control_buffer,
     bool force_slow_dispatch = false) {
 #if defined(TRACY_ENABLE)
-    ContextId context_id = getContextIdSafe(mesh_device, device);
+    ContextId context_id = extract_context_id(mesh_device, device);
     if (!getDeviceProfilerState(context_id)) {
         return;
     }
@@ -113,7 +101,7 @@ void setControlBuffer(
 
 void syncDeviceHost(distributed::MeshDevice* mesh_device, IDevice* device, CoreCoord logical_core, bool doHeader) {
     ZoneScopedC(tracy::Color::Tomato3);
-    ContextId context_id = getContextIdSafe(mesh_device, nullptr);
+    ContextId context_id = extract_context_id(mesh_device, nullptr);
     if (!MetalContext::instance(context_id).rtoptions().get_profiler_sync_enabled()) {
         return;
     }
@@ -831,12 +819,8 @@ static void ReadDeviceProfilerResultsImpl(
     ProfilerReadState state,
     const std::optional<ProfilerOptionalMetadata>& metadata) {
     ZoneScoped;
-    ContextId context_id = getContextIdSafe(mesh_device, device);
+    ContextId context_id = extract_context_id(mesh_device, device);
     if (!getDeviceProfilerState(context_id)) {
-        return;
-    }
-
-    if (device != nullptr && !getDeviceProfilerState(extract_context_id(device))) {
         return;
     }
 
@@ -903,7 +887,8 @@ void ReadDeviceProfilerResults(
     ProfilerReadState state,
     const std::optional<ProfilerOptionalMetadata>& metadata) {
 #if defined(TRACY_ENABLE)
-    if (getDeviceDebugDumpEnabled(extract_context_id(mesh_device))) {
+    ContextId context_id = extract_context_id(mesh_device, device);
+    if (getDeviceDebugDumpEnabled(context_id)) {
         return;
     }
 
@@ -921,20 +906,22 @@ void ReadDeviceProfilerResultsInternal(
     // Note: This function bypasses the getDeviceDebugDumpEnabled() check
     // It is intended only for use by ProfilerStateManager during cleanup
 #if defined(TRACY_ENABLE)
-    if (!getDeviceProfilerState(extract_context_id(mesh_device))) {
+    ContextId context_id = extract_context_id(mesh_device, device);
+    if (!getDeviceProfilerState(context_id)) {
         return;
     }
 
     const std::unique_ptr<ProfilerStateManager>& profiler_state_manager =
-        MetalContext::instance(extract_context_id(mesh_device)).profiler_state_manager();
+        MetalContext::instance(context_id).profiler_state_manager();
     auto profiler_it = profiler_state_manager->device_profiler_map.find(device->id());
     TT_ASSERT(profiler_it != profiler_state_manager->device_profiler_map.end());
     DeviceProfiler& profiler = profiler_it->second;
 
     TT_FATAL(
-        !MetalContext::instance().dprint_server(), "Debug print server is running, cannot read device profiler data");
+        !MetalContext::instance(context_id).dprint_server(),
+        "Debug print server is running, cannot read device profiler data");
 
-    if (include_l1 || MetalContext::instance().rtoptions().get_profiler_trace_only()) {
+    if (include_l1 || MetalContext::instance(context_id).rtoptions().get_profiler_trace_only()) {
         profiler.readResults(
             mesh_device, device, virtual_cores, state, ProfilerDataBufferSource::DRAM_AND_L1, metadata);
     } else {
