@@ -316,7 +316,8 @@ struct FabricEriscDatamoverConfig {
 
     std::size_t channel_buffer_size_bytes = 0;
 
-    std::size_t num_used_sender_channels = 0;    // Total across all VCs (duplicate in allocator... don't modify)
+    std::size_t num_used_sender_channels = 0;    // Derived total: sum(num_used_sender_channels_per_vc). Use
+                                                 // num_used_sender_channels_per_vc for per-VC logic.
     std::size_t num_used_receiver_channels = 0;  // Total across all VCs (duplicate in allocator... don't modify)
     std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {
         0, 0};  // Per-VC sender channel counts
@@ -616,8 +617,11 @@ public:
 
 private:
     // Per-RISC channel servicing flags [risc_id][channel_id]
-    std::array<std::array<bool, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS> is_sender_channel_serviced_{};
-    std::array<std::array<bool, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS> is_receiver_channel_serviced_{};
+    // Outer dim is MAX_RISC_CORES_PER_ETH_CHAN (not MAX_NUM_VCS — they are equal by coincidence on current HW)
+    std::array<std::array<bool, builder_config::num_max_sender_channels>, builder_config::MAX_RISC_CORES_PER_ETH_CHAN>
+        is_sender_channel_serviced_{};
+    std::array<std::array<bool, builder_config::num_max_receiver_channels>, builder_config::MAX_RISC_CORES_PER_ETH_CHAN>
+        is_receiver_channel_serviced_{};
 
     // Apply channel trimming overrides: disables unused sender/receiver channels
     // and stores overrides for compile-time arg generation (RX forwarding disable flags).
