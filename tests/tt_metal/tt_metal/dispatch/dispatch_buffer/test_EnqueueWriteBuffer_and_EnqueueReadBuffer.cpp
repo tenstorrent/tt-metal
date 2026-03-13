@@ -2129,6 +2129,39 @@ TEST_F(UnitMeshCQSingleCardBufferFixture, TestNonblockingReads) {
     }
 }
 
+TEST_F(UnitMeshCQSingleCardBufferFixture, EnqueueBufferVariousDims) {
+    // Release fixture devices to use different mesh device dimensions
+    devices_.clear();
+    reserved_devices_.clear();
+
+    for (const distributed::MeshShape& mesh_shape : {distributed::MeshShape(1, 1), distributed::MeshShape(1)}) {
+        auto mesh_device = distributed::MeshDevice::create(distributed::MeshDeviceConfig(mesh_shape));
+
+        for (const BufferType buftype : {BufferType::DRAM, BufferType::L1}) {
+            constexpr uint32_t page_size = 2048;
+            constexpr uint32_t num_pages = 8;
+            constexpr uint32_t buf_size = num_pages * page_size;
+
+            distributed::DeviceLocalBufferConfig local_config{
+                .page_size = page_size, .buffer_type = buftype, .bottom_up = false};
+            const distributed::ReplicatedBufferConfig buffer_config{.size = buf_size};
+
+            auto buf = distributed::MeshBuffer::create(buffer_config, local_config, mesh_device.get());
+            auto src = local_test_functions::generate_arange_vector(buf->size());
+
+            EXPECT_NO_THROW(distributed::EnqueueWriteMeshBuffer(mesh_device->mesh_command_queue(), buf, src, false));
+
+            std::vector<uint32_t> dst;
+            EXPECT_NO_THROW(distributed::EnqueueReadMeshBuffer(mesh_device->mesh_command_queue(), dst, buf, true));
+
+            EXPECT_EQ(src, dst);
+        }
+
+        mesh_device->close();
+        mesh_device.reset();
+    }
+}
+
 }  // end namespace basic_tests
 
 namespace stress_tests {
