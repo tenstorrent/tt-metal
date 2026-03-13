@@ -15,7 +15,6 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.demo.stage import (
-    DenseDecoderStage,
     EmbeddingStage,
     LMHeadStage,
     PassthroughPayload,
@@ -25,7 +24,7 @@ from models.demos.deepseek_v3_b1.demo.stage import (
 )
 from models.demos.deepseek_v3_b1.demo.weight_provider import WeightProvider
 from models.demos.deepseek_v3_b1.micro_ops.pipeline_block.op import PipelineBlock
-from models.demos.deepseek_v3_b1.tests.unit_tests.test_decoder_block_api import DecoderBlockStage
+from models.demos.deepseek_v3_b1.tests.unit_tests.test_decoder_block_api import DecoderBlockStage, DenseBlockStage
 
 
 def create_fabric_router_config(max_payload_size: int) -> Any:
@@ -88,7 +87,10 @@ def create_single_pod_pipeline_configuration(
 
     # Same layout as SP4: stage i -> layer_id i-1 for decoder stages; fewer MoE stages (4-13 = layers 3-12)
     def _dense_stage(layer_id: int):
-        return lambda d: DenseDecoderStage(weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d))
+        return lambda d: DenseBlockStage(
+            weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
+            layer_idx=layer_id,
+        )
 
     def _decoder_stage(layer_id: int):
         return lambda d: DecoderBlockStage(
@@ -137,7 +139,10 @@ def create_sp4_pipeline_configuration(
 
     # Stage i -> layer_id i-1 for decoder stages (stage 1 = layer 0, ..., stage 61 = layer 60)
     def _dense_stage(layer_id: int):
-        return lambda d: DenseDecoderStage(weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d))
+        return lambda d: DenseBlockStage(
+            weights=weight_provider.load_dense_layer(layer_id=layer_id, device=d),
+            layer_idx=layer_id,
+        )
 
     def _decoder_stage(layer_id: int):
         return lambda d: DecoderBlockStage(
