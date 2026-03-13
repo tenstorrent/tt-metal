@@ -628,10 +628,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         CreateCircularBuffer(program, core_grid, c_out0_config);
     }
 
-    // stats output
-    auto c_out1_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_17, im_df}})
-                             .set_page_size(tt::CBIndex::c_17, im_tile_size);
-    CreateCircularBuffer(program, core_grid, c_out1_config);
+    // stats output (c_17) — in streaming path, alias with c_11 (sum_in) to save 14 KB.
+    // c_11 consumed at start (copy_block to prev.sum), c_17 produced at end (write_accumulators).
+    // Non-streaming path: allocate c_17 standalone.
+    bool alias_c17_c11 = use_streaming_compute;
 
     // Streaming compute v2: 1-tile recip scratch CB (c_9) for normalize_row_streaming.
     // c_4 is used by cb_scale_in in ring joint, so we use c_9 instead.
@@ -650,9 +650,25 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
                 .set_page_size(tt::CBIndex::c_10, stats_tile_size);
         CreateCircularBuffer(program, core_grid, c_sum_out_config);
 
-        auto c_sum_in_config = CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_11, stats_df}})
-                                   .set_page_size(tt::CBIndex::c_11, stats_tile_size);
-        CreateCircularBuffer(program, core_grid, c_sum_in_config);
+        if (alias_c17_c11) {
+            // Alias c_11 (sum_in) with c_17 (max_out) — non-overlapping lifetimes
+            auto c_sum_in_config =
+                CircularBufferConfig(
+                    statistics_tiles * stats_tile_size, {{tt::CBIndex::c_11, stats_df}, {tt::CBIndex::c_17, im_df}})
+                    .set_page_size(tt::CBIndex::c_11, stats_tile_size)
+                    .set_page_size(tt::CBIndex::c_17, im_tile_size);
+            CreateCircularBuffer(program, core_grid, c_sum_in_config);
+        } else {
+            auto c_sum_in_config =
+                CircularBufferConfig(statistics_tiles * stats_tile_size, {{tt::CBIndex::c_11, stats_df}})
+                    .set_page_size(tt::CBIndex::c_11, stats_tile_size);
+            CreateCircularBuffer(program, core_grid, c_sum_in_config);
+        }
+    }
+    if (!alias_c17_c11) {
+        auto c_out1_config = CircularBufferConfig(statistics_tiles * im_tile_size, {{tt::CBIndex::c_17, im_df}})
+                                 .set_page_size(tt::CBIndex::c_17, im_tile_size);
+        CreateCircularBuffer(program, core_grid, c_out1_config);
     }
 
     uint32_t q_addr = input_tensor_q.buffer()->address();
