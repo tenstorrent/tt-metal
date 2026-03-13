@@ -28,7 +28,6 @@ Owner:
 from collections import defaultdict
 from collections.abc import Callable
 from functools import cached_property
-import threading
 from dataclasses import dataclass
 from typing import Literal, TypeAlias
 
@@ -39,10 +38,12 @@ from triage import (
     triage_field,
     recurse_field,
     run_script,
-    log_warning,
+    log_warning_device,
+    log_warning_risc,
     create_progress,
     log_check,
 )
+from triage_session import get_triage_session
 from ttexalens.context import Context
 from ttexalens.device import Device
 from ttexalens.coordinate import OnChipCoordinate
@@ -205,23 +206,6 @@ def get_block_locations(
     return block_locations
 
 
-@dataclass(frozen=True)
-class BrokenCore:
-    location: OnChipCoordinate
-    risc_name: str
-
-    def __hash__(self):
-        return hash((self.location, self.risc_name))
-
-    def __eq__(self, other: object) -> bool:
-        if not isinstance(other, BrokenCore):
-            return False
-        return self.location == other.location and self.risc_name == other.risc_name
-
-    def __str__(self) -> str:
-        return f"{self.risc_name} at {self.location.to_user_str()}"
-
-
 class RunChecks:
     def __init__(
         self,
@@ -236,9 +220,7 @@ class RunChecks:
         self._use_unique_id = metal_device_id_mapping.mismatch_exists()
         # Pre-compute unique_id to device mapping for fast lookup
         self._unique_id_to_device: dict[int, Device] = {device.unique_id: device for device in devices}
-        self._broken_devices: set[Device] = set()
-        self._broken_cores: dict[Device, set[BrokenCore]] = {}
-        self._skip_lock = threading.Lock()
+        self._session = get_triage_session()
 
     @cached_property
     def _location_to_block_type_map(self) -> dict[OnChipCoordinate, BlockType]:
@@ -252,18 +234,6 @@ class RunChecks:
 
     def get_device_by_unique_id(self, unique_id: int) -> Device | None:
         return self._unique_id_to_device.get(unique_id)
-
-    def is_device_broken(self, device: Device) -> bool:
-        with self._skip_lock:
-            return device in self._broken_devices
-
-    def is_device_in_broken_cores(self, device: Device) -> bool:
-        with self._skip_lock:
-            return device in self._broken_cores
-
-    def get_device_broken_cores(self, device: Device) -> set[BrokenCore] | None:
-        with self._skip_lock:
-            return self._broken_cores.get(device).copy()
 
     def get_block_type(self, location: OnChipCoordinate):
         log_check(
@@ -303,30 +273,29 @@ class RunChecks:
             try:
                 for device in self.devices:
                     # Skipping broken devices
-                    with self._skip_lock:
-                        if device in self._broken_devices:
-                            continue
+                    if self._session.is_device_broken(device):
+                        continue
                     try:
                         check_result = check(device)
                     except TimeoutDeviceRegisterError as e:
-                        with self._skip_lock:
-                            self._broken_devices.add(device)
-                            if print_broken_devices:
-                                log_warning(
-                                    f"Triage broke device {device.id} with: {e}. This device will be skipped from now on."
-                                )
-                            if device.is_local:
-                                # We are classifying remote devices as broken since we cannot access them if their local device is broken
-                                for remote_device in device.remote_devices:
-                                    # Broken remote devices will inherit the error from the local device
-                                    self._broken_devices.add(remote_device)
-                                    if print_broken_devices:
-                                        log_warning(
-                                            f"Device {remote_device.id} will be skipped from now on due to its local device (device {device.id}) being broken."
-                                        )
+                        self._session.add_broken_device(device)
+                        if print_broken_devices:
+                            log_warning_device(
+                                device, f"Triage broke device with: {e}. This device will be skipped from now on."
+                            )
+                        if device.is_local:
+                            # We are classifying remote devices as broken since we cannot access them if their local device is broken
+                            for remote_device in device.remote_devices:
+                                # Broken remote devices will inherit the error from the local device
+                                self._session.add_broken_device(remote_device)
+                                if print_broken_devices:
+                                    log_warning_device(
+                                        remote_device,
+                                        f"Will be skipped from now on due to its local device (device {device.id}) being broken.",
+                                    )
                         continue
                     except Exception as e:
-                        log_warning(f"Skipping device {device.id}: {str(e)}")
+                        log_warning_device(device, f"Skipping: {str(e)}")
                         continue
                     # Use the common result collection helper
                     self._collect_results(
@@ -410,26 +379,12 @@ class RunChecks:
                 try:
                     check_result = check(location, risc_name)
                 except RiscHaltError as e:
-                    with self._skip_lock:
-                        if (
-                            location._device in self._broken_cores.keys()
-                            and BrokenCore(location, risc_name) in self._broken_cores[location._device]
-                        ):
-                            # If the core is already broken we do not need to add it again
-                            continue
-                        if location._device in self._broken_cores.keys():
-                            self._broken_cores[location._device].add(BrokenCore(location, risc_name))
-                        else:
-                            self._broken_cores[location._device] = {BrokenCore(location, risc_name)}
+                    self._session.add_broken_core(location, risc_name)
                     if print_broken_cores:
-                        log_warning(
-                            f"Triage broke {risc_name} at {location.to_user_str()} at device {location.device_id} with: {e}."
-                        )
+                        log_warning_risc(risc_name, location, f"Broken: {e}.")
                     continue
                 except Exception as e:
-                    log_warning(
-                        f"Skipping {risc_name} at {location.to_user_str()} at device {location.device_id}: {str(e)}"
-                    )
+                    log_warning_risc(risc_name, location, f"Skipping: {str(e)}")
                     continue
 
                 # Use the common result collection helper

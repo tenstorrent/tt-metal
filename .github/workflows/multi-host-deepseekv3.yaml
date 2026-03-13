@@ -214,7 +214,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -239,7 +238,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -265,7 +263,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -290,7 +287,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -316,7 +312,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -351,7 +346,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -387,7 +381,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -422,7 +415,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -458,7 +450,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro
@@ -493,7 +484,6 @@ jobs:
             -e PYTHONPATH=${{ github.workspace }}
             -e TT_METAL_HOME=${{ github.workspace }}
             -e ARCH_NAME=wormhole_b0
-            -e TT_METAL_ENABLE_ERISC_IRAM="1"
             -e GTEST_OUTPUT="xml:${{ github.workspace }}/generated/test_reports/"
             -e DEEPSEEK_V3_CACHE_OVERRIDE=${{ steps.cache-config.outputs.cache_override }}
             -v /etc/mpirun:/etc/mpirun:ro

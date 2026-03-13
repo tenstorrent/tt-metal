@@ -172,7 +172,7 @@ setup_dual_galaxy_env() {
         fi
     done
 
-    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
+    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
     _resolve_deepseekv3_cache
     export MESH_DEVICE="DUAL"
 }
@@ -211,7 +211,7 @@ setup_quad_galaxy_env() {
         fi
     done
 
-    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
+    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
     _resolve_deepseekv3_cache
     export MESH_DEVICE="QUAD"
 }

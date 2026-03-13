@@ -39,6 +39,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <yaml-cpp/yaml.h>
 
+#include "context/metal_env_impl.hpp"
 #include "tt_metal/api/tt-metalium/experimental/fabric/control_plane.hpp"
 #include "tt_metal/fabric/builder/fabric_builder_config.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
@@ -178,23 +179,20 @@ void emit_capture_channel_yaml(YAML::Emitter& emitter, const CaptureResults& cap
 
 }  // namespace
 
-void export_channel_trimming_capture() {
-    auto& metal_ctx = tt::tt_metal::MetalContext::instance();
-    const auto& rtoptions = metal_ctx.rtoptions();
+void export_channel_trimming_capture(tt::tt_metal::MetalEnvImpl& env) {
+    const auto& rtoptions = env.get_rtoptions();
+    const auto& cluster = env.get_cluster();
+    const auto& control_plane = env.get_control_plane();
 
     // Guard: capture must be enabled via runtime option
     if (!rtoptions.get_enable_channel_trimming_capture()) {
         return;
     }
 
-    auto& cluster = metal_ctx.get_cluster();
-
     // Guard: skip on Mock devices
     if (cluster.get_target_device_type() == tt::TargetDevice::Mock) {
         return;
     }
-
-    auto& control_plane = metal_ctx.get_control_plane();
 
     // Guard: capture buffer must be allocated
     const auto& builder_ctx = control_plane.get_fabric_context().get_builder_context();
