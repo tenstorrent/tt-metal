@@ -142,3 +142,23 @@ runs:
             fi
           fi
         } >> "$GITHUB_STEP_SUMMARY"
+
+    - name: Cleanup temp files
+      if: always()
+      shell: bash
+      run: |
+        shopt -s nullglob
+
+        echo "=== Disk usage before cleanup ==="
+        df -h / || true
+
+        # Clean temp files left by kernel compilation in /tmp
+        tmp_files=(/tmp/cc*.s /tmp/cc*.o /tmp/cc*.res /tmp/cc*.ld /tmp/cc*.le)
+        if [ ${#tmp_files[@]} -gt 0 ]; then
+          echo "=== Kernel compilation temp files ==="
+          du -shc "${tmp_files[@]}" || true
+          rm -rf "${tmp_files[@]}"
+        fi
+
+        echo "=== Disk usage after cleanup ==="
+        df -h / || true
