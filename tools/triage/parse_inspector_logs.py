@@ -438,11 +438,15 @@ def _find_rank_scoped_inspector_directory(logs_root: str) -> str | None:
         return None
 
     rank_dir_pattern = re.compile(r"^.+_rank_\d+$")
-    rank_dirs = sorted(
-        entry
-        for entry in os.listdir(logs_root)
-        if rank_dir_pattern.match(entry) and os.path.isdir(os.path.join(logs_root, entry))
-    )
+    try:
+        rank_dirs = sorted(
+            entry
+            for entry in os.listdir(logs_root)
+            if rank_dir_pattern.match(entry) and os.path.isdir(os.path.join(logs_root, entry))
+        )
+    except FileNotFoundError:
+        # Directory was removed between isdir check and listdir - treat as no rank dirs found
+        rank_dirs = []
     candidates = [os.path.join(logs_root, rank_dir, "generated", "inspector") for rank_dir in rank_dirs]
     existing_candidates = [candidate for candidate in candidates if os.path.exists(candidate)]
     if not existing_candidates:

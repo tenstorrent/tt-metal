@@ -31,18 +31,31 @@ namespace tt::filesystem {
 
 void sync_filesystem(const std::filesystem::path& path) {
 #ifdef __linux__
-    std::error_code ec;
-    std::filesystem::path sync_target = path;
-    if (!std::filesystem::is_directory(path, ec) || ec) {
-        sync_target = path.parent_path();
+    // Use explicit string conversion for portability (path::c_str() may be wchar_t* on Windows)
+    std::string path_str = path.string();
+
+    // Try to open the path as a directory directly to avoid TOCTOU race.
+    // Using O_DIRECTORY ensures we only succeed if it's actually a directory.
+    int fd = ::open(path_str.c_str(), O_RDONLY | O_DIRECTORY);
+
+    if (fd == -1 && ::errno == ENOTDIR) {
+        // Path exists but is not a directory - try to open its parent.
+        std::filesystem::path parent = path.parent_path();
+
+        // Handle empty parent_path() case (e.g., relative path "file.txt" with no directory)
+        if (parent.empty()) {
+            parent = std::filesystem::current_path();
+        }
+
+        fd = ::open(parent.string().c_str(), O_RDONLY | O_DIRECTORY);
     }
-    int fd = ::open(sync_target.c_str(), O_RDONLY | O_DIRECTORY);
+
     if (fd != -1) {
         if (::syncfs(fd) != 0) {
-            log_debug(tt::LogMetal, "syncfs failed for {}: {}", sync_target.string(), strerror(errno));
+            log_debug(tt::LogMetal, "syncfs failed for {}: {}", path_str, ::strerror(::errno));
         }
         if (::close(fd) != 0) {
-            log_debug(tt::LogMetal, "close failed after syncfs for {}: {}", sync_target.string(), strerror(errno));
+            log_debug(tt::LogMetal, "close failed after syncfs for {}: {}", path_str, ::strerror(::errno));
         }
         return;
     }
@@ -140,7 +153,13 @@ bool safe_hard_link_or_copy(const std::filesystem::path& target, const std::file
         if (!ec) {
             return true;
         }
-        if (!is_estale_error(ec)) {
+        // Only fall back to copy for specific errors where hard link is expected to fail:
+        // - EXDEV: Cross-device link (target and link on different filesystems)
+        // - ENOTSUP: Operation not supported (filesystem doesn't support hard links)
+        // - EPERM: Operation not permitted (some security policies)
+        bool can_fallback_to_copy = ec == std::errc::cross_device_link || ec == std::errc::not_supported ||
+                                    ec == std::errc::operation_not_permitted;
+        if (!is_estale_error(ec) && can_fallback_to_copy) {
             ec.clear();
             std::filesystem::copy_file(target, link, std::filesystem::copy_options::overwrite_existing, ec);
             if (!ec) {
@@ -155,6 +174,15 @@ bool safe_hard_link_or_copy(const std::filesystem::path& target, const std::file
                     ec.message());
                 return false;
             }
+        } else if (!is_estale_error(ec)) {
+            // Hard link failed for a reason that doesn't warrant copy fallback (e.g., permission denied)
+            log_warning(
+                tt::LogMetal,
+                "Failed to hard_link {} to {}: {} (copy fallback not attempted)",
+                target.string(),
+                link.string(),
+                ec.message());
+            return false;
         }
         if (attempt < kMaxFsRetries - 1) {
             std::this_thread::sleep_for(

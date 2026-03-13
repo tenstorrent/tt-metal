@@ -335,20 +335,20 @@ ElfFile::Impl* ElfFile::Impl::Make(ElfFile& owner, const std::string& path) {
     int saved_errno = 0;
 
     tt::filesystem::retry_on_estale([&]() {
-        errno = 0;
-        int fd = open(path.c_str(), O_RDONLY | O_CLOEXEC);
-        if (fd >= 0 && fstat(fd, &st) >= 0) {
-            buffer = mmap(nullptr, st.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
+        ::errno = 0;
+        int fd = ::open(path.c_str(), O_RDONLY | O_CLOEXEC);
+        if (fd >= 0 && ::fstat(fd, &st) >= 0) {
+            buffer = ::mmap(nullptr, st.st_size, PROT_READ | PROT_WRITE, MAP_PRIVATE, fd, 0);
         }
-        saved_errno = errno;
+        saved_errno = ::errno;
         if (fd >= 0) {
-            close(fd);
+            ::close(fd);
         }
         return buffer != MAP_FAILED;
     });
 
     if (buffer == MAP_FAILED) {
-        TT_THROW("{}: cannot map elf file into memory: {}", path, strerror(saved_errno));
+        TT_THROW("{}: cannot map elf file into memory: {}", path, ::strerror(saved_errno));
     }
 
     owner.contents_ = std::span(reinterpret_cast<std::byte*>(buffer), st.st_size);
@@ -380,24 +380,24 @@ void ElfFile::WriteImage(std::string const& path) {
     int saved_errno = 0;
 
     tt::filesystem::retry_on_estale([&]() {
-        errno = 0;
-        int file_descriptor = open(
+        ::errno = 0;
+        int file_descriptor = ::open(
             path.c_str(),
             O_WRONLY | O_CLOEXEC | O_CREAT | O_TRUNC,
             S_IRUSR | S_IWUSR | S_IRGRP | S_IWGRP | S_IROTH | S_IWOTH);
         failed = file_descriptor < 0;
         if (!failed) {
-            failed = write(file_descriptor, contents_.data(), contents_.size()) != ssize_t(contents_.size());
-            saved_errno = errno;
-            close(file_descriptor);
+            failed = ::write(file_descriptor, contents_.data(), contents_.size()) != ssize_t(contents_.size());
+            saved_errno = ::errno;
+            ::close(file_descriptor);
         } else {
-            saved_errno = errno;
+            saved_errno = ::errno;
         }
         return !failed;
     });
 
     if (failed) {
-        TT_THROW("{}: cannot write elf file: {}", path, strerror(saved_errno));
+        TT_THROW("{}: cannot write elf file: {}", path, ::strerror(saved_errno));
     }
 }
 

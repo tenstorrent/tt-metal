@@ -405,7 +405,9 @@ def build_dependency_failure_lines(script: "TriageScript") -> list[str]:
         lines.append(f"- {failed_dep.name}: {summary}")
     lines.append(
         "Action: fix dependency failures above. For inspector-related failures, verify --inspector-log-path or "
-        "--inspector-rpc-host/--inspector-rpc-port and that TT_METAL_INSPECTOR=1 and TT_METAL_INSPECTOR_RPC=1."
+        "--inspector-rpc-host/--inspector-rpc-port and that TT_METAL_INSPECTOR=1 and TT_METAL_INSPECTOR_RPC=1. "
+        "In multi-rank runs, ensure TT_METAL_LOGS_PATH contains <hostname>_rank_N directories and that "
+        "the Inspector RPC port (base_port + rank) is correctly matched between C++ and triage tools."
     )
     return lines
 

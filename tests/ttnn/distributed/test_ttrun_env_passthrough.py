@@ -276,3 +276,131 @@ def test_rank_environment_preserves_explicit_rank_override_jit_scratch(monkeypat
     env = get_rank_environment(binding, config)
 
     assert env["TT_METAL_JIT_SCRATCH"] == "/rank-local/jit"
+
+
+# --- Additional passthrough prefix tests ---
+
+
+def test_arch_prefix_passthrough(monkeypatch, tmp_path):
+    """Test that ARCH_ prefixed variables are auto-propagated."""
+    monkeypatch.setenv("ARCH_NAME", "wormhole_b0")
+
+    binding = RankBinding(rank=0, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+
+    assert env["ARCH_NAME"] == "wormhole_b0"
+
+
+def test_wh_prefix_passthrough(monkeypatch, tmp_path):
+    """Test that WH_ prefixed variables (Wormhole-specific) are auto-propagated."""
+    monkeypatch.setenv("WH_ARCH_YAML", "/path/to/wh_arch.yaml")
+
+    binding = RankBinding(rank=0, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+
+    assert env["WH_ARCH_YAML"] == "/path/to/wh_arch.yaml"
+
+
+def test_deepseek_prefix_passthrough(monkeypatch, tmp_path):
+    """Test that DEEPSEEK_ prefixed variables are auto-propagated."""
+    monkeypatch.setenv("DEEPSEEK_V3_HF_MODEL", "deepseek-ai/deepseek-v3")
+
+    binding = RankBinding(rank=0, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+
+    assert env["DEEPSEEK_V3_HF_MODEL"] == "deepseek-ai/deepseek-v3"
+
+
+def test_mesh_prefix_passthrough(monkeypatch, tmp_path):
+    """Test that MESH_ prefixed variables are auto-propagated."""
+    monkeypatch.setenv("MESH_DEVICE", "T3000")
+
+    binding = RankBinding(rank=0, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+
+    assert env["MESH_DEVICE"] == "T3000"
+
+
+def test_loguru_prefix_passthrough(monkeypatch, tmp_path):
+    """Test that LOGURU_ prefixed variables are auto-propagated."""
+    monkeypatch.setenv("LOGURU_LEVEL", "DEBUG")
+
+    binding = RankBinding(rank=0, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+
+    assert env["LOGURU_LEVEL"] == "DEBUG"
+
+
+def test_launcher_only_blocklist_keys_stripped(monkeypatch):
+    """Test that launcher-only blocklist keys are stripped from launcher environment."""
+    # Set all launcher-only blocklist variables
+    monkeypatch.setenv("ACTIONS_ORCHESTRATION_ID", "12345")
+    monkeypatch.setenv("CCACHE_TEMPDIR", "/tmp/ccache_temp")
+    monkeypatch.setenv("CI", "true")
+    monkeypatch.setenv("DEBIAN_FRONTEND", "noninteractive")
+    monkeypatch.setenv("HOSTNAME", "build-runner")
+
+    launcher_env = get_launcher_environment()
+
+    assert "ACTIONS_ORCHESTRATION_ID" not in launcher_env
+    assert "CCACHE_TEMPDIR" not in launcher_env
+    assert "CI" not in launcher_env
+    assert "DEBIAN_FRONTEND" not in launcher_env
+    assert "HOSTNAME" not in launcher_env
+
+
+def test_pythonhome_not_set_by_default(monkeypatch, tmp_path):
+    """Test that PYTHONHOME is not set unless explicitly provided."""
+    monkeypatch.delenv("PYTHONHOME", raising=False)
+
+    binding = RankBinding(rank=0, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+
+    assert "PYTHONHOME" not in env
+
+
+def test_pythonhome_preserved_when_explicitly_set(monkeypatch, tmp_path):
+    """Test that PYTHONHOME is preserved when explicitly set in parent environment."""
+    monkeypatch.setenv("PYTHONHOME", "/custom/python/home")
+
+    binding = RankBinding(rank=0, mesh_id=0, mesh_host_rank=0)
+    config = _build_config(tmp_path, binding)
+
+    env = get_rank_environment(binding, config)
+
+    assert env["PYTHONHOME"] == "/custom/python/home"
+
+
+def test_multi_rank_binding_scopes_paths_correctly(monkeypatch, tmp_path):
+    """Test that multiple ranks each get their own scoped paths."""
+    monkeypatch.setenv("TT_METAL_CACHE", "/shared/cache")
+    monkeypatch.setenv("TT_METAL_LOGS_PATH", "/shared/logs")
+
+    hostname = socket.gethostname()
+
+    # Build environment for rank 0
+    binding0 = RankBinding(rank=0, mesh_id=0, mesh_host_rank=0)
+    config0 = _build_config(tmp_path, binding0)
+    env0 = get_rank_environment(binding0, config0)
+
+    # Build environment for rank 1
+    binding1 = RankBinding(rank=1, mesh_id=0, mesh_host_rank=1)
+    config1 = _build_config(tmp_path, binding1)
+    env1 = get_rank_environment(binding1, config1)
+
+    assert env0["TT_METAL_CACHE"] == f"/shared/cache/{hostname}_rank_0"
+    assert env1["TT_METAL_CACHE"] == f"/shared/cache/{hostname}_rank_1"
+    assert env0["TT_METAL_LOGS_PATH"] == f"/shared/logs/{hostname}_rank_0"
+    assert env1["TT_METAL_LOGS_PATH"] == f"/shared/logs/{hostname}_rank_1"

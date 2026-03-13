@@ -530,7 +530,7 @@ bool JitBuildState::build_state_matches(const string& out_dir) const {
     bool hash_matches = false;
 
     bool success = tt::filesystem::retry_on_estale([&]() {
-        errno = 0;
+        ::errno = 0;
         std::ifstream file(hash_path);
         if (!file.is_open()) {
             return false;

@@ -438,6 +438,62 @@ def classify_mpi_env_exports(
     return direct_exports, name_only_exports, missing_launcher_keys
 
 
+def validate_path_safety(path_str: str, var_name: str) -> None:
+    """Validate that a filesystem path is safe for use.
+
+    Checks:
+    - Path does not contain parent directory traversal (..)
+    - Path is absolute (not relative)
+    - Path does not point to sensitive system directories
+
+    Args:
+        path_str: The path value to validate
+        var_name: Name of the environment variable (for error messages)
+
+    Raises:
+        ValueError: If the path fails validation
+    """
+    if not path_str:
+        return  # Empty paths are handled by defaults elsewhere
+
+    path = Path(path_str)
+
+    # Check for parent directory traversal
+    if ".." in path_str:
+        raise ValueError(
+            f"{var_name} contains parent directory traversal (..): {path_str}. "
+            "This is not allowed for security reasons."
+        )
+
+    # Require absolute paths for cache/log/scratch directories
+    if not path.is_absolute():
+        raise ValueError(f"{var_name} must be an absolute path, got: {path_str}")
+
+    # Check for sensitive system directories
+    sensitive_prefixes = [
+        "/etc",
+        "/bin",
+        "/sbin",
+        "/usr/bin",
+        "/usr/sbin",
+        "/lib",
+        "/lib64",
+        "/usr/lib",
+        "/usr/lib64",
+        "/boot",
+        "/sys",
+        "/proc",
+        "/dev",
+    ]
+    path_normalized = path.resolve()
+    for prefix in sensitive_prefixes:
+        if str(path_normalized).startswith(prefix):
+            raise ValueError(
+                f"{var_name} points to a sensitive system directory: {path_str}. "
+                f"Please choose a different path under /tmp, /home, or a dedicated application directory."
+            )
+
+
 def apply_rank_scoped_paths(env: Dict[str, str], rank: int, explicit_keys: set[str] | None = None) -> None:
     """Scope selected filesystem paths per rank (in-place).
 
@@ -568,6 +624,15 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
 
     # Isolate cache/log paths per rank to avoid shared-path collisions.
     apply_rank_scoped_paths(env, binding.rank, explicit_keys=explicit_rank_scoped_keys)
+
+    # Validate path safety for filesystem environment variables
+    for path_var in ["TT_METAL_CACHE", "TT_METAL_LOGS_PATH", "TT_METAL_JIT_SCRATCH"]:
+        if path_var in env:
+            try:
+                validate_path_safety(env[path_var], path_var)
+            except ValueError as e:
+                logger.error(f"{TT_RUN_PREFIX} {e}")
+                raise
 
     return env
 

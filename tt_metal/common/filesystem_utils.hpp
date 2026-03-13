@@ -104,7 +104,9 @@ inline constexpr int kFsRetryDelayMs = 500;
 inline constexpr int kFsRetryJitterMs = 100;
 
 // Check if error code is ESTALE (stale file handle) - NFS specific error
-inline bool is_estale_error(const std::error_code& ec) { return ec.value() == ESTALE; }
+inline bool is_estale_error(const std::error_code& ec) {
+    return ec.category() == std::system_category() && ec.value() == ESTALE;
+}
 
 // Check if error is ENOENT (file/directory not found)
 inline bool is_not_found_error(const std::error_code& ec) { return ec == std::errc::no_such_file_or_directory; }
@@ -113,14 +115,19 @@ inline bool is_not_found_error(const std::error_code& ec) { return ec == std::er
 // Uses thread-local RNG for thread safety.
 int get_retry_jitter_ms();
 
-// Generic ESTALE retry helper for low-level operations using errno.
+// Generic ESTALE retry helper for low-level C-style syscalls using errno.
 // Calls `operation()` up to kMaxFsRetries times, retrying only if
 // errno == ESTALE after a failed attempt. Sleeps between retries with
 // random jitter to prevent thundering herd issues.
 //
+// IMPORTANT: This template is designed for C-style syscalls that set errno.
+// It should NOT be used with std::filesystem operations (which use std::error_code).
+// For std::filesystem operations, use the safe_* wrappers instead.
+//
 // The operation should:
-// - Clear errno before the syscall if needed
-// - Return true on success, false to retry
+// - Clear errno before the syscall (errno = 0)
+// - Return true on success, false to trigger retry check
+// - The syscall should set errno on failure
 //
 // Returns true if operation eventually succeeded, false if all retries failed.
 template <typename Operation>
@@ -129,7 +136,7 @@ bool retry_on_estale(Operation&& operation) {
         if (operation()) {
             return true;
         }
-        if (errno != ESTALE) {
+        if (::errno != ESTALE) {
             break;
         }
         if (attempt < kMaxFsRetries - 1) {
@@ -201,6 +208,12 @@ std::optional<std::filesystem::file_time_type> safe_last_write_time(const std::f
 // Safe directory iteration with ESTALE retry (no sync, no jitter).
 // Returns vector of directory entries, skipping entries that disappear during iteration.
 // Returns empty vector on error or if directory doesn't exist.
+//
+// Consistency guarantee: If ESTALE occurs mid-iteration, the entire operation is
+// retried (up to kMaxFsRetries times) with the entries vector cleared before each
+// retry. This ensures callers always receive a consistent snapshot of the directory
+// at a single point in time, at the cost of potentially higher latency when
+// ESTALE errors occur frequently.
 std::vector<std::filesystem::directory_entry> safe_directory_entries(const std::filesystem::path& path);
 
 }  // namespace tt::filesystem

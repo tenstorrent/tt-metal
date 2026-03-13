@@ -502,9 +502,8 @@ TEST_F(FilesystemUtilsTest, SafeRename_ReturnsFalseWhenDestParentDoesNotExist) {
     EXPECT_TRUE(std::filesystem::exists(source));
 }
 
-TEST_F(FilesystemUtilsTest, SafeCreateDirectories_ReturnsFalseForInvalidPath) {
-    // Try to create a directory in a non-existent parent with a path that could be invalid
-    // This may succeed on some systems but should handle errors gracefully
+TEST_F(FilesystemUtilsTest, SafeCreateDirectories_CreatesNestedDirectories) {
+    // Create nested directories in a single call - all parent directories should be created
     std::filesystem::path valid_nested = temp_dir_ / "valid" / "nested" / "path";
     EXPECT_TRUE(safe_create_directories(valid_nested));
     EXPECT_TRUE(std::filesystem::exists(valid_nested));
@@ -533,6 +532,67 @@ TEST_F(FilesystemUtilsTest, SafeOperations_HandleSymlinks) {
         std::filesystem::remove(link, ec);
     }
     // If symlinks aren't supported, skip this test gracefully
+}
+
+// ============================================================================
+// sync_filesystem Tests
+// ============================================================================
+
+TEST_F(FilesystemUtilsTest, SyncFilesystem_SyncsDirectory) {
+    // Create a directory and a file within it
+    std::filesystem::path test_dir = create_test_directory("sync_test_dir");
+    std::filesystem::path test_file = test_dir / "sync_test_file.txt";
+
+    // Write content to the file
+    {
+        std::ofstream file(test_file);
+        file << "test content for sync_filesystem";
+        file.close();
+    }
+
+    // Sync the directory - should not throw or crash
+    EXPECT_NO_THROW(sync_filesystem(test_dir));
+
+    // Verify file still exists after sync
+    EXPECT_TRUE(std::filesystem::exists(test_file));
+}
+
+TEST_F(FilesystemUtilsTest, SyncFilesystem_SyncsFile) {
+    // Create a test file
+    std::filesystem::path test_file = create_test_file("sync_test.txt", "content to sync");
+
+    // Sync the file itself (not a directory) - should fall back to parent directory
+    EXPECT_NO_THROW(sync_filesystem(test_file));
+
+    // Verify file still exists
+    EXPECT_TRUE(std::filesystem::exists(test_file));
+}
+
+TEST_F(FilesystemUtilsTest, SyncFilesystem_HandlesEmptyParentPath) {
+    // Test with a relative path that has no directory component
+    // This should not crash when trying to get parent_path()
+    std::filesystem::path relative_file = "relative_test_file.txt";
+
+    // Create the file in current directory
+    {
+        std::ofstream file(relative_file);
+        file << "test";
+        file.close();
+    }
+
+    // Sync should handle empty parent_path() gracefully
+    EXPECT_NO_THROW(sync_filesystem(relative_file));
+
+    // Clean up
+    std::filesystem::remove(relative_file);
+}
+
+TEST_F(FilesystemUtilsTest, SyncFilesystem_HandlesNonExistentPath) {
+    // Test with a non-existent path - should fall back to sync() without crashing
+    std::filesystem::path non_existent = temp_dir_ / "definitely_does_not_exist" / "subdir";
+
+    // Should not throw even though path doesn't exist
+    EXPECT_NO_THROW(sync_filesystem(non_existent));
 }
 
 }  // namespace tt::filesystem::test

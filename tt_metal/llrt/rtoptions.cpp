@@ -365,7 +365,16 @@ const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->
 namespace {
 /** Return MPI/mesh rank from process environment for Inspector RPC port selection, or -1 if not set.
  * Prefer OMPI_COMM_WORLD_RANK / PMI_RANK so that when multiple processes share TT_MESH_HOST_RANK=0
- * (e.g. run_cluster_validation under mpirun), each still gets a distinct port. */
+ * (e.g. run_cluster_validation under mpirun), each still gets a distinct port.
+ *
+ * Thread Safety Note:
+ * This function uses std::getenv() which is not thread-safe on all platforms
+ * (environment variables may be modified by other threads concurrently).
+ * RunTimeOptions is typically a singleton - port-related methods should ideally
+ * be called during initialization or with appropriate synchronization if called
+ * concurrently from multiple threads. The rank value is deterministic once the
+ * process starts, so computing it once at construction would be ideal.
+ */
 int get_rank_from_env() {
     const char* rank_str = std::getenv("OMPI_COMM_WORLD_RANK");
     if (rank_str) {
@@ -400,7 +409,15 @@ uint16_t RunTimeOptions::get_effective_inspector_rpc_server_port() const {
     uint32_t base = inspector_settings.rpc_server_port;
     if (rank >= 0) {
         uint32_t port = base + static_cast<uint32_t>(rank);
-        port = std::min<uint32_t>(port, 65535);
+        if (port > 65535) {
+            log_warning(
+                tt::LogRuntime,
+                "Inspector RPC port overflow: base_port={} + rank={} exceeds 65535, clamping to 65535. "
+                "Consider reducing base port or rank count to avoid port conflicts.",
+                base,
+                rank);
+            port = 65535;
+        }
         return static_cast<uint16_t>(port);
     }
     return static_cast<uint16_t>(base);
@@ -823,7 +840,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Multiple groups can be combined by OR-ing the values (e.g., 3 = FPU + PACK)
         // Note: Currently, only FPU counters are supported
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
-            sscanf(value, "%u", &this->profiler_perf_counter_mode);
+            ::sscanf(value, "%u", &this->profiler_perf_counter_mode);
             if (this->profiler_perf_counter_mode != 0) {
                 this->profiler_enabled = true;
             }
@@ -1476,12 +1493,12 @@ void RunTimeOptions::ParseWatcherEnv() {
     for (const std::string& feature : all_features) {
         std::string env_var("TT_METAL_WATCHER_DISABLE_");
         env_var += feature;
-        if (getenv(env_var.c_str()) != nullptr) {
+        if (std::getenv(env_var.c_str()) != nullptr) {
             watcher_disabled_features.insert(feature);
         }
     }
 
-    const char* watcher_debug_delay_str = getenv("TT_METAL_WATCHER_DEBUG_DELAY");
+    const char* watcher_debug_delay_str = std::getenv("TT_METAL_WATCHER_DEBUG_DELAY");
     if (watcher_debug_delay_str != nullptr) {
         sscanf(watcher_debug_delay_str, "%u", &watcher_debug_delay);
         // Assert watcher is also enabled (TT_METAL_WATCHER=1)
