@@ -324,31 +324,16 @@ void multicast_test(
 }  // namespace unit_tests::dm::direct_write
 
 TEST_F(GenericMeshDeviceFixture, TensixDirectWritePerformanceComparison) {
-    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    if (arch == tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "Skipping test for Blackhole architecture";
-    }
-
     uint32_t test_id = 500;
     unit_tests::dm::direct_write::performance_comparison_test(get_mesh_device(), test_id);
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDirectWriteAddressPatterns) {
-    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    if (arch == tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "Skipping test for Blackhole architecture";
-    }
-
     uint32_t test_id = 501;
     unit_tests::dm::direct_write::address_pattern_test(get_mesh_device(), test_id);
 }
 
 TEST_F(GenericMeshDeviceFixture, TensixDirectWriteMulticast) {
-    const auto arch = tt::get_arch_from_string(tt::test_utils::get_umd_arch_name());
-    if (arch == tt::ARCH::BLACKHOLE) {
-        GTEST_SKIP() << "Skipping test for Blackhole architecture";
-    }
-
     uint32_t test_id = 507;
     unit_tests::dm::direct_write::multicast_test(get_mesh_device(), test_id);
 }
