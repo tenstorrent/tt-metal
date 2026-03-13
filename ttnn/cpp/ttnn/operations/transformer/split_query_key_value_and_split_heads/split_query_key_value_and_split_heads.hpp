@@ -23,7 +23,8 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
     uint32_t num_heads,
     std::optional<uint32_t> num_kv_heads,
     bool transpose_key,
-    const std::optional<MemoryConfig>& memory_config);
+    const std::optional<MemoryConfig>& memory_config,
+    bool use_falcon7b_backend = false);
 
 }  // namespace transformer
 }  // namespace ttnn

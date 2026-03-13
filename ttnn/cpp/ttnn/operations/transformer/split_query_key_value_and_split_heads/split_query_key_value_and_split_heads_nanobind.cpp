@@ -71,6 +71,7 @@ void bind_split_query_key_value_and_split_heads(nb::module_& mod) {
                 num_kv_heads (int, optional): num heads of Key and num heads of Value. If not passed in, then :attr:`num_kv_heads` is set to :attr:`num_heads`. Defaults to `None`.
                 transpose_key (bool): Whether to transpose the Key tensor on the last two dimensions. Defaults to `true`
                 memory_config (ttnn.MemoryConfig, optional): Memory configuration for the operation. Defaults to `None`.
+                use_falcon7b_backend (bool): Whether to use the specialized Falcon7B backend for splitting QKV heads. Defaults to `false`.
 
             Returns:
                Tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]: the output tensor.
@@ -87,7 +88,8 @@ void bind_split_query_key_value_and_split_heads(nb::module_& mod) {
         nb::arg("num_heads"),
         nb::arg("num_kv_heads") = nb::none(),
         nb::arg("transpose_key") = true,
-        nb::arg("memory_config") = nb::none());
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("use_falcon7b_backend") = false);
 }
 
 }  // namespace ttnn::operations::transformer

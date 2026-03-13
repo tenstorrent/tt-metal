@@ -146,7 +146,7 @@ std::tuple<ttnn::Tensor, ttnn::Tensor> joint_scaled_dot_product_attention(
         program_config,
         scale,
         compute_kernel_config);
-    return {output_tensors.output, output_tensors.joint_output};
+    return {output_tensors[prim::JOINT_SDPA_OUTPUT_IDX], output_tensors[prim::JOINT_SDPA_JOINT_OUTPUT_IDX]};
 }
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_product_attention(
@@ -195,7 +195,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ring_joint_scaled_dot_produ
         scale,
         compute_kernel_config,
         core_allocation_strategy);
-    return {output_tensors.output, output_tensors.joint_output, output_tensors.stats_output};
+    return {
+        output_tensors[prim::RING_JOINT_SDPA_OUTPUT_IDX],
+        output_tensors[prim::RING_JOINT_SDPA_JOINT_OUTPUT_IDX],
+        output_tensors[prim::RING_JOINT_SDPA_STATS_OUTPUT_IDX]};
 }
 
 ttnn::Tensor flash_mla_prefill(
