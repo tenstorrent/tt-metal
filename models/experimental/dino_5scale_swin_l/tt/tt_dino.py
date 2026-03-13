@@ -59,39 +59,31 @@ def sine_positional_encoding_ttnn(
     x_embed = ttnn.arange(1, W + 1, 1, dtype=dtype, device=device, memory_config=memory_config)
     x_embed = ttnn.reshape(x_embed, (1, 1, W))
     x_embed = ttnn.multiply(ttnn.divide(x_embed, W + eps), scale)
-    x_embed = ttnn.repeat(x_embed, (1, H, 1))
     y_embed = ttnn.arange(1, H + 1, 1, dtype=dtype, device=device, memory_config=memory_config)
     y_embed = ttnn.reshape(y_embed, (1, H, 1))
     y_embed = ttnn.multiply(ttnn.divide(y_embed, H + eps), scale)
-    y_embed = ttnn.repeat(y_embed, (1, 1, W))
     if dim_t_cache is not None:
         dim_t = dim_t_cache
     else:
-        dim_t = ttnn.arange(0, num_feats, 1, dtype=dtype, device=device, memory_config=memory_config)
-        dim_t = ttnn.floor(ttnn.divide(dim_t, 2.0, memory_config=memory_config))
-        dim_t = ttnn.multiply(dim_t, 2.0, memory_config=memory_config)
+        dim_t = ttnn.arange(0, num_feats, 2, dtype=dtype, device=device, memory_config=memory_config)
         dim_t = ttnn.divide(dim_t, float(num_feats), memory_config=memory_config)
         dim_t = ttnn.pow(float(temperature), dim_t, memory_config=memory_config)
-    x_embed = ttnn.reshape(x_embed, (1, H, W, 1))
+    x_embed = ttnn.reshape(x_embed, (1, 1, W, 1))
     pos_x = ttnn.divide(x_embed, dim_t)
-    y_embed = ttnn.reshape(y_embed, (1, H, W, 1))
+    y_embed = ttnn.reshape(y_embed, (1, H, 1, 1))
     pos_y = ttnn.divide(y_embed, dim_t)
-    sin_x = ttnn.sin(pos_x[:, :, :, 0::2])
-    cos_x = ttnn.cos(pos_x[:, :, :, 1::2])
-    sin_x = ttnn.unsqueeze(sin_x, -1)
-    cos_x = ttnn.unsqueeze(cos_x, -1)
-    pos_x = ttnn.concat([sin_x, cos_x], dim=-1)
-    pos_x = ttnn.reshape(pos_x, (1, H, W, num_feats))
-    sin_y = ttnn.sin(pos_y[:, :, :, 0::2])
-    cos_y = ttnn.cos(pos_y[:, :, :, 1::2])
-    sin_y = ttnn.unsqueeze(sin_y, -1)
-    cos_y = ttnn.unsqueeze(cos_y, -1)
-    pos_y = ttnn.concat([sin_y, cos_y], dim=-1)
-    pos_y = ttnn.reshape(pos_y, (1, H, W, num_feats))
+    sin_x = ttnn.sin(pos_x)
+    cos_x = ttnn.cos(pos_x)
+    pos_x = ttnn.stack([sin_x, cos_x], dim=-1)
+    pos_x = ttnn.reshape(pos_x, (1, 1, W, num_feats))
+    pos_x = ttnn.repeat(pos_x, (1, H, 1, 1))
+    sin_y = ttnn.sin(pos_y)
+    cos_y = ttnn.cos(pos_y)
+    pos_y = ttnn.stack([sin_y, cos_y], dim=-1)
+    pos_y = ttnn.reshape(pos_y, (1, H, 1, num_feats))
+    pos_y = ttnn.repeat(pos_y, (1, 1, W, 1))
     pos = ttnn.concat([pos_y, pos_x], dim=-1)
-    pos = ttnn.permute(pos, (0, 3, 1, 2))
-    pos = ttnn.reshape(pos, (1, num_feats * 2, H * W))
-    pos = ttnn.permute(pos, (0, 2, 1))
+    pos = ttnn.reshape(pos, (1, H * W, num_feats * 2))
     return ttnn.to_layout(pos, ttnn.ROW_MAJOR_LAYOUT)
 
 
@@ -231,6 +223,7 @@ class TtDINO:
         window_size: int = 12,
         in_channels: Tuple[int, ...] = (192, 384, 768, 1536),
         trace_mode: bool = False,
+        ms_deform_chunk_queries: Optional[int] = None,
     ):
         self.device = device
         self.trace_mode = trace_mode
@@ -270,6 +263,7 @@ class TtDINO:
             num_levels=num_levels,
             num_points=num_points,
             trace_mode=trace_mode,
+            upload_chunk_queries=ms_deform_chunk_queries,
         )
 
         self.level_embed = encoder_params["level_embed"]
@@ -284,6 +278,7 @@ class TtDINO:
             num_levels=num_levels,
             num_points=num_points,
             trace_mode=trace_mode,
+            upload_chunk_queries=ms_deform_chunk_queries,
         )
 
         pd = decoder_params["_torch_pre_decoder"]
@@ -307,6 +302,7 @@ class TtDINO:
         self._pe_cache: List[ttnn.Tensor] = []
         self._valid_ratios_tt = None
         self._spatial_shapes_tt = None
+
         if trace_mode:
             from models.experimental.dino_5scale_swin_l.tt.tt_neck import DINO_NECK_LEVEL_SHAPES
 

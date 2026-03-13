@@ -136,6 +136,7 @@ def _build_model_and_inputs(device):
         window_size=SWIN_L_WINDOW_SIZE,
         in_channels=(192, 384, 768, 1536),
         trace_mode=False,
+        ms_deform_chunk_queries=512,
     )
     tt_inputs_host, dram_config, l1_config, input_dims = _setup_sharded_input(device)
     return tt_model, tt_inputs_host, dram_config, l1_config, input_dims
@@ -257,5 +258,5 @@ def test_dino_5scale_swin_l_e2e_perf_2cq(device, batch_size_per_device, expected
     )
     logger.info(
         f"DINO-5scale Swin-L {DINO_INPUT_H}x{DINO_INPUT_W} batch_size={batch_size} "
-        f"compile={compile_time:.2f}s inference_avg={inference_time_avg:.4f}s FPS={batch_size/inference_time_avg:.2f}"
+        f"compile={compile_time:.2f}s inference_avg={inference_time_avg:.4f}s FPS={batch_size/inference_time_avg:.5f}"
     )

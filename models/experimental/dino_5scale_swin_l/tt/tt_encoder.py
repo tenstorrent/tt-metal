@@ -11,11 +11,12 @@ Reuses the multi-scale deformable attention pattern from BEVFormer/UniAD
 with native ttnn.grid_sample for bilinear sampling.
 """
 
+
 import torch
 import ttnn
 from loguru import logger
 
-UPLOAD_CHUNK_QUERIES = 2048
+UPLOAD_CHUNK_QUERIES = 16
 
 
 def compute_sampling_locations_and_attention_weights(
@@ -180,6 +181,77 @@ def multi_scale_deformable_attn_ttnn(
     return output
 
 
+def multi_scale_deformable_attn_uniad_style(
+    value_tt,
+    value_spatial_shapes,
+    sampling_locations_tt,
+    attention_weights_tt,
+    device,
+    num_heads,
+    head_dim,
+):
+    """Optimized all-on-device MSDeformAttn path for decoder-sized query counts."""
+    if isinstance(sampling_locations_tt, torch.Tensor):
+        sampling_locations_tt = ttnn.from_torch(
+            sampling_locations_tt, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+    if isinstance(attention_weights_tt, torch.Tensor):
+        attention_weights_tt = ttnn.from_torch(attention_weights_tt, device=device, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    bs = sampling_locations_tt.shape[0]
+    num_queries = sampling_locations_tt.shape[1]
+    num_points = sampling_locations_tt.shape[4]
+
+    split_sizes = [int(H) * int(W) for H, W in value_spatial_shapes]
+    value_level_list = ttnn.split(value_tt, split_sizes, dim=1)
+
+    sampling_grids = ttnn.multiply(sampling_locations_tt, 2.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    sampling_grids = ttnn.add(sampling_grids, -1.0, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+    output = ttnn.zeros(
+        [bs, num_queries, num_heads, head_dim],
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+    )
+
+    for level, (H_, W_) in enumerate(value_spatial_shapes):
+        H_, W_ = int(H_), int(W_)
+
+        val_l = value_level_list[level]
+        val_l = ttnn.permute(val_l, (0, 2, 1, 3))
+        val_l = ttnn.reshape(val_l, (bs * num_heads, H_, W_, head_dim))
+        val_l = ttnn.to_memory_config(val_l, ttnn.L1_MEMORY_CONFIG)
+
+        grid = sampling_grids[:, :, :, level, :, :]
+        grid = ttnn.permute(grid, (0, 2, 1, 3, 4))
+        grid = ttnn.reshape(grid, (bs * num_heads, num_queries * num_points, 1, 2))
+        grid = ttnn.to_layout(grid, ttnn.ROW_MAJOR_LAYOUT)
+
+        sampled = ttnn.grid_sample(val_l, grid, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(grid)
+        ttnn.deallocate(val_l)
+
+        sampled = ttnn.reshape(sampled, (bs, num_heads, num_queries, num_points, head_dim))
+        sampled = ttnn.permute(sampled, (0, 2, 1, 3, 4))
+
+        attn = attention_weights_tt[:, :, :, level, :]
+        attn = ttnn.unsqueeze(attn, -1)
+        weighted = ttnn.mul(sampled, attn, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(sampled)
+        ttnn.deallocate(attn)
+
+        level_out = ttnn.sum(weighted, dim=-2, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(weighted)
+
+        output = ttnn.add(output, level_out, memory_config=ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(level_out)
+
+    ttnn.deallocate(sampling_grids)
+    return ttnn.reshape(output, (bs, num_queries, num_heads * head_dim))
+
+
 class TtMSDeformAttn:
     """
     Multi-Scale Deformable Attention for DINO encoder/decoder.
@@ -199,6 +271,7 @@ class TtMSDeformAttn:
         num_points=4,
         batch_first=True,
         trace_mode=False,
+        upload_chunk_queries=None,
     ):
         self.embed_dims = embed_dims
         self.num_heads = num_heads
@@ -209,6 +282,7 @@ class TtMSDeformAttn:
         self.device = device
         self.params = params
         self.trace_mode = trace_mode
+        self.upload_chunk_queries = upload_chunk_queries if upload_chunk_queries is not None else UPLOAD_CHUNK_QUERIES
 
     def __call__(
         self,
@@ -251,13 +325,48 @@ class TtMSDeformAttn:
             mask = ttnn.reshape(key_padding_mask, (bs, num_keys, 1))
             value = ttnn.where(mask, ttnn.multiply(value, 0, memory_config=ttnn.DRAM_MEMORY_CONFIG), value)
 
+        upload_chunk_queries = self.upload_chunk_queries
+
+        if num_queries <= upload_chunk_queries:
+            logger.info("  MSDeformAttn: UniAD-style batched path...")
+            sampling_locations, aw_tt = compute_sampling_locations_and_attention_weights(
+                sampling_offsets_flat,
+                attention_weights_flat,
+                reference_points,
+                spatial_shapes,
+                bs,
+                num_queries,
+                self.num_heads,
+                self.num_levels,
+                self.num_points,
+                self.device,
+                spatial_shapes_tt=spatial_shapes_tt,
+            )
+            output = multi_scale_deformable_attn_uniad_style(
+                value,
+                spatial_shapes,
+                sampling_locations,
+                aw_tt,
+                self.device,
+                self.num_heads,
+                self.head_dim,
+            )
+            ttnn.deallocate(sampling_offsets_flat)
+            ttnn.deallocate(attention_weights_flat)
+            ttnn.deallocate(sampling_locations)
+            ttnn.deallocate(aw_tt)
+            output = ttnn.linear(output, self.params["output_proj"]["weight"], bias=self.params["output_proj"]["bias"])
+            output = ttnn.add(output, identity)
+            logger.info("  MSDeformAttn: done (UniAD-style).")
+            return output
+
         if spatial_shapes_tt is not None and isinstance(reference_points, ttnn.Tensor):
             logger.info("  MSDeformAttn: device-only path (per-chunk)...")
             value_l_tts = split_value_into_levels(value, spatial_shapes, self.num_heads, self.head_dim)
 
             output_chunks_device = []
-            for q_start in range(0, num_queries, UPLOAD_CHUNK_QUERIES):
-                q_end = min(q_start + UPLOAD_CHUNK_QUERIES, num_queries)
+            for q_start in range(0, num_queries, upload_chunk_queries):
+                q_end = min(q_start + upload_chunk_queries, num_queries)
                 chunk_Q = q_end - q_start
                 so_chunk = ttnn.slice(
                     sampling_offsets_flat,
@@ -364,14 +473,14 @@ class TtMSDeformAttn:
 
         value_l_tts = split_value_into_levels(value, spatial_shapes, self.num_heads, self.head_dim)
 
-        num_upload_chunks = (num_queries + UPLOAD_CHUNK_QUERIES - 1) // UPLOAD_CHUNK_QUERIES
+        num_upload_chunks = (num_queries + upload_chunk_queries - 1) // upload_chunk_queries
         logger.info(
-            f"  MSDeformAttn: {num_upload_chunks} chunks (chunk={UPLOAD_CHUNK_QUERIES}), "
+            f"  MSDeformAttn: {num_upload_chunks} chunks (chunk={upload_chunk_queries}), "
             f"grid+attention on device ({num_queries} queries)..."
         )
-        output_chunks_host = []
-        for q_start in range(0, num_queries, UPLOAD_CHUNK_QUERIES):
-            q_end = min(q_start + UPLOAD_CHUNK_QUERIES, num_queries)
+        output_chunks = []
+        for q_start in range(0, num_queries, upload_chunk_queries):
+            q_end = min(q_start + upload_chunk_queries, num_queries)
             loc_chunk_tt = ttnn.slice(
                 sampling_locations_tt,
                 [0, q_start, 0, 0, 0, 0],
@@ -395,21 +504,19 @@ class TtMSDeformAttn:
             )
             ttnn.deallocate(loc_chunk_tt)
             ttnn.deallocate(aw_chunk_tt)
-            output_chunks_host.append(ttnn.to_torch(chunk_out))
-            ttnn.deallocate(chunk_out)
+            output_chunks.append(chunk_out)
 
         ttnn.deallocate(sampling_locations_tt)
         ttnn.deallocate(attention_weights_tt)
         for vl in value_l_tts:
             ttnn.deallocate(vl)
 
-        output_cat = torch.cat(output_chunks_host, dim=1)
-        output = ttnn.from_torch(
-            output_cat,
-            device=self.device,
-            layout=ttnn.TILE_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
+        if len(output_chunks) == 1:
+            output = output_chunks[0]
+        else:
+            output = ttnn.concat(output_chunks, dim=1)
+            for chunk in output_chunks:
+                ttnn.deallocate(chunk)
 
         logger.info("  MSDeformAttn: output projection on device...")
         output = ttnn.linear(output, self.params["output_proj"]["weight"], bias=self.params["output_proj"]["bias"])
@@ -440,7 +547,17 @@ class TtFFN:
 class TtDINOEncoderLayer:
     """Single encoder layer: MSDeformAttn -> LN -> FFN -> LN."""
 
-    def __init__(self, params, device, embed_dims=256, num_heads=8, num_levels=5, num_points=4, trace_mode=False):
+    def __init__(
+        self,
+        params,
+        device,
+        embed_dims=256,
+        num_heads=8,
+        num_levels=5,
+        num_points=4,
+        trace_mode=False,
+        upload_chunk_queries=None,
+    ):
         self.self_attn = TtMSDeformAttn(
             params["self_attn"],
             device,
@@ -449,6 +566,7 @@ class TtDINOEncoderLayer:
             num_levels=num_levels,
             num_points=num_points,
             trace_mode=trace_mode,
+            upload_chunk_queries=upload_chunk_queries,
         )
         self.ffn = TtFFN(params["ffn"], device)
         self.norm1_w = params["norms"][0]["weight"]
@@ -505,6 +623,7 @@ class TtDINOEncoder:
         num_points=4,
         profile_per_layer=False,
         trace_mode=True,
+        upload_chunk_queries=None,
     ):
         self.device = device
         self.num_layers = num_layers
@@ -520,6 +639,7 @@ class TtDINOEncoder:
                 num_levels=num_levels,
                 num_points=num_points,
                 trace_mode=trace_mode,
+                upload_chunk_queries=upload_chunk_queries,
             )
             for i in range(num_layers)
         ]

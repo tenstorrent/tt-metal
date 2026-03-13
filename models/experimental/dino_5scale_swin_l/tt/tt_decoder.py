@@ -298,6 +298,7 @@ class TtDINODecoderLayer:
         num_levels=5,
         num_points=4,
         trace_mode=False,
+        upload_chunk_queries=None,
     ):
         self.self_attn = TtMultiheadAttention(
             params["self_attn"],
@@ -313,6 +314,7 @@ class TtDINODecoderLayer:
             num_levels=num_levels,
             num_points=num_points,
             trace_mode=trace_mode,
+            upload_chunk_queries=upload_chunk_queries,
         )
         self.ffn = TtFFN(params["ffn"], device)
         self.norm1_w = params["norms"][0]["weight"]
@@ -385,6 +387,7 @@ class TtDINODecoder:
         num_levels=5,
         num_points=4,
         trace_mode=False,
+        upload_chunk_queries=None,
     ):
         self.device = device
         self.num_layers = num_layers
@@ -406,6 +409,7 @@ class TtDINODecoder:
                 num_levels=num_levels,
                 num_points=num_points,
                 trace_mode=trace_mode,
+                upload_chunk_queries=upload_chunk_queries,
             )
             for i in range(num_layers)
         ]

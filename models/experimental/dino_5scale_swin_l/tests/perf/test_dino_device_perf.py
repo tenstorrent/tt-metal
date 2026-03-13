@@ -37,7 +37,7 @@ def test_perf_device_bare_metal_dino_5scale():
 
     inference_time_key = "AVG DEVICE KERNEL SAMPLES/S"
 
-    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size)
+    post_processed_results = run_device_perf(command, subdir, num_iterations, cols, batch_size, op_support_count=40000)
     actual_perf = post_processed_results.get(inference_time_key, 0)
 
     print(f"\n{'='*60}")
