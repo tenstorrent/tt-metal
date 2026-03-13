@@ -361,7 +361,7 @@ Tensor binary_op(
         sub_core_grids);
 }
 
-inline Tensor add(
+Tensor add(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -371,20 +371,8 @@ inline Tensor add(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::ADD>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor add(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor add(
     const Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -394,42 +382,24 @@ inline Tensor add(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::ADD>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor add_(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor add_(
     const Tensor& lhs,
     const Tensor& rhs,
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::ADD>::invoke(
-        lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
-}
-inline Tensor add_(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor add_(
     const Tensor& lhs,
     float rhs,
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::ADD>::invoke(
-        lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
-}
-inline Tensor subtract(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor subtract(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -439,20 +409,8 @@ inline Tensor subtract(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::SUB>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor subtract(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor subtract(
     const Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -462,42 +420,24 @@ inline Tensor subtract(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::SUB>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor subtract_(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor subtract_(
     const Tensor& lhs,
     const Tensor& rhs,
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::SUB>::invoke(
-        lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
-}
-inline Tensor subtract_(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor subtract_(
     const Tensor& lhs,
     float rhs,
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::SUB>::invoke(
-        lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
-}
-inline Tensor eq(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor eq(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -507,20 +447,8 @@ inline Tensor eq(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::EQ>::invoke(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor eq(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor eq(
     const Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
@@ -530,29 +458,14 @@ inline Tensor eq(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::EQ>::invoke(
-        lhs,
-        rhs,
-        dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor eq(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor eq(
     float lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& output = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::EQ>::invoke(
-        lhs, rhs, dtype, memory_config, output);
-}
-inline Tensor ne(
+    const std::optional<Tensor>& output = std::nullopt);
+Tensor ne(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -562,20 +475,8 @@ inline Tensor ne(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::NE>::invoke(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor ne(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor ne(
     const Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
@@ -585,29 +486,14 @@ inline Tensor ne(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::NE>::invoke(
-        lhs,
-        rhs,
-        dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor ne(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor ne(
     float lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& output = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::NE>::invoke(
-        lhs, rhs, dtype, memory_config, output);
-}
-inline Tensor ge(
+    const std::optional<Tensor>& output = std::nullopt);
+Tensor ge(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -617,20 +503,8 @@ inline Tensor ge(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::GE>::invoke(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor ge(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor ge(
     const Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
@@ -640,29 +514,14 @@ inline Tensor ge(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::GE>::invoke(
-        lhs,
-        rhs,
-        dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor ge(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor ge(
     float lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& output = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::GE>::invoke(
-        lhs, rhs, dtype, memory_config, output);
-}
-inline Tensor gt(
+    const std::optional<Tensor>& output = std::nullopt);
+Tensor gt(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -672,20 +531,8 @@ inline Tensor gt(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::GT>::invoke(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor gt(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor gt(
     const Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
@@ -695,29 +542,14 @@ inline Tensor gt(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::GT>::invoke(
-        lhs,
-        rhs,
-        dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor gt(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor gt(
     float lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& output = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::GT>::invoke(
-        lhs, rhs, dtype, memory_config, output);
-}
-inline Tensor le(
+    const std::optional<Tensor>& output = std::nullopt);
+Tensor le(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -727,20 +559,8 @@ inline Tensor le(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::LE>::invoke(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor le(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor le(
     const Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
@@ -750,29 +570,14 @@ inline Tensor le(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::LE>::invoke(
-        lhs,
-        rhs,
-        dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor le(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor le(
     float lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& output = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::LE>::invoke(
-        lhs, rhs, dtype, memory_config, output);
-}
-inline Tensor lt(
+    const std::optional<Tensor>& output = std::nullopt);
+Tensor lt(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -782,20 +587,8 @@ inline Tensor lt(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::LT>::invoke(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor lt(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor lt(
     const Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
@@ -805,29 +598,14 @@ inline Tensor lt(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::LT>::invoke(
-        lhs,
-        rhs,
-        dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor lt(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor lt(
     float lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& dtype = std::nullopt,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<Tensor>& output = std::nullopt) {
-    return operations::binary::RelationalBinary<operations::binary::BinaryOpType::LT>::invoke(
-        lhs, rhs, dtype, memory_config, output);
-}
-inline Tensor logical_and(
+    const std::optional<Tensor>& output = std::nullopt);
+Tensor logical_and(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -837,20 +615,8 @@ inline Tensor logical_and(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::LOGICAL_AND>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor logical_and(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor logical_and(
     const Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -860,20 +626,8 @@ inline Tensor logical_and(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::LOGICAL_AND>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor logical_or(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor logical_or(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -883,20 +637,8 @@ inline Tensor logical_or(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::LOGICAL_OR>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor logical_or(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor logical_or(
     const Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -906,20 +648,8 @@ inline Tensor logical_or(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::LOGICAL_OR>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor logical_xor(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor logical_xor(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -929,20 +659,8 @@ inline Tensor logical_xor(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::LOGICAL_XOR>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor logical_xor(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor logical_xor(
     const Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -952,20 +670,8 @@ inline Tensor logical_xor(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::LOGICAL_XOR>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor ldexp(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor ldexp(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -975,20 +681,8 @@ inline Tensor ldexp(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::LDEXP>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor ldexp(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor ldexp(
     const Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -998,42 +692,24 @@ inline Tensor ldexp(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::LDEXP>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor ldexp_(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor ldexp_(
     const Tensor& lhs,
     const Tensor& rhs,
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::LDEXP>::invoke(
-        lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
-}
-inline Tensor ldexp_(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor ldexp_(
     const Tensor& lhs,
     float rhs,
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::LDEXP>::invoke(
-        lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
-}
-inline Tensor logaddexp(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor logaddexp(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -1043,20 +719,8 @@ inline Tensor logaddexp(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::LOGADDEXP>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor logaddexp(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor logaddexp(
     const Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -1066,42 +730,24 @@ inline Tensor logaddexp(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::LOGADDEXP>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor logaddexp_(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor logaddexp_(
     const Tensor& lhs,
     const Tensor& rhs,
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::LOGADDEXP>::invoke(
-        lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
-}
-inline Tensor logaddexp_(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor logaddexp_(
     const Tensor& lhs,
     float rhs,
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::LOGADDEXP>::invoke(
-        lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
-}
-inline Tensor logaddexp2(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor logaddexp2(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -1111,20 +757,8 @@ inline Tensor logaddexp2(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::LOGADDEXP2>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor logaddexp2(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor logaddexp2(
     const Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -1134,42 +768,24 @@ inline Tensor logaddexp2(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::LOGADDEXP2>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor logaddexp2_(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor logaddexp2_(
     const Tensor& lhs,
     const Tensor& rhs,
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::LOGADDEXP2>::invoke(
-        lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
-}
-inline Tensor logaddexp2_(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor logaddexp2_(
     const Tensor& lhs,
     float rhs,
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::LOGADDEXP2>::invoke(
-        lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
-}
-inline Tensor squared_difference(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor squared_difference(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -1179,20 +795,8 @@ inline Tensor squared_difference(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::SQUARED_DIFFERENCE>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor squared_difference(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor squared_difference(
     const Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -1202,41 +806,23 @@ inline Tensor squared_difference(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::SQUARED_DIFFERENCE>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor squared_difference_(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor squared_difference_(
     const Tensor& lhs,
     const Tensor& rhs,
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::SQUARED_DIFFERENCE>::invoke(
-        lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
-}
-inline Tensor squared_difference_(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor squared_difference_(
     const Tensor& lhs,
     float rhs,
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> post_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     std::optional<bool> use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return operations::binary::InplaceBinaryOperation<operations::binary::BinaryOpType::SQUARED_DIFFERENCE>::invoke(
-        lhs, rhs, post_activations, lhs_activations, rhs_activations, use_legacy, sub_core_grids);
-}
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 Tensor divide(
     const Tensor& lhs,
     const Tensor& rhs,
@@ -1511,7 +1097,7 @@ Tensor subalpha(
     float alpha,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& output = std::nullopt);
-inline Tensor logical_right_shift(
+Tensor logical_right_shift(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -1521,20 +1107,8 @@ inline Tensor logical_right_shift(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::LOGICAL_RIGHT_SHIFT>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor logical_right_shift(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor logical_right_shift(
     const Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -1544,20 +1118,8 @@ inline Tensor logical_right_shift(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::LOGICAL_RIGHT_SHIFT>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor xlogy(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor xlogy(
     const Tensor& lhs,
     const Tensor& rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -1567,20 +1129,8 @@ inline Tensor xlogy(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::XLOGY>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
-inline Tensor xlogy(
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
+Tensor xlogy(
     const Tensor& lhs,
     float rhs,
     const std::optional<const DataType>& output_dtype = std::nullopt,
@@ -1590,19 +1140,7 @@ inline Tensor xlogy(
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> lhs_activations = {},
     tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> rhs_activations = {},
     const std::optional<bool>& use_legacy = std::nullopt,
-    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt) {
-    return binary_op<operations::binary::BinaryOpType::XLOGY>(
-        lhs,
-        rhs,
-        output_dtype,
-        memory_config,
-        output,
-        post_activations,
-        lhs_activations,
-        rhs_activations,
-        use_legacy,
-        sub_core_grids);
-}
+    const std::optional<CoreRangeSet>& sub_core_grids = std::nullopt);
 Tensor hypot(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
