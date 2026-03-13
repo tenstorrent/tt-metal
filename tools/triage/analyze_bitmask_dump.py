@@ -236,7 +236,13 @@ def analyze_step_grouped(
             lines.append(f"  inferred mesh rows={mesh_rows} cols={mesh_cols}; " f"join_order(c0-per-row)={join_order}")
 
         # Replica consistency check on packed stage (must be exact across cols).
-        def _check_stage_replicas(stage_name: str) -> None:
+        # atol=0.0 for all bitmask/unpack stages: replicas running the same deterministic
+        # ops on the same inputs must produce bitwise-identical results.  The only stage
+        # that might legitimately need a small tolerance is unpacked_penalty_mask (large
+        # float values), but even there replicas should be identical; pass atol explicitly
+        # per stage rather than inferring from dtype so that a 0/1 stage stored as float32
+        # (TILE_LAYOUT auto-promotes int32) is never compared with a multi-million tolerance.
+        def _check_stage_replicas(stage_name: str, atol: float = 0.0) -> None:
             nonlocal local_errs
             stage = by_name.get(stage_name, {})
             if not stage:
@@ -248,7 +254,7 @@ def analyze_step_grouped(
                     sid = shard_ids[r * mesh_cols + c]
                     cur = stage[sid]
                     cur = cur.to(torch.float32) if cur.is_floating_point() else cur.to(torch.int32)
-                    msg = first_mismatch(cur, ref, atol=2.0e6 if ref.is_floating_point() else 0.0, rtol=0.0)
+                    msg = first_mismatch(cur, ref, atol=atol, rtol=0.0)
                     if msg:
                         lines.append(f"  ! {stage_name} replica mismatch row={r} col={c} shard={sid} -> {msg}")
                         local_errs += 1
@@ -263,9 +269,9 @@ def analyze_step_grouped(
                 "unpacked_bitmask_reshape",
                 "converted_bitmask_tile",
                 "converted_bitmask_tile_post_penalty",
-                "unpacked_penalty_mask",
             ):
-                _check_stage_replicas(stage_name)
+                _check_stage_replicas(stage_name, atol=0.0)
+            _check_stage_replicas("unpacked_penalty_mask", atol=2.0e6)
 
         joined: Dict[str, torch.Tensor] = {}
         for name in NAMES:
