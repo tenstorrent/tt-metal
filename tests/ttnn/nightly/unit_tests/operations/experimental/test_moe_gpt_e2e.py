@@ -2402,9 +2402,6 @@ def run_test_full_pipeline_multi_iter(
         logger.info(f"  iter {iteration}: moe_gpt done")
 
         # --- Step 3: selective_reduce_combine ---
-        # WORKAROUND: disable program cache around combine to avoid hang caused by
-        # override_runtime_arguments not updating fabric mux connection runtime args.
-        mesh_device.disable_and_clear_program_cache()
         logger.info(f"  iter {iteration}: combine (use_output_tensor={use_output_tensor})")
         combine_kwargs = dict(
             hidden_size=hidden_size,
@@ -2433,7 +2430,6 @@ def run_test_full_pipeline_multi_iter(
         )
         ttnn.synchronize_device(mesh_device)
         logger.info(f"  iter {iteration}: combine done")
-        mesh_device.enable_program_cache()
 
         # --- Cleanup moe_gpt outputs (like fused_decode.py does) ---
         for i in range(4):  # output[3] and [4] share a buffer; deallocating [3] frees both

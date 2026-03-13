@@ -1074,6 +1074,9 @@ void MoEGPTMeshWorkloadFactory::override_runtime_arguments(
                     rt.at(1) = tensor_args.expert_indices.buffer()->address();
                     rt.at(2) = tensor_args.expert_scores.buffer()->address();
                     rt.at(3) = tensor_args.expert_mapping.buffer()->address();
+                    rt.at(4) = tensor_return_value.at(0).buffer()->address();  // per_expert_total_tokens
+                    rt.at(5) = tensor_return_value.at(1).buffer()->address();  // expert_activation
+                    rt.at(6) = tensor_return_value.at(2).buffer()->address();  // e_t
                 }
             }
         }
