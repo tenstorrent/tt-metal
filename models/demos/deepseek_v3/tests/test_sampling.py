@@ -131,14 +131,10 @@ def test_deepseek_device_sampling_stochastic_behavior(mesh_device, ccl, hf_confi
     sampling.seed_manager.reset_seed(params.seed, list(range(batch_size)))
 
     sampled_tokens = []
-    tt_tokens_last = None
-    tt_log_probs_last = None
     try:
         for _ in range(num_samples):
             sampling.seed_manager.get_new_values()
             tt_tokens, tt_log_probs = sampling.sample(tt_input, enable_trace=use_tracing)
-            tt_tokens_last = tt_tokens
-            tt_log_probs_last = tt_log_probs
             device_tokens = _extract_all_tokens(tt_tokens, mesh_device, USERS_PER_ROW)
             sampled_tokens.append(int(device_tokens[0].item()))
             # In trace mode, sampling reuses captured output tensors across iterations.
@@ -147,12 +143,6 @@ def test_deepseek_device_sampling_stochastic_behavior(mesh_device, ccl, hf_confi
                 ttnn.deallocate(tt_tokens)
                 if tt_log_probs is not None:
                     ttnn.deallocate(tt_log_probs)
-        if use_tracing:
-            # Trace mode reuses persistent output tensors; release them after the loop.
-            if tt_tokens_last is not None:
-                ttnn.deallocate(tt_tokens_last)
-            if tt_log_probs_last is not None:
-                ttnn.deallocate(tt_log_probs_last)
     finally:
         if use_tracing:
             # Release cached trace metadata/tensors before exiting the test.
