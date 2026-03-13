@@ -434,4 +434,4 @@ jobs:
         uses: tenstorrent/tt-metal/.github/actions/slack-report-merge-gate-main@main
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_WEBHOOK_URL }}
-          owner: "S0985AN7TC5"
+          owner: "S0985AN7TC5,U0AK4BVCFM0"
