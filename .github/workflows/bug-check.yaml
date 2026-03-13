@@ -1,0 +1,55 @@
+name: Bug Check
+
+on:
+  issue_comment:
+    types: [created]
+
+jobs:
+  bug-check:
+    name: Run Bug Checker
+    if: >-
+      github.event.issue.pull_request &&
+      contains(github.event.comment.body, '/bug-check')
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: write
+      security-events: write
+
+    steps:
+      - name: Get PR number
+        id: pr
+        run: echo "number=${{ github.event.issue.number }}" >> "$GITHUB_OUTPUT"
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: pip install anthropic pyyaml
+
+      - name: Run bug checker
+        id: check
+        env:
+          BUG_CHECKER_API_KEY: ${{ secrets.BUG_CHECKER_API_KEY }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          python .github/run_bug_checker.py \
+            --pr ${{ steps.pr.outputs.number }} \
+            --sarif .github/bug-checker-results.sarif \
+            --post-comments \
+            --verbose
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: .github/bug-checker-results.sarif
+        continue-on-error: true
