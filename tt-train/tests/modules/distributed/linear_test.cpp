@@ -16,7 +16,7 @@
 #include "core/tt_tensor_utils.hpp"
 #include "modules/linear_module.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn_fixed/distributed/tt_metal.hpp"
 
