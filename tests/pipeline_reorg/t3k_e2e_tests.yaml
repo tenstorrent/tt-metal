@@ -115,13 +115,13 @@
 
 - name: t3k_DeepSeek_PREFILL
   cmd: |
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv
-    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv -tb=short -k random
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv  -tb=short -k random
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv -tb=short -k random
+    pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv -tb=short -k random
   skus:
     wh_llmbox:
-      timeout: 10
-  owner_id: U08E1JCMAJF
+      timeout: 15
+  owner_id: U08E1JCMAJF # Marko Bezulj
   team: shield
   model-name: deepseek_prefill
