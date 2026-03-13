@@ -1103,6 +1103,36 @@ void ControlPlane::configure_routing_tables_for_fabric_ethernet_channels() {
     this->router_port_directions_to_physical_eth_chan_map_.clear();
 
     const auto& intra_mesh_connectivity = this->mesh_graph_->get_intra_mesh_connectivity();
+    const auto& inter_mesh_connectivity = this->mesh_graph_->get_inter_mesh_connectivity();
+
+    // Debug: print mesh graph nodes with 4+ directions (before assignment)
+    for (std::uint32_t mesh_id_val = 0; mesh_id_val < intra_mesh_connectivity.size(); mesh_id_val++) {
+        MeshId mesh_id{mesh_id_val};
+        for (ChipId chip_id = 0; chip_id < static_cast<ChipId>(intra_mesh_connectivity[mesh_id_val].size());
+             chip_id++) {
+            std::unordered_set<RoutingDirection> directions;
+            for (const auto& [_, edge] : intra_mesh_connectivity[mesh_id_val][chip_id]) {
+                directions.insert(edge.port_direction);
+            }
+            if (chip_id < static_cast<ChipId>(inter_mesh_connectivity[mesh_id_val].size())) {
+                for (const auto& [_, edge] : inter_mesh_connectivity[mesh_id_val][chip_id]) {
+                    directions.insert(edge.port_direction);
+                }
+            }
+            if (directions.size() >= 4) {
+                std::string dirs_str;
+                for (const auto& dir : directions) {
+                    if (!dirs_str.empty()) {
+                        dirs_str += ", ";
+                    }
+                    dirs_str += enchantum::to_string(dir);
+                }
+                std::cerr << "Mesh graph node " << FabricNodeId(mesh_id, chip_id) << " has " << directions.size()
+                          << " directions (before assignment): " << dirs_str << std::endl;
+            }
+        }
+    }
+
     // Initialize the bookkeeping for mapping from mesh/chip/direction to physical ethernet channels
     for (const auto& [fabric_node_id, _] : this->logical_mesh_chip_id_to_physical_chip_id_mapping_) {
         if (!this->router_port_directions_to_physical_eth_chan_map_.contains(fabric_node_id)) {
@@ -2699,6 +2729,13 @@ std::vector<PortDescriptor> ControlPlane::assign_logical_ports_to_exit_nodes(
             try_assign_port(true);
         }
     }
+    log_info(
+        tt::LogFabric,
+        "assign_logical_ports_to_exit_nodes: mesh {} -> {} completed: assigned {} ports (out of {} exit nodes)",
+        *my_mesh_id,
+        *neighbor_mesh_id,
+        ports_to_neighbor.size(),
+        exit_nodes.size());
     return ports_to_neighbor;
 }
 
