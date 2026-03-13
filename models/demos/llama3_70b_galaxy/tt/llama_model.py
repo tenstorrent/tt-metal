@@ -778,7 +778,8 @@ class TtTransformer(LightweightModule):
                     f"[TT_DEBUG_BITMASK] step={self._debug_bitmask_step} "
                     f"converted_bitmask post-penalty check failed: {e}"
                 )
-        self._sanity_check_unpacked_bitmask(bitmask, converted_bitmask, result)
+        if hasattr(self, "_sanity_check_unpacked_bitmask"):
+            self._sanity_check_unpacked_bitmask(bitmask, converted_bitmask, result)
         return result
 
     def start_bitmask_to_device(self, bitmask):
