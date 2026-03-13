@@ -2,12 +2,14 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt-metalium/experimental/metal2_host_api/program_factory.hpp>
-#include "program_impl.hpp"
+#include <tt-metalium/program.hpp>
+#include <tt-metalium/experimental/metal2_host_api/program_spec.hpp>
+#include "impl/program/program_impl.hpp"
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
 Program MakeProgramFromSpec(const ProgramSpec& spec) {
+    (void)spec;  // Suppress unused parameter warning for stub implementation
     auto impl = std::make_shared<detail::ProgramImpl>();
 
     /*

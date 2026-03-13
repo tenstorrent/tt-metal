@@ -34,6 +34,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tile.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/tilize_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/dataflow_buffer/dataflow_buffer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/metal2_host_api/program.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/kernels/kernel_types.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/allocator/algorithms/free_list_opt.cpp

@@ -6,6 +6,7 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
 #include <variant>
 #include <vector>
 
@@ -13,8 +14,8 @@
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
-typedef SemaphoreSpecId = uint_32;
-typedef SemaphoreSpecName = std::string;
+using SemaphoreSpecId = uint32_t;
+using SemaphoreSpecName = std::string;
 
 struct SemaphoreSpec { 
 
@@ -24,7 +25,7 @@ struct SemaphoreSpec {
     // (I'm considering removing either the string or uint32_t option. Both is annoying. Thoughts?)
 
     // Target nodes
-    using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>
+    using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
     Nodes target_nodes;
 
 

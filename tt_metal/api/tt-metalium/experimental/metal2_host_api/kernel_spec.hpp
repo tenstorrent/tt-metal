@@ -6,16 +6,21 @@
 
 #include <cstdint>
 #include <optional>
+#include <string>
+#include <unordered_map>
 #include <variant>
 #include <vector>
 
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp> 
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
+#include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
+#include <tt-metalium/base_types.hpp>    // For MathFidelity, UnpackToDestMode (global scope)
+#include <tt-metalium/kernel_types.hpp>  // For DataMovementProcessor, NOC, etc.
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
-typedef KernelSpecID = uint_32;
-typedef KernelSpecName = std::string;
+using KernelSpecID = uint32_t;
+using KernelSpecName = std::string;
 
 struct KernelSpec {
 
@@ -51,6 +56,7 @@ struct KernelSpec {
         using IncludePaths = std::vector<std::string>;
         using Defines = std::vector<std::pair<std::string, std::string>>;
         using Macros = std::vector<std::string>;
+        using OptLevel = tt::tt_metal::KernelBuildOptLevel;
 
         IncludePaths include_paths = {};   // -I <path>
         Defines defines = {};              // -D <name>=<value>
@@ -106,9 +112,9 @@ struct KernelSpec {
         // (Must be of uint32_t; can be treated as varargs in the kernel code)
         using NumRTAsPerNode = std::vector<std::pair<NodeCoord, size_t>>; // {node, num_rtas}
         NumRTAsPerNode num_runtime_args_per_node;
-        size_t num_common_runtime_args
+        size_t num_common_runtime_args;
     };
-    RuntimeArgsSchema runtime_arguments_schema;
+    RuntimeArgSchema runtime_arguments_schema;
 
 };
 
@@ -135,11 +141,12 @@ struct ComputeKernelSpec : public KernelSpec {
         bool math_approx_mode = false;
 
         // "Unpack to dest" mode must be specified on a per-DFB basis
-        using UnpackToDestMode = std::pair<std::variant<DFBSpecId, DFBSpecName>, UnpackToDestMode>; 
-        std::vector<UnpackToDestMode> unpack_to_dest_mode = {}; // empty vector means default mode
+        // unpack_to_dest_mode maps DFB identifier to UnpackToDestMode
+        using UnpackToDestModeEntry = std::pair<std::variant<DFBSpecID, DFBSpecName>, ::UnpackToDestMode>;
+        std::vector<UnpackToDestModeEntry> unpack_to_dest_mode = {}; // empty vector means default mode
     };
     std::optional<Gen1TensixComputeConfig> gen1_tensix_compute_config = std::nullopt;
-    
+
 
     // Currently looking identical to Gen1... but we'll see!
     struct Gen2TensixComputeConfig {
@@ -150,8 +157,9 @@ struct ComputeKernelSpec : public KernelSpec {
         bool math_approx_mode = false;
 
         // "Unpack to dest" mode must be specified on a per-DFB basis
-        using UnpackToDestMode = std::pair<std::variant<DFBSpecId, DFBSpecName>, UnpackToDestMode>; 
-        std::vector<UnpackToDestMode> unpack_to_dest_mode = {}; // empty vector means default mode
+        // unpack_to_dest_mode maps DFB identifier to UnpackToDestMode
+        using UnpackToDestModeEntry = std::pair<std::variant<DFBSpecID, DFBSpecName>, ::UnpackToDestMode>;
+        std::vector<UnpackToDestModeEntry> unpack_to_dest_mode = {}; // empty vector means default mode
     };
     std::optional<Gen2TensixComputeConfig> gen2_tensix_compute_config = std::nullopt;
 };
@@ -169,10 +177,12 @@ struct DataMovementKernelSpec : public KernelSpec {
     // You can provide either a Gen1 config, a Gen2 config, or both.
     // If your host code is intended to run on Gen1 or Gen2, you should provide both.
 
+    // TODO: Get rid of the manual specification of processor and NOC.
+    // (or at least make them optional)
     struct Gen1DataMovementConfig {
-        DataMovementProcessor processor = DataMovementProcessor::RISCV_0;  // TODO: Paul wanted to be rid of this
-        NOC noc = NOC::RISCV_0_default;                                    // TODO: This too
-        NOC_MODE noc_mode = NOC_MODE::DM_DEDICATED_NOC;
+        tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;  
+        tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;                                    
+        tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
     };
 
     struct Gen2DataMovementConfig {

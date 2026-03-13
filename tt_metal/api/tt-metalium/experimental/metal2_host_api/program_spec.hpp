@@ -32,7 +32,7 @@ struct WorkerSpec {
 //   (analogous to a function's signature and body)
 struct ProgramSpec {
     std::vector<WorkerSpec> workers;
-}
+};
 
 // ProgramRunParams describes the mutable properties of a Program, 
 // which are specified anew for each Program execution
@@ -52,10 +52,10 @@ struct ProgramRunParams {
         // Defined common runtime arguments (named & typed)
         //   TODO
 
-        // Unnamed runtime arguments 
+        // Unnamed runtime arguments
         // (specified per-node, length can vary per-node)
-        using NodeRuntimeArgs = std::vector<uint32_t>; 
-        using RuntimeArgs = std::vector<std::pair<CoreCoord, NodeRuntimeArgs>>; 
+        using NodeRuntimeArgs = std::vector<uint32_t>;
+        using RuntimeArgs = std::vector<std::pair<NodeCoord, NodeRuntimeArgs>>;
         RuntimeArgs runtime_args;
 
         // Unnamed common runtime arguments (shared by all cores of a kernel)
@@ -72,17 +72,17 @@ struct ProgramRunParams {
 
     struct DFBRunParams {
         // DFB identifier
-        std::variant<DFBid, DFBName> dfb_id;
+        std::variant<DFBSpecID, DFBSpecName> dfb_id;
 
         // DFB size overrides
         // DFB sizes specified in the ProgramSpec can (optionally) be overridden per Program execution.
-        std::optional<uint32_t> entry_size = std::nullopt;        
+        std::optional<uint32_t> entry_size = std::nullopt;
         std::optional<uint32_t> num_entries = std::nullopt;
 
         // DFB borrowed memory
-        // For DFBs built on borrowed memory, the underlying memory is passed as an argument. 
-        using BorrowedMemory = std::variant<BufferView, MeshTensorView>; // non-owning view
-        std::optional<BorrowedMemory> borrowed_memory = std::nullopt;
+        // For DFBs built on borrowed memory, the underlying memory is passed as an argument.
+        // using BorrowedMemory = std::variant<BufferView, MeshTensorView>; // non-owning view types, TBD
+        // std::optional<BorrowedMemory> borrowed_memory = std::nullopt;
     };
 
 };
