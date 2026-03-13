@@ -8,7 +8,6 @@
 #include <optional>
 #include <vector>
 
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/types.hpp"
 
 namespace ttnn {

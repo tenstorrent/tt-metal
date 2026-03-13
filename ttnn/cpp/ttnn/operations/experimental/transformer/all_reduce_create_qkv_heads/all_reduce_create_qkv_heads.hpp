@@ -7,7 +7,6 @@
 #include "ttnn/global_semaphore.hpp"
 
 #include <optional>
-#include <tuple>
 
 namespace ttnn::experimental {
 

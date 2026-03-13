@@ -9,7 +9,6 @@
 
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/ccl/rms_allgather/rms_allgather.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
