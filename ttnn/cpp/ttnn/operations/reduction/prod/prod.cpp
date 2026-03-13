@@ -6,7 +6,7 @@
 #include "device/prod_op_all.hpp"
 
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/operations/data_movement/permute/permute.hpp"
 #include "ttnn/operations/data_movement/slice/slice.hpp"

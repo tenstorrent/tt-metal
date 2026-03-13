@@ -7,6 +7,8 @@
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
 namespace ttnn::operations::creation {
+
 namespace nb = nanobind;
-void py_module(nb::module_& mod);
+void bind_creation_operations(nb::module_& mod);
+
 }  // namespace ttnn::operations::creation
