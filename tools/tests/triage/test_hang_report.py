@@ -13,7 +13,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from defusedxml.ElementTree import parse as XMLParse
+from xml.etree.ElementTree import parse as XMLParse
 
 if not os.environ.get("TT_METAL_HOME"):
     pytest.skip("TT_METAL_HOME not set; skipping hang report tests", allow_module_level=True)

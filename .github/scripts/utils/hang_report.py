@@ -32,6 +32,7 @@ import sys
 from datetime import datetime, timezone
 from html import escape
 from textwrap import dedent
+from xml.etree.ElementTree import parse as XMLParse
 
 REPORT_DIR = "generated/test_reports"
 TRIAGE_SUMMARY_PATH = "generated/triage_summary.txt"
