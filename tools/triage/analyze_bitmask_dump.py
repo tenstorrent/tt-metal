@@ -131,7 +131,10 @@ def max_abs_err(a: torch.Tensor, b: torch.Tensor) -> Tuple[float, float]:
     d = (a[:h, :w].to(torch.float32) - b[:h, :w].to(torch.float32)).abs()
     if d.numel() == 0:
         return 0.0, 0.0
-    return d.max().item(), d.mean().item()
+    finite = d[torch.isfinite(d)]
+    if finite.numel() == 0:
+        return 0.0, 0.0
+    return finite.max().item(), finite.mean().item()
 
 
 def find_host_slice_match(host: torch.Tensor, packed_local: torch.Tensor) -> Optional[int]:
@@ -151,7 +154,9 @@ def expected01_from_packed(packed_local: torch.Tensor) -> torch.Tensor:
     return ((packed_local[:, :, None] >> ar[None, None, :]) & 1).reshape(packed_local.shape[0], -1)
 
 
-def analyze_step_shard(step: int, shard: int, data: StepShard, verbose: bool, show_ok: bool) -> int:
+def analyze_step_shard(
+    step: int, shard: int, data: StepShard, verbose: bool, show_ok: bool, ignore_logits_nan: bool
+) -> int:
     errs = 0
     t = data.tensors
     lines = [f"\n=== step={step} shard={shard} ==="]
@@ -208,16 +213,29 @@ def analyze_step_shard(step: int, shard: int, data: StepShard, verbose: bool, sh
         w = min(before.shape[-1], penalty.shape[-1]) if before.ndim >= 1 else None
         if h is not None and w is not None and before.ndim == 4 and penalty.ndim == 2:
             delta = after[0, 0, :h, :w] - before[0, 0, :h, :w]
+            penalty_slice = penalty[:h, :w]
+
+            if ignore_logits_nan:
+                valid = torch.isfinite(delta) & torch.isfinite(penalty_slice)
+                invalid_count = (~valid).sum().item()
+                if invalid_count > 0 and verbose:
+                    lines.append(f"  logits delta has {invalid_count} non-finite positions; ignored for comparison")
+                delta_cmp = torch.where(valid, delta, torch.zeros_like(delta))
+                penalty_cmp = torch.where(valid, penalty_slice, torch.zeros_like(penalty_slice))
+            else:
+                delta_cmp = delta
+                penalty_cmp = penalty_slice
+
             # delta is bf16-derived in dumps; allow quantization noise around large magnitudes.
-            msg = first_mismatch(delta, penalty[:h, :w], atol=2.0e6, rtol=0.0)
+            msg = first_mismatch(delta_cmp, penalty_cmp, atol=2.0e6, rtol=0.0)
             if msg:
-                max_err, mean_err = max_abs_err(delta, penalty[:h, :w])
+                max_err, mean_err = max_abs_err(delta_cmp, penalty_cmp)
                 lines.append(
                     f"  ! logits delta != penalty -> {msg} " f"(max_abs_err={max_err:.6g}, mean_abs_err={mean_err:.6g})"
                 )
                 errs += 1
             elif verbose:
-                max_err, mean_err = max_abs_err(delta, penalty[:h, :w])
+                max_err, mean_err = max_abs_err(delta_cmp, penalty_cmp)
                 lines.append(
                     "  logits_after - logits_before matches penalty "
                     f"(within tol, max_abs_err={max_err:.6g}, mean_abs_err={mean_err:.6g})"
@@ -237,6 +255,11 @@ def main() -> None:
     ap.add_argument("--step", type=int, default=None, help="Analyze only one step")
     ap.add_argument("--verbose", action="store_true", help="Print full per-shard stats")
     ap.add_argument("--show-ok", action="store_true", help="Print one line for passing shards")
+    ap.add_argument(
+        "--no-ignore-logits-nan",
+        action="store_true",
+        help="Treat non-finite logits delta positions as mismatches",
+    )
     args = ap.parse_args()
 
     by_step = load_dump_dir(args.dump_dir)
@@ -255,7 +278,12 @@ def main() -> None:
     for step in steps:
         for shard in sorted(by_step[step].keys()):
             total_errs += analyze_step_shard(
-                step, shard, by_step[step][shard], verbose=args.verbose, show_ok=args.show_ok
+                step,
+                shard,
+                by_step[step][shard],
+                verbose=args.verbose,
+                show_ok=args.show_ok,
+                ignore_logits_nan=not args.no_ignore_logits_nan,
             )
 
     print(f"\nDone. Total issues found: {total_errs}")
