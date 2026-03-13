@@ -1604,7 +1604,7 @@ class MLA1D(AbstractModule):
                 col_idx=col_idx,
                 block_size=kvpe_cache.shape[2],
                 max_blocks=kvpe_cache.shape[0],
-                mesh_device=cfg.get("mesh_device", None),
+                mesh_device=cfg["mesh_device"],
             )
 
         ttnn.experimental.paged_fill_cache(
@@ -1710,8 +1710,9 @@ class MLA1D(AbstractModule):
         dim = x.shape[3]
 
         wo_prefill_seq_chunk_size = int(os.getenv("DEEPSEEK_WO_PREFILL_CHUNK_SIZE", str(DEFAULT_SEQ_LEN_CHUNK_SIZE)))
-        if wo_prefill_seq_chunk_size <= 0:
-            wo_prefill_seq_chunk_size = DEFAULT_SEQ_LEN_CHUNK_SIZE
+        assert wo_prefill_seq_chunk_size > 0, (
+            "DEEPSEEK_WO_PREFILL_CHUNK_SIZE must be > 0, " f"got {wo_prefill_seq_chunk_size}"
+        )
         if seq_len > wo_prefill_seq_chunk_size:
             num_heads = v_out.shape[2]
             v_head_dim = v_out.shape[3]
