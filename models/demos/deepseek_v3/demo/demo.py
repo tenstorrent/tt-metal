@@ -297,8 +297,8 @@ def create_parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--max-users-per-row",
         type=int,
-        default=None,
-        help="Override the maximum number of active users per row for demo decode.",
+        default=USERS_PER_ROW,
+        help=f"Maximum number of active users per row for demo decode (default: {USERS_PER_ROW}).",
     )
     return p
 
@@ -402,7 +402,7 @@ def run_demo(
     *,
     model_path: str | Path | None = None,
     max_new_tokens: int = 32,
-    max_users_per_row: int | None = None,
+    max_users_per_row: int = USERS_PER_ROW,
     cache_dir: str | Path | None = None,
     random_weights: bool = False,
     single_layer: str | None = None,

@@ -150,8 +150,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         mesh_device: ttnn.MeshDevice | None = None,
         model_path: str | Path | None = None,
         cache_dir: str | Path | None = None,
-        batch_size: int = USERS_PER_ROW,
-        batch_size_per_row: int | None = None,
+        batch_size_per_row: int = USERS_PER_ROW,
         tokenizer=None,
         random_weights: bool = False,
         dense_layers: int | None = None,
@@ -226,27 +225,14 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.ccl = CCL(mesh_device)
         mesh_shape = list(mesh_device.shape)
         self.dp_factor = mesh_shape[1]
-        legacy_batch_size_per_row = int(batch_size)
-        if batch_size_per_row is not None and legacy_batch_size_per_row != USERS_PER_ROW:
-            if int(batch_size_per_row) != legacy_batch_size_per_row:
-                raise ValueError(
-                    "Specify only one of batch_size and batch_size_per_row; "
-                    "batch_size is a deprecated alias for batch_size_per_row."
-                )
-        resolved_batch_size_per_row = (
-            int(batch_size_per_row) if batch_size_per_row is not None else legacy_batch_size_per_row
-        )
-        if resolved_batch_size_per_row <= 0:
-            raise ValueError(f"batch_size_per_row must be > 0, got {resolved_batch_size_per_row}")
-        if resolved_batch_size_per_row > USERS_PER_ROW:
-            raise ValueError(
-                f"batch_size_per_row {resolved_batch_size_per_row} exceeds the supported maximum {USERS_PER_ROW}"
-            )
-        if resolved_batch_size_per_row % self.dp_factor != 0:
-            raise ValueError(
-                f"batch_size_per_row {resolved_batch_size_per_row} must be divisible by dp_factor={self.dp_factor}"
-            )
-        self.batch_size_per_row = resolved_batch_size_per_row
+        batch_size_per_row = int(batch_size_per_row)
+        if batch_size_per_row <= 0:
+            raise ValueError(f"batch_size_per_row must be > 0, got {batch_size_per_row}")
+        if batch_size_per_row > USERS_PER_ROW:
+            raise ValueError(f"batch_size_per_row {batch_size_per_row} exceeds the supported maximum {USERS_PER_ROW}")
+        if batch_size_per_row % self.dp_factor != 0:
+            raise ValueError(f"batch_size_per_row {batch_size_per_row} must be divisible by dp_factor={self.dp_factor}")
+        self.batch_size_per_row = batch_size_per_row
         self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
 
         # Configure sampling
@@ -739,7 +725,7 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         return tt_out
 
-    def _tokens_from_device(self, tt_out_tok, mesh_device, batch_size_per_row=USERS_PER_ROW) -> torch.Tensor:
+    def _tokens_from_device(self, tt_out_tok, mesh_device, batch_size_per_row: int) -> torch.Tensor:
         composed = ttnn.to_torch(
             tt_out_tok,
             mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, -1), mesh_shape=tuple(mesh_device.shape)),
@@ -1974,7 +1960,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                         decode_logits = self.decode_forward(
                             tokens=next_tokens,
                             start_pos=positions,
-                            batch_size_per_row=self.batch_size_per_row,
                             profiler=profiler,
                             gen_idx=gen_idx,
                             enable_trace=self.enable_trace,
@@ -2620,7 +2605,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         self,
         init_tokens: torch.Tensor,
         positions: torch.Tensor,
-        batch_size_per_row: int,
         page_tables: torch.Tensor | None = None,
     ) -> None:
         """Allocate persistent inputs, capture trace for one decode iteration, and store trace state."""
@@ -2681,7 +2665,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         self,
         tokens: torch.Tensor,
         start_pos: torch.Tensor,
-        batch_size_per_row: int = USERS_PER_ROW,
         gen_idx: int = 0,
         profiler: BenchmarkProfiler | None = None,
         enable_trace: bool = False,
@@ -2700,7 +2683,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         else:
             # Capture trace and return trace output
             if self._trace_id is None:
-                self._capture_decode_trace(tokens, start_pos, batch_size_per_row, page_table)
+                self._capture_decode_trace(tokens, start_pos, page_table)
                 # First call: return the captured run's output
                 assert self._trace_output is not None
 

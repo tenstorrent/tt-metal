@@ -24,7 +24,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI2,
     SEQ_LEN_CHUNK_SIZE,
-    USERS_PER_ROW,
     dram_sharded_weight_config,
     even_int_div,
     find_largest_divisor,
@@ -218,7 +217,7 @@ class MLP(AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
-        batch_size_per_row: int = USERS_PER_ROW,
+        batch_size_per_row: int,
         input_num_cores: int | None = None,
         output_num_cores: int | None = None,
     ) -> ModelDecodeConfig:
@@ -354,7 +353,7 @@ class MLP(AbstractModule):
         per_device_width: int,
         activation_sharding_num_cores: int,
         mesh_device: ttnn.Device,
-        batch_size_per_row: int = USERS_PER_ROW,
+        batch_size_per_row: int,
     ) -> ttnn.MemoryConfig:
         """Get the memory config for an activation tensor in decode mode."""
         return ttnn.create_sharded_memory_config_(

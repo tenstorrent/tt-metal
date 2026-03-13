@@ -21,7 +21,6 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
     COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC,
-    USERS_PER_ROW,
     even_int_div,
     get_state_dicts,
     shard_and_save,
@@ -91,7 +90,7 @@ class DistributedRMSNorm(RMSNormBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
-        batch_size_per_row: int = USERS_PER_ROW,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
         """Generate decode configuration for this module.
 
