@@ -355,28 +355,6 @@ extern "C" uint32_t _start1() {
 
                 trigger_sync_register_init();
 
-                if constexpr (ASSERT_ENABLED) {
-                    if (noc_mode == DM_DYNAMIC_NOC) {
-                        WAYPOINT("NKFW");
-                        // Assert that no noc transactions are outstanding, to ensure that all reads and writes have
-                        // landed and the NOC interface is in a known idle state for the next kernel.
-                        for (int noc = 0; noc < NUM_NOCS; noc++) {
-                            ASSERT(ncrisc_dynamic_noc_reads_flushed(noc));
-                            ASSERT(ncrisc_dynamic_noc_nonposted_writes_sent(noc));
-                            ASSERT(ncrisc_dynamic_noc_nonposted_writes_flushed(noc));
-                            ASSERT(ncrisc_dynamic_noc_nonposted_atomics_flushed(noc));
-                            ASSERT(ncrisc_dynamic_noc_posted_writes_sent(noc));
-                        }
-                        WAYPOINT("NKFD");
-                    }
-                }
-
-#if defined(PROFILE_KERNEL)
-                if (noc_mode == DM_DYNAMIC_NOC) {
-                    // re-init for profiler to able to run barrier in dedicated noc mode
-                    noc_local_state_init(noc_index);
-                }
-#endif
                 // Need to ensure that Remapper state is cleared for next kernel launch
                 if (g_remapper_configurator.is_remapper_enabled()) {
                     g_remapper_configurator.clear_all_pairs();
