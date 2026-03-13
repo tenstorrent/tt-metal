@@ -40,18 +40,12 @@ void bind_deepseek_moe_post_combine_tilize(nb::module_& mod) {
         ttnn::nanobind_overload_t{
             [](const OperationType& self,
                const ttnn::Tensor& input_tensor,
-               int32_t dim,
-               uint64_t split_size,
-               const tt::tt_metal::MemoryConfig& output_memory_config,
-               const std::optional<ttnn::DeviceComputeKernelConfig>& compute_kernel_config) {
-                return self(input_tensor, dim, split_size, output_memory_config, compute_kernel_config);
+               const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config) {
+                return self(input_tensor, output_memory_config);
             },
             nb::arg("input_tensor"),
-            nb::arg("dim"),
             nb::kw_only(),
-            nb::arg("split_size"),
-            nb::arg("output_memory_config").noconvert() = tt::tt_metal::operation::DEFAULT_OUTPUT_MEMORY_CONFIG,
-            nb::arg("compute_kernel_config").noconvert() = nb::none()});
+            nb::arg("output_memory_config").noconvert() = nb::none()});
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_moe_post_combine_tilize::detail

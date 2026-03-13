@@ -14,10 +14,7 @@ namespace ttnn::experimental::prim {
 
 struct DeepseekMoEPostCombineTilizeProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle reader_kernel_id;
-        tt::tt_metal::KernelHandle writer_kernel_id;
         uint32_t num_cores_to_be_used;
-        uint32_t num_cores_x;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
@@ -25,13 +22,13 @@ struct DeepseekMoEPostCombineTilizeProgramFactory {
     static cached_program_t create(
         const DeepseekMoEPostCombineTilizeParams& operation_attributes,
         const DeepseekMoEPostCombineTilizeInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
+        ttnn::Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const DeepseekMoEPostCombineTilizeParams& operation_attributes,
         const DeepseekMoEPostCombineTilizeInputs& tensor_args,
-        std::vector<ttnn::Tensor>& tensor_return_value);
+        ttnn::Tensor& tensor_return_value);
 };
 
 }  // namespace ttnn::experimental::prim
