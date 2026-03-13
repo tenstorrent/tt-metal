@@ -131,7 +131,26 @@ Create a **single-device profiling op** (`ring_joint_sdpa_profile`) that:
 
 **Status**: Completed 2026-03-13. Current baseline (q=256, k=128) is optimal within L1 constraints.
 
-### Phase 6: Automated Benchmarking (Optional)
+### Phase 6: Kernel Time Breakdown (Next Step)
+**Goal**: Understand where time is spent - data movement vs compute
+
+**Motivation**: FPU utilization is only 28-32%, suggesting significant headroom. Need to determine if we're data-bound or compute-bound.
+
+**Investigation**:
+- Analyze Tracy kernel breakdown: reader time, compute time, writer time
+- Compare DRAM bandwidth utilization vs theoretical peak
+- Identify which kernel phase dominates total time
+- Determine if optimization should focus on data movement or compute
+
+**Questions to Answer**:
+1. What fraction of time is spent in reader kernel (DRAM → L1)?
+2. What fraction of time is spent in compute kernel?
+3. What fraction of time is spent in writer kernel (L1 → DRAM)?
+4. Is the compute kernel itself memory-bound (L1 access patterns)?
+
+**Success Criteria**: Clear identification of bottleneck (data-bound vs compute-bound)
+
+### Phase 7: Automated Benchmarking (Optional)
 **Goal**: Continuous performance tracking
 
 - Add profiling op to benchmark suite
@@ -178,15 +197,21 @@ These are intentionally excluded to isolate compute performance.
 
 ## Insights (Updated with Phase 5 Results)
 
-1. **Compute efficiency**: TBD - need to compare against theoretical peak
-2. **Memory boundedness**: TBD - need detailed kernel breakdown
+1. **Compute efficiency**: ✅ **ANSWERED**
+   - ring_index=0 (most causal work): **28.6% FPU utilization**
+   - ring_index=31 (least causal work): **32.5% FPU utilization**
+   - Significant headroom exists (~70% unutilized)
+2. **Memory boundedness**: **NEXT INVESTIGATION**
+   - Low FPU util suggests data movement may be bottleneck
+   - Need kernel breakdown: reader time vs compute time vs writer time
 3. **Chunk size sensitivity**: ✅ **ANSWERED**
    - Larger q_chunk dramatically improves performance (~2x per doubling)
    - k_chunk has smaller impact; k=128 is sweet spot
    - L1 limits max useful config to q=256, k=128
-4. **Balanced vs unbalanced**: ✅ **PARTIAL**
-   - ring_index=31 (least causal work) is 15-20% faster than ring_index=0
-   - Confirms causal masking adds measurable overhead
+4. **Balanced vs unbalanced**: ✅ **ANSWERED**
+   - ring_index=31 is 15-20% faster than ring_index=0
+   - FPU util is 14% higher for ring_index=31 (32.5% vs 28.6%)
+   - Causal masking adds both compute time and reduces efficiency
 5. **Scaling behavior**: TBD - need to vary sequence length
 
 ---
