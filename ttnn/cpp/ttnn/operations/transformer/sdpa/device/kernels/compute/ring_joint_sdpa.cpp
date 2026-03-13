@@ -70,8 +70,10 @@ void kernel_main() {
     constexpr uint32_t total_mask_tiles = 1 + (global_n_partial_col > 0 ? 1 : 0) + (joint_l_partial_col > 0 ? 1 : 0);
 
     uint32_t argidx = 0;
-    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);    // Index 0
+    const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);      // Index 1
+    const uint32_t global_q_start_2 = get_arg_val<uint32_t>(argidx++);  // Index 2 - NEW: Second range start
+    const uint32_t global_q_end_2 = get_arg_val<uint32_t>(argidx++);    // Index 3 - NEW: Second range end
 
     RingSDPAOpIndexer fused_op_indexer = RingSDPAOpIndexer(argidx);
 
@@ -279,6 +281,127 @@ void kernel_main() {
                 lw_mask,
                 causality,
                 balancing);
+        }
+
+        // Second processing loop for balanced core distribution (NEW)
+        if (global_q_end_2 > global_q_start_2) {  // Only run if second range is non-empty
+            if constexpr (use_streaming_compute) {
+                sdpa_ring_v2<
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    0,  // Skt — not used for ring
+                    DHt,
+                    DHt,  // vDHt = DHt for ring
+                    scale_fp32,
+                    qk_subblock_h,
+                    cb_q_in,
+                    cb_k_in,
+                    cb_v_in,
+                    cb_qk_im,
+                    cb_identity_scale_in,
+                    cb_exp_max_diff,
+                    cb_col_identity,
+                    cb_recip_scratch,
+                    cb_mask_in,
+                    cb_scale_in,
+                    cb_lse_in,
+                    cb_lse_out,
+                    cb_prev_out,
+                    cb_out,
+                    uniform_dataformat>(
+                    global_q_start_2,  // Use second range
+                    global_q_end_2,    // Use second range
+                    num_kv_chunks,
+                    ring_iter,
+                    ring_id,
+                    num_local_k_chunks,
+                    local_padded_Nt,
+                    logical_nt,
+                    ring_iter_needs_global_n_mask,
+                    ring_iter_needs_joint_n_mask,
+                    local_n_needs_masking,
+                    global_n_mask_chunk_id,
+                    local_n_mask_chunk_id,
+                    joint_n_mask_chunk_id,
+                    cb_out_im_A,
+                    cb_out_im_B,
+                    cb_max_A,
+                    cb_max_B,
+                    cb_sum_A,
+                    cb_sum_B,
+                    lw_mask);
+            } else {
+                bool causality = (ring_iter == 0 ? is_causal : false);
+
+                uint32_t iter_num_kv_chunks = num_kv_chunks;
+                if (is_causal && is_balanced && ring_index > ring_id) {
+                    iter_num_kv_chunks /= 2;
+                }
+                bool balancing = (ring_index >= ring_id ? false : is_balanced);
+
+                sdpa_ring<
+                    cb_qk_im,
+                    cb_identity_scale_in,
+                    cb_scale_in,
+                    Sq_chunk_t,
+                    Sk_chunk_t,
+                    NH,
+                    DHt,
+                    vDHt,
+                    scale_fp32>(
+                    qk_in0_block_w,
+                    qk_subblock_w,
+                    qk_subblock_h,
+                    qk_in0_num_subblocks,
+                    qk_in1_num_subblocks,
+                    qk_num_blocks,
+                    out_in0_block_w,
+                    out_subblock_w,
+                    out_subblock_h,
+                    out_in0_num_subblocks,
+                    out_in1_num_subblocks,
+                    out_num_blocks,
+                    global_q_start_2,  // Use second range
+                    global_q_end_2,    // Use second range
+                    num_local_q_chunks,
+                    0,
+                    iter_num_kv_chunks,
+                    q_chunk_tiles,
+                    k_chunk_tiles,
+                    v_chunk_tiles,
+                    qk_chunk_tiles,
+                    out_chunk_tiles,
+                    ring_iter,
+                    ring_id,
+                    num_local_k_chunks,
+                    local_padded_Nt,
+                    logical_nt,
+                    ring_iter_needs_global_n_mask,
+                    ring_iter_needs_joint_n_mask,
+                    local_n_needs_masking,
+                    global_n_mask_chunk_id,
+                    local_n_mask_chunk_id,
+                    joint_n_mask_chunk_id,
+                    cb_q_in,
+                    cb_k_in,
+                    cb_v_in,
+                    cb_mask_in,
+                    cb_col_identity,
+                    cb_out_im_A,
+                    cb_out_im_B,
+                    cb_max_A,
+                    cb_max_B,
+                    cb_sum_A,
+                    cb_sum_B,
+                    cb_exp_max_diff,
+                    cb_lse_in,
+                    cb_lse_out,
+                    cb_prev_out,
+                    cb_out,
+                    lw_mask,
+                    causality,
+                    balancing);
+            }
         }
     }
 }

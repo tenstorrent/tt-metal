@@ -52,8 +52,10 @@ void kernel_main() {
     const uint32_t joint_q_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_k_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_v_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);
-    const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);
+    const uint32_t global_q_start = get_arg_val<uint32_t>(argidx++);    // Index 8
+    const uint32_t global_q_end = get_arg_val<uint32_t>(argidx++);      // Index 9
+    const uint32_t global_q_start_2 = get_arg_val<uint32_t>(argidx++);  // Index 10 - NEW: Second range start
+    const uint32_t global_q_end_2 = get_arg_val<uint32_t>(argidx++);    // Index 11 - NEW: Second range end
 
     const uint32_t is_chain_participant = get_arg_val<uint32_t>(argidx++);
     const uint32_t is_injector = get_arg_val<uint32_t>(argidx++);
@@ -361,6 +363,177 @@ void kernel_main() {
                 }
             }
         }
+
+        // Second processing loop for balanced core distribution (NEW)
+        if (global_q_end_2 > global_q_start_2) {  // Only run if second range is non-empty
+            for (uint32_t global_q_chunk = global_q_start_2; global_q_chunk < global_q_end_2; ++global_q_chunk) {
+                // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.
+                const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
+                const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
+                const uint32_t q_chunk = global_q_chunk % num_q_chunks;
+                const auto q_row_start_tile = q_chunk * Sq_chunk_t;
+                const bool is_joint_q = q_chunk >= num_local_q_chunks;
+
+                if (q_chunk < half_sequence && is_balanced && ring_index < ring_id) {
+                    continue;
+                }
+
+                Slice q_slice;
+                uint32_t end_seq_tile;
+                if (is_joint_q) {
+                    // Get row index into the joint Q tensor
+                    const uint32_t joint_q_row_start_tile = (q_chunk - num_local_q_chunks) * Sq_chunk_t;
+                    q_slice = Slice(nb, nq, joint_q_row_start_tile, joint_q_row_start_tile + Sq_chunk_t, 0, DHt);
+                    end_seq_tile = Lt;
+                } else {
+                    // Index into the Q input tensor
+                    q_slice = Slice(nb, nq, q_row_start_tile, q_row_start_tile + Sq_chunk_t, 0, DHt);
+                    end_seq_tile = local_padded_Nt;
+                }
+
+                // Use compile-time conditionals to avoid TensorAccessor type mismatch
+                if constexpr (use_joint_tensors) {
+                    if (is_joint_q) {
+                        read_block(
+                            joint_q_generator, q_slice, end_seq_tile, cb_q_in, q_tile_bytes, false /*transpose*/);
+                    } else {
+                        read_block(q_generator, q_slice, end_seq_tile, cb_q_in, q_tile_bytes, false /*transpose*/);
+                    }
+                } else {
+                    // When joint tensors not provided, always use regular Q generator
+                    read_block(q_generator, q_slice, end_seq_tile, cb_q_in, q_tile_bytes, false /*transpose*/);
+                }
+
+                for (uint32_t k_chunk = 0; k_chunk < iter_num_kv_chunks; ++k_chunk) {
+                    /**
+                     * Iterate over all KV chunks for this Q chunk.
+                     * If this is the last ring ID, we will also read from joint KV.
+                     * If this k chunk is in the spatial input and beyond the logical N, we will skip it.
+                     */
+                    const bool kv_chunk_is_joint = k_chunk >= num_local_k_chunks;
+                    // Global index into the padded KV tensor
+                    const uint32_t kv_global_start_tile = local_padded_Nt * ring_id + k_chunk * Sk_chunk_t;
+                    const bool kv_chunk_is_beyond_logical_n =
+                        !kv_chunk_is_joint && (kv_global_start_tile >= logical_nt);
+
+                    if (is_causal) {
+                        // For causal masks, we only compute attention if our Q comes AFTER the current KV chunk
+                        // q_row_start_tile is the first row (in tiles) of our Q.
+                        // kv_global_start_tile is the first row (in tiles) of the current K.
+                        if (q_row_start_tile < kv_global_start_tile) {
+                            continue;
+                        }
+                    }
+
+                    if (kv_chunk_is_beyond_logical_n) {
+                        /**
+                         * Skip k_chunk.
+                         * We need to push dummy K and V data so that the compute gets dummy data
+                         */
+                        cb_reserve_back(cb_k_in, k_chunk_tiles);
+                        cb_push_back(cb_k_in, k_chunk_tiles);
+                        cb_reserve_back(cb_v_in, v_chunk_tiles);
+                        cb_push_back(cb_v_in, v_chunk_tiles);
+
+                        continue;
+                    }
+
+                    Slice k_slice;
+                    Slice v_slice;
+
+                    // Determine whether this is a local or joint KV slice
+                    if (kv_chunk_is_joint) {
+                        // Get row index into the joint KV tensor
+                        const uint32_t joint_kv_row_start_tile = (k_chunk - num_local_k_chunks) * Sk_chunk_t;
+                        k_slice = Slice(nb, nq, 0, DHt, joint_kv_row_start_tile, joint_kv_row_start_tile + Sk_chunk_t);
+                        v_slice = Slice(nb, nq, joint_kv_row_start_tile, joint_kv_row_start_tile + Sk_chunk_t, 0, DHt);
+                        end_seq_tile = Lt;
+                    } else {
+                        // Index into the local input tensor
+                        k_slice = Slice(nb, nq, 0, DHt, k_chunk * Sk_chunk_t, (k_chunk + 1) * Sk_chunk_t);
+                        v_slice = Slice(nb, nq, k_chunk * Sk_chunk_t, (k_chunk + 1) * Sk_chunk_t, 0, DHt);
+                        end_seq_tile = local_padded_Nt;
+                    }
+
+                    if (KV_chunks_processed_in_iter % 2 == 0) {
+                        // Use compile-time conditionals to avoid TensorAccessor type mismatch
+                        if constexpr (use_joint_tensors) {
+                            if (kv_chunk_is_joint) {
+                                read_block(
+                                    joint_k_generator,
+                                    k_slice,
+                                    end_seq_tile,
+                                    cb_k_in,
+                                    k_tile_bytes,
+                                    true /*transpose*/);
+                                read_block(
+                                    joint_v_generator,
+                                    v_slice,
+                                    end_seq_tile,
+                                    cb_v_in,
+                                    v_tile_bytes,
+                                    false /*transpose*/);
+                            } else {
+                                read_block(
+                                    k_generator, k_slice, end_seq_tile, cb_k_in, k_tile_bytes, true /*transpose*/);
+                                read_block(
+                                    v_generator, v_slice, end_seq_tile, cb_v_in, v_tile_bytes, false /*transpose*/);
+                            }
+                        } else {
+                            // When joint tensors not provided, always use regular KV generators
+                            read_block(k_generator, k_slice, end_seq_tile, cb_k_in, k_tile_bytes, true /*transpose*/);
+                            read_block(v_generator, v_slice, end_seq_tile, cb_v_in, v_tile_bytes, false /*transpose*/);
+                        }
+                    } else {
+                        cb_reserve_back(cb_k_in, k_chunk_tiles);
+                        cb_push_back(cb_k_in, k_chunk_tiles);
+
+                        cb_reserve_back(cb_v_in, v_chunk_tiles);
+                        cb_push_back(cb_v_in, v_chunk_tiles);
+                    }
+
+                    ++KV_chunks_processed_in_iter;
+
+                    // Handle chain forwarding logic for V chunks (same as first loop)
+                    uint32_t q_iter_local = q_chunk;  // local chunk being processed by this core
+                    if ((q_iter_local >= chain_q_chunk_start) &&
+                        (q_iter_local < (chain_q_chunk_start + chain_q_chunk_count))) {
+                        if (is_chain_participant && is_injector && (nb == chain_batch && nq == chain_head) &&
+                            (q_iter_local < next_core_q_chunks) && kv_chunk_is_joint) {
+                            // Read V chunk data from joint tensor instead of using forwarded data
+                            if constexpr (use_joint_tensors) {
+                                read_block(
+                                    joint_v_generator,
+                                    v_slice,
+                                    end_seq_tile,
+                                    cb_v_in,
+                                    v_tile_bytes,
+                                    false /*transpose*/);
+                            }
+                        } else {
+                            // Receive forwarded V chunk from previous core
+                            noc_semaphore_set(receiver_semaphore_addr_ptr, INVALID);
+                            noc_semaphore_inc(sender_semaphore_noc_addr, 1);
+                            noc_semaphore_wait(receiver_semaphore_addr_ptr, VALID);
+                            cb_push_back(cb_v_in, v_chunk_tiles);
+                        }
+
+                        // Forward V chunk to next core if applicable
+                        if (is_chain_participant && !is_sink && (nb == chain_batch && nq == chain_head) &&
+                            (q_iter_local < next_core_q_chunks)) {
+                            noc_semaphore_wait(sender_semaphore_addr_ptr, 1);
+                            noc_semaphore_set(sender_semaphore_addr_ptr, 0);
+                            uint64_t v_unicast_data_addr =
+                                get_noc_addr(next_physical_x, next_physical_y, cb_v_start_address);
+                            noc_async_write(cb_v_start_address, v_unicast_data_addr, v_chunk_tiles * v_tile_bytes);
+                            noc_async_writes_flushed();
+                            noc_semaphore_set_remote(valid_semaphore_addr, receiver_semaphore_noc_addr);
+                        }
+                    }
+                }
+            }
+        }
+
         if (KV_chunks_processed_in_iter % 2 == 0) {
             cb_reserve_back(cb_k_in, k_chunk_tiles);
             cb_reserve_back(cb_v_in, v_chunk_tiles);

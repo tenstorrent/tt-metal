@@ -634,8 +634,6 @@ def test_mla_sdpa_bh_galaxy(
     is_balanced,
     reset_seeds,
 ):
-    if is_blackhole() == False:
-        pytest.skip("This test only runs on Blackhole galaxy todo add galaxy")
     mesh_device_shape = list(mesh_device.shape)
     assert mesh_device_shape[rp_axis] >= rp_factor and mesh_device_shape[up_axis] >= up_factor
 

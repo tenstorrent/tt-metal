@@ -717,8 +717,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     struct CoreWork {
         CoreCoord logical_core;
         CoreCoord physical_core;
-        uint32_t global_q_start = 0;
-        uint32_t global_q_count = 0;
+        uint32_t global_q_start = 0;    // First range
+        uint32_t global_q_count = 0;    // First range
+        uint32_t global_q_start_2 = 0;  // NEW: Second range
+        uint32_t global_q_count_2 = 0;  // NEW: Second range
         std::vector<CoreHeadWork> head_work;
     };
 
@@ -751,6 +753,11 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const uint32_t extra_chunks = (num_cores == 0) ? 0 : (total_q_chunks % num_cores);
     uint32_t next_global_chunk = 0;
 
+    // Core-level balancing assertion
+    if (args.is_balanced && NH % 2 != 0) {
+        TT_FATAL(false, "Balanced core distribution requires even number of heads, got {}", NH);
+    }
+
     auto decode_flat_chunk = [&](uint32_t flat_chunk_index) {
         const uint32_t head_span = num_q_chunks;
         const uint32_t head_index = head_span == 0 ? 0 : (flat_chunk_index / head_span);
@@ -760,48 +767,186 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         return std::tuple<uint32_t, uint32_t, uint32_t>{batch, head, q_chunk};
     };
 
-    for (uint32_t i = 0; i < num_cores; ++i) {
-        CoreCoord core = {i % grid_size.x, i / grid_size.x};
-        uint32_t chunk_count = base_chunks_per_core + ((i < extra_chunks) ? 1 : 0);
-        if (next_global_chunk >= total_q_chunks) {
-            chunk_count = 0;
-        } else if (chunk_count > total_q_chunks - next_global_chunk) {
-            chunk_count = total_q_chunks - next_global_chunk;
-        }
+    if (args.is_balanced) {
+        // Core-level balanced distribution with head pairing
+        const uint32_t cores_per_group = 7;
 
-        auto& work = core_work.at(i);
-        work.logical_core = core;
-        work.physical_core = device->worker_core_from_logical_core(core);
-        work.global_q_start = next_global_chunk;
-        work.global_q_count = chunk_count;
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            CoreCoord core = {i % grid_size.x, i / grid_size.x};
+            auto& work = core_work.at(i);
+            work.logical_core = core;
+            work.physical_core = device->worker_core_from_logical_core(core);
 
-        uint32_t remaining = chunk_count;
-        uint32_t flat_chunk = next_global_chunk;
-        while (remaining > 0) {
-            auto [batch_idx, head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
-            uint32_t chunk_capacity_in_head = num_q_chunks - q_chunk_idx;
-            uint32_t chunk_take = std::min(remaining, chunk_capacity_in_head);
+            const uint32_t group_id = i / cores_per_group;
+            const uint32_t core_within_group = i % cores_per_group;
 
-            work.head_work.push_back(CoreHeadWork{
-                .batch = batch_idx,
-                .head = head_idx,
-                .q_chunk_start = q_chunk_idx,
-                .q_chunk_count = chunk_take,
-            });
-
-            if (!head_segments.empty()) {
-                uint32_t head_id = (batch_idx * NH) + head_idx;
-                if (head_id < head_segments.size()) {
-                    head_segments[head_id].push_back(HeadSegmentRef{
-                        .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
-                }
+            // Skip if group_id >= NH/2 (not enough head pairs)
+            if (group_id >= NH / 2) {
+                work.global_q_start = 0;
+                work.global_q_count = 0;
+                work.global_q_start_2 = 0;
+                work.global_q_count_2 = 0;
+                continue;
             }
 
-            remaining -= chunk_take;
-            flat_chunk += chunk_take;
-        }
+            // Calculate head pair for this group: (head1, head2) = (2*group_id, 2*group_id + 1)
+            const uint32_t head1 = 2 * group_id;
+            const uint32_t head2 = 2 * group_id + 1;
 
-        next_global_chunk += chunk_count;
+            // Calculate chunks per core in this group
+            const uint32_t chunks_per_group = 2 * num_q_chunks;  // Two heads worth of chunks
+            const uint32_t base_chunks_per_core_in_group = chunks_per_group / cores_per_group;
+            const uint32_t extra_chunks_in_group = chunks_per_group % cores_per_group;
+            const uint32_t chunks_for_this_core =
+                base_chunks_per_core_in_group + ((core_within_group < extra_chunks_in_group) ? 1 : 0);
+
+            if (chunks_for_this_core == 0) {
+                work.global_q_start = 0;
+                work.global_q_count = 0;
+                work.global_q_start_2 = 0;
+                work.global_q_count_2 = 0;
+                continue;
+            }
+
+            // First/last distribution pattern
+            // First half of chunks come from early chunks of head1
+            // Second half of chunks come from late chunks of head2
+            const uint32_t first_half = chunks_for_this_core / 2;
+            const uint32_t second_half = chunks_for_this_core - first_half;
+
+            // Calculate global chunk indices
+            // Head1 early chunks (first range)
+            if (first_half > 0) {
+                const uint32_t head1_start_offset = core_within_group * first_half;
+                if (head1_start_offset < num_q_chunks) {
+                    work.global_q_start = head1 * num_q_chunks + head1_start_offset;
+                    work.global_q_count = std::min(first_half, num_q_chunks - head1_start_offset);
+                } else {
+                    work.global_q_start = 0;
+                    work.global_q_count = 0;
+                }
+            } else {
+                work.global_q_start = 0;
+                work.global_q_count = 0;
+            }
+
+            // Head2 late chunks (second range)
+            if (second_half > 0) {
+                const uint32_t head2_end_offset = (cores_per_group - 1 - core_within_group) * second_half;
+                if (head2_end_offset < num_q_chunks) {
+                    const uint32_t head2_start_chunk = num_q_chunks - head2_end_offset - second_half;
+                    work.global_q_start_2 = head2 * num_q_chunks + head2_start_chunk;
+                    work.global_q_count_2 = std::min(second_half, num_q_chunks - head2_start_chunk);
+                } else {
+                    work.global_q_start_2 = 0;
+                    work.global_q_count_2 = 0;
+                }
+            } else {
+                work.global_q_start_2 = 0;
+                work.global_q_count_2 = 0;
+            }
+
+            // Process first range for head_work
+            uint32_t remaining = work.global_q_count;
+            uint32_t flat_chunk = work.global_q_start;
+            while (remaining > 0) {
+                auto [batch_idx, head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
+                uint32_t chunk_capacity_in_head = num_q_chunks - q_chunk_idx;
+                uint32_t chunk_take = std::min(remaining, chunk_capacity_in_head);
+
+                work.head_work.push_back(CoreHeadWork{
+                    .batch = batch_idx,
+                    .head = head_idx,
+                    .q_chunk_start = q_chunk_idx,
+                    .q_chunk_count = chunk_take,
+                });
+
+                if (!head_segments.empty()) {
+                    uint32_t head_id = (batch_idx * NH) + head_idx;
+                    if (head_id < head_segments.size()) {
+                        head_segments[head_id].push_back(HeadSegmentRef{
+                            .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+                    }
+                }
+
+                remaining -= chunk_take;
+                flat_chunk += chunk_take;
+            }
+
+            // Process second range for head_work
+            remaining = work.global_q_count_2;
+            flat_chunk = work.global_q_start_2;
+            while (remaining > 0) {
+                auto [batch_idx, head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
+                uint32_t chunk_capacity_in_head = num_q_chunks - q_chunk_idx;
+                uint32_t chunk_take = std::min(remaining, chunk_capacity_in_head);
+
+                work.head_work.push_back(CoreHeadWork{
+                    .batch = batch_idx,
+                    .head = head_idx,
+                    .q_chunk_start = q_chunk_idx,
+                    .q_chunk_count = chunk_take,
+                });
+
+                if (!head_segments.empty()) {
+                    uint32_t head_id = (batch_idx * NH) + head_idx;
+                    if (head_id < head_segments.size()) {
+                        head_segments[head_id].push_back(HeadSegmentRef{
+                            .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+                    }
+                }
+
+                remaining -= chunk_take;
+                flat_chunk += chunk_take;
+            }
+        }
+    } else {
+        // Original sequential distribution logic
+        for (uint32_t i = 0; i < num_cores; ++i) {
+            CoreCoord core = {i % grid_size.x, i / grid_size.x};
+            uint32_t chunk_count = base_chunks_per_core + ((i < extra_chunks) ? 1 : 0);
+            if (next_global_chunk >= total_q_chunks) {
+                chunk_count = 0;
+            } else if (chunk_count > total_q_chunks - next_global_chunk) {
+                chunk_count = total_q_chunks - next_global_chunk;
+            }
+
+            auto& work = core_work.at(i);
+            work.logical_core = core;
+            work.physical_core = device->worker_core_from_logical_core(core);
+            work.global_q_start = next_global_chunk;
+            work.global_q_count = chunk_count;
+            work.global_q_start_2 = 0;  // No second range in sequential mode
+            work.global_q_count_2 = 0;  // No second range in sequential mode
+
+            uint32_t remaining = chunk_count;
+            uint32_t flat_chunk = next_global_chunk;
+            while (remaining > 0) {
+                auto [batch_idx, head_idx, q_chunk_idx] = decode_flat_chunk(flat_chunk);
+                uint32_t chunk_capacity_in_head = num_q_chunks - q_chunk_idx;
+                uint32_t chunk_take = std::min(remaining, chunk_capacity_in_head);
+
+                work.head_work.push_back(CoreHeadWork{
+                    .batch = batch_idx,
+                    .head = head_idx,
+                    .q_chunk_start = q_chunk_idx,
+                    .q_chunk_count = chunk_take,
+                });
+
+                if (!head_segments.empty()) {
+                    uint32_t head_id = (batch_idx * NH) + head_idx;
+                    if (head_id < head_segments.size()) {
+                        head_segments[head_id].push_back(HeadSegmentRef{
+                            .core_idx = i, .head_work_index = static_cast<uint32_t>(work.head_work.size() - 1)});
+                    }
+                }
+
+                remaining -= chunk_take;
+                flat_chunk += chunk_take;
+            }
+
+            next_global_chunk += chunk_count;
+        }
     }
 
     // Construct chains: for each head that spans >= 2 cores, pick first core with single head segment as injector
@@ -868,6 +1013,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         const auto& work = core_work.at(i);
         uint32_t global_q_start = work.global_q_start;
         uint32_t global_q_end = work.global_q_start + work.global_q_count;
+        uint32_t global_q_start_2 = work.global_q_start_2;
+        uint32_t global_q_end_2 = work.global_q_start_2 + work.global_q_count_2;
 
         // log the above
         log_debug(tt::LogOp, "core: {}", i);
@@ -884,8 +1031,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             joint_q_addr,
             joint_k_addr,
             joint_v_addr,
-            global_q_start,
-            global_q_end,
+            global_q_start,    // Index 8
+            global_q_end,      // Index 9
+            global_q_start_2,  // Index 10 - NEW: Second range start
+            global_q_end_2,    // Index 11 - NEW: Second range end
         };
         // Append chain runtime args for store-and-forward
         const auto& chain = core_chain_info.at(i);
@@ -932,16 +1081,20 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
             out_addr,
             joint_out_addr,
             lse_addr,
-            global_q_start,
-            global_q_end,
+            global_q_start,    // Index 3
+            global_q_end,      // Index 4
+            global_q_start_2,  // Index 5 - NEW: Second range start
+            global_q_end_2,    // Index 6 - NEW: Second range end
         };
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args);
         SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
 
         // Compute args
         std::vector<uint32_t> compute_args = {
-            global_q_start,
-            global_q_end,
+            global_q_start,    // Index 0
+            global_q_end,      // Index 1
+            global_q_start_2,  // Index 2 - NEW: Second range start
+            global_q_end_2,    // Index 3 - NEW: Second range end
         };
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(compute_args);
         SetRuntimeArgs(program, compute_kernels_id, core, compute_args);
