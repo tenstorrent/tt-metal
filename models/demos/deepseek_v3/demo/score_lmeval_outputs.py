@@ -16,13 +16,49 @@ from __future__ import annotations
 import argparse
 import difflib
 import json
+import re
 from collections import defaultdict
 
 from lm_eval.tasks import TaskManager
+from lm_eval.tasks.aime import utils as aime_utils
 
 TASK_ALIASES = {
     # Historical/tti-eval naming aliases.
     "r1_aime24": "aime24",
+}
+
+GPQA_CHOICE_RE = re.compile(r"\(([A-D])\)")
+GPQA_BOXED_RE = re.compile(r"\\boxed(?:\s*\{)?\s*\(?([A-D])\)?\s*(?:\})?", re.IGNORECASE)
+
+
+def score_aime24(doc: dict, pred: str) -> dict[str, float]:
+    return aime_utils.process_results(doc, [pred])
+
+
+def extract_gpqa_choice(pred: str) -> str | None:
+    boxed_matches = GPQA_BOXED_RE.findall(pred)
+    if boxed_matches:
+        return f"({boxed_matches[-1].upper()})"
+    choice_matches = GPQA_CHOICE_RE.findall(pred.upper())
+    if choice_matches:
+        return f"({choice_matches[-1]})"
+    answer_match = re.search(r"(?i)(?:the answer is|final answer is|answer:)\s*\(?([A-D])\)?", pred)
+    if answer_match:
+        return f"({answer_match.group(1).upper()})"
+    return None
+
+
+def score_gpqa(doc: dict, pred: str) -> dict[str, float]:
+    extracted = extract_gpqa_choice(pred)
+    target = str(doc["answer"]).strip().upper()
+    return {"exact_match": 1.0 if extracted == target else 0.0}
+
+
+LOCAL_TASK_SCORERS = {
+    "aime24": score_aime24,
+    "r1_aime24": score_aime24,
+    "r1_gpqa_diamond": score_gpqa,
+    "gpqa_diamond": score_gpqa,
 }
 
 
@@ -69,23 +105,26 @@ def main() -> None:
         task_name = prompt_item.get("task")
         if not task_name:
             raise SystemExit(f"Prompt item {i} missing 'task' field")
-        resolved = resolve_task_name(task_name, manager)
-        if resolved is None:
-            suggestions = difflib.get_close_matches(task_name, manager.task_index.keys(), n=5)
-            hint = f" Closest: {', '.join(suggestions)}" if suggestions else ""
-            raise SystemExit(f"Unknown lm-eval task '{task_name}'.{hint}")
-        if resolved != task_name:
-            alias_notes[task_name] = resolved
-        if resolved not in tasks:
-            tasks[resolved] = manager.load_task_or_group(resolved)[resolved]
-
-        task = tasks[resolved]
         doc = prompt_item.get("doc")
         if doc is None:
             raise SystemExit(f"Prompt item {i} missing 'doc' field")
 
         pred = gen_item.get("text", "")
-        result = task.process_results(doc, [pred])
+        scorer = LOCAL_TASK_SCORERS.get(task_name)
+        if scorer is not None:
+            result = scorer(doc, pred)
+        else:
+            resolved = resolve_task_name(task_name, manager)
+            if resolved is None:
+                suggestions = difflib.get_close_matches(task_name, manager.task_index.keys(), n=5)
+                hint = f" Closest: {', '.join(suggestions)}" if suggestions else ""
+                raise SystemExit(f"Unknown lm-eval task '{task_name}'.{hint}")
+            if resolved != task_name:
+                alias_notes[task_name] = resolved
+            if resolved not in tasks:
+                tasks[resolved] = manager.load_task_or_group(resolved)[resolved]
+            task = tasks[resolved]
+            result = task.process_results(doc, [pred])
         for metric_name, value in result.items():
             metrics[task_name][metric_name].append(value)
 
