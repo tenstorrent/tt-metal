@@ -85,29 +85,47 @@ permissions:
   contents: write
 
 jobs:
-  # ── Shared steps ──────────────────────────────────────────────────
-  resolve-skus:
+  # ── Preflight: resolve SKUs and check which combos have tests ────
+  preflight:
     runs-on: ubuntu-latest
     outputs:
-      enabled-skus: ${{ steps.resolve.outputs.enabled-skus }}
+      enabled-skus: ${{ steps.resolve-skus.outputs.enabled-skus }}
+      has-t1-unit: ${{ steps.check.outputs.has-t1-unit }}
+      has-t1-e2e: ${{ steps.check.outputs.has-t1-e2e }}
+      has-t1-sweep: ${{ steps.check.outputs.has-t1-sweep }}
+      has-t2-unit: ${{ steps.check.outputs.has-t2-unit }}
+      has-t2-e2e: ${{ steps.check.outputs.has-t2-e2e }}
+      has-t2-sweep: ${{ steps.check.outputs.has-t2-sweep }}
+      has-t3-unit: ${{ steps.check.outputs.has-t3-unit }}
+      has-t3-e2e: ${{ steps.check.outputs.has-t3-e2e }}
+      has-any-tests: ${{ steps.check.outputs.has-any-tests }}
     steps:
+      - name: Checkout test definitions
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: tests/pipeline_reorg
+          sparse-checkout-cone-mode: true
+
       - name: Resolve SKU selection
-        id: resolve
+        id: resolve-skus
         run: |
           ALL_SKUS="wh_n150,wh_n300,wh_llmbox_perf,wh_galaxy"
           VALID_SKUS="wh_n150 wh_n300 wh_llmbox_perf wh_galaxy"
           SKU_INPUT="${{ inputs.skus || 'all' }}"
 
-          # Normalize: trim spaces around commas
-          SKU_INPUT=$(echo "$SKU_INPUT" | sed 's/ *, */,/g')
+          # Trim leading/trailing whitespace from the entire input
+          SKU_INPUT=$(echo "$SKU_INPUT" | xargs)
 
           if [[ "$SKU_INPUT" == "all" ]]; then
             SKUS="$ALL_SKUS"
           else
-            # Validate each SKU in the comma-separated list
             SKUS=""
             IFS=',' read -ra ITEMS <<< "$SKU_INPUT"
             for item in "${ITEMS[@]}"; do
+              # Trim leading/trailing whitespace from each token
+              item=$(echo "$item" | xargs)
+              # Skip empty tokens (e.g. from trailing commas)
+              [[ -z "$item" ]] && continue
               if [[ ! " $VALID_SKUS " =~ " $item " ]]; then
                 echo "::error::Invalid SKU '$item'. Valid options: all, wh_n150, wh_n300, wh_llmbox_perf, wh_galaxy"
                 exit 1
@@ -123,7 +141,79 @@ jobs:
           echo "enabled-skus=$SKUS" >> $GITHUB_OUTPUT
           echo "Selected SKUs: $SKUS"
 
+      - name: Install dependencies
+        run: pip3 install PyYAML
+
+      - name: Check which tier/test-type combos have matching tests
+        id: check
+        run: |
+          python3 - <<'PYEOF'
+          import yaml, os, sys
+
+          enabled_skus = "${{ steps.resolve-skus.outputs.enabled-skus }}".split(",")
+          model_filter = "${{ inputs.model || 'all' }}"
+
+          # Map of test-type -> YAML file
+          test_files = {
+              "unit":  "tests/pipeline_reorg/models_unit_tests.yaml",
+              "e2e":   "tests/pipeline_reorg/models_e2e_tests.yaml",
+              "sweep": "tests/pipeline_reorg/models_sweep_tests.yaml",
+          }
+
+          github_output = os.environ.get("GITHUB_OUTPUT", "")
+          results = {}
+          any_tests = False
+
+          for test_type, path in test_files.items():
+              if not os.path.exists(path):
+                  for tier in [1, 2, 3]:
+                      results[f"has-t{tier}-{test_type}"] = "false"
+                  continue
+
+              with open(path) as f:
+                  tests = yaml.safe_load(f) or []
+
+              for tier in [1, 2, 3]:
+                  key = f"has-t{tier}-{test_type}"
+                  found = False
+                  for test in tests:
+                      skus = test.get("skus", {})
+                      if not isinstance(skus, dict):
+                          continue
+                      # Check if any SKU matches both the enabled list and the tier
+                      for sku_name, sku_cfg in skus.items():
+                          if sku_name in enabled_skus and sku_cfg.get("tier") == tier:
+                              # Check model filter
+                              if model_filter == "all" or test.get("model") == model_filter:
+                                  found = True
+                                  break
+                      if found:
+                          break
+                  results[key] = "true" if found else "false"
+                  if found:
+                      any_tests = True
+
+          results["has-any-tests"] = "true" if any_tests else "false"
+
+          if github_output:
+              with open(github_output, "a") as f:
+                  for k, v in results.items():
+                      f.write(f"{k}={v}\n")
+
+          # Summary
+          print("Preflight results:")
+          for k, v in sorted(results.items()):
+              icon = "✓" if v == "true" else "✗"
+              print(f"  {icon} {k} = {v}")
+
+          if not any_tests:
+              print("\n::warning::No tests match the selected combination of tiers, test types, SKUs, and model filter. Nothing will run.")
+          PYEOF
+
+  # ── Build (only if at least one combo has tests) ─────────────────
   build-artifact:
+    needs: preflight
+    if: ${{ needs.preflight.outputs.has-any-tests == 'true' }}
     uses: ./.github/workflows/build-artifact.yaml
     permissions:
       packages: write
@@ -136,115 +226,115 @@ jobs:
 
   # ── Tier 1 ────────────────────────────────────────────────────────
   t1-unit-tests:
-    needs: [build-artifact, resolve-skus]
-    if: ${{ inputs.tier-1 && inputs.run-unit-tests }}
+    needs: [build-artifact, preflight]
+    if: ${{ inputs.tier-1 && inputs.run-unit-tests && needs.preflight.outputs.has-t1-unit == 'true' }}
     secrets: inherit
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       tier: "1"
 
   t1-e2e-tests:
-    needs: [build-artifact, resolve-skus]
-    if: ${{ inputs.tier-1 && inputs.run-e2e-tests }}
+    needs: [build-artifact, preflight]
+    if: ${{ inputs.tier-1 && inputs.run-e2e-tests && needs.preflight.outputs.has-t1-e2e == 'true' }}
     secrets: inherit
     uses: ./.github/workflows/models-e2e-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       tier: "1"
 
   t1-sweep-tests:
-    needs: [build-artifact, resolve-skus]
-    if: ${{ inputs.tier-1 && inputs.run-sweep-tests }}
+    needs: [build-artifact, preflight]
+    if: ${{ inputs.tier-1 && inputs.run-sweep-tests && needs.preflight.outputs.has-t1-sweep == 'true' }}
     secrets: inherit
     uses: ./.github/workflows/models-sweep-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       tier: "1"
 
   # ── Tier 2 ────────────────────────────────────────────────────────
   t2-unit-tests:
-    needs: [build-artifact, resolve-skus]
-    if: ${{ inputs.tier-2 && inputs.run-unit-tests }}
+    needs: [build-artifact, preflight]
+    if: ${{ inputs.tier-2 && inputs.run-unit-tests && needs.preflight.outputs.has-t2-unit == 'true' }}
     secrets: inherit
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       tier: "2"
 
   t2-e2e-tests:
-    needs: [build-artifact, resolve-skus]
-    if: ${{ inputs.tier-2 && inputs.run-e2e-tests }}
+    needs: [build-artifact, preflight]
+    if: ${{ inputs.tier-2 && inputs.run-e2e-tests && needs.preflight.outputs.has-t2-e2e == 'true' }}
     secrets: inherit
     uses: ./.github/workflows/models-e2e-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       tier: "2"
 
   t2-sweep-tests:
-    needs: [build-artifact, resolve-skus]
-    if: ${{ inputs.tier-2 && inputs.run-sweep-tests }}
+    needs: [build-artifact, preflight]
+    if: ${{ inputs.tier-2 && inputs.run-sweep-tests && needs.preflight.outputs.has-t2-sweep == 'true' }}
     secrets: inherit
     uses: ./.github/workflows/models-sweep-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       tier: "2"
 
   # ── Tier 3 ────────────────────────────────────────────────────────
   t3-unit-tests:
-    needs: [build-artifact, resolve-skus]
-    if: ${{ inputs.tier-3 && inputs.run-unit-tests }}
+    needs: [build-artifact, preflight]
+    if: ${{ inputs.tier-3 && inputs.run-unit-tests && needs.preflight.outputs.has-t3-unit == 'true' }}
     secrets: inherit
     uses: ./.github/workflows/models-unit-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       tier: "3"
 
   t3-e2e-tests:
-    needs: [build-artifact, resolve-skus]
-    if: ${{ inputs.tier-3 && inputs.run-e2e-tests }}
+    needs: [build-artifact, preflight]
+    if: ${{ inputs.tier-3 && inputs.run-e2e-tests && needs.preflight.outputs.has-t3-e2e == 'true' }}
     secrets: inherit
     uses: ./.github/workflows/models-e2e-tests-impl.yaml
     with:
       docker-image: ${{ needs.build-artifact.outputs.dev-docker-image }}
       build-artifact-name: ${{ needs.build-artifact.outputs.build-artifact-name }}
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
-      enabled-skus: ${{ needs.resolve-skus.outputs.enabled-skus }}
+      enabled-skus: ${{ needs.preflight.outputs.enabled-skus }}
       model: ${{ inputs.model || 'all' }}
       mlperf-read-only: ${{ inputs.mlperf-read-only != false }}
       tier: "3"
