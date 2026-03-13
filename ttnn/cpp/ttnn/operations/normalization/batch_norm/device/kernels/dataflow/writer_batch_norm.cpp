@@ -43,8 +43,13 @@ void kernel_main() {
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
 
-    // output
+    // output — when the compute CB is float32 but the tensor stores bfloat16, the tile size
+    // for address calculation and DRAM writes must match the tensor's native format (bfloat16).
+#ifdef CONVERT_OUTPUT_TO_BF16
+    constexpr uint32_t dst_tile_bytes = 2048;  // bfloat16: 1024 elements * 2 bytes
+#else
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
+#endif
     const auto dst = TensorAccessor(dst_args, dst_addr, dst_tile_bytes);
 
     // batch_var
@@ -130,6 +135,15 @@ void kernel_main() {
             for (uint32_t t = start_t; t < HtWt && num_tiles_written < num_tiles; ++t, ++num_tiles_written) {
                 // write a tile to dst
                 cb_id_dst_obj.wait_front(onetile);
+#ifdef CONVERT_OUTPUT_TO_BF16
+                {
+                    auto* fp32_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_read_ptr(cb_id_dst));
+                    auto* bf16_ptr = reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(cb_id_dst));
+                    for (uint32_t i = 0; i < 1024; ++i) {
+                        bf16_ptr[i] = static_cast<uint16_t>(fp32_ptr[i] >> 16);
+                    }
+                }
+#endif
                 noc.async_write(
                     cb_id_dst_obj,
                     dst,

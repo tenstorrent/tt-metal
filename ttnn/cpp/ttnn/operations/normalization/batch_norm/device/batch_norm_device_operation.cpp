@@ -41,9 +41,14 @@ void BatchNormOperation::validate_tensors(
     check_tensor_BN(batch_mean, "batch_mean_shape", C);
     check_tensor_BN(batch_var, "batch_mean_shape", C);
 
-    // output (N, C, H, W)
+    // output (N, C, H, W) — must have the same dtype as input
     if (output.has_value()) {
         check_tensor_BN(output.value(), "output_shape", C);
+        TT_FATAL(
+            output->dtype() == input.dtype(),
+            "batch_norm: output dtype ({}) must match input dtype ({})",
+            output->dtype(),
+            input.dtype());
     }
 
     // weight (1, C, 1, 1)
@@ -172,24 +177,8 @@ ttnn::operations::normalization::BatchNormOperation::tensor_return_value_t batch
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     using OperationType = ttnn::operations::normalization::BatchNormOperation;
 
+    // Output always has the same dtype as input; params (mean/var/weight/bias) may differ.
     DataType output_dtype = input.dtype();
-    if (output.has_value()) {
-        output_dtype = output->dtype();
-    } else {
-        auto promote = [&output_dtype](DataType dt) {
-            if (dt == DataType::FLOAT32) {
-                output_dtype = DataType::FLOAT32;
-            }
-        };
-        promote(batch_mean.dtype());
-        promote(batch_var.dtype());
-        if (weight.has_value()) {
-            promote(weight->dtype());
-        }
-        if (bias.has_value()) {
-            promote(bias->dtype());
-        }
-    }
 
     OperationType::operation_attributes_t operation_attributes{
         eps,

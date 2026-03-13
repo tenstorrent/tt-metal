@@ -172,7 +172,6 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
 
     uint32_t a_single_tile_size = tt::tile_size(a_data_format);
     uint32_t b_single_tile_size = tt::tile_size(b_data_format);
-    uint32_t c_single_tile_size = tt::tile_size(c_data_format);
     uint32_t d_single_tile_size = tt::tile_size(d_data_format);
     uint32_t e_single_tile_size = tt::tile_size(e_data_format);
     uint32_t f_single_tile_size = tt::tile_size(f_data_format);
@@ -198,8 +197,15 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
         b_single_tile_size,
         b_num_tiles_per_cb,
         b_data_format);  // batch_mean
+    // Output CB uses interm_data_format so the compute kernel can pack without packer format
+    // switching. The writer handles the final conversion to the tensor's native dtype.
     auto [output_tensor_cb, output_tensor_cb_handle] = create_cb(
-        tt::CBIndex::c_2, program, all_device_cores, c_single_tile_size, num_tiles_per_cb, c_data_format);  // output
+        tt::CBIndex::c_2,
+        program,
+        all_device_cores,
+        interm_single_tile_size,
+        num_tiles_per_cb,
+        interm_data_format);  // output
     auto [batch_var_tensor_cb, batch_var_tensor_cb_handle] = create_cb(
         tt::CBIndex::c_3,
         program,
@@ -277,6 +283,9 @@ BatchNormOperation::BatchNormFactory::cached_program_t BatchNormOperation::Batch
     }
     if (f_data_format == DataFormat::Float32) {
         writer_defines["BIAS_IS_FP32"] = "1";
+    }
+    if (interm_data_format == DataFormat::Float32 && c_data_format != DataFormat::Float32) {
+        writer_defines["CONVERT_OUTPUT_TO_BF16"] = "1";
     }
 
     auto writer_kernel_id = tt_metal::CreateKernel(

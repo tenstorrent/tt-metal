@@ -47,6 +47,49 @@ Tensor batch_norm(
         input.logical_shape().rank(),
         input.logical_shape().rank());
 
+    // output must have the same dtype as input
+    if (output.has_value()) {
+        TT_FATAL(
+            output->dtype() == input.dtype(),
+            "batch_norm: output dtype ({}) must match input dtype ({})",
+            output->dtype(),
+            input.dtype());
+    }
+
+    // All user-provided parameters (running_mean, running_var, weight, bias) must share the same dtype
+    auto get_param_dtype = [&]() -> std::optional<DataType> {
+        if (running_mean.has_value()) {
+            return running_mean->dtype();
+        }
+        if (running_var.has_value()) {
+            return running_var->dtype();
+        }
+        if (weight.has_value()) {
+            return weight->dtype();
+        }
+        if (bias.has_value()) {
+            return bias->dtype();
+        }
+        return std::nullopt;
+    };
+    auto param_dtype = get_param_dtype();
+    if (param_dtype.has_value()) {
+        auto check_param = [&](const std::optional<Tensor>& t, std::string_view name) {
+            if (t.has_value()) {
+                TT_FATAL(
+                    t->dtype() == param_dtype.value(),
+                    "batch_norm: {} dtype ({}) must match other parameter tensors dtype ({})",
+                    name,
+                    t->dtype(),
+                    param_dtype.value());
+            }
+        };
+        check_param(running_mean, "running_mean");
+        check_param(running_var, "running_var");
+        check_param(weight, "weight");
+        check_param(bias, "bias");
+    }
+
     // For 0V tensors
     if (input.logical_volume() == 0) [[unlikely]] {
         return ttnn::clone(
