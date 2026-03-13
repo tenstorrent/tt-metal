@@ -1795,8 +1795,9 @@ class MLA1D(AbstractModule):
         # This all-gather materializes [1, num_heads, chunk_seq_len, kv_lora_rank] in DRAM.
         # Large prefills can OOM here, so keep the chunk size configurable and conservative.
         WKV_B2_AG_SEQ_CHUNK_SIZE = int(os.getenv("DEEPSEEK_WKV_B2_AG_PREFILL_CHUNK_SIZE", "2048"))
-        if WKV_B2_AG_SEQ_CHUNK_SIZE <= 0:
-            WKV_B2_AG_SEQ_CHUNK_SIZE = 2048
+        assert WKV_B2_AG_SEQ_CHUNK_SIZE > 0, (
+            "DEEPSEEK_WKV_B2_AG_PREFILL_CHUNK_SIZE must be > 0, " f"got {WKV_B2_AG_SEQ_CHUNK_SIZE}"
+        )
         if seq_len > WKV_B2_AG_SEQ_CHUNK_SIZE:
             num_chunks = (seq_len + WKV_B2_AG_SEQ_CHUNK_SIZE - 1) // WKV_B2_AG_SEQ_CHUNK_SIZE
             v_out_chunks = []
