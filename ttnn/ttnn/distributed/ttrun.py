@@ -332,9 +332,13 @@ MPI_ENV_VALUE_SPECIAL_CHARS = frozenset({" ", "\t", "\n", "\r", '"', "'", "`", "
 # Environment variables that should be isolated per MPI rank by appending
 # `<hostname>_rank_<rank>`.
 # This reduces shared-path contention (for example, NFS stale handles in multi-host jobs).
+#
+# TT_METAL_CACHE is intentionally NOT rank-scoped: all JIT build writes now go
+# through scratch (local disk) with atomic merge to the shared NFS cache, so
+# a single shared cache maximizes cross-rank cache hits.  Logs and scratch dirs
+# remain rank-scoped since they are per-process by nature.
 RANK_SCOPED_PATH_ENV_VARS = frozenset(
     {
-        "TT_METAL_CACHE",
         "TT_METAL_LOGS_PATH",
         "TT_METAL_JIT_SCRATCH",
     }
@@ -532,21 +536,11 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
         key for key in RANK_SCOPED_PATH_ENV_VARS if key in config.global_env or key in binding.env_overrides
     }
 
-    # Ensure TT_METAL_CACHE has a value so rank scoping always applies.
-    # Without this, unset TT_METAL_CACHE falls through to the C++ default
-    # ($HOME/.cache/tt-metal-cache/) which is shared across all ranks on NFS,
-    # causing ESTALE when SFPI JIT builds race on the same inodes.
-    # The C++ side (rtoptions.cpp) appends /tt-metal-cache via normalize_path(),
-    # so we set the parent directory here to match the default hierarchy.
-    #
-    # Why rank-scoped cache is still needed even with TT_METAL_JIT_SCRATCH:
-    # The scratch dir handles the hot path (SFPI compilation), but not all JIT
-    # operations go through scratch (e.g. non-SFPI builds, firmware builds,
-    # linker outputs).  The ESTALE retry wrappers in tt::filesystem reduce but
-    # don't eliminate contention on shared NFS inodes.  Rank-scoped cache
-    # covers the long tail of other writes.  If future work makes all JIT
-    # builds scratch-aware, rank scoping can be revisited.
-    if "TT_METAL_CACHE" not in env and "TT_METAL_CACHE" not in explicit_rank_scoped_keys:
+    # Ensure TT_METAL_CACHE has a value so the C++ side doesn't fall back to
+    # the HOME-based default.  TT_METAL_CACHE is shared (not rank-scoped)
+    # because all JIT build writes now go through scratch (local disk) with
+    # atomic merge to NFS.  This maximizes cross-rank cache hits.
+    if "TT_METAL_CACHE" not in env:
         home = os.environ.get("HOME", "")
         env["TT_METAL_CACHE"] = f"{home}/.cache" if home else "/tmp"
 
@@ -555,6 +549,13 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     # per-rank suffix, eliminating cross-rank contention entirely.
     if "TT_METAL_JIT_SCRATCH" not in env and "TT_METAL_JIT_SCRATCH" not in explicit_rank_scoped_keys:
         env["TT_METAL_JIT_SCRATCH"] = "/tmp/tt-jit-build"
+
+    # Disable XIP ELF dumps in multi-host mode by default.  XIP dumps write
+    # .xip.elf files next to cached ELFs on NFS, which causes ESTALE contention
+    # when multiple ranks load firmware simultaneously.  Users who need XIP dumps
+    # for triage can override by setting TT_METAL_DISABLE_XIP_DUMP=0.
+    if "TT_METAL_DISABLE_XIP_DUMP" not in env:
+        env["TT_METAL_DISABLE_XIP_DUMP"] = "1"
 
     # Isolate cache/log paths per rank to avoid shared-path collisions.
     apply_rank_scoped_paths(env, binding.rank, explicit_keys=explicit_rank_scoped_keys)

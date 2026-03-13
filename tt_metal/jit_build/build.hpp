@@ -67,6 +67,11 @@ public:
     const std::string& get_root_path() const { return root_; }
     const std::string& get_out_root_path() const { return out_root_; }
     const std::string& get_out_kernel_root_path() const { return out_kernel_root_; }
+    // Returns scratch kernel root when scratch is configured, NFS kernel root otherwise.
+    // Use for genfile writes so they happen on local disk in scratch mode.
+    const std::string& get_genfiles_kernel_root_path() const {
+        return has_scratch() ? scratch_kernel_root_ : out_kernel_root_;
+    }
     const std::string& get_out_firmware_root_path() const {
         return out_firmware_root_;
     }  // Path to the firmware directory for this device
@@ -186,10 +191,10 @@ public:
 
     void build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets = {}) const;
 
-    // Copy generated headers (chlkc_descriptors.h, etc.) from NFS to the scratch
-    // genfiles directory.  Must be called once per kernel BEFORE any parallel
-    // build() calls to avoid races on the shared scratch genfiles directory.
-    void ensure_scratch_genfiles(const JitBuildSettings* settings) const;
+    // When scratch is configured, merge generated headers (chlkc_descriptors.h, etc.)
+    // from the scratch genfiles directory to the NFS cache so future cache-hit checks work.
+    // Must be called once per kernel AFTER generate_binaries() and BEFORE parallel build() calls.
+    void merge_genfiles_to_cache(const JitBuildSettings* settings) const;
 
     const std::string& get_out_path() const { return this->out_path_; }
     const std::string& get_target_name() const { return this->target_name_; }
