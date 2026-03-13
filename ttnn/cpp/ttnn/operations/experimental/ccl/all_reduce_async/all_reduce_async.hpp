@@ -6,7 +6,6 @@
 
 #include <optional>
 #include "ttnn/decorators.hpp"
-#include "ttnn/operations/reduction/generic/generic_reductions.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
