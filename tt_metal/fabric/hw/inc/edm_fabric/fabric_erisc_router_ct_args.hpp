@@ -125,6 +125,8 @@ static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_
 
 constexpr size_t VC0_RECEIVER_CHANNEL = 0;
 constexpr size_t VC1_RECEIVER_CHANNEL = 1;
+// Note: VC1_SENDER_CHANNEL_START is defined above as MAX_NUM_SENDER_CHANNELS_VC0
+constexpr size_t VC0_SENDER_CHANNEL_START = 0;
 
 // Doesn't REALLY matter but for consistency I picked the next available ID
 constexpr size_t worker_info_offset_past_connection_semaphore = 32;
