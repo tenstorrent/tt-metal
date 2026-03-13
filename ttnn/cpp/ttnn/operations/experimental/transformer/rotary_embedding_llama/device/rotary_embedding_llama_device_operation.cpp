@@ -5,6 +5,7 @@
 #include "rotary_embedding_llama_device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "rotary_embedding_llama_multi_core_program_factory.hpp"
+#include "rotary_embedding_llama_multi_core_prefill_sharded_program_factory.hpp"
 #include "rotary_embedding_llama_sharded_program_factory.hpp"
 #include "ttnn/device.hpp"
 #include <tt-metalium/constants.hpp>
@@ -12,9 +13,15 @@
 namespace ttnn::experimental::prim {
 
 RotaryEmbeddingLlamaDeviceOperation::program_factory_t RotaryEmbeddingLlamaDeviceOperation::select_program_factory(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     if (operation_attributes.is_decode_mode) {
         return RotaryEmbeddingLlamaMultiCoreSharded{};
+    }
+    const bool any_sharded =
+        tensor_args.cos_cache.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED ||
+        tensor_args.trans_mat.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED;
+    if (any_sharded) {
+        return RotaryEmbeddingLlamaMultiCorePrefillSharded{};
     }
     return RotaryEmbeddingLlamaMultiCore{};
 }
