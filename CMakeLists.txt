@@ -13,7 +13,7 @@ set_directory_properties(
 )
 
 ############################################
-# Project setup
+# Project setup stage
 ############################################
 
 # For single-config generators, default to RelWithDebInfo if unspecified
