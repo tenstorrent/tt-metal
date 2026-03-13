@@ -759,7 +759,7 @@ private:
     /** Rank-aware port for Inspector RPC when running under MPI/tt-run (base_port + rank). */
     uint16_t get_effective_inspector_rpc_server_port() const;
 
-    // Helper functions to parse feature-specific environment vaiables.
+    // Helper functions to parse feature-specific environment variables.
     void ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal);
     void ParseFeatureCoreRange(RunTimeDebugFeatures feature, const std::string& env_var, CoreType core_type);
     bool ParseFeatureChipIds(

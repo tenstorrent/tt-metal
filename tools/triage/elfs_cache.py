@@ -100,7 +100,8 @@ class ElfsCache:
         Get a ParsedElfFile from cache or parse and cache it if not present.
 
         This method is thread-safe and will only parse each ELF file once,
-        returning the cached instance on subsequent calls.
+        returning the cached instance on subsequent calls.  ESTALE retries
+        happen outside the lock to avoid blocking other threads for up to 10s.
 
         Args:
             elf_path: Path to the ELF file
@@ -110,20 +111,27 @@ class ElfsCache:
         """
         if not os.path.exists(elf_path):
             raise TTTriageError(f"ELF file {elf_path} does not exist.")
+
+        with self._lock:
+            if elf_path in self._cache:
+                return self._cache[elf_path]
+
+        # Parse outside the lock so ESTALE retries (up to ~10s) don't block other threads.
+        try:
+            parsed_elf = self._parse_elf_with_estale_retry(elf_path)
+        except Exception as exc:
+            if self._is_estale_error(exc):
+                raise TTTriageError(
+                    f"Failed to parse ELF file {elf_path} due to stale file handle on filesystem: {exc}"
+                ) from exc
+            raise
+        if not parsed_elf:
+            raise TTTriageError(
+                f"Failed to extract DWARF info from ELF file {elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
+            )
+
         with self._lock:
             if elf_path not in self._cache:
-                try:
-                    parsed_elf = self._parse_elf_with_estale_retry(elf_path)
-                except Exception as exc:
-                    if self._is_estale_error(exc):
-                        raise TTTriageError(
-                            f"Failed to parse ELF file {elf_path} due to stale file handle on filesystem: {exc}"
-                        ) from exc
-                    raise
-                if not parsed_elf:
-                    raise TTTriageError(
-                        f"Failed to extract DWARF info from ELF file {elf_path}.\nRun workload with TT_METAL_RISCV_DEBUG_INFO=1 to enable debug info."
-                    )
                 self._cache[elf_path] = parsed_elf
             return self._cache[elf_path]
 

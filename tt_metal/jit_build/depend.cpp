@@ -148,9 +148,7 @@ void write_dependency_hashes(const std::string& out_dir, const std::string& obj,
     }
     hash_file.close();
     if (hash_file.fail()) {
-        utils::safe_remove(hash_path);
-    } else {
-        ::sync();
+        tt::filesystem::safe_remove(hash_path);
     }
 }
 

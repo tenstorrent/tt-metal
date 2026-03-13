@@ -151,26 +151,31 @@ private:
     [[nodiscard]] auto GetShdr(unsigned ix) const -> const Shdr& { return shdrs_[ix]; }
     using Impl::GetContents;
     [[nodiscard]] auto GetContents(const Phdr& phdr) const -> std::span<std::byte> {
-        // Validate offset and size are within bounds before calling subspan
         auto contents = GetContents();
         if (phdr.p_offset >= contents.size() || phdr.p_filesz > contents.size() - phdr.p_offset) {
-            return {};
+            TT_THROW(
+                "ELF program header out of bounds: offset={}, filesz={}, file size={}",
+                phdr.p_offset,
+                phdr.p_filesz,
+                contents.size());
         }
         return contents.subspan(phdr.p_offset, phdr.p_filesz);
     }
     [[nodiscard]] auto GetContents(const Shdr& shdr) const -> std::span<std::byte> {
-        // Validate offset and size are within bounds before calling subspan
         auto contents = GetContents();
         if (shdr.sh_offset >= contents.size() || shdr.sh_size > contents.size() - shdr.sh_offset) {
-            return {};
+            TT_THROW(
+                "ELF section header out of bounds: offset={}, size={}, file size={}",
+                shdr.sh_offset,
+                shdr.sh_size,
+                contents.size());
         }
         return contents.subspan(shdr.sh_offset, shdr.sh_size);
     }
     [[nodiscard]] auto GetString(size_t offset, const Shdr& shdr) const -> const char* {
         auto section = GetContents(shdr);
-        // Validate offset is within bounds and there's room for at least a null terminator
         if (offset >= section.size()) {
-            return nullptr;
+            TT_THROW("ELF string offset {} out of bounds (section size {})", offset, section.size());
         }
         return ByteOffset<const char>(section.data(), offset);
     }
@@ -179,9 +184,8 @@ private:
     }
     [[nodiscard]] auto GetSymbols(const Shdr& shdr) const -> std::span<Sym> {
         auto section = GetContents(shdr);
-        // Validate entry size is non-zero and entries fit within section
-        if (shdr.sh_entsize == 0 || section.size() < shdr.sh_entsize) {
-            return {};
+        if (shdr.sh_entsize == 0) {
+            TT_THROW("ELF symbol table has zero entry size");
         }
         return std::span(ByteOffset<Sym>(section.data()), section.size() / shdr.sh_entsize);
     }
@@ -190,9 +194,8 @@ private:
     }
     [[nodiscard]] auto GetRelocations(const Shdr& shdr) const -> std::span<Rela> {
         auto section = GetContents(shdr);
-        // Validate entry size is non-zero and entries fit within section
-        if (shdr.sh_entsize == 0 || section.size() < shdr.sh_entsize) {
-            return {};
+        if (shdr.sh_entsize == 0) {
+            TT_THROW("ELF relocation table has zero entry size");
         }
         return std::span(ByteOffset<Rela>(section.data()), section.size() / shdr.sh_entsize);
     }

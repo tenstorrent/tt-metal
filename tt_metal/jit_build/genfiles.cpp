@@ -31,6 +31,7 @@
 #include <tt_stl/unreachable.hpp>
 #include "build.hpp"
 #include "hlk_desc.hpp"
+#include "common/filesystem_utils.hpp"
 #include "jit_build/jit_build_utils.hpp"
 #include "jit_build_options.hpp"
 #include "jit_build_settings.hpp"
@@ -531,7 +532,7 @@ void jit_build_genfiles_descriptors(const JitBuildEnv& env, const JitBuildOption
     //ZoneScoped;
     //const std::string tracyPrefix = "generate_descriptors_";
     //ZoneName((tracyPrefix + options.name).c_str(), options.name.length() + tracyPrefix.length());
-    jit_build::utils::safe_create_directories(options.path);
+    tt::filesystem::safe_create_directories(options.path);
     generate_all_descriptors(env, options);
 }
 // clang-format on

@@ -60,16 +60,13 @@ def _is_safe_path(file_path: str) -> bool:
     """Validate that the file path is safe to open (no path traversal)."""
     if not file_path:
         return False
-    # Check for path traversal attempts
     normalized = os.path.normpath(file_path)
-    # Reject paths containing .. or absolute paths that could be dangerous
-    if normalized != file_path or file_path.startswith("..") or "/../" in file_path:
+    # Reject paths that resolve to a parent directory escape
+    if ".." in normalized.split(os.sep):
         return False
-    # Reject absolute paths outside expected directories
-    if os.path.isabs(file_path):
-        # Only allow absolute paths under /work, /home, or /opt/venv
-        allowed_prefixes = ("/work/", "/home/", "/opt/venv/")
-        if not any(file_path.startswith(prefix) for prefix in allowed_prefixes):
+    if os.path.isabs(normalized):
+        allowed_prefixes = ("/work/", "/home/", "/opt/", "/tmp/", "/usr/")
+        if not any(normalized.startswith(prefix) for prefix in allowed_prefixes):
             return False
     return True
 

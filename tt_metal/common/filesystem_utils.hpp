@@ -48,17 +48,17 @@
 //
 // Sync behavior
 // -------------
-// Write operations (remove, rename, create_directories, hard_link/copy)
-// sync the filesystem after successful completion. This ensures:
+// The safe_* functions do NOT automatically sync the filesystem after writes.
+// Callers that need cross-client visibility (e.g. after merging JIT build
+// artifacts to an NFS cache) should call sync_filesystem() explicitly at
+// the appropriate boundary.  This avoids the severe performance cost of
+// flushing all pending I/O on every individual file operation.
 //
+// sync_filesystem() ensures:
 //   - Data durability: All written data is flushed to stable storage on
 //     the NFS server before returning.
-//
 //   - Cross-client visibility: Other NFS clients will see the changes
 //     immediately, rather than waiting for their cache to expire.
-//
-//   - Corruption prevention: In crash scenarios, data is less likely to be
-//     lost or corrupted.
 //
 // Implementation:
 //   - On Linux: Uses syncfs() to sync only the specific filesystem containing
@@ -67,9 +67,8 @@
 //
 // Performance implications:
 //   - Even with syncfs(), the flush affects all pending I/O on that filesystem.
-//   - Use these utilities when correctness and durability matter more than
-//     raw performance. For high-throughput scenarios, use std::filesystem
-//     directly with your own error handling.
+//   - Call sync_filesystem() only at batch boundaries (e.g. after a set of
+//     merges completes), not after each individual file operation.
 //
 // Blocking behavior
 // -----------------
@@ -141,8 +140,14 @@ bool retry_on_estale(Operation&& operation) {
     return false;
 }
 
+// Flush all pending writes on the filesystem containing `path` to stable storage.
+// On Linux, uses syncfs() scoped to that filesystem; elsewhere falls back to sync().
+// Call this at batch boundaries (e.g. after merging build artifacts) rather than
+// after every individual file operation.
+void sync_filesystem(const std::filesystem::path& path);
+
 // Safe remove that ignores ENOENT and retries on ESTALE.
-// Calls ::sync() after successful removal. Includes jitter on retries.
+// Does NOT sync -- call sync_filesystem() at the appropriate boundary.
 // Returns true if file was removed or didn't exist, false on other errors.
 bool safe_remove(const std::filesystem::path& path);
 
@@ -151,23 +156,23 @@ bool safe_remove(const std::filesystem::path& path);
 //   - Another process creates files while remove_all is running
 //   - NFS "silly-rename" files (.nfsXXXX) appear when deleting files held open by other processes
 //   - Mount points exist inside the directory
-// Syncs filesystem after successful removal. Includes jitter on retries.
+// Does NOT sync -- call sync_filesystem() at the appropriate boundary.
 // Returns true if directory was removed or didn't exist, false on other errors.
 bool safe_remove_all(const std::filesystem::path& path);
 
 // Safe rename that retries on ESTALE errors.
-// Calls ::sync() after successful rename. Includes jitter on retries.
+// Does NOT sync -- call sync_filesystem() at the appropriate boundary.
 // If ignore_missing is true, ENOENT errors are ignored (returns true).
 // Returns true on success, false on non-retryable errors.
 bool safe_rename(const std::filesystem::path& src, const std::filesystem::path& dst, bool ignore_missing = false);
 
 // Safe create_hard_link with fallback to copy_file, retrying on ESTALE.
-// Calls ::sync() after successful link or copy. Includes jitter on retries.
+// Does NOT sync -- call sync_filesystem() at the appropriate boundary.
 // Returns true on success, false on failure.
 bool safe_hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link);
 
 // Safe create_directories that ignores "already exists" and retries on ESTALE.
-// Calls ::sync() after successful creation. Includes jitter on retries.
+// Does NOT sync -- call sync_filesystem() at the appropriate boundary.
 // Returns true on success (directory exists or was created), false on other errors.
 bool safe_create_directories(const std::filesystem::path& path);
 

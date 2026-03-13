@@ -4,8 +4,6 @@
 
 #include <tt_stl/fmt.hpp>
 #include <cstdint>
-#include <cerrno>
-#include <cstring>
 #include <filesystem>
 #include <algorithm>
 #include <memory>
@@ -14,7 +12,6 @@
 #include <set>
 #include <vector>
 #include <unordered_set>
-#include <unistd.h>
 #include <sys/wait.h>
 
 #include <enchantum/enchantum.hpp>
@@ -724,34 +721,14 @@ void MetalContext::on_dispatch_timeout_detected() {
         if (!command.empty()) {
             log_info(tt::LogMetal, "Executing command: {}", command);
 
-            // Use fork/execvp instead of std::system() to avoid shell injection vulnerabilities.
-            // This safely executes the command without shell interpretation.
-            pid_t pid = fork();
-            if (pid == -1) {
-                log_warning(tt::LogMetal, "Failed to fork process for timeout command: {}", strerror(errno));
-            } else if (pid == 0) {
-                // Child process: execute the command via shell to support redirections
-                // but only after validation. The shell is only used here in the isolated child.
-                execl("/bin/sh", "sh", "-c", command.c_str(), nullptr);
-                // If we reach here, exec failed
-                log_warning(tt::LogMetal, "Failed to execute timeout command '{}': {}", command, strerror(errno));
-                _exit(127);
-            } else {
-                // Parent process: wait for child to complete
-                int status;
-                pid_t wait_result = waitpid(pid, &status, 0);
-                if (wait_result == -1) {
-                    log_warning(tt::LogMetal, "Failed to wait for timeout command: {}", strerror(errno));
-                } else if (WIFEXITED(status)) {
-                    int exit_code = WEXITSTATUS(status);
-                    if (exit_code != 0) {
-                        log_warning(
-                            tt::LogMetal, "Timeout command '{}' returned non-zero exit code: {}", command, exit_code);
-                    }
-                } else if (WIFSIGNALED(status)) {
-                    log_warning(
-                        tt::LogMetal, "Timeout command '{}' terminated by signal: {}", command, WTERMSIG(status));
-                }
+            // std::system() passes the command through /bin/sh, which is required
+            // because timeout commands may contain shell features (redirections,
+            // pipes, etc.).
+            int result = std::system(command.c_str());
+
+            if (result != 0) {
+                log_warning(
+                    tt::LogMetal, "Timeout command '{}' returned non-zero exit code: {}", command, WEXITSTATUS(result));
             }
         }
     }

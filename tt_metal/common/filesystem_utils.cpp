@@ -27,22 +27,15 @@ int get_retry_jitter_ms() {
 
 }  // namespace tt::filesystem
 
-namespace {
+namespace tt::filesystem {
 
-// Sync the filesystem containing the given path.
-// Uses syncfs() when available (Linux) to limit scope to specific filesystem,
-// falling back to sync() on other platforms. This reduces impact on concurrent
-// I/O operations in other threads compared to process-wide sync().
 void sync_filesystem(const std::filesystem::path& path) {
 #ifdef __linux__
-    // Try to open the path (or its parent directory if it's not a directory itself)
-    // and sync just that filesystem using syncfs().
     std::error_code ec;
     std::filesystem::path sync_target = path;
     if (!std::filesystem::is_directory(path, ec)) {
         sync_target = path.parent_path();
     }
-    // Open directory to get file descriptor for syncfs
     int fd = ::open(sync_target.c_str(), O_RDONLY | O_DIRECTORY);
     if (fd != -1) {
         if (::syncfs(fd) != 0) {
@@ -54,19 +47,14 @@ void sync_filesystem(const std::filesystem::path& path) {
         return;
     }
 #endif
-    // Fallback to process-wide sync() on non-Linux platforms or if open fails
     ::sync();
 }
-}  // namespace
-
-namespace tt::filesystem {
 
 bool safe_remove(const std::filesystem::path& path) {
     std::error_code ec;
     for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
         std::filesystem::remove(path, ec);
         if (!ec) {
-            sync_filesystem(path);
             return true;
         }
         if (is_not_found_error(ec)) {
@@ -90,7 +78,6 @@ bool safe_remove_all(const std::filesystem::path& path) {
     for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
         std::filesystem::remove_all(path, ec);
         if (!ec) {
-            sync_filesystem(path);
             return true;
         }
         if (is_not_found_error(ec)) {
@@ -122,7 +109,6 @@ bool safe_rename(const std::filesystem::path& src, const std::filesystem::path& 
     for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
         std::filesystem::rename(src, dst, ec);
         if (!ec) {
-            sync_filesystem(dst);
             return true;
         }
         if (ignore_missing && is_not_found_error(ec)) {
@@ -152,14 +138,12 @@ bool safe_hard_link_or_copy(const std::filesystem::path& target, const std::file
     for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
         std::filesystem::create_hard_link(target, link, ec);
         if (!ec) {
-            sync_filesystem(link);
             return true;
         }
         if (!is_estale_error(ec)) {
             ec.clear();
             std::filesystem::copy_file(target, link, std::filesystem::copy_options::overwrite_existing, ec);
             if (!ec) {
-                sync_filesystem(link);
                 return true;
             }
             if (!is_estale_error(ec)) {
@@ -192,7 +176,6 @@ bool safe_create_directories(const std::filesystem::path& path) {
     for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
         std::filesystem::create_directories(path, ec);
         if (!ec || ec == std::errc::file_exists) {
-            sync_filesystem(path);
             return true;
         }
         if (!is_estale_error(ec)) {

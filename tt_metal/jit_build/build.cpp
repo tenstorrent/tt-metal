@@ -71,19 +71,17 @@ void write_successful_jit_build_marker(const JitBuildState& build, const JitBuil
                                                  : build.get_out_path() + settings->get_full_kernel_name() + "/";
     std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
     file.close();
-    // Sync to ensure the success marker is written to NFS before continuing
     if (!file.fail()) {
-        ::sync();
+        tt::filesystem::sync_filesystem(out_dir);
     }
 }
 
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
-    jit_build::utils::safe_hard_link_or_copy(target, link);
+    tt::filesystem::safe_hard_link_or_copy(target, link);
 }
 
 // Merge build artifacts from a local scratch directory to the NFS cache.
 // Copies each regular file atomically: write to a temp name, then rename.
-// Skips files that are identical in size (best-effort dedup for idempotent builds).
 void merge_scratch_to_cache(const std::string& scratch_dir, const std::string& cache_dir) {
     std::error_code ec;
     for (const auto& entry : fs::directory_iterator(scratch_dir, ec)) {
@@ -93,20 +91,13 @@ void merge_scratch_to_cache(const std::string& scratch_dir, const std::string& c
         const auto& src = entry.path();
         fs::path dst = fs::path(cache_dir) / src.filename();
 
-        // Write to temp, then atomically rename within the NFS cache dir
         auto tmp_path = jit_build::utils::FileRenamer::generate_temp_path(dst);
-        std::error_code copy_ec;
-        fs::copy_file(src, tmp_path, fs::copy_options::overwrite_existing, copy_ec);
-        if (copy_ec) {
+        if (!tt::filesystem::safe_hard_link_or_copy(src, tmp_path)) {
             log_warning(
-                tt::LogBuildKernels,
-                "Failed to copy scratch artifact {} to {}: {}",
-                src.string(),
-                tmp_path,
-                copy_ec.message());
+                tt::LogBuildKernels, "Failed to copy scratch artifact {} to {}", src.string(), tmp_path.string());
             continue;
         }
-        jit_build::utils::safe_rename(tmp_path, dst, false);
+        tt::filesystem::safe_rename(tmp_path, dst, false);
     }
     if (ec) {
         log_warning(tt::LogBuildKernels, "Failed to iterate scratch directory {}: {}", scratch_dir, ec.message());
@@ -123,15 +114,9 @@ void copy_genfiles_to_scratch(const std::string& nfs_dir, const std::string& scr
             continue;
         }
         auto dst = fs::path(scratch_dir) / entry.path().filename();
-        std::error_code copy_ec;
-        fs::copy_file(entry.path(), dst, fs::copy_options::overwrite_existing, copy_ec);
-        if (copy_ec) {
+        if (!tt::filesystem::safe_hard_link_or_copy(entry.path(), dst)) {
             log_warning(
-                tt::LogBuildKernels,
-                "Failed to copy generated file {} to {}: {}",
-                entry.path().string(),
-                dst.string(),
-                copy_ec.message());
+                tt::LogBuildKernels, "Failed to copy generated file {} to {}", entry.path().string(), dst.string());
         }
     }
 }
@@ -631,12 +616,12 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     // log file and dephash file can be renamed after compilation, but the .o file
     // needs to be renamed after link step to avoid LTO reading inconsistent object files.
     jit_build::utils::FileRenamer log_file(obj_path + ".log");
-    jit_build::utils::safe_remove(log_file.path());
+    tt::filesystem::safe_remove(log_file.path());
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands())) {
         build_failure(this->target_name_, "compile", cmd, log_file.path());
     }
     jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
-    jit_build::utils::safe_remove(temp_d_path);  // .d file not needed after hash is written
+    tt::filesystem::safe_remove(temp_d_path);  // .d file not needed after hash is written
 }
 
 bool JitBuildState::need_compile(const string& out_dir, const string& obj) const {
@@ -717,7 +702,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
         log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
     }
     jit_build::utils::FileRenamer log_file(elf_name + ".log");
-    jit_build::utils::safe_remove(log_file.path());
+    tt::filesystem::safe_remove(log_file.path());
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands())) {
         build_failure(this->target_name_, "link", cmd, log_file.path());
     }
@@ -727,7 +712,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     hash_file.close();
     if (hash_file.fail()) {
         // Don't leave incomplete hash file
-        jit_build::utils::safe_remove(dephash_file.path());
+        tt::filesystem::safe_remove(dephash_file.path());
     }
 }
 
@@ -784,7 +769,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     std::string work_dir = cache_dir;
     if (use_scratch) {
         work_dir = fmt::format("{}{}{}/", this->scratch_path_, kernel_name, this->target_name_);
-        jit_build::utils::safe_create_directories(work_dir);
+        tt::filesystem::safe_create_directories(work_dir);
 
         if (settings) {
             // Generated headers (kernel_includes.hpp, chlkc_descriptors.h, etc.)
@@ -793,7 +778,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
             // Copy them to scratch so they're resolvable from the scratch work_dir.
             std::string nfs_genfiles_dir = fmt::format("{}{}", this->out_path_, kernel_name);
             std::string scratch_genfiles_dir = fmt::format("{}{}", this->scratch_path_, kernel_name);
-            jit_build::utils::safe_create_directories(scratch_genfiles_dir);
+            tt::filesystem::safe_create_directories(scratch_genfiles_dir);
             copy_genfiles_to_scratch(nfs_genfiles_dir, scratch_genfiles_dir);
         }
     }
@@ -806,7 +791,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     const size_t num_objs = this->objs_.size();
 
     // Handle race conditions in directory creation - another thread may have created it
-    jit_build::utils::safe_create_directories(cache_dir);
+    tt::filesystem::safe_create_directories(cache_dir);
 
     // Check build state once: if build parameters (flags, defines, includes from HAL, etc.)
     // have changed, force full recompilation and relinking.
@@ -845,9 +830,9 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         string target_work_dir = target_cache_dir;
         if (use_scratch) {
             target_work_dir = fmt::format("{}{}{}/", target->scratch_path_, kernel_name, target->target_name_);
-            jit_build::utils::safe_create_directories(target_work_dir);
+            tt::filesystem::safe_create_directories(target_work_dir);
         }
-        jit_build::utils::safe_create_directories(target_cache_dir);
+        tt::filesystem::safe_create_directories(target_cache_dir);
 
         if (state_changed || compiled.any() || target->need_link(target_cache_dir)) {
             populate_link_objs();
@@ -857,6 +842,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
             }
             if (use_scratch) {
                 merge_scratch_to_cache(target_work_dir, target_cache_dir);
+                tt::filesystem::sync_filesystem(target_cache_dir);
             }
             // Record the build state used for linking so that future runs can detect
             // when link-affecting flags (lflags, linker script, etc.) change.
@@ -877,11 +863,12 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
                         fs::path(scratch_temp).concat(".dephash"), fs::path(cache_final).concat(".dephash"));
                 }
                 // Clean up scratch temp files
-                jit_build::utils::safe_remove(scratch_temp);
-                jit_build::utils::safe_remove(fs::path(scratch_temp).concat(".dephash"));
+                tt::filesystem::safe_remove(scratch_temp);
+                tt::filesystem::safe_remove(fs::path(scratch_temp).concat(".dephash"));
             }
             // Merge any remaining artifacts (log files, etc.)
             merge_scratch_to_cache(work_dir, cache_dir);
+            tt::filesystem::sync_filesystem(cache_dir);
         } else {
             // Rename the temporary .o and .dephash files after linking is done.
             // Handle race conditions - another thread may have already renamed/removed the file
@@ -891,12 +878,12 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
                 src_path.replace_filename(this->temp_objs_[i]);
                 dst_path.replace_filename(this->objs_[i]);
                 if (compiled.test(i)) {
-                    jit_build::utils::safe_rename(src_path, dst_path, true);
+                    tt::filesystem::safe_rename(src_path, dst_path, true);
                     src_path += ".dephash";
                     dst_path += ".dephash";
-                    jit_build::utils::safe_rename(src_path, dst_path, true);
+                    tt::filesystem::safe_rename(src_path, dst_path, true);
                 } else {
-                    jit_build::utils::safe_remove(src_path);
+                    tt::filesystem::safe_remove(src_path);
                 }
             }
         }
