@@ -100,9 +100,9 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
     const auto& gathered_input_tensor_k = tensor_args.gathered_k;
     const auto& gathered_input_tensor_v = tensor_args.gathered_v;
 
-    auto& output_tensor = output_tensors.output;
-    auto& joint_output_tensor = output_tensors.joint_output;
-    auto& stats_output_tensor = output_tensors.stats_output;
+    auto& output_tensor = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX];
+    auto& joint_output_tensor = output_tensors[RING_JOINT_SDPA_JOINT_OUTPUT_IDX];
+    auto& stats_output_tensor = output_tensors[RING_JOINT_SDPA_STATS_OUTPUT_IDX];
 
     std::size_t q_chunk_size = args.get_q_chunk_size();
     std::size_t k_chunk_size = args.get_k_chunk_size();
@@ -136,8 +136,10 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
 
     auto [num_targets_forward, num_targets_backward, dynamic_alternate] = ccl::get_forward_backward_configuration(
         args.all_gather_operation_attributes.ring_size, device_index, args.all_gather_operation_attributes.topology);
+    if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring && device_index % 2 == 0) {
+        std::swap(num_targets_forward, num_targets_backward);
+    }
 
-    // This is how ring_joint_sdpa expects the number of forward and backward writes
     uint32_t forward_writes_expected, backward_writes_expected;
     if (args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Linear) {
         forward_writes_expected = num_targets_backward;
@@ -146,8 +148,8 @@ RingJointSDPAProgramFactory::cached_program_t RingJointSDPAProgramFactory::creat
         TT_FATAL(
             args.all_gather_operation_attributes.topology == ttnn::ccl::Topology::Ring,
             "Topology must be Linear or Ring");
-        forward_writes_expected = num_targets_forward - 1;
-        backward_writes_expected = num_targets_backward - 1;
+        forward_writes_expected = num_targets_forward;
+        backward_writes_expected = num_targets_backward;
     }
     // Minimally use matmul fused op signaler
     sdpa_fused_op_signaler->init_all_gather(
@@ -1203,9 +1205,9 @@ void RingJointSDPAProgramFactory::override_runtime_arguments(
         auto* joint_v_buffer = tensor_args.joint_v.buffer();
 
         // Get addresses for output tensors
-        auto* out_buffer = output_tensors.output.buffer();
-        auto* joint_out_buffer = output_tensors.joint_output.buffer();
-        auto* stats_buffer = output_tensors.stats_output.buffer();
+        auto* out_buffer = output_tensors[RING_JOINT_SDPA_OUTPUT_IDX].buffer();
+        auto* joint_out_buffer = output_tensors[RING_JOINT_SDPA_JOINT_OUTPUT_IDX].buffer();
+        auto* stats_buffer = output_tensors[RING_JOINT_SDPA_STATS_OUTPUT_IDX].buffer();
 
         uint32_t q_addr = q_buffer->address();
         uint32_t k_addr = k_buffer->address();
