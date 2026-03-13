@@ -1639,3 +1639,54 @@ class TTNNBailingMoE(TTNNMoE):
             adapted.e_score_correction_bias = torch.zeros(bailing_gate.weight.shape[0])
 
         return adapted
+
+
+class TTNNQwen3TalkerMoE(TTNNModule):
+    """
+    Reference TTNN wrapper for Qwen3-Omni talker text sparse MoE block.
+
+    This class currently delegates execution to the original PyTorch
+    `Qwen3OmniMoeTalkerTextSparseMoeBlock` while integrating with the
+    Symbiote TTNN module plumbing. It is intended primarily for
+    numerical correctness testing (PCC vs. PyTorch).
+    """
+
+    def __init__(self, torch_moe, config=None):
+        super().__init__()
+        self._fallback_torch_layer = torch_moe
+        self.config = config
+
+    @classmethod
+    def from_torch(cls, torch_moe):
+        """
+        Create `TTNNQwen3TalkerMoE` from a PyTorch
+        `Qwen3OmniMoeTalkerTextSparseMoeBlock` instance.
+        """
+
+        qwen_config = getattr(torch_moe.shared_expert, "config", None)
+
+        # Build a minimal config shim for possible future use.
+        class AdaptedConfig:
+            pass
+
+        cfg = AdaptedConfig()
+        if qwen_config is not None:
+            cfg.hidden_size = getattr(qwen_config, "hidden_size", None)
+            cfg.moe_intermediate_size = getattr(qwen_config, "moe_intermediate_size", None)
+            cfg.num_experts_per_tok = getattr(qwen_config, "num_experts_per_tok", None)
+            cfg.n_routed_experts = getattr(qwen_config, "num_experts", None)
+            cfg.norm_topk_prob = getattr(qwen_config, "norm_topk_prob", True)
+            cfg.hidden_act = getattr(qwen_config, "hidden_act", "silu")
+
+        return cls(torch_moe, cfg)
+
+    def forward(self, x):
+        """
+        Forward pass: run the original PyTorch MoE block and wrap the
+        result back into a TTNN-compatible tensor wrapper.
+        """
+        # Convert any TTNN-dispatched input to a plain torch tensor.
+        x_torch = TorchTTNNTensor(x).to_torch
+        y_torch = self._fallback_torch_layer(x_torch)
+        # Let the Symbiote run_config wrap the result as needed.
+        return y_torch
