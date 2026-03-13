@@ -168,8 +168,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.hf_config = (
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         )
-        self._ensure_max_seq_len(self.hf_config)
-        model_max_seq_len = int(self.hf_config.max_seq_len)
+        model_max_seq_len = int(self.hf_config.max_position_embeddings)
         requested_max_seq_len = MAX_SEQ_LEN if max_seq_len is None else int(max_seq_len)
         if requested_max_seq_len <= 0:
             raise ValueError(f"max_seq_len must be > 0, got {requested_max_seq_len}")
@@ -312,32 +311,6 @@ class DeepseekGenerator(WarmupForwardMixin):
     def _dump_meminfo(self, header: str) -> None:
         if self.enable_mem_profile:
             dump_ttnn_meminfo(self.mesh_device, header=header)
-
-    @staticmethod
-    def _ensure_max_seq_len(hf_config) -> None:
-        if getattr(hf_config, "max_seq_len", None) is not None:
-            return
-        try:
-            max_pos = getattr(hf_config, "max_position_embeddings", None)
-            scaled = None
-            if getattr(hf_config, "rope_scaling", None):
-                factor = hf_config.rope_scaling.get("factor")
-                orig = hf_config.rope_scaling.get("original_max_position_embeddings")
-                if factor and orig:
-                    scaled = int(factor * orig)
-            if max_pos is not None and scaled is not None:
-                # Prefer the larger of the declared max_position_embeddings and the rope-scaled length.
-                hf_config.max_seq_len = int(max(max_pos, scaled))
-                return
-            if scaled is not None:
-                hf_config.max_seq_len = int(scaled)
-                return
-            if max_pos is not None:
-                hf_config.max_seq_len = int(max_pos)
-                return
-        except Exception:
-            pass
-        hf_config.max_seq_len = 4096
 
     def _prepare_weight_configs(self, cache_dir: str | Path | None) -> None:
         weight_cache_base = Path(cache_dir) if cache_dir is not None else Path("generated/deepseek_v3")
