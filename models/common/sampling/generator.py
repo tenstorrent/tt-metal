@@ -106,6 +106,7 @@ class SamplingGenerator:
             except Exception as e:
                 logger.warning(f"Failed to release trace {trace_id} for SamplingGenerator: {e}")
                 continue
+        trace_states.clear()
 
     def _trace_slot(self, penalties_on: bool, log_probs_on: bool, force_argmax: bool):
         key = _TraceKey(penalties_on=penalties_on, log_probs_on=log_probs_on, force_argmax=force_argmax)
