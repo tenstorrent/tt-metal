@@ -38,10 +38,13 @@ private:
 
 struct DeviceStorage {
     std::vector<distributed::MeshCoordinate> coords;
+
+private:
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer;
     // Workaround for managing view MeshBuffer; expected to be refactored in #38093
     std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer;
 
+public:
     DeviceStorage() = default;
     DeviceStorage(
         std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
@@ -49,7 +52,7 @@ struct DeviceStorage {
         std::shared_ptr<distributed::MeshBuffer> root_buffer_ = nullptr);
 
     Buffer* get_buffer() const;
-    std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer() const;
+    const std::shared_ptr<distributed::MeshBuffer>& get_mesh_buffer() const;
 
     // Begin internal functions:
     //

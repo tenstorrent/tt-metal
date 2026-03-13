@@ -323,7 +323,7 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
                 tt::tt_metal::BufferDistributionSpec new_buffer_dist_spec = tt::tt_metal::BufferDistributionSpec(
                     tensor_shape_pages, shard_shape_pages, new_shard_spec.grid, new_shard_spec.orientation);
 
-                auto device_local_config = device_storage.mesh_buffer->device_local_config();
+                auto device_local_config = device_storage.get_mesh_buffer()->device_local_config();
                 auto& sharding_args = device_local_config.sharding_args;
                 tt::tt_metal::BufferShardingArgs new_sharding_args(
                     new_buffer_dist_spec, new_shard_spec_buffer, sharding_args.buffer_layout());
@@ -335,10 +335,10 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
                     .bottom_up = device_local_config.bottom_up};
 
                 auto view_mesh_buffer = tt::tt_metal::distributed::MeshBuffer::create(
-                    device_storage.mesh_buffer->global_config(),
+                    device_storage.get_mesh_buffer()->global_config(),
                     new_device_config,
-                    device_storage.mesh_buffer->device(),
-                    device_storage.mesh_buffer->address());
+                    device_storage.get_mesh_buffer()->device(),
+                    device_storage.get_mesh_buffer()->address());
                 tt::tt_metal::DeviceStorage view_storage(
                     view_mesh_buffer, device_storage.coords, device_storage.get_root_mesh_buffer());
 

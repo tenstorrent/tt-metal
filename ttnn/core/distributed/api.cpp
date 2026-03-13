@@ -73,18 +73,15 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
             [&](const HostBuffer& buffer) { tensors.push_back(Tensor{buffer, tensor.tensor_spec()}); });
         return tensors;
     }
-    if (is_device_tensor(tensor)) {
+    if (is_device_tensor(tensor) && tensor.is_allocated()) {
         const auto& device_storage = tensor.device_storage();
-        if (auto mesh_buffer = device_storage.mesh_buffer; mesh_buffer != nullptr) {
-            std::vector<ttnn::Tensor> tensors;
-            tensors.reserve(device_storage.coords.size());
-            for (const auto& coord : device_storage.coords) {
-                DeviceStorage shard_storage(mesh_buffer, {coord});
-                tensors.push_back(Tensor(std::move(shard_storage), tensor.tensor_spec(), tensor.tensor_topology()));
-            }
-            return tensors;
+        std::vector<ttnn::Tensor> tensors;
+        tensors.reserve(device_storage.coords.size());
+        for (const auto& coord : device_storage.coords) {
+            DeviceStorage shard_storage(device_storage.get_mesh_buffer(), {coord});
+            tensors.push_back(Tensor(std::move(shard_storage), tensor.tensor_spec(), tensor.tensor_topology()));
         }
-        return {tensor};
+        return tensors;
     }
     return {tensor};
 }
@@ -120,7 +117,7 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shar
             shard.tensor_spec() == reference_shard.tensor_spec(), "All tensor shards must have the same tensor spec");
     }
 
-    auto mesh_buffer = reference_shard.device_storage().mesh_buffer;
+    auto mesh_buffer = reference_shard.mesh_buffer();
     TT_FATAL(
         mesh_buffer != nullptr,
         "Error aggregating multichip tensors: tensors shards must be allocated on a mesh buffer.");
@@ -128,7 +125,7 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shar
     for (const auto& shard : tensor_shards) {
         const auto& shard_storage = shard.device_storage();
         TT_FATAL(
-            shard_storage.mesh_buffer == mesh_buffer,
+            shard.is_allocated(),
             "Error aggregating multichip tensors: tensor shards must be allocated on the same mesh buffer. "
             "Consider moving tensors to host, aggregating, and re-uploading on device storage.");
         for (const auto& coord : shard_storage.coords) {
