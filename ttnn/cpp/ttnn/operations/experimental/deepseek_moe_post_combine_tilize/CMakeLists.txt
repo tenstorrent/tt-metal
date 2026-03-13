@@ -4,8 +4,9 @@ add_library(
     ALIAS ttnn_op_experimental_deepseek_moe_post_combine_tilize
 )
 
-target_precompile_headers(ttnn_op_experimental_deepseek_moe_post_combine_tilize REUSE_FROM TTNN::PCH)
+target_precompile_headers(ttnn_op_experimental_deepseek_moe_post_combine_tilize REUSE_FROM TT::CommonPCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_deepseek_moe_post_combine_tilize)
+
 set_target_properties(
     ttnn_op_experimental_deepseek_moe_post_combine_tilize
     PROPERTIES
@@ -13,8 +14,8 @@ set_target_properties(
             api
 )
 
-# Globbing non-build files is acceptable for now because devs don't generate packages.
 file(GLOB_RECURSE kernels device/kernels/*)
+
 target_sources(
     ttnn_op_experimental_deepseek_moe_post_combine_tilize
     PUBLIC
@@ -27,9 +28,9 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
         FILES ${kernels}
     PRIVATE
-        deepseek_moe_post_combine_tilize.cpp
         device/deepseek_moe_post_combine_tilize_device_operation.cpp
         device/deepseek_moe_post_combine_tilize_program_factory.cpp
+        deepseek_moe_post_combine_tilize.cpp
 )
 
 target_include_directories(ttnn_op_experimental_deepseek_moe_post_combine_tilize PRIVATE ${FixmeOpIncDirs})
