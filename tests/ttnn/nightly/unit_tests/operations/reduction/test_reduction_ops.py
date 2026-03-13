@@ -19,10 +19,12 @@ from loguru import logger
 from models.common.utility_functions import torch_random
 
 
-# Helper function that calls topk with preallocated output tensors, whose shapes are
-# determined by the ttnn_result obtained from a previous run of topk without preallocated output tensors.
 def _run_topk_with_preallocated(input_tensor, k, dim, device, ttnn_result):
-    """Re-runs topk with preallocated output tensors and returns (values, indices) as torch tensors."""
+    """
+    Helper function that calls topk with preallocated output tensors, whose shapes are
+    determined by the ttnn_result obtained from a previous run of topk without preallocated
+    output tensors.
+    """
     prealloc_values = ttnn.empty(
         ttnn_result[0].shape,
         dtype=ttnn_result[0].dtype,
@@ -44,9 +46,12 @@ def _run_topk_with_preallocated(input_tensor, k, dim, device, ttnn_result):
     )
 
 
-# Helper function that calls argmax with preallocated output tensor, whose shape is
-# determined by the ttnn_result obtained from a previous run of argmax without preallocated output tensors.
 def _run_argmax_with_preallocated(input_tensor, dim, keepdim, device, ttnn_result):
+    """
+    Helper function that calls argmax with preallocated output tensor, whose shape is
+    determined by the ttnn_result obtained from a previous run of argmax without
+    preallocated output tensors.
+    """
     prealloc_output = ttnn.empty(
         ttnn_result.shape,
         dtype=ttnn_result.dtype,
@@ -58,9 +63,12 @@ def _run_argmax_with_preallocated(input_tensor, dim, keepdim, device, ttnn_resul
     return ttnn.to_torch(ttnn.from_device(prealloc_output))
 
 
-# Helper function that calls a cumulative op (cumsum/cumprod) with preallocated output tensor,
-# whose shape is determined by the ttnn_result obtained from a previous run without preallocated output.
 def _run_accumulation_with_preallocated(ttnn_op, input_tensor, dim, device, ttnn_result_tensor):
+    """
+    Helper function that calls a cumulative op (cumsum/cumprod) with preallocated output tensor,
+    whose shape is determined by the ttnn_result obtained from a previous run without
+    preallocated output tensor.
+    """
     prealloc_output = ttnn.empty(
         ttnn_result_tensor.shape,
         dtype=ttnn_result_tensor.dtype,
@@ -72,10 +80,11 @@ def _run_accumulation_with_preallocated(ttnn_op, input_tensor, dim, device, ttnn
     return ttnn.to_torch(ttnn.from_device(prealloc_output))
 
 
-# Helper function that calls moe with preallocated output tensor, whose shape is determined by
-# the ttnn_result obtained from a previous run of moe without preallocated output.
 def _run_moe_with_preallocated(input_tensor, expert_mask_tensor, topk_mask_tensor, k, device, ttnn_result):
-    """Re-runs moe with preallocated output tensor and returns the result as a torch tensor."""
+    """
+    Helper function that calls moe with preallocated output tensor, whose shape is determined by
+    the ttnn_result obtained from a previous run of moe without preallocated output.
+    """
     prealloc_output = ttnn.empty(
         ttnn_result.shape,
         dtype=ttnn_result.dtype,
@@ -87,12 +96,13 @@ def _run_moe_with_preallocated(input_tensor, expert_mask_tensor, topk_mask_tenso
     return ttnn.to_torch(ttnn.from_device(prealloc_output))
 
 
-# Helper function that calls sampling with preallocated output tensor, whose shape is determined by
-# the ttnn_result obtained from a previous run of sampling without preallocated output.
 def _run_sampling_with_preallocated(
     input_values, input_indices, k_tensor, p_tensor, temp_tensor, seed, device, ttnn_result
 ):
-    """Re-runs sampling with preallocated output tensor and returns the result as a torch tensor."""
+    """
+    Helper function that calls sampling with preallocated output tensor, whose shape is determined by
+    the ttnn_result obtained from a previous run of sampling without preallocated output tensor.
+    """
     prealloc_output = ttnn.empty(
         ttnn_result.shape,
         dtype=ttnn_result.dtype,
@@ -110,6 +120,63 @@ def _run_sampling_with_preallocated(
         output_tensor=prealloc_output,
     )
     return ttnn.to_torch(ttnn.from_device(prealloc_output))
+
+
+def _torch_sampling_reference(values, indices, k, p, temp, seed):
+    """
+    Torch reference for ttnn.sampling: softmax -> top-k -> top-p (nucleus) -> multinomial.
+    Required because there is no direct PyTorch equivalent.
+    Returns tensor of shape (1, 1, 1, num_users) of sampled index values (one per user).
+    This code was AI generated based on description of ttnn.sampling, since there is
+    no direct PyTorch equivalent.
+    """
+    N, C, H, W = values.shape
+    num_users = N * C * H
+
+    # Flatten to (num_users, W) so each row is one user's logits.
+    values_flat = values.reshape(num_users, W)
+    temp_flat = temp.view(num_users, 1).expand(num_users, W)
+    probs_flat = torch.softmax(values_flat / temp_flat, dim=-1)
+    indices_flat = indices.reshape(num_users, W)
+
+    torch.manual_seed(seed)
+    out_list = []
+    for u in range(num_users):
+        probs_u = probs_flat[u, :].clone()
+        k_u = int(k[u].item())
+        p_u = float(p[u].item())
+        # Top-k: zero out all but the top-k probabilities, then renormalize.
+        if k_u < W:
+            _, top_idx = torch.topk(probs_u, k_u, dim=-1)
+            mask = torch.zeros_like(probs_u, dtype=torch.bool)
+            mask[top_idx] = True
+            probs_u = torch.where(mask, probs_u, torch.zeros_like(probs_u))
+        probs_u_sum = probs_u.sum()
+        if probs_u_sum > 0:
+            probs_u = probs_u / probs_u_sum
+        # Top-p (nucleus): sort descending, cumsum, keep until cumsum <= p_u.
+        probs_sorted, _ = torch.sort(probs_u, descending=True)
+        cumsum = torch.cumsum(probs_sorted, dim=-1)
+        # Number of elements to keep: first position where cumsum > p_u (exclusive).
+        keep = (cumsum <= p_u).sum().item()
+        if keep < 1:
+            keep = 1
+        # Rebuild mask: keep only indices that are in the top-p set.
+        _, sort_idx = torch.sort(probs_u, descending=True)
+        mask = torch.zeros_like(probs_u, dtype=torch.bool)
+        mask[sort_idx[:keep]] = True
+        probs_u = torch.where(mask, probs_u, torch.zeros_like(probs_u))
+        probs_u_sum = probs_u.sum()
+        if probs_u_sum > 0:
+            probs_u = probs_u / probs_u_sum
+        # Multinomial: sample one index from the distribution.
+        sampled_idx = torch.multinomial(probs_u.unsqueeze(0), num_samples=1, replacement=True).squeeze(0).item()
+        # Output is the value of input_indices at that position (per API: returns input_indices_tensor[final_index]).
+        out_val = indices_flat[u, sampled_idx].item()
+        out_list.append(out_val)
+    # Output shape (1, 1, 1, num_users): one sampled index value per user.
+    out_tensor = torch.tensor(out_list, dtype=indices.dtype).view(1, 1, 1, num_users)
+    return out_tensor
 
 
 # Test a 0D, 1D, 5D, and a 0-volume tensor
@@ -186,12 +253,10 @@ def test_generic_ops(device, tensor_shape, dim, keepdim, dtype, layout, op):
     assert passing, f"{output_pcc}, torch: {torch_result}, ttnn: {ttnn_result}"
 
 
-# @pytest.mark.parametrize("tensor_shape", [(60, 0, 32)])
 @pytest.mark.parametrize("tensor_shape", [(), (170,), (3, 6, 40, 63, 20), (60, 0, 32)])
 @pytest.mark.parametrize("dim", [None, 0, -1])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
 @pytest.mark.parametrize("layout", [ttnn.TILE_LAYOUT])
-# @pytest.mark.parametrize("k", [50])
 @pytest.mark.parametrize("k", [50, 1, 0])
 def test_topk(device, tensor_shape, dim, dtype, layout, k):
     """
@@ -492,7 +557,7 @@ def test_accumulation(device, tensor_shape, dim, dtype, layout, op):
     ), f"Preallocated {op} result: {prealloc_result} does not match non-preallocated: {ttnn_result_in_torch}"
 
 
-# (2, 2, 32, 64) shape hangs the test.
+# (2, 2, 32, 64) shape hangs the test. Issue #39795
 # @pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (2, 2, 32, 64), (1, 1, 0, 64)])
 @pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (1, 1, 0, 64)])
 @pytest.mark.parametrize("dtype", [torch.bfloat16])
@@ -602,62 +667,6 @@ def test_moe(device, tensor_shape, dtype, layout):
     assert torch.allclose(
         prealloc_result.float(), ttnn_result_in_torch.float(), atol=atol, rtol=rtol
     ), f"Preallocated moe result: {prealloc_result} does not match non-preallocated: {ttnn_result_in_torch}"
-
-
-def _torch_sampling_reference(values, indices, k, p, temp, seed):
-    """
-    Torch reference for ttnn.sampling: softmax -> top-k -> top-p (nucleus) -> multinomial.
-    Returns tensor of shape (1, 1, 1, num_users) of sampled index values (one per user).
-    This code was AI generated based on description of ttnn.sampling, since there is
-    no direct PyTorch equivalent.
-    """
-    N, C, H, W = values.shape
-    num_users = N * C * H
-
-    # Flatten to (num_users, W) so each row is one user's logits.
-    values_flat = values.reshape(num_users, W)
-    temp_flat = temp.view(num_users, 1).expand(num_users, W)
-    probs_flat = torch.softmax(values_flat / temp_flat, dim=-1)
-    indices_flat = indices.reshape(num_users, W)
-
-    torch.manual_seed(seed)
-    out_list = []
-    for u in range(num_users):
-        probs_u = probs_flat[u, :].clone()
-        k_u = int(k[u].item())
-        p_u = float(p[u].item())
-        # Top-k: zero out all but the top-k probabilities, then renormalize.
-        if k_u < W:
-            _, top_idx = torch.topk(probs_u, k_u, dim=-1)
-            mask = torch.zeros_like(probs_u, dtype=torch.bool)
-            mask[top_idx] = True
-            probs_u = torch.where(mask, probs_u, torch.zeros_like(probs_u))
-        probs_u_sum = probs_u.sum()
-        if probs_u_sum > 0:
-            probs_u = probs_u / probs_u_sum
-        # Top-p (nucleus): sort descending, cumsum, keep until cumsum <= p_u.
-        probs_sorted, _ = torch.sort(probs_u, descending=True)
-        cumsum = torch.cumsum(probs_sorted, dim=-1)
-        # Number of elements to keep: first position where cumsum > p_u (exclusive).
-        keep = (cumsum <= p_u).sum().item()
-        if keep < 1:
-            keep = 1
-        # Rebuild mask: keep only indices that are in the top-p set.
-        _, sort_idx = torch.sort(probs_u, descending=True)
-        mask = torch.zeros_like(probs_u, dtype=torch.bool)
-        mask[sort_idx[:keep]] = True
-        probs_u = torch.where(mask, probs_u, torch.zeros_like(probs_u))
-        probs_u_sum = probs_u.sum()
-        if probs_u_sum > 0:
-            probs_u = probs_u / probs_u_sum
-        # Multinomial: sample one index from the distribution.
-        sampled_idx = torch.multinomial(probs_u.unsqueeze(0), num_samples=1, replacement=True).squeeze(0).item()
-        # Output is the value of input_indices at that position (per API: returns input_indices_tensor[final_index]).
-        out_val = indices_flat[u, sampled_idx].item()
-        out_list.append(out_val)
-    # Output shape (1, 1, 1, num_users): one sampled index value per user.
-    out_tensor = torch.tensor(out_list, dtype=indices.dtype).view(1, 1, 1, num_users)
-    return out_tensor
 
 
 @pytest.mark.parametrize("tensor_shape", [(), (1, 1, 32, 64), (1, 1, 32, 0)])
