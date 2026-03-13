@@ -1115,6 +1115,118 @@ def test_ring_joint_sdpa_profile_production_scale(device, ring_index: int):
 
 
 # ============================================================================
+# Chunk Size Sweep for Profile Optimization (Phase 6)
+# ============================================================================
+
+
+@pytest.mark.parametrize("q_chunk_size", [64, 128, 256, 512])
+@pytest.mark.parametrize("k_chunk_size", [64, 128, 256, 512])
+@pytest.mark.parametrize("ring_index", [0, 31])
+def test_chunk_size_sweep(device, q_chunk_size: int, k_chunk_size: int, ring_index: int):
+    """
+    Sweep Q and K chunk sizes at production scale.
+
+    Tests all combinations of chunk sizes at ring_index=0 (longest duration,
+    most causal work) and ring_index=31 (shortest duration, highest FPU util)
+    as representative extremes.
+
+    Some combinations may exceed L1 memory (~1.5MB) and fail with OOM - this is
+    expected and logged. Run with Tracy to capture timing for valid configs:
+        python -m tracy -p -r -v -m pytest "...::test_chunk_size_sweep[...]" -v -s
+
+    Configuration:
+    - GQA: 32 Q heads, 1 KV head (shared across Q heads)
+    - Q: [1, 32, 4096, 576] BFLOAT16
+    - K: [1, 1, 4096, 576] BFLOAT8_B
+    - V: [1, 32, 4096, 128] BFLOAT8_B
+    - ring_size=32, total_seq=131072
+    """
+    # Production config
+    b = 1
+    nh_q, nh_k, nh_v = 32, 1, 32  # GQA: 32 Q heads, 1 KV head
+    d_qk, d_v = 576, 128  # Q/K dim=576, V dim=128
+    local_seq = 4096
+    ring_size = 32
+    total_seq = local_seq * ring_size  # 131072
+
+    # Program config - use device's actual grid size
+    program_config = ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=device.compute_with_storage_grid_size(),
+        q_chunk_size=q_chunk_size,
+        k_chunk_size=k_chunk_size,
+        exp_approx_mode=False,
+    )
+
+    compute_kernel_config = ttnn.WormholeComputeKernelConfig(
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=True,
+        fp32_dest_acc_en=False,
+        packer_l1_acc=False,
+    )
+
+    # Create random tensors (no need for real data since we skip correctness)
+    Q_local = torch.randn(b, nh_q, local_seq, d_qk)
+    K_local = torch.randn(b, nh_k, local_seq, d_qk)
+    V_local = torch.randn(b, nh_v, local_seq, d_v)
+    K_gathered = torch.randn(b, nh_k, total_seq, d_qk)
+    V_gathered = torch.randn(b, nh_v, total_seq, d_v)
+
+    # Move to device with appropriate dtypes
+    memory_config = ttnn.DRAM_MEMORY_CONFIG
+
+    tt_Q = ttnn.from_torch(
+        Q_local, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device
+    )
+    tt_K = ttnn.from_torch(
+        K_local, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device
+    )
+    tt_V = ttnn.from_torch(
+        V_local, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device
+    )
+    tt_K_gathered = ttnn.from_torch(
+        K_gathered, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device
+    )
+    tt_V_gathered = ttnn.from_torch(
+        V_gathered, dtype=ttnn.bfloat8_b, layout=ttnn.TILE_LAYOUT, memory_config=memory_config, device=device
+    )
+
+    # Run profile op - catch L1 OOM as expected for large chunk sizes
+    try:
+        tt_output, _, tt_lse = ttnn.transformer.ring_joint_sdpa_profile(
+            tt_Q,
+            tt_K,
+            tt_V,
+            tt_K_gathered,
+            tt_V_gathered,
+            ring_size=ring_size,
+            ring_index=ring_index,
+            logical_n=total_seq,
+            program_config=program_config,
+            is_causal=True,
+            is_balanced=True,
+            compute_kernel_config=compute_kernel_config,
+        )
+
+        # Success - log result
+        assert tt_output is not None
+        assert tt_lse is not None
+        print(f"PASS: q_chunk={q_chunk_size}, k_chunk={k_chunk_size}, ring_index={ring_index}")
+        print(f"  Q: {list(Q_local.shape)} -> tt_Q: {tt_Q.shape}")
+        print(f"  K_gathered: {list(K_gathered.shape)} -> tt_K_gathered: {tt_K_gathered.shape}")
+        print(f"  Output: {tt_output.shape}")
+
+    except RuntimeError as e:
+        if "beyond max L1 size" in str(e):
+            # Expected OOM for large chunk sizes - log and pass
+            print(f"OOM: q_chunk={q_chunk_size}, k_chunk={k_chunk_size}, ring_index={ring_index}")
+            print(f"  Circular buffers exceed L1 capacity")
+            pytest.skip(f"L1 OOM: q={q_chunk_size}, k={k_chunk_size}")
+        else:
+            # Unexpected error - re-raise
+            raise
+
+
+# ============================================================================
 # Main entry point for direct execution
 # ============================================================================
 
