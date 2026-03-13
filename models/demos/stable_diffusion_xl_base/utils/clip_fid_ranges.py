@@ -31,6 +31,8 @@ def using_full_dataset(model_name, num_prompts):
         "sdxl-base-refiner-tp",
         "sdxl-img2img",
         "sdxl-img2img-tp",
+        "sdxl-lora",
+        "sdxl-lora-tp",
     }:
         return num_prompts == SDXL_DATASET_SIZE
     elif model_name in {"sdxl-inpaint", "sdxl-inpaint-tp"}:
