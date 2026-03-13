@@ -72,6 +72,11 @@ Plans:
 
 **Requirements:** DS-01, DS-02
 
+**Plans:** 1 plan
+
+Plans:
+- [ ] 04-01-PLAN.md — Add VC0_SENDER_CHANNEL_START constant; replace is_sender_channel_serviced[0] literals; build + sanity test
+
 **Success criteria:**
 1. No flat sender channel array indexed by `[vc][channel_id]` in kernel headers
 2. CT args wire format unchanged
