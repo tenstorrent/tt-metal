@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn::prim {
@@ -56,9 +57,8 @@ ttsl::hash::hash_t BroadcastDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "BroadcastDeviceOperation::compute_program_hash is called");
 
-    auto subdevice_id = operation_attributes.sub_device_id;
     auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto sd_id = ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(operation_attributes.sub_device_id);
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     return tt::tt_metal::operation::hash_operation<BroadcastDeviceOperation>(
         operation_attributes.sender_coord,

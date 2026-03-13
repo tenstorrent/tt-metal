@@ -58,7 +58,7 @@ def run_sub_devices_program(device):
         {
             ttnn.CoreRange(
                 ttnn.CoreCoord(4, 4),
-                ttnn.CoreCoord(4, 4),
+                ttnn.CoreCoord(5, 4),
             ),
         }
     )

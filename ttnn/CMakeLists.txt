@@ -137,6 +137,7 @@ target_sources(
         core/config.cpp
         core/core.cpp
         core/device.cpp
+        core/device_context.cpp
         core/device_operation_detail.cpp
         core/distributed/api.cpp
         core/distributed/distributed_tensor.cpp
@@ -559,6 +560,7 @@ target_sources(
             api/ttnn/device.hpp
             api/ttnn/device_operation.hpp
             api/ttnn/device_operation_detail.hpp
+            api/ttnn/device_context.hpp
             api/ttnn/distributed/api.hpp
             api/ttnn/distributed/bidirectional_fabric_socket.hpp
             api/ttnn/distributed/create_socket.hpp
