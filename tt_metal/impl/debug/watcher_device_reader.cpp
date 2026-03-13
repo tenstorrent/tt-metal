@@ -90,6 +90,15 @@ const char* get_riscv_name(HalProgrammableCoreType core_type, uint32_t processor
                 core_type);
             return names[processor_index];
         }
+        case HalProgrammableCoreType::DRAM: {
+            static const char* const names[] = {"drisc"};
+            TT_FATAL(
+                processor_index < 1,
+                "Watcher data corrupted, unexpected processor index {} on core {}",
+                processor_index,
+                core_type);
+            return names[processor_index];
+        }
         case HalProgrammableCoreType::COUNT: TT_THROW("unsupported core type");
     }
     TT_THROW("unreachable");
@@ -403,6 +412,19 @@ void WatcherDeviceReader::Dump(FILE* file) {
         Core::Create(eth_core, HalProgrammableCoreType::IDLE_ETH, *this, dump_data).Dump();
     }
 
+    // Dump DRAM cores (Blackhole only)
+    {
+        const auto& hal = MetalContext::instance().hal();
+        bool has_dram_fw = hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
+        if (has_dram_fw) {
+            const auto& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
+            for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
+                Core::Create(CoreCoord{dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM, *this, dump_data)
+                    .Dump();
+            }
+        }
+    }
+
     for (auto k_id : dump_data.used_kernel_names) {
         fprintf(f, "k_id[%3d]: %s\n", k_id.first, kernel_names[k_id.first].c_str());
     }
@@ -499,9 +521,14 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     const auto& hal = MetalContext::instance().hal();
     CoreType core_type = hal.get_core_type(hal.get_programmable_core_type_index(programmable_core_type));
-    auto virtual_coord =
-        tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
-            reader.device_id, logical_coord, core_type);
+    CoreCoord virtual_coord;
+    if (programmable_core_type == HalProgrammableCoreType::DRAM) {
+        virtual_coord = logical_coord;
+    } else {
+        virtual_coord =
+            tt::tt_metal::MetalContext::instance().get_cluster().get_virtual_coordinate_from_logical_coordinates(
+                reader.device_id, logical_coord, core_type);
+    }
 
     // Print device id, core coords (logical)
     string core_type_str;
@@ -509,6 +536,8 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
         core_type_str = "acteth";
     } else if (programmable_core_type == HalProgrammableCoreType::IDLE_ETH) {
         core_type_str = "idleth";
+    } else if (programmable_core_type == HalProgrammableCoreType::DRAM) {
+        core_type_str = "dram";
     } else {
         core_type_str = "worker";
     }
@@ -527,8 +556,7 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     auto core_str = fmt::format("Device {} {} {}", reader.device_id, core_type_str, core_coord_str);
     fprintf(reader.f, "%s: ", core_str.c_str());
 
-    uint64_t mailbox_addr =
-        MetalContext::instance().hal().get_dev_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
+    uint64_t mailbox_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
 
     auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
     uint32_t mailbox_read_size =
@@ -554,12 +582,15 @@ void WatcherDeviceReader::Core::Dump() const {
     bool is_eth_core =
         (programmable_core_type_ == HalProgrammableCoreType::ACTIVE_ETH ||
          programmable_core_type_ == HalProgrammableCoreType::IDLE_ETH);
+    bool is_dram_core = (programmable_core_type_ == HalProgrammableCoreType::DRAM);
 
     ValidateKernelIDs();
 
     // Whether or not watcher data is available depends on a flag set on the device.
-    if (mbox_data_.watcher().enable() != dev_msgs::WatcherEnabled and
-        mbox_data_.watcher().enable() != dev_msgs::WatcherDisabled) {
+    bool enabled = false;
+    if (mbox_data_.watcher().enable() == dev_msgs::WatcherEnabled) {
+        enabled = true;
+    } else if (mbox_data_.watcher().enable() != dev_msgs::WatcherDisabled) {
         TT_THROW(
             "Watcher read invalid watcher.enable on {}. Read {}, valid values are {} and {}.",
             core_str_,
@@ -567,16 +598,15 @@ void WatcherDeviceReader::Core::Dump() const {
             dev_msgs::WatcherEnabled,
             dev_msgs::WatcherDisabled);
     }
-    bool enabled = (mbox_data_.watcher().enable() == dev_msgs::WatcherEnabled);
 
     if (enabled) {
         // Dump state only gathered if device is compiled w/ watcher
         if (!rtoptions.watcher_status_disabled()) {
             DumpWaypoints();
         }
-        // Ethernet cores have firmware that starts at address 0, so no need to check it for a
-        // magic value.
-        if (!is_eth_core) {
+        // DumpL1Status() is TENSIX-specific: it asserts programmable_core_type_ == TENSIX and
+        // checks L1[0] for the TENSIX firmware launch value, so skip non-TENSIX cores (ETH, DRAM).
+        if (!is_eth_core && !is_dram_core) {
             DumpL1Status();
         }
         if (!rtoptions.watcher_noc_sanitize_disabled()) {
@@ -599,8 +629,8 @@ void WatcherDeviceReader::Core::Dump() const {
 
     // Dump state always available
     DumpLaunchMessage();
-    // Ethernet cores don't use the sync reg
-    if (!is_eth_core && rtoptions.get_watcher_dump_all()) {
+    // Ethernet and DRAM cores don't use the sync reg
+    if (!is_eth_core && !is_dram_core && rtoptions.get_watcher_dump_all()) {
         // Reading registers while running can cause hangs, only read if
         // requested explicitly
         DumpSyncRegs();
@@ -613,7 +643,7 @@ void WatcherDeviceReader::Core::Dump() const {
         const char* separator = (i > 0) ? "|" : "";
         fprintf(reader_.f, "%s%3d", separator, kernel_config.watcher_kernel_ids()[i]);
     }
-    if (!is_eth_core && rtoptions.get_watcher_text_start()) {
+    if (!is_eth_core && !is_dram_core && rtoptions.get_watcher_text_start()) {
         uint32_t kernel_config_base = kernel_config.kernel_config_base()[0];
         fprintf(reader_.f, " text_start:");
         for (size_t i = 0; i < num_processors; i++) {

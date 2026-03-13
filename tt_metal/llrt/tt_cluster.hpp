@@ -348,6 +348,7 @@ public:
 
     bool is_worker_core(const CoreCoord& core, ChipId chip_id) const;
     bool is_ethernet_core(const CoreCoord& core, ChipId chip_id) const;
+    bool is_dram_core(const CoreCoord& core, ChipId chip_id) const;
     CoreCoord get_logical_ethernet_core_from_virtual(ChipId chip, CoreCoord core) const;
 
     // These two functions should be removed in favor of direct translation.
@@ -424,6 +425,7 @@ private:
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_worker_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_eth_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_dram_cores_;
+    std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_dram_hw_cores_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> virtual_pcie_cores_;
     std::unordered_map<BoardType, std::unordered_map<CoreCoord, int32_t>> virtual_routing_to_profiler_flat_id_;
     std::unordered_map<ChipId, std::unordered_set<CoreCoord>> frequent_retrain_cores_;
