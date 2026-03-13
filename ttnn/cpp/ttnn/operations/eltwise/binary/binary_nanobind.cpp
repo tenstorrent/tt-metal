@@ -2370,8 +2370,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Subtracts :attr:`input_tensor_b` from :attr:`input_tensor_a` and returns the tensor with the same layout as :attr:`input_tensor_a` in-place)doc",
         R"doc(\mathrm{{input\_tensor\_a}}_i - \mathrm{{input\_tensor\_b}}_i)doc",
-        &detail::inplace_binding_tensor_scalar<static_cast<InplaceScalarFn>(&ttnn::subtract_)>,
-        &detail::inplace_binding_tensor_tensor<static_cast<InplaceTensorFn>(&ttnn::subtract_)>,
+        &detail::inplace_binding_tensor_scalar<static_cast<detail::InplaceScalarFn>(&ttnn::subtract_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<detail::InplaceTensorFn>(&ttnn::subtract_)>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32, INT32, UINT16 (range: 0 - 65535), UINT32 (range: 0 - 4294967295))doc");
 
     detail::bind_binary_operation<"eq">(
@@ -2795,8 +2795,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Performs Less than in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_a}} < \mathrm{{input\_tensor\_b}})doc",
-        &detail::inplace_binding_tensor_scalar<BinaryOpType::LT>,
-        &detail::inplace_binding_tensor_tensor<BinaryOpType::LT>,
+        &detail::inplace_binding_tensor_scalar<static_cast<detail::InplaceScalarFn>(&ttnn::lt_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<detail::InplaceTensorFn>(&ttnn::lt_)>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation<"le_">(
@@ -2835,8 +2835,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Performs logaddexp in-place operation on :attr:`input_a` and :attr:`input_b` and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\verb|logaddexp|(\mathrm{{input\_tensor\_a,input\_tensor\_b}}))doc",
-        &detail::inplace_binding_tensor_scalar<BinaryOpType::LOGADDEXP>,
-        &detail::inplace_binding_tensor_tensor<BinaryOpType::LOGADDEXP>,
+        &detail::inplace_binding_tensor_scalar<static_cast<detail::InplaceScalarFn>(&ttnn::logaddexp_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<detail::InplaceTensorFn>(&ttnn::logaddexp_)>,
         R"doc(BFLOAT16, BFLOAT8_B, FLOAT32)doc");
 
     detail::bind_inplace_operation<"logaddexp2_">(
@@ -2884,8 +2884,8 @@ void py_module(nb::module_& mod) {
         mod,
         R"doc(Subtracts :attr:`input_a` from :attr:`input_b` in-place and returns the tensor with the same layout as :attr:`input_tensor`)doc",
         R"doc(\mathrm{{input\_tensor\_b}} - \mathrm{{input\_tensor\_a}})doc",
-        &detail::inplace_binding_tensor_scalar<BinaryOpType::RSUB>,
-        &detail::inplace_binding_tensor_tensor<BinaryOpType::RSUB>,
+        &detail::inplace_binding_tensor_scalar<static_cast<detail::InplaceScalarFn>(&ttnn::rsub_)>,
+        &detail::inplace_binding_tensor_tensor<static_cast<detail::InplaceTensorFn>(&ttnn::rsub_)>,
         R"doc(FLOAT32, BFLOAT16, BFLOAT8_B, INT32, UINT32, UINT16)doc");
 
     detail::bind_inplace_operation<"bias_gelu_">(
