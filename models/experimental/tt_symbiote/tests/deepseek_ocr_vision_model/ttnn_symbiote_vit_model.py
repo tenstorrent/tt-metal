@@ -255,12 +255,7 @@ class TTNNClipVisionEmbeddings(TTNNModule):
 
         # Get patch embeddings
         if patch_embeds is not None:
-            # Match PyTorch: patch_embeds.flatten(2).transpose(1, 2)
-            # Converts [B, C, H, W] -> [B, H*W, C]
-            if len(patch_embeds.shape) == 4:
-                b_pe, c_pe, h_pe, w_pe = patch_embeds.shape
-                patch_embeds = ttnn.reshape(patch_embeds, (b_pe, c_pe, h_pe * w_pe))
-                patch_embeds = ttnn.permute(patch_embeds, (0, 2, 1))
+            patch_embeds = patch_embeds
         else:
             # Extract patches
             patches = self._unfold_patches(pixel_values)
@@ -1112,6 +1107,10 @@ class TTNNVitModel(TTNNModule):
 
         if patch_embeds is not None and patch_embeds.layout != ttnn.TILE_LAYOUT:
             patch_embeds = ttnn.to_layout(patch_embeds, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        if patch_embeds is not None and len(patch_embeds.shape) == 4:
+            patch_embeds = ttnn.reshape(patch_embeds, shape=[patch_embeds.shape[0], patch_embeds.shape[1], -1])
+            patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
 
         # Embeddings
         x = self.embeddings.forward(x, patch_embeds)
