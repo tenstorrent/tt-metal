@@ -108,7 +108,7 @@ models:
     wh_galaxy: 30
   unit:
     wh_llmbox: 305
-    wh_llmbox_perf: 235
+    wh_llmbox_perf: 260
     wh_n150: 30
     wh_n300: 30
     wh_galaxy: 30
