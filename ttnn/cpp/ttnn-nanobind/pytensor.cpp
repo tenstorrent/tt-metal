@@ -148,7 +148,7 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
         py_tensor.dtype().code,
         py_tensor.dtype().bits,
         optional_data_type.has_value(),
-        optional_data_type.value_or(DataType::INVALID),
+        static_cast<int>(optional_data_type.value_or(DataType::INVALID)),
         config.dtype.code,
         config.dtype.bits);
 
@@ -238,7 +238,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
                 auto input_float_buffer = tt::tt_metal::HostBuffer(std::move(float_unpacked_data));
                 return dispatch_to_concrete.template operator()<float>(input_float_buffer);
             }
-            case DataType::INVALID: TT_THROW("Unsupported DataType: {}", tt_dtype);
+            case DataType::INVALID: TT_THROW("Unsupported DataType: {}", static_cast<int>(tt_dtype));
         }
         TT_THROW("Unreachable");
     };
@@ -280,7 +280,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
         case DataType::BFLOAT8_B:
         case DataType::BFLOAT4_B:
         case DataType::FLOAT32: return dispatch_to_concrete.template operator()<float>(tt_tensor);
-        case DataType::INVALID: TT_THROW("Unsupported DataType: {}", tt_tensor.dtype());
+        case DataType::INVALID: TT_THROW("Unsupported DataType: {}", static_cast<int>(tt_tensor.dtype()));
     }
     TT_THROW("Unreachable");
 }
@@ -358,7 +358,7 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
             case DataType::UINT8: return to_host_buffer_impl.operator()<uint8_t>(contiguous_py_tensor);
             case DataType::UINT16: return to_host_buffer_impl.operator()<uint16_t>(contiguous_py_tensor);
             case DataType::INT32: return to_host_buffer_impl.operator()<int32_t>(contiguous_py_tensor);
-            default: TT_THROW("Unsupported target DataType: {}", target_dtype);
+            default: TT_THROW("Unsupported target DataType: {}", static_cast<int>(target_dtype));
         }
     };
 
@@ -1322,6 +1322,64 @@ void pytensor_module(nb::module_& mod) {
 
                 address = tt_tensor.buffer_address()
 
+        )doc")
+        .def(
+            "buffer_page_size",
+            [](const Tensor& self) -> uint32_t {
+                const auto& s = self.device_storage();
+                TT_FATAL(s.mesh_buffer != nullptr, "Tensor is not allocated.");
+                return s.mesh_buffer->page_size();
+            },
+            R"doc(
+            Get the page size of the underlying buffer in bytes.
+
+            For tiled tensors, this is the tile size. For row-major tensors,
+            this is the stick size (width * element_size).
+
+            The tensor must be on device.
+        )doc")
+        .def(
+            "buffer_num_pages",
+            [](const Tensor& self) -> uint32_t {
+                const auto& s = self.device_storage();
+                TT_FATAL(s.mesh_buffer != nullptr, "Tensor is not allocated.");
+                return s.mesh_buffer->num_pages();
+            },
+            R"doc(
+            Get the number of pages in the underlying buffer.
+
+            For tiled tensors, this is the number of tiles.
+            For row-major tensors, this is the number of sticks (rows).
+
+            The tensor must be on device.
+        )doc")
+        .def(
+            "buffer_aligned_page_size",
+            [](const Tensor& self) -> uint32_t {
+                const auto& s = self.device_storage();
+                TT_FATAL(s.mesh_buffer != nullptr, "Tensor is not allocated.");
+                auto* ref_buffer = s.mesh_buffer->get_reference_buffer();
+                TT_FATAL(ref_buffer != nullptr, "Could not get reference buffer.");
+                return ref_buffer->aligned_page_size();
+            },
+            R"doc(
+            Get the aligned page size of the underlying buffer in bytes.
+
+            This is the page size rounded up to the buffer's alignment requirement
+            (e.g., DRAM alignment). Used for efficient DMA transfers.
+
+            The tensor must be on device.
+        )doc")
+        .def(
+            "element_size",
+            [](const Tensor& self) -> uint32_t {
+                return tt::datum_size(datatype_to_dataformat_converter(self.dtype()));
+            },
+            R"doc(
+            Get the size of a single element in bytes for this tensor's data type.
+
+            Returns:
+                int: Element size in bytes (e.g., 2 for bfloat16, 4 for float32).
         )doc")
         .def(
             "get_layout", [](const Tensor& self) { return self.layout(); }, R"doc(
