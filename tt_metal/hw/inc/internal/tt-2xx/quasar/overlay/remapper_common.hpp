@@ -28,6 +28,8 @@
 #define REMAP_CLIENT_L_STATUS_REG_ADDR32(pair_idx) \
     (REMAP_CLIENT_L_STATUS_REG_BASE_ADDR32 + ((pair_idx) * REMAP_REG_PAIR_STRIDE))
 
+namespace overlay {
+
 typedef enum clientTypes { DM_0, DM_1, DM_2, DM_3, NEO_0, NEO_1, NEO_2, NEO_3 } tClientTypes;
 
 typedef struct {
@@ -121,5 +123,7 @@ typedef union {
 } tClientL_status_Reg_u;
 
 // Removed: Single register pointers replaced with pair-indexed access
+
+}  // namespace overlay
 
 #endif  // __DM__REMAPPER_COMMON_HPP__

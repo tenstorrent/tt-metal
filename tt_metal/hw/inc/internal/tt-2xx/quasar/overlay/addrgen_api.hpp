@@ -57,6 +57,8 @@
 #define ADDRGEN_0 0
 #define ADDRGEN_1 1
 
+namespace overlay {
+
 enum bank_order_e { BANK_INNER = 0, BANK_MIDDLE, BANK_OUTER };
 
 /*
@@ -567,3 +569,5 @@ DEFINE_ADDR_GEN(addrgen_0, ADDRGEN_0)
 DEFINE_ADDR_GEN(addrgen_1, ADDRGEN_1)
 
 #undef DEFINE_ADDR_GEN
+
+}  // namespace overlay

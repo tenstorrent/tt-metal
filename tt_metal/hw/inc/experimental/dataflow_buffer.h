@@ -58,7 +58,7 @@ public:
                 for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
                     PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
                     // DPRINT << "reserve_back: tc_id: " << static_cast<uint32_t>(tc_id) << " free space: " << static_cast<uint32_t>(llk_intf_get_free_space(get_tensix_id(ptc), get_counter_id(ptc))) << ENDL();
-                    if (llk_intf_get_free_space(get_tensix_id(ptc), get_counter_id(ptc)) < num_entries) {
+                    if (overlay::llk_intf_get_free_space(get_tensix_id(ptc), get_counter_id(ptc)) < num_entries) {
                         ready = false;
                         break;
                     }
@@ -66,7 +66,7 @@ public:
             }
         } else {
             uint8_t tensix_id = get_tensix_id(packed_tc);
-            while (llk_intf_get_free_space(tensix_id, tc_id) < num_entries);
+            while (overlay::llk_intf_get_free_space(tensix_id, tc_id) < num_entries);
             // DPRINT << "reserve_back: tc_id: " << static_cast<uint32_t>(tc_id) << " free space: " << static_cast<uint32_t>(llk_intf_get_free_space(tensix_id, tc_id)) << ENDL();
         }
 #endif
@@ -94,7 +94,7 @@ public:
             for (uint8_t i = 0; i < local_dfb_interface_.num_tcs_to_rr; i++) {
                 PackedTileCounter ptc = local_dfb_interface_.tc_slots[i].packed_tile_counter;
                 // DPRINT << "push_back: tc_id: " << static_cast<uint32_t>(tc_id) << " posted: " << static_cast<uint32_t>(llk_intf_get_posted(get_tensix_id(ptc), get_counter_id(ptc))) << ENDL();
-                llk_intf_inc_posted(get_tensix_id(ptc), get_counter_id(ptc), num_entries);
+                overlay::llk_intf_inc_posted(get_tensix_id(ptc), get_counter_id(ptc), num_entries);
             }
             local_dfb_interface_.tc_slots[0].wr_ptr += (num_entries * local_dfb_interface_.stride_size);
             if (local_dfb_interface_.tc_slots[0].wr_ptr == local_dfb_interface_.tc_slots[0].limit) {
@@ -103,7 +103,7 @@ public:
             // tc_idx deliberately not advanced
         } else {
             uint8_t tensix_id = get_tensix_id(packed_tc);
-            llk_intf_inc_posted(tensix_id, tc_id, num_entries);
+            overlay::llk_intf_inc_posted(tensix_id, tc_id, num_entries);
             // DPRINT << "push_back: tensix_id: " << static_cast<uint32_t>(tensix_id) << " tc_id: " << static_cast<uint32_t>(tc_id) << " capacity: "
             //         << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id))
             //         << " posted: " << static_cast<uint32_t>(llk_intf_get_posted(tensix_id, tc_id)) << ENDL();
@@ -140,7 +140,7 @@ public:
         //        << " capacity: " << static_cast<uint32_t>(llk_intf_get_capacity(tensix_id, tc_id))
         //        << " tc_id: " << static_cast<uint32_t>(tc_id)
         //        << " occupancy: " << static_cast<uint32_t>(llk_intf_get_occupancy(tensix_id, tc_id)) << ENDL();
-        while (llk_intf_get_occupancy(tensix_id, tc_id) < num_entries);
+        while (overlay::llk_intf_get_occupancy(tensix_id, tc_id) < num_entries);
 #endif
     }
 
@@ -163,7 +163,7 @@ public:
         // })
 #elif !defined(COMPILE_FOR_TRISC)
         uint8_t tensix_id = get_tensix_id(packed_tc);
-        llk_intf_inc_acked(tensix_id, tc_id, num_entries);
+        overlay::llk_intf_inc_acked(tensix_id, tc_id, num_entries);
         local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr += (num_entries * local_dfb_interface_.stride_size);
         if (local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr == local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].limit) {
             local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].rd_ptr = local_dfb_interface_.tc_slots[local_dfb_interface_.tc_idx].base_addr;
@@ -199,7 +199,8 @@ public:
                 uint8_t tensix_id = get_tensix_id(packed_tc);
                 // DPRINT << "read acked: " << static_cast<uint32_t>(fast_llk_intf_read_acked(tensix_id, tc_id)) << " read posted: " << static_cast<uint32_t>(fast_llk_intf_read_posted(tensix_id, tc_id)) << ENDL();
                 all_acked &=
-                    (fast_llk_intf_read_acked(tensix_id, tc_id) == fast_llk_intf_read_posted(tensix_id, tc_id));
+                    (overlay::fast_llk_intf_read_acked(tensix_id, tc_id) ==
+                     overlay::fast_llk_intf_read_posted(tensix_id, tc_id));
 #endif
             }
         }
