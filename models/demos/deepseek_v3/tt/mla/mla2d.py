@@ -73,9 +73,11 @@ class MLA2D(MLA1D):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        batch_size_per_row: int = USERS_PER_ROW,
     ) -> ModelPrefillConfig:
         super_cfg = super().prefill_model_config(hf_config, mesh_device)
         input_memory_config = super_cfg.pop("input_memory_config")
+        super_cfg["batch_size_per_row"] = batch_size_per_row
         return {
             "mla1d": super_cfg,
             "input_memory_config": input_memory_config,
@@ -96,9 +98,11 @@ class MLA2D(MLA1D):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        batch_size_per_row: int = USERS_PER_ROW,
     ) -> ModelDecodeConfig:
-        super_cfg = super().decode_model_config(hf_config, mesh_device)
+        super_cfg = super().decode_model_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
         input_memory_config = super_cfg.pop("input_memory_config")
+        super_cfg["batch_size_per_row"] = batch_size_per_row
         return {
             "mla1d": super_cfg,
             "input_memory_config": input_memory_config,
@@ -184,10 +188,11 @@ class MLA2D(MLA1D):
         ccl = cfg["ccl"]
 
         x_next = ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["seq_ag_prefill"]))
+        batch_size_per_row = cfg["mla1d"].get("batch_size_per_row", USERS_PER_ROW)
         x_out = super().forward_prefill(
             x_next,
-            batch_idx=batch_idx % USERS_PER_ROW,
-            row_idx=batch_idx // USERS_PER_ROW,
+            batch_idx=batch_idx % batch_size_per_row,
+            row_idx=batch_idx // batch_size_per_row,
             cfg=cfg["mla1d"],
             rope_tensors=rope_tensors,
             page_table=page_table,

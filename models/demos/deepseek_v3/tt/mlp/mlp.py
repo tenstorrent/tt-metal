@@ -218,6 +218,7 @@ class MLP(AbstractModule):
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
         fabric_config: ttnn.FabricConfig,
+        batch_size_per_row: int = USERS_PER_ROW,
         input_num_cores: int | None = None,
         output_num_cores: int | None = None,
     ) -> ModelDecodeConfig:
@@ -262,9 +263,17 @@ class MLP(AbstractModule):
 
         # Calculate input and output memory configurations
 
-        input_memory_config = cls._get_decode_activation_memory_config(dim, input_num_cores, mesh_device)
+        input_memory_config = cls._get_decode_activation_memory_config(
+            dim,
+            input_num_cores,
+            mesh_device,
+            batch_size_per_row=batch_size_per_row,
+        )
         output_memory_config = cls._get_decode_activation_memory_config(
-            even_int_div(dim, mesh_width), output_num_cores, mesh_device
+            even_int_div(dim, mesh_width),
+            output_num_cores,
+            mesh_device,
+            batch_size_per_row=batch_size_per_row,
         )
 
         # Construct the config
@@ -279,7 +288,11 @@ class MLP(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
-                    USERS_PER_ROW, dim, even_int_div(hidden_dim, mesh_width), input_num_cores, inner_num_cores
+                    batch_size_per_row,
+                    dim,
+                    even_int_div(hidden_dim, mesh_width),
+                    input_num_cores,
+                    inner_num_cores,
                 ),
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
@@ -287,7 +300,7 @@ class MLP(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
-                    USERS_PER_ROW,
+                    batch_size_per_row,
                     even_int_div(hidden_dim, mesh_width),
                     dim,
                     inner_num_cores,
@@ -299,7 +312,11 @@ class MLP(AbstractModule):
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
                 program_config=get_dram_sharded_matmul_config(
-                    USERS_PER_ROW, dim, even_int_div(hidden_dim, mesh_width), input_num_cores, inner_num_cores
+                    batch_size_per_row,
+                    dim,
+                    even_int_div(hidden_dim, mesh_width),
+                    input_num_cores,
+                    inner_num_cores,
                 ),
                 compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
@@ -333,12 +350,16 @@ class MLP(AbstractModule):
     @final
     @classmethod
     def _get_decode_activation_memory_config(
-        cls, per_device_width: int, activation_sharding_num_cores: int, mesh_device: ttnn.Device
+        cls,
+        per_device_width: int,
+        activation_sharding_num_cores: int,
+        mesh_device: ttnn.Device,
+        batch_size_per_row: int = USERS_PER_ROW,
     ) -> ttnn.MemoryConfig:
         """Get the memory config for an activation tensor in decode mode."""
         return ttnn.create_sharded_memory_config_(
             shape=(
-                ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE),
+                ttnn.core.roundup(batch_size_per_row, ttnn.TILE_SIZE),
                 ttnn.core.roundup(even_int_div(per_device_width, activation_sharding_num_cores), ttnn.TILE_SIZE),
             ),
             core_grid=ttnn.num_cores_to_corerangeset(

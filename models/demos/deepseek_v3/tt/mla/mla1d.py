@@ -591,6 +591,7 @@ class MLA1D(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        batch_size_per_row: int = USERS_PER_ROW,
     ) -> ModelDecodeConfig:
         """Generate decode operator configuration for this MLP layer.
 
@@ -621,7 +622,7 @@ class MLA1D(AbstractModule):
 
         input_memory_config = ttnn.create_sharded_memory_config(
             shape=(
-                ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE),
+                ttnn.core.roundup(batch_size_per_row, ttnn.TILE_SIZE),
                 hidden_size_per_device,
             ),
             core_grid=ttnn.CoreGrid(y=7, x=4),
@@ -655,7 +656,7 @@ class MLA1D(AbstractModule):
         qkv_a_num_in0_cores = qkv_a_in0_core_grid.x * qkv_a_in0_core_grid.y
         qkv_a_num_out_cores = qkv_a_out_core_grid.x * qkv_a_out_core_grid.y
         qkv_a_in0_block_w = even_int_div(hidden_size_per_device, qkv_a_num_in0_cores * tile_size)  # 896 // 7 // 32 = 4
-        qkv_a_per_core_M = math.ceil(USERS_PER_ROW / tile_size)  # ceil(32 / 32) = 1
+        qkv_a_per_core_M = math.ceil(batch_size_per_row / tile_size)
         qkv_a_per_core_N = even_int_div(qkv_a_n_padded, qkv_a_num_out_cores * tile_size)  # 2304 // 8 // 32 = 9
 
         qkv_a_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
@@ -697,7 +698,7 @@ class MLA1D(AbstractModule):
         wq_b_num_in0_cores = wq_b_in0_core_grid.x * wq_b_in0_core_grid.y
         wq_b_num_out_cores = wq_b_out_core_grid.x * wq_b_out_core_grid.y
         wq_b_in0_block_w = even_int_div(q_lora_rank, wq_b_num_in0_cores * tile_size)  # 1536 // 16 // 32 = 3
-        wq_b_per_core_M = math.ceil(USERS_PER_ROW / tile_size)  # ceil(32 / 32) = 1
+        wq_b_per_core_M = math.ceil(batch_size_per_row / tile_size)
         wq_b_per_core_N = even_int_div(wq_b_n_padded, wq_b_num_out_cores * tile_size)  # 3072 // 16 // 32 = 6
 
         wq_b_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
@@ -730,7 +731,7 @@ class MLA1D(AbstractModule):
         # =====================================================================
         wkv_b1_batch = num_heads_local  # 16
         wkv_b1_batch_padded = pad_batch_to_dram_banks(wkv_b1_batch)  # 24
-        wkv_b1_m = ttnn.core.roundup(USERS_PER_ROW, tile_size)  # roundup(32, 32) = 32
+        wkv_b1_m = ttnn.core.roundup(batch_size_per_row, tile_size)
         wkv_b1_k = qk_nope_head_dim  # 128
         wkv_b1_n = kv_lora_rank  # 512
 
@@ -859,7 +860,7 @@ class MLA1D(AbstractModule):
         wo_num_in0_cores = wo_in0_core_grid.x * wo_in0_core_grid.y
         wo_num_out_cores = wo_out_core_grid.x * wo_out_core_grid.y
         wo_in0_block_w = even_int_div(wo_k, wo_num_in0_cores * tile_size)  # 16384 // 16 // 32 = 32
-        wo_per_core_M = math.ceil(USERS_PER_ROW / tile_size)  # ceil(32 / 32) = 1
+        wo_per_core_M = math.ceil(batch_size_per_row / tile_size)
         wo_per_core_N = even_int_div(wo_n_padded, wo_num_out_cores * tile_size)  # 1152 // 12 // 32 = 3
 
         wo_program_config = ttnn.MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig(
@@ -887,7 +888,7 @@ class MLA1D(AbstractModule):
         )
 
         # Resharding for q_rope
-        q_rope_shape = (1, USERS_PER_ROW, num_heads_local, qk_rope_head_dim)
+        q_rope_shape = (1, batch_size_per_row, num_heads_local, qk_rope_head_dim)
         q_rope_shard_height = nearest_y(q_rope_shape[2], ttnn.TILE_SIZE)
         q_rope_shard_width = q_rope_shape[3]
         q_rope_num_cores = q_rope_shape[1]
@@ -913,7 +914,7 @@ class MLA1D(AbstractModule):
         )
 
         # Resharding for kv_rope
-        kv_rope_shape = (1, USERS_PER_ROW, 1, qk_rope_head_dim)
+        kv_rope_shape = (1, batch_size_per_row, 1, qk_rope_head_dim)
         kv_rope_shard_height = nearest_y(kv_rope_shape[2], ttnn.TILE_SIZE)
         kv_rope_shard_width = kv_rope_shape[3]
         kv_rope_num_cores = kv_rope_shape[1]
@@ -940,7 +941,7 @@ class MLA1D(AbstractModule):
         )
 
         # Resharding for kvpe
-        kvpe_shape = (1, even_int_div(USERS_PER_ROW, mesh_shape[1]), 1, kv_lora_rank + qk_rope_head_dim)
+        kvpe_shape = (1, even_int_div(batch_size_per_row, mesh_shape[1]), 1, kv_lora_rank + qk_rope_head_dim)
         kvpe_shard_height = nearest_y(kvpe_shape[2], ttnn.TILE_SIZE)
         kvpe_shard_width = kvpe_shape[3]
         kvpe_num_cores = kvpe_shape[1]
@@ -974,9 +975,10 @@ class MLA1D(AbstractModule):
         )
 
         q_num_cores = num_cores
-        q_num_cores = min(even_int_div(USERS_PER_ROW, mesh_shape[1]) * num_heads, q_num_cores)
+        q_num_cores = min(even_int_div(batch_size_per_row, mesh_shape[1]) * num_heads, q_num_cores)
         block_height = nearest_y(
-            (even_int_div(USERS_PER_ROW, mesh_shape[1]) * num_heads) // q_num_cores, ttnn.TILE_SIZE
+            (even_int_div(batch_size_per_row, mesh_shape[1]) * num_heads) // q_num_cores,
+            ttnn.TILE_SIZE,
         )
         block_width = kv_lora_rank + qk_rope_head_dim
 
@@ -1053,7 +1055,7 @@ class MLA1D(AbstractModule):
         )
 
         wq_a2a_reshard_out_mem_config = ttnn.create_sharded_memory_config(
-            shape=(USERS_PER_ROW, num_heads, kv_lora_rank + qk_rope_head_dim),
+            shape=(batch_size_per_row, num_heads, kv_lora_rank + qk_rope_head_dim),
             core_grid=ttnn.CoreGrid(y=8, x=8),
             strategy=ttnn.ShardStrategy.HEIGHT,
         )
@@ -1066,7 +1068,7 @@ class MLA1D(AbstractModule):
         # via Parallel (which requires non-overlapping core ranges).
         num_q_cores = 16
         num_kv_nope_cores = 16
-        shard_height = ttnn.core.roundup(USERS_PER_ROW, ttnn.TILE_SIZE)
+        shard_height = ttnn.core.roundup(batch_size_per_row, ttnn.TILE_SIZE)
 
         # Q slice: WIDTH sharded on 4x4 grid (0,0)-(3,3) -> 16 cores, shard [32, 96]
         q_slice_mem_config = ttnn.MemoryConfig(
@@ -1705,7 +1707,7 @@ class MLA1D(AbstractModule):
         ttnn.deallocate(tt_kvpe_fp16)
 
         # Update KVPE Cache
-        batch_size_per_dp_shard = even_int_div(USERS_PER_ROW, sdpa_dp_factor)
+        batch_size_per_dp_shard = even_int_div(cfg.get("batch_size_per_row", USERS_PER_ROW), sdpa_dp_factor)
         local_batch_idx = batch_idx % batch_size_per_dp_shard  # Local batch index within the DP shard
         col_idx = batch_idx // batch_size_per_dp_shard  # Which DP shard the batch belongs to
         if _deepseek_kvdbg_enabled():
