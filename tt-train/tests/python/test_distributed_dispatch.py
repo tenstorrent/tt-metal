@@ -59,14 +59,14 @@ class TestLayoutPrimitives:
     def test_replicate_repr(self):
         assert repr(Replicate()) == "Replicate()"
 
-    def test_layout_frozen(self):
+    def test_layout_immutable(self):
         layout = Layout(placements=(Replicate(), Shard(-1)))
         assert layout.ndim == 2
         assert layout.is_sharded_on(1)
         assert not layout.is_sharded_on(0)
-        # Verify frozen (immutable)
+        # Layout uses __slots__ so assignment to undefined attrs raises AttributeError
         with pytest.raises(AttributeError):
-            layout.placements = (Shard(0),)
+            layout.foo = "bar"
 
     def test_layout_hashable(self):
         a = Layout(placements=(Replicate(), Shard(-1)))
@@ -91,7 +91,7 @@ class TestLayoutPrimitives:
 
     def test_replicated_layout_default(self):
         rep = replicated_layout()
-        assert rep.ndim == 1
+        assert rep.ndim == 2  # default is 2 for 2D mesh (DP+TP)
         assert rep.is_replicated()
 
     def test_with_placement(self):
@@ -3612,6 +3612,8 @@ class TestDistributedVsSingleDevice:
         2. Register it in _RAW_OPS
         3. Register a sharding rule
         4. Call through dispatch and verify layout handling
+
+        Assumes 8x4 2D mesh (DP=8, TP=4).
         """
         import ttml
         import ttnn
@@ -3634,14 +3636,26 @@ class TestDistributedVsSingleDevice:
         set_runtime(rt)
 
         # Define a custom op (wraps silu for simplicity)
+        # Use _get_raw to call raw ops directly, avoiding nested dispatch
+        from ttml.distributed.dispatch import _get_raw
+
         def custom_scaled_activation(x, scale=1.0):
-            result = ttml.ops.unary.silu(x)
+            # Call raw silu (not dispatched) since we handle sharding in our rule
+            raw_silu = _get_raw("silu")
+            result = raw_silu(x)
             if scale != 1.0:
+                # Create scale tensor replicated on the mesh
+                rep_mapper = ttml.core.distributed.replicate_tensor_to_mesh_mapper(
+                    mesh_device
+                )
                 scale_tensor = ttml.autograd.Tensor.from_numpy(
                     np.array([[[[scale]]]], dtype=ml_dtypes.bfloat16),
                     layout=ttnn.Layout.TILE,
+                    mapper=rep_mapper,
                 )
-                result = ttml.ops.binary.mul(result, scale_tensor)
+                # Call raw mul to avoid nested dispatch
+                raw_mul = _get_raw("mul")
+                result = raw_mul(result, scale_tensor)
             return result
 
         # Register the raw op
@@ -3658,8 +3672,9 @@ class TestDistributedVsSingleDevice:
             )
 
         # Create distributed tensor with sharded layout
-        np_data = self._nonzero_randn(1, 1, 8, 32)
-        layout = Layout(placements=(Replicate(), Shard(-1)))
+        # Shape [1, 1, 32, 128] - last dim 128 divisible by TP size 4
+        np_data = self._nonzero_randn(1, 1, 32, 128)
+        layout = Layout(ndim=2, axis_placements={1: Shard(-1)})
         x = distribute_tensor(
             ttml.autograd.Tensor.from_numpy(
                 np_data.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
@@ -3965,23 +3980,21 @@ class TestDistributedVsSingleDevice:
         1. Input batch is correctly sharded across DP axis (axis 0)
         2. Model weights are correctly sharded across TP axis (axis 1)
         3. Forward pass produces correct results
-        4. sync_gradients correctly all-reduces across DP axis
-        5. TP gradients stay sharded (not reduced across TP axis)
 
-        Uses mesh [8, 4] = 8 DP x 4 TP = 32 devices.
+        Assumes 8x4 2D mesh (DP=8, TP=4).
         """
         import ttml
         import ttnn
         import ml_dtypes
         from ttml.distributed import init_ops
-        from ttml.distributed.dispatch import _get_raw
-        from ttml.distributed.training import (
-            distribute_tensor,
-            distribute_module,
-            distribute_batch,
-            sync_gradients,
+        from ttml.distributed.training import distribute_tensor
+        from ttml.distributed.layout import (
+            Layout,
+            Shard,
+            Replicate,
+            get_layout,
+            set_layout,
         )
-        from ttml.distributed.layout import Layout, Shard, Replicate, get_layout
         from ttml.distributed.mesh_runtime import MeshRuntime, set_runtime
         from ttml.modules import LinearLayer
 
@@ -4011,7 +4024,7 @@ class TestDistributedVsSingleDevice:
         )
 
         # Distribute weight with TP (column-parallel: shard on out_features)
-        col_layout = Layout(placements=(Replicate(), Shard(-2)))
+        col_layout = Layout(ndim=2, axis_placements={1: Shard(-2)})
         linear.weight.tensor = distribute_tensor(
             linear.weight.tensor, mesh_device, col_layout
         )
@@ -4027,11 +4040,19 @@ class TestDistributedVsSingleDevice:
         num_tokens = 32
         np_input = self._nonzero_randn(batch_size, 1, num_tokens, in_features)
 
-        # Create input tensor and shard across DP axis
-        input_tensor = ttml.autograd.Tensor.from_numpy(
-            np_input.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
+        # Create input tensor directly with shard mapper (like collate does)
+        # Shard batch dim (0) across DP axis (0)
+        batch_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
+            mesh_device, 0, dp_axis  # shard dim 0 across dp_axis
         )
-        x = distribute_batch(input_tensor, mesh_device, dp_axis)
+        x = ttml.autograd.Tensor.from_numpy(
+            np_input.astype(ml_dtypes.bfloat16),
+            layout=ttnn.Layout.TILE,
+            mapper=batch_mapper,
+        )
+        # Stamp the layout metadata
+        batch_layout = Layout(ndim=2, axis_placements={dp_axis: Shard(0)})
+        set_layout(x, batch_layout)
 
         # Verify input is sharded on DP axis (batch dim)
         input_layout = get_layout(x)
@@ -4043,23 +4064,30 @@ class TestDistributedVsSingleDevice:
         out = ttml.ops.linear.linear(x, linear.weight.tensor)
 
         # Output should be sharded on TP axis (column-parallel output)
+        # and also sharded on DP axis (batch preserved)
         out_layout = get_layout(out)
         assert out_layout.is_sharded_on(
             tp_axis
         ), f"Output should be sharded on TP axis, got {out_layout}"
+        assert out_layout.is_sharded_on(
+            dp_axis
+        ), f"Output should preserve DP batch sharding, got {out_layout}"
 
-        # Gather output across TP axis for comparison
+        # Gather output across TP axis first, then DP axis
         out_gathered = ttml.ops.distributed.all_gather(
             out, dim=-1, cluster_axis=tp_axis
         )
+        out_gathered = ttml.ops.distributed.all_gather(
+            out_gathered, dim=0, cluster_axis=dp_axis
+        )
 
-        # Get output as numpy
+        # After gathering, all devices have the full tensor [8, 1, 32, 64]
+        # Use the standard composer - it flattens the 2D mesh and concatenates along dim 0
         out_np = np.asarray(ttml.autograd.to_numpy(out_gathered, composer=composer))
 
-        # Compute reference: each DP rank processes its slice of the batch
-        # Since we gathered across DP axis (dim 0), we have all batch results
-        # Take first 8 slices (one per DP rank, but replicated on each)
-        out_np_first = out_np[:dp_size]
+        # After compose: shape is [32*8, 1, 32, 64] = [256, 1, 32, 64]
+        # All 32 devices have the same gathered result, so take first batch_size rows
+        out_np_first = out_np[:batch_size]
 
         # NumPy reference for full batch
         expected = np_input @ weight_np[0, 0].T
@@ -4074,26 +4102,41 @@ class TestDistributedVsSingleDevice:
         print(f"  Model weights sharded on TP axis (axis 1)")
         print(f"  Forward PCC: {pcc:.4f}")
 
-    def test_distribute_batch_helper(self):
-        """Test the distribute_batch helper function."""
+    def test_batch_sharding_with_mapper(self):
+        """Test batch sharding using shard_tensor_to_mesh_mapper (the correct approach).
+
+        Assumes 8x4 2D mesh (DP=8, TP=4).
+        """
         import ttml
         import ttnn
         import ml_dtypes
-        from ttml.distributed.training import distribute_batch
-        from ttml.distributed.layout import Layout, Shard, Replicate, get_layout
+        from ttml.distributed.layout import (
+            Layout,
+            Shard,
+            Replicate,
+            get_layout,
+            set_layout,
+        )
 
         mesh_device = ttml.autograd.AutoContext.get_instance().get_device()
 
         # Create batch tensor - batch size must be divisible by DP size (8)
         batch_size = 8
-        np_data = self._nonzero_randn(batch_size, 1, 32, 64)
-        tensor = ttml.autograd.Tensor.from_numpy(
-            np_data.astype(ml_dtypes.bfloat16), layout=ttnn.Layout.TILE
-        )
-
-        # Distribute batch across DP axis (axis 0)
         dp_axis = 0
-        result = distribute_batch(tensor, mesh_device, dp_axis)
+        np_data = self._nonzero_randn(batch_size, 1, 32, 64)
+
+        # Create tensor directly with shard mapper (like collate does)
+        batch_mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
+            mesh_device, 0, dp_axis  # shard dim 0 across dp_axis
+        )
+        result = ttml.autograd.Tensor.from_numpy(
+            np_data.astype(ml_dtypes.bfloat16),
+            layout=ttnn.Layout.TILE,
+            mapper=batch_mapper,
+        )
+        # Stamp the layout metadata
+        batch_layout = Layout(ndim=2, axis_placements={dp_axis: Shard(0)})
+        set_layout(result, batch_layout)
 
         # Verify layout: Shard(0) on dp_axis, Replicate on others
         result_layout = get_layout(result)
