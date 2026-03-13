@@ -15,15 +15,25 @@ ParsedDependencies parse_dependency_file(std::istream& file);
 
 // Writes the hashes of the dependencies of `obj` to `hash_file`.
 // Sets badbit on `hash_file` on any failure.
+// When `canonical_dir` is non-empty, dependency paths under `out_dir` are
+// rewritten to use `canonical_dir` so that .dephash files remain valid when
+// compilation happens in a scratch directory different from the NFS cache.
 void write_dependency_hashes(
     const ParsedDependencies& dependencies,
     const std::string& out_dir,
     const std::string& obj,
-    std::ostream& hash_file);
+    std::ostream& hash_file,
+    const std::string& canonical_dir = {});
 
 // Reads dependencies from .d file and writes their hashes to .hash file.
 // Deletes the .hash file on any failure.
-void write_dependency_hashes(const std::string& out_dir, const std::string& obj, const std::string& hash_path);
+// When `canonical_dir` is non-empty, paths under `out_dir` in the .dephash
+// output are rewritten to `canonical_dir`.
+void write_dependency_hashes(
+    const std::string& out_dir,
+    const std::string& obj,
+    const std::string& hash_path,
+    const std::string& canonical_dir = {});
 
 // Returns true if all dependencies' hashes match those stored in `hash_file`.
 bool dependencies_up_to_date(std::istream& hash_file);

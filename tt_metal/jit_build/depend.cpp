@@ -82,7 +82,8 @@ void write_dependency_hashes(
     const ParsedDependencies& dependencies,
     const std::string& out_dir,
     const std::string& obj,
-    std::ostream& hash_file) {
+    std::ostream& hash_file,
+    const std::string& canonical_dir) {
     auto iter = dependencies.find(obj);
     if (iter == dependencies.end()) {
         log_warning(tt::LogBuildKernels, "Cannot cache JIT build, no dependencies found for {}.", obj);
@@ -90,6 +91,9 @@ void write_dependency_hashes(
         return;
     }
     for (const auto& dep : iter->second) {
+        // Need to handle two cases:
+        // 1. file is an absolute path
+        // 2. file is a path relative to out_dir
         std::filesystem::path dep_path(dep);
         if (dep_path.is_relative()) {
             dep_path = out_dir / dep_path;
@@ -108,11 +112,26 @@ void write_dependency_hashes(
             hash_file.setstate(std::ios::badbit);
             return;
         }
-        hash_file << dep_path << '\t' << hash << '\n';
+        // Always write absolute path to the hash file, so when reading back we don't need to
+        // worry about relative paths.
+        // When canonical_dir is set (scratch-mode), rewrite paths under out_dir to canonical_dir
+        // so .dephash files remain valid after the scratch directory is removed.
+        std::filesystem::path record_path = dep_path;
+        if (!canonical_dir.empty()) {
+            auto dep_str = dep_path.string();
+            if (dep_str.starts_with(out_dir)) {
+                record_path = canonical_dir + dep_str.substr(out_dir.size());
+            }
+        }
+        hash_file << record_path << '\t' << hash << '\n';
     }
 }
 
-void write_dependency_hashes(const std::string& out_dir, const std::string& obj, const std::string& hash_path) {
+void write_dependency_hashes(
+    const std::string& out_dir,
+    const std::string& obj,
+    const std::string& hash_path,
+    const std::string& canonical_dir) {
     std::filesystem::path obj_path = obj;
     if (obj_path.is_relative()) {
         obj_path = out_dir / obj_path;
@@ -144,7 +163,7 @@ void write_dependency_hashes(const std::string& out_dir, const std::string& obj,
 
     if (dep_file.is_open()) {
         auto dependencies = parse_dependency_file(dep_file);
-        write_dependency_hashes(dependencies, out_dir, obj, hash_file);
+        write_dependency_hashes(dependencies, out_dir, obj, hash_file, canonical_dir);
     }
     hash_file.close();
     if (hash_file.fail()) {
@@ -171,6 +190,7 @@ bool dependencies_up_to_date(std::istream& hash_file) {
         });
 
         if (!dep_file.is_open()) {
+            // It is a valid case that a dependency file no longer exists, for example a header file is no longer used.
             log_debug(tt::LogBuildKernels, "Need to JIT build because file {} no longer exists.", dep.string());
             return false;
         }
@@ -190,6 +210,7 @@ bool dependencies_up_to_date(std::istream& hash_file) {
         log_warning(tt::LogBuildKernels, "Cannot use JIT build cache because dependency hash file is malformed.");
         return false;
     }
+    // "No dependencies" means "always rebuild".  This shouldn't happen with a properly generated dependency file.
     return count > 0;
 }
 

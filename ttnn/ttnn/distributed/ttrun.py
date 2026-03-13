@@ -538,6 +538,14 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     # causing ESTALE when SFPI JIT builds race on the same inodes.
     # The C++ side (rtoptions.cpp) appends /tt-metal-cache via normalize_path(),
     # so we set the parent directory here to match the default hierarchy.
+    #
+    # Why rank-scoped cache is still needed even with TT_METAL_JIT_SCRATCH:
+    # The scratch dir handles the hot path (SFPI compilation), but not all JIT
+    # operations go through scratch (e.g. non-SFPI builds, firmware builds,
+    # linker outputs).  The ESTALE retry wrappers in tt::filesystem reduce but
+    # don't eliminate contention on shared NFS inodes.  Rank-scoped cache
+    # covers the long tail of other writes.  If future work makes all JIT
+    # builds scratch-aware, rank scoping can be revisited.
     if "TT_METAL_CACHE" not in env and "TT_METAL_CACHE" not in explicit_rank_scoped_keys:
         home = os.environ.get("HOME", "")
         env["TT_METAL_CACHE"] = f"{home}/.cache" if home else "/tmp"

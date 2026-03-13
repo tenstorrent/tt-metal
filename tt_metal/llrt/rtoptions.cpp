@@ -400,9 +400,7 @@ uint16_t RunTimeOptions::get_effective_inspector_rpc_server_port() const {
     uint32_t base = inspector_settings.rpc_server_port;
     if (rank >= 0) {
         uint32_t port = base + static_cast<uint32_t>(rank);
-        if (port > 65535) {
-            port = 65535;
-        }
+        port = std::min<uint32_t>(port, 65535);
         return static_cast<uint16_t>(port);
     }
     return static_cast<uint16_t>(base);

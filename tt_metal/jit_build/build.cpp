@@ -371,8 +371,12 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     is_fw_(build_config.is_fw),
     process_defines_at_compile_(true),
     out_path_(build_config.is_fw ? env_.out_firmware_root_ : env_.out_kernel_root_),
-    scratch_path_(
-        env_.has_scratch() ? (build_config.is_fw ? env_.scratch_firmware_root_ : env_.scratch_kernel_root_) : ""),
+    scratch_path_([&]() -> std::string {
+        if (!env_.has_scratch()) {
+            return "";
+        }
+        return build_config.is_fw ? env_.scratch_firmware_root_ : env_.scratch_kernel_root_;
+    }()),
     cflags_(env.cflags_),
     defines_(env.defines_),
     includes_(env.includes_),
@@ -542,7 +546,8 @@ void JitBuildState::write_build_state_hash(const string& out_dir) const {
     file << build_state_hash_;
 }
 
-void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
+void JitBuildState::compile_one(
+    const string& out_dir, const JitBuildSettings* settings, size_t src_index, const string& canonical_dir) const {
     // ZoneScoped;
 
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
@@ -619,7 +624,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands())) {
         build_failure(this->target_name_, "compile", cmd, log_file.path());
     }
-    jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
+    jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash", canonical_dir);
     tt::filesystem::safe_remove(temp_d_path);  // .d file not needed after hash is written
 }
 
@@ -647,7 +652,9 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
         if (state_changed || need_compile(cache_check_dir, this->objs_[i])) {
             compiled.set(i);
-            launch_build_step([this, &out_dir, settings, i] { this->compile_one(out_dir, settings, i); }, events);
+            launch_build_step(
+                [this, &out_dir, &check_dir, settings, i] { this->compile_one(out_dir, settings, i, check_dir); },
+                events);
         } else {
             log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", cache_check_dir, this->objs_[i]);
         }
@@ -859,9 +866,15 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
                 fs::path scratch_temp = fs::path(work_dir) / this->temp_objs_[i];
                 fs::path cache_final = fs::path(cache_dir) / this->objs_[i];
                 if (compiled.test(i)) {
-                    hard_link_or_copy(scratch_temp, cache_final);
-                    hard_link_or_copy(
-                        fs::path(scratch_temp).concat(".dephash"), fs::path(cache_final).concat(".dephash"));
+                    auto tmp_obj = jit_build::utils::FileRenamer::generate_temp_path(cache_final);
+                    hard_link_or_copy(scratch_temp, tmp_obj);
+                    tt::filesystem::safe_rename(tmp_obj, cache_final, false);
+
+                    fs::path scratch_dephash = fs::path(scratch_temp).concat(".dephash");
+                    fs::path cache_dephash = fs::path(cache_final).concat(".dephash");
+                    auto tmp_dephash = jit_build::utils::FileRenamer::generate_temp_path(cache_dephash);
+                    hard_link_or_copy(scratch_dephash, tmp_dephash);
+                    tt::filesystem::safe_rename(tmp_dephash, cache_dephash, false);
                 }
                 // Clean up scratch temp files
                 tt::filesystem::safe_remove(scratch_temp);

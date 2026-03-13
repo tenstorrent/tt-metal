@@ -66,7 +66,7 @@ bool safe_remove(const std::filesystem::path& path) {
         }
         if (attempt < kMaxFsRetries - 1) {
             std::this_thread::sleep_for(
-                std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + get_retry_jitter_ms()));
+                std::chrono::milliseconds((kFsRetryDelayMs * (attempt + 1)) + get_retry_jitter_ms()));
         }
     }
     log_warning(tt::LogMetal, "Failed to remove {} after {} retries: {}", path.string(), kMaxFsRetries, ec.message());
@@ -96,7 +96,7 @@ bool safe_remove_all(const std::filesystem::path& path) {
         }
         if (attempt < kMaxFsRetries - 1) {
             std::this_thread::sleep_for(
-                std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + get_retry_jitter_ms()));
+                std::chrono::milliseconds((kFsRetryDelayMs * (attempt + 1)) + get_retry_jitter_ms()));
         }
     }
     log_warning(
@@ -120,7 +120,7 @@ bool safe_rename(const std::filesystem::path& src, const std::filesystem::path& 
         }
         if (attempt < kMaxFsRetries - 1) {
             std::this_thread::sleep_for(
-                std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + get_retry_jitter_ms()));
+                std::chrono::milliseconds((kFsRetryDelayMs * (attempt + 1)) + get_retry_jitter_ms()));
         }
     }
     log_warning(
@@ -158,7 +158,7 @@ bool safe_hard_link_or_copy(const std::filesystem::path& target, const std::file
         }
         if (attempt < kMaxFsRetries - 1) {
             std::this_thread::sleep_for(
-                std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + get_retry_jitter_ms()));
+                std::chrono::milliseconds((kFsRetryDelayMs * (attempt + 1)) + get_retry_jitter_ms()));
         }
     }
     log_warning(
@@ -184,7 +184,7 @@ bool safe_create_directories(const std::filesystem::path& path) {
         }
         if (attempt < kMaxFsRetries - 1) {
             std::this_thread::sleep_for(
-                std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + get_retry_jitter_ms()));
+                std::chrono::milliseconds((kFsRetryDelayMs * (attempt + 1)) + get_retry_jitter_ms()));
         }
     }
     log_warning(
@@ -346,8 +346,7 @@ std::vector<std::filesystem::directory_entry> safe_directory_entries(const std::
             try {
                 entries.push_back(*it);
             } catch (const std::filesystem::filesystem_error& e) {
-                // Entry may have disappeared during iteration (ESTALE, ENOENT), skip it.
-                // Only ignore filesystem errors; other exceptions propagate.
+                log_debug(tt::LogMetal, "Skipping stale directory entry in {}: {}", path.string(), e.what());
             }
             it.increment(ec);
             if (ec) {

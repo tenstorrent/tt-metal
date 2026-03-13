@@ -171,7 +171,11 @@ protected:
         const JitBuildSettings* settings,
         bool state_changed,
         const std::string& check_dir = {}) const;
-    void compile_one(const std::string& out_dir, const JitBuildSettings* settings, size_t src_index) const;
+    void compile_one(
+        const std::string& out_dir,
+        const JitBuildSettings* settings,
+        size_t src_index,
+        const std::string& canonical_dir = {}) const;
     bool need_link(const std::string& out_dir) const;
     void link(const std::string& out_dir, const JitBuildSettings* settings, const std::string& link_objs) const;
     void weaken(const std::string& out_dir) const;

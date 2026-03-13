@@ -41,7 +41,6 @@
 #include <experimental/fabric/control_plane.hpp>
 #include <experimental/mock_device.hpp>
 #include "device/device_manager.hpp"
-#include "device/firmware/risc_firmware_initializer.hpp"
 #include <distributed_context.hpp>
 #include <experimental/fabric/fabric.hpp>
 #include <system_mesh.hpp>
