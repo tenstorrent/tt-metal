@@ -19,7 +19,7 @@
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "tools/profiler/op_profiler.hpp"
 
 namespace ttnn::operations::binary_backward {
