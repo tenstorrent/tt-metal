@@ -176,6 +176,14 @@ TEST_F(InterMeshDual2x4FabricFixture, MultiMeshNorthMulticast_1) {
     }
 }
 
+// ========= Data-Movement Tests for BigMesh 1x16 Dual T3K  =========
+
+TEST_F(IntermeshBigMesh1x16FabricFixture, RandomizedInterMeshUnicast) {
+    for (uint32_t i = 0; i < 100; i++) {
+        multihost_utils::RandomizedInterMeshUnicast(this);
+    }
+}
+
 // ========= Data-Movement Tests for NanoExabox Machines  =========
 
 TEST_F(IntermeshNanoExabox2x4FabricFixture, RandomizedIntermeshUnicastBwd) {
