@@ -247,6 +247,13 @@ class NanoExabox1x8FabricFixture : public Fixture {
 // Generic Fixture for BigMesh 1x16 dual T3K systems using Fabric (two T3Ks as a single mesh)
 template <typename Fixture>
 class BigMesh1x16FabricFixture : public Fixture {
+    void SetUp() override {
+        tt::tt_fabric::SetFabricConfig(
+            tt::tt_fabric::FabricConfig::FABRIC_2D,
+            tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
+        Fixture::SetUp();
+    }
+
     std::string get_path_to_mesh_graph_desc() override {
         return "tests/tt_metal/tt_fabric/custom_mesh_descriptors/dual_t3k_1x16_experimental_bigmesh_mgd.textproto";
     }

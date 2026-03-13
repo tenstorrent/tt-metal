@@ -21,7 +21,9 @@ run_dual_t3k_unit_tests() {
   local strict_rank_binding="tests/tt_metal/distributed/config/dual_t3k_strict_connection_rank_bindings.yaml"
   local bigmesh_rank_binding="tests/tt_metal/distributed/config/dual_t3k_1x16_experimental_bigmesh_rank_bindings.yaml"
 
+  echo "LOG_METAL: Running repro_dual_t3k_1x16_fabric_1d_crash.py"
   tt-run --rank-binding "$bigmesh_rank_binding" --mpi-args "$mpi_args" python3 tests/scripts/multihost/repro_dual_t3k_1x16_fabric_1d_crash.py --fabric-2d
+  echo "LOG_METAL: Running multi_host_fabric_tests --gtest_filter='*BigMesh1x16*'"
   tt-run --rank-binding "$bigmesh_rank_binding" --mpi-args "$mpi_args" ./build/test/tt_metal/multi_host_fabric_tests --gtest_filter='*BigMesh1x16*' ; fail+=$?
 
   # Record the end time
