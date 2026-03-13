@@ -5,6 +5,7 @@
 #pragma once
 
 #include <optional>
+
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
