@@ -84,23 +84,11 @@ class SFTConfig:
     save_interval: int = 500
     checkpoint_dir: str = "checkpoints"
     seed: Optional[int] = None
-
-    # ---- sequence ----
     max_seq_len: int = 1024
-
-    # ---- learning rate (used by default warmup schedule & default optimizer) ----
     learning_rate: float = 2e-5
-
-    # ---- scheduler (linear warmup → constant) ----
     warmup_steps: int = 0
-
-    # ---- gradient clipping ----
     max_grad_norm: float = 0.0
-
-    # ---- logging ----
     log_interval: int = 1
-
-    # ---- memory ----
     gradient_checkpointing: bool = False
 
 
