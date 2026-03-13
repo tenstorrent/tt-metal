@@ -205,17 +205,38 @@ TEST(MetalContextIntegrationTest, MockDeviceOnly) {
         distributed::DeviceLocalBufferConfig local_config{.page_size = buffer_size, .buffer_type = BufferType::L1};
         distributed::ReplicatedBufferConfig buffer_config{.size = buffer_size};
         auto buffer = distributed::MeshBuffer::create(buffer_config, local_config, mock_device.get());
-        log_info(tt::LogTest, "Buffer address: {}", buffer->address());
+        ASSERT_GT(buffer->address(), 0);
         ASSERT_TRUE(buffer->is_allocated());
         buffer->deallocate();
         ASSERT_FALSE(buffer->is_allocated());
 
         // Test command queue operations
         auto& cq = mock_device->mesh_command_queue();
-        std::vector<uint32_t> write_data(16);
+        constexpr size_t num_elements = 16;
+        std::vector<uint32_t> write_data(num_elements);
         std::iota(write_data.begin(), write_data.end(), 0xDEADBEEF);
 
         distributed::EnqueueWriteMeshBuffer(cq, buffer, write_data, true);
+
+        std::vector<uint32_t> read_data;
+        distributed::EnqueueReadMeshBuffer(cq, read_data, buffer, true);
+
+        // TODO: Uncomment this once CreateProgram and CreateKernel stop implicitly creating the physical metal context
+        // https://github.com/tenstorrent/tt-metal/issues/39849
+        // auto program = CreateProgram();
+        // distributed::MeshCoordinateRange device_range = distributed::MeshCoordinateRange(mock_device->shape());
+        // auto core_grid = mock_device->compute_with_storage_grid_size();
+        // auto core_range = CoreRange({0, 0}, {core_grid.x - 1, core_grid.y - 1});
+
+        // CreateKernelFromString(
+        //     program,
+        //     "void kernel_main() {}",
+        //     core_range,
+        //     DataMovementConfig{});
+
+        // distributed::MeshWorkload workload;
+        // workload.add_program(device_range, std::move(program));
+        // distributed::EnqueueMeshWorkload(cq, workload, true);
     }
 
     // Assert that we didn't implicitly create the physical metal context
