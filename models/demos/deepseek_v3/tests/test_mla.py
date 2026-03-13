@@ -418,5 +418,44 @@ def test_forward_pass(
     )
 
 
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": get_fabric_config(),
+        }
+    ],
+    indirect=True,
+)
+@pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
+def test_mode_decode_forward_pass_batch_8_users_per_row(
+    hf_config_short,
+    cache_path,
+    mesh_device,
+    ccl,
+    model_path,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+    state_dict,
+):
+    # Keep this case out of the shared matrix so batch-8 decode coverage stays targeted.
+    run_test_forward_pass_mla2d(
+        layer_idx=0,
+        mode="decode",
+        seq_len=1,
+        batch_size_per_row=8,
+        hf_config_short=hf_config_short,
+        cache_path=cache_path,
+        mesh_device=mesh_device,
+        ccl=ccl,
+        model_path=model_path,
+        module_path="model.layers.0.self_attn",
+        force_recalculate_weight_config=force_recalculate_weight_config,
+        state_dict=state_dict,
+        decode_position_ids=17,
+        perf_mode=False,
+    )
+
+
 if __name__ == "__main__":
     pytest.main([__file__])
