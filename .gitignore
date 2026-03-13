@@ -150,6 +150,7 @@ Testing
 .github/actions/*/node_modules/
 models/experimental/petr/resources/*.pth
 
-# Claude Code configuration
-.claude/
-CLAUDE.md
+# Worktree setup markers
+.worktree_building
+.worktree_ready
+.worktree_setup.log
