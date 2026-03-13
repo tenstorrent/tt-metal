@@ -10,31 +10,23 @@ Run cluster validation commands for multiple iterations.
 Required Options:
     --hosts <host-list>                     Comma-separated list of hosts
     --image <docker-image>                  Docker image to use
+    --script <script-path>                  Path to the validation script to run inside the container
 
 Optional:
-    --cabling-descriptor-path <path>        Path to cabling descriptor file
-                                            (default: /data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto)
-    --deployment-descriptor-path <path>     Path to deployment descriptor file
-                                            (default: /data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto)
-    --iterations <number>                   Number of times to run the full validation sequence (default: 50)
-                                            Each iteration runs run_cluster_validation with 10 internal iterations
     --output <directory>                    Output directory for log files (default: validation_output)
     --help                                  Display this help message and exit
 
 Example:
     $0 --hosts bh-glx-c01u02,bh-glx-c01u08,bh-glx-c02u02,bh-glx-c02u08 \\
        --image ghcr.io/tenstorrent/tt-metal/upstream-tests-wh-6u:latest \\
-       --iterations 100
 EOF
 }
 
 # Parse command line arguments
 HOSTS=""
 DOCKER_IMAGE=""
-CABLING_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/cabling_descriptor.textproto"
-DEPLOYMENT_DESCRIPTOR_PATH="/data/scaleout_configs/bh_glx_exabox/deployment_descriptor.textproto"
-ITERATIONS=50
-OUTPUT_DIR="validation_output"
+SCRIPT_PATH=""
+OUTPUT_DIR="ttnn_validation_output"
 
 while [[ $# -gt 0 ]]; do
     case $1 in
@@ -54,32 +46,12 @@ while [[ $# -gt 0 ]]; do
             DOCKER_IMAGE="$2"
             shift 2
             ;;
-        --cabling-descriptor-path)
+        --script)
             if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
-                echo "Error: --cabling-descriptor-path requires a non-empty value"
+                echo "Error: --script requires a non-empty value"
                 exit 1
             fi
-            CABLING_DESCRIPTOR_PATH="$2"
-            shift 2
-            ;;
-        --deployment-descriptor-path)
-            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
-                echo "Error: --deployment-descriptor-path requires a non-empty value"
-                exit 1
-            fi
-            DEPLOYMENT_DESCRIPTOR_PATH="$2"
-            shift 2
-            ;;
-        --iterations)
-            if [[ -z "$2" ]] || [[ "$2" == --* ]]; then
-                echo "Error: --iterations requires a non-empty value"
-                exit 1
-            fi
-            if ! [[ "$2" =~ ^[1-9][0-9]*$ ]]; then
-                echo "Error: --iterations must be a positive integer, got '$2'"
-                exit 1
-            fi
-            ITERATIONS="$2"
+            SCRIPT_PATH="$2"
             shift 2
             ;;
         --output)
@@ -118,51 +90,41 @@ if [[ -z "$DOCKER_IMAGE" ]]; then
     exit 1
 fi
 
+if [[ -z "$SCRIPT_PATH" ]]; then
+    echo "Error: --script is required"
+    echo ""
+    show_help
+    exit 1
+fi
+
 echo "Using hosts: $HOSTS"
 echo "Using docker image: $DOCKER_IMAGE"
-echo "Cabling descriptor path: $CABLING_DESCRIPTOR_PATH"
-echo "Deployment descriptor path: $DEPLOYMENT_DESCRIPTOR_PATH"
-echo "Number of iterations: $ITERATIONS"
+echo "Using script: $SCRIPT_PATH"
 echo "Output directory: $OUTPUT_DIR"
 echo ""
 
 # Create output directory if it doesn't exist
 mkdir -p "$OUTPUT_DIR"
+WORK_DIR=/workspace
 
-# Main testing loop
-for ((i=1; i<=ITERATIONS; i++)); do
-    echo "Starting iteration $i of $ITERATIONS..."
+LOG_FILE="$OUTPUT_DIR/ttnn_validation.log"
+# {
+#     # echo "Running tt-smi -glx_reset..."
+#     # mpirun --host "$HOSTS" --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
+#     # sleep 5
 
-    LOG_FILE="$OUTPUT_DIR/cluster_validation_iteration_${i}.log"
+#     echo ""
+#     echo "Running TTNN validation..."
+#     ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
+#         --empty-entrypoint \
+#         --host "$HOSTS" \
+#         -x ARCH_NAME=blackhole \
+#         -x TT_METAL_LOGS_PATH=/tmp \
+#         -x TT_METAL_HOME=/ \
+#         python $WORK_DIR/$SCRIPT_PATH
+#         # $WORK_DIR/tests/scripts/tg/run_tg_frequent_tests.sh --model unit
 
-    {
-        echo "=========================================="
-        echo "Iteration: $i"
-        echo "Timestamp: $(date)"
-        echo "=========================================="
-        echo ""
+#     echo "=========================================="
+# } 2>&1 | tee "$LOG_FILE"
 
-        echo "Running tt-smi -glx_reset..."
-        mpirun --host "$HOSTS" --mca btl_tcp_if_exclude docker0,lo,tailscale0 tt-smi -glx_reset
-
-        sleep 5
-
-        echo ""
-        echo "Running cluster validation..."
-        ./tools/scaleout/exabox/mpi-docker --image "$DOCKER_IMAGE" \
-            --empty-entrypoint \
-            --host "$HOSTS" \
-            ./build/tools/scaleout/run_cluster_validation \
-            --cabling-descriptor-path "$CABLING_DESCRIPTOR_PATH" \
-            --deployment-descriptor-path "$DEPLOYMENT_DESCRIPTOR_PATH" \
-            --send-traffic \
-            --num-iterations 2
-        echo "Iteration $i completed at $(date)"
-        echo "=========================================="
-    } 2>&1 | tee "$LOG_FILE"
-
-    echo "Iteration $i logged to $LOG_FILE"
-    echo ""
-done
-
-echo "All $ITERATIONS iterations completed!"
+echo "Done."
