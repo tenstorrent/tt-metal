@@ -71,7 +71,6 @@
 #include "tt_metal/impl/program/dispatch.hpp"
 #include "tt_metal/jit_build/build_env_manager.hpp"
 #include "tt_metal/jit_build/genfiles.hpp"
-#include "tt_metal/jit_build/precompiled.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
@@ -177,28 +176,17 @@ std::string ensure_kernel_binaries(
     const DeviceBuildEnv& build_env,
     size_t kernel_hash) {
     if (const auto& precompiled_config = kernel->precompiled_config(); precompiled_config.has_value()) {
-        const auto precompiled_dir =
-            precompiled::find_precompiled_kernel_dir(precompiled_config->precompiled_dir, kernel->name(), kernel_hash);
-        if (precompiled_dir.has_value()) {
-            if (kernel->binaries_exist_on_disk(device, precompiled_config->precompiled_dir)) {
-                log_debug(
-                    tt::LogBuildKernels,
-                    "Using precompiled kernel binaries. kernel_name={}, compile_hash={}, precompiled_dir={}",
-                    kernel->name(),
-                    kernel_hash,
-                    precompiled_config->precompiled_dir);
-                return precompiled_config->precompiled_dir;
-            }
+        if (kernel->binaries_exist_on_disk(device, precompiled_config->precompiled_dir)) {
             log_debug(
                 tt::LogBuildKernels,
-                "Precompiled kernel directory found but missing binaries. kernel_name={}, compile_hash={}, "
-                "precompiled_dir={}",
+                "Using precompiled kernel binaries. kernel_name={}, compile_hash={}, precompiled_dir={}",
                 kernel->name(),
                 kernel_hash,
                 precompiled_config->precompiled_dir);
+            return precompiled_config->precompiled_dir;
         }
 
-        if (precompiled_config->fallback_policy == decltype(precompiled_config->fallback_policy)::Error) {
+        if (precompiled_config->fallback_policy == experimental::PrecompiledKernelConfig::BinaryNotFoundPolicy::Error) {
             throw experimental::PrecompiledKernelNotFoundError(
                 kernel->name(), kernel_hash, precompiled_config->precompiled_dir, precompiled_config->fallback_policy);
         }
