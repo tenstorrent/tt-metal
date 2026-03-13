@@ -44,6 +44,7 @@ jobs:
       env:
         LOGURU_LEVEL: INFO
         PYTHONPATH: /work
+        TT_METAL_HOME: /work
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         LSAN_OPTIONS: suppressions=/usr/share/tt-metalium/lsan.supp
       volumes:
