@@ -93,8 +93,7 @@ void merge_scratch_to_cache(const std::string& scratch_dir, const std::string& c
 
         auto tmp_path = jit_build::utils::FileRenamer::generate_temp_path(dst);
         if (!tt::filesystem::safe_hard_link_or_copy(src, tmp_path)) {
-            log_warning(
-                tt::LogBuildKernels, "Failed to copy scratch artifact {} to {}", src.string(), tmp_path.string());
+            log_warning(tt::LogBuildKernels, "Failed to copy scratch artifact {} to {}", src.string(), tmp_path);
             continue;
         }
         tt::filesystem::safe_rename(tmp_path, dst, false);
