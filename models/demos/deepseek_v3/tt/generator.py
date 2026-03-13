@@ -118,11 +118,25 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.hf_config = (
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         )
-        # Hard-code the context length to keep KV cache + RoPE tables bounded.
-        # (Avoid env var overrides; long-context runs should change this constant in code.)
-        if max_seq_len is not None and int(max_seq_len) != MAX_SEQ_LEN:
-            logger.warning(f"Ignoring requested max_seq_len={max_seq_len}; using MAX_SEQ_LEN={MAX_SEQ_LEN}.")
-        self.hf_config.max_seq_len = MAX_SEQ_LEN
+        self._ensure_max_seq_len(self.hf_config)
+        model_max_seq_len = int(self.hf_config.max_seq_len)
+        requested_max_seq_len = MAX_SEQ_LEN if max_seq_len is None else int(max_seq_len)
+        if requested_max_seq_len <= 0:
+            raise ValueError(f"max_seq_len must be > 0, got {requested_max_seq_len}")
+        if requested_max_seq_len % ttnn.TILE_SIZE != 0:
+            raise ValueError(f"max_seq_len {requested_max_seq_len} must be divisible by TILE_SIZE={ttnn.TILE_SIZE}")
+        if requested_max_seq_len > model_max_seq_len:
+            raise ValueError(
+                f"max_seq_len {requested_max_seq_len} exceeds model-supported context length {model_max_seq_len}"
+            )
+        if requested_max_seq_len != MAX_SEQ_LEN:
+            logger.warning(
+                "Using overridden max_seq_len={} (default={}, model supports up to {}).",
+                requested_max_seq_len,
+                MAX_SEQ_LEN,
+                model_max_seq_len,
+            )
+        self.hf_config.max_seq_len = requested_max_seq_len
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:

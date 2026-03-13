@@ -97,6 +97,11 @@ def create_parser() -> argparse.ArgumentParser:
         help="Path to local HF DeepSeek-V3 model (safetensors)",
     )
     p.add_argument("--max-new-tokens", type=int, default=32, help="Number of tokens to generate")
+    p.add_argument(
+        "--max-seq-len",
+        type=int,
+        help="Optional generator context length override. Must be divisible by 32 and <= the model-supported limit.",
+    )
     p.add_argument("--cache-dir", type=str, required=True)
     p.add_argument(
         "--sampling",
@@ -329,6 +334,7 @@ def run_demo(
     *,
     model_path: str | Path | None = None,
     max_new_tokens: int = 32,
+    max_seq_len: int | None = None,
     cache_dir: str | Path | None = None,
     random_weights: bool = False,
     single_layer: str | None = None,
@@ -455,6 +461,7 @@ def run_demo(
                     override_num_layers if override_num_layers is not None else (1 if random_weights else None)
                 ),
                 single_layer=(single_layer if random_weights else None),
+                max_seq_len=max_seq_len,
                 enable_trace=enable_trace,
                 enable_mem_profile=enable_mem_profile,
                 signpost=signpost,
@@ -693,6 +700,7 @@ def main() -> None:
         args.prompts,
         model_path=args.model_path,
         max_new_tokens=args.max_new_tokens,
+        max_seq_len=args.max_seq_len,
         cache_dir=args.cache_dir,
         random_weights=bool(args.random_weights),
         single_layer=args.single_layer,
