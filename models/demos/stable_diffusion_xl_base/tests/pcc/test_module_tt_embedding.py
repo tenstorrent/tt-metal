@@ -9,22 +9,40 @@ from diffusers import UNet2DConditionModel
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import torch_random
+from models.common.utility_functions import torch_random, is_blackhole
 from models.demos.stable_diffusion_xl_base.tt.model_configs import load_model_optimisations
 from models.demos.stable_diffusion_xl_base.tt.tt_embedding import TtTimestepEmbedding
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("image_resolution", [(1024, 1024), (512, 512)])
+@pytest.mark.parametrize(
+    "image_resolution",
+    [
+        (1024, 1024),
+        (512, 512),
+    ],
+)
 @pytest.mark.parametrize("input_shape, module_path", [((1, 320), "time_embedding"), ((1, 2816), "add_embedding")])
 @pytest.mark.parametrize("linear_weights_dtype", [ttnn.bfloat16])
-def test_embedding(device, image_resolution, input_shape, module_path, is_ci_env, reset_seeds, linear_weights_dtype):
+def test_embedding(
+    device,
+    image_resolution,
+    input_shape,
+    module_path,
+    is_ci_env,
+    is_ci_v2_env,
+    sdxl_base_unet_location,
+    reset_seeds,
+    linear_weights_dtype,
+):
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
     unet = UNet2DConditionModel.from_pretrained(
-        "stabilityai/stable-diffusion-xl-base-1.0",
+        sdxl_base_unet_location,
         torch_dtype=torch.float32,
         use_safetensors=True,
-        subfolder="unet",
-        local_files_only=is_ci_env,
+        local_files_only=is_ci_v2_env or is_ci_env,
+        subfolder=None if is_ci_v2_env else "unet",
     )
     unet.eval()
     state_dict = unet.state_dict()
