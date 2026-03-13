@@ -308,7 +308,7 @@
   model-name: wan2.2-t2v-a14b
 
 - name: llama3-8b performance batch-32
-  cmd: HF_MODEL=meta-llama/Meta-Llama-3-8B TT_CACHE_PATH=meta-llama/Meta-Llama-3-8B pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  cmd: HF_MODEL=models/tt_transformers/model_params/Meta-Llama-3-8B TT_CACHE_PATH=models/tt_transformers/model_params/Meta-Llama-3-8B pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
   skus:
     bh_llmbox:
       timeout: 10
@@ -325,7 +325,7 @@
   model-name: llama3-8b
 
 - name: qwen2.5-32b-instruct performance batch-32
-  cmd: HF_MODEL=Qwen/Qwen2.5-32B-Instruct TT_CACHE_PATH=Qwen/Qwen2.5-32B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  cmd: HF_MODEL=models/tt_transformers/model_params/Qwen2.5-32B-Instruct TT_CACHE_PATH=models/tt_transformers/model_params/Qwen2.5-32B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
   skus:
     bh_llmbox:
       timeout: 10
@@ -338,7 +338,7 @@
   model-name: qwen2.5-32b-instruct
 
 - name: qwen2.5-72b-instruct performance batch-32
-  cmd: HF_MODEL=Qwen/Qwen2.5-72B-Instruct TT_CACHE_PATH=Qwen/Qwen2.5-72B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  cmd: HF_MODEL=models/tt_transformers/model_params/Qwen2.5-72B-Instruct TT_CACHE_PATH=models/tt_transformers/model_params/Qwen2.5-72B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
   skus:
     bh_llmbox:
       timeout: 10
@@ -351,7 +351,7 @@
   model-name: qwen2.5-72b-instruct
 
 - name: qwen2.5-vl-32b-instruct performance batch-32
-  cmd: HF_MODEL=Qwen/Qwen2.5-VL-32B-Instruct TT_CACHE_PATH=Qwen/Qwen2.5-VL-32B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  cmd: HF_MODEL=models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct TT_CACHE_PATH=models/tt_transformers/model_params/Qwen2.5-VL-32B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
   skus:
     bh_llmbox:
       timeout: 10
@@ -364,7 +364,7 @@
   model-name: qwen2.5-vl-32b-instruct
 
 - name: qwen2.5-vl-72b performance batch-32
-  cmd: HF_MODEL=Qwen/Qwen2.5-VL-72B-Instruct TT_CACHE_PATH=Qwen/Qwen2.5-VL-72B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  cmd: HF_MODEL=models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct TT_CACHE_PATH=models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
   skus:
     bh_llmbox:
       timeout: 10
@@ -377,7 +377,7 @@
   model-name: qwen2.5-vl-72b
 
 - name: qwen3-vl-32b performance batch-32
-  cmd: HF_MODEL=Qwen/Qwen3-VL-32B-Instruct TT_CACHE_PATH=Qwen/Qwen3-VL-32B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  cmd: HF_MODEL=models/tt_transformers/model_params/Qwen3-VL-32B-Instruct TT_CACHE_PATH=models/tt_transformers/model_params/Qwen3-VL-32B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
   skus:
     bh_llmbox:
       timeout: 10
@@ -414,7 +414,7 @@
   model-name: gpt-oss-20b
 
 - name: gpt-oss-120b performance
-  cmd: HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=openai/gpt-oss-120b pytest models/demos/gpt_oss/demo/text_demo.py -k "performance" --timeout=1200
+  cmd: HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache pytest models/demos/gpt_oss/demo/text_demo.py -k "performance" --timeout=1200
   skus:
     bh_loudbox:
       timeout: 30
