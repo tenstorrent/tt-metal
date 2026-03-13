@@ -1,111 +1,9 @@
 # TTNN Operation Diagram Templates
 
-## SFPU Condition Code Diagram
-
-Example is related to the _trunc_body_ function.
-
-                                +---------------+
-                                | Input: LREG0  |
-                                | LREG3 = 23    |
-                                +---------------+
-                                        |
-                                        |
-                                +-------------------+
-                                |    SFPEXEXP       |
-                                | Extracts unbiased |
-                                | exponent to LREG2 |
-                                +-------------------+
-                                        |
-                                        |
-                    +--------------------------------------------+
-                    |                                            |
-                LREG2 < 0                                    LREG2 >=0
-                    |                                            |
-        +-------------------------------+           +---------------------------+
-        | Lane disabled                 |           | Lane enabled              |
-        | Keep mask LREG1 = 0X8000_0000 |           | LREG2 = LREG3 - LREG2     |
-        +-------------------------------+           |       = 23 - LREG2        |
-                    |                               | LREG1 = LREG1 << LREG2    |
-                    |                               +---------------------------+
-                    |                                            |
-                    +--------------------------------------------+
-                                        |
-                                        |
-                            +-----------------------+
-                            | LREG1 = LREG0 & LREG1 |
-                            | Output: LREG1         |
-                            +-----------------------+
-
----
-
-## Suggested Alternative Diagrams
-
-All alternatives below depict the same `_trunc_body_` / `_calculate_trunc_` logic
-using different visual styles, each suited for different documentation contexts.
-
-## CC State Machine
-
-Focuses on how the condition code state evolves across instructions.
-Best for complex kernels with nested or chained CC updates.
-
-```
-_trunc_body_ — CC State Transitions
-════════════════════════════════════════════════════════════════
-
-  CC State: ALL_ENABLED                   ◁── initial state
-       │
-       │  SFPLOADI L3=23                  (no CC effect)
-       │  SFPLOADI L1=0x8000_0000         (no CC effect)
-       │
-       ▼
-  ┌─────────────────────────────────┐
-  │ SFPEXEXP  SET_CC_SGN_EXP |      │
-  │           SET_CC_COMP_EXP       │
-  │                                 │
-  │ CC ← (unbiased_exp ≥ 0)        │
-  └────────────┬────────────────────┘
-               │
-               ▼
-  CC State: ENABLED where exp ≥ 0
-       │
-       │  SFPLOADI L1=0xFFFF_FFFF    (CC-guarded: only exp≥0 lanes)
-       │
-       ▼
-  ┌─────────────────────────────────┐
-  │ SFPIADD  CC_GTE0                │
-  │                                 │
-  │ CC ← CC_prev AND (result ≥ 0)  │
-  │    = (exp ≥ 0) AND (23-exp ≥ 0)│
-  │    = (0 ≤ exp ≤ 23)            │
-  └────────────┬────────────────────┘
-               │
-               ▼
-  CC State: ENABLED where 0 ≤ exp ≤ 23
-       │
-       │  SFPSHFT2 L1 <<= L2        (CC-guarded: only 0≤exp≤23 lanes)
-       │
-       ▼
-  ┌─────────────────────────────────┐
-  │ SFPENCC                         │
-  │                                 │
-  │ CC ← ALL_ENABLED               │
-  └────────────┬────────────────────┘
-               │
-               ▼
-  CC State: ALL_ENABLED
-       │
-       │  SFPAND L1 = L0 & L1       (all lanes)
-       ▼
-```
-
 ---
 
 ## CC State Machine — Generalized Template
 
-Use this template to produce CC State Machine diagrams for any SFPU kernel that
-uses raw TTI_ instructions (non-SFPI). The diagram tracks condition code state
-as a vertical flow, with boxed nodes for CC-modifying instructions and inline
-annotations for CC-guarded instructions.
 
 ### Construction Rules
 
@@ -146,7 +44,6 @@ annotations for CC-guarded instructions.
      `SFPADDI`, `SFPAND`, `SFPOR`, `SFPSHFT2`, `SFPLOADI`, `SFPLOAD`, `SFPSTORE`,
      `SFPMOV`, `SFPNOP`) are always safe to annotate as `(no CC effect)`.
 
-1. **Start with `CC State: ALL_ENABLED`** — this is always the initial state.
 
 2. **Group consecutive non-CC instructions** between state transitions. List them
    as indented lines with `│` continuation and `(no CC effect)` annotation:
@@ -275,15 +172,3 @@ calls `_trunc_body_` then has its own CC block). Chain them vertically:
        │  ...
   CC State: ALL_ENABLED               ◁── SFPENCC reset
 ```
-
-### Quick Reference: Common CC-Setting Patterns
-
-| Instruction | Modifier | CC becomes |
-|-------------|----------|------------|
-| `SFPEXEXP`  | `SET_CC_SGN_EXP \| SET_CC_COMP_EXP` | enabled where unbiased exp ≥ 0 |
-| `SFPSETCC`  | `LREG_LT0` | enabled where LREG < 0 |
-| `SFPSETCC`  | `LREG_GTE0` | enabled where LREG ≥ 0 |
-| `SFPIADD`   | `CC_LT0` | CC_prev AND (result < 0) |
-| `SFPIADD`   | `CC_GTE0` | CC_prev AND (result ≥ 0) |
-| `SFPIADD`   | `CC_NONE` | CC unchanged (no CC update) |
-| `SFPENCC`   | — | ALL_ENABLED (full reset) |

@@ -239,3 +239,75 @@ The MCP-is-dead debate posts, plan/pricing complaints, and most "I built X" show
 ### Time estimate
 
 Tier 1-2 (posts 1-8) is ~2 hours of reading and will give you 80% of the value.
+
+---
+
+## 4. Context Maximization & Token Optimization Strategies
+
+The Ralph Loop and related context management techniques weren't heavily represented in Reddit feed data (the Reddit MCP only provides hot/new/top feeds, not search). The best resources come from a mix of Reddit posts and external sources.
+
+### The Ralph Loop (Fresh Context Pattern)
+
+The Ralph Loop (a.k.a. "Ralph Wiggum technique") is an autonomous loop that prevents context window degradation by spawning fresh Claude Code sessions for each iteration, persisting state through files and git commits rather than conversation history.
+
+**Core idea**: Instead of one long conversation that degrades, run many short fresh sessions. Each session reads state from disk, does work, commits, exits. Next session starts clean.
+
+| Source | Link |
+|--------|------|
+| GitHub (original) | [snarktank/ralph](https://github.com/snarktank/ralph) — autonomous agent loop that runs until all PRD items complete |
+| GitHub (Claude Code variant) | [frankbria/ralph-claude-code](https://github.com/frankbria/ralph-claude-code) — autonomous dev loop with intelligent exit detection |
+| DeepWiki explanation | [Fresh Context Pattern (Ralph Loop)](https://deepwiki.com/FlorianBruniaux/claude-code-ultimate-guide/7.3-fresh-context-pattern-(ralph-loop)) |
+| Awesome list | [snwfdhmp/awesome-ralph](https://github.com/snwfdhmp/awesome-ralph) — curated resources about the Ralph technique |
+| Medium walkthrough | [The RALPH Loop Changes Everything — Part 1](https://medium.com/@munish.munagala/using-claude-code-the-ralph-loop-changes-everything-part-1-7c842d4a5352) |
+| Critical take | [The "Fake Ralph Loop" in Claude Code](https://medium.com/@honestuser_ai/the-fake-ralph-loop-in-claude-code-b71c48bb41cd) — distinguishes real fresh-context loops from session-internal loops |
+| Blog guide | [Ralph Wiggum technique: Run Claude Code autonomously for hours](https://www.atcyrus.com/stories/ralph-wiggum-technique-claude-code-autonomous-loops) |
+| Claude plugin | [Ralph Loop – Claude Plugin](https://claude.com/plugins/ralph-loop) |
+
+**Note**: With Opus 4.6, the Ralph Loop is becoming less necessary for many tasks — compaction has improved significantly, and the model handles long sessions better. Still valuable for overnight/autonomous runs.
+
+### Token Saving & Context Optimization (Reddit)
+
+| Score | Post | Key Takeaway |
+|------:|------|--------------|
+| 2735 | [I blew $417 on Claude Code to build a word game. Here's the brutal truth.](https://www.reddit.com/r/ClaudeAI/comments/1jpddbf/i_blew_417_on_claude_code_to_build_a_word_game/) | Cautionary tale on runaway token costs without context discipline |
+| 794 | [I saved 10M tokens (89%) on my Claude Code sessions with a CLI proxy](https://www.reddit.com/r/ClaudeAI/comments/1r2tt7q/i_saved_10m_tokens_89_on_my_claude_code_sessions/) | CLI proxy approach for massive token reduction |
+| 825 | [I've used AI to write 100% of my code for 1+ year. 13 no-bs lessons](https://www.reddit.com/r/ClaudeCode/comments/1qxvobt/ive_used_ai_to_write_100_of_my_code_for_1_year_as/) | Plan mode and session management lessons |
+| 776 | [What I learned from writing 500k+ lines with Claude Code](https://www.reddit.com/r/ClaudeCode/comments/1px2umk/what_i_learned_from_writing_500k_lines_with/) | Context management at scale |
+| 552 | [This is what 3k hours in CC looks like](https://www.reddit.com/r/ClaudeCode/comments/1r8h10y/this_is_what_3k_hours_in_cc_looks_like/) | Real token cost data from heavy usage |
+| 506 | [I published a nice compact status line that you will probably like](https://www.reddit.com/r/ClaudeCode/comments/1rj85f5/i_published_a_nice_compact_status_line_that_you/) | Monitoring context usage in real-time |
+| 14 | [mcp2cli — Turn any MCP server or OpenAPI spec into a CLI, save 96–99% of tokens](https://www.reddit.com/r/ClaudeCode/comments/1rsabue/mcp2cli_turn_any_mcp_server_or_openapi_spec_into/) | Eliminate token waste from tool schemas |
+| 1 | [Built an MCP that stops Claude from reading 5000-line logs raw (96% token reduction)](https://www.reddit.com/r/ClaudeAI/comments/1rsh2ly/built_an_mcp_that_stops_claude_from_reading/) | Pre-process large inputs before feeding to Claude |
+
+### UltraThink / Extended Thinking
+
+| Score | Post | Note |
+|------:|------|------|
+| 1042 | [btw im ultrathinking to simplify the loop of these fast releases](https://www.reddit.com/r/ClaudeAI/comments/1rqgtlc/btw_im_ultrathinking_to_simplify_the_loop_of/) | Community discussion on ultrathink usage |
+
+UltraThink was deprecated Jan 16, 2026. Extended thinking is now enabled by default with max budget. Use `/effort` command for granular control (low/medium/high/max). See [What is UltraThink in Claude Code](https://claudelog.com/faqs/what-is-ultrathink/) and [UltraThink is Dead. Long Live Extended Thinking.](https://decodeclaude.com/ultrathink-deprecated/).
+
+### External Guides (Non-Reddit, High Value)
+
+| Source | Link | Focus |
+|--------|------|-------|
+| Official docs | [Claude Code Best Practices](https://code.claude.com/docs/en/best-practices) | Anthropic's own recommendations |
+| Blog (comprehensive) | [12 Proven Techniques to Save Tokens in Claude Code](https://aslamdoctor.com/12-proven-techniques-to-save-tokens-in-claude-code/) | Token saving checklist |
+| GitHub (mega-guide) | [Claude-Code-Everything-You-Need-to-Know](https://github.com/wesammustafa/Claude-Code-Everything-You-Need-to-Know) | All-in-one guide including BMAD method |
+| GitHub gist | [Practical workflow for reducing token usage](https://gist.github.com/dholdaway/8009f089d3407e14f3d753f2a70eb63e) | Compacting strategies, CLAUDE.md structure, modular context |
+| Blog | [A Guide to Claude Code 2.0 and getting better at coding agents](https://sankalp.bearblog.dev/my-experience-with-claude-code-20-and-how-to-get-better-at-using-coding-agents/) | Practical workflow optimization |
+| Frontend Masters | [Thinking Mode & Compacting Context Windows](https://frontendmasters.com/courses/pro-ai/thinking-mode-compacting-context-windows/) | Video course on context management |
+| DEV Community | [24 Claude Code Tips: advent calendar](https://dev.to/oikon/24-claude-code-tips-claudecodeadventcalendar-52b5) | Daily tips collection |
+| Hacker News | [Claude Code: Best practices for agentic coding](https://news.ycombinator.com/item?id=43735550) | HN discussion on official best practices |
+
+### Quick Reference: Context Maximization Cheat Sheet
+
+1. **`/compact`** — Summarize conversation, reload fresh with summary pre-loaded
+2. **`/clear`** — Full reset when switching tasks (don't accumulate unrelated context)
+3. **Plan Mode** — Separate thinking from execution, saves 40-60% tokens
+4. **Sub-agents** — Offload research to separate context windows, get back summaries
+5. **`.claudeignore`** — Exclude irrelevant files from scanning
+6. **`/effort`** — Control thinking depth (low for simple, max for hard problems)
+7. **CLAUDE.md** — Keep under 5k tokens, use as persistent project memory
+8. **Ralph Loop** — For autonomous/overnight runs: fresh session per iteration, persist via files+git
+9. **Worktrees** — Parallel agents in isolated git worktrees, no file conflicts
+10. **MCP tool pruning** — Remove unused MCP servers to reduce tool schema overhead
