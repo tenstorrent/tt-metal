@@ -13,6 +13,18 @@ Integration test against real weights (requires KIMI_HF_MODEL env var)::
     KIMI_HF_MODEL=/workspace/extra/Kimi-K2.5 \
         pytest models/demos/kimi_k25/tests/test_weight_loader.py -v -k real
 
+Key namespace (after prefix stripping)
+---------------------------------------
+KimiLazyStateDict strips ``language_model.`` from checkpoint keys, so the
+exposed keys look like DSV3's convert_weights expects::
+
+    model.layers.{L}.mlp.experts.{E}.gate_proj.weight_packed  ← INT4 → BF16
+    model.layers.{L}.self_attn.q_proj.weight                  ← BF16 pass-through
+    lm_head.weight                                             ← BF16 pass-through
+
+Full checkpoint keys (as stored in safetensors) use ``language_model.model.*``
+for text-backbone tensors and ``language_model.lm_head.*`` for the LM head.
+
 Test structure
 --------------
 Unit tests (no real weights needed):
@@ -26,6 +38,7 @@ Unit tests (no real weights needed):
   - test_kimi_state_dict_scale_accessible: weight_scale key readable
   - test_kimi_state_dict_missing_key_raises: KeyError for missing key
   - test_kimi_state_dict_cache_hit: second access returns same tensor
+  - test_view_with_prefix_preserves_dequant: sub-view retains INT4 dequant
 
 Integration tests (require KIMI_HF_MODEL):
   - test_real_gate_proj_shape_dtype: real gate_proj expert weight
@@ -53,6 +66,12 @@ from models.demos.kimi_k25.utils.weight_loader import (
     packed_key_to_scale_key,
     packed_key_to_shape_key,
 )
+
+# Full checkpoint prefix for text-backbone tensors (as stored in safetensors).
+# Note: this is NOT the same as KIMI_MODEL_PREFIX ("language_model.") which is
+# what KimiLazyStateDict strips to expose model.layers.* keys to callers.
+_CKPT_TEXT_PREFIX = "language_model.model."
+_CKPT_LMHEAD_PREFIX = "language_model."
 
 
 # ── Test helpers ─────────────────────────────────────────────────────────────
@@ -89,6 +108,14 @@ def _make_checkpoint(
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Create a minimal Kimi-like safetensors checkpoint in *tmp_path*.
 
+    Mock checkpoint key structure mirrors the real Kimi K2.5 checkpoint:
+      - ``language_model.model.*`` for text backbone weights
+      - ``language_model.lm_head.*`` for the LM head
+
+    After KimiLazyStateDict strips ``language_model.``, these are exposed as:
+      - ``model.layers.*``, ``model.embed_tokens.*``, etc.
+      - ``lm_head.*``
+
     Returns:
         (weights_i8, scales, attn_weight) — original tensors for reference.
     """
@@ -101,18 +128,22 @@ def _make_checkpoint(
         torch.bfloat16
     )
     attn_weight = torch.randn(out_f, in_f, dtype=torch.bfloat16)
+    lm_head_weight = torch.randn(out_f, in_f, dtype=torch.bfloat16)
 
     packed_i32 = _pack_int4_to_i32(weights_i8)  # (out_f, in_f // 8)
 
-    prefix = KIMI_MODEL_PREFIX  # "language_model.model."
+    # Full checkpoint keys — use the real Kimi K2.5 prefix scheme:
+    #   language_model.model.*  for text backbone
+    #   language_model.lm_head.* for LM head
     tensors: dict[str, torch.Tensor] = {
-        f"{prefix}layers.1.mlp.experts.0.gate_proj.weight_packed": packed_i32,
-        f"{prefix}layers.1.mlp.experts.0.gate_proj.weight_scale": scales,
-        f"{prefix}layers.1.self_attn.q_proj.weight": attn_weight,
+        f"{_CKPT_TEXT_PREFIX}layers.1.mlp.experts.0.gate_proj.weight_packed": packed_i32,
+        f"{_CKPT_TEXT_PREFIX}layers.1.mlp.experts.0.gate_proj.weight_scale": scales,
+        f"{_CKPT_TEXT_PREFIX}layers.1.self_attn.q_proj.weight": attn_weight,
+        f"{_CKPT_LMHEAD_PREFIX}lm_head.weight": lm_head_weight,
     }
     if include_weight_shape:
         shape_tensor = torch.tensor([out_f, in_f], dtype=torch.int32)
-        tensors[f"{prefix}layers.1.mlp.experts.0.gate_proj.weight_shape"] = shape_tensor
+        tensors[f"{_CKPT_TEXT_PREFIX}layers.1.mlp.experts.0.gate_proj.weight_shape"] = shape_tensor
 
     shard = "model-00001-of-00001.safetensors"
     save_file(tensors, tmp_path / shard)
@@ -203,19 +234,28 @@ class TestDequantizeI32Packed:
 
 
 def test_is_int4_packed_key():
-    assert is_int4_packed_key("layers.1.mlp.experts.0.gate_proj.weight_packed")
-    assert not is_int4_packed_key("layers.1.mlp.experts.0.gate_proj.weight_scale")
-    assert not is_int4_packed_key("layers.0.self_attn.q_proj.weight")
+    assert is_int4_packed_key("model.layers.1.mlp.experts.0.gate_proj.weight_packed")
+    assert not is_int4_packed_key("model.layers.1.mlp.experts.0.gate_proj.weight_scale")
+    assert not is_int4_packed_key("model.layers.0.self_attn.q_proj.weight")
 
 
 def test_packed_to_scale_key():
-    k = "layers.1.mlp.experts.0.gate_proj.weight_packed"
-    assert packed_key_to_scale_key(k) == "layers.1.mlp.experts.0.gate_proj.weight_scale"
+    k = "model.layers.1.mlp.experts.0.gate_proj.weight_packed"
+    assert packed_key_to_scale_key(k) == "model.layers.1.mlp.experts.0.gate_proj.weight_scale"
 
 
 def test_packed_to_shape_key():
-    k = "layers.1.mlp.experts.0.gate_proj.weight_packed"
-    assert packed_key_to_shape_key(k) == "layers.1.mlp.experts.0.gate_proj.weight_shape"
+    k = "model.layers.1.mlp.experts.0.gate_proj.weight_packed"
+    assert packed_key_to_shape_key(k) == "model.layers.1.mlp.experts.0.gate_proj.weight_shape"
+
+
+def test_kimi_model_prefix_value():
+    """KIMI_MODEL_PREFIX must equal 'language_model.' for DSV3 compat."""
+    assert KIMI_MODEL_PREFIX == "language_model.", (
+        f"KIMI_MODEL_PREFIX is {KIMI_MODEL_PREFIX!r}; "
+        "must be 'language_model.' so sub_state_dict('model.embed_tokens.') "
+        "maps to 'language_model.model.embed_tokens.*' in the checkpoint."
+    )
 
 
 # ── Unit tests: KimiLazyStateDict ────────────────────────────────────────────
@@ -237,54 +277,60 @@ def ckpt(tmp_path):
 class TestKimiLazyStateDict:
     def test_expert_weight_dtype(self, ckpt):
         state = KimiLazyStateDict(ckpt["path"])
-        w = state["layers.1.mlp.experts.0.gate_proj.weight_packed"]
+        w = state["model.layers.1.mlp.experts.0.gate_proj.weight_packed"]
         assert w.dtype == torch.bfloat16
 
     def test_expert_weight_shape(self, ckpt):
         state = KimiLazyStateDict(ckpt["path"])
-        w = state["layers.1.mlp.experts.0.gate_proj.weight_packed"]
+        w = state["model.layers.1.mlp.experts.0.gate_proj.weight_packed"]
         assert w.shape == (ckpt["out_f"], ckpt["in_f"])
 
     def test_expert_weight_pcc(self, ckpt):
         state = KimiLazyStateDict(ckpt["path"])
-        w = state["layers.1.mlp.experts.0.gate_proj.weight_packed"]
+        w = state["model.layers.1.mlp.experts.0.gate_proj.weight_packed"]
         ref = _reference_dequant(ckpt["weights_i8"], ckpt["scales"])
         pcc = _pcc(w, ref)
         assert pcc > 0.9999, f"PCC={pcc:.6f} < 0.9999"
 
     def test_passthrough_bf16_weight(self, ckpt):
         state = KimiLazyStateDict(ckpt["path"])
-        q = state["layers.1.self_attn.q_proj.weight"]
+        q = state["model.layers.1.self_attn.q_proj.weight"]
         assert q.dtype == torch.bfloat16
         assert torch.allclose(q, ckpt["attn_weight"])
 
+    def test_lm_head_accessible(self, ckpt):
+        """lm_head.weight is under language_model.lm_head.* in checkpoint."""
+        state = KimiLazyStateDict(ckpt["path"])
+        head = state["lm_head.weight"]
+        assert head.dtype == torch.bfloat16
+
     def test_scale_key_accessible(self, ckpt):
         state = KimiLazyStateDict(ckpt["path"])
-        scales = state["layers.1.mlp.experts.0.gate_proj.weight_scale"]
+        scales = state["model.layers.1.mlp.experts.0.gate_proj.weight_scale"]
         assert scales.dtype == torch.bfloat16
         assert scales.shape == (ckpt["out_f"], ckpt["in_f"] // 32)
 
     def test_missing_key_raises(self, ckpt):
         state = KimiLazyStateDict(ckpt["path"])
         with pytest.raises(KeyError):
-            _ = state["layers.99.mlp.experts.0.gate_proj.weight_packed"]
+            _ = state["model.layers.99.mlp.experts.0.gate_proj.weight_packed"]
 
     def test_cache_hit_returns_same_object(self, ckpt):
         """Second access should return the cached tensor (same identity)."""
         state = KimiLazyStateDict(ckpt["path"])
-        w1 = state["layers.1.mlp.experts.0.gate_proj.weight_packed"]
-        w2 = state["layers.1.mlp.experts.0.gate_proj.weight_packed"]
+        w1 = state["model.layers.1.mlp.experts.0.gate_proj.weight_packed"]
+        w2 = state["model.layers.1.mlp.experts.0.gate_proj.weight_packed"]
         assert w1 is w2
 
     def test_len_matches_visible_keys(self, ckpt):
-        """Len should reflect only language_model.model.* keys."""
+        """Len reflects all language_model.* keys (text + lm_head)."""
         state = KimiLazyStateDict(ckpt["path"])
-        # Our fixture: weight_packed, weight_scale, weight_shape, attn weight = 4
-        assert len(state) == 4
+        # Fixture has: weight_packed, weight_scale, weight_shape, attn, lm_head = 5
+        assert len(state) == 5
 
     def test_expert_weight_not_nan(self, ckpt):
         state = KimiLazyStateDict(ckpt["path"])
-        w = state["layers.1.mlp.experts.0.gate_proj.weight_packed"]
+        w = state["model.layers.1.mlp.experts.0.gate_proj.weight_packed"]
         assert not torch.isnan(w).any()
         assert not torch.isinf(w).any()
 
@@ -294,10 +340,40 @@ class TestKimiLazyStateDict:
             tmp_path, include_weight_shape=False
         )
         state = KimiLazyStateDict(tmp_path)
-        w = state["layers.1.mlp.experts.0.gate_proj.weight_packed"]
+        w = state["model.layers.1.mlp.experts.0.gate_proj.weight_packed"]
         assert w.shape == (16, 64)
         ref = _reference_dequant(weights_i8, scales)
         assert _pcc(w, ref) > 0.9999
+
+    def test_view_with_prefix_preserves_dequant(self, ckpt):
+        """view_with_prefix returns KimiLazyStateDict, preserving INT4 dequant.
+
+        Simulates what RowBatchedModel.convert_weights does when it calls
+        sub_state_dict(state_dict, "model.layers.1.") — the sub-view must
+        still return BF16 for weight_packed keys, not the raw I32 tensor.
+        """
+        state = KimiLazyStateDict(ckpt["path"])
+        # Create sub-view as sub_state_dict(state, "model.layers.1.") would
+        sub = state.view_with_prefix("model.layers.1.")
+        assert isinstance(sub, KimiLazyStateDict), (
+            f"view_with_prefix returned {type(sub).__name__}, expected KimiLazyStateDict"
+        )
+        # Key relative to the sub-view (model.layers.1. prefix stripped off)
+        w = sub["mlp.experts.0.gate_proj.weight_packed"]
+        assert w.dtype == torch.bfloat16, (
+            f"Sub-view returned {w.dtype}, expected bfloat16. "
+            "INT4 dequant was lost in the sub-view."
+        )
+        assert w.shape == (ckpt["out_f"], ckpt["in_f"])
+
+    def test_view_with_prefix_combined_prefix(self, ckpt):
+        """view_with_prefix combines base_prefix correctly (no double-prefix)."""
+        state = KimiLazyStateDict(ckpt["path"])
+        sub = state.view_with_prefix("model.layers.1.")
+        # Combined prefix should be "language_model." + "model.layers.1."
+        assert sub._base_prefix == "language_model.model.layers.1.", (
+            f"Expected 'language_model.model.layers.1.', got {sub._base_prefix!r}"
+        )
 
 
 # ── Integration tests (require real Kimi K2.5 weights) ───────────────────────
@@ -314,7 +390,7 @@ _REAL_WEIGHTS = pytest.mark.skipif(
 def test_real_gate_proj_shape_dtype():
     """gate_proj for expert 0 of layer 1 → (2048, 7168) BF16."""
     state = KimiLazyStateDict(KIMI_HF_MODEL)
-    w = state["layers.1.mlp.experts.0.gate_proj.weight_packed"]
+    w = state["model.layers.1.mlp.experts.0.gate_proj.weight_packed"]
     assert w.dtype == torch.bfloat16, f"Expected BF16, got {w.dtype}"
     assert w.shape == (2048, 7168), f"Expected (2048, 7168), got {w.shape}"
 
@@ -323,7 +399,7 @@ def test_real_gate_proj_shape_dtype():
 def test_real_weight_not_nan_not_zero():
     """Dequantized real weight is finite and non-trivial."""
     state = KimiLazyStateDict(KIMI_HF_MODEL)
-    w = state["layers.1.mlp.experts.0.gate_proj.weight_packed"]
+    w = state["model.layers.1.mlp.experts.0.gate_proj.weight_packed"]
     assert not torch.isnan(w).any(), "NaN in real dequantized weight"
     assert not torch.isinf(w).any(), "Inf in real dequantized weight"
     assert w.abs().max() > 1e-6, "All-zero dequantized weight (suspicious)"
@@ -337,7 +413,7 @@ def test_real_weight_not_nan_not_zero():
 def test_real_down_proj_shape():
     """down_proj for expert 0 of layer 1 → (7168, 2048) BF16."""
     state = KimiLazyStateDict(KIMI_HF_MODEL)
-    w = state["layers.1.mlp.experts.0.down_proj.weight_packed"]
+    w = state["model.layers.1.mlp.experts.0.down_proj.weight_packed"]
     assert w.shape == (7168, 2048), f"Expected (7168, 2048), got {w.shape}"
     assert w.dtype == torch.bfloat16
 
@@ -347,10 +423,27 @@ def test_real_attention_passthrough():
     """Layer-0 self-attention weight is BF16 and not dequantized."""
     state = KimiLazyStateDict(KIMI_HF_MODEL)
     # Layer 0 is dense (not MoE) — all weights are native BF16
-    # Access via weight_scale key would fail (no INT4 for attn)
-    # Just verify a self_attn key exists and returns BF16
-    # Key: layers.0.self_attn.q_proj.weight (no weight_packed suffix)
-    q = state["layers.0.self_attn.q_proj.weight"]
+    q = state["model.layers.0.self_attn.q_proj.weight"]
     assert q.dtype == torch.bfloat16, f"Expected BF16, got {q.dtype}"
     assert q.ndim == 2
     print(f"\n[INFO] q_proj layer 0: shape={q.shape}")
+
+
+@_REAL_WEIGHTS
+def test_real_lm_head_accessible():
+    """LM head weight accessible as lm_head.weight (language_model.lm_head.*)."""
+    state = KimiLazyStateDict(KIMI_HF_MODEL)
+    head = state["lm_head.weight"]
+    assert head.dtype == torch.bfloat16
+    assert head.ndim == 2
+    print(f"\n[INFO] lm_head.weight shape={head.shape}")
+
+
+@_REAL_WEIGHTS
+def test_real_view_with_prefix_layer1():
+    """Sub-view for layer 1 still dequantizes INT4 expert weights."""
+    state = KimiLazyStateDict(KIMI_HF_MODEL)
+    layer1 = state.view_with_prefix("model.layers.1.")
+    w = layer1["mlp.experts.0.gate_proj.weight_packed"]
+    assert w.dtype == torch.bfloat16
+    assert w.shape == (2048, 7168)
