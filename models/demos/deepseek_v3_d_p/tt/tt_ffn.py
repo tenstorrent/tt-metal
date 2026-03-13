@@ -1,11 +1,22 @@
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """
 TTNN implementation of FFN (Feed-Forward Network) module for DeepSeek V3 dense layers.
 
-This module uses the shared expert architecture with DeepSeek 671B config dimensions.
+TtFPN (TP=4) module uses the shared expert architecture with DeepSeek 671B config dimensions.
 """
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import COMPUTE_KERNEL_CONFIG_LOFI, TtSharedExpert
+from models.demos.deepseek_v3_d_p.tt.moe.tt_shared_expert import TtSharedExpert
+
+COMPUTE_KERNEL_CONFIG_HIFI2 = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi2,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
 
 # DeepSeek 671B FFN dimensions
 EMB_DIM = 7168
@@ -28,8 +39,8 @@ class TtFfn(TtSharedExpert):
         torch_weights: dict = None,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
-        weights_dtype=ttnn.bfloat4_b,
-        compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_LOFI,
+        weights_dtype=ttnn.bfloat8_b,  # explore bfp4 ?
+        compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,  # explore COMPUTE_KERNEL_CONFIG_LOFI with bfp4
     ):
         """
         Initialize TtFfn module.
