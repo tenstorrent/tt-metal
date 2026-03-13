@@ -16,7 +16,7 @@
 #include "ttnn/operations/eltwise/unary/unary_composite.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/matmul/matmul.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
 #include "ttnn/device.hpp"
 #include <variant>
@@ -512,7 +512,7 @@ Tensor run_remainder(
     const std::optional<MemoryConfig>& output_mem_config,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using FusedActivations = tt::stl::Span<const unary::EltwiseUnaryWithParam>;
-    // explicitly using binary_ng to avoid fallback to legacy because of row boradcast
+    // explicitly using binary_ng to avoid fallback to legacy because of row broadcast
     Tensor result = ttnn::subtract(
         input_a,
         ttnn::multiply(

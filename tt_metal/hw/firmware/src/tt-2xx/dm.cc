@@ -9,6 +9,7 @@
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "internal/dataflow_buffer_init.h"
 #include "internal/debug/stack_usage.h"
 #include "internal/debug/sanitize.h"
@@ -50,6 +51,10 @@ uint32_t tt_l1_ptr* sem_l1_base[ProgrammableCoreType::COUNT] __attribute__((used
 thread_local uint32_t rta_count __attribute__((used));
 thread_local uint32_t crta_count __attribute__((used));
 #endif
+
+// Per-processor kernel thread info for Quasar (set from kernel_config before kernel runs)
+thread_local uint32_t num_sw_threads __attribute__((used));
+thread_local uint32_t my_thread_id __attribute__((used));
 
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
@@ -99,9 +104,11 @@ void deassert_trisc() {
     subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_INIT;
     deassert_trisc_reset();
 }
-// Definition of the global DFB interface array (declared extern in dataflow_buffer_init.h)
+
 thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS] __attribute__((used));
 RemapperAPI g_remapper_configurator __attribute__((used));
+
+volatile experimental::TxnDFBDescriptor experimental::g_txn_dfb_descriptor[32] __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -199,11 +206,12 @@ extern "C" uint32_t _start1() {
     my_logical_x_ = mailboxes->core_info.absolute_logical_x;
     my_logical_y_ = mailboxes->core_info.absolute_logical_y;
 
-    // risc_init();
     device_setup();
     if (hartid > 0) {
         signal_subordinate_completion();
     } else {  // This is DM0
+        DEVICE_PRINT_INITIALIZE_LOCK();
+        risc_init();
         noc_bank_table_init(MEM_BANK_TO_NOC_SCRATCH);
 
         deassert_trisc();
@@ -303,6 +311,9 @@ extern "C" uint32_t _start1() {
                 uint32_t tt_l1_ptr* dfb_l1_base =
                     (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                           launch_msg_address->kernel_config.local_cb_offset);
+                for (uint32_t i = 0; i < MaxDMProcessorsPerCoreType; i++) {
+                    mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
+                }
                 start_subordinate_kernel_run_early(enables);
 
                 // Run the kernel
@@ -429,6 +440,7 @@ extern "C" uint32_t _start1() {
 
         record_stack_usage(stack_free);
         WAYPOINT("D1");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
     }

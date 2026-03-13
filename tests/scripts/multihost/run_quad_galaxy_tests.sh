@@ -82,7 +82,7 @@ setup_dual_galaxy_env() {
         exit 1
     fi
 
-    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
+    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
     _resolve_deepseekv3_cache
     export MESH_DEVICE="DUAL"
 }
@@ -105,9 +105,21 @@ setup_quad_galaxy_env() {
         exit 1
     fi
 
-    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"
+    export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
     _resolve_deepseekv3_cache
     export MESH_DEVICE="QUAD"
+}
+
+# Compute pytest --timeout value.
+# When DEEPSEEK_V3_CACHE_OVERRIDE is set (cache recalculation), add 6 hours.
+_demo_timeout() {
+    local base_timeout=$1
+    local cache_extra=21600  # 6 hours
+    if [[ -n "${DEEPSEEK_V3_CACHE_OVERRIDE:-}" ]]; then
+        echo $(( base_timeout + cache_extra ))
+    else
+        echo "$base_timeout"
+    fi
 }
 
 # Helper: run a test command via tt-run using the current environment
@@ -176,8 +188,9 @@ run_quad_deepseekv3_module_tests() {
 run_dual_teacher_forced_test() {
     fail=0
     setup_dual_galaxy_env
+    local timeout=$(_demo_timeout 3600)
 
-    _run_deepseekv3_tt bash -c "pytest -svvv models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/dual_teacher_forced_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/dual_teacher_forced_output.log" ; fail+=$?
 
     # Extract accuracy metrics from logs and save to artifact file
     if [[ -f generated/artifacts/dual_teacher_forced_output.log ]]; then
@@ -194,8 +207,9 @@ run_dual_teacher_forced_test() {
 run_quad_teacher_forced_test() {
     fail=0
     setup_quad_galaxy_env
+    local timeout=$(_demo_timeout 3600)
 
-    _run_deepseekv3_tt bash -c "pytest -svvv models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/quad_teacher_forced_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout models/demos/deepseek_v3/demo/test_demo_teacher_forced.py::test_demo_teacher_forcing_accuracy 2>&1 | tee generated/artifacts/quad_teacher_forced_output.log" ; fail+=$?
 
     # Extract accuracy metrics from logs and save to artifact file
     if [[ -f generated/artifacts/quad_teacher_forced_output.log ]]; then
@@ -216,8 +230,9 @@ run_quad_teacher_forced_test() {
 run_dual_demo_test() {
     fail=0
     setup_dual_galaxy_env
+    local timeout=$(_demo_timeout 2400)
 
-    _run_deepseekv3_tt bash -c "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[dual_full_demo]' 2>&1 | tee generated/artifacts/dual_demo_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[dual_full_demo]' 2>&1 | tee generated/artifacts/dual_demo_output.log" ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -227,8 +242,9 @@ run_dual_demo_test() {
 run_quad_demo_test() {
     fail=0
     setup_quad_galaxy_env
+    local timeout=$(_demo_timeout 3600)
 
-    _run_deepseekv3_tt bash -c "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[quad_full_demo]' 2>&1 | tee generated/artifacts/quad_demo_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[quad_full_demo]' 2>&1 | tee generated/artifacts/quad_demo_output.log" ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -242,8 +258,9 @@ run_quad_demo_test() {
 run_dual_demo_stress_test() {
     fail=0
     setup_dual_galaxy_env
+    local timeout=$(_demo_timeout 5400)
 
-    _run_deepseekv3_tt bash -c "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[dual_stress_demo]' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[dual_stress_demo]' 2>&1 | tee generated/artifacts/dual_demo_stress_output.log" ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -253,8 +270,9 @@ run_dual_demo_stress_test() {
 run_quad_demo_stress_test() {
     fail=0
     setup_quad_galaxy_env
+    local timeout=$(_demo_timeout 5400)
 
-    _run_deepseekv3_tt bash -c "pytest -svvv 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[quad_stress_demo]' 2>&1 | tee generated/artifacts/quad_demo_stress_output.log" ; fail+=$?
+    _run_deepseekv3_tt bash -c "set -o pipefail; pytest -svvv --timeout=$timeout 'models/demos/deepseek_v3/demo/test_demo.py::test_demo[quad_stress_demo]' 2>&1 | tee generated/artifacts/quad_demo_stress_output.log" ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1

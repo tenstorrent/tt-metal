@@ -23,11 +23,14 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.demo.pipeline import (
-    create_single_galaxy_pipeline_configuration,
-    create_single_pod_pipeline_configuration,
+from models.demos.deepseek_v3_b1.demo.pipeline import PipelineConfiguration, create_single_galaxy_pipeline_configuration
+from models.demos.deepseek_v3_b1.demo.stage import (
+    TOKEN_PAGE_SIZE_BYTES,
+    EmbeddingStage,
+    LMHeadStage,
+    PassthroughPayload,
+    PassthroughStage,
 )
-from models.demos.deepseek_v3_b1.demo.stage import token_page_size_bytes
 from models.demos.deepseek_v3_b1.fused_ops.lm_head_sampling.op import LMHeadSampling
 from models.demos.deepseek_v3_b1.micro_ops.d2d_exchange.op import MeshWrapper, SocketInterface
 from models.demos.deepseek_v3_b1.micro_ops.host_io.op import HostInterface
@@ -65,6 +68,34 @@ class _SyntheticWeightProvider:
         )
 
 
+def create_single_pod_passthrough_pipeline_configuration(
+    weight_provider,
+    *,
+    lm_head_fp32_dest_acc_en: bool = True,
+    lm_head_persistent_mode: bool = True,
+) -> PipelineConfiguration:
+    """16-stage pod topology with passthrough middle stages for LM-head-focused synthetic testing."""
+
+    def stage_0(device):
+        return EmbeddingStage(weight_provider.load_embedding(device))
+
+    def stage_14(device):
+        return LMHeadStage(
+            weights=weight_provider.load_lm_head(device),
+            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
+            lm_head_persistent_mode=lm_head_persistent_mode,
+        )
+
+    return PipelineConfiguration(
+        {
+            0: stage_0,
+            **{i: (lambda d: PassthroughStage(PassthroughPayload.ACTIVATION)) for i in range(1, 14)},
+            14: stage_14,
+            15: (lambda d: PassthroughStage(PassthroughPayload.TOKEN)),
+        }
+    )
+
+
 # Golden helper: same deterministic formula as _SyntheticWeightProvider (one-hot embedding, winner_per_row).
 def _compute_expected_lm_head_indices_synthetic(iterations: int) -> torch.Tensor:
     """Compute expected output indices for synthetic weights. Same math as _SyntheticWeightProvider."""
@@ -100,7 +131,7 @@ def _is_lm_head_sampling_perf_enabled():
 
 
 def _is_persistent_mode_enabled():
-    return os.getenv("RUN_PERSISTENT_MODE", "0") == "1"
+    return os.getenv("TT_RUN_PERSISTENT_MODE", "0") == "1"
 
 
 @pytest.mark.skipif(not _is_lm_head_sampling_perf_enabled(), reason="Set RUN_LM_HEAD_SAMPLING_PERF=1 to run perf test")
@@ -401,17 +432,6 @@ def test_perf(bh_2d_mesh_device, use_fp32, final_mesh_coord, num_iters, num_warm
 
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("seed", [123, 1337, 52098])
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 573440,
-        }
-    ],
-    indirect=True,
-)
 def test_single_device(
     bh_2d_mesh_device,
     use_fp32,
@@ -564,17 +584,6 @@ def test_single_device(
 
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize("seed", [1337])
-@pytest.mark.parametrize(
-    "device_params",
-    [
-        {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
-            "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 573440,
-        }
-    ],
-    indirect=True,
-)
 def test_single_device_d2h(
     bh_2d_mesh_device,
     use_fp32,
@@ -746,23 +755,29 @@ def test_single_device_d2h(
 
 
 @pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize("final_mesh_coord", [(1, 1)])
-@pytest.mark.parametrize("seed", [7, 1337, 4242])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
             "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 573440,
         }
     ],
     indirect=True,
+)
+@pytest.mark.parametrize(
+    "sender_coord, final_mesh_coord, seed",
+    [
+        ((1, 1), (0, 0), 7),
+        ((0, 0), (1, 1), 1337),
+        ((3, 0), (2, 0), 4242),
+    ],
 )
 def test_multidevice(
     bh_2d_mesh_device,
     use_fp32,
     final_mesh_coord,
+    sender_coord,
     seed,
 ):
     """4x2 mesh fused LM-head + k=1 sampling (argmax) with CCL enabled."""
@@ -848,12 +863,12 @@ def test_multidevice(
         ttnn.ShardSpec(final_core_grid, scratch_shape_per_device, ttnn.ShardOrientation.ROW_MAJOR),
     )
 
-    sender_coord = ttnn.MeshCoordinate(1, 0)
+    sender_mesh_coord = ttnn.MeshCoordinate(sender_coord[0], sender_coord[1])
     device_inputs = []
     device_intermediate = []
     for r in range(mesh_rows):
         for c in range(mesh_cols):
-            if r == sender_coord[0] and c == sender_coord[1]:
+            if r == sender_mesh_coord[0] and c == sender_mesh_coord[1]:
                 device_inputs.append(torch_a)
             else:
                 device_inputs.append(torch.zeros_like(torch_a))
@@ -944,7 +959,7 @@ def test_multidevice(
         ttnn_gamma,
         ttnn_b,
         ttnn_scores,
-        sender_coord=sender_coord,
+        sender_coord=sender_mesh_coord,
         indices_tensor=ttnn_indices,
         output_index_tensor=ttnn_output_index,
         argmax_final_core_coord=final_core,
@@ -975,9 +990,8 @@ def test_multidevice(
     "device_params",
     [
         {
-            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D_TORUS_X,
             "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 573440,
         }
     ],
     indirect=True,
@@ -1211,7 +1225,7 @@ def test_d2h(
 
 
 @pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize("final_mesh_coord", [(1, 1)])
+@pytest.mark.parametrize("final_mesh_coord", [(1, 1), (0, 1), (1, 0), (0, 0), (3, 1)])
 @pytest.mark.parametrize("seed", [5449])
 @pytest.mark.parametrize(
     "device_params",
@@ -1219,7 +1233,6 @@ def test_d2h(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 573440,
         }
     ],
     indirect=True,
@@ -1528,7 +1541,7 @@ def test_d2d_to_d2h_pipeline(
 
 
 @pytest.mark.parametrize("use_fp32", [True])
-@pytest.mark.parametrize("final_mesh_coord", [(1, 1)])
+@pytest.mark.parametrize("final_mesh_coord", [(1, 1), (0, 1), (2, 0), (2, 1)])
 @pytest.mark.parametrize("seed", [5449])
 @pytest.mark.parametrize(
     "device_params",
@@ -1536,7 +1549,6 @@ def test_d2d_to_d2h_pipeline(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 573440,
         }
     ],
     indirect=True,
@@ -1879,12 +1891,11 @@ def test_4stage_galaxy_1_iteration(
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_2D,
             "fabric_router_config": create_fabric_router_config(15232),
-            "trace_region_size": 573440,
         }
     ],
     indirect=True,
 )
-def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_fp32):
+def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32):
     """
     4-stage 4x2 single-galaxy pipeline:
     P1(H2D) -> P2(LMHead+Sampling) -> P3(forward) -> P4(forward) -> P1(D2H).
@@ -1903,19 +1914,19 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
 
     config = create_single_galaxy_pipeline_configuration(
         _SyntheticWeightProvider(),
-        fp32_dest_acc_en=use_fp32,
-        persistent_mode=False,
+        lm_head_fp32_dest_acc_en=use_fp32,
+        lm_head_persistent_mode=False,
     )
     pipeline = config.build_pipeline(mesh_device)
     try:
         pipeline.setup_and_run()
 
         if pipeline.my_mesh_id == 0:
-            torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
+            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
             torch_token[0, 0] = 0
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
-                torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32),
+                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
@@ -1931,7 +1942,9 @@ def test_lm_head_sampling_pipeline_block_4stage_single_galaxy(mesh_device, use_f
         pipeline.terminate()
 
 
-@pytest.mark.skipif(not _is_persistent_mode_enabled(), reason="Set RUN_PERSISTENT_MODE=1 to run persistent mode test")
+@pytest.mark.skipif(
+    not _is_persistent_mode_enabled(), reason="Set TT_RUN_PERSISTENT_MODE=1 to run persistent mode test"
+)
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize(
     "mesh_device",
@@ -1966,7 +1979,7 @@ def test_persistent_mode(mesh_device, use_fp32):
     torch_expected_indices = _compute_expected_lm_head_indices_synthetic(iterations)
     config = create_single_galaxy_pipeline_configuration(
         _SyntheticWeightProvider(),
-        fp32_dest_acc_en=use_fp32,
+        lm_head_fp32_dest_acc_en=use_fp32,
     )
     pipeline = config.build_pipeline(mesh_device)
     pipeline.setup_and_run()
@@ -1974,11 +1987,11 @@ def test_persistent_mode(mesh_device, use_fp32):
     if pipeline.my_mesh_id == 0:
         for iteration in range(iterations):
             logger.info(f"Writing token for iteration {iteration}")
-            torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
+            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
             torch_token[0, 0] = iteration
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
-                torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32),
+                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
@@ -1996,7 +2009,9 @@ def test_persistent_mode(mesh_device, use_fp32):
     logger.info(f"Barrier completed for P{pipeline.my_mesh_id}")
 
 
-# @pytest.mark.skipif(not _is_persistent_mode_enabled(), reason="Set RUN_PERSISTENT_MODE=1 to run persistent mode test")
+@pytest.mark.skipif(
+    not _is_persistent_mode_enabled(), reason="Set TT_RUN_PERSISTENT_MODE=1 to run persistent mode test"
+)
 @pytest.mark.parametrize("use_fp32", [True])
 @pytest.mark.parametrize(
     "mesh_device",
@@ -2029,24 +2044,26 @@ def test_persistent_mode_pod(mesh_device, use_fp32):
 
     iterations = 100
     torch_expected_indices = _compute_expected_lm_head_indices_synthetic(iterations)
-    config = create_single_pod_pipeline_configuration(
+    config = create_single_pod_passthrough_pipeline_configuration(
         _SyntheticWeightProvider(),
-        fp32_dest_acc_en=use_fp32,
+        lm_head_fp32_dest_acc_en=use_fp32,
     )
     pipeline = config.build_pipeline(mesh_device)
     pipeline.setup_and_run()
 
     if pipeline.my_mesh_id == 0:
         for iteration in range(iterations):
-            torch_token = torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32)
+            torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
             torch_token[0, 0] = iteration
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
             output_tensor = ttnn.from_torch(
-                torch.zeros(1, token_page_size_bytes // 4, dtype=torch.uint32),
+                torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
                 dtype=ttnn.uint32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
             )
+            logger.info(f"Writing token for iteration {iteration}")
             pipeline.write_token(token_tensor)
+            logger.info(f"Reading output for iteration {iteration}")
             pipeline.read_output(output_tensor)
             got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
             expected_idx = torch_expected_indices[iteration]

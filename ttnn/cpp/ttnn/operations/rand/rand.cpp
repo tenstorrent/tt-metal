@@ -10,9 +10,9 @@
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::rand {
+namespace ttnn {
 
-Tensor Rand::invoke(
+Tensor rand(
     const ttnn::Shape& shape,
     MeshDevice& device,
     const DataType dtype,
@@ -32,4 +32,5 @@ Tensor Rand::invoke(
     }
     return tensor;
 }
-}  // namespace ttnn::operations::rand
+
+}  // namespace ttnn

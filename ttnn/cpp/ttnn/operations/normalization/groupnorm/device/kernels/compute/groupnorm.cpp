@@ -41,7 +41,7 @@ void kernel_main() {
     //   receiver: This the cores that receive the aggregated results from sender, they only do
     //   local computations that they send to the sender for final aggregation
     //
-    // This is a high level desciption of the stages of this kernel, tags will be added to show where in the code each
+    // This is a high level description of the stages of this kernel, tags will be added to show where in the code each
     // stage starts and ends
     //
     // Batch Loop:
@@ -85,7 +85,7 @@ void kernel_main() {
     //           We add beta to this value
     //
     // We are now done! Nice
-    //   To look at where the code starts and stops seach for
+    //   To look at where the code starts and stops search for
     //   Start LABEL or End Label
     //   Ex: Start Local Reduce or End Local Reduce
     // clang-format on
@@ -122,10 +122,11 @@ void kernel_main() {
     constexpr uint32_t GROUP_SIZE_SMALLER_THAN_TILE_W = get_named_compile_time_arg_val("GROUP_SIZE_SMALLER_THAN_TILE_W");
     constexpr uint32_t group_row_offset = get_named_compile_time_arg_val("group_row_offset");
     constexpr uint32_t num_out_blocks = get_named_compile_time_arg_val("num_out_blocks");
+    constexpr uint32_t tile_width = get_named_compile_time_arg_val("TILE_WIDTH");
 
     constexpr uint32_t block_w_minus_one = block_w - 1;
     constexpr uint32_t block_w_minus_two = block_w - 2;
-    constexpr uint32_t tile_w_minux_group_size = TILE_WIDTH - num_cols_per_group;
+    constexpr uint32_t tile_w_minux_group_size = tile_width - num_cols_per_group;
 
     // dst regs
     constexpr uint32_t dst0 = 0;
@@ -165,9 +166,7 @@ void kernel_main() {
 #ifdef UNTILIZE_OUT
     constexpr uint32_t cb_out = tt::CBIndex::c_30;
 #else
-    constexpr uint32_t cb_out = (do_gamma or do_beta)
-                                    ? (((do_gamma and not do_beta) or (not do_gamma and do_beta)) ? cb_in : cb_out0)
-                                    : cb_out0;
+    constexpr uint32_t cb_out = (do_gamma or do_beta) ? cb_out0 : cb_reread_write_out;
 #endif
 
     // tile offset
@@ -186,13 +185,15 @@ void kernel_main() {
     uint32_t index_block_w = 0;
     uint32_t output_tile_index = 0;
     bool apply_gamma_beta[block_w];
-    constexpr uint32_t data_per_core_N_per_group = (per_core_N * TILE_WIDTH / group);
+    constexpr uint32_t data_per_core_N_per_group = (per_core_N * tile_width / group);
 
 #ifdef UNTILIZE_OUT
     constexpr int cb_outgamma = cb_in;
-    constexpr int cb_inbeta = do_gamma ? cb_outgamma : cb_out;
+    constexpr int cb_inbeta = do_gamma ? cb_outgamma : cb_reread_write_out;
     constexpr int cb_outbeta = do_gamma ? cb_out : cb_in;
-    constexpr int cb_untilize_in = (do_gamma and not do_beta) ? cb_outgamma : do_beta ? cb_outbeta : cb_out;
+    constexpr int cb_untilize_in = (do_gamma and not do_beta) ? cb_outgamma
+                                   : do_beta                  ? cb_outbeta
+                                                              : cb_reread_write_out;
     constexpr int cb_untilize_out =
 #ifdef READER_REPACK
         cb_repack_out;
@@ -694,7 +695,7 @@ void kernel_main() {
                     }
 
                     bool is_past_end_of_group =
-                        (((w + index_g_offset) + 1) * TILE_WIDTH) > ((g + 1) * data_per_core_N_per_group);
+                        (((w + index_g_offset) + 1) * tile_width) > ((g + 1) * data_per_core_N_per_group);
                     apply_gamma_beta[w] = !is_past_end_of_group;
                 }
                 cb_pop_front(cb_xmm, out_block_hw_normal);
@@ -783,7 +784,7 @@ void kernel_main() {
             }
             // End Final Val Calc
             if constexpr (GROUP_SIZE_IS_POWER_OF_2) {
-                if (row_offset == TILE_WIDTH) {
+                if (row_offset == tile_width) {
                     index_g_offset += block_w;
                     row_offset = num_cols_per_group;
 
@@ -792,11 +793,11 @@ void kernel_main() {
                     row_offset += num_cols_per_group;
                 }
             } else if constexpr (GROUP_SIZE_SMALLER_THAN_TILE_W) {
-                if (row_offset == TILE_WIDTH) {
+                if (row_offset == tile_width) {
                     index_g_offset += block_w_minus_one;
                     row_offset = num_cols_per_group;
 
-                } else if (row_offset > TILE_WIDTH) {
+                } else if (row_offset > tile_width) {
                     index_g_offset += block_w_minus_one;
                     row_offset = row_offset + group_row_offset;
 
@@ -804,7 +805,7 @@ void kernel_main() {
                     row_offset += num_cols_per_group;
                 }
             } else {
-                if (row_offset > TILE_WIDTH) {
+                if (row_offset > tile_width) {
                     index_g_offset += block_w_minus_one;
                     row_offset = row_offset - tile_w_minux_group_size;
                 } else {

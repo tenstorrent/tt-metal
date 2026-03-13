@@ -19,7 +19,7 @@
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
 #include "ttnn/common/constants.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "tools/profiler/op_profiler.hpp"
 
 namespace ttnn::operations::binary_backward {
@@ -31,7 +31,7 @@ void preallocated_tensors_check(
     const Tensor& input,
     const Tensor& other,
     const std::array<bool, 2>& required_outputs) {
-    TT_FATAL(required_outputs[0] || required_outputs[1], "Atleast one gradient is expected to be calculated.");
+    TT_FATAL(required_outputs[0] || required_outputs[1], "At least one gradient is expected to be calculated.");
 
     if (required_outputs[0] && !input_grad.has_value()) {
         input_grad = ttnn::empty_like(input);

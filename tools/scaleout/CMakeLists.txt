@@ -4,6 +4,7 @@ add_executable(
     run_cluster_validation
     validation/run_cluster_validation.cpp
     validation/utils/ethernet_link_metrics_serialization.cpp
+    validation/utils/ethernet_link_api.cpp
     validation/utils/cluster_validation_utils.cpp
 )
 
@@ -110,7 +111,7 @@ target_link_libraries(
         tt_metal
 )
 target_compile_features(scaleout_tools PUBLIC cxx_std_20)
-target_precompile_headers(scaleout_tools REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(scaleout_tools TT::CommonPCH)
 
 install(TARGETS scaleout_tools EXPORT Metalium LIBRARY COMPONENT metalium-runtime FILE_SET api COMPONENT metalium-dev)
 

@@ -8,9 +8,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/types.hpp"
 
-namespace ttnn::operations::full {
+namespace ttnn {
 
-Tensor Full::invoke(
+Tensor moreh_full(
     const ttnn::SmallVector<uint32_t>& shape,
     const std::variant<float, int> fill_value,
     ttnn::MeshDevice* mesh_device,
@@ -19,4 +19,5 @@ Tensor Full::invoke(
     const MemoryConfig& memory_config) {
     return ttnn::prim::full(shape, fill_value, mesh_device, dtype, layout, memory_config);
 }
-}  // namespace ttnn::operations::full
+
+}  // namespace ttnn

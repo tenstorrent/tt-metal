@@ -21,21 +21,22 @@
 #include "circular_buffer_test_utils.hpp"
 #include <tt-metalium/circular_buffer_config.hpp>
 #include <tt-metalium/core_coord.hpp>
-#include <tt-metalium/data_types.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/device.hpp>
 #include "device_fixture.hpp"
 #include <tt-metalium/distributed.hpp>
 #include "gtest/gtest.h"
 #include <tt-metalium/hal_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/program.hpp>
 #include <tt_stl/span.hpp>
 #include <tt-metalium/tt_backend_api_types.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 
-// Access to internal API: ProgramImpl::get_cb_base_addr
+// Access to internal API: ProgramImpl::get_cb_base_addr, circular_buffers_unique_coreranges, etc.
 #include "impl/program/program_impl.hpp"
+// Access to CircularBufferImpl::size(), local_buffer_indices(), etc.
+#include "impl/buffers/circular_buffer.hpp"
 
 using std::vector;
 using namespace tt::tt_metal;
@@ -212,7 +213,8 @@ TEST_F(MeshDeviceFixture, TensixTestValidCircularBufferAddress) {
 
 TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
     for (unsigned int id = 0; id < num_devices_; id++) {
-        auto& cq = devices_.at(id)->mesh_command_queue();
+        auto& mesh_device = devices_.at(id);
+        auto& cq = mesh_device->mesh_command_queue();
         distributed::MeshWorkload workload;
         auto zero_coord = distributed::MeshCoordinate(0, 0);
         auto device_range = distributed::MeshCoordinateRange(zero_coord, zero_coord);
@@ -221,28 +223,34 @@ TEST_F(MeshDeviceFixture, TensixTestCircularBuffersAndL1BuffersCollision) {
         auto& program_ = workload.get_programs().at(device_range);
         uint32_t page_size = tt::tile_size(tt::DataFormat::Float16_b);
 
-        auto buffer_size = page_size * 128;
-        tt::tt_metal::InterleavedBufferConfig buff_config{
-            .device = this->devices_.at(id)->get_devices()[0],
-            .size = buffer_size,
-            .page_size = buffer_size,
-            .buffer_type = tt::tt_metal::BufferType::L1};
-        auto l1_buffer = CreateBuffer(buff_config);
+        DeviceAddr l1_unreserved_base = mesh_device->allocator()->get_base_allocator_addr(HalMemType::L1);
+        DeviceAddr l1_max_size = mesh_device->get_devices()[0]->l1_size_per_core();
+        DeviceAddr l1_bank_size = l1_max_size - l1_unreserved_base;
 
-        // L1 buffer is entirely in bank 0
-        auto core = l1_buffer->allocator()->get_logical_core_from_bank_id(0);
+        // Allocate a MeshBuffer that consumes most of L1 bank 0 (top-down), leaving room for
+        // only one tile worth of CBs.
+        uint32_t alignment = mesh_device->allocator()->get_alignment(BufferType::L1);
+        DeviceAddr buffer_size = (l1_bank_size - page_size) / alignment * alignment;
+        distributed::ReplicatedBufferConfig replicated_config = {
+            .size = buffer_size,
+        };
+        distributed::DeviceLocalBufferConfig local_config = {
+            .page_size = buffer_size,
+            .buffer_type = tt::tt_metal::BufferType::L1,
+        };
+        auto l1_mesh_buffer = distributed::MeshBuffer::create(replicated_config, local_config, mesh_device.get());
+
+        auto core = mesh_device->allocator()->get_logical_core_from_bank_id(0);
         CoreRange cr(core, core);
         CoreRangeSet cr_set({cr});
         initialize_program(program_, cr_set);
 
-        uint32_t num_pages =
-            ((l1_buffer->address() - devices_.at(id)->allocator()->get_base_allocator_addr(HalMemType::L1)) / max_cbs_ /
-             page_size) +
-            1;
-        CBConfig cb_config = {.num_pages = num_pages};
-        for (uint32_t buffer_id = 0; buffer_id < max_cbs_; buffer_id++) {
+        // Two CBs of page_size each will push the CB region past the MeshBuffer's lowest
+        // occupied address, triggering the collision.
+        CBConfig cb_config;
+        for (uint32_t buffer_id = 0; buffer_id < 2; buffer_id++) {
             CircularBufferConfig config1 =
-                CircularBufferConfig(cb_config.page_size * cb_config.num_pages, {{buffer_id, cb_config.data_format}})
+                CircularBufferConfig(cb_config.page_size, {{buffer_id, cb_config.data_format}})
                     .set_page_size(buffer_id, cb_config.page_size);
             CreateCircularBuffer(program_, core, config1);
         }
@@ -586,6 +594,100 @@ TEST_F(MeshDeviceFixture, TensixTestDataCopyWithUpdatedCircularBufferConfig) {
         detail::ReadFromDeviceL1(
             this->devices_.at(id)->get_devices()[0], core, global_cb_buffer->address(), buffer_size, second_cb_data);
         EXPECT_EQ(src_vec, second_cb_data);
+    }
+}
+
+// Regression test for CB config dispatch corruption bug (same pattern as argmax).
+// Replicates dispatch.cpp's CB config payload construction using
+// circular_buffers_unique_coreranges() and circular_buffers_on_corerange().
+TEST_F(MeshDispatchFixture, TensixTestCircularBufferConfigDispatchWithOverlappingCoreRanges) {
+    // The argmax factory creates:
+    //   1. CB index 0 on cores0 with size0   (first core group)
+    //   2. CB index 0 on cores1 with size1   (second core group, different size)
+    //   3. CB index 1 on all_cores           (union of cores0 + cores1)
+    //
+    // CreateCircularBuffer internally calls merge_ranges() on the input CoreRangeSet.
+    // When all_cores = {(0,0)-(2,0), (3,0)-(4,0)}, merge_ranges() combines these
+    // adjacent ranges into {(0,0)-(4,0)}.
+    //
+    // Without fix, circular_buffers_unique_coreranges() returns:
+    //   {(0,0)-(2,0)}, {(3,0)-(4,0)}, {(0,0)-(4,0)}
+    //                                   ^^^^^^^^^^^^^ overlaps both!
+    //
+    // Dispatch builds one multicast payload per unique range (dispatch.cpp:1046-1096).
+    // For the merged {(0,0)-(4,0)}, circular_buffers_on_corerange() returns all three
+    // CBs. CB#1 writes size0 for index 0, then CB#2 overwrites with size1.
+    // This payload gets multicast to ALL cores, corrupting cores0's config.
+    CBConfig cb_config;
+
+    // Two non-overlapping core groups, adjacent so merge_ranges() combines them.
+    CoreRange cores0_range({0, 0}, {2, 0});  // 3 cores
+    CoreRange cores1_range({3, 0}, {4, 0});  // 2 cores
+    CoreRangeSet cores0({cores0_range});
+    CoreRangeSet cores1({cores1_range});
+    // Two separate ranges — merge_ranges() inside CreateCircularBuffer will
+    // merge them into {(0,0)-(4,0)}.
+    CoreRangeSet all_cores(std::vector<CoreRange>{cores0_range, cores1_range});
+
+    Program program;
+
+    uint32_t size0 = cb_config.page_size;
+    uint32_t size1 = cb_config.page_size * 2;
+
+    // CB index 0 on cores0 with size0
+    CircularBufferConfig cfg0 =
+        CircularBufferConfig(size0, {{0, cb_config.data_format}}).set_page_size(0, cb_config.page_size);
+    CreateCircularBuffer(program, cores0, cfg0);
+
+    // CB index 0 on cores1 with size1 — different size, same index
+    CircularBufferConfig cfg1 =
+        CircularBufferConfig(size1, {{0, cb_config.data_format}}).set_page_size(0, cb_config.page_size);
+    CreateCircularBuffer(program, cores1, cfg1);
+
+    // CB index 1 spanning all_cores.
+    // merge_ranges() merges {(0,0)-(2,0), (3,0)-(4,0)} into {(0,0)-(4,0)}.
+    CircularBufferConfig spanning_cfg =
+        CircularBufferConfig(cb_config.page_size, {{1, cb_config.data_format}}).set_page_size(1, cb_config.page_size);
+    CreateCircularBuffer(program, all_cores, spanning_cfg);
+
+    // Replicate dispatch.cpp's CB config payload construction (lines 1046-1096).
+    // For each unique core range, dispatch builds a payload from all intersecting CBs
+    // via circular_buffers_on_corerange(), then multicasts it to all cores in that range.
+    const auto& unique_ranges = program.impl().circular_buffers_unique_coreranges();
+
+    // Simulate multicast: build per-range payload, write to all covered cores.
+    // Last range covering a core overwrites previous values (same as hardware multicast).
+    std::map<CoreCoord, uint32_t> core_to_cb0_size;
+    for (const CoreRange& range : unique_ranges) {
+        // Build payload for this range exactly like dispatch.cpp:1054-1066
+        uint32_t payload_cb0_size = 0;
+        const auto& cbs_on_range = program.impl().circular_buffers_on_corerange(range);
+        for (const auto& cb : cbs_on_range) {
+            for (const auto& buffer_index : cb->local_buffer_indices()) {
+                if (buffer_index == 0) {
+                    payload_cb0_size = cb->size();
+                }
+            }
+        }
+
+        // Simulate multicast to all cores in this range
+        for (uint32_t x = range.start_coord.x; x <= range.end_coord.x; x++) {
+            for (uint32_t y = range.start_coord.y; y <= range.end_coord.y; y++) {
+                core_to_cb0_size[CoreCoord(x, y)] = payload_cb0_size;
+            }
+        }
+    }
+
+    // Verify: cores0 should have size0, cores1 should have size1.
+    // Without the fix, cores0 gets size1 because the merged range's payload
+    // (with CB#2 overwriting CB#1 for index 0) is multicast last to all cores.
+    for (uint32_t x = cores0_range.start_coord.x; x <= cores0_range.end_coord.x; x++) {
+        EXPECT_EQ(size0, core_to_cb0_size[CoreCoord(x, 0)])
+            << "Core (" << x << ", 0) in cores0 got wrong size for CB index 0";
+    }
+    for (uint32_t x = cores1_range.start_coord.x; x <= cores1_range.end_coord.x; x++) {
+        EXPECT_EQ(size1, core_to_cb0_size[CoreCoord(x, 0)])
+            << "Core (" << x << ", 0) in cores1 got wrong size for CB index 0";
     }
 }
 

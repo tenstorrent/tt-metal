@@ -93,6 +93,11 @@ bool can_use_streaming_compute(
     if (qk_out_subblock_h > 2 || Sk_chunk_t % (8 / qk_out_subblock_h) != 0) {
         return false;
     }
+    // Streaming v2 requires q_num_subblocks > 1 (Sq_chunk_t > subblock_h) because the Phase 2
+    // pipeline assumes at least one q_subblock iteration for correct softmax drain + SALAD overlap.
+    if (Sq_chunk_t / qk_out_subblock_h <= 1) {
+        return false;
+    }
     // Non-tile-aligned K padding requires boundary tiles the streaming mask path doesn't support.
     const bool streaming_mask_unsupported = (padded_Sk != Sk) && (Sk % TILE_HEIGHT != 0 || Sq_chunk_t == 1);
     return !streaming_mask_unsupported;
@@ -222,7 +227,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
     // q - [B, NHQ, Sq, DH_qk]
     // k - [B, 1, Sk, DH_qk]
     // v - [B, NVH, Sk, DH_v]
-    // k head is in latent space, and is reused accross all q heads
+    // k head is in latent space, and is reused across all q heads
 
     // Paged cache parameters when in chunked mode
     const bool flexible_chunked = operation_attributes.chunk_start_idx_tensor.has_value();
@@ -580,7 +585,7 @@ SDPAProgramFactory::cached_program_t SDPAProgramFactory::create(
         B,
         NQH,
         NKH,
-        Skt,
+        Skt,  // Padded K tile count — used by standard SDPA path for loop bounds
         DHt,
         vDHt,
         Sq_chunk_t,
