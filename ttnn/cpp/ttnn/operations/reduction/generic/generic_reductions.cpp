@@ -18,6 +18,7 @@
 
 namespace ttnn::operations::reduction {
 
+// Does not support ReduceType::Prod (handled separately in prod.cpp).
 template <reduction_common::ReduceType reduce_type>
 Tensor reduce(
     const Tensor& input_tensor_arg,
@@ -355,6 +356,7 @@ Tensor non_height_width_reduce(
     return output_tensor;
 }
 
+// Does not support ReduceType::Prod (handled separately in prod.cpp).
 template <reduction_common::ReduceType reduce_type>
 Tensor reduce(
     const Tensor& input_tensor_arg,
