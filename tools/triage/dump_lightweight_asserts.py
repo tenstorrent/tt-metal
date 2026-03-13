@@ -149,17 +149,17 @@ def dump_lightweight_asserts(
             if pc >= 4:
                 previous_instruction = read_word_from_device(location, pc - 4)
 
-        # Check if core hit ebreak
+        # Check if core hit ebreak or is spinning in a while(true) loop after an assert failure
         while_true_instruction = 0x0000006F
         ebreak_instruction = 0x00100073
-        rewind_pc = False
-        if previous_instruction == ebreak_instruction or previous_instruction == while_true_instruction:
-            rewind_pc = True
+        rewind_pc_for_ebreak = False
+        if previous_instruction == ebreak_instruction:
+            rewind_pc_for_ebreak = True
         elif current_instruction != ebreak_instruction and current_instruction != while_true_instruction:
             return None
 
         callstack_data = callstack_provider.get_cached_callstacks(
-            location, risc_name, rewind_pc, use_full_callstack=True
+            location, risc_name, rewind_pc_for_ebreak, use_full_callstack=True
         )
         arguments_and_locals = None
         assert_code = "?"
