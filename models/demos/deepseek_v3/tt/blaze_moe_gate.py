@@ -340,9 +340,6 @@ class BlazeMoeGate(AbstractModule):
         assert x.memory_config() == cfg["input_memory_config"]
 
         # Gate projections
-        import pdb
-
-        pdb.set_trace()
         if cfg["linear_fallback"]:
             logits = cls.linear_fallback_op(x, **cfg["linear_fallback_config"], **cfg["gate_proj"])
         else:
