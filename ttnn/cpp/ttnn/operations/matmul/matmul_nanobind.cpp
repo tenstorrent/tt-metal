@@ -746,6 +746,70 @@ void py_module(nb::module_& mod) {
             nb::arg("global_cb") = nb::none(),
             nb::arg("sub_device_id") = nb::none()));
 
+    mod.def(
+        "matmul_descriptor",
+        [](const ttnn::Tensor& input_tensor_a,
+           const ttnn::Tensor& input_tensor_b,
+           bool transpose_a,
+           bool transpose_b,
+           const std::optional<const ttnn::MemoryConfig>& memory_config,
+           std::optional<const ttnn::DataType> dtype,
+           const std::optional<const ttnn::operations::matmul::MatmulProgramConfig>& program_config,
+           std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+           std::optional<const ttnn::CoreGrid> core_grid,
+           const std::optional<const tt::tt_metal::Tile>& output_tile) {
+            auto result = ttnn::matmul_descriptor(
+                input_tensor_a,
+                input_tensor_b,
+                transpose_a,
+                transpose_b,
+                memory_config,
+                dtype,
+                program_config,
+                compute_kernel_config,
+                core_grid,
+                output_tile);
+            return nb::make_tuple(std::move(result.descriptor), std::move(result.output_tensors));
+        },
+        nb::arg("input_tensor_a"),
+        nb::arg("input_tensor_b"),
+        nb::kw_only(),
+        nb::arg("transpose_a") = false,
+        nb::arg("transpose_b") = false,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("dtype") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("core_grid") = nb::none(),
+        nb::arg("output_tile") = nb::none(),
+        R"doc(
+        Creates a ProgramDescriptor for a matmul operation without enqueuing it.
+
+        Runs the same pipeline as matmul() (transpose handling, config generation, factory selection)
+        but returns a (ProgramDescriptor, output_tensors) tuple instead of executing.
+
+        Note: This requires that the selected matmul factory implements create_descriptor().
+        Not all factories have been migrated yet; a runtime error will be raised if the
+        selected factory does not support descriptor creation.
+
+        Args:
+            input_tensor_a (ttnn.Tensor): First input tensor.
+            input_tensor_b (ttnn.Tensor): Second input tensor.
+
+        Keyword Args:
+            transpose_a (bool): Whether to transpose input_tensor_a. Default: False.
+            transpose_b (bool): Whether to transpose input_tensor_b. Default: False.
+            memory_config (ttnn.MemoryConfig, optional): Output memory config. Default: None.
+            dtype (ttnn.DataType, optional): Output data type. Default: None.
+            program_config (MatmulProgramConfig, optional): Program config. Default: None.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute config. Default: None.
+            core_grid (ttnn.CoreGrid, optional): Core grid. Default: None.
+            output_tile (list, optional): Output tile config. Default: None.
+
+        Returns:
+            tuple: (ProgramDescriptor, output_tensors)
+        )doc");
+
     ttnn::bind_function<"linear">(
         mod,
         R"doc(

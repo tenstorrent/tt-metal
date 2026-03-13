@@ -7,7 +7,6 @@ from typing import Optional
 import ttnn
 
 from models.experimental.ops.descriptors.op_descriptor import OpDescriptor
-from models.experimental.ops.descriptors.normalization._utils import _create_layernorm_op_descriptor
 
 
 def rms_norm(
@@ -24,9 +23,12 @@ def rms_norm(
     """
     Create an OpDescriptor for an RMS norm operation.
 
+    Uses the C++ rms_norm_descriptor() path which shares all decision logic
+    (validation, factory selection, output allocation) with ttnn.rms_norm().
+
     Args:
         input_tensor: The input tensor (must be on device).
-        core_range_set: The set of cores to run the operation on. Required for non-sharded inputs.
+        core_range_set: Unused — kept for API compatibility.
         epsilon: Small constant for numerical stability (default: 1e-12).
         weight: Optional weight (gamma) tensor for scaling.
         bias: Optional bias (beta) tensor for shifting.
@@ -37,34 +39,28 @@ def rms_norm(
 
     Returns:
         OpDescriptor containing the program descriptor, input tensors, and output tensors.
-
-    Example:
-        >>> rms_desc_1 = models.experimental.ops.descriptors.normalization.rms_norm(input1, weight=w1, cores=cores1)
-        >>> rms_desc_2 = models.experimental.ops.descriptors.normalization.rms_norm(input2, weight=w2, cores=cores2)
-        >>> out_1, out_2 = models.experimental.ops.descriptors.composite.launch([rms_desc_1, rms_desc_2])
     """
-    device = input_tensor.device()
-    arch = device.arch()
-
     if program_config is not None and program_config.use_welford:
         raise ValueError("Welford's algorithm is not supported for RMS norm")
 
-    # Initialize compute kernel config if not provided
-    if compute_kernel_config is None:
-        compute_kernel_config = ttnn.rmsnorm_default_compute_config(arch)
-
-    return _create_layernorm_op_descriptor(
+    descriptor, output = ttnn.rms_norm_descriptor(
         input_tensor,
-        compute_kernel_config,
-        ttnn.LayerNormType.RMSNORM,
-        weight,
-        bias,
-        residual_input_tensor,
-        memory_config,
-        core_range_set,
-        epsilon,
-        program_config,
+        epsilon=epsilon,
+        weight=weight,
+        bias=bias,
+        residual_input_tensor=residual_input_tensor,
+        memory_config=memory_config,
+        program_config=program_config,
+        compute_kernel_config=compute_kernel_config,
     )
+    inputs = [input_tensor]
+    if residual_input_tensor is not None:
+        inputs.append(residual_input_tensor)
+    if weight is not None:
+        inputs.append(weight)
+    if bias is not None:
+        inputs.append(bias)
+    return OpDescriptor(descriptor, inputs, [output])
 
 
 __all__ = ["rms_norm"]

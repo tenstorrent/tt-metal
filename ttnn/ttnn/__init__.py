@@ -404,6 +404,7 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
     MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
+    matmul_descriptor,
 )
 
 from ttnn.operations.normalization import (
@@ -431,6 +432,8 @@ from ttnn.operations.normalization import (
     layernorm_default_compute_config,
     rmsnorm_default_compute_config,
     create_layernorm_program_config,
+    layer_norm_descriptor,
+    rms_norm_descriptor,
 )
 
 from ttnn.operations.embedding import (

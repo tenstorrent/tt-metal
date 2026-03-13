@@ -222,6 +222,64 @@ void bind_normalization_layernorm_operation(nb::module_& mod) {
             nb::arg("recip_tensor") = nb::none()));
 }
 
+void bind_normalization_layer_norm_descriptor(nb::module_& mod) {
+    mod.def(
+        "layer_norm_descriptor",
+        [](const ttnn::Tensor& input_tensor,
+           float epsilon,
+           const std::optional<const ttnn::Tensor>& weight,
+           const std::optional<const ttnn::Tensor>& bias,
+           const std::optional<const ttnn::Tensor>& residual_input_tensor,
+           const std::optional<ttnn::MemoryConfig>& memory_config,
+           const std::optional<const ttnn::prim::LayerNormProgramConfig>& program_config,
+           std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
+           const std::optional<const ttnn::Tensor>& recip_tensor) {
+            auto result = ttnn::layer_norm_descriptor(
+                input_tensor,
+                epsilon,
+                weight,
+                bias,
+                residual_input_tensor,
+                memory_config,
+                program_config,
+                compute_kernel_config,
+                recip_tensor);
+            return nb::make_tuple(std::move(result.descriptor), std::move(result.output_tensors));
+        },
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("epsilon") = 1e-12,
+        nb::arg("weight") = nb::none(),
+        nb::arg("bias") = nb::none(),
+        nb::arg("residual_input_tensor") = nb::none(),
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("program_config") = nb::none(),
+        nb::arg("compute_kernel_config") = nb::none(),
+        nb::arg("recip_tensor") = nb::none(),
+        R"doc(
+        Creates a ProgramDescriptor for a layer norm operation without enqueuing it.
+
+        Runs the same pipeline as layer_norm() (output allocation, validation, factory selection)
+        but returns a (ProgramDescriptor, output_tensor) tuple instead of executing.
+
+        Args:
+            input_tensor (ttnn.Tensor): The input tensor.
+
+        Keyword args:
+            epsilon (float): Small constant for numerical stability. Default: 1e-12.
+            weight (ttnn.Tensor, optional): Weight (gamma) tensor. Default: None.
+            bias (ttnn.Tensor, optional): Bias (beta) tensor. Default: None.
+            residual_input_tensor (ttnn.Tensor, optional): Residual tensor. Default: None.
+            memory_config (ttnn.MemoryConfig, optional): Output memory config. Default: None.
+            program_config (LayerNormProgramConfig, optional): Program config. Default: None.
+            compute_kernel_config (ttnn.DeviceComputeKernelConfig, optional): Compute config. Default: None.
+            recip_tensor (ttnn.Tensor, optional): Reciprocal LUT tensor. Default: None.
+
+        Returns:
+            tuple: (ProgramDescriptor, output_tensor)
+        )doc");
+}
+
 void bind_normalization_layernorm_params_and_inputs(nb::module_& mod) {
     nb::class_<ttnn::prim::LayerNormParams>(mod, "LayerNormParams")
         .def(nb::init<>())
@@ -386,6 +444,7 @@ void bind_normalization_layernorm(nb::module_& mod) {
     bind_normalization_layernorm_types(mod);
     bind_normalization_layernorm_program_config(mod);
     bind_normalization_layernorm_operation(mod);
+    bind_normalization_layer_norm_descriptor(mod);
     bind_normalization_layernorm_params_and_inputs(mod);
     bind_normalization_layernorm_device_operation(mod);
     bind_normalization_layernorm_program_factory(mod);
