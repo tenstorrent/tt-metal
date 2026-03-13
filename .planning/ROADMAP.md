@@ -54,6 +54,12 @@
 
 **Requirements:** HS-01, HS-02
 
+**Plans:** 2 plans
+
+Plans:
+- [ ] 03-01-PLAN.md — Remove dead AllocatorConstructionParams; fix is_sender_channel_serviced_ sizing; document num_used_sender_channels as derived
+- [ ] 03-02-PLAN.md — Fix compute_mesh_router_builder.cpp to use per-VC sum; build + sanity test
+
 **Success criteria:**
 1. `num_used_sender_channels_per_vc` is consistently typed and named
 2. No mixed flat/per-VC sender channel indexing in allocators or builder
