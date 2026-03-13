@@ -16,6 +16,13 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
         v->line_num = line_num;
         v->tripped = assert_type;
         v->which = internal_::get_hw_thread_idx();
+        if (assert_type == DebugAssertHwFault) {  // only vslid on Quasar
+            uint64_t mcause;
+            uint64_t mtval;
+            asm volatile("csrr %0, mcause" : "=r"(mcause));
+            asm volatile("csrr %0, mtval" : "=r"(mtval));
+            v->hw_fault_info = mtval << 32 | (mcause & 0xffffffff);
+        }
     }
 
     // Hang, or in the case of erisc, early exit.

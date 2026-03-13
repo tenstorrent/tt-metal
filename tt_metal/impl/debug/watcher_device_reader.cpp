@@ -771,7 +771,9 @@ void WatcherDeviceReader::Core::DumpAssertStatus() const {
     std::string error_msg =
         fmt::format("{}: {} ", core_str_, get_riscv_name(programmable_core_type_, assert_status.which()));
     std::string assert_msg = get_debug_assert_message(
-        static_cast<dev_msgs::debug_assert_type_t>(assert_status.tripped()), assert_status.line_num());
+        static_cast<dev_msgs::debug_assert_type_t>(assert_status.tripped()),
+        assert_status.line_num(),
+        assert_status.hw_fault_info());
     if (assert_msg.empty()) {
         LogRunningKernels();
         TT_THROW(

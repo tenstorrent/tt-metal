@@ -248,6 +248,7 @@ struct debug_assert_msg_t {
     volatile uint16_t line_num;
     volatile uint8_t tripped;
     volatile uint8_t which;
+    volatile uint64_t hw_fault_info;
 };
 
 enum debug_assert_type_t {
@@ -258,7 +259,8 @@ enum debug_assert_type_t {
     DebugAssertNCriscNOCNonpostedAtomicsFlushedTripped = 6,
     DebugAssertNCriscNOCPostedWritesSentTripped = 7,
     DebugAssertRtaOutOfBounds = 8,
-    DebugAssertCrtaOutOfBounds = 9
+    DebugAssertCrtaOutOfBounds = 9,
+    DebugAssertHwFault = 10,
 };
 
 enum debug_transaction_type_t { TransactionRead = 0, TransactionWrite = 1, TransactionAtomic = 2, TransactionNumTypes };

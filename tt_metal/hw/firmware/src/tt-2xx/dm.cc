@@ -9,6 +9,7 @@
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/ring_buffer.h"
 #include "internal/dataflow_buffer_init.h"
 #include "internal/debug/stack_usage.h"
 #include "internal/debug/sanitize.h"
@@ -84,6 +85,15 @@ void set_deassert_addresses() {
     WRITE_REG(NEO_REGS_3__LOCAL_REGS_DEBUG_REGS_TRISC_RESET_PC_OVERRIDE_REG_ADDR, 0b1111);
 }
 
+inline void handle_interupt() {
+    ASSERT(0 == 1, debug_assert_type_t::DebugAssertHwFault);
+#if !defined(WATCHER_ENABLED)  // hang anyway
+    while (1) {
+        ;
+    }
+#endif
+}
+
 void invalidate_trisc_instruction_cache() {
     // invalidate TRISCs
     WRITE_REG(NEO_REGS_0__LOCAL_REGS_DEBUG_REGS_RISCV_IC_INVALIDATE_REG_ADDR, RISCV_IC_TRISC_ALL_MASK);
@@ -109,6 +119,8 @@ void device_setup() {
     // clock gating
     // NOC setup
     set_deassert_addresses();
+    uint64_t isr_address = reinterpret_cast<uint64_t>(handle_interupt);
+    asm volatile("csrw mtvec, %0" : : "r"(isr_address));  // set the interrupt handler
     // wzeromem
     // invalidate_l1_cache
     // clear_destination_registers
@@ -181,17 +193,6 @@ inline void wait_subordinates() {
 
 inline void trigger_sync_register_init() { subordinate_sync->neo0_trisc0 = RUN_SYNC_MSG_INIT_SYNC_REGISTERS; }
 
-inline void handle_interupt() {
-    uint64_t mcause;
-    asm volatile("csrr %0, mcause" : "=r"(mcause));
-    ASSERT(0 == 1, debug_assert_type_t::DebugAssertCrtaOutOfBounds);
-#if !defined(WATCHER_ENABLED)  // hang anyway
-    while (1) {
-        ;
-    }
-#endif
-}
-
 extern "C" uint32_t _start1() {
     configure_csr();
     uint32_t hartid = internal_::get_hw_thread_idx();
@@ -221,7 +222,6 @@ extern "C" uint32_t _start1() {
         DPRINT << "DM0-FW: deasserted TRISC" << ENDL();
         wait_subordinates();
         mailboxes->go_messages[0].signal = RUN_MSG_DONE;
-        asm volatile("csrw mtvec, %0" : : "r"(handle_interupt));  // set the interrupt handler
 
         trigger_sync_register_init();
 
@@ -427,9 +427,6 @@ extern "C" uint32_t _start1() {
         WAYPOINT("D1");
 
         *((volatile uint8_t*)&(subordinate_sync->dm1) + hartid - 1) = RUN_SYNC_MSG_DONE;
-        if (hartid == 4) {
-            asm volatile(".word 0x00000000");
-        }
     }
 
     return 0;
