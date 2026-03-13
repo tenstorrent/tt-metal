@@ -90,6 +90,11 @@ Plans:
 
 **Requirements:** CA-01, CA-02
 
+**Plans:** 1 plan
+
+Plans:
+- [ ] 05-01-PLAN.md — Update emit_channel_allocations_ct_args signatures to per-VC arrays on both allocators; update call site; build + sanity test
+
 **Success criteria:**
 1. Allocator API has no mixed flat/per-VC indexing
 2. Both sender and receiver use per-VC types throughout the allocator
