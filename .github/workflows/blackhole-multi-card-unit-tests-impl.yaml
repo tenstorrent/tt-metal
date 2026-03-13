@@ -123,12 +123,12 @@ jobs:
             test-type: loudbox-or-qb
             owner_id: U08E1JCMAJF # Marko Bezulj
             model-name: deepseek_prefill
-          - name: bh_DeepSeek_SHARED_EXPERT_FFN
+          - name: bh_DeepSeek_TP4_FFN_SHARED_EXPERT
             cmd: |
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_shared_expert.py -vvv
-              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ffn.py -vvv
-            timeout: 15
-            test-type: loudbox-or-qb
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_shared_expert.py -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ffn.py -vvv --tb=short
+            timeout: 5
+            test-type: qb-only
             owner_id: U08E1JCMAJF
             model-name: deepseek_prefill
           - name: bh_DeepSeek_RMSNORM
@@ -153,10 +153,10 @@ jobs:
 
           if [ "$fast_only" == "true" ]; then
             filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" --argjson quietbox "$quietbox_json" \
-              '[.[] | select(((.["test-type"] == "fast") or (.["test-type"] == "fast-viommu" and $viommu)) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "loudbox-or-qb") or $loudbox or $quietbox))]')
+              '[.[] | select(((.["test-type"] == "fast") or (.["test-type"] == "fast-viommu" and $viommu)) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "loudbox-or-qb") or $loudbox or $quietbox) and ((.["test-type"] != "qb-only") or $quietbox))]')
           else
             filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" --argjson quietbox "$quietbox_json" \
-              '[.[] | select(((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "loudbox-or-qb") or $loudbox or $quietbox))]')
+              '[.[] | select(((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "loudbox-or-qb") or $loudbox or $quietbox) and ((.["test-type"] != "qb-only") or $quietbox))]')
           fi
 
           # Filter by model if specified
