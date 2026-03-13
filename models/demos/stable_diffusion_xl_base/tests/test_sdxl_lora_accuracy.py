@@ -9,11 +9,11 @@ import pytest
 from loguru import logger
 
 from models.demos.stable_diffusion_xl_base.conftest import get_device_name
-from models.demos.stable_diffusion_xl_base.demo.demo_base_and_refiner import test_demo_base_and_refiner
+from models.demos.stable_diffusion_xl_base.demo.demo_lora import run_demo_inference
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
-    SDXL_BASE_REFINER_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,
     SDXL_L1_SMALL_SIZE,
+    SDXL_TRACE_REGION_SIZE,
 )
 from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
     accuracy_assert,
@@ -24,8 +24,6 @@ from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
     sdxl_get_prompts,
 )
 
-test_demo_base_and_refiner.__test__ = False
-
 
 @pytest.mark.parametrize(
     "image_resolution",
@@ -35,13 +33,15 @@ test_demo_base_and_refiner.__test__ = False
     ],
     ids=["1024x1024", "512x512"],
 )
+# Note: The 'fabric_config' parameter is only required when running with cfg_parallel enabled,
+# as the all_gather_async operation used in this mode depends on fabric being set.
 @pytest.mark.parametrize(
     "device_params, use_cfg_parallel",
     [
         (
             {
                 "l1_small_size": SDXL_L1_SMALL_SIZE,
-                "trace_region_size": SDXL_BASE_REFINER_TRACE_REGION_SIZE,
+                "trace_region_size": SDXL_TRACE_REGION_SIZE,
                 "fabric_config": SDXL_FABRIC_CONFIG,
             },
             True,
@@ -49,13 +49,17 @@ test_demo_base_and_refiner.__test__ = False
         (
             {
                 "l1_small_size": SDXL_L1_SMALL_SIZE,
-                "trace_region_size": SDXL_BASE_REFINER_TRACE_REGION_SIZE,
+                "trace_region_size": SDXL_TRACE_REGION_SIZE,
             },
             False,
         ),
     ],
     indirect=["device_params"],
     ids=["use_cfg_parallel", "no_cfg_parallel"],
+)
+@pytest.mark.parametrize(
+    "negative_prompt",
+    (("normal quality, low quality, worst quality, low res, blurry, nsfw, nude"),),
 )
 @pytest.mark.parametrize(
     "num_inference_steps",
@@ -66,24 +70,12 @@ test_demo_base_and_refiner.__test__ = False
     ((8.0),),
 )
 @pytest.mark.parametrize(
-    "negative_prompt",
-    (("normal quality, low quality, worst quality, low res, blurry, nsfw, nude"),),
-)
-@pytest.mark.parametrize(
     "vae_on_device",
     [
         (True),
         (False),
     ],
     ids=("device_vae", "host_vae"),
-)
-@pytest.mark.parametrize(
-    "capture_trace",
-    [
-        (True),
-        (False),
-    ],
-    ids=("with_trace", "no_trace"),
 )
 @pytest.mark.parametrize(
     "encoders_on_device",
@@ -94,29 +86,23 @@ test_demo_base_and_refiner.__test__ = False
     ids=("device_encoders", "host_encoders"),
 )
 @pytest.mark.parametrize(
-    "use_refiner",
+    "capture_trace",
     [
         (True),
         (False),
     ],
-    ids=("with_refiner", "no_refiner"),
+    ids=("with_trace", "no_trace"),
 )
 @pytest.mark.parametrize(
-    "denoising_split",
+    "prompt_2, negative_prompt_2, crop_coords_top_left, guidance_rescale, timesteps, sigmas",
     [
-        (0.8),
+        (None, None, (0, 0), 0.0, None, None),
     ],
-)
-@pytest.mark.parametrize(
-    "refiner_strength, refiner_aesthetic_score, refiner_negative_aesthetic_score",
-    [
-        (0.3, 6.0, 2.5),
-    ],
-    ids=["default_refiner_params"],
+    ids=["default_additional_parameters"],
 )
 @pytest.mark.parametrize("captions_path", ["models/demos/stable_diffusion_xl_base/coco_data/captions.tsv"])
 @pytest.mark.parametrize("coco_statistics_path", ["models/demos/stable_diffusion_xl_base/coco_data/val2014.npz"])
-def test_accuracy_sdxl(
+def test_accuracy_sdxl_lora(
     validate_fabric_compatibility,
     mesh_device,
     is_ci_env,
@@ -131,14 +117,16 @@ def test_accuracy_sdxl(
     guidance_scale,
     negative_prompt,
     use_cfg_parallel,
-    use_refiner,
-    denoising_split,
-    refiner_strength,
-    refiner_aesthetic_score,
-    refiner_negative_aesthetic_score,
+    prompt_2,
+    negative_prompt_2,
+    crop_coords_top_left,
+    guidance_rescale,
+    timesteps,
+    sigmas,
+    lora_path,
 ):
-    if image_resolution == (512, 512) and (vae_on_device or use_refiner):
-        pytest.skip("Accuracy test on 512x512 image resolution is only supported for UNet on device.")
+    if image_resolution == (512, 512):
+        pytest.skip("Accuracy target not available for 512x512 image resolution")
 
     start_from, num_prompts = evaluation_range
 
@@ -148,10 +136,12 @@ def test_accuracy_sdxl(
         num_prompts,
     )
 
+    prompts_suffix = "ColoringBook: "  # Default Lora (ColoringBookRedmond-V2) works best with this suffix
+    prompts = [prompts_suffix + prompt for prompt in prompts]
+
     logger.info(f"Start inference from prompt index: {start_from} to {start_from + num_prompts}")
 
-    images = test_demo_base_and_refiner(
-        validate_fabric_compatibility,
+    images = run_demo_inference(
         mesh_device,
         is_ci_env,
         image_resolution,
@@ -160,22 +150,18 @@ def test_accuracy_sdxl(
         num_inference_steps,
         vae_on_device,
         encoders_on_device,
-        capture_trace,
         evaluation_range,
+        capture_trace,
         guidance_scale,
-        use_cfg_parallel=use_cfg_parallel,
+        use_cfg_parallel,
         fixed_seed_for_batch=True,
-        prompt_2=None,
-        negative_prompt_2=None,
-        crop_coords_top_left=(0, 0),
-        guidance_rescale=0.0,
-        timesteps=None,
-        sigmas=None,
-        refiner_strength=refiner_strength,
-        refiner_aesthetic_score=refiner_aesthetic_score,
-        refiner_negative_aesthetic_score=refiner_negative_aesthetic_score,
-        use_refiner=use_refiner,
-        denoising_split=denoising_split,
+        prompt_2=prompt_2,
+        negative_prompt_2=negative_prompt_2,
+        crop_coords_top_left=crop_coords_top_left,
+        guidance_rescale=guidance_rescale,
+        timesteps=timesteps,
+        sigmas=sigmas,
+        lora_path=lora_path,
     )
 
     skip_check_and_save = os.getenv("TT_SDXL_SKIP_CHECK_AND_SAVE", "0") == "1"
@@ -185,7 +171,7 @@ def test_accuracy_sdxl(
 
     accuracy_metrics = calculate_accuracy_metrics(images, prompts, coco_statistics_path)
 
-    model_name = ("sdxl-base-refiner" if use_refiner else "sdxl") + ("-tp" if use_cfg_parallel else "")
+    model_name = "sdxl-lora" + ("-tp" if use_cfg_parallel else "")
     metadata = {
         "model_name": model_name,
         "device": get_device_name(),
@@ -193,13 +179,8 @@ def test_accuracy_sdxl(
         "capture_trace": capture_trace,
         "encoders_on_device": encoders_on_device,
         "use_cfg_parallel": use_cfg_parallel,
-        "use_refiner": use_refiner,
         "negative_prompt": negative_prompt,
         "guidance_scale": guidance_scale,
-        "denoising_split": denoising_split,
-        "refiner_strength": refiner_strength,
-        "refiner_aesthetic_score": refiner_aesthetic_score,
-        "refiner_negative_aesthetic_score": refiner_negative_aesthetic_score,
         "num_inference_steps": num_inference_steps,
         "start_from": start_from,
         "num_prompts": num_prompts,
