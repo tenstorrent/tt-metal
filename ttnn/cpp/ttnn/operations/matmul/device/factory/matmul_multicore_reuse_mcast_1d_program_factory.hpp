@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <functional>
+
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operations/matmul/device/matmul_device_operation_types.hpp"
 #include "ttnn/operations/ccl/ccl_op_fusion.hpp"
@@ -64,10 +66,10 @@ struct MatmulMeshWorkloadMultiCoreReuseMcast1DProgramFactory {
 
 MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
-    const Tensor& a,
-    const std::vector<Tensor>& b_tensors,
-    const std::optional<const Tensor>& bias,
-    const std::vector<Tensor>& output_tensors,
+    const tt::tt_metal::MeshTensor& a,
+    const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& b_tensors,
+    const tt::tt_metal::MeshTensor* bias,
+    const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& output_tensors,
     bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     const operations::matmul::MatmulProgramConfig& program_config,
@@ -80,10 +82,10 @@ MatmulMultiCoreReuseMcast1DProgramFactory::shared_variables_t matmul_multi_core_
 
 MatmulMultiCoreReuseMcast1DProgramFactory::cached_program_t matmul_multi_core_reuse_mcast_1d_optimized_helper(
     tt::tt_metal::Program& program,
-    const Tensor& a,
-    const std::vector<Tensor>& b_tensors,
-    const std::optional<const Tensor>& bias,
-    const std::vector<Tensor>& output_tensors,
+    const tt::tt_metal::MeshTensor& a,
+    const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& b_tensors,
+    const tt::tt_metal::MeshTensor* bias,
+    const std::vector<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& output_tensors,
     bool broadcast_batch,
     DeviceComputeKernelConfig compute_kernel_config,
     const operations::matmul::MatmulProgramConfig& program_config,

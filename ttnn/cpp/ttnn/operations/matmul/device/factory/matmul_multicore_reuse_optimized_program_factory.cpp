@@ -13,13 +13,11 @@
 #include "ttnn/tensor/shape/shape.hpp"
 
 using namespace tt;
-using tt::tt_metal::Tensor;
 
 namespace ttnn::prim {
 namespace reuse_optimized_helpers {
 
 MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
-    tt_metal::IDevice* device,
     MathFidelity math_fidelity,
     bool fp32_dest_acc_en,
     bool math_approx_mode,
@@ -39,9 +37,9 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
     uint32_t out_subblock_w,
     uint32_t per_core_M,
     uint32_t per_core_N,
-    const Tensor& in0,
-    const Tensor& in1,
-    const Tensor& output,
+    const tt::tt_metal::MeshTensor& in0,
+    const tt::tt_metal::MeshTensor& in1,
+    const tt::tt_metal::MeshTensor& output,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
     tt::DataFormat in0_data_format,
@@ -49,6 +47,8 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
     tt::DataFormat output_data_format,
     bool untilize_out) {
     tt_metal::Program program{};
+
+    const auto& device = in0.device();
 
     // TODO: We can generalize this into some special form of fuse batch, where we have B /= batch_scale_factor and M *=
     // batch_scale_factor
@@ -78,9 +78,6 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
     uint32_t output_single_tile_size = output_tile.get_tile_size(output_data_format);
     uint32_t interm0_single_tile_size = output_tile.get_tile_size(interm0_data_format);
 
-    tt_metal::Buffer* in0_buffer = in0.buffer();
-    tt_metal::Buffer* in1_buffer = in1.buffer();
-    tt_metal::Buffer* out_buffer = output.buffer();
     bool in0_is_sharded = in0.is_sharded();
     bool in1_is_sharded = in1.is_sharded();
     bool output_is_sharded = output.is_sharded();
@@ -121,11 +118,11 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
     uint32_t num_output_blocks_total = (B * M / per_core_M) * (N / per_core_N);
     std::optional<tt::tt_metal::ShardSpec> shard_spec = std::nullopt;
     if (in0_is_sharded) {
-        shard_spec = in0.shard_spec().value();
+        shard_spec = in0.legacy_shard_spec().value();
     } else if (in1_is_sharded) {
-        shard_spec = in1.shard_spec().value();
+        shard_spec = in1.legacy_shard_spec().value();
     } else if (output_is_sharded) {
-        shard_spec = output.shard_spec().value();
+        shard_spec = output.legacy_shard_spec().value();
     }
 
     uint32_t num_cores = 0, num_blocks_per_core_group_1 = 0, num_blocks_per_core_group_2 = 0;
@@ -175,7 +172,7 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
         (std::uint32_t)bcast_batch,
         (std::uint32_t)M * K,  // MtKt
     };
-    tt::tt_metal::TensorAccessorArgs(*in0_buffer).append_to(reader_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(in0).append_to(reader_compile_time_args);
 
     std::vector<uint32_t> reader_writer_compile_time_args = {
         (std::uint32_t)in1_tensor_stride_w,
@@ -199,8 +196,8 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
         (std::uint32_t)out_num_subblocks_h,                // out_num_subblocks_h
         (std::uint32_t)M * N,                              // MtNt
     };
-    tt::tt_metal::TensorAccessorArgs(*in1_buffer).append_to(reader_writer_compile_time_args);
-    tt::tt_metal::TensorAccessorArgs(*out_buffer).append_to(reader_writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(in1).append_to(reader_writer_compile_time_args);
+    tt::tt_metal::TensorAccessorArgs(output).append_to(reader_writer_compile_time_args);
     std::map<std::string, std::string> mm_kernel_in0_reader_defines;
     std::map<std::string, std::string> mm_kernel_in1_reader_writer_defines;
     if (in0_is_sharded) {
@@ -232,7 +229,7 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
     */
     bool in0_needs_intermediate_cb_read = false;
     bool in1_needs_intermediate_cb_read = false;
-    if (device->arch() == tt::ARCH::BLACKHOLE) {
+    if (device.arch() == tt::ARCH::BLACKHOLE) {
         in0_needs_intermediate_cb_read = ((in0_single_tile_size % 64) != 0);
         if (in0_needs_intermediate_cb_read) {
             mm_kernel_in0_reader_defines["INTERMEDIATE_CB_READ"] = "1";
@@ -309,9 +306,9 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
     }
 
     ttnn::operations::compute_throttle_utils::add_stagger_defines_if_needed(
-        device->arch(), num_cores, mm_kernel_defines);
+        device.arch(), num_cores, mm_kernel_defines);
     ttnn::operations::compute_throttle_utils::throttle_mm_perf(
-        device->arch(), num_cores, mm_kernel_defines, throttle_level);
+        device.arch(), num_cores, mm_kernel_defines, throttle_level);
 
     // Named compile args for compute kernels (CB indices)
     std::unordered_map<std::string, uint32_t> compute_named_compile_args = {
@@ -381,7 +378,7 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
             .set_page_size(src0_cb_index, in0_single_tile_size)
             .set_tile_dims(src0_cb_index, in0_tile);
     if (in0_is_sharded) {
-        cb_src0_config = cb_src0_config.set_globally_allocated_address(*in0_buffer);
+        cb_src0_config = cb_src0_config.set_globally_allocated_address(in0);
     }
     auto cb_src0 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src0_config);
 
@@ -391,7 +388,7 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
             .set_page_size(src1_cb_index, in1_single_tile_size)
             .set_tile_dims(src1_cb_index, in1_tile);
     if (in1_is_sharded) {
-        cb_src1_config = cb_src1_config.set_globally_allocated_address(*in1_buffer);
+        cb_src1_config = cb_src1_config.set_globally_allocated_address(in1);
     }
     auto cb_src1 = tt_metal::CreateCircularBuffer(program, all_cores, cb_src1_config);
 
@@ -437,7 +434,7 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
     // output_cb_data_format_spec) 	.set_page_size(output_cb_index, output_single_tile_size)
     //     .set_page_size(interm0_cb_index, output_single_tile_size);
     if (output_is_sharded) {
-        output_cb_config = output_cb_config.set_globally_allocated_address(*out_buffer);
+        output_cb_config = output_cb_config.set_globally_allocated_address(output);
     }
     auto cb_output = tt_metal::CreateCircularBuffer(program, CoreRangeSet({all_cores}), output_cb_config);
 
@@ -470,17 +467,17 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
 
     // Write runtime args to device
     std::vector<uint32_t> mm_reader_args = {
-        (std::uint32_t)in0_buffer->address(),  // in0_tensor_addr
-        (std::uint32_t)0,                      // in0_tensor_start_tile_id placeholder
-        (std::uint32_t)0,                      // batch placeholder
+        (std::uint32_t)in0.address(),  // in0_tensor_addr
+        (std::uint32_t)0,              // in0_tensor_start_tile_id placeholder
+        (std::uint32_t)0,              // batch placeholder
     };
 
     std::vector<uint32_t> mm_writer_args = {
-        (std::uint32_t)in1_buffer->address(),  // in1_tensor_addr
-        (std::uint32_t)0,                      // in1_tensor_start_tile_id placeholder
-        (std::uint32_t)0,                      // batch placeholder
-        (std::uint32_t)out_buffer->address(),  // out_tensor_addr
-        (std::uint32_t)0,                      // out_tensor_start_tile_id placeholder
+        (std::uint32_t)in1.address(),     // in1_tensor_addr
+        (std::uint32_t)0,                 // in1_tensor_start_tile_id placeholder
+        (std::uint32_t)0,                 // batch placeholder
+        (std::uint32_t)output.address(),  // out_tensor_addr
+        (std::uint32_t)0,                 // out_tensor_start_tile_id placeholder
     };
     bool row_major = false;
     if (shard_spec.has_value()) {
@@ -544,9 +541,9 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t create_program(
 }  // namespace reuse_optimized_helpers
 
 MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t matmul_multi_core_reuse_optimized_(
-    const Tensor& a,
-    const Tensor& b,
-    Tensor& output,
+    const tt::tt_metal::MeshTensor& a,
+    const tt::tt_metal::MeshTensor& b,
+    const tt::tt_metal::MeshTensor& output,
     bool bcast_batch,
     bool transpose_a,
     bool transpose_b,
@@ -560,10 +557,10 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t matmul_multi_core_
     uint32_t per_core_N,
     bool fuse_batch,
     bool untilize_out) {
-    const auto& ashape = operations::matmul::utilities::get_matmul_tensor_padded_shape(a, transpose_a);
-    const auto& bshape = operations::matmul::utilities::get_matmul_tensor_padded_shape(b, transpose_b);
-    auto in0_tile = operations::matmul::utilities::get_matmul_tile(a, transpose_a);
-    auto in1_tile = operations::matmul::utilities::get_matmul_tile(b, transpose_b);
+    const auto& ashape = operations::matmul::utilities::get_matmul_mesh_tensor_padded_shape(a, transpose_a);
+    const auto& bshape = operations::matmul::utilities::get_matmul_mesh_tensor_padded_shape(b, transpose_b);
+    auto in0_tile = operations::matmul::utilities::get_matmul_mesh_tensor_tile(a, transpose_a);
+    auto in1_tile = operations::matmul::utilities::get_matmul_mesh_tensor_tile(b, transpose_b);
 
     TT_FATAL(
         (bcast_batch == false) or (ashape[0] == 1) or (ashape.rank() == 2),
@@ -574,10 +571,10 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t matmul_multi_core_
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());        // in1
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output_dtype);  // output
 
-    tt_metal::IDevice* device = a.device();
+    const auto& device = a.device();
 
     auto [math_fidelity, math_approx_mode, fp32_dest_acc_en, packer_l1_acc, dst_full_sync_en] =
-        get_compute_kernel_config_args(device->arch(), compute_kernel_config);
+        get_compute_kernel_config_args(device.arch(), compute_kernel_config);
 
     if (fp32_dest_acc_en) {
         TT_FATAL(
@@ -595,7 +592,7 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t matmul_multi_core_
     uint32_t Kt = operations::matmul::utilities::get_K_dim(ashape, in0_tile);
     uint32_t Nt = operations::matmul::utilities::get_N_dim(bshape, in1_tile);
 
-    const auto ashape_logical = operations::matmul::utilities::get_matmul_tensor_logical_shape(a, transpose_a);
+    const auto ashape_logical = operations::matmul::utilities::get_matmul_mesh_tensor_logical_shape(a, transpose_a);
     const auto in0_last_ktile_w = ashape_logical[-1] % in0_tile.get_width();
 
     // TODO: Generalize
@@ -609,14 +606,12 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t matmul_multi_core_
     //                      Grayskull Device Setup
     ////////////////////////////////////////////////////////////////////////////
     // Pass in cshape instead
-    tt_metal::Buffer* out_buffer = output.buffer();
-    TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     ////////////////////////////////////////////////////////////////////////////
     //                      Application Setup
     ////////////////////////////////////////////////////////////////////////////
     return reuse_optimized_helpers::create_program(
-        device,
         math_fidelity,
         fp32_dest_acc_en,
         math_approx_mode,
@@ -669,9 +664,9 @@ MatmulMultiCoreReuseOptimizedProgramFactory::cached_program_t MatmulMultiCoreReu
     TT_FATAL(operation_attributes.bcast_batch.has_value(), "Bcast batch should have been provided");
 
     return matmul_multi_core_reuse_optimized_(
-        tensor_args.input_tensors.at(0),
-        tensor_args.input_tensors.at(1),
-        tensor_return_value.at(0),
+        tensor_args.input_tensors.at(0).mesh_tensor(),
+        tensor_args.input_tensors.at(1).mesh_tensor(),
+        tensor_return_value.at(0).mesh_tensor(),
         operation_attributes.bcast_batch.value(),
         operation_attributes.transpose_a,
         operation_attributes.transpose_b,
@@ -701,17 +696,13 @@ void MatmulMultiCoreReuseOptimizedProgramFactory::override_runtime_arguments(
     auto cb_output = shared_variables.cb_output;
     auto cores = shared_variables.cores;
 
-    const auto& input_tensors = tensor_args.input_tensors;
-    const auto& output_tensors = tensor_return_value;
+    const auto& in0 = tensor_args.input_tensors.at(0).mesh_tensor();
+    const auto& in1 = tensor_args.input_tensors.at(1).mesh_tensor();
+    const auto& output = tensor_return_value.at(0).mesh_tensor();
 
-    auto* src_buffer_a = input_tensors.at(0).buffer();
-    auto* src_buffer_b = input_tensors.at(1).buffer();
-
-    auto* dst_buffer = output_tensors.at(0).buffer();
-
-    const bool src0_sharded = input_tensors[0].memory_config().is_sharded();
-    const bool src1_sharded = input_tensors[1].memory_config().is_sharded();
-    const bool out_sharded = output_tensors[0].memory_config().is_sharded();
+    const bool src0_sharded = in0.is_sharded();
+    const bool src1_sharded = in1.is_sharded();
+    const bool out_sharded = output.is_sharded();
 
     const bool update_reader_args = !src0_sharded;
 
@@ -725,26 +716,26 @@ void MatmulMultiCoreReuseOptimizedProgramFactory::override_runtime_arguments(
         for (const auto& core : cores) {
             if (update_reader_args) {
                 auto& runtime_args = reader_runtime_args_by_core[core.x][core.y];
-                runtime_args[0] = src_buffer_a->address();  // in0_tensor_addr
+                runtime_args[0] = in0.address();  // in0_tensor_addr
             }
 
             if (update_writer_args) {
                 auto& runtime_args = writer_runtime_args_by_core[core.x][core.y];
-                runtime_args[0] = src_buffer_b->address();  // in1_tensor_addr
-                runtime_args[3] = dst_buffer->address();    // out_tensor_addr
+                runtime_args[0] = in1.address();     // in1_tensor_addr
+                runtime_args[3] = output.address();  // out_tensor_addr
             }
         }
     }
     if (src0_sharded) {
-        UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer_a);
+        UpdateDynamicCircularBufferAddress(program, cb_src0, in0);
     }
 
     if (src1_sharded) {
-        UpdateDynamicCircularBufferAddress(program, cb_src1, *src_buffer_b);
+        UpdateDynamicCircularBufferAddress(program, cb_src1, in1);
     }
 
     if (out_sharded) {
-        UpdateDynamicCircularBufferAddress(program, cb_output, *dst_buffer);
+        UpdateDynamicCircularBufferAddress(program, cb_output, output);
     }
 }
 

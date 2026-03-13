@@ -15,6 +15,7 @@
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/work_split.hpp>
+#include <tt-metalium/tensor_accessor_args.hpp>
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/tensor/shape/shape.hpp"
 
@@ -50,10 +51,10 @@ create_program_batch_sharded(
     uint32_t per_core_M,   // M tiles per core (should equal M for batch sharding)
     uint32_t per_core_N,   // N tiles per core (should equal N for batch sharding)
     std::optional<UnaryWithParam> fused_activation,
-    tt_metal::Buffer* in0_buffer,
-    tt_metal::Buffer* in1_buffer,
-    tt_metal::Buffer* bias_buffer,
-    tt_metal::Buffer* out_buffer,
+    const tt::tt_metal::MeshTensor& in0,
+    const tt::tt_metal::MeshTensor& in1,
+    const std::optional<std::reference_wrapper<const tt::tt_metal::MeshTensor>>& bias,
+    const tt::tt_metal::MeshTensor& out,
     const tt::tt_metal::Tile& in0_tile,
     const tt::tt_metal::Tile& in1_tile,
     const tt::tt_metal::Tile& bias_tile,
@@ -264,8 +265,8 @@ create_program_batch_sharded(
     uint32_t interm0_CB_size = out_block_tiles * interm0_single_tile_size;
 
     // Sharded input buffer (in0 in L1)
-    uint32_t in0_shard_tiles = in0_buffer->shard_spec().shape()[0] / in0_tile.get_tile_shape()[0] *
-                               in0_buffer->shard_spec().shape()[1] / in0_tile.get_tile_shape()[1];
+    uint32_t in0_shard_tiles = in0.legacy_shard_spec().value().shape[0] / in0_tile.get_tile_shape()[0] *
+                               in0.legacy_shard_spec().value().shape[1] / in0_tile.get_tile_shape()[1];
     uint32_t in2_CB_size = in0_shard_tiles * in0_single_tile_size;
 
     // Bias CB
@@ -273,8 +274,8 @@ create_program_batch_sharded(
     uint32_t in3_CB_size = in3_block_tiles * bias_single_tile_size;
 
     // Output reshard buffer
-    uint32_t out_shard_tiles = out_buffer->shard_spec().shape()[0] / output_tile.get_tile_shape()[0] *
-                               out_buffer->shard_spec().shape()[1] / output_tile.get_tile_shape()[1];
+    uint32_t out_shard_tiles = out.legacy_shard_spec().value().shape[0] / output_tile.get_tile_shape()[0] *
+                               out.legacy_shard_spec().value().shape[1] / output_tile.get_tile_shape()[1];
     uint32_t out_reshard_CB_size = out_shard_tiles * output_single_tile_size;
 
     // Page sizes for DRAM reads
@@ -321,17 +322,17 @@ create_program_batch_sharded(
             .set_tile_dims(src1_cb_index, in1_tile);
     tt_metal::CreateCircularBuffer(program, all_cores_in_rect_grid, src1_cb_config);
 
-    // CB 2: sharded in0 buffer - on INPUT storage cores, backed by in0_buffer
+    // CB 2: sharded in0 buffer - on INPUT storage cores, backed by in0
     uint32_t src2_cb_index = tt::CBIndex::c_2;
     tt_metal::CircularBufferConfig src2_cb_config =
         tt_metal::CircularBufferConfig(in2_CB_size, {{src2_cb_index, in0_data_format}})
             .set_page_size(src2_cb_index, in0_single_tile_size)
             .set_tile_dims(src2_cb_index, in0_tile)
-            .set_globally_allocated_address(*in0_buffer);
+            .set_globally_allocated_address(in0);
     auto cb_src2 = tt_metal::CreateCircularBuffer(program, input_all_storage_cores, src2_cb_config);
 
     // CB 3: bias (if fused) - on all cores in bounding box
-    if (bias_buffer != nullptr) {
+    if (bias.has_value()) {
         uint32_t src3_cb_index = tt::CBIndex::c_3;
         tt_metal::CircularBufferConfig cb_src3_config =
             tt_metal::CircularBufferConfig(in3_CB_size, {{src3_cb_index, bias_data_format}})
@@ -370,13 +371,13 @@ create_program_batch_sharded(
         tt_metal::CreateCircularBuffer(program, all_worker_cores, output_cb_config);
     }
 
-    // CB 6: output reshard buffer - on OUTPUT storage cores, backed by out_buffer
+    // CB 6: output reshard buffer - on OUTPUT storage cores, backed by out
     uint32_t output_reshard_cb_index = tt::CBIndex::c_6;
     tt_metal::CircularBufferConfig output_reshard_cb_config =
         tt_metal::CircularBufferConfig(out_reshard_CB_size, {{output_reshard_cb_index, output_data_format}})
             .set_page_size(output_reshard_cb_index, output_single_tile_size)
             .set_tile_dims(output_reshard_cb_index, output_tile)
-            .set_globally_allocated_address(*out_buffer);
+            .set_globally_allocated_address(out);
     auto cb_output_reshard =
         tt_metal::CreateCircularBuffer(program, output_all_storage_cores, output_reshard_cb_config);
 
@@ -385,7 +386,7 @@ create_program_batch_sharded(
     std::map<std::string, std::string> reader_defines;
     std::map<std::string, std::string> writer_defines;
 
-    if (bias_buffer != nullptr) {
+    if (bias.has_value()) {
         mm_kernel_defines["FUSE_BIAS"] = "1";
         writer_defines["FUSE_BIAS"] = "1";
     }
@@ -443,7 +444,7 @@ create_program_batch_sharded(
         (uint32_t)out_batch_stride_bytes,  // out_tensor_stride_batch_bytes (for NOC write)
         (uint32_t)out_reshard_CB_size,     // out_shard_size_bytes (full shard)
     };
-    if (bias_buffer != nullptr) {
+    if (bias.has_value()) {
         in1_writer_compile_args.push_back(bias_buffer_page_size);
         in1_writer_compile_args.push_back(bias_buffer_num_pages);
         in1_writer_compile_args.push_back(in3_block_tiles);
@@ -597,7 +598,7 @@ create_program_batch_sharded(
             1u,                               // worker_core_type (1 = active worker)
             input_storage_noc_x[worker_idx],  // input storage core NOC x
             input_storage_noc_y[worker_idx],  // input storage core NOC y
-            in0_buffer->address(),            // L1 address of in0 shard on storage core
+            in0.address(),                    // L1 address of in0 shard on storage core
         };
         tt_metal::SetRuntimeArgs(program, mm_kernel_in0_reader_id, core, in0_reader_runtime_args);
         reader_kernel_ids.push_back(mm_kernel_in0_reader_id);
@@ -605,13 +606,13 @@ create_program_batch_sharded(
         // in1 writer runtime args
         std::vector<uint32_t> in1_writer_runtime_args = {
             1u,  // is_worker_core
-            in1_buffer->address(),
-            bias_buffer != nullptr ? bias_buffer->address() : 0u,
+            in1.address(),
+            bias.has_value() ? bias->get().address() : 0u,
             bank_id,
             vc,
             output_storage_noc_x[worker_idx],  // output storage core NOC x
             output_storage_noc_y[worker_idx],  // output storage core NOC y
-            out_buffer->address(),             // L1 address of output shard on storage core
+            out.address(),                     // L1 address of output shard on storage core
         };
         tt_metal::SetRuntimeArgs(program, mm_kernel_in1_writer_id, core, in1_writer_runtime_args);
         writer_kernel_ids.push_back(mm_kernel_in1_writer_id);
@@ -637,14 +638,11 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
     const ttnn::prim::MatmulInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value,
     const ttnn::prim::MatmulParams& operation_attributes) {
-    const auto& input_tensors = tensor_args.input_tensors;
-    const auto& optional_input_tensors = tensor_args.optional_input_tensors;
-    const auto& output_tensors = tensor_return_value;
-
-    const auto& a = input_tensors.at(0);
-    const auto& b = input_tensors.at(1);
-    const auto& bias = optional_input_tensors.at(0);
-    const auto& output = output_tensors.at(0);
+    // Get MeshTensor references for the migration
+    const auto& a = tensor_args.input_tensors.at(0).mesh_tensor();
+    const auto& b = tensor_args.input_tensors.at(1).mesh_tensor();
+    const auto& bias_opt = tensor_args.optional_input_tensors.at(0);
+    const auto& output = tensor_return_value.at(0).mesh_tensor();
     const auto& ashape = a.padded_shape();
     const auto& bshape = b.padded_shape();
     auto in0_tile = a.tensor_spec().tile();
@@ -658,44 +656,38 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
     tt::DataFormat in1_data_format = tt_metal::datatype_to_dataformat_converter(b.dtype());
     tt::DataFormat output_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
 
-    tt_metal::Buffer* bias_buffer = nullptr;
+    std::optional<std::reference_wrapper<const tt::tt_metal::MeshTensor>> bias_mesh_tensor = std::nullopt;
     tt::DataFormat bias_data_format = tt::DataFormat::Bfp8_b;
-    if (bias.has_value()) {
-        const auto& c = bias.value();
-        TT_FATAL(c.storage_type() == StorageType::DEVICE, "Bias tensor must be on device");
-        TT_FATAL(a.device() == c.device(), "Operands to matmul need to be on the same device!");
-        TT_FATAL(c.buffer() != nullptr, "Operands to matmul need to be allocated in buffers on device!");
-        bias_buffer = c.buffer();
+    if (bias_opt.has_value()) {
+        const auto& c = bias_opt.value().mesh_tensor();
+        TT_FATAL(c.is_allocated(), "Operands to matmul need to be allocated in buffers on device!");
+
+        bias_mesh_tensor = c;
         bias_data_format = tt_metal::datatype_to_dataformat_converter(c.dtype());
     }
 
     tt::tt_metal::IDevice* device =
         reuse_batched_hs_dram_sharded_optimized_helpers::get_device_for_dram_banks(a, mesh_coord);
 
-    TT_FATAL(
-        a.shard_spec().has_value() && output.shard_spec().has_value(), "Both input A and output must have shard specs");
-    CoreRangeSet input_all_cores_storage = a.shard_spec().value().grid;
-    CoreRangeSet output_all_cores_storage = output.shard_spec().value().grid;
+    TT_FATAL(a.is_sharded() && output.is_sharded(), "Both input A and output must have shard specs");
+    CoreRangeSet input_all_cores_storage = a.legacy_shard_spec().value().grid;
+    CoreRangeSet output_all_cores_storage = output.legacy_shard_spec().value().grid;
 
-    tt_metal::Buffer* in0_buffer = a.buffer();
-    tt_metal::Buffer* in1_buffer = b.buffer();
-    tt_metal::Buffer* out_buffer = output.buffer();
-
-    uint32_t in0_single_tile_size = in0_tile.get_tile_size(tt_metal::datatype_to_dataformat_converter(a.dtype()));
-    uint32_t in1_single_tile_size = in1_tile.get_tile_size(tt_metal::datatype_to_dataformat_converter(b.dtype()));
+    uint32_t in0_single_tile_size = in0_tile.get_tile_size(in0_data_format);
+    uint32_t in1_single_tile_size = in1_tile.get_tile_size(in1_data_format);
 
     // Buffer size validation
     TT_FATAL(
-        in0_buffer->size() % in0_single_tile_size == 0,
+        a.tensor_spec().compute_packed_buffer_size_bytes() % in0_single_tile_size == 0,
         "Input A buffer size ({}) must be divisible by single tile size ({})",
-        in0_buffer->size(),
+        a.tensor_spec().compute_packed_buffer_size_bytes(),
         in0_single_tile_size);
     TT_FATAL(
-        in1_buffer->size() % in1_single_tile_size == 0,
+        b.tensor_spec().compute_packed_buffer_size_bytes() % in1_single_tile_size == 0,
         "Input B buffer size ({}) must be divisible by single tile size ({})",
-        in1_buffer->size(),
+        b.tensor_spec().compute_packed_buffer_size_bytes(),
         in1_single_tile_size);
-    TT_FATAL(out_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(output.is_allocated(), "Output buffer should be allocated on device!");
 
     // Shape compatibility checks
     TT_FATAL(
@@ -775,13 +767,13 @@ matmul_multi_core_reuse_batched_hs_dram_sharded_optimized_(
         per_core_M,
         per_core_N,
         fused_activation,
-        in0_buffer,
-        in1_buffer,
-        bias_buffer,
-        out_buffer,
+        a,
+        b,
+        bias_mesh_tensor,
+        output,
         in0_tile,
         in1_tile,
-        bias.has_value() ? bias->tensor_spec().tile() : output_tile,
+        bias_mesh_tensor.has_value() ? bias_mesh_tensor->get().tensor_spec().tile() : output_tile,
         output_tile,
         in0_data_format,
         in1_data_format,
@@ -817,19 +809,17 @@ void MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::override_runtime_ar
     const ttnn::prim::MatmulParams& /*operation_attributes*/,
     const ttnn::prim::MatmulInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
-    const auto& input_tensors = tensor_args.input_tensors;
-    const auto& optional_input_tensors = tensor_args.optional_input_tensors;
-    const auto& output_tensors = tensor_return_value;
+    const auto& a = tensor_args.input_tensors.at(0).mesh_tensor();
+    const auto& b = tensor_args.input_tensors.at(1).mesh_tensor();
+    const auto& bias_opt = tensor_args.optional_input_tensors.at(0);
+    const auto& output = tensor_return_value.at(0).mesh_tensor();
 
     for (auto& [mesh_coord_range, program] : cached_workload.workload.get_programs()) {
-        auto* src_buffer_a = input_tensors.at(0).buffer();
-        auto* src_buffer_b = input_tensors.at(1).buffer();
-        const auto& bias_tensor = optional_input_tensors.at(0);
-        auto* dst_buffer = output_tensors.at(0).buffer();
         auto shared_variables = cached_workload.shared_variables.at(mesh_coord_range);
 
-        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src2, *src_buffer_a);
-        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output_reshard, *dst_buffer);
+        // API improvement opportunity: UpdateDynamicCircularBufferAddress requires get_reference_buffer()
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_src2, a);
+        UpdateDynamicCircularBufferAddress(program, shared_variables.cb_output_reshard, output);
 
         const auto& all_worker_cores_ordered = shared_variables.all_worker_cores_ordered;
         const auto& reader_kernel_ids = shared_variables.reader_kernel_ids;
@@ -841,18 +831,18 @@ void MatmulMultiCoreReuseBatchedHSDRAMShardedProgramFactory::override_runtime_ar
             // Update reader kernel runtime args - arg[3] is the L1 address of in0 shard
             auto reader_kernel_id = reader_kernel_ids[i];
             auto& reader_runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-            reader_runtime_args[3] = src_buffer_a->address();
+            reader_runtime_args[3] = a.address();
 
             // Update writer kernel runtime args
             auto writer_kernel_id = writer_kernel_ids[i];
             auto& writer_runtime_args = GetRuntimeArgs(program, writer_kernel_id, core);
-            writer_runtime_args[1] = src_buffer_b->address();
-            if (bias_tensor.has_value()) {
-                writer_runtime_args[2] = bias_tensor.value().buffer()->address();
+            writer_runtime_args[1] = b.address();
+            if (bias_opt.has_value()) {
+                writer_runtime_args[2] = bias_opt.value().mesh_tensor().address();
             } else {
                 writer_runtime_args[2] = 0;
             }
-            writer_runtime_args[7] = dst_buffer->address();  // L1 address of output shard on storage core
+            writer_runtime_args[7] = output.address();  // L1 address of output shard on storage core
         }
     }
 }

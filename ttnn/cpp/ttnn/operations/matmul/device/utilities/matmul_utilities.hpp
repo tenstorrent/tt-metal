@@ -8,6 +8,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/distributed/types.hpp"
+#include <tt-metalium/experimental/tensor/mesh_tensor.hpp>
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/operations/eltwise/unary/common/unary_op_types.hpp"
 
@@ -153,6 +154,68 @@ inline ttnn::Shape get_matmul_tensor_logical_shape(const Tensor& input_tensor, b
     return shape;
 }
 
+/**
+ * @brief Get the padded shape of a MeshTensor, with optional transpose.
+ *
+ * Returns the padded shape of the tensor. If transpose is true, the padded shape dimensions are swapped.
+ *
+ * @param input_tensor The MeshTensor whose padded shape is queried.
+ * @param transpose Whether to return the padded shape after transposing (swap height and width).
+ * @return ttnn::Shape The padded shape of the tensor, possibly transposed.
+ */
+inline ttnn::Shape get_matmul_mesh_tensor_padded_shape(const tt::tt_metal::MeshTensor& input_tensor, bool transpose) {
+    auto padded_shape = input_tensor.padded_shape();
+    if (transpose) {
+        std::swap(padded_shape[-2], padded_shape[-1]);
+    }
+    return padded_shape;
+}
+
+/**
+ * @brief Get the tile shape of a MeshTensor, with optional transpose.
+ *
+ * Returns a tile representing the height and width of the tensor's tile. If transpose is true,
+ * the tile shape dimensions are swapped.
+ *
+ * @param input_tensor The MeshTensor whose tile shape is queried.
+ * @param transpose Whether to return the tile shape after transposing (swap height and width).
+ * @return tt::tt_metal::Tile The tile shape of the tensor, possibly transposed.
+ */
+inline tt::tt_metal::Tile get_matmul_mesh_tensor_tile(const tt::tt_metal::MeshTensor& input_tensor, bool transpose) {
+    auto curr_tile = input_tensor.tensor_spec().tile();
+    if (!transpose) {
+        return curr_tile;
+    }
+
+    // If the tile is already transposed and we are asked to transpose it again,
+    // the result should be the original orientation (double-transpose cancels out).
+    // Therefore, we negate the transpose flag.
+    const auto transpose_was_set = curr_tile.get_transpose_of_faces();
+    TT_FATAL(
+        (!transpose_was_set) || curr_tile.get_transpose_within_face(),
+        "The tile spec must have both transpose_within_face {} and transpose_of_faces {} set or neither set",
+        curr_tile.get_transpose_within_face(),
+        curr_tile.get_transpose_of_faces());
+    return tt::tt_metal::Tile({curr_tile.get_width(), curr_tile.get_height()}, !transpose_was_set);
+}
+
+/**
+ * @brief Get the shape of a MeshTensor, with optional transpose.
+ *
+ * Returns the logical shape of the tensor. If transpose is true, the shape dimensions are swapped.
+ *
+ * @param input_tensor The MeshTensor whose shape is queried.
+ * @param transpose Whether to return the shape after transposing (swap height and width).
+ * @return ttnn::Shape The shape of the tensor, possibly transposed.
+ */
+inline ttnn::Shape get_matmul_mesh_tensor_logical_shape(const tt::tt_metal::MeshTensor& input_tensor, bool transpose) {
+    auto shape = input_tensor.logical_shape();
+    if (transpose) {
+        std::swap(shape[-2], shape[-1]);
+    }
+    return shape;
+}
+
 }  // namespace ttnn::operations::matmul::utilities
 
 namespace ttnn::prim::dram_sharded_helpers {
@@ -160,7 +223,7 @@ namespace ttnn::prim::dram_sharded_helpers {
 // Treat it as a one off patch to restore functionality that
 // was adjusted to fix one P0 causing another P0.
 // TODO: Proper fix will be implemented in Issue #32205
-tt::tt_metal::IDevice* get_device_for_dram_banks(const ttnn::Tensor& a, const ttnn::MeshCoordinate& coord);
+tt::tt_metal::IDevice* get_device_for_dram_banks(const tt::tt_metal::MeshTensor& a, const ttnn::MeshCoordinate& coord);
 
 void get_max_page_size_and_num_pages(
     tt::tt_metal::IDevice* device, uint32_t num_tiles, uint32_t tile_size, uint32_t& page_size, uint32_t& num_pages);
