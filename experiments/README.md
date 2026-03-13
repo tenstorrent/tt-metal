@@ -16,8 +16,7 @@
    - [Fused Ops](#fused-ops)
    - [Profiling](#profiling)
 5. [Performance Results](#performance-results)
-6. [Generated Profiler Reports](#generated-profiler-reports)
-7. [Key Concepts](#key-concepts)
+6. [Key Concepts](#key-concepts)
 
 ---
 
@@ -216,19 +215,57 @@ GLM4_MOE_LITE_DEBUG_ALLOW_PARTIAL_LAYERS=1 TT_METAL_GTEST_ETH_DISPATCH=1 python 
   --max-new-tokens 5 --mesh-cols 4 --phase decode --prompt "Hi"
 ```
 
-#### Trace Mode (Fused)
+#### Trace Mode (Fused, 1x4)
 
 ```bash
-# Fused + trace-logits
+# Fused + trace-logits, 1x4
 GLM4_MOE_LITE_FUSED_KV_BRANCH=1 TT_METAL_GTEST_ETH_DISPATCH=1 python \
   models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
   --max-new-tokens 5 --mesh-cols 4 --phase decode --prompt "Hi" \
   --enable-trace --trace-mode logits
 
-# Fused + trace-sampling
+# Fused + trace-sampling, 1x4
 GLM4_MOE_LITE_FUSED_KV_BRANCH=1 TT_METAL_GTEST_ETH_DISPATCH=1 python \
   models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
   --max-new-tokens 5 --mesh-cols 4 --phase decode --prompt "Hi" \
+  --enable-trace --trace-mode sampling
+```
+
+#### Trace Mode (Fused, 1x8 — 8 devices)
+
+```bash
+# Fused (KV_BRANCH + QKV_A + SHARED_GATE_UP) + trace-sampling, 1x8
+GLM4_MOE_LITE_FUSED_KV_BRANCH=1 GLM4_MOE_LITE_FUSE_QKV_A=1 \
+  GLM4_MOE_LITE_FUSE_SHARED_GATE_UP=1 TT_METAL_GTEST_ETH_DISPATCH=1 python \
+  models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
+  --max-new-tokens 4 --mesh-cols 8 --phase both \
+  --enable-trace --trace-mode sampling
+
+# All fused (+ EXPERTS_GATE_UP) + trace-sampling, 1x8
+GLM4_MOE_LITE_FUSED_KV_BRANCH=1 GLM4_MOE_LITE_FUSE_QKV_A=1 \
+  GLM4_MOE_LITE_FUSE_SHARED_GATE_UP=1 GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP=1 \
+  TT_METAL_GTEST_ETH_DISPATCH=1 python \
+  models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
+  --max-new-tokens 4 --mesh-cols 8 --phase both \
+  --enable-trace --trace-mode sampling
+```
+
+#### Trace Mode (Fused, 2x4 — 8 devices, T3K physical topology)
+
+```bash
+# Fused (KV_BRANCH + QKV_A + SHARED_GATE_UP) + trace-sampling, 2x4
+GLM4_MOE_LITE_FUSED_KV_BRANCH=1 GLM4_MOE_LITE_FUSE_QKV_A=1 \
+  GLM4_MOE_LITE_FUSE_SHARED_GATE_UP=1 TT_METAL_GTEST_ETH_DISPATCH=1 python \
+  models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
+  --max-new-tokens 4 --mesh-rows 2 --mesh-cols 4 --phase both \
+  --enable-trace --trace-mode sampling
+
+# All fused (+ EXPERTS_GATE_UP) + trace-sampling, 2x4
+GLM4_MOE_LITE_FUSED_KV_BRANCH=1 GLM4_MOE_LITE_FUSE_QKV_A=1 \
+  GLM4_MOE_LITE_FUSE_SHARED_GATE_UP=1 GLM4_MOE_LITE_FUSE_EXPERTS_GATE_UP=1 \
+  TT_METAL_GTEST_ETH_DISPATCH=1 python \
+  models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
+  --max-new-tokens 4 --mesh-rows 2 --mesh-cols 4 --phase both \
   --enable-trace --trace-mode sampling
 ```
 
@@ -263,6 +300,36 @@ Profiler output lands in `generated/profiler/reports/<name>/<timestamp>/`.
 
 ## Performance Results
 
+### Master Comparison: All Configurations Tested
+
+| # | Configuration | Mesh | Dev | Decode Latency | Throughput | Speedup |
+| --- | --- | --- | --- | --- | --- | --- |
+| 1 | Non-fused, eager | 1x4 | 4 | 504.6 ms | 1.98 tok/s | 1.0x |
+| 2 | Non-fused, trace-logits | 1x4 | 4 | 156.3 ms | 6.4 tok/s | 3.2x |
+| 3 | Non-fused, trace-sampling | 1x4 | 4 | 137.6 ms | 7.3 tok/s | 3.7x |
+| 4 | Fused (KV_BRANCH), eager | 1x4 | 4 | 533.5 ms | 1.87 tok/s | 0.9x |
+| 5 | Fused (KV_BRANCH), trace-logits | 1x4 | 4 | 153.2 ms | 6.5 tok/s | 3.3x |
+| 6 | Fused (KV_BRANCH), trace-sampling | 1x4 | 4 | 141.0 ms | 7.1 tok/s | 3.6x |
+| 7 | **Non-fused, trace-sampling** | **2x4** | **8** | **120.6 ms** | **8.3 tok/s** | **4.2x** |
+| 8 | Fused (3 flags), trace-sampling | 2x4 | 8 | 120.8 ms | 8.3 tok/s | 4.2x |
+| 9 | All-fused (4 flags), trace-sampling | 2x4 | 8 | 127.6 ms | 7.8 tok/s | 4.0x |
+| 10 | Fused (3 flags), trace-sampling | 1x8 | 8 | 124.7 ms | 8.0 tok/s | 4.0x |
+| 11 | All-fused (4 flags), trace-sampling | 1x8 | 8 | 130.8 ms | 7.6 tok/s | 3.9x |
+
+**Row 7 is the fastest configuration.** Fused (3 flags) = KV_BRANCH + QKV_A + SHARED_GATE_UP. All-fused (4 flags) adds EXPERTS_GATE_UP.
+
+### Cross-Comparison: Topology × Fusion (All Trace-Sampling)
+
+| Configuration | 1x4 (4 dev) | 1x8 (8 dev) | 2x4 (8 dev) |
+| --- | --- | --- | --- |
+| **Non-fused** | 137.6 ms | — | **120.6 ms** |
+| **Fused (3 flags)** | 141.0 ms | 124.7 ms | **120.8 ms** |
+| **All-fused (4 flags)** | DRAM OOM | 130.8 ms | **127.6 ms** |
+
+- 2x4 is fastest for all fusion configs (matches T3K physical topology)
+- EXPERTS_GATE_UP causes DRAM OOM on 1x4 but works on 8-device topologies (5-6% slower)
+- 1x8 is 3-4% slower than 2x4 across all configs
+
 ### Non-Fused Ops (1x4 mesh, 4 devices)
 
 | Metric | Eager | Trace-Logits | Trace-Sampling |
@@ -274,7 +341,7 @@ Profiler output lands in `generated/profiler/reports/<name>/<timestamp>/`.
 | **Device kernel time** | ~44.2 ms | ~44.2 ms | ~44.2 ms |
 | **Device kernel utilization** | 8.8% | 28.3% | **32.1%** |
 
-### Fused Ops (1x4 mesh, 4 devices)
+### Fused Ops (1x4 mesh, 4 devices, KV_BRANCH only)
 
 | Metric | Fused Eager | Fused + Trace-Logits | Fused + Trace-Sampling |
 | --- | --- | --- | --- |
@@ -282,10 +349,9 @@ Profiler output lands in `generated/profiler/reports/<name>/<timestamp>/`.
 | **Decode throughput** | 1.87 tok/s | ~6.5 tok/s | **~7.1 tok/s** |
 | **Speedup vs fused eager** | 1.0x | 3.5x | **3.8x** |
 | **First token latency** | ~533.5 ms | 169.1 ms | 140.6 ms |
-| **Device kernel time** | ~44 ms | ~44 ms | ~44 ms |
 | **Device kernel utilization** | 8.2% | 28.7% | **31.2%** |
 
-### Non-Fused Ops (2x4 mesh, 8 devices — T3K physical topology)
+### Non-Fused Ops (2x4 mesh, 8 devices — FASTEST)
 
 | Metric | Trace-Sampling |
 | --- | --- |
@@ -294,23 +360,21 @@ Profiler output lands in `generated/profiler/reports/<name>/<timestamp>/`.
 | **Min / Max latency** | 120.2 / 121.0 ms |
 | **First token latency** | 11,399 ms (includes trace capture) |
 
-### Cross-Comparison: Mesh Topology (Trace-Sampling, Non-Fused)
+### Fused Ops (2x4 mesh, 8 devices)
 
-| Metric | 1x4 (4 dev) | 2x4 (8 dev) | Delta |
-| --- | --- | --- | --- |
-| **Decode latency** | 137.6 ms | **120.6 ms** | **-12.3% faster** |
-| **Throughput** | 7.3 tok/s | **8.3 tok/s** | **+13.7%** |
+| Metric | Fused (3 flags) | All-Fused (4 flags) |
+| --- | --- | --- |
+| **Steady-state decode latency** | 120.8 ms/token | 127.6 ms/token |
+| **Min / Max** | 120.7 / 120.9 ms | 127.0 / 128.2 ms |
+| **First token latency** | 12,697 ms | 4,212 ms |
 
-The 2x4 mesh matches the T3K physical topology (2 rows × 4 columns), providing optimal inter-device communication paths and the fastest decode performance.
+### Fused Ops (1x8 mesh, 8 devices)
 
-### Cross-Comparison: Non-Fused vs Fused (1x4, Trace-Sampling)
-
-| Metric | Non-Fused + Trace-Sampling | Fused + Trace-Sampling | Delta |
-| --- | --- | --- | --- |
-| **Decode latency** | **137.6 ms** | 141.0 ms | +2.5% slower |
-| **Throughput** | **7.3 tok/s** | 7.1 tok/s | -2.7% |
-
-The fused kernel itself is very fast on-device (~10 us per invocation), but the data marshaling operations around it (layout conversions, resharding, concat) add more overhead than the fusion saves. The "Path to Making Fused Ops Faster" involves kernel-side DRAM I/O to eliminate these marshaling ops.
+| Metric | Fused (3 flags) | All-Fused (4 flags) |
+| --- | --- | --- |
+| **Steady-state decode latency** | 124.7 ms/token | 130.8 ms/token |
+| **Min / Max** | 124.4 / 124.9 ms | 130.8 / 130.9 ms |
+| **First token latency** | 8,435 ms | 4,212 ms |
 
 ### Profiler: Device Kernel Duration Comparison (Decode, Per Step, Dev 0)
 
@@ -328,10 +392,22 @@ All profiler runs used `--phase both`, `--max-new-tokens 4`, `--prompt "Hi"`, `-
 | AllGather ms/step | 1.12 | 1.18 | 2.05 | 2.23 |
 | **Prefill kernel ms** | 169.48 | 167.50 | **143.12** | 143.48 |
 
-**Fastest decode kernel: 2x4 (8 dev, unfused) at 108.47 ms/step** — 13.3% faster than 1x4.
-**Fastest prefill kernel: 1x8 (8 dev, unfused) at 143.12 ms** — essentially tied with 2x4 (143.48 ms).
+**Fastest decode kernel: 2x4 unfused at 108.47 ms/step** — 13.3% faster than 1x4.
+**Fastest prefill kernel: 1x8 unfused at 143.12 ms** — tied with 2x4 (143.48 ms).
 
-Matmul is consistent across all configs (~33 ms/step) — it is compute-bound and not topology-dependent. The 2x4 topology wins on decode primarily because FillPad drops to 19.19 ms (vs 23.18 on 1x8), likely due to better inter-device communication paths matching the physical T3K topology.
+Matmul is consistent across all configs (~33 ms/step) — compute-bound, not topology-dependent. The 2x4 topology wins on decode primarily because FillPad drops to 19.19 ms (vs 23.18 on 1x8).
+
+### Latency Breakdown (Non-Fused, Trace-Sampling)
+
+| Component | Eager (1x4) | Trace-Sampling (1x4) | Trace-Sampling (2x4) |
+| --- | --- | --- | --- |
+| Device kernel compute | ~44 ms | ~44 ms | ~36 ms |
+| Host dispatch overhead | ~460 ms | ~0 ms | ~0 ms |
+| Trace replay overhead | 0 ms | ~5 ms | ~5 ms |
+| Token readback (D2H) | -- | ~1 ms | ~1 ms |
+| Host input copy (H2D) | -- | ~0.3 ms | ~0.3 ms |
+| Residual (NOC, fabric, DRAM BW) | ~0.6 ms | ~87.3 ms | ~78.3 ms |
+| **Total** | **504.6 ms** | **137.6 ms** | **120.6 ms** |
 
 ### 1-Layer Isolated Tests
 
@@ -340,20 +416,6 @@ Matmul is consistent across all configs (~33 ms/step) — it is compute-bound an
 | **Per-token latency** | ~12,034 ms | 151 ms | 138 ms |
 | **Speedup** | 1x | 80x | 87x |
 
-The extreme 80-87x speedup with 1 layer confirms that dispatch overhead is ~99.99% of eager time when compute is minimal.
-
-### Latency Breakdown (Non-Fused, Trace-Sampling, 1x4)
-
-| Component | Eager | Trace-Sampling |
-| --- | --- | --- |
-| Device kernel compute | ~44 ms | ~44 ms |
-| Host dispatch overhead | ~460 ms | ~0 ms |
-| Trace replay overhead | 0 ms | ~5 ms |
-| Logits/token readback (D2H) | -- | ~1 ms |
-| Host input copy (H2D) | -- | ~0.3 ms |
-| Residual (NOC, fabric, DRAM BW) | ~0.6 ms | ~88.5 ms |
-| **Total** | **504.6 ms** | **137.6 ms** |
-
 ### Profiler: Device Op Counts (Decode, Per Device, 1x4)
 
 | Metric | Non-Fused | Fused |
@@ -361,26 +423,7 @@ The extreme 80-87x speedup with 1 layer confirms that dispatch overhead is ~99.9
 | Total device ops | ~4,568 | ~4,474 (-2.1%) |
 | FillPad ops | 369 (17.5% of device time) | 369 (17.4%) |
 | Fused kernel op code | N/A | `GenericOpDeviceOperation` |
-| Fused kernel duration | N/A | ~10 us/invocation |
-
----
-
-## Generated Profiler Reports
-
-Reports are stored under `generated/profiler/reports/`:
-
-| Report Name | Path | Description |
-| --- | --- | --- |
-| Non-fused 1x4 both | `glm4_unfused_both/2026_03_13_04_25_02/` | 4 devices, unfused, prefill+decode |
-| Non-fused 1x8 both | `glm4_unfused_both/2026_03_13_05_08_27/` | 8 devices (1x8), unfused, prefill+decode |
-| Non-fused 2x4 both | `glm4_unfused_2x4/2026_03_13_09_32_34/` | 8 devices (2x4), unfused, prefill+decode |
-| Fused 1x4 both (KV+QKV_A) | `glm4_fused_both/2026_03_13_04_36_59/` | 4 devices, fused KV_BRANCH+QKV_A |
-| Fused 1x4 both (KV only) | `glm4_fused_both/2026_03_13_02_10_27/` | 4 devices, fused KV_BRANCH only |
-| Non-fused both (original) | `glm4_both_eth/2026_03_12_01_36_44/` | Original 4-device profiling |
-| Non-fused decode standalone | `glm4_decode_eth/2026_03_12_01_11_39/` | Decode-only profiling run |
-
-Each report directory contains:
-- `ops_perf_results_<name>_<timestamp>.csv` — full op-level performance data
+| Fused kernel duration | N/A | ~10 µs/invocation |
 
 ---
 
@@ -404,11 +447,25 @@ The kernel operates in `TILE_1x32` format internally and uses `ROW_MAJOR` tensor
 
 ### Mesh Topology
 The T3K has a physical 2×4 topology (2 rows × 4 columns = 8 Wormhole devices). Three mesh configurations have been tested:
-- **1x4** (4 devices): Simplest, uses half the devices. No hugepage issues.
-- **1x8** (8 devices): Uses all devices in a flat 1D mesh. Works but doesn't match the physical topology.
-- **2x4** (8 devices): Matches the T3K physical topology. Provides the best decode kernel performance (108.47 ms/step vs 125.06 ms for 1x4) and the fastest wall-clock decode latency (120.6 ms/token).
 
-Note: 8-device runs require 16 1GB hugepages (2 per device). The system allocates these at boot via `/opt/tenstorrent/bin/hugepages-setup.sh`. If a run crashes, hugepages may leak and require a system reboot to reclaim.
+| Mesh | Devices | Physical Match | Non-Fused Decode | Fused (3 flag) Decode | All-Fused Decode |
+| --- | --- | --- | --- | --- | --- |
+| 1x4 | 4 | Partial | 137.6 ms | 141.0 ms | DRAM OOM |
+| 1x8 | 8 | No (flat 1D) | — | 124.7 ms | 130.8 ms |
+| **2x4** | **8** | **Yes** | **120.6 ms** | **120.8 ms** | **127.6 ms** |
+
+The 2x4 mesh consistently outperforms 1x8 by 3-4% across all fusion configurations because it matches the physical interconnect topology. The 1x8 mesh forces a linear communication path that increases FillPad and AllGather overhead.
+
+**Hugepages:** 8-device runs require 16 × 1GB hugepages (2 per device). If a run crashes, hugepages may leak. Clean with `rm -f /dev/hugepages-1G/*tenstorrent*` or reboot.
+
+### Fusion Flags: Compatibility & Performance
+
+| Flag | 1x4 | 1x8 | 2x4 | Impact |
+| --- | --- | --- | --- | --- |
+| `FUSED_KV_BRANCH=1` | Works | Works | Works | Neutral on 2x4, +2.5% on 1x4 |
+| `FUSE_QKV_A=1` | Works | Works | Works | Neutral |
+| `FUSE_SHARED_GATE_UP=1` | Works | Works | Works | Neutral |
+| `FUSE_EXPERTS_GATE_UP=1` | **DRAM OOM** | Works | Works | +4.9% (1x8), +5.6% (2x4) slower |
 
 ### ETH Dispatch
 Setting `TT_METAL_GTEST_ETH_DISPATCH=1` routes the command dispatch through Ethernet cores instead of dedicating Tensix cores for dispatch. This frees all 64 Tensix cores for compute, which is critical for full-grid utilization.
