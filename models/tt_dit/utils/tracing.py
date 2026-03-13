@@ -67,6 +67,7 @@ class Tracer:
         *args: Any,
         tracer_cq_id: int = 0,
         tracer_blocking_execution: bool = True,
+        tracer_capture_only: bool = False,
         **kwargs: Any,
     ) -> Any:
         """Capture or execute trace.
@@ -81,6 +82,8 @@ class Tracer:
         Args:
             tracer_cq_id: Command queue id.
             tracer_blocking_execution: Whether ``ttnn.execute_trace`` should block.
+            tracer_capture_only: If ``True``, capture the trace without executing it. Only has an
+                effect on the first call.
             *args: Positional inputs to pass to the wrapped function.
             **kwargs: Named inputs to pass to the wrapped function. Optional on subsequent calls.
 
@@ -126,9 +129,10 @@ class Tracer:
                 ttnn.release_trace(self._device, trace_id)
                 raise
 
-            # Trace capture records commands but does not execute them. Execute the trace to
-            # actually compute outputs.
-            ttnn.execute_trace(self._device, trace_id, cq_id=tracer_cq_id, blocking=tracer_blocking_execution)
+            if not tracer_capture_only:
+                # Trace capture records commands but does not execute them. Execute the trace to
+                # actually compute outputs.
+                ttnn.execute_trace(self._device, trace_id, cq_id=tracer_cq_id, blocking=tracer_blocking_execution)
 
             # Allow resources referenced by the function to be freed, which might be used to offload
             # weights.
