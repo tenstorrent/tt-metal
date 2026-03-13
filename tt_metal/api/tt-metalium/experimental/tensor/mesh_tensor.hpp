@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <tt-metalium/hal_types.hpp>
+
 #include <tt-metalium/experimental/tensor/tensor_types.hpp>
 #include <tt-metalium/experimental/tensor/spec/tensor_spec.hpp>
 #include <tt-metalium/experimental/tensor/topology/tensor_topology.hpp>
@@ -131,7 +133,7 @@ public:
      *
      * pre-condition: The device tensor must not be in a default constructed state.
      */
-    distributed::MeshDevice& get_device() const;
+    distributed::MeshDevice& device() const;
 
     // Getters:
 
@@ -164,6 +166,8 @@ public:
     // For sharded tensors, at least one of ShardSpec or NdShardSpec will be provided.
     const std::optional<ShardSpec>& legacy_shard_spec() const;
     const std::optional<NdShardSpec>& nd_shard_spec() const;
+
+    DeviceAddr address() const;
 
     // Utils:
 

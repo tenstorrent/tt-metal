@@ -31,7 +31,9 @@ namespace tt::tt_metal {
 
 distributed::MeshBuffer& MeshTensor::mesh_buffer() const { return *mesh_buffer_invariant_breaking(); }
 
-distributed::MeshDevice& MeshTensor::get_device() const { return *mesh_buffer().device(); }
+distributed::MeshDevice& MeshTensor::device() const { return *mesh_buffer().device(); }
+
+DeviceAddr MeshTensor::address() const { return mesh_buffer().address(); }
 
 DataType MeshTensor::dtype() const { return tensor_spec().data_type(); }
 
