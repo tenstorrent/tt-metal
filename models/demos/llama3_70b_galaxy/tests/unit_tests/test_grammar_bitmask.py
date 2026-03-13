@@ -60,6 +60,7 @@ def test_unpack_bitmask_with_subcore_grids(mesh_device):
 
     g = torch.Generator().manual_seed(0)
     for i in range(NUM_RANDOM_ITERS):
+        print(f"Iteration {i}")
         grammar_bitmask = torch.randint(0, 2**31 - 1, (batch_size, packed_vocab_dim), dtype=torch.int32, generator=g)
         grammar_bitmask_tt = ttnn.from_torch(
             grammar_bitmask,
