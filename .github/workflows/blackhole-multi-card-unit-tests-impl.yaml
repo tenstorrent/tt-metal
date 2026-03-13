@@ -118,15 +118,26 @@ jobs:
             cmd: ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config ${TT_METAL_HOME}/tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_fabric_ubench_at_least_2x2_mesh.yaml
             timeout: 15
             test-type: slow
-          - name: bh_DeepSeek_PREFILL
+          - name: bh_lb_DeepSeek_PREFILL
             cmd: |
               pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv --tb=short
               pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv --tb=short
               pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv --tb=short
               pytest models/demos/deepseek_v3_d_p/tests/pcc/test_torch_dispatch_combine.py -vvv --tb=short
               pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv --tb=short
-            timeout: 30
-            test-type: loudbox-or-qb
+            timeout: 15
+            test-type: loudbox
+            owner_id: U08E1JCMAJF # Marko Bezulj
+            model-name: deepseek_prefill
+          - name: bh_qb_DeepSeek_PREFIL
+            cmd: |
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_reduce.py -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_torch_dispatch_combine.py -vvv --tb=short
+              pytest models/demos/deepseek_v3_d_p/tests/pcc/test_ttnn_dispatch_combine.py -vvv --tb=short
+            timeout: 15
+            test-type: qb
             owner_id: U08E1JCMAJF # Marko Bezulj
             model-name: deepseek_prefill
           YAML_EOF
@@ -145,10 +156,10 @@ jobs:
 
           if [ "$fast_only" == "true" ]; then
             filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" --argjson quietbox "$quietbox_json" \
-              '[.[] | select(((.["test-type"] == "fast") or (.["test-type"] == "fast-viommu" and $viommu)) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "loudbox-or-qb") or $loudbox or $quietbox))]')
+              '[.[] | select(((.["test-type"] == "fast") or (.["test-type"] == "fast-viommu" and $viommu)) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "qb") or $quietbox))]')
           else
             filtered_tests=$(echo "$all_tests" | jq -c --argjson viommu "$viommu_json" --argjson loudbox "$loudbox_json" --argjson quietbox "$quietbox_json" \
-              '[.[] | select(((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "loudbox-or-qb") or $loudbox or $quietbox))]')
+              '[.[] | select(((.["test-type"] != "fast-viommu" and .["test-type"] != "slow-viommu") or $viommu) and ((.["test-type"] != "loudbox") or $loudbox) and ((.["test-type"] != "qb") or $quietbox))]')
           fi
 
           # Filter by model if specified
@@ -262,6 +273,7 @@ jobs:
         if: ${{ failure() }}
         with:
           slack_webhook_url: ${{ secrets.SLACK_METAL_INFRA_PIPELINE_STATUS_ALERT }}
+          # Falls back to William Ly (U0883RN6CRE) when test-group.owner_id not set
           owner: ${{ matrix.test-group.owner_id || 'U0883RN6CRE' }}
       - uses: tenstorrent/tt-metal/.github/actions/upload-artifact-with-job-uuid@main
         timeout-minutes: 10
