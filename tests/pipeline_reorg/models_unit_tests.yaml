@@ -154,7 +154,7 @@
   model: gemma-3-27b
   skus:
     wh_llmbox_perf:
-      timeout: 15
+      timeout: 45
       tier: 2
   owner_id: U03PUAKE719 # Miguel Tairum Cruz
   team: models
