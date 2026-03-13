@@ -9,7 +9,9 @@ import pytest
 
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json, run_demo
 
-MODEL_PATH = Path(os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528"))
+MODEL_PATH = Path(
+    os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized")
+)
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
 
 
@@ -92,6 +94,7 @@ def test_demo(
     enable_trace: bool,
     artifact_name: str,
     profile_decode: bool,
+    force_recalculate_weight_config: bool,
 ):
     """
     DeepSeek v3 demo test with prompts loaded from JSON file.
@@ -119,6 +122,7 @@ def test_demo(
         max_new_tokens=max_new_tokens,
         repeat_batches=repeat_batches,
         profile_decode=profile_decode,
+        force_recalculate=force_recalculate_weight_config,
         signpost=True,
     )
     if override_num_layers is not None:

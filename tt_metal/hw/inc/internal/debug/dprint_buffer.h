@@ -13,3 +13,7 @@
 inline volatile tt_l1_ptr DebugPrintMemLayout* get_debug_print_buffer() {
     return GET_MAILBOX_ADDRESS_DEV(dprint_buf.data[internal_::get_hw_thread_idx()]);
 }
+
+inline volatile tt_l1_ptr DevicePrintMemoryLayout* get_device_print_buffer() {
+    return GET_MAILBOX_ADDRESS_DEV(dprint_buf.shared_data);
+}

@@ -179,7 +179,7 @@ test_suite_wh_6u_model_unit_tests() {
     echo "[upstream-tests] running WH 6U upstream model unit tests"
     pytest tests/ttnn/unit_tests/operations/ccl/test_ccl_async_TG_llama.py
     pytest tests/ttnn/unit_tests/operations/transformers/test_prefetcher_TG.py
-    pytest tests/tt_eager/python_api_testing/unit_testing/misc/test_matmul_1d_gather_in0.py::test_matmul_1d_ring_llama_perf
+    pytest tests/ttnn/nightly/unit_tests/operations/matmul/test_matmul_1d_gather_in0.py::test_matmul_1d_ring_llama_perf
 }
 
 test_suite_wh_6u_llama_demo_tests() {
@@ -187,7 +187,7 @@ test_suite_wh_6u_llama_demo_tests() {
 
     verify_llama_dir_
 
-    pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat"
+    FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/text_demo.py -k "repeat" --timeout 1000
     # Some AssertionError: Throughput is out of targets 49 - 53 t/s/u in 200 iterations
     # assert 200 <= 20
     # pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "full"
@@ -200,7 +200,7 @@ test_suite_wh_6u_llama_long_stress_tests() {
     verify_llama_dir_
 
     # This will take almost 3 hours. Ensure that the tensors are cached in the LLAMA_DIR.
-    pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "stress-test and not mini-stress-test"
+    FAKE_DEVICE=TG pytest models/demos/llama3_70b_galaxy/demo/demo_decode.py -k "stress-test and not mini-stress-test" --timeout 1000
 }
 
 test_suite_bh_ttnn_stress_tests() {
