@@ -12,8 +12,6 @@ import sys
 from .. import _ttml
 
 # --- C++ enums and classes from _ttml.models ---
-# Use _ttml directly: ttml._ttml is aliased to the compiled .so which has no __path__,
-# so "from ttml._ttml.models" fails with "ttml._ttml is not a package"
 from _ttml.models import (
     BaseTransformer,
     KvCache,

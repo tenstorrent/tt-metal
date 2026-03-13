@@ -19,9 +19,9 @@ class InMemoryDataloader(TTMLDataloader):
     Iterates the dataset by index, groups examples into batches, and calls the
     injected ``collate_fn`` to produce :class:`Batch` objects with ttml tensors.
 
-    Yields examples indefinitely — when the dataset is exhausted it reshuffles
-    (if ``shuffle=True``) and starts again, so the training loop never sees a
-    ``StopIteration``.
+    Yields a single pass over the dataset.  When ``shuffle=True`` the indices
+    are randomly permuted before iteration.  The caller (e.g. ``SFTTrainer``)
+    is responsible for re-iterating when another epoch is needed.
 
     Example::
 
@@ -60,7 +60,10 @@ class InMemoryDataloader(TTMLDataloader):
             yield self.collate_fn(examples)
 
     def __len__(self) -> int:
-        return len(self.dataset) // self.batch_size
+        n = len(self.dataset)
+        if self.drop_last:
+            return n // self.batch_size
+        return (n + self.batch_size - 1) // self.batch_size
 
 
 def sft_collate_fn(

@@ -203,6 +203,17 @@ class Batch:
 **Loss mask contract:** `loss_mask.sum() == B * T` so that `mean(cross_entropy * loss_mask)`
 gives the per-completion-token loss.
 
+> **Warning — custom collate functions must respect the loss mask contract.**
+>
+> The default loss computation multiplies the per-token cross-entropy by `loss_mask` and
+> takes the **mean** over `B * T` elements. This only produces a correct per-completion-token
+> loss when `loss_mask` is normalized so that `loss_mask.sum() == B * T`. The built-in
+> `sft_collate_fn` handles this automatically, but if you write your own `collate_fn` you
+> **must** normalize `loss_mask` the same way — for example, by scaling each sequence's mask
+> so the batch total equals `B * T`. If the mask is not normalized (e.g. it contains raw 0/1
+> values), your reported losses will be incorrectly scaled and will not reflect the true
+> per-completion-token loss.
+
 ### TTMLDataloader
 
 Abstract base class. Subclass it and implement `__iter__` and `__len__`:

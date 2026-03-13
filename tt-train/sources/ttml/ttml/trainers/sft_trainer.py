@@ -6,6 +6,7 @@
 
 from __future__ import annotations
 
+import logging
 import os
 import pickle
 from dataclasses import dataclass, replace
@@ -17,6 +18,8 @@ if TYPE_CHECKING:
 import numpy as np
 import ttnn
 from tqdm import tqdm
+
+logger = logging.getLogger(__name__)
 
 import ttml
 from ttml.common.data import build_causal_mask
@@ -95,6 +98,11 @@ class SFTConfig:
 class SFTTrainer:
     """Supervised fine-tuning trainer for a single Tenstorrent device.
 
+    .. note::
+        Multi-device (e.g. data-parallel, tensor-parallel) training is not
+        yet supported.  This is planned as a future enhancement.
+        TODO: extend to multi-device topologies.
+
     The trainer owns the training loop, optimizer, and scheduler.  It knows
     nothing about model internals or dataset structure — only the interfaces
     defined by :class:`~ttml.modules.module_base.AbstractModuleBase` and
@@ -144,7 +152,12 @@ class SFTTrainer:
             lr_schedule: Optional callable ``step -> lr``.
             callbacks: Optional list of :class:`TrainerCallback` instances.
             compute_loss_func: Optional callable ``(model_output, batch) -> loss``
-                that replaces the default masked cross-entropy.
+                that replaces the default masked cross-entropy.  Must return a
+                scalar :class:`ttml.autograd.Tensor` loss already reduced over
+                batch and sequence dimensions.  When this hook is provided the
+                caller is fully responsible for applying ``batch.loss_mask``
+                (or any other prompt/pad masking strategy); the default masking
+                logic is bypassed entirely.
 
         Note:
             When ``config.gradient_checkpointing`` is ``True`` the model's
@@ -252,7 +265,11 @@ class SFTTrainer:
                     for cb in self._callbacks:
                         cb.on_eval_end(self, self.step, val_loss)
 
-            if cfg.save_interval > 0 and self.step % cfg.save_interval == 0:
+            if (
+                cfg.save_interval > 0
+                and self.step % cfg.save_interval == 0
+                and self.step > 0
+            ):
                 self._save_checkpoint()
                 for cb in self._callbacks:
                     cb.on_save(
@@ -277,6 +294,24 @@ class SFTTrainer:
         logits = self.model(batch.input_ids, self._causal_mask)  # [B, 1, T, V]
         if self._compute_loss_override is not None:
             return self._compute_loss_override(logits, batch)
+
+        # Validate loss_mask normalisation: for a standard SFT collate the mask
+        # should sum to B*T (one entry per token position).  A large deviation
+        # usually indicates a custom collate that forgot to normalise.
+        if batch.loss_mask is not None:
+            mask_np = batch.loss_mask.to_numpy(ttnn.DataType.FLOAT32)
+            B, _, T, _ = mask_np.shape
+            expected = float(B * T)
+            actual = float(mask_np.sum())
+            if abs(actual - expected) > 1e-3:
+                logger.warning(
+                    "loss_mask sum (%.2f) differs from expected B*T (%d). "
+                    "If you are using a custom collate function, make sure "
+                    "the mask is correctly normalised.",
+                    actual,
+                    int(expected),
+                )
+
         loss = self._loss_fn(
             logits, batch.labels, ttml.ops.ReduceType.NONE
         )  # [B, 1, T, 1]
@@ -295,7 +330,19 @@ class SFTTrainer:
         return float(np.mean(losses))
 
     def _save_checkpoint(self) -> None:
-        """Persist model parameters as a pickle checkpoint."""
+        """Persist model parameters as a pickle checkpoint.
+
+        .. note::
+            When a ``peft_config`` is used and the model is wrapped in
+            :class:`LoraModel`, this currently saves *all* parameters (base +
+            LoRA).  Ideally only the LoRA adapter weights should be persisted
+            to keep checkpoints small and avoid redundant copies of the frozen
+            base weights.
+
+        TODO: when ``peft_config`` is set, filter ``self.model.parameters()``
+        to save only LoRA adapter parameters (e.g. those whose name contains
+        ``lora_``).
+        """
         os.makedirs(self.config.checkpoint_dir, exist_ok=True)
         path = os.path.join(self.config.checkpoint_dir, f"step_{self.step}.pkl")
 
