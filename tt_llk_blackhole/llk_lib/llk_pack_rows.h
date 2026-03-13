@@ -149,7 +149,7 @@ inline void _llk_pack_rows_(const std::uint32_t tile_index, const std::uint32_t 
     ckernel::ckernel_template::run();
 
     // Reset Z counters after pack operation
-    TT_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
+    TTI_SETADCZW(p_setadc::PAC, 0, 0, 0, 0, 0b0101);
 }
 
 /**

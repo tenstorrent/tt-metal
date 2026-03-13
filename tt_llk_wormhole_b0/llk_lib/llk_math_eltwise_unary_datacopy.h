@@ -489,7 +489,7 @@ inline void _llk_math_fast_tilize_init_(const std::uint32_t unpack_dst_format, c
     // not sure why it doesn't work if CFG_STATE_ID_StateID is not 1
     if (unpack_dst_format != to_underlying(DataFormat::Tf32))
     {
-        TT_SETC16(CFG_STATE_ID_StateID_ADDR32, 1);
+        TTI_SETC16(CFG_STATE_ID_StateID_ADDR32, 1);
         TTI_NOP;
         TTI_NOP;
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(0);
@@ -514,7 +514,7 @@ inline void _llk_math_fast_tilize_uninit_(const std::uint32_t unpack_dst_format)
     {
         TTI_STALLWAIT(p_stall::STALL_CFG, p_stall::MATH | p_stall::WAIT_SFPU);
         cfg_reg_rmw_tensix<ALU_ACC_CTRL_Fp32_enabled_RMW>(is_fp32_dest_acc_en);
-        TT_SETC16(CFG_STATE_ID_StateID_ADDR32, 0);
+        TTI_SETC16(CFG_STATE_ID_StateID_ADDR32, 0);
         TTI_NOP;
         TTI_NOP;
     }
