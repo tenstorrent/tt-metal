@@ -4,11 +4,12 @@
 // GLM KV Cache Branch unified kernel (adapted from DSv3 KVCacheBranch)
 //
 // Fuses: DKV Matmul + Gather + RMSNorm + RoPE
-// Output: RMSNorm'd nope data in nope_output_cb, RoPE result in k_rope_output_cb
-// KV cache write is NOT done here — caller uses paged_update_cache separately.
+// Kernel reads x, cos, sin from DRAM and writes nope+rope output to DRAM.
+// Only gamma, weights, and trans_mat remain as sharded L1 tensors.
 //
 // RISC responsibilities:
-// - NCRISC: Setup sharded buffers, gather sender, RMSNorm scaler/eps fill
+// - NCRISC: Phase 0 (DRAM read x/cos/sin), setup sharded buffers,
+//           RMSNorm scaler/eps fill, Phase 5 (DRAM write output)
 // - BRISC: Gather receiver, wait for output CBs
 // - TRISC: Matmul compute, RMSNorm compute, RoPE compute
 
@@ -53,9 +54,6 @@ void kernel_main() {
 
     // RMSNorm reader args (runtime — scaler/eps values passed at dispatch time)
     using KV_RMSNormCTArgs = glm4_rmsnorm::RMSNorm::ReaderCTArgs;
-
-    // No RoPE NCRISC declarations needed: cos/sin/trans_mat are sharded
-    // (already in L1). The NCRISC RoPE reader is skipped in Phase 4.
 
 // ============================================================================
 // BRISC (Writer)
@@ -144,31 +142,91 @@ void kernel_main() {
     };
 #endif
 
+    // ========================================================================
+    // NCRISC Phase 0: Read x, cos, sin from DRAM into CBs
+    // ========================================================================
 #if defined(COMPILE_FOR_NCRISC)
-    // Setup sharded persistent buffers
+    constexpr uint32_t TILE_1x32_BYTES = 64;  // 1 * 32 * sizeof(bf16)
+
+    // Read x from DRAM on all matmul cores
     if constexpr (Core::is_dkv_matmul_core) {
         constexpr uint32_t dkv_matmul_in0 = get_named_compile_time_arg_val("dkv_matmul_in0");
         constexpr uint32_t dkv_matmul_k_num_tiles = get_named_compile_time_arg_val("dkv_matmul_k_num_tiles");
-        unified_kernels::setup_sharded_buffer(dkv_matmul_in0, dkv_matmul_k_num_tiles);
+        constexpr uint32_t x_total_bytes = dkv_matmul_k_num_tiles * TILE_1x32_BYTES;
 
+        uint32_t x_dram_addr = get_common_arg_val<uint32_t>(4);
+
+        cb_reserve_back(dkv_matmul_in0, dkv_matmul_k_num_tiles);
+        uint32_t l1_write_addr = get_write_ptr(dkv_matmul_in0);
+
+        const InterleavedAddrGen<true> x_addrgen = {
+            .bank_base_address = x_dram_addr,
+            .page_size = x_total_bytes,
+        };
+        uint64_t x_noc_addr = x_addrgen.get_noc_addr(0);
+        noc_async_read(x_noc_addr, l1_write_addr, x_total_bytes);
+        noc_async_read_barrier();
+
+        cb_push_back(dkv_matmul_in0, dkv_matmul_k_num_tiles);
+    }
+
+    // Read cos/sin from DRAM on rope cores
+    if constexpr (Core::is_krope_core) {
+        constexpr uint32_t cos_cb_id = get_named_compile_time_arg_val("cos_cb");
+        constexpr uint32_t sin_cb_id = get_named_compile_time_arg_val("sin_cb");
+        constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+        constexpr uint32_t tile_offset = get_named_compile_time_arg_val("krope_core_tile_offset");
+        constexpr uint32_t cos_sin_page_size = get_named_compile_time_arg_val("cos_sin_dram_page_size");
+
+        uint32_t cos_dram_addr = get_common_arg_val<uint32_t>(5);
+        uint32_t sin_dram_addr = get_common_arg_val<uint32_t>(6);
+
+        // Read cos tile for this core
+        cb_reserve_back(cos_cb_id, Wt);
+        {
+            uint32_t cos_l1_addr = get_write_ptr(cos_cb_id);
+            const InterleavedAddrGen<true> cos_addrgen = {
+                .bank_base_address = cos_dram_addr,
+                .page_size = cos_sin_page_size,
+            };
+            uint64_t cos_noc_addr = cos_addrgen.get_noc_addr(0);
+            cos_noc_addr += tile_offset * TILE_1x32_BYTES;
+            noc_async_read(cos_noc_addr, cos_l1_addr, TILE_1x32_BYTES);
+        }
+
+        // Read sin tile for this core
+        cb_reserve_back(sin_cb_id, Wt);
+        {
+            uint32_t sin_l1_addr = get_write_ptr(sin_cb_id);
+            const InterleavedAddrGen<true> sin_addrgen = {
+                .bank_base_address = sin_dram_addr,
+                .page_size = cos_sin_page_size,
+            };
+            uint64_t sin_noc_addr = sin_addrgen.get_noc_addr(0);
+            sin_noc_addr += tile_offset * TILE_1x32_BYTES;
+            noc_async_read(sin_noc_addr, sin_l1_addr, TILE_1x32_BYTES);
+        }
+
+        noc_async_read_barrier();
+        cb_push_back(cos_cb_id, Wt);
+        cb_push_back(sin_cb_id, Wt);
+    }
+
+    // Setup remaining sharded persistent buffers (weights, gamma, trans_mat)
+    if constexpr (Core::is_dkv_matmul_core) {
         constexpr uint32_t dkv_matmul_in1 = get_named_compile_time_arg_val("dkv_matmul_in1");
+        constexpr uint32_t dkv_matmul_k_num_tiles = get_named_compile_time_arg_val("dkv_matmul_k_num_tiles");
         constexpr uint32_t dkv_matmul_out_w_per_core = get_named_compile_time_arg_val("dkv_matmul_out_w_per_core");
         unified_kernels::setup_sharded_buffer(dkv_matmul_in1, dkv_matmul_k_num_tiles * dkv_matmul_out_w_per_core);
     }
     if constexpr (Core::is_kv_rmsnorm_core) {
-        // Setup gamma sharded buffer on rmsnorm core
         constexpr uint32_t gamma_cb = get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb");
         constexpr uint32_t gamma_num_tiles = get_named_compile_time_arg_val("kv_rmsnorm_num_tiles");
         unified_kernels::setup_sharded_buffer(gamma_cb, gamma_num_tiles);
     }
     if constexpr (Core::is_krope_core) {
-        constexpr uint32_t cos_cb = get_named_compile_time_arg_val("cos_cb");
-        constexpr uint32_t sin_cb = get_named_compile_time_arg_val("sin_cb");
-        constexpr uint32_t trans_mat_cb = get_named_compile_time_arg_val("trans_mat_cb");
-        constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
-        unified_kernels::setup_sharded_buffer(cos_cb, Wt);
-        unified_kernels::setup_sharded_buffer(sin_cb, Wt);
-        unified_kernels::setup_sharded_buffer(trans_mat_cb, 1);
+        constexpr uint32_t trans_mat_cb_id = get_named_compile_time_arg_val("trans_mat_cb");
+        unified_kernels::setup_sharded_buffer(trans_mat_cb_id, 1);
     }
 #endif
 
@@ -192,8 +250,6 @@ void kernel_main() {
 
     // ========================================================================
     // Phase 3: RMSNorm on gathered nope data (on rmsnorm core only)
-    // Input: gather dst CB (16 tiles of 1x32, pushed by gather receiver)
-    // Output: nope output CB (16 tiles of 1x32, backed by output tensor)
     // ========================================================================
     {
         DeviceZoneScopedN("KV_RMSNORM");
@@ -203,12 +259,7 @@ void kernel_main() {
 
     // ========================================================================
     // Phase 4: RoPE on k_rope data (on rope cores only)
-    //
-    // NCRISC is skipped: cos/sin/trans_mat are already in L1 as sharded
-    // buffers (populated by setup_sharded_buffer above). The generic
-    // Rope::Op NCRISC reader would try to re-read them from DRAM using
-    // uninitialized addresses (cos_tensor_address=0, position_ids=0),
-    // causing a NOC hang on an invalid DRAM read.
+    // NCRISC is skipped: cos/sin were loaded in Phase 0, trans_mat is sharded.
     // ========================================================================
     {
         DeviceZoneScopedN("K_ROPE");
@@ -218,14 +269,50 @@ void kernel_main() {
 #endif
     }
 
-    // Output: RMSNorm'd nope in nope_output_cb (on rmsnorm core)
-    //         RoPE result in k_rope_output_cb (on rope core)
-    // These are backed by sharded output tensors — no explicit DRAM write needed.
+    // ========================================================================
+    // NCRISC Phase 5: Write nope+rope output to DRAM
+    // ========================================================================
+#if defined(COMPILE_FOR_NCRISC)
+    {
+        DeviceZoneScopedN("DRAM_WRITE_OUTPUT");
+
+        constexpr uint32_t kvpe_out_page_size = get_named_compile_time_arg_val("kvpe_out_dram_page_size");
+        constexpr uint32_t kvpe_out_nope_bytes = get_named_compile_time_arg_val("kvpe_out_nope_bytes");
+        uint32_t kvpe_out_dram_addr = get_common_arg_val<uint32_t>(7);
+
+        const InterleavedAddrGen<true> out_addrgen = {
+            .bank_base_address = kvpe_out_dram_addr,
+            .page_size = kvpe_out_page_size,
+        };
+        uint64_t out_base_noc_addr = out_addrgen.get_noc_addr(0);
+
+        // RMSNorm core: write nope (16 tiles) to output offset 0
+        if constexpr (Core::is_kv_rmsnorm_core) {
+            constexpr uint32_t nope_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb");
+            constexpr uint32_t nope_num_tiles = get_named_compile_time_arg_val("kv_rmsnorm_num_tiles");
+            cb_wait_front(nope_output_cb, nope_num_tiles);
+            uint32_t nope_l1_addr = get_read_ptr(nope_output_cb);
+            noc_async_write(nope_l1_addr, out_base_noc_addr, kvpe_out_nope_bytes);
+        }
+
+        // Rope cores: write rope (1 tile each) to output after nope
+        if constexpr (Core::is_krope_core) {
+            constexpr uint32_t k_rope_output_cb = get_named_compile_time_arg_val("k_rope_output_cb");
+            constexpr uint32_t Wt = get_named_compile_time_arg_val("Wt");
+            constexpr uint32_t tile_offset = get_named_compile_time_arg_val("krope_core_tile_offset");
+            cb_wait_front(k_rope_output_cb, Wt);
+            uint32_t rope_l1_addr = get_read_ptr(k_rope_output_cb);
+            uint64_t rope_dram_addr = out_base_noc_addr + kvpe_out_nope_bytes + tile_offset * TILE_1x32_BYTES;
+            noc_async_write(rope_l1_addr, rope_dram_addr, Wt * TILE_1x32_BYTES);
+        }
+
+        noc_async_write_barrier();
+    }
+#endif
 
 #if defined(COMPILE_FOR_BRISC)
-    // Wait for output CBs to be ready
+    // Wait for output CBs to be ready (synchronization — ensures compute completed)
     if constexpr (Core::is_kv_rmsnorm_core) {
-        // Wait for RMSNorm output (which writes to the nope output tensor CB)
         constexpr uint32_t nope_output_cb = get_named_compile_time_arg_val("kv_rmsnorm_output_cb");
         constexpr uint32_t nope_num_tiles = get_named_compile_time_arg_val("kv_rmsnorm_num_tiles");
         cb_wait_front(nope_output_cb, nope_num_tiles);

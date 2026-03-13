@@ -482,33 +482,15 @@ def _prepare_fused_kv_branch_weights(
         mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
     )
 
-    # ---- Pre-allocated nope output tensor on rmsnorm core ----
-    nope_output_shard_spec = ttnn.ShardSpec(rms_crs, (1, kv_lora_rank), ttnn.ShardOrientation.ROW_MAJOR)
-    nope_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, nope_output_shard_spec
-    )
-    nope_output_fused = ttnn.from_torch(
-        torch.zeros((1, kv_lora_rank), dtype=torch.bfloat16),
+    # ---- Pre-allocated DRAM output tensor for kernel-side write ----
+    # The kernel writes nope+rope concatenated directly to this ROW_MAJOR DRAM tensor.
+    # Shape [1, kvpe_dim] so page_size = kvpe_dim * 2 bytes (single page).
+    kvpe_output_fused = ttnn.from_torch(
+        torch.zeros((1, kvpe_dim), dtype=torch.bfloat16),
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         device=device,
-        memory_config=nope_output_mem_config,
-        mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
-    )
-
-    # ---- Pre-allocated rope output tensor on rope cores ----
-    rope_output_shard_spec = ttnn.ShardSpec(
-        rope_crs, (1, qk_rope_head_dim // rope_crs.num_cores()), ttnn.ShardOrientation.ROW_MAJOR
-    )
-    rope_output_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, rope_output_shard_spec
-    )
-    rope_output_fused = ttnn.from_torch(
-        torch.zeros((1, qk_rope_head_dim), dtype=torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        device=device,
-        memory_config=rope_output_mem_config,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         mesh_mapper=ttnn.ReplicateTensorToMesh(device) if is_mesh else None,
     )
 
@@ -518,8 +500,7 @@ def _prepare_fused_kv_branch_weights(
         "gamma": gamma_fused,
         "gamma_torch": gamma_torch.squeeze(0),  # [kv_lora_rank] for host-side RMSNorm
         "trans_mat": trans_mat_fused,
-        "nope_output": nope_output_fused,
-        "rope_output": rope_output_fused,
+        "kvpe_output": kvpe_output_fused,
         "spec_crs": spec_crs,
         "rms_crs": rms_crs,
         "rope_crs": rope_crs,

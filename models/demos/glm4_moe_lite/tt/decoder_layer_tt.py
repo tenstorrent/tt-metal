@@ -277,91 +277,51 @@ def _fused_kv_branch_forward(
 ) -> ttnn.Tensor:
     """Execute fused KV cache branch: matmul + gather + RMSNorm + RoPE in one dispatch.
 
-    Input x: [1,1,1,2048] in DRAM (batch=1 only).
-    Returns kvpe_new: [1,1,1,576] in DRAM (RMSNorm'd nope + rope concatenated).
+    The kernel reads x, cos, sin directly from DRAM and writes nope+rope output
+    directly to a pre-allocated DRAM tensor. Only format conversions and weight
+    resharding remain as Python-side ops.
+
+    Input x: [1,1,1,2048] TILE DRAM (batch=1 only).
+    Returns kvpe_new: [1,1,1,576] TILE DRAM.
     """
     from models.demos.glm4_moe_lite.fused_ops.kv_cache_branch.op import GLMKVCacheBranch
 
-    spec_crs = fused_kv["spec_crs"]
-    rope_crs = fused_kv["rope_crs"]
-
-    # 1. Replicate input x onto the 18-core grid (HEIGHT_SHARDED, ROW_MAJOR).
-    # x is [1,1,1,hidden] standard TILE in DRAM. Convert to ROW_MAJOR, replicate
-    # across num_cores rows, then shard. The kernel's CB is configured with TILE_1x32
-    # descriptors, so it interprets the identical bytes as 1x32 tiles.
-    num_cores = spec_crs.num_cores()
-    hidden_size = int(x.shape[-1])
-
+    # 1. Convert x to ROW_MAJOR DRAM (kernel reads contiguous bytes as TILE_1x32 tiles)
     x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
-    x_2d = ttnn.reshape(x_rm, [1, hidden_size])
-    x_repeated = ttnn.concat([x_2d] * num_cores, dim=0)
 
-    input_shard_spec = ttnn.ShardSpec(spec_crs, (1, hidden_size), ttnn.ShardOrientation.ROW_MAJOR)
-    input_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, input_shard_spec)
-    x_sharded = ttnn.to_memory_config(x_repeated, input_mem_config)
-    ttnn.deallocate(x_repeated, force=False)
-
-    # 2. Shard cos/sin for current position onto rope cores (WIDTH_SHARDED, ROW_MAJOR).
-    # cos_batch/sin_batch: [1,1,1,64] standard TILE HEIGHT_SHARDED.
-    # Convert to ROW_MAJOR [1, 64] in DRAM, then WIDTH_SHARD onto 2 rope cores.
-    rope_dim = int(cos_batch.shape[-1])
-    num_rope_cores = rope_crs.num_cores()
-    cos_sin_shard_width = rope_dim // num_rope_cores
-    cos_sin_shard_spec = ttnn.ShardSpec(rope_crs, (1, cos_sin_shard_width), ttnn.ShardOrientation.ROW_MAJOR)
-    cos_sin_mem_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, cos_sin_shard_spec
-    )
-
+    # 2. Convert cos/sin to ROW_MAJOR DRAM (kernel reads contiguous bytes)
     cos_rm = ttnn.to_layout(cos_batch, ttnn.ROW_MAJOR_LAYOUT)
-    cos_2d = ttnn.reshape(cos_rm, [1, rope_dim])
-    cos_dram = ttnn.to_memory_config(cos_2d, ttnn.DRAM_MEMORY_CONFIG)
-    cos_sharded = ttnn.to_memory_config(cos_dram, cos_sin_mem_config)
-    ttnn.deallocate(cos_dram, force=False)
-
+    cos_dram = ttnn.to_memory_config(cos_rm, ttnn.DRAM_MEMORY_CONFIG)
     sin_rm = ttnn.to_layout(sin_batch, ttnn.ROW_MAJOR_LAYOUT)
-    sin_2d = ttnn.reshape(sin_rm, [1, rope_dim])
-    sin_dram = ttnn.to_memory_config(sin_2d, ttnn.DRAM_MEMORY_CONFIG)
-    sin_sharded = ttnn.to_memory_config(sin_dram, cos_sin_mem_config)
-    ttnn.deallocate(sin_dram, force=False)
+    sin_dram = ttnn.to_memory_config(sin_rm, ttnn.DRAM_MEMORY_CONFIG)
 
-    # 3. Reshard weight from DRAM to L1 for this layer, call fused op, then free L1 copy.
+    # 3. Reshard weight from DRAM to L1 for this layer
     w_kv_a_l1 = ttnn.to_memory_config(fused_kv["w_kv_a"], fused_kv["w_kv_a_l1_config"])
 
-    nope_result, rope_result = GLMKVCacheBranch.op(
-        input_tensor=x_sharded,
+    # 4. Fused kernel: reads x/cos/sin from DRAM, writes nope+rope to kvpe_output DRAM
+    kvpe_output = GLMKVCacheBranch.op(
+        input_tensor=x_rm,
         dkv_matmul_weights_tensor=w_kv_a_l1,
         gamma_tensor=fused_kv["gamma"],
-        cos_tensor=cos_sharded,
-        sin_tensor=sin_sharded,
+        cos_tensor=cos_dram,
+        sin_tensor=sin_dram,
         trans_mat_tensor=fused_kv["trans_mat"],
-        nope_output_tensor=fused_kv["nope_output"],
-        rope_output_tensor=fused_kv["rope_output"],
+        kvpe_output_tensor=fused_kv["kvpe_output"],
+        rope_core_grid=fused_kv["rope_crs"],
         epsilon=fused_kv["epsilon"],
     )
 
     ttnn.deallocate(w_kv_a_l1, force=True)
 
-    # 4. Concat nope + rope on-device (no host roundtrip).
-    # Output tensors are ROW_MAJOR (bytes identical to TILE_1x32 for 1-row data).
-    # to_memory_config (sharded→interleaved) uses raw shard_height for ROW_MAJOR.
-    kvpe_dim = int(fused_kv["nope_output"].shape[-1]) + int(fused_kv["rope_output"].shape[-1])
-
-    nope_dram = ttnn.to_memory_config(nope_result, ttnn.DRAM_MEMORY_CONFIG)
-    rope_dram = ttnn.to_memory_config(rope_result, ttnn.DRAM_MEMORY_CONFIG)
-
-    kvpe_rm = ttnn.concat([nope_dram, rope_dram], dim=-1)
-    ttnn.deallocate(nope_dram, force=False)
-    ttnn.deallocate(rope_dram, force=False)
-
-    kvpe_4d = ttnn.reshape(kvpe_rm, [1, 1, 1, kvpe_dim])
+    # 5. Convert output to standard TILE format for downstream ops
+    kvpe_dim = int(kvpe_output.shape[-1])
+    kvpe_4d = ttnn.reshape(kvpe_output, [1, 1, 1, kvpe_dim])
     kvpe_new = ttnn.to_layout(kvpe_4d, ttnn.TILE_LAYOUT)
-    if kvpe_4d is not kvpe_new:
-        ttnn.deallocate(kvpe_4d, force=False)
 
-    # Cleanup sharded temporaries
-    ttnn.deallocate(x_sharded, force=False)
-    ttnn.deallocate(cos_sharded, force=False)
-    ttnn.deallocate(sin_sharded, force=False)
+    # Cleanup temporaries
+    ttnn.deallocate(x_rm, force=False)
+    ttnn.deallocate(cos_dram, force=False)
+    ttnn.deallocate(sin_dram, force=False)
 
     return kvpe_new
 

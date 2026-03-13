@@ -103,7 +103,8 @@ def main() -> int:
         default="~/.cache/ttnn/models/glm4_moe_lite/vllm",
         help="TT weight cache dir (default reuses the vLLM cache to avoid reconverting all layers).",
     )
-    ap.add_argument("--mesh-cols", type=int, default=1, help="Use mesh shape (1,mesh_cols).")
+    ap.add_argument("--mesh-rows", type=int, default=1, help="Number of rows in mesh shape.")
+    ap.add_argument("--mesh-cols", type=int, default=1, help="Number of columns in mesh shape.")
     ap.add_argument(
         "--device-ids",
         default="auto",
@@ -147,17 +148,21 @@ def main() -> int:
         raise ValueError(f"expected prompt input_ids [1,S], got {tuple(prompt_ids.shape)}")
     prompt_len = int(prompt_ids.shape[1])
 
+    mesh_rows = int(args.mesh_rows)
     mesh_cols = int(args.mesh_cols)
-    if mesh_cols <= 0:
-        raise ValueError("--mesh-cols must be > 0")
+    if mesh_rows <= 0 or mesh_cols <= 0:
+        raise ValueError("--mesh-rows and --mesh-cols must be > 0")
+    n_devices = mesh_rows * mesh_cols
     device_ids_raw = str(args.device_ids).strip().lower()
     device_ids: list[int] | None
     if device_ids_raw in {"auto", ""}:
         device_ids = None
     else:
         device_ids = [int(x) for x in str(args.device_ids).split(",") if x.strip() != ""]
-        if len(device_ids) != mesh_cols:
-            raise ValueError(f"--device-ids must have exactly mesh-cols entries (got {len(device_ids)} vs {mesh_cols})")
+        if len(device_ids) != n_devices:
+            raise ValueError(
+                f"--device-ids must have exactly mesh-rows*mesh-cols entries (got {len(device_ids)} vs {n_devices})"
+            )
 
     # Ensure MoE is enabled (matches production intent).
     os.environ["GLM4_MOE_LITE_ENABLE_MOE"] = "1"
@@ -171,9 +176,9 @@ def main() -> int:
     blocks_per_seq = max(1, _round_up(total_len, block_size) // block_size)
 
     # Open a mesh device for consistency with vLLM (even if mesh-cols=1).
-    _set_default_fabric_config(mesh_cols)
+    _set_default_fabric_config(n_devices)
     open_kwargs = {
-        "mesh_shape": ttnn.MeshShape(1, mesh_cols),
+        "mesh_shape": ttnn.MeshShape(mesh_rows, mesh_cols),
         "dispatch_core_config": ttnn.DispatchCoreConfig(ttnn.DispatchCoreType.ETH),
     }
     if device_ids is not None:
@@ -321,7 +326,7 @@ def main() -> int:
         print("", flush=True)
         print(f"=== TT greedy decode ({mode_label}) ===", flush=True)
         print(
-            f"mesh_shape=(1,{mesh_cols}) device_ids={device_ids if device_ids is not None else 'auto'} "
+            f"mesh_shape=({mesh_rows},{mesh_cols}) device_ids={device_ids if device_ids is not None else 'auto'} "
             f"kv_cache_dtype={args.kv_cache_dtype} dispatch=ETH phase={phase}",
             flush=True,
         )
