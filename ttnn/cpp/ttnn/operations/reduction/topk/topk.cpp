@@ -264,31 +264,27 @@ std::vector<Tensor> topk(
                     input_tensor.layout(),
                     *(input_tensor.device()),
                     memory_config.value_or(input_tensor.memory_config()))};
-        } else {
-            // If the output tensors were preallocated, they should already have
-            // the correct shapes (validated above), so fill the values with the input tensor
-            // and a zero as the index and return.
-            auto& [values, indices] = preallocated_output_tensors.value();
-            ttnn::copy(input_tensor, values);
-
-            // Creating indices tensor on host and copying to device (there is no direct way to write
-            // to a device tensor with a scalar value).
-            const TensorSpec& indices_spec = indices.tensor_spec();
-            TT_FATAL(
-                indices_spec.data_type() == DataType::UINT16, "Indices tensor must be UINT16 for rank 0 input tensor");
-            // Although we only need to store one value, have to account for extra padding
-            // in the tile layout. So host buffer size needs to match device buffer size.
-            auto indices_vec = std::vector<uint16_t>(
-                indices_spec.physical_shape().height() * indices_spec.physical_shape().width(), 0);
-            Tensor host_indices(
-                tt::tt_metal::HostBuffer(std::move(indices_vec)),
-                desired_final_shape,
-                DataType::UINT16,
-                indices.layout());
-            copy_to_device(host_indices, indices);
-
-            return {values, indices};
         }
+
+        // If the output tensors were preallocated, they should already have
+        // the correct shapes (validated above), so fill the values with the input tensor
+        // and a zero as the index and return.
+        auto& [values, indices] = preallocated_output_tensors.value();
+        ttnn::copy(input_tensor, values);
+
+        // Creating indices tensor on host and copying to device (there is no direct way to write
+        // to a device tensor with a scalar value).
+        const TensorSpec& indices_spec = indices.tensor_spec();
+        TT_FATAL(indices_spec.data_type() == DataType::UINT16, "Indices tensor must be UINT16 for rank 0 input tensor");
+        // Although we only need to store one value, have to account for extra padding
+        // in the tile layout. So host buffer size needs to match device buffer size.
+        auto indices_vec =
+            std::vector<uint16_t>(indices_spec.physical_shape().height() * indices_spec.physical_shape().width(), 0);
+        Tensor host_indices(
+            tt::tt_metal::HostBuffer(std::move(indices_vec)), desired_final_shape, DataType::UINT16, indices.layout());
+        copy_to_device(host_indices, indices);
+
+        return {values, indices};
     }
 
     // For a zero volume input tensor, return a zero volume tensor with the shape adjusted for k.
@@ -306,12 +302,12 @@ std::vector<Tensor> topk(
             };
 
             return {make_zero_volume_tensor(), make_zero_volume_tensor()};
-        } else {
-            // If the output tensors were preallocated, they should already have
-            // the correct shapes (validated above), so just return them as is.
-            auto& [values, indices] = preallocated_output_tensors.value();
-            return {values, indices};
         }
+
+        // If the output tensors were preallocated, they should already have
+        // the correct shapes (validated above), so just return them as is.
+        auto& [values, indices] = preallocated_output_tensors.value();
+        return {values, indices};
     }
 
     // Set up memory and execution configurations with defaults if not provided
