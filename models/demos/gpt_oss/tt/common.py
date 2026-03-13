@@ -48,7 +48,7 @@ def create_tt_model(
     # Note: num_layers parameter is intentionally not used to preserve full model architecture
 
     # Avoid loading state_dict for every DP model
-    if state_dict is None:
+    if not state_dict:
         state_dict = gpt_oss_model_args.load_state_dict(
             weights_path=gpt_oss_model_args.model_path,
             dummy_weights=gpt_oss_model_args.dummy_weights,

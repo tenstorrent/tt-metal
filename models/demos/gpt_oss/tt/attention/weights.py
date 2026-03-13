@@ -50,6 +50,13 @@ def load_attention_weights(
         AttentionWeights container with all loaded weights
     """
 
+    # Compute o_proj padding size based on config/mesh (independent of state_dict)
+    hidden_size = config.hidden_size
+    local_hidden = hidden_size // mesh_config.tp
+    padded_local_hidden = ((local_hidden + 31) // 32) * 32  # Round up to tile boundary
+    o_proj_pad_size = padded_local_hidden - local_hidden
+    o_proj_cache_suffix = f"_padded" if o_proj_pad_size > 0 and mesh_config.tp > 1 else ""
+
     if state_dict:
         # Extract projection weights from state dict
         q_proj_weight = substate(state_dict, "q_proj")["weight"]  # [num_heads * head_dim, hidden_size]
@@ -108,15 +115,9 @@ def load_attention_weights(
         )
         decode_sinks /= config.scaling
 
-        # Output projection
         # Pad o_proj output dimension for tile alignment in CCL operations.
         # Without padding, local_hidden = hidden_size / TP may not be tile-aligned (e.g., 2880/8 = 360),
         # causing CCL to do expensive Untilize->Pad->Tilize cycles internally.
-        hidden_size = config.hidden_size
-        local_hidden = hidden_size // mesh_config.tp
-        padded_local_hidden = ((local_hidden + 31) // 32) * 32  # Round up to tile boundary
-        o_proj_pad_size = padded_local_hidden - local_hidden
-
         if o_proj_pad_size > 0 and mesh_config.tp > 1:
             # Pad the output dimension of o_proj weight: [input_dim, hidden_size] -> [input_dim, padded_hidden]
             # Each TP device's output goes from local_hidden to padded_local_hidden
@@ -138,8 +139,6 @@ def load_attention_weights(
         o_proj_bias = None
         decode_sinks = None
         sinks_for_sdpa = None
-
-    o_proj_cache_suffix = f"_padded" if mesh_config.tp > 1 else ""
 
     # Clean mesh mapping using MeshConfig
     col_mesh_mapper = mesh_config.column_parallel(mesh_device)
