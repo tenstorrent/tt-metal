@@ -11,6 +11,7 @@ import pytest
 from loguru import logger
 
 from models.demos.deepseek_v3.demo.demo import load_prompts_from_json, run_demo
+from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
 MODEL_PATH = Path(
     os.getenv("DEEPSEEK_V3_HF_MODEL", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized")
@@ -86,6 +87,7 @@ def maybe_validate_english_keyboard_output(results: dict, override_num_layers: i
 def _demo_case(
     *,
     max_prompts: int,
+    max_users_per_row: int,
     repeat_batches: int,
     max_new_tokens: int,
     override_num_layers: int | None,
@@ -101,6 +103,7 @@ def _demo_case(
     return pytest.param(
         {
             "max_prompts": max_prompts,
+            "max_users_per_row": max_users_per_row,
             "repeat_batches": repeat_batches,
             "max_new_tokens": max_new_tokens,
             "override_num_layers": override_num_layers,
@@ -113,20 +116,20 @@ def _demo_case(
         },
         id=case_id,
         marks=marks,
-    )
+)
 
 
 # Test matrix:
-# +------------------+-------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
-# | id               | max_prompts | repeat_batches | max_new_tokens | override_num_layers | enable_trace | sample_on_device | artifact_name            | profile_decode | stop_at_eos | expect_full_length |
-# +------------------+-------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
-# | tg_stress        | 56          | 2              | 128            | 5                   | False        | True             | None                     | False          | False       | True               |
-# | dual_full_demo   | 256         | 1              | 129            | None                | True         | True             | dual_demo_full_results   | False          | None        | False              |
-# | dual_stress_demo | 56          | 20             | 129            | None                | True         | True             | dual_demo_stress_results | False          | False       | True               |
-# | quad_full_demo   | 512         | 1              | 129            | None                | True         | True             | quad_demo_full_results   | False          | None        | False              |
-# | quad_stress_demo | 56          | 20             | 129            | None                | True         | True             | quad_demo_stress_results | False          | False       | True               |
-# | profile_decode   | 1           | 1              | 13             | 5                   | True         | True             | None                     | True           | False       | True               |
-# +------------------+-------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
+# +------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
+# | id               | max_prompts | max_users_per_row | repeat_batches | max_new_tokens | override_num_layers | enable_trace | sample_on_device | artifact_name            | profile_decode | stop_at_eos | expect_full_length |
+# +------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
+# | tg_stress        | 32          | 8                 | 2              | 128            | 5                   | False        | True             | None                     | False          | False       | True               |
+# | dual_full_demo   | 256         | 32                | 1              | 129            | None                | True         | True             | dual_demo_full_results   | False          | None        | False              |
+# | dual_stress_demo | 56          | 32                | 20             | 129            | None                | True         | True             | dual_demo_stress_results | False          | False       | True               |
+# | quad_full_demo   | 512         | 32                | 1              | 129            | None                | True         | True             | quad_demo_full_results   | False          | None        | False              |
+# | quad_stress_demo | 56          | 32                | 20             | 129            | None                | True         | True             | quad_demo_stress_results | False          | False       | True               |
+# | profile_decode   | 1           | 32                | 1              | 13             | 5                   | True         | True             | None                     | True           | False       | True               |
+# +------------------+-------------+-------------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
 
 
 @pytest.mark.parametrize(
@@ -134,7 +137,8 @@ def _demo_case(
     "case",
     [
         _demo_case(
-            max_prompts=56,
+            max_prompts=32,
+            max_users_per_row=8,
             repeat_batches=2,
             max_new_tokens=128,
             override_num_layers=5,
@@ -149,6 +153,7 @@ def _demo_case(
         ),
         _demo_case(
             max_prompts=256,
+            max_users_per_row=32,
             repeat_batches=1,
             max_new_tokens=129,
             override_num_layers=None,
@@ -163,6 +168,7 @@ def _demo_case(
         ),
         _demo_case(
             max_prompts=56,
+            max_users_per_row=32,
             repeat_batches=20,
             max_new_tokens=129,
             override_num_layers=None,
@@ -177,6 +183,7 @@ def _demo_case(
         ),
         _demo_case(
             max_prompts=512,
+            max_users_per_row=32,
             repeat_batches=1,
             max_new_tokens=129,
             override_num_layers=None,
@@ -191,6 +198,7 @@ def _demo_case(
         ),
         _demo_case(
             max_prompts=56,
+            max_users_per_row=32,
             repeat_batches=20,
             max_new_tokens=129,
             override_num_layers=None,
@@ -205,6 +213,7 @@ def _demo_case(
         ),
         _demo_case(
             max_prompts=1,
+            max_users_per_row=32,
             repeat_batches=1,
             max_new_tokens=13,
             override_num_layers=5,
@@ -233,6 +242,7 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
         cache_dir=CACHE_DIR,
         random_weights=False,
         max_new_tokens=case["max_new_tokens"],
+        max_users_per_row=case["max_users_per_row"],
         repeat_batches=case["repeat_batches"],
         enable_trace=case["enable_trace"],
         sample_on_device=case["sample_on_device"],
@@ -247,6 +257,13 @@ def test_demo(case: dict, force_recalculate_weight_config: bool):
 
     results = run_demo(**run_kwargs)
     maybe_validate_english_keyboard_output(results, case["override_num_layers"])
+
+    requested_system_name = os.getenv("MESH_DEVICE")
+    assert requested_system_name is not None, "MESH_DEVICE must be set for demo tests"
+    mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
+    expected_generations = min(len(prompts), case["max_users_per_row"] * int(mesh_shape[0]))
+
+    assert len(results["generations"]) == expected_generations
 
     # Full-demo cases can stop early on EOS; stress/profile cases disable EOS and
     # should always produce the requested token count.

@@ -127,8 +127,8 @@ class DeepseekGenerator(WarmupForwardMixin):
     Notes:
     - Prefill at the model level is not fully implemented in RowBatchedModel; we emulate
       prefill by iterating decode steps over the prompt tokens (updates caches).
-    - Batch size in configs is tied to USERS_PER_ROW; for simplicity we decode
-      up to that many sequences. If fewer are provided, we pad/ignore extras.
+    - Decode runs are configured for up to a fixed number of users per row.
+      If fewer prompts are provided, we pad/ignore extras.
 
     Usage:
     - Context manager (recommended):
@@ -151,6 +151,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         model_path: str | Path | None = None,
         cache_dir: str | Path | None = None,
         batch_size: int = USERS_PER_ROW,
+        batch_size_per_row: int | None = None,
         tokenizer=None,
         random_weights: bool = False,
         dense_layers: int | None = None,
@@ -225,7 +226,27 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.ccl = CCL(mesh_device)
         mesh_shape = list(mesh_device.shape)
         self.dp_factor = mesh_shape[1]
-        self.batch_size_per_row = USERS_PER_ROW
+        legacy_batch_size_per_row = int(batch_size)
+        if batch_size_per_row is not None and legacy_batch_size_per_row != USERS_PER_ROW:
+            if int(batch_size_per_row) != legacy_batch_size_per_row:
+                raise ValueError(
+                    "Specify only one of batch_size and batch_size_per_row; "
+                    "batch_size is a deprecated alias for batch_size_per_row."
+                )
+        resolved_batch_size_per_row = (
+            int(batch_size_per_row) if batch_size_per_row is not None else legacy_batch_size_per_row
+        )
+        if resolved_batch_size_per_row <= 0:
+            raise ValueError(f"batch_size_per_row must be > 0, got {resolved_batch_size_per_row}")
+        if resolved_batch_size_per_row > USERS_PER_ROW:
+            raise ValueError(
+                f"batch_size_per_row {resolved_batch_size_per_row} exceeds the supported maximum {USERS_PER_ROW}"
+            )
+        if resolved_batch_size_per_row % self.dp_factor != 0:
+            raise ValueError(
+                f"batch_size_per_row {resolved_batch_size_per_row} must be divisible by dp_factor={self.dp_factor}"
+            )
+        self.batch_size_per_row = resolved_batch_size_per_row
         self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
 
         # Configure sampling
@@ -246,7 +267,11 @@ class DeepseekGenerator(WarmupForwardMixin):
             )
         if self.sample_on_device:
             enable_internal_trace_sampling = enable_trace and self.sample_on_device
-            self.sampling_args = make_deepseek_sampling_args(mesh_device, self.hf_config.vocab_size)
+            self.sampling_args = make_deepseek_sampling_args(
+                mesh_device,
+                self.hf_config.vocab_size,
+                max_batch_size=self.batch_size_per_row,
+            )
             self.sampling_generator = SamplingGenerator(
                 args=self.sampling_args,
                 mesh_device=self.mesh_device,
@@ -420,7 +445,9 @@ class DeepseekGenerator(WarmupForwardMixin):
             logger.info("Creating model prefill config...")
             self._dump_meminfo("Before creating model prefill config...")
             self.model_prefill_cfg = RowBatchedModel.prefill_model_config(
-                hf_config=self.hf_config, mesh_device=self.mesh_device
+                hf_config=self.hf_config,
+                mesh_device=self.mesh_device,
+                batch_size_per_row=self.batch_size_per_row,
             )
             self._dump_meminfo("After creating model prefill config...")
             self._prepare_model_states(kv_cache_override=kv_cache_override)
@@ -446,7 +473,9 @@ class DeepseekGenerator(WarmupForwardMixin):
                 hasattr(self, "model_shared_state") and self.model_shared_state is not None
             ), "Model shared state must be prepared before creating decode run config. Run _prepare_run_configs('prefill') first."
             self.model_decode_cfg = RowBatchedModel.decode_model_config(
-                hf_config=self.hf_config, mesh_device=self.mesh_device
+                hf_config=self.hf_config,
+                mesh_device=self.mesh_device,
+                batch_size_per_row=self.batch_size_per_row,
             )
             self._dump_meminfo("Before creating model run config for decode...")
             self.model_run_config_decode = create_run_config(
