@@ -21,7 +21,7 @@ from models.tt_transformers.tt.ccl import get_num_links
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
-@pytest.mark.parametrize("batch_seq_len", [4096, 3200])
+@pytest.mark.parametrize("batch_seq_len", [4096, 3200], ids=["4K", "3.2K"])
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
     [
@@ -69,7 +69,7 @@ def test_ffn_pcc(
     logger.debug(f"Testing with mesh_shape={mesh_shape}, num_devices={num_devices}")
     logger.debug(f"batch_seq_len={batch_seq_len}, emb_dim={EMB_DIM}, hidden_dim={HIDDEN_DIM}")
 
-    signpost(f"FFN PCC test - mesh {mesh_shape}, batch_seq={batch_seq_len}")
+    signpost(f"FFN PCC test - {mesh_shape=} {batch_seq_len=} {num_links=} {topology=}")
 
     actual_num_links = get_num_links(mesh_device, cluster_axis=1)
     logger.debug(f"Available ethernet links along mesh columns: {actual_num_links}")
@@ -92,6 +92,7 @@ def test_ffn_pcc(
         torch_weights=torch_weights,
         num_links=num_links,
         topology=topology,
+        activations_dtype=activations_dtype,
         weights_dtype=weights_dtype,
     )
 

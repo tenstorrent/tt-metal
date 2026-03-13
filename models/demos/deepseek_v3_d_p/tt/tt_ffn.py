@@ -39,6 +39,7 @@ class TtFfn(TtSharedExpert):
         torch_weights: dict = None,
         num_links: int = 1,
         topology: ttnn.Topology = ttnn.Topology.Linear,
+        activations_dtype=ttnn.bfloat16,
         weights_dtype=ttnn.bfloat8_b,  # explore bfp4 ?
         compute_kernel_config: ttnn.WormholeComputeKernelConfig = COMPUTE_KERNEL_CONFIG_HIFI2,  # explore COMPUTE_KERNEL_CONFIG_LOFI with bfp4
     ):
@@ -60,7 +61,7 @@ class TtFfn(TtSharedExpert):
             torch_weights=torch_weights,
             num_links=num_links,
             topology=topology,
-            activations_dtype=ttnn.bfloat16,
+            activations_dtype=activations_dtype,
             weights_dtype=weights_dtype,
             compute_kernel_config=compute_kernel_config,
         )
