@@ -124,14 +124,8 @@ class RotarySetup:
             mesh_mapper=ttnn.ReplicateTensorToMesh(device),
         )
 
-    def get_rot_idxs(self, position_idxs, on_host: bool = False):
-        """
-        Get the rotary positional embedding indices for the given position indices.
-        Args:
-            position_idxs: A tensor of shape [batch] containing the position indices.
-        Returns:
-            rot_idxs: A tensor of shape [1, batch] containing the rotary positional embedding indices.
-        """
+    def _position_idxs_to_tensor(self, position_idxs, *, dtype, on_host: bool = False):
+        """Map decode position ids to the row-sharded mesh layout used by DeepSeek decode."""
         assert isinstance(position_idxs, torch.Tensor), "Position ids must be a torch tensor"
         assert len(position_idxs.shape) == 1, "position idxs must be a [batch] tensor"
 
@@ -158,9 +152,9 @@ class RotarySetup:
         pad_size = ttnn.core.roundup(position_idxs.shape[1], ttnn.TILE_SIZE) - position_idxs.shape[1]
         position_idxs = torch.nn.functional.pad(position_idxs, (0, pad_size), "constant", 0)
 
-        rot_idxs = ttnn.as_tensor(
+        return ttnn.as_tensor(
             position_idxs,
-            dtype=ttnn.uint32,
+            dtype=dtype,
             layout=ttnn.ROW_MAJOR_LAYOUT,
             mesh_mapper=ttnn.ShardTensor2dMesh(
                 self.device,
@@ -171,7 +165,19 @@ class RotarySetup:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        return rot_idxs
+    def get_position_idxs_tensor(self, position_idxs, on_host: bool = False):
+        """Get decode position ids as an int32 tensor with row-sharded mesh layout."""
+        return self._position_idxs_to_tensor(position_idxs, dtype=ttnn.int32, on_host=on_host)
+
+    def get_rot_idxs(self, position_idxs, on_host: bool = False):
+        """
+        Get the rotary positional embedding indices for the given position indices.
+        Args:
+            position_idxs: A tensor of shape [batch] containing the position indices.
+        Returns:
+            rot_idxs: A tensor of shape [1, batch] containing the rotary positional embedding indices.
+        """
+        return self._position_idxs_to_tensor(position_idxs, dtype=ttnn.uint32, on_host=on_host)
 
     def get_rot_mats_table(self, seq_len: int | None = None):
         """

@@ -33,7 +33,7 @@ from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
 from models.perf.benchmarking_utils import BenchmarkProfiler
 
-MAX_SEQ_LEN = 2048
+MAX_SEQ_LEN = 32768
 
 
 def _build_verify_alias_page_table_host(
@@ -175,11 +175,25 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.hf_config = (
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
         )
-        # Hard-code the context length to keep KV cache + RoPE tables bounded.
-        # (Avoid env var overrides; long-context runs should change this constant in code.)
-        if max_seq_len is not None and int(max_seq_len) != MAX_SEQ_LEN:
-            logger.warning(f"Ignoring requested max_seq_len={max_seq_len}; using MAX_SEQ_LEN={MAX_SEQ_LEN}.")
-        self.hf_config.max_seq_len = MAX_SEQ_LEN
+        self._ensure_max_seq_len(self.hf_config)
+        model_max_seq_len = int(self.hf_config.max_seq_len)
+        requested_max_seq_len = MAX_SEQ_LEN if max_seq_len is None else int(max_seq_len)
+        if requested_max_seq_len <= 0:
+            raise ValueError(f"max_seq_len must be > 0, got {requested_max_seq_len}")
+        if requested_max_seq_len % ttnn.TILE_SIZE != 0:
+            raise ValueError(f"max_seq_len {requested_max_seq_len} must be divisible by TILE_SIZE={ttnn.TILE_SIZE}")
+        if requested_max_seq_len > model_max_seq_len:
+            raise ValueError(
+                f"max_seq_len {requested_max_seq_len} exceeds model-supported context length {model_max_seq_len}"
+            )
+        if requested_max_seq_len != MAX_SEQ_LEN:
+            logger.warning(
+                "Using overridden max_seq_len={} (default={}, model supports up to {}).",
+                requested_max_seq_len,
+                MAX_SEQ_LEN,
+                model_max_seq_len,
+            )
+        self.hf_config.max_seq_len = requested_max_seq_len
         # Optional overrides for layer counts before building states
         if override_num_layers is not None:
             try:
@@ -756,6 +770,27 @@ class DeepseekGenerator(WarmupForwardMixin):
             mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape),
         )
         return self._normalize_hidden_host_for_mtp(hidden)
+
+    def _tt_from_positions(self, positions: torch.Tensor) -> Tuple[dict, ttnn.Tensor]:
+        """Return rope tensors dict and TTNN positions shard for decode.
+
+        positions: [B] int tensor
+        returns: (rope_tensors, tt_positions)
+        """
+        rope_mats = self.rope_setup.get_rot_mats_table(seq_len=1)
+        rope_tensors = {
+            "cos_matrix": rope_mats["cos_matrix"],
+            "sin_matrix": rope_mats["sin_matrix"],
+            "trans_matrix": rope_mats["trans_matrix"],
+        }
+
+        tt_positions = ttnn.from_torch(
+            positions.to(torch.int32),
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensorToMesh(self.mesh_device, dim=0),
+            dtype=ttnn.int32,
+        )
+        return rope_tensors, tt_positions
 
     def _iter_decode_mla_cfgs(self):
         for block_cfg in self.model_run_config_decode["mlp_decoder_block"]:
