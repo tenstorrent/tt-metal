@@ -148,6 +148,34 @@ void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p)
     Dist::MeshCoordinate src_coord = coord_of_phys(src_phys);
     Dist::MeshCoordinate dst_coord = coord_of_phys(dst_phys);
 
+    // Check if this is a connection manager variant (needed for second destination setup)
+    // This checks the test params enum before conversion to kernel enum
+    const bool is_conn_mgr_variant_from_params =
+        (p.api_variant == AddrgenApiVariant::UnicastWriteConnMgr ||
+         p.api_variant == AddrgenApiVariant::UnicastWriteWithStateConnMgr ||
+         p.api_variant == AddrgenApiVariant::UnicastWriteSetStateConnMgr ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteConnMgr ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithStateConnMgr ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetStateConnMgr ||
+         p.api_variant == AddrgenApiVariant::ScatterWriteConnMgr ||
+         p.api_variant == AddrgenApiVariant::ScatterWriteWithStateConnMgr ||
+         p.api_variant == AddrgenApiVariant::ScatterWriteSetStateConnMgr);
+
+    // For connection manager variants: set up second destination chip
+    tt::tt_fabric::FabricNodeId dst2{tt::tt_fabric::MeshId{p.mesh_id}, p.dst2_chip};
+    ChipId dst2_phys = 0;
+    tt::tt_metal::IDevice* dst2_dev = nullptr;
+    Dist::MeshCoordinate dst2_coord{0, 0};
+    tt::tt_metal::CoreCoord rx2_xy = rx_xy;
+    if (is_conn_mgr_variant_from_params) {
+        dst2_phys = cp.get_physical_chip_id_from_fabric_node_id(dst2);
+        dst2_dev = tt::tt_metal::detail::GetActiveDevice(dst2_phys);
+        if (dst2_dev) {
+            dst2_coord = coord_of_phys(dst2_phys);
+            rx2_xy = dst2_dev->worker_core_from_logical_core(p.receiver_core);
+        }
+    }
+
     // --- IO buffers & initialization (MeshBuffer style) ---
     Dist::DeviceLocalBufferConfig src_local{.page_size = p.page_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
     Dist::DeviceLocalBufferConfig dst_local{
@@ -166,6 +194,10 @@ void run_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p)
     // Initialize shards on specific src/dst devices (pass CQ, use vectors)
     Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
     Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);
+    // For connection manager variants: initialize second destination buffer
+    if (is_conn_mgr_variant_from_params && dst2_dev) {
+        Dist::WriteShard(mcq, dst_buf, zeros, dst2_coord, /*blocking=*/true);
+    }
 
     // ---------------------------- PROGRAM FACTORY ----------------------------
     /*
@@ -215,7 +247,10 @@ Notes:
     const bool is_fused_atomic_inc =
         (p.api_variant == AddrgenApiVariant::FusedAtomicIncWrite ||
          p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithState ||
-         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetState);
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetState ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteConnMgr ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithStateConnMgr ||
+         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetStateConnMgr);
 
     const std::string KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/";
 
@@ -234,6 +269,23 @@ Notes:
             case AddrgenApiVariant::ScatterWrite: return {OperationType::Scatter, ApiVariant::Basic};
             case AddrgenApiVariant::ScatterWriteWithState: return {OperationType::Scatter, ApiVariant::WithState};
             case AddrgenApiVariant::ScatterWriteSetState: return {OperationType::Scatter, ApiVariant::SetState};
+            // Connection manager variants
+            case AddrgenApiVariant::UnicastWriteConnMgr: return {OperationType::BasicWrite, ApiVariant::ConnMgrBasic};
+            case AddrgenApiVariant::UnicastWriteWithStateConnMgr:
+                return {OperationType::BasicWrite, ApiVariant::ConnMgrWithState};
+            case AddrgenApiVariant::UnicastWriteSetStateConnMgr:
+                return {OperationType::BasicWrite, ApiVariant::ConnMgrSetState};
+            case AddrgenApiVariant::FusedAtomicIncWriteConnMgr:
+                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrBasic};
+            case AddrgenApiVariant::FusedAtomicIncWriteWithStateConnMgr:
+                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrWithState};
+            case AddrgenApiVariant::FusedAtomicIncWriteSetStateConnMgr:
+                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrSetState};
+            case AddrgenApiVariant::ScatterWriteConnMgr: return {OperationType::Scatter, ApiVariant::ConnMgrBasic};
+            case AddrgenApiVariant::ScatterWriteWithStateConnMgr:
+                return {OperationType::Scatter, ApiVariant::ConnMgrWithState};
+            case AddrgenApiVariant::ScatterWriteSetStateConnMgr:
+                return {OperationType::Scatter, ApiVariant::ConnMgrSetState};
             default: TT_FATAL(false, "Unknown API variant"); return {OperationType::BasicWrite, ApiVariant::Basic};
         }
     };
@@ -269,6 +321,20 @@ Notes:
     const uint32_t sem_wait_value = is_fused_atomic_inc ? NUM_PAGES : 1u;
     tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, receiver_core, {gsem->address(), sem_wait_value});
 
+    // For connection manager variants: set up second receiver program
+    tt::tt_metal::Program receiver_prog2 = tt::tt_metal::CreateProgram();
+    if (is_conn_mgr_variant_from_params && dst2_dev) {
+        auto rx_wait_k2 = tt::tt_metal::CreateKernel(
+            receiver_prog2,
+            KDIR + receiver_kernel_name,
+            p.receiver_core,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_0_default,
+                .defines = defines});
+        tt::tt_metal::SetRuntimeArgs(receiver_prog2, rx_wait_k2, p.receiver_core, {gsem->address(), sem_wait_value});
+    }
+
     // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
     const uint32_t CB_ID = tt::CBIndex::c_0;
@@ -298,7 +364,7 @@ Notes:
             .defines = defines});
     tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
 
-    // Writer kernel (CB->Fabric->dst + final sem INC) - now uses unified kernel with compile-time args
+    // Writer kernel (CB->Fabric->dst + final sem INC) - select kernel based on connection manager variant
     std::vector<uint32_t> writer_cta;
     tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
     writer_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
@@ -308,21 +374,24 @@ Notes:
     writer_cta.push_back(dst_aligned_page_size);  // Aligned page size (dest buffer addressing)
     writer_cta.push_back(src_aligned_page_size);  // Source aligned page size (CB stride for scatter)
 
+    // Check if this is a connection manager variant to select the appropriate kernel
+    const bool is_conn_mgr_variant =
+        (api_variant == ApiVariant::ConnMgrBasic || api_variant == ApiVariant::ConnMgrWithState ||
+         api_variant == ApiVariant::ConnMgrSetState);
+
+    // Select kernel based on connection manager variant
+    const std::string writer_kernel_name =
+        is_conn_mgr_variant ? "unicast_tx_writer_addrgen_conn_mgr.cpp" : "unicast_tx_writer_addrgen.cpp";
+
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
-        KDIR + "unicast_tx_writer_addrgen.cpp",  // Unified unicast writer kernel
+        KDIR + writer_kernel_name,
         p.sender_core,
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .compile_args = writer_cta,
             .defines = defines});
-
-    // Resolve forwarding and append fabric connection args
-    uint32_t link_idx = 0;
-    if (!pick_forwarding_link_or_fail(src, dst, link_idx, p)) {
-        return;
-    }
 
     std::vector<uint32_t> writer_rt = {
         (uint32_t)dst_buf->address(),  // 0: dst_base (receiver L1 offset)
@@ -333,11 +402,39 @@ Notes:
         (uint32_t)gsem->address()      // 5: receiver L1 semaphore addr
     };
 
-    // Pack the fabric-connection runtime args for the writer kernel.
-    // This establishes the send path (routing/link identifiers) for fabric traffic.
-    // The device kernel must unpack these in the same order via build_from_args(...).
-    tt::tt_fabric::append_fabric_connection_rt_args(
-        src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
+    if (is_conn_mgr_variant) {
+        // Connection manager variant: use routing plane connection manager
+        // Add num_connections (2 for dual destination test, fallback to 1 if dst2_dev is null)
+        uint32_t num_connections = (dst2_dev != nullptr) ? 2u : 1u;
+        writer_rt.push_back(num_connections);
+
+        // Use append_routing_plane_connection_manager_rt_args for route setup
+        std::vector<tt::tt_fabric::FabricNodeId> dst_nodes = (dst2_dev != nullptr)
+                                                                 ? std::vector<tt::tt_fabric::FabricNodeId>{dst, dst2}
+                                                                 : std::vector<tt::tt_fabric::FabricNodeId>{dst};
+        std::vector<uint32_t> connection_link_indices = {};  // Empty means auto-select
+        tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+            src,
+            dst_nodes,
+            connection_link_indices,
+            sender_prog,
+            writer_k,
+            p.sender_core,
+            writer_rt,
+            tt::tt_fabric::FabricApiType::Mesh,
+            CoreType::WORKER);
+    } else {
+        // Basic variant: use regular fabric connection args
+        uint32_t link_idx = 0;
+        if (!pick_forwarding_link_or_fail(src, dst, link_idx, p)) {
+            return;
+        }
+        // Pack the fabric-connection runtime args for the writer kernel.
+        // This establishes the send path (routing/link identifiers) for fabric traffic.
+        // The device kernel must unpack these in the same order via build_from_args(...).
+        tt::tt_fabric::append_fabric_connection_rt_args(
+            src, dst, /*link_idx=*/link_idx, sender_prog, p.sender_core, writer_rt);
+    }
     tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
     // -------------------------- end PROGRAM FACTORY --------------------------
 
@@ -345,6 +442,10 @@ Notes:
     Dist::MeshWorkload receiver_workload;
     Dist::MeshWorkload sender_workload;
     receiver_workload.add_program(Dist::MeshCoordinateRange(dst_coord), std::move(receiver_prog));
+    // For connection manager variants: add second receiver to workload
+    if (is_conn_mgr_variant_from_params && dst2_dev) {
+        receiver_workload.add_program(Dist::MeshCoordinateRange(dst2_coord), std::move(receiver_prog2));
+    }
     sender_workload.add_program(Dist::MeshCoordinateRange(src_coord), std::move(sender_prog));
 
     // Run once: receiver first (so it's ready), then sender
@@ -352,6 +453,256 @@ Notes:
     Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/true);
 
     // Read back (single shard) and verify
+    std::vector<uint32_t> rx(n_words, 0u);
+    Dist::ReadShard(mcq, rx, dst_buf, dst_coord, /*blocking=*/true);
+    verify_payload_words(rx, tx);
+
+    // For connection manager variants: verify second destination
+    if (is_conn_mgr_variant_from_params && dst2_dev) {
+        std::vector<uint32_t> rx2(n_words, 0u);
+        Dist::ReadShard(mcq, rx2, dst_buf, dst2_coord, /*blocking=*/true);
+        verify_payload_words(rx2, tx);
+    }
+}
+
+// ----------------------------------- Linear (1D) program -----------------------------------
+void run_linear_unicast_write_test(HelpersFixture* fixture, const AddrgenTestParams& p) {
+    const auto& cp = tt::tt_metal::MetalContext::instance().get_control_plane();
+    namespace Dist = tt::tt_metal::distributed;
+
+    // Linear API test does NOT use FABRIC_2D define
+    std::map<std::string, std::string> defines = {};
+
+    tt::tt_fabric::FabricNodeId src{tt::tt_fabric::MeshId{p.mesh_id}, p.src_chip};
+    tt::tt_fabric::FabricNodeId dst{tt::tt_fabric::MeshId{p.mesh_id}, p.dst_chip};
+
+    ChipId src_phys = cp.get_physical_chip_id_from_fabric_node_id(src);
+    ChipId dst_phys = cp.get_physical_chip_id_from_fabric_node_id(dst);
+
+    tt::tt_metal::IDevice* src_dev = nullptr;
+    tt::tt_metal::IDevice* dst_dev = nullptr;
+    if (!lookup_devices_or_fail(src_phys, dst_phys, src_dev, dst_dev)) {
+        return;
+    }
+
+    if (!validate_workload_or_fail(p)) {
+        return;
+    }
+
+    tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
+
+    // --- Mesh device + coords for per-shard IO ---
+    auto mesh = fixture->get_mesh_device();
+    auto view = mesh->get_view();
+    auto coord_of_phys = [&](ChipId phys) -> Dist::MeshCoordinate {
+        for (const auto& c : Dist::MeshCoordinateRange(view.shape())) {
+            if (view.get_device(c)->id() == phys) {
+                return c;
+            }
+        }
+        TT_FATAL(false, "Physical chip {} is not part of this MeshDevice", phys);
+        return Dist::MeshCoordinate(0);
+    };
+    Dist::MeshCoordinate src_coord = coord_of_phys(src_phys);
+    Dist::MeshCoordinate dst_coord = coord_of_phys(dst_phys);
+
+    // --- IO buffers & initialization (MeshBuffer style) ---
+    Dist::DeviceLocalBufferConfig src_local{.page_size = p.page_size, .buffer_type = tt::tt_metal::BufferType::DRAM};
+    Dist::DeviceLocalBufferConfig dst_local{
+        .page_size = p.page_size,
+        .buffer_type = p.use_dram_dst ? tt::tt_metal::BufferType::DRAM : tt::tt_metal::BufferType::L1};
+    Dist::ReplicatedBufferConfig rcfg{.size = p.tensor_bytes};
+    auto src_buf = Dist::MeshBuffer::create(rcfg, src_local, mesh.get());
+    auto dst_buf = Dist::MeshBuffer::create(rcfg, dst_local, mesh.get());
+
+    const size_t n_words = p.tensor_bytes / 4;
+    auto tx = make_tx_pattern(n_words);
+    std::vector<uint32_t> zeros(n_words, 0u);
+
+    // Mesh CQ (needed for shard I/O and later trace)
+    auto& mcq = mesh->mesh_command_queue();
+    // Initialize shards on specific src/dst devices (pass CQ, use vectors)
+    Dist::WriteShard(mcq, src_buf, tx, src_coord, /*blocking=*/true);
+    Dist::WriteShard(mcq, dst_buf, zeros, dst_coord, /*blocking=*/true);
+
+    // --- Global semaphore ---
+    tt::tt_metal::Program receiver_prog = tt::tt_metal::CreateProgram();
+    tt::tt_metal::CoreRangeSet rx_core_set(tt::tt_metal::CoreRange(p.receiver_core, p.receiver_core));
+    static std::optional<tt::tt_metal::GlobalSemaphore> gsem_linear;
+    if (!gsem_linear) {
+        gsem_linear = tt::tt_metal::CreateGlobalSemaphore(mesh.get(), rx_core_set, /*initial_value=*/0);
+    }
+
+    const std::string KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/";
+
+    // Receiver kernel
+    auto rx_wait_k = tt::tt_metal::CreateKernel(
+        receiver_prog,
+        KDIR + "rx_addrgen.cpp",
+        p.receiver_core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .defines = defines});
+
+    const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
+
+    // Calculate aligned page sizes
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    uint32_t src_alignment = hal.get_alignment(tt::tt_metal::HalMemType::DRAM);
+    uint32_t dst_alignment = p.use_dram_dst ? hal.get_alignment(tt::tt_metal::HalMemType::DRAM)
+                                            : hal.get_alignment(tt::tt_metal::HalMemType::L1);
+    uint32_t src_aligned_page_size = ((p.page_size + src_alignment - 1) / src_alignment) * src_alignment;
+    uint32_t dst_aligned_page_size = ((p.page_size + dst_alignment - 1) / dst_alignment) * dst_alignment;
+
+    // Determine if this is a fused atomic inc variant
+    const bool is_fused_atomic_inc =
+        (p.api_variant == AddrgenApiVariant::LinearFusedAtomicIncWrite ||
+         p.api_variant == AddrgenApiVariant::LinearFusedAtomicIncWriteWithState ||
+         p.api_variant == AddrgenApiVariant::LinearFusedAtomicIncWriteSetState);
+
+    // For fused atomic inc, each write increments the semaphore, so receiver waits for NUM_PAGES
+    // For regular unicast, a single atomic inc is sent after all writes, so receiver waits for 1
+    const uint32_t sem_wait_value = is_fused_atomic_inc ? NUM_PAGES : 1u;
+    tt::tt_metal::SetRuntimeArgs(receiver_prog, rx_wait_k, p.receiver_core, {gsem_linear->address(), sem_wait_value});
+
+    // Sender program: READER (RISCV_0) + WRITER (RISCV_1)
+    tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
+    const uint32_t CB_ID = tt::CBIndex::c_0;
+    auto cb_cfg = tt::tt_metal::CircularBufferConfig(8 * src_aligned_page_size, {{CB_ID, tt::DataFormat::Float16}})
+                      .set_page_size(CB_ID, src_aligned_page_size);
+    (void)tt::tt_metal::CreateCircularBuffer(sender_prog, p.sender_core, cb_cfg);
+
+    // Helper to map linear API variant to OPERATION_TYPE and API_VARIANT compile-time parameters
+    auto get_linear_operation_and_api_variant = [](AddrgenApiVariant variant) -> std::pair<OperationType, ApiVariant> {
+        switch (variant) {
+            case AddrgenApiVariant::LinearUnicastWrite: return {OperationType::BasicWrite, ApiVariant::Basic};
+            case AddrgenApiVariant::LinearUnicastWriteWithState:
+                return {OperationType::BasicWrite, ApiVariant::WithState};
+            case AddrgenApiVariant::LinearUnicastWriteSetState:
+                return {OperationType::BasicWrite, ApiVariant::SetState};
+            case AddrgenApiVariant::LinearScatterWrite: return {OperationType::Scatter, ApiVariant::Basic};
+            case AddrgenApiVariant::LinearScatterWriteWithState: return {OperationType::Scatter, ApiVariant::WithState};
+            case AddrgenApiVariant::LinearScatterWriteSetState: return {OperationType::Scatter, ApiVariant::SetState};
+            case AddrgenApiVariant::LinearFusedAtomicIncWrite:
+                return {OperationType::FusedAtomicInc, ApiVariant::Basic};
+            case AddrgenApiVariant::LinearFusedAtomicIncWriteWithState:
+                return {OperationType::FusedAtomicInc, ApiVariant::WithState};
+            case AddrgenApiVariant::LinearFusedAtomicIncWriteSetState:
+                return {OperationType::FusedAtomicInc, ApiVariant::SetState};
+            case AddrgenApiVariant::LinearUnicastWriteConnMgr:
+                return {OperationType::BasicWrite, ApiVariant::ConnMgrBasic};
+            default:
+                TT_FATAL(false, "Unknown linear API variant");
+                return {OperationType::BasicWrite, ApiVariant::Basic};
+        }
+    };
+
+    auto [operation_type, api_variant] = get_linear_operation_and_api_variant(p.api_variant);
+
+    // Reader kernel (DRAM->CB) - uses unified kernel with OPERATION_TYPE compile-time arg
+    std::vector<uint32_t> reader_cta;
+    tt::tt_metal::TensorAccessorArgs(*src_buf).append_to(reader_cta);
+    reader_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
+    reader_cta.push_back(1u);                                     // SRC_IS_DRAM
+    reader_cta.push_back(NUM_PAGES);
+    reader_cta.push_back(p.page_size);            // Raw page size (actual data size to transfer)
+    reader_cta.push_back(src_aligned_page_size);  // Aligned page size (source buffer spacing)
+
+    auto reader_k = tt::tt_metal::CreateKernel(
+        sender_prog,
+        KDIR + "tx_reader_to_cb_addrgen.cpp",  // Unified reader kernel
+        p.sender_core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+            .noc = tt::tt_metal::NOC::RISCV_0_default,
+            .compile_args = reader_cta,
+            .defines = defines});
+    tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
+
+    // Writer kernel (linear addrgen)
+    std::vector<uint32_t> writer_cta;
+    tt::tt_metal::TensorAccessorArgs(*dst_buf).append_to(writer_cta);
+    writer_cta.push_back(static_cast<uint32_t>(operation_type));  // OPERATION_TYPE
+    writer_cta.push_back(static_cast<uint32_t>(api_variant));     // API_VARIANT
+    writer_cta.push_back(NUM_PAGES);                              // TOTAL_PAGES
+    writer_cta.push_back(p.page_size);                            // Raw page size (actual data size to transfer)
+    writer_cta.push_back(dst_aligned_page_size);                  // Aligned page size (dest buffer addressing)
+    writer_cta.push_back(src_aligned_page_size);                  // Source aligned page size (CB stride for scatter)
+
+    // Check if this is a connection manager variant
+    const bool is_linear_conn_mgr = (p.api_variant == AddrgenApiVariant::LinearUnicastWriteConnMgr);
+
+    // Select kernel based on connection manager variant
+    const std::string writer_kernel_name =
+        is_linear_conn_mgr ? "linear_unicast_tx_writer_addrgen_conn_mgr.cpp" : "linear_unicast_tx_writer_addrgen.cpp";
+
+    auto writer_k = tt::tt_metal::CreateKernel(
+        sender_prog,
+        KDIR + writer_kernel_name,
+        p.sender_core,
+        tt::tt_metal::DataMovementConfig{
+            .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
+            .noc = tt::tt_metal::NOC::RISCV_1_default,
+            .compile_args = writer_cta,
+            .defines = defines});
+
+    // Get forwarding link for fabric connection
+    auto forwarding_links = tt::tt_fabric::get_forwarding_link_indices(src, dst);
+    if (forwarding_links.empty()) {
+        ADD_FAILURE() << "No forwarding links from src to dst";
+        return;
+    }
+    uint32_t link_idx = forwarding_links[0];
+
+    // For linear fabric, num_hops is a test parameter (like other linear tests)
+    // Hardcoded to 1 for simple single-hop test between adjacent chips
+    uint32_t num_hops = 1;
+
+    std::vector<uint32_t> writer_rt = {
+        (uint32_t)dst_buf->address(),     // 0: dst_base
+        (uint32_t)rx_xy.x,                // 1: receiver_noc_x
+        (uint32_t)rx_xy.y,                // 2: receiver_noc_y
+        (uint32_t)gsem_linear->address()  // 3: receiver L1 semaphore addr
+    };
+
+    if (is_linear_conn_mgr) {
+        // Connection manager variant: pack num_connections and num_hops array
+        uint32_t num_connections = 1;          // Single destination for now
+        writer_rt.push_back(num_connections);  // 4: num_connections
+        writer_rt.push_back(num_hops);         // 5: num_hops[0]
+
+        // Use routing plane connection manager args
+        std::vector<tt::tt_fabric::FabricNodeId> dst_nodes = {dst};
+        std::vector<uint32_t> connection_link_indices = {};  // Empty means auto-select
+        tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
+            src,
+            dst_nodes,
+            connection_link_indices,
+            sender_prog,
+            writer_k,
+            p.sender_core,
+            writer_rt,
+            tt::tt_fabric::FabricApiType::Linear,
+            CoreType::WORKER);
+    } else {
+        // Basic variant: use regular fabric connection args
+        writer_rt.push_back(num_hops);  // 4: num_hops for linear unicast
+        tt::tt_fabric::append_fabric_connection_rt_args(src, dst, link_idx, sender_prog, p.sender_core, writer_rt);
+    }
+
+    tt::tt_metal::SetRuntimeArgs(sender_prog, writer_k, p.sender_core, writer_rt);
+
+    // --- Execution ---
+    Dist::MeshWorkload receiver_workload;
+    Dist::MeshWorkload sender_workload;
+    receiver_workload.add_program(Dist::MeshCoordinateRange(dst_coord), std::move(receiver_prog));
+    sender_workload.add_program(Dist::MeshCoordinateRange(src_coord), std::move(sender_prog));
+
+    Dist::EnqueueMeshWorkload(mcq, receiver_workload, /*blocking=*/false);
+    Dist::EnqueueMeshWorkload(mcq, sender_workload, /*blocking=*/true);
+
+    // Read back and verify
     std::vector<uint32_t> rx(n_words, 0u);
     Dist::ReadShard(mcq, rx, dst_buf, dst_coord, /*blocking=*/true);
     verify_payload_words(rx, tx);
