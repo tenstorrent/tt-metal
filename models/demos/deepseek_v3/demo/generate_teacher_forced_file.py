@@ -26,8 +26,8 @@ except ImportError:
 from models.demos.deepseek_v3.utils.hf_model_utils import (
     DEQUANTIZED_CHECKPOINT_ERROR_GUIDANCE,
     apply_with_names,
+    index_model_weights,
     load_model_uninitialized,
-    load_model_weights,
     unload_weight_from_weights_dict,
 )
 
@@ -97,9 +97,9 @@ def generate_reference(
         if hasattr(model, "config"):
             model.config.num_hidden_layers = 1
 
-    print("Loading weights dictionary from disk...")
-    weights_dict = load_model_weights(str(MODEL_PATH))
-    print(f"Loaded {len(weights_dict)} weight tensors from disk")
+    print("Indexing weights lazily from disk...")
+    weights_dict = index_model_weights(MODEL_PATH)
+    print(f"Indexed {len(weights_dict)} weight tensors from disk")
 
     @torch.no_grad()
     def load_weight_with_dtype(name: str, tensor: torch.Tensor) -> torch.Tensor:

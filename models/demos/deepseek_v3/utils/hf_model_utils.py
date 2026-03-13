@@ -51,8 +51,14 @@ def load_model_uninitialized(model_path: str = os.path.dirname(os.path.dirname(_
 executor = concurrent.futures.ThreadPoolExecutor(max_workers=os.cpu_count())
 
 
-def load_model_weights(
-    model_path: str, thread_pool_executor: concurrent.futures.ThreadPoolExecutor | None = None
+def index_model_weights(model_path: str | Path) -> Mapping[str, torch.Tensor]:
+    from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
+
+    return LazyStateDict(Path(model_path))
+
+
+def materialize_model_weights(
+    model_path: str | Path, thread_pool_executor: concurrent.futures.ThreadPoolExecutor | None = None
 ) -> dict[str, torch.Tensor]:
     safetensors_filepaths = sorted(glob(f"{model_path}/*.safetensors"))
     weights_dict = {}
@@ -331,7 +337,9 @@ def apply_with_names(
         )
 
 
-def load_weight_from_weights_dict(weights_dict: dict[str, torch.Tensor]) -> Callable[[str, torch.Tensor], torch.Tensor]:
+def load_weight_from_weights_dict(
+    weights_dict: Mapping[str, torch.Tensor]
+) -> Callable[[str, torch.Tensor], torch.Tensor]:
     @torch.no_grad()
     def load_weight(name: str, tensor: torch.Tensor) -> torch.Tensor:
         print(f"Loading weight: {name}" + " " * 50, end="\r")
@@ -353,13 +361,16 @@ def load_weight_from_weights_dict(weights_dict: dict[str, torch.Tensor]) -> Call
 
 
 def unload_weight_from_weights_dict(
-    weights_dict: dict[str, torch.Tensor],
+    weights_dict: Mapping[str, torch.Tensor],
 ) -> Callable[[str, torch.Tensor], torch.Tensor]:
     @torch.no_grad()
     def unload_weight(name: str, tensor: torch.Tensor) -> torch.Tensor:
         if name not in weights_dict:
             return tensor
         tensor.data = torch.empty(0, dtype=tensor.dtype)
+        evict_fn = getattr(weights_dict, "evict", None)
+        if callable(evict_fn):
+            evict_fn(name)
         return tensor
 
     return unload_weight
@@ -367,7 +378,7 @@ def unload_weight_from_weights_dict(
 
 def add_dynamic_weight_loading_hooks(
     module: torch.nn.Module,
-    weights_dict: dict[str, torch.Tensor],
+    weights_dict: Mapping[str, torch.Tensor],
     lazy_modules: list[str] = ["DeepseekV3Attention", "DeepseekV3MLP"],
     model_name: str = "",
     thread_pool_executor: concurrent.futures.ThreadPoolExecutor | None = None,
@@ -479,7 +490,7 @@ def prepare_model_state_dict(
     random_weights: bool = False,
     model_path: str | None = None,
     single_layer: str | None = None,
-) -> dict[str, torch.Tensor]:
+) -> Mapping[str, torch.Tensor]:
     """
     Prepare model state dict from either random weights or loaded HuggingFace weights.
 
@@ -490,8 +501,8 @@ def prepare_model_state_dict(
         single_layer: Optional single layer name (used for validation with random weights)
 
     Returns:
-        Dictionary containing model state dict with keys filtered to model components
-        (embed_tokens, layers, norm, lm_head)
+        Mapping containing model state dict entries for model components.
+        For HF checkpoints this may be a lazy mapping backed by safetensors.
     """
     if random_weights:
         if single_layer and single_layer.lower() == "moe":
@@ -516,32 +527,18 @@ def prepare_model_state_dict(
     else:
         if model_path is None:
             raise ValueError("model_path must be provided when random_weights is False")
-        logger.info(f"Loading HF weights from {model_path} (this may take a while)...")
-        hf_weights = load_model_weights(model_path)
-        logger.info("HF weights loaded")
+        logger.info(f"Indexing HF weights from {model_path} for lazy loading...")
+        model_state = index_model_weights(model_path)
+        logger.info("HF weights indexed lazily")
 
-        if "lm_head.weight" not in hf_weights:
+        if "lm_head.weight" not in model_state:
             raise RuntimeError(
                 "No HF safetensors found in model path or missing 'lm_head.weight'. "
                 "Set DEEPSEEK_V3_HF_MODEL to a directory containing DeepSeek-V3 safetensors, or pass --model-path."
             )
-        model_state = {
-            k: v
-            for k, v in hf_weights.items()
-            if k.startswith("model.embed_tokens.")
-            or k.startswith("model.layers.")
-            or k.startswith("model.norm.")
-            or k.startswith("lm_head.")
-        }
         if any(name.endswith("_scale_inv") for name in model_state):
             raise RuntimeError(
                 "Detected quantized HF tensors (*_scale_inv) in model weights. "
-                "DeepSeek-V3 TT conversion now only supports already-dequantized bf16 checkpoints. "
-                f"{DEQUANTIZED_CHECKPOINT_ERROR_GUIDANCE}"
-            )
-        if any(weight.dtype == torch.float8_e4m3fn for weight in model_state.values()):
-            raise RuntimeError(
-                "Detected float8 quantized tensors in model weights. "
                 "DeepSeek-V3 TT conversion now only supports already-dequantized bf16 checkpoints. "
                 f"{DEQUANTIZED_CHECKPOINT_ERROR_GUIDANCE}"
             )

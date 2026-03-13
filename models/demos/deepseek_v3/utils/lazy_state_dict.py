@@ -95,6 +95,14 @@ class LazyStateDict(Mapping[str, torch.Tensor]):
         if self._cache:
             self._cache.clear()
 
+    def evict(self, key: str) -> None:
+        """
+        Drop a single cached tensor from this view while keeping shard handles open.
+        This is useful for dynamic weight loading flows that want per-module tensors
+        to be released after a forward pass.
+        """
+        self._cache.pop(self._full_key(key), None)
+
     def close(self) -> None:
         """
         Close all cached shard handles and clear cached tensors and accounting.
