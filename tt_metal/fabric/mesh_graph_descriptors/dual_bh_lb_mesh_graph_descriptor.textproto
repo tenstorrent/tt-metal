@@ -1,11 +1,11 @@
 # --- Meshes ---------------------------------------------------------------
-# Two 2x4 meshes stacked vertically via fabric links to form logical 4x4
+# Unified 4x4 mesh spanning 2 vertically-stacked hosts
 
 mesh_descriptors {
   name: "M0"
   arch: BLACKHOLE
-  device_topology { dims: [ 2, 4 ] }  # 2 rows, 4 columns per host
-  host_topology   { dims: [ 1, 1 ] }   # Single host per mesh
+  device_topology { dims: [ 4, 4 ] }  # Unified logical 4x4 mesh
+  host_topology   { dims: [ 2, 1 ] }  # 2 hosts stacked vertically
   channels { count: 2 policy: RELAXED }
 }
 
@@ -15,40 +15,11 @@ graph_descriptors {
   name: "G0"
   type: "FABRIC"
 
-  # Two mesh instances (one per host)
+  # Single unified mesh instance
   instances { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-  instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
 
-  # Explicit vertical fabric connections:
-  # M0 bottom row (row 1, devices 4-7) ↔ M1 top row (row 0, devices 0-3)
-
-  # Column 0
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 4 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 0 } }
-    channels { count: 2 policy: RELAXED }
-  }
-
-  # Column 1
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 5 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 1 } }
-    channels { count: 2 policy: RELAXED }
-  }
-
-  # Column 2
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 6 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 2 } }
-    channels { count: 2 policy: RELAXED }
-  }
-
-  # Column 3
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 device_id: 7 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 device_id: 3 } }
-    channels { count: 2 policy: RELAXED }
-  }
+  # Connections are implicit based on device_topology [4,4] and host_topology [2,1]
+  # Vertical fabric connections between row 1 (host 0) and row 2 (host 1) are auto-configured
 }
 
 # --- Instantiation ----------------------------------------------------------

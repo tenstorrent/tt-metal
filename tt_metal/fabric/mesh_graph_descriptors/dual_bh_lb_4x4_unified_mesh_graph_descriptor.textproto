@@ -1,0 +1,15 @@
+# --- Mesh Descriptors ------------------------------------------------------
+# Unified 4x4 mesh spanning 2 vertically-stacked hosts (LB boxes)
+# Each host contributes 2 rows x 4 columns
+
+mesh_descriptors {
+  name: "M0"
+  arch: BLACKHOLE
+  device_topology { dims: [ 4, 4 ] }  # Logical 4x4 mesh
+  host_topology   { dims: [ 2, 1 ] }  # 2 hosts stacked vertically, 1 column of hosts
+  channels { count: 2 policy: RELAXED }
+}
+
+# --- Instantiation ----------------------------------------------------------
+# Single unified mesh instance
+top_level_instance { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
