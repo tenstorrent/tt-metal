@@ -54,6 +54,7 @@ EXIT_CODE_ARC_TIMEOUT = 10
 EXIT_CODE_AICLK_TIMEOUT = 11
 EXIT_CODE_NETWORK_ERROR = 12
 EXIT_CODE_INCONCLUSIVE = 50
+EXIT_CODE_INPUT_ERROR = 66
 
 # Threshold for repeated link failures (> 50% = same link failing repeatedly)
 REPEATED_LINK_THRESHOLD = 0.5
@@ -1448,12 +1449,12 @@ def main():
     log_dir = Path(args.directory)
     if not log_dir.is_dir():
         print(f"Error: {args.directory} not found", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CODE_INPUT_ERROR)
 
     log_files = sorted(log_dir.glob("*.log"))
     if not log_files:
         print(f"No .log files in {args.directory}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CODE_INPUT_ERROR)
 
     analyses = [analyze_log_file(str(f)) for f in log_files]
     metrics = calculate_metrics(analyses)

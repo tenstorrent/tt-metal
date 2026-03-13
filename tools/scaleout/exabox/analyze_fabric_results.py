@@ -28,6 +28,7 @@ EXIT_CODE_TEST_HANGING = 4
 EXIT_CODE_NOC_CONFLICT = 5
 EXIT_CODE_ETHERNET_CORE_TIMEOUT = 6
 EXIT_CODE_INCONCLUSIVE = 50
+EXIT_CODE_INPUT_ERROR = 66
 
 
 class Colors:
@@ -55,7 +56,7 @@ class LogAnalysis:
     all_passed: bool = False
     warnings: list[str] = field(default_factory=list)
     critical_errors: list[str] = field(default_factory=list)
-    error_category: str = ""
+    error_category: str = "inconclusive"
     exit_code: int = EXIT_CODE_INCONCLUSIVE
 
 
@@ -240,19 +241,6 @@ def print_recommendations(analysis: LogAnalysis) -> None:
     print("Recommendations")
     print("=" * 50 + "\n")
 
-    # Use registry pattern to generate recommendations
-    # Process categories in a consistent order
-    category_order = [
-        "passed",
-        "mgd_error",
-        "fw_init_failed",
-        "fabric_router_sync_timeout",
-        "noc_conflict",
-        "ethernet_core_timeout",
-        "test_hanging",
-        "inconclusive",
-    ]
-
     recs = []
     if analysis.error_category in RECOMMENDATION_GENERATORS:
         recs.extend(RECOMMENDATION_GENERATORS[analysis.error_category](analysis))
@@ -356,7 +344,7 @@ def main():
     log_file = Path(args.path)
     if not log_file.is_file():
         print(f"Error: Log file not found: {args.path}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CODE_INPUT_ERROR)
 
     # Analyze log file
     analysis = analyze_log_file(str(log_file))

@@ -125,6 +125,7 @@ The script returns exit codes enabling automated troubleshooting (e.g., Ansible 
 - `11` - AICLK timeout
 - `12` - Network errors (MPI/SSH)
 - `50` - Inconclusive (manual review required)
+- `66` - Input error (file/directory not found)
 
 ### Dispatch Tests
 
@@ -195,6 +196,7 @@ The script returns specific exit codes for automated workflows:
 - `5` - NOC address conflict
 - `6` - Ethernet core timeout
 - `50` - Inconclusive (manual review required)
+- `66` - Input error (log file not found)
 
 
 **Important: Host Ordering Matters for 4x32 Clusters**
