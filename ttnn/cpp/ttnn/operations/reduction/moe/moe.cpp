@@ -4,7 +4,7 @@
 
 #include "moe.hpp"
 
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/copy/copy.hpp"
 #include "ttnn/operations/reduction/moe/device/moe_device_operation.hpp"
 
