@@ -9,7 +9,6 @@ from torch import nn
 from transformers import AutoModel, AutoTokenizer
 import pytest
 from models.experimental.tt_symbiote.modules.activation import TTNNSilu, TTNNGelu
-from models.experimental.tt_symbiote.modules.attention import LlamaAttention
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear
 from models.experimental.tt_symbiote.modules.conv import TTNNConv2dNHWC
 from models.experimental.tt_symbiote.utils.device_management import set_device
@@ -17,6 +16,8 @@ from models.experimental.tt_symbiote.utils.module_replacement import register_mo
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
 from tqdm import tqdm
 from torch.nn import functional as F
+
+from models.experimental.tt_symbiote.tests.deepseek_ocr_vision_model.ttnn_symbiote_vit_model import TTNNVitModel
 
 
 def get_abs_pos_sam(abs_pos, tgt_size):
@@ -110,6 +111,7 @@ def test_deepseek_ocr(device):
         use_safetensors=True,
         torch_dtype=torch.bfloat16,
     )
+
     nn_to_nn = {
         model.model.sam_model.__class__: ImageEncoderViT,
         # model.model.layers[0].input_layernorm.__class__: TTNNRMSNorm,
@@ -118,9 +120,10 @@ def test_deepseek_ocr(device):
         nn.Linear: TTNNLinear,
         nn.SiLU: TTNNSilu,
         nn.GELU: TTNNGelu,
-        # nn.LayerNorm: TTNNLayerNorm,
         nn.Conv2d: TTNNConv2dNHWC,
-        model.model.layers[0].self_attn.__class__: LlamaAttention,
+        model.model.vision_model.__class__: TTNNVitModel,
+        # nn.LayerNorm: TTNNLayerNorm,
+        # model.model.layers[0].self_attn.__class__: LlamaAttention,
     }
 
     # prompt = "<image>\nFree OCR. "

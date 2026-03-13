@@ -510,8 +510,8 @@ class TTNNNoTPAttention(TTNNModule):
 
         sdpa_cfg = ttnn.SDPAProgramConfig(
             compute_with_storage_grid_size=(grid_x, grid_y),
-            q_chunk_size=max(128, seqlen),
-            k_chunk_size=max(128, seqlen),
+            q_chunk_size=256,
+            k_chunk_size=256,
             exp_approx_mode=False,
         )
 
@@ -1088,6 +1088,11 @@ class TTNNVitModel(TTNNModule):
 
         if patch_embeds is not None and patch_embeds.layout != ttnn.TILE_LAYOUT:
             patch_embeds = ttnn.to_layout(patch_embeds, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+
+        if len(patch_embeds.shape) == 4:
+            # patch_embeds = patch_embeds.flatten(2).transpose(1, 2)
+            patch_embeds = ttnn.reshape(patch_embeds, shape=[patch_embeds.shape[0], patch_embeds.shape[1], -1])
+            patch_embeds = ttnn.transpose(patch_embeds, 1, 2)
 
         # Embeddings
         x = self.embeddings.forward(x, patch_embeds)
