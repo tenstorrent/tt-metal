@@ -18,10 +18,8 @@
 #include "api/debug/noc_logging.h"
 #include "api/debug/dprint.h"
 
-#if (                                                                                          \
-    defined(COMPILE_FOR_BRISC) || defined(COMPILE_FOR_NCRISC) || defined(COMPILE_FOR_ERISC) || \
-    defined(COMPILE_FOR_IDLE_ERISC)) &&                                                        \
-    defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_NOC_SANITIZE) && !defined(FORCE_WATCHER_OFF)
+#if !defined(COMPILE_FOR_TRISC) && defined(WATCHER_ENABLED) && !defined(WATCHER_DISABLE_NOC_SANITIZE) && \
+    !defined(FORCE_WATCHER_OFF)
 
 #include "watcher_common.h"
 #include "internal/hw_thread.h"
@@ -34,6 +32,10 @@
 #include "eth_l1_address_map.h"
 #if !defined(WATCHER_DISABLE_CB_SANITIZE)
 #include "internal/circular_buffer_interface.h"
+#endif
+
+#if defined(ARCH_QUASAR)
+#include "internal/tt-2xx/quasar/overlay/overlay_addresses.h"
 #endif
 
 // A couple defines for specifying read/write and multi/unicast
@@ -259,8 +261,10 @@ inline uint16_t debug_valid_cb_addr(uint32_t l1_addr, uint32_t len) {
 #endif  // !WATCHER_DISABLE_CB_SANITIZE && !COMPILE_FOR_ERISC
 
 // Note:
-//  - this isn't racy w/ the host so long as invalid is written last
-//  - this isn't racy between riscvs so long as each gets their own noc_index
+//  - this isn't racy w/ the host so long as return_code is written last
+//  - this isn't racy between riscvs so long as each gets their own noc_index as is the case on WH/BH
+//  - for Quasar, multiple DMs share one NOC so CAS is used; address is remapped from uncached to
+//    cached L1 (LR/SC requires cache coherence), then flushed to make writes visible to host
 void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     uint8_t noc_id,
     uint64_t noc_addr,
@@ -275,16 +279,36 @@ void __attribute__((noinline)) debug_sanitize_post_addr_and_hang(
     }
 
     debug_sanitize_addr_msg_t tt_l1_ptr* v = *GET_MAILBOX_ADDRESS_DEV(watcher.sanitize);
+    volatile debug_sanitize_addr_msg_t* san = &v[noc_id];
 
-    if (v[noc_id].return_code == DebugSanitizeOK) {
-        v[noc_id].noc_addr = noc_addr;
-        v[noc_id].l1_addr = l1_addr;
-        v[noc_id].len = len;
-        v[noc_id].which_risc = internal_::get_hw_thread_idx();
-        v[noc_id].is_multicast = (multicast == DEBUG_SANITIZE_NOC_MULTICAST);
-        v[noc_id].is_write = (dir == DEBUG_SANITIZE_NOC_WRITE);
-        v[noc_id].is_target = (which_core == DEBUG_SANITIZE_NOC_TARGET);
-        v[noc_id].return_code = return_code;
+#if defined(ARCH_QUASAR)
+    // TODO: Remove this check once mailbox is accessed via cached memory (see dm.cc UNCACHED_MEM_MAILBOX_BASE)
+    uintptr_t addr = reinterpret_cast<uintptr_t>(san);
+    if (addr >= MEM_L1_UNCACHED_BASE) {
+        san = reinterpret_cast<volatile debug_sanitize_addr_msg_t*>(addr - MEM_L1_UNCACHED_BASE);
+    }
+    uint16_t expected = DebugSanitizeOK;
+    if (__atomic_compare_exchange_n(
+            &san->return_code, &expected, DebugSanitizeWriteInProgress, false, __ATOMIC_SEQ_CST, __ATOMIC_RELAXED))
+#else
+    if (san->return_code == DebugSanitizeOK)
+#endif
+    {
+        san->noc_addr = noc_addr;
+        san->l1_addr = l1_addr;
+        san->len = len;
+        san->which_risc = internal_::get_hw_thread_idx();
+        san->is_multicast = (multicast == DEBUG_SANITIZE_NOC_MULTICAST);
+        san->is_write = (dir == DEBUG_SANITIZE_NOC_WRITE);
+        san->is_target = (which_core == DEBUG_SANITIZE_NOC_TARGET);
+        san->return_code = return_code;
+#if defined(ARCH_QUASAR)
+        // Flush 64B cache line to L1 so host sees all fields via NOC; fence ensures completion
+        // TODO: Replace with flush_l2_cache_line() once available
+        volatile uint64_t* flush_reg = reinterpret_cast<volatile uint64_t*>(L2_FLUSH_ADDR);
+        *flush_reg = reinterpret_cast<uintptr_t>(san);
+        asm volatile("fence" ::: "memory");
+#endif
     }
 
 #if defined(COMPILE_FOR_ERISC)
@@ -374,30 +398,13 @@ uint32_t debug_sanitize_noc_addr(
 
         // Only check wrap-around for Tensix-to-Tensix multicasts
         if (both_cores_tensix) {
-            if (is_virtual_coord && is_virtual_coord_end) {
-                // Virtual coordinates: noc0 and noc1 endpoints are identical in virtual space,
-                // but coordinate ordering differs between noc0 and noc1.
-                //
-                // NoC torus architectures (WH/BH) support wrap-around multicasts where end < start.
-                // Non-torus architectures (Quasar) require start <= end.
+            // NoC torus architectures (WH/BH) support wrap-around multicasts where end < start.
+            // Quasar is non-torus with 1 NOC, so start <= end is required regardless of coord type.
 #ifdef ARCH_QUASAR
-                if (noc_id == 0) {
-                    if (x > x_end || y > y_end) {
-                        return_code = DebugSanitizeNocMulticastInvalidRange;
-                    }
-                } else {
-                    if (x_end > x || y_end > y) {
-                        return_code = DebugSanitizeNocMulticastInvalidRange;
-                    }
-                }
-#endif
-            } else {
-#ifdef ARCH_QUASAR
-                if (x > x_end || y > y_end) {
-                    return_code = DebugSanitizeNocMulticastInvalidRange;
-                }
-#endif
+            if (x > x_end || y > y_end) {
+                return_code = DebugSanitizeNocMulticastInvalidRange;
             }
+#endif
         } else {
             // For non-Tensix multicasts, enforce start <= end on all architectures
             if (is_virtual_coord && is_virtual_coord_end) {
