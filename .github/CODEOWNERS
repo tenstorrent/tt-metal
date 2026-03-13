@@ -46,6 +46,7 @@ tests/scale_out/test_ccl_fabric_manager.py @tenstorrent/metalium-developers-meta
 # metal runtime
 tt_metal/**/CMakeLists.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 tt_metal/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass # nothing should be caught by this, if so, someone added a path somewhere
+tt_metal/sources.cmake @tenstorrent/metalium-api-owners @tenstorrent/codeowner-bypass
 tt_metal/api/ @tenstorrent/metalium-api-owners @tenstorrent/codeowner-bypass
 tt_metal/api/tt-metalium/experimental/dataflow_buffer/ @abhullar-tt @arikTT @nhuang-tt @tenstorrent/codeowner-bypass
 tt_metal/api/tt-metalium/experimental/fabric @ubcheema @aliuTT @aagarwalTT @tt-aho @SeanNijjar @yugaoTT @Riddy21 @cfjchu @p1-0tr @tenstorrent/codeowner-bypass # fabric experimental APIs
@@ -103,7 +104,7 @@ tt_metal/test @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypa
 tt_metal/tools/* @kmabeeTT @nhuang-tt @mo-tenstorrent @ihamer-tt @tenstorrent/codeowner-bypass
 tt_metal/tools/lightmetal_runner @kmabeeTT @tenstorrent/codeowner-bypass
 tt_metal/tools/mem_bench @nhuang-tt @tenstorrent/codeowner-bypass # should be moved to tests micro benchmark?
-tt_metal/tools/precompile_fw @ruizhangTT @tenstorrent/codeowner-bypass
+tt_metal/tools/precompile_fw @abhullar-tt @ruizhangTT @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/ @mo-tenstorrent @nhuang-tt @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/event_metadata.hpp @bgrady-tt @sohaibnadeemTT @tenstorrent/codeowner-bypass
 tt_metal/tools/profiler/fabric_event_profiler.hpp @bgrady-tt @sohaibnadeemTT @tenstorrent/codeowner-bypass
@@ -386,6 +387,7 @@ models/experimental/efficientdetd0 @dvartaniansTT @tenstorrent/cse-developer-ttn
 models/**/requirements*.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 models/vllm_test_utils/ @skhorasganiTT @viktorpusTT @uaydonat @tenstorrent/codeowner-bypass
 models/experimental/pi0 @sdawle-TT @dvartaniansTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
+models/experimental/ops @tenstorrent/metalium-developers-ops-leads @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 
 # tracy
 tools/tracy/ @mo-tenstorrent @nhuang-tt @tenstorrent/codeowner-bypass
