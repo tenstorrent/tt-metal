@@ -279,6 +279,7 @@ class Glm4MoeForCausalLM(nn.Module):
         self._ensure_tt_runner()
 
         warmup_batch = max_batch_size
+        logger.info("=== warmup_model_decode: starting, batch={}, enable_trace={} ===", warmup_batch, enable_trace)
         page_table = torch.zeros((warmup_batch, max(1, num_blocks)), dtype=torch.int32)
         page_table[:, 0] = 0
 
@@ -290,6 +291,7 @@ class Glm4MoeForCausalLM(nn.Module):
             enable_trace=enable_trace,
             read_from_device=True,
         )
+        logger.info("=== warmup_model_decode: completed ===")
 
     # -------------------------------------------------------------------
     # Prefill Forward
@@ -473,3 +475,4 @@ class Glm4MoeForCausalLM(nn.Module):
             max_batch_size=self.max_batch_size,
             hparams=self.hparams,
         )
+        logger.info("=== TT runner created successfully, model init complete ===")

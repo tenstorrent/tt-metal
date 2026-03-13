@@ -21,6 +21,7 @@ import json
 import math
 import os
 import time
+import traceback
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import SimpleNamespace
@@ -340,14 +341,18 @@ class Glm4MoeTT:
     mtp_enabled: bool = False
     mtp_enorm: Any | None = None        # RMSNorm(hidden_size)
     mtp_hnorm: Any | None = None        # RMSNorm(hidden_size)
-    mtp_eh_proj_w: ttnn.Tensor | None = None  # Linear [hidden, 2*hidden] -> [hidden]
+    mtp_eh_proj_w: ttnn.Tensor | None = None  # Linear [hidden, 2*hidden] -> [hidden] (UNUSED, kept for reference)
+    mtp_eh_proj_e_w: ttnn.Tensor | None = None  # Linear [hidden, hidden] -> [hidden] (embed half)
+    mtp_eh_proj_h_w: ttnn.Tensor | None = None  # Linear [hidden, hidden] -> [hidden] (hidden half)
     mtp_shared_head_norm: Any | None = None   # RMSNorm(hidden_size)
     mtp_shared_head_w: ttnn.Tensor | None = None  # Linear [hidden] -> [vocab/tp]
     mtp_decoder_layer: Any | None = None  # Glm4MoeDecoderLayer for MTP layer
+    mtp_max_batch: int = 16  # Skip MTP when active batch > this threshold
 
     _decode_trace_states: dict[int, _DecodeTraceState] = field(init=False, default_factory=dict)
     _last_draft_token_ids: torch.Tensor | None = field(init=False, default=None)
     _prev_draft_ids: torch.Tensor | None = field(init=False, default=None)
+    _mtp_batch_skip_logged: bool = field(init=False, default=False)
 
     @classmethod
     def create(
@@ -525,16 +530,19 @@ class Glm4MoeTT:
 
         # ---- MTP Layer (optional, for GLM-4.7 Full with num_nextn_predict_layers=1) ----
         mtp_enabled = os.environ.get("GLM4_MOE_MTP", "").strip() == "1"
+        mtp_max_batch = int(os.environ.get("GLM4_MOE_MTP_MAX_BATCH", "16"))
         mtp_enorm = None
         mtp_hnorm = None
         mtp_eh_proj_w = None
+        mtp_eh_proj_e_w = None
+        mtp_eh_proj_h_w = None
         mtp_shared_head_norm = None
         mtp_shared_head_w = None
         mtp_decoder_layer = None
 
         if mtp_enabled:
             mtp_layer_idx = int(hparams.num_hidden_layers)  # 92
-            logger.info("MTP enabled: loading layer {} weights", mtp_layer_idx)
+            logger.info("MTP enabled: loading layer {} weights (mtp_max_batch={})", mtp_layer_idx, mtp_max_batch)
             mtp_cache = cache_dir / "mtp"
             mtp_cache.mkdir(parents=True, exist_ok=True)
 
@@ -570,10 +578,21 @@ class Glm4MoeTT:
             )
 
             # eh_proj: Linear(2*hidden -> hidden, no bias)
-            mtp_eh_proj_w = _linear_weight_tt(
+            # Split into two halves to avoid ttnn.concat (concat fails on TG mesh)
+            # Original weight: [hidden, 2*hidden] in HF layout (out_dim, in_dim)
+            # First hidden cols correspond to embed input, second hidden cols to hidden input
+            eh_proj_full = mtp_state[f"model.layers.{mtp_layer_idx}.eh_proj.weight"]  # [hidden, 2*hidden]
+            mtp_eh_proj_w = None  # Not used anymore
+            mtp_eh_proj_e_w = _linear_weight_tt(
                 device=device,
-                torch_weight_out_in=mtp_state[f"model.layers.{mtp_layer_idx}.eh_proj.weight"],
-                cache_file=mtp_cache / "eh_proj_w",
+                torch_weight_out_in=eh_proj_full[:, :hidden].contiguous(),  # [hidden, hidden]
+                cache_file=mtp_cache / "eh_proj_e_w",
+                dtype=dense_dtype,
+            )
+            mtp_eh_proj_h_w = _linear_weight_tt(
+                device=device,
+                torch_weight_out_in=eh_proj_full[:, hidden:].contiguous(),  # [hidden, hidden]
+                cache_file=mtp_cache / "eh_proj_h_w",
                 dtype=dense_dtype,
             )
 
@@ -622,6 +641,7 @@ class Glm4MoeTT:
 
             logger.info("MTP layer {} weights loaded successfully", mtp_layer_idx)
 
+        logger.info("=== All weights loaded, creating model object (MTP={}) ===", mtp_enabled)
         return cls(
             device=device,
             snapshot_dir=snapshot_dir,
@@ -646,9 +666,12 @@ class Glm4MoeTT:
             configuration=configuration,
             tt_ccl=tt_ccl,
             mtp_enabled=mtp_enabled,
+            mtp_max_batch=mtp_max_batch,
             mtp_enorm=mtp_enorm,
             mtp_hnorm=mtp_hnorm,
             mtp_eh_proj_w=mtp_eh_proj_w,
+            mtp_eh_proj_e_w=mtp_eh_proj_e_w,
+            mtp_eh_proj_h_w=mtp_eh_proj_h_w,
             mtp_shared_head_norm=mtp_shared_head_norm,
             mtp_shared_head_w=mtp_shared_head_w,
             mtp_decoder_layer=mtp_decoder_layer,
@@ -683,6 +706,7 @@ class Glm4MoeTT:
             logits [active, 1, vocab] as torch float32 when sampling_params is None,
             or next token ids [active] as torch int32 when sampling_params is not None.
         """
+        logger.info("=== decode() called: tokens={}, enable_trace={} ===", tuple(tokens.shape), enable_trace)
         if tokens.ndim != 2 or tokens.shape[1] != 1:
             raise ValueError(f"expected tokens [B,1], got {tuple(tokens.shape)}")
         if start_pos.ndim != 1:
@@ -780,10 +804,14 @@ class Glm4MoeTT:
             ttnn.deallocate(x, force=False)
             x = x_next
 
-        # Preserve hidden state for MTP before final_norm
+        # Preserve hidden state for MTP before final_norm (skip clone if batch exceeds threshold)
         mtp_hidden = None
         if self.mtp_enabled:
-            mtp_hidden = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            if active <= self.mtp_max_batch:
+                mtp_hidden = ttnn.clone(x, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            elif not self._mtp_batch_skip_logged:
+                logger.info("MTP skipped: active batch {} > mtp_max_batch {} (GLM4_MOE_MTP_MAX_BATCH)", active, self.mtp_max_batch)
+                object.__setattr__(self, '_mtp_batch_skip_logged', True)
 
         # Final norm + LM head (sharded norm to avoid L1 overflow with hidden=5120).
         x = _sharded_rms_norm(x, self.final_norm, int(self.hparams.hidden_size))
@@ -792,8 +820,8 @@ class Glm4MoeTT:
         if sampling_params is not None:
             next_ids_flat = self._sample_greedy(logits_tt, active, x, tt_positions, cos_batch, sin_batch, page_table_tt)
 
-            # MTP draft token generation
-            if self.mtp_enabled and mtp_hidden is not None:
+            # MTP draft token generation (skip when batch exceeds threshold)
+            if self.mtp_enabled and mtp_hidden is not None and active <= self.mtp_max_batch:
                 try:
                     draft_token_ids = self._mtp_forward_eager(
                         main_token_ids=next_ids_flat,
@@ -817,10 +845,10 @@ class Glm4MoeTT:
         result = self._logits_to_host(logits_tt, active, vocab)
 
         # MTP: compute main_ids from logits if sampling_params is None (host-sampling mode)
-        if self.mtp_enabled and mtp_hidden is not None:
+        if self.mtp_enabled and mtp_hidden is not None and active <= self.mtp_max_batch:
             try:
                 logits_host = result  # already on host from _logits_to_host
-                main_ids_eager = torch.argmax(logits_host, dim=-1).to(torch.int32).cpu()
+                main_ids_eager = torch.argmax(logits_host, dim=-1).to(torch.int32).cpu().flatten()
                 draft_token_ids = self._mtp_forward_eager(
                     main_token_ids=main_ids_eager,
                     hidden_state=mtp_hidden,
@@ -1198,41 +1226,38 @@ class Glm4MoeTT:
         ttnn.deallocate(x_embed, force=False)
         hnorm_out = _sharded_rms_norm(hidden_state, self.mtp_hnorm, hidden)
 
-        # 3. concat + project: [1,1,hidden_batch,2*hidden] -> [1,1,hidden_batch,hidden]
-        concat = ttnn.concat([enorm_out, hnorm_out], dim=3)
+        # 3. Split-matmul projection (avoids ttnn.concat which fails on TG mesh)
+        proj_e = ttnn.linear(enorm_out, self.mtp_eh_proj_e_w)
         ttnn.deallocate(enorm_out, force=False)
+        proj_h = ttnn.linear(hnorm_out, self.mtp_eh_proj_h_w)
         ttnn.deallocate(hnorm_out, force=False)
-        proj = ttnn.linear(concat, self.mtp_eh_proj_w)
-        ttnn.deallocate(concat, force=False)
+        proj = ttnn.add(proj_e, proj_h)
+        ttnn.deallocate(proj_e, force=False)
+        ttnn.deallocate(proj_h, force=False)
 
         # 4. Prepare RoPE for MTP positions (= main_position + 1)
-        #    Pad positions and page_table to hidden_batch to match hidden state
+        #    Use `batch` (not hidden_batch) — positions/cos/sin must match attention's active_batch
         dp_shard_axis = None
         dp_batch_mapper = ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None
         if is_mesh and int(self.device.shape[1]) > 1:
             dp_size = int(self.device.shape[1])
-            if hidden_batch > 1 and hidden_batch % dp_size == 0:
+            if batch > 1 and batch % dp_size == 0:
                 dp_shard_axis = 1
                 mesh_shape = list(self.device.shape)
                 dp_batch_mapper = ttnn.ShardTensor2dMesh(
                     self.device, dims=(None, 0), mesh_shape=mesh_shape,
                 )
 
-        mtp_pos_clamped = mtp_positions.to(torch.int32).clamp(
+        mtp_pos_clamped = mtp_positions[:batch].to(torch.int32).clamp(
             min=0, max=max(0, int(self.max_seq_len) - 1)
         )
-        if len(mtp_pos_clamped) < hidden_batch:
-            mtp_pos_clamped = torch.cat([mtp_pos_clamped,
-                                         torch.zeros(hidden_batch - len(mtp_pos_clamped), dtype=torch.int32)])
         tt_positions, cos_batch, sin_batch, sin_neg_batch = _prepare_decode_rope_and_positions_tt(
             device=self.device, rope=self.rope, positions=mtp_pos_clamped,
             dp_shard_axis=dp_shard_axis,
         )
 
-        # Page table for MTP (padded to hidden_batch)
+        # Page table for MTP (use batch, not hidden_batch)
         pt = page_table[:batch].to(torch.int32).contiguous()
-        if batch < hidden_batch:
-            pt = torch.cat([pt, pt[-1:].expand(hidden_batch - batch, -1)], dim=0)
         page_table_tt = ttnn.from_torch(
             pt,
             device=self.device,
@@ -1292,12 +1317,15 @@ class Glm4MoeTT:
         # DO NOT deallocate x_embed — it's a persistent buffer
         hnorm_out = _sharded_rms_norm(state.mtp_hidden_tt, self.mtp_hnorm, hidden)
 
-        # 3. concat + project (shapes must match — both pre-allocated with mtp_batch)
-        concat = ttnn.concat([enorm_out, hnorm_out], dim=3)
+        # 3. Split-matmul projection (avoids ttnn.concat which fails on TG mesh)
+        # proj = W_e @ enorm + W_h @ hnorm (equivalent to W @ concat(enorm, hnorm))
+        proj_e = ttnn.linear(enorm_out, self.mtp_eh_proj_e_w)
         ttnn.deallocate(enorm_out, force=False)
+        proj_h = ttnn.linear(hnorm_out, self.mtp_eh_proj_h_w)
         ttnn.deallocate(hnorm_out, force=False)
-        proj = ttnn.linear(concat, self.mtp_eh_proj_w)
-        ttnn.deallocate(concat, force=False)
+        proj = ttnn.add(proj_e, proj_h)
+        ttnn.deallocate(proj_e, force=False)
+        ttnn.deallocate(proj_h, force=False)
 
         # 4. RoPE from persistent cos/sin tensors
         rot_mats = (
@@ -1334,16 +1362,18 @@ class Glm4MoeTT:
         """Copy MTP inputs into persistent device tensors."""
         is_mesh = _is_mesh_device(self.device)
         mapper = ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None
-        batch = int(state.batch)
-        # Use tile-padded batch from the pre-allocated MTP embed tensor
+        batch = int(state.batch)  # = active (the trace batch, e.g. 1 or 32)
+        # Embed uses tile-padded batch (for _sharded_rms_norm / linear compatibility)
         mtp_batch = int(state.mtp_embed_tt.shape[-2])
+        # Positions/cos/sin use active batch (must match attention's q/k batch)
+        active = batch
 
-        # DP sharding for TG mesh (use mtp_batch for sharding decisions)
+        # DP sharding for TG mesh
         dp_batch_mapper = mapper
         rope_mapper = mapper
         if is_mesh and int(self.device.shape[1]) > 1:
             dp_size = int(self.device.shape[1])
-            if mtp_batch > 1 and mtp_batch % dp_size == 0:
+            if active > 1 and active % dp_size == 0:
                 mesh_shape = list(self.device.shape)
                 dp_batch_mapper = ttnn.ShardTensor2dMesh(
                     self.device, dims=(None, 0), mesh_shape=mesh_shape,
@@ -1366,11 +1396,13 @@ class Glm4MoeTT:
         )
         ttnn.copy_host_to_device_tensor(host_embed, state.mtp_embed_tt)
 
-        # 2. Copy MTP positions
+        # 2. Copy MTP positions (use `active` batch, not mtp_batch)
         mtp_pos_padded = mtp_positions.view(-1).contiguous().to(torch.int32)
-        if len(mtp_pos_padded) < mtp_batch:
-            pad = torch.zeros(mtp_batch - len(mtp_pos_padded), dtype=torch.int32)
+        if len(mtp_pos_padded) < active:
+            pad = torch.zeros(active - len(mtp_pos_padded), dtype=torch.int32)
             mtp_pos_padded = torch.cat([mtp_pos_padded, pad])
+        elif len(mtp_pos_padded) > active:
+            mtp_pos_padded = mtp_pos_padded[:active]
         host_pos = ttnn.from_torch(
             mtp_pos_padded,
             dtype=ttnn.int32,
@@ -1379,19 +1411,21 @@ class Glm4MoeTT:
         )
         ttnn.copy_host_to_device_tensor(host_pos, state.mtp_positions_tt)
 
-        # 3. Copy MTP cos/sin/sin_neg
+        # 3. Copy MTP cos/sin/sin_neg (use `active` batch, not mtp_batch)
         mtp_pos_clamped = mtp_positions.to(torch.long).clamp(
             min=0, max=int(self.rope["cos_matrix_host"].shape[2]) - 1
         )
-        if len(mtp_pos_clamped) < mtp_batch:
-            pad = torch.zeros(mtp_batch - len(mtp_pos_clamped), dtype=torch.long)
+        if len(mtp_pos_clamped) < active:
+            pad = torch.zeros(active - len(mtp_pos_clamped), dtype=torch.long)
             mtp_pos_clamped = torch.cat([mtp_pos_clamped, pad])
+        elif len(mtp_pos_clamped) > active:
+            mtp_pos_clamped = mtp_pos_clamped[:active]
         cos_host = self.rope["cos_matrix_host"]
         sin_host = self.rope["sin_matrix_host"]
         rope_dim = int(cos_host.shape[3])
 
-        cos_batch_t = cos_host[0, 0, mtp_pos_clamped, :].reshape(1, mtp_batch, 1, rope_dim).to(torch.bfloat16)
-        sin_batch_t = sin_host[0, 0, mtp_pos_clamped, :].reshape(1, mtp_batch, 1, rope_dim).to(torch.bfloat16)
+        cos_batch_t = cos_host[0, 0, mtp_pos_clamped, :].reshape(1, active, 1, rope_dim).to(torch.bfloat16)
+        sin_batch_t = sin_host[0, 0, mtp_pos_clamped, :].reshape(1, active, 1, rope_dim).to(torch.bfloat16)
 
         host_cos = ttnn.from_torch(cos_batch_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rope_mapper)
         host_sin = ttnn.from_torch(sin_batch_t, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, mesh_mapper=rope_mapper)
@@ -1482,6 +1516,7 @@ class Glm4MoeTT:
         # Read outputs (use real active count, not padded bucket).
         # First, get main model token IDs (needed for both return AND MTP).
         main_ids = None
+        cached_logits_host = None
         if sampling_params is not None and state.top1_indices_tt is not None:
             next_ids_torch = _tt_to_torch_for_vllm_output(
                 tensor=state.top1_indices_tt, device=self.device
@@ -1494,17 +1529,19 @@ class Glm4MoeTT:
                     main_ids = self._host_argmax_from_trace_logits(state.logits_tt, active, vocab)
                 else:
                     main_ids = self._sample_from_trace_logits(state.logits_tt, active)
-            elif self.mtp_enabled:
-                # Host-sampling path: use _logits_to_host (pure read, no device ops)
-                # then argmax on host. Can't use _host_argmax_from_trace_logits
-                # because it does ttnn.topk() which is blocked after trace replay.
+            elif self.mtp_enabled and active <= self.mtp_max_batch:
+                # MTP needs main_ids for draft input. Read full logits to host and cache
+                # for reuse in the return path (avoids redundant D2H read).
+                # Note: topk DOES work after trace replay, but we need full logits for
+                # the return value anyway, so reading once + caching is optimal.
                 vocab = int(self.hparams.vocab_size)
                 logits_host = self._logits_to_host(state.logits_tt, active, vocab)
+                cached_logits_host = logits_host  # Cache to avoid redundant D2H read later
                 main_ids = logits_host.reshape(active, -1)[:, :vocab].argmax(dim=-1).to(torch.int32)
 
-        # MTP execution after main trace
+        # MTP execution after main trace (skip when batch exceeds threshold)
         object.__setattr__(self, '_last_draft_token_ids', None)
-        if self.mtp_enabled and state.mtp_hidden_tt is not None and main_ids is not None:
+        if self.mtp_enabled and state.mtp_hidden_tt is not None and main_ids is not None and active <= self.mtp_max_batch:
             try:
                 # MTP acceptance tracking
                 prev = self._prev_draft_ids
@@ -1517,6 +1554,10 @@ class Glm4MoeTT:
                             object.__setattr__(self, '_mtp_accepted', 0)
                         object.__setattr__(self, '_mtp_total', self._mtp_total + n)
                         object.__setattr__(self, '_mtp_accepted', self._mtp_accepted + match)
+                        # Diagnostic 1: log draft vs main token IDs (first 20 steps)
+                        if self._mtp_total < 20:
+                            logger.info("MTP diag: prev_draft={} main_ids={} match={}/{}",
+                                        prev[:min(n, 4)].tolist(), main_ids[:min(n, 4)].tolist(), match, n)
                         if self._mtp_total <= 5 or self._mtp_total % 500 == 0:
                             mode = "trace" if state.mtp_trace_id is not None else "eager"
                             logger.info("MTP acceptance [{}]: {}/{} = {:.1%}",
@@ -1527,25 +1568,38 @@ class Glm4MoeTT:
                 mtp_positions = positions[:active] + 1
 
                 if state.mtp_trace_id is not None:
-                    # Traced MTP execution
-                    self._copy_mtp_trace_inputs(
-                        state=state,
-                        main_token_ids=main_ids,
-                        mtp_positions=mtp_positions,
-                    )
-                    if self.tt_ccl is not None:
-                        self.tt_ccl.reset_sem_counters()
-                    ttnn.synchronize_device(self.device)
-                    ttnn.execute_trace(self.device, state.mtp_trace_id, cq_id=0, blocking=False)
-                    ttnn.synchronize_device(self.device)
+                    # Verify MTP trace batch matches current active batch
+                    mtp_trace_batch = int(state.batch)
+                    if mtp_trace_batch != active:
+                        logger.warning("MTP trace batch mismatch: trace_batch={} active={}, skipping MTP",
+                                       mtp_trace_batch, active)
+                    else:
+                        # Traced MTP execution
+                        self._copy_mtp_trace_inputs(
+                            state=state,
+                            main_token_ids=main_ids,
+                            mtp_positions=mtp_positions,
+                        )
+                        if self.tt_ccl is not None:
+                            self.tt_ccl.reset_sem_counters()
+                        ttnn.synchronize_device(self.device)
+                        ttnn.execute_trace(self.device, state.mtp_trace_id, cq_id=0, blocking=False)
+                        ttnn.synchronize_device(self.device)
 
-                    # Read MTP logits via pure host transfer (no device ops)
-                    # Can't use _host_argmax_from_trace_logits — ttnn.topk()
-                    # is blocked after trace replay (trace_id_ still set).
-                    vocab = int(self.hparams.vocab_size)
-                    mtp_logits_host = self._logits_to_host(state.mtp_logits_tt, active, vocab)
-                    draft_token_ids = mtp_logits_host.reshape(active, -1)[:, :vocab].argmax(dim=-1).to(torch.int32)
-                    object.__setattr__(self, '_last_draft_token_ids', draft_token_ids)
+                        # Read MTP logits to host for draft token selection.
+                        # Note: topk IS safe after trace replay, but per-shard topk has
+                        # ~10ms/call × 8 shards = 80ms overhead at small batch sizes.
+                        # Full logits read at active<=16 is ~296KB-4.6MB (faster than 8 topk calls).
+                        # Use topk only at large batch (>16) where 9.28MB DMA dominates.
+                        vocab = int(self.hparams.vocab_size)
+                        mtp_logits_host = self._logits_to_host(state.mtp_logits_tt, active, vocab)
+                        draft_token_ids = mtp_logits_host.reshape(active, -1)[:, :vocab].argmax(dim=-1).to(torch.int32)
+                        if not hasattr(self, '_mtp_diag_count'):
+                            object.__setattr__(self, '_mtp_diag_count', 0)
+                        if self._mtp_diag_count < 10:
+                            logger.info("MTP draft: ids={}", draft_token_ids[:4].tolist())
+                            object.__setattr__(self, '_mtp_diag_count', self._mtp_diag_count + 1)
+                        object.__setattr__(self, '_last_draft_token_ids', draft_token_ids)
                 else:
                     # Eager MTP fallback
                     draft_token_ids = self._mtp_forward_eager(
@@ -1560,8 +1614,11 @@ class Glm4MoeTT:
                 if self._last_draft_token_ids is not None:
                     object.__setattr__(self, '_prev_draft_ids', self._last_draft_token_ids.cpu().clone())
             except Exception as e:
-                logger.warning("MTP forward (trace path) failed (non-fatal): {}", e)
+                logger.warning("MTP forward (trace path) failed (non-fatal): {}\n{}", e, traceback.format_exc())
                 object.__setattr__(self, '_last_draft_token_ids', None)
+        elif self.mtp_enabled and active > self.mtp_max_batch and not self._mtp_batch_skip_logged:
+            logger.info("MTP skipped: active batch {} > mtp_max_batch {} (GLM4_MOE_MTP_MAX_BATCH)", active, self.mtp_max_batch)
+            object.__setattr__(self, '_mtp_batch_skip_logged', True)
 
         # Return main model output
         # Only return main_ids directly when sampling_params is set (device-sampling).
@@ -1572,7 +1629,10 @@ class Glm4MoeTT:
         if state.logits_tt is not None:
             # Non-sampling path: return full logits on host
             vocab = int(self.hparams.vocab_size)
-            logits_host = self._logits_to_host(state.logits_tt, active, vocab)
+            if cached_logits_host is not None:
+                logits_host = cached_logits_host  # Reuse cached D2H result
+            else:
+                logits_host = self._logits_to_host(state.logits_tt, active, vocab)
             return logits_host
 
         return torch.zeros((active, 1, int(self.hparams.vocab_size)), dtype=torch.float32)
@@ -1588,6 +1648,7 @@ class Glm4MoeTT:
         active: int,
     ) -> _DecodeTraceState:
         """Capture a decode trace for the given batch size."""
+        logger.info("=== _capture_decode_trace: starting, batch={} ===", active)
         hidden = int(self.hparams.hidden_size)
         is_mesh = _is_mesh_device(self.device)
         mapper = ttnn.ReplicateTensorToMesh(self.device) if is_mesh else None
@@ -1668,8 +1729,8 @@ class Glm4MoeTT:
 
         if self.mtp_enabled:
             rope_dim = int(self.hparams.head_dim * self.hparams.partial_rotary_factor)
-            # Tile-pad MTP batch to match hidden state shape after trace
-            # (TILE_LAYOUT pads dim[-2] to 32, so clone(x) always has ≥32 in batch)
+            # Tile-pad MTP batch for embed/hidden tensors (they go through _sharded_rms_norm
+            # and linear ops that need tile-padded dim[-2])
             mtp_batch = ((active + 31) // 32) * 32
 
             mtp_embed_tt = ttnn.from_torch(
@@ -1680,8 +1741,10 @@ class Glm4MoeTT:
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=mapper,
             )
+            # Positions, cos, sin use `active` (NOT mtp_batch) because the decoder layer's
+            # attention uses active_batch for batch slicing, and cos/sin must match q/k batch.
             mtp_positions_tt = ttnn.from_torch(
-                torch.zeros(mtp_batch, dtype=torch.int32),
+                torch.zeros(active, dtype=torch.int32),
                 device=self.device,
                 dtype=ttnn.int32,
                 layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1689,17 +1752,17 @@ class Glm4MoeTT:
                 mesh_mapper=dp_batch_mapper,
             )
             mtp_cos_batch_tt = ttnn.from_torch(
-                torch.zeros(1, mtp_batch, 1, rope_dim, dtype=torch.bfloat16),
+                torch.zeros(1, active, 1, rope_dim, dtype=torch.bfloat16),
                 device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=rope_mapper,
             )
             mtp_sin_batch_tt = ttnn.from_torch(
-                torch.zeros(1, mtp_batch, 1, rope_dim, dtype=torch.bfloat16),
+                torch.zeros(1, active, 1, rope_dim, dtype=torch.bfloat16),
                 device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=rope_mapper,
             )
             mtp_sin_neg_batch_tt = ttnn.from_torch(
-                torch.zeros(1, mtp_batch, 1, rope_dim, dtype=torch.bfloat16),
+                torch.zeros(1, active, 1, rope_dim, dtype=torch.bfloat16),
                 device=self.device, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG, mesh_mapper=rope_mapper,
             )
@@ -1710,6 +1773,7 @@ class Glm4MoeTT:
         # Clone embed_tt before feeding into layer stack because decoder_layer_tt
         # deallocates its residual input (layer 0's x). embed_tt must survive
         # for copy_host_to_device_tensor updates between trace replays.
+        logger.info("=== _capture_decode_trace: starting compile warmup ===")
         x = ttnn.clone(embed_tt, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         for layer_idx in range(self.num_layers_to_run):
             dl = self.decoder_layers[layer_idx]
@@ -1785,6 +1849,7 @@ class Glm4MoeTT:
 
         # Synchronize device to drain all async ops from compile-forward
         # before starting trace capture.
+        logger.info("=== _capture_decode_trace: compile warmup DONE, syncing device ===")
         ttnn.synchronize_device(self.device)
 
         # Explicitly free compile-forward outputs (skip if already freed for MTP).
@@ -1810,6 +1875,7 @@ class Glm4MoeTT:
         ttnn.copy_host_to_device_tensor(host_embed, embed_tt)
 
         # Now capture trace.
+        logger.info("=== _capture_decode_trace: starting trace capture ===")
         logger.info("Capturing decode trace for batch={}", active)
         if self.tt_ccl is not None:
             self.tt_ccl.reset_sem_counters()
