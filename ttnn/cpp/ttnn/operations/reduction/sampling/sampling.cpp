@@ -16,7 +16,7 @@ Tensor sampling(
     const Tensor& temp,
     const std::optional<uint32_t>& seed,
     const std::optional<tt::tt_metal::CoreRangeSet>& sub_core_grids,
-    std::optional<Tensor> output_tensor) {
+    const std::optional<Tensor>& output_tensor) {
     return ttnn::prim::sampling(
         input_values_tensor, input_indices_tensor, k, p, temp, seed, sub_core_grids, output_tensor);
 }
