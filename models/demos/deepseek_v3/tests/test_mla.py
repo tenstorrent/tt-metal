@@ -238,24 +238,7 @@ def run_test_forward_pass_mla2d(
 
     # Set up ttnn inputs
     logger.info("Setting up model inputs")
-    # Create input memory config using the new pattern
-    if mode == "decode":
-        # Calculate per-device shape after ShardTensor2dMesh with dims=(-2, -1)
-        # For decode, torch_input.unsqueeze(0) has shape [1, seq_len, batch, hidden_size],
-        # so dims=(-2, -1) shards the (batch, hidden_size) dimensions across the mesh.
-        full_shape = torch_input.unsqueeze(0).shape  # [1, seq_len, batch, hidden_size]
-        per_device_shape = (
-            full_shape[0],
-            full_shape[1],
-            full_shape[2] // mesh_device.shape[0],  # batch (dim -2) sharded across mesh rows
-            full_shape[3] // mesh_device.shape[1],  # hidden_size (dim -1) sharded across mesh cols
-        )
-        input_memory_config = ttnn.create_sharded_memory_config(
-            per_device_shape,
-            **run_config["mla1d"]["wq_kv_a_in0_memory_config"],
-        )
-    else:
-        input_memory_config = run_config["input_memory_config"]
+    input_memory_config = run_config["input_memory_config"]
 
     tt_input = ttnn.from_torch(
         torch_input.unsqueeze(0),
