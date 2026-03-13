@@ -154,98 +154,158 @@ def expected01_from_packed(packed_local: torch.Tensor) -> torch.Tensor:
     return ((packed_local[:, :, None] >> ar[None, None, :]) & 1).reshape(packed_local.shape[0], -1)
 
 
-def analyze_step_shard(
-    step: int, shard: int, data: StepShard, verbose: bool, show_ok: bool, ignore_logits_nan: bool
+def _join_shards(tensors_by_shard: Dict[int, torch.Tensor], shard_ids: list[int]) -> Optional[torch.Tensor]:
+    if not shard_ids:
+        return None
+    ts = [tensors_by_shard[s] for s in shard_ids if s in tensors_by_shard]
+    if len(ts) != len(shard_ids):
+        return None
+    ndim = ts[0].ndim
+    if ndim in (2, 3):
+        dim = 1
+    elif ndim == 4:
+        dim = 3
+    else:
+        # Unexpected shape; keep per-shard behavior by not joining.
+        return None
+    return torch.cat(ts, dim=dim)
+
+
+def _chunked_groups(shard_ids: list[int], group_size: int) -> list[list[int]]:
+    shard_ids = sorted(shard_ids)
+    if group_size <= 1 or len(shard_ids) < group_size or len(shard_ids) % group_size != 0:
+        return [[s] for s in shard_ids]
+    return [shard_ids[i : i + group_size] for i in range(0, len(shard_ids), group_size)]
+
+
+def _infer_group_size(host_packed: Optional[torch.Tensor], packed_by_shard: Dict[int, torch.Tensor]) -> int:
+    if host_packed is None or not packed_by_shard:
+        return 1
+    first = packed_by_shard[sorted(packed_by_shard.keys())[0]]
+    if host_packed.ndim != 2 or first.ndim != 2:
+        return 1
+    local_w = first.shape[1]
+    if local_w <= 0 or host_packed.shape[1] % local_w != 0:
+        return 1
+    return host_packed.shape[1] // local_w
+
+
+def analyze_step_grouped(
+    step: int, shard_map: Dict[int, StepShard], verbose: bool, show_ok: bool, ignore_logits_nan: bool
 ) -> int:
     errs = 0
-    t = data.tensors
-    lines = [f"\n=== step={step} shard={shard} ==="]
-    if verbose:
-        for name in NAMES:
-            if name in t:
-                lines.append(f"  {name}: {tensor_stats(t[name])}")
+    host_packed: Optional[torch.Tensor] = None
+    by_name: Dict[str, Dict[int, torch.Tensor]] = {}
+    for shard, data in shard_map.items():
+        if data.host_packed is not None:
+            host_packed = data.host_packed
+        for name, tensor in data.tensors.items():
+            by_name.setdefault(name, {})[shard] = tensor
 
-    packed = t.get("packed_bitmask_device")
-    if packed is None:
-        lines.append("  ! missing packed_bitmask_device")
-        print("\n".join(lines))
+    packed_by_shard = by_name.get("packed_bitmask_device", {})
+    if not packed_by_shard:
+        print(f"\n=== step={step} ===\n  ! missing packed_bitmask_device")
         return 1
 
-    if data.host_packed is not None:
-        col = find_host_slice_match(data.host_packed.to(torch.int32), packed.to(torch.int32))
-        if col is None:
-            lines.append("  ! packed shard does NOT match any host packed slice")
+    group_size = _infer_group_size(host_packed, packed_by_shard)
+    groups = _chunked_groups(sorted(packed_by_shard.keys()), group_size)
+
+    for group_idx, shard_ids in enumerate(groups):
+        lines = [f"\n=== step={step} group={group_idx} shards={shard_ids[0]}..{shard_ids[-1]} ==="]
+        local_errs = 0
+
+        joined: Dict[str, torch.Tensor] = {}
+        for name in NAMES:
+            if name == "packed_bitmask_host":
+                continue
+            if name in by_name:
+                j = _join_shards(by_name[name], shard_ids)
+                if j is not None:
+                    joined[name] = j
+                    if verbose:
+                        lines.append(f"  {name}: {tensor_stats(j)}")
+
+        packed = joined.get("packed_bitmask_device")
+        if packed is None:
+            lines.append("  ! failed to build joined packed_bitmask_device")
+            print("\n".join(lines))
             errs += 1
-        elif verbose:
-            lines.append(f"  host slice match at col_start={col}")
+            continue
 
-    expected01 = expected01_from_packed(packed.to(torch.int32))
-    expected_penalty = torch.where(
-        expected01 != 0,
-        torch.tensor(0.0, dtype=torch.float32),
-        torch.tensor(-1e9, dtype=torch.float32),
-    )
+        packed_i32 = packed.to(torch.int32)
+        torch_bitmask_to_broadcast = packed_i32[:, :, None]
+        ar = torch.arange(32, dtype=torch.int32, device=packed_i32.device)
+        torch_rshift = torch_bitmask_to_broadcast >> ar[None, None, :]
+        torch_and1 = torch_rshift & 1
+        torch_unpacked = torch_and1.reshape(packed_i32.shape[0], -1)
+        torch_penalty = torch.where(
+            torch_unpacked != 0,
+            torch.tensor(0.0, dtype=torch.float32),
+            torch.tensor(-1e9, dtype=torch.float32),
+        )
 
-    for name in ("broadcast_unpacked_and1", "unpacked_bitmask_reshape", "converted_bitmask_tile"):
-        if name in t:
-            got = t[name].to(torch.int32)
-            msg = first_mismatch(got, expected01)
+        if host_packed is not None and host_packed.shape == packed_i32.shape:
+            msg = first_mismatch(packed_i32, host_packed.to(torch.int32))
             if msg:
-                lines.append(f"  ! {name} != expected01 -> {msg}")
-                errs += 1
+                lines.append(f"  ! packed_bitmask_device(joined) != packed_bitmask_host -> {msg}")
+                local_errs += 1
             elif verbose:
-                lines.append(f"  {name} matches expected01")
+                lines.append("  packed_bitmask_device(joined) matches packed_bitmask_host")
 
-    if "unpacked_penalty_mask" in t:
-        got = t["unpacked_penalty_mask"].to(torch.float32)
-        msg = first_mismatch(got, expected_penalty)
-        if msg:
-            lines.append(f"  ! unpacked_penalty_mask != expected_penalty -> {msg}")
-            errs += 1
-        elif verbose:
-            lines.append("  unpacked_penalty_mask matches expected_penalty")
-
-    if "logits_before_mask" in t and "logits_after_mask" in t and "unpacked_penalty_mask" in t:
-        before = t["logits_before_mask"].to(torch.float32)
-        after = t["logits_after_mask"].to(torch.float32)
-        penalty = t["unpacked_penalty_mask"].to(torch.float32)
-        h = min(before.shape[-2], penalty.shape[-2]) if before.ndim >= 2 else None
-        w = min(before.shape[-1], penalty.shape[-1]) if before.ndim >= 1 else None
-        if h is not None and w is not None and before.ndim == 4 and penalty.ndim == 2:
-            delta = after[0, 0, :h, :w] - before[0, 0, :h, :w]
-            penalty_slice = penalty[:h, :w]
-
-            if ignore_logits_nan:
-                valid = torch.isfinite(delta) & torch.isfinite(penalty_slice)
-                invalid_count = (~valid).sum().item()
-                if invalid_count > 0 and verbose:
-                    lines.append(f"  logits delta has {invalid_count} non-finite positions; ignored for comparison")
-                delta_cmp = torch.where(valid, delta, torch.zeros_like(delta))
-                penalty_cmp = torch.where(valid, penalty_slice, torch.zeros_like(penalty_slice))
+        stage_expected = {
+            "bitmask_to_broadcast": torch_bitmask_to_broadcast,
+            "broadcast_unpacked_rshift": torch_rshift,
+            "broadcast_unpacked_and1": torch_and1,
+            "unpacked_bitmask_reshape": torch_unpacked,
+            "converted_bitmask_tile": torch_unpacked,
+            "unpacked_penalty_mask": torch_penalty,
+        }
+        for name, exp in stage_expected.items():
+            got = joined.get(name)
+            if got is None:
+                continue
+            if exp.is_floating_point():
+                msg = first_mismatch(got.to(torch.float32), exp.to(torch.float32))
             else:
-                delta_cmp = delta
-                penalty_cmp = penalty_slice
-
-            # delta is bf16-derived in dumps; allow quantization noise around large magnitudes.
-            msg = first_mismatch(delta_cmp, penalty_cmp, atol=2.0e6, rtol=0.0)
+                msg = first_mismatch(got.to(torch.int32), exp.to(torch.int32))
             if msg:
-                max_err, mean_err = max_abs_err(delta_cmp, penalty_cmp)
-                lines.append(
-                    f"  ! logits delta != penalty -> {msg} " f"(max_abs_err={max_err:.6g}, mean_abs_err={mean_err:.6g})"
-                )
-                errs += 1
+                lines.append(f"  ! {name} != torch_ref -> {msg}")
+                local_errs += 1
             elif verbose:
-                max_err, mean_err = max_abs_err(delta_cmp, penalty_cmp)
-                lines.append(
-                    "  logits_after - logits_before matches penalty "
-                    f"(within tol, max_abs_err={max_err:.6g}, mean_abs_err={mean_err:.6g})"
-                )
+                lines.append(f"  {name} matches torch_ref")
 
-    if errs > 0 or verbose or show_ok:
-        if errs == 0 and not verbose and show_ok:
-            lines.append("  OK")
-        print("\n".join(lines))
+        if "logits_before_mask" in joined and "logits_after_mask" in joined:
+            before = joined["logits_before_mask"].to(torch.float32)
+            after = joined["logits_after_mask"].to(torch.float32)
+            h = min(before.shape[-2], torch_penalty.shape[-2]) if before.ndim >= 2 else None
+            w = min(before.shape[-1], torch_penalty.shape[-1]) if before.ndim >= 1 else None
+            if h is not None and w is not None and before.ndim == 4:
+                delta = after[0, 0, :h, :w] - before[0, 0, :h, :w]
+                penalty_slice = torch_penalty[:h, :w]
+                if ignore_logits_nan:
+                    valid = torch.isfinite(delta) & torch.isfinite(penalty_slice)
+                    delta = torch.where(valid, delta, torch.zeros_like(delta))
+                    penalty_slice = torch.where(valid, penalty_slice, torch.zeros_like(penalty_slice))
+                msg = first_mismatch(delta, penalty_slice, atol=2.0e6, rtol=0.0)
+                if msg:
+                    max_err, mean_err = max_abs_err(delta, penalty_slice)
+                    lines.append(
+                        f"  ! logits delta != penalty_ref -> {msg} "
+                        f"(max_abs_err={max_err:.6g}, mean_abs_err={mean_err:.6g})"
+                    )
+                    local_errs += 1
+                elif verbose:
+                    max_err, mean_err = max_abs_err(delta, penalty_slice)
+                    lines.append(
+                        "  logits_after - logits_before matches penalty_ref "
+                        f"(within tol, max_abs_err={max_err:.6g}, mean_abs_err={mean_err:.6g})"
+                    )
 
+        if local_errs > 0 or verbose or show_ok:
+            if local_errs == 0 and not verbose and show_ok:
+                lines.append("  OK")
+            print("\n".join(lines))
+        errs += local_errs
     return errs
 
 
@@ -255,6 +315,11 @@ def main() -> None:
     ap.add_argument("--step", type=int, default=None, help="Analyze only one step")
     ap.add_argument("--verbose", action="store_true", help="Print full per-shard stats")
     ap.add_argument("--show-ok", action="store_true", help="Print one line for passing shards")
+    ap.add_argument(
+        "--per-shard",
+        action="store_true",
+        help="Use legacy shard-by-shard checks instead of joined/grouped checks",
+    )
     ap.add_argument(
         "--no-ignore-logits-nan",
         action="store_true",
@@ -276,11 +341,19 @@ def main() -> None:
         return
 
     for step in steps:
-        for shard in sorted(by_step[step].keys()):
-            total_errs += analyze_step_shard(
+        if args.per_shard:
+            for shard in sorted(by_step[step].keys()):
+                total_errs += analyze_step_grouped(
+                    step,
+                    {shard: by_step[step][shard]},
+                    verbose=args.verbose,
+                    show_ok=args.show_ok,
+                    ignore_logits_nan=not args.no_ignore_logits_nan,
+                )
+        else:
+            total_errs += analyze_step_grouped(
                 step,
-                shard,
-                by_step[step][shard],
+                by_step[step],
                 verbose=args.verbose,
                 show_ok=args.show_ok,
                 ignore_logits_nan=not args.no_ignore_logits_nan,
