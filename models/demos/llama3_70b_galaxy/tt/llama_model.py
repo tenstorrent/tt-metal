@@ -4,6 +4,7 @@
 
 import ttnn
 import torch
+import os
 from tqdm import tqdm
 from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
 from models.common.rmsnorm import RMSNorm
@@ -71,6 +72,9 @@ class TtTransformer(LightweightModule):
             )
         self._active_bitmask = None
         self._bitmask_copy_event = None
+        self._debug_bitmask = os.getenv("TT_DEBUG_BITMASK", "0") == "1"
+        self._debug_bitmask_step = 0
+        self._debug_bitmask_max_steps = int(os.getenv("TT_DEBUG_BITMASK_MAX_STEPS", "32"))
         self.bitmask_arange = ttnn.arange(
             start=0, end=32, step=1, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device
         )
@@ -613,14 +617,17 @@ class TtTransformer(LightweightModule):
     def unpack_bitmask(self, bitmask):
         op_kwargs = {"sub_core_grids": self.args.sub_core_grids} if self.args.sub_core_grids is not None else {}
         batch_dim, vocab_dim = bitmask.shape
+        self._debug_log_device_tensor_slice("packed_bitmask_device", bitmask)
         bitmask_to_broadcast = ttnn.reshape(bitmask, (batch_dim, vocab_dim, 1), **op_kwargs)
         broadcast_unpacked = ttnn.bitwise_right_shift(bitmask_to_broadcast, self.bitmask_arange)
         broadcast_unpacked = ttnn.bitwise_and(broadcast_unpacked, 1)
         unpacked_bitmask = ttnn.reshape(broadcast_unpacked, (batch_dim, -1), **op_kwargs)
         converted_bitmask = ttnn.to_layout(unpacked_bitmask, ttnn.TILE_LAYOUT, **op_kwargs)
+        self._debug_log_device_tensor_slice("unpacked_bitmask_01", converted_bitmask)
         # converted_bitmask is 0/1. Compute (x - 1) * 1e9 -> {-1e9, 0}.
         result = ttnn.add(converted_bitmask, -1.0, dtype=ttnn.float32, **op_kwargs)
         ttnn.multiply_(result, 1e9, **op_kwargs)
+        self._debug_log_device_tensor_slice("unpacked_penalty_mask", result)
         return result
 
     def start_bitmask_to_device(self, bitmask):
@@ -637,6 +644,12 @@ class TtTransformer(LightweightModule):
             bitmask = torch.cat([bitmask, pad], dim=-1)
         elif packed_in > packed_target:
             raise ValueError(f"Bitmask has too many packed bits: {packed_in} > {packed_target}")
+        if self._debug_should_log_bitmask():
+            sample = bitmask.reshape(-1)[: min(16, bitmask.numel())].tolist()
+            print(
+                f"[TT_DEBUG_BITMASK] step={self._debug_bitmask_step} packed_bitmask_host: "
+                f"shape={tuple(bitmask.shape)} dtype={bitmask.dtype} sample={sample}"
+            )
         bitmask_tt = ttnn.from_torch(
             bitmask,
             device=None,
@@ -657,6 +670,7 @@ class TtTransformer(LightweightModule):
     def apply_bitmask_to_logits(self, tt_logits):
         if self._active_bitmask is None:
             return tt_logits
+        self._debug_log_device_tensor_slice("logits_before_mask", tt_logits)
         with ttnn.trace_allocation_safe_scope(self.mesh_device):
             bitmask_unpacked = self.unpack_bitmask(self._active_bitmask)
             ttnn.add_(
@@ -665,6 +679,9 @@ class TtTransformer(LightweightModule):
                 **({"sub_core_grids": self.args.sub_core_grids} if self.args.sub_core_grids is not None else {}),
             )
             bitmask_unpacked.deallocate(True)
+        self._debug_log_device_tensor_slice("logits_after_mask", tt_logits)
+        if self._debug_should_log_bitmask():
+            self._debug_bitmask_step += 1
         return tt_logits
 
     def ttnn_decode_forward(
@@ -735,6 +752,23 @@ class TtTransformer(LightweightModule):
             enable_trace=False,
         )
         return tt_toks, tt_log_probs
+
+    def _debug_should_log_bitmask(self):
+        return self._debug_bitmask and self._debug_bitmask_step < self._debug_bitmask_max_steps
+
+    def _debug_log_device_tensor_slice(self, name, tensor, width=16):
+        if not self._debug_should_log_bitmask():
+            return
+        try:
+            t = ttnn.to_torch(ttnn.get_device_tensors(tensor)[0])
+            flat = t.reshape(-1)
+            sample = flat[: min(width, flat.numel())].tolist()
+            print(
+                f"[TT_DEBUG_BITMASK] step={self._debug_bitmask_step} {name}: "
+                f"shape={tuple(t.shape)} dtype={t.dtype} sample={sample}"
+            )
+        except Exception as e:
+            print(f"[TT_DEBUG_BITMASK] step={self._debug_bitmask_step} {name}: debug read failed: {e}")
 
     def switch_mode(self, mode):
         if mode == "decode":
