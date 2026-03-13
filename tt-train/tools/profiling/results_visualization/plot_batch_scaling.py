@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Extract batch-size-scaling subset from the full results CSV and produce 5 plots.
 
 The script filters rows where tp==1, dp==1, n_blocks==4,

@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Extract TP-scaling subset from the full results CSV and produce 7 plots.
 
 The script filters rows where dp==1 and tp in {1, 2, 4, 8} (pure TP scaling),

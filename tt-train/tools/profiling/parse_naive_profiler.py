@@ -1,4 +1,7 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Parse NAIVE_PROFILER timestamps from training stdout and print per-step and average timings."""
 
 import math

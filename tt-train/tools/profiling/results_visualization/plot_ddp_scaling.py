@@ -1,13 +1,16 @@
-#!/usr/bin/env python3
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Extract DDP-scaling subset from the full results CSV and produce 4 plots.
 
 The script filters rows where tp==1, n_blocks==8, and dp in {1, 2, 4, 8, 32}
 (pure DDP scaling with naive profiler), and creates:
-  - ddp_scaling.csv           – the filtered subset
-  - ts_vs_dp.png              – tokens/s vs DDP
-  - tsd_vs_dp.png             – tokens/s/device vs DDP
-  - step_time_ms_vs_dp.png    – total step time vs DDP
-  - grad_sync_ms_vs_dp.png    – gradient sync time vs DDP
+  - ddp_scaling.csv           - the filtered subset
+  - ts_vs_dp.png              - tokens/s vs DDP
+  - tsd_vs_dp.png             - tokens/s/device vs DDP
+  - step_time_ms_vs_dp.png    - total step time vs DDP
+  - grad_sync_ms_vs_dp.png    - gradient sync time vs DDP
 
 Each plot (except grad_sync) includes a dashed "ideal scaling" line derived
 from the dp=1 baseline.
