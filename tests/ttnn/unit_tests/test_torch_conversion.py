@@ -7,7 +7,7 @@ import torch
 import ttnn
 import pytest
 import numpy as np
-from ttnn import ReplicateTensorToMesh, ShardTensorToMesh, ShardTensor2dMesh, ConcatMeshToTensor
+from ttnn import ReplicateTensorToMesh, ShardTensorToMesh, ShardTensor2dMesh
 
 
 def is_ttnn_float_type(tt_dtype) -> bool:
