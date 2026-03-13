@@ -153,6 +153,7 @@ jobs:
       matrix:
         platform: [
           "N150-viommu",
+          "p150b-viommu-prio",
         ]
     uses: ./.github/workflows/smoke.yaml
     secrets: inherit
@@ -177,6 +178,7 @@ jobs:
       matrix:
         platform: [
           "N150-viommu",
+          "p150b-viommu-prio",
         ]
     uses: ./.github/workflows/smoke.yaml
     secrets: inherit
