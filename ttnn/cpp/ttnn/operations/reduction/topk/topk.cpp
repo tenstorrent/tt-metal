@@ -251,6 +251,8 @@ std::vector<Tensor> topk(
     // but for now we simply match its behavior).
     if (rank == 0 && (k == 1 || k == 0)) {
         // Caller requested top 1 elements from a scalar tensor.
+        // Note that rank == 0 and k == 0 is treated the same as rank == 0 and k == 1
+        // by PyTorch, so we handle it the same way.
         // We need to return a copy of the input tensor as is (that is the 1 top element), and
         // a scalar tensor containing a single 0 as the index (matches what PyTorch does).
         if (!preallocated_output_tensors.has_value()) {
