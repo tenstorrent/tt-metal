@@ -1218,18 +1218,12 @@ class TTNNExperts(TTNNModule):
         combined_output = ttnn.reshape(
             combined_output, shape=(self.num_experts_per_tok, 1, batch_size_per_device * seq_len, self.hidden_size)
         )
-        print("combined_output.shape : ", combined_output.shape)
         combined_output = ttnn.to_layout(combined_output, ttnn.TILE_LAYOUT)
 
         # 9. Apply expert weights
-        print("topk_experts_weights.shape : ", topk_experts_weights.shape)
         topk_experts_weights_rm = ttnn.to_layout(topk_experts_weights, ttnn.ROW_MAJOR_LAYOUT)
         topk_experts_weights_rm = ttnn.unsqueeze(topk_experts_weights_rm, 0)
-        print("topk_experts_weights_rm unsqz 1.shape : ", topk_experts_weights_rm.shape)
         topk_experts_weights_rm = ttnn.unsqueeze(topk_experts_weights_rm, 0)
-        print("topk_experts_weights_rm unsqz 2.shape : ", topk_experts_weights_rm.shape)
-        # topk_experts_weights_rm = ttnn.repeat(topk_experts_weights_rm, repeat_dims=(self.hidden_size, 1, 1, 1))
-        print("topk_experts_weights_rm repeat.shape : ", topk_experts_weights_rm.shape)
         topk_experts_weights_rm = ttnn.reshape(
             topk_experts_weights_rm,
             shape=(
@@ -1239,18 +1233,14 @@ class TTNNExperts(TTNNModule):
                 topk_experts_weights_rm.shape[4],
             ),
         )
-        print("topk_experts_weights_rm reshape.shape : ", topk_experts_weights_rm.shape)
         topk_experts_weights_rm = ttnn.permute(topk_experts_weights_rm, (3, 1, 2, 0))
-        print("topk_experts_weights_rm permute.shape : ", topk_experts_weights_rm.shape)
         topk_experts_weights_tile = ttnn.to_layout(topk_experts_weights_rm, ttnn.TILE_LAYOUT)
-        print("topk_experts_weights_tile.shape : ", topk_experts_weights_tile.shape)
         ttnn.deallocate(topk_experts_weights_rm)
 
         weighted_output = ttnn.mul(
             combined_output,
             topk_experts_weights_tile,
         )
-        print("weighted_output.shape : ", weighted_output.shape)
 
         # 10. Sum over experts dimension
         final_output = ttnn.sum(weighted_output, dim=0, keepdim=True)
@@ -1375,32 +1365,6 @@ class TTNNMoE(TTNNModule):
 from models.experimental.tt_symbiote.modules.linear import TTNNLinear
 
 
-def _stack_deepseek_v2_experts(experts_module_list, config):
-    """
-    Build a single object with gate_up_proj and down_proj from a ModuleList of
-    DeepseekV2MLP-style experts (each with gate_proj, up_proj, down_proj).
-    Compatible with TTNNExperts.from_torch() so V2 MoE can reuse the V3 expert stack.
-    """
-    experts = list(experts_module_list)
-    gate_up_list = []
-    down_list = []
-    for expert in experts:
-        if expert is None:
-            continue
-        gate_w = expert.gate_proj.weight
-        up_w = expert.up_proj.weight
-        down_w = expert.down_proj.weight
-        gate_up_list.append(torch.cat([gate_w, up_w], dim=0))
-        down_list.append(down_w.T)
-    gate_up_proj = torch.stack(gate_up_list, dim=0)
-    down_proj = torch.stack(down_list, dim=0)
-    out = type("DeepseekV2ExpertsStack", (), {})()
-    out.config = config
-    out.gate_up_proj = gate_up_proj
-    out.down_proj = down_proj
-    return out
-
-
 class TTNNDeepseekV2MoE(TTNNModule):
     """
     TTNN symbiote for DeepSeek V2 MoE (e.g. DeepSeek-OCR).
@@ -1427,7 +1391,7 @@ class TTNNDeepseekV2MoE(TTNNModule):
 
         module.gate = TTNNDeepseekOCRMoEGate.from_torch(torch_moe.gate)
 
-        stacked_experts = _stack_deepseek_v2_experts(torch_moe.experts, torch_moe.config)
+        stacked_experts = cls._stack_deepseek_v2_experts(torch_moe.experts, torch_moe.config)
         module.experts = TTNNExperts.from_torch(stacked_experts)
 
         if getattr(torch_moe, "shared_experts", None) is not None:
@@ -1436,6 +1400,32 @@ class TTNNDeepseekV2MoE(TTNNModule):
             module.shared_experts = None
 
         return module
+
+    @staticmethod
+    def _stack_deepseek_v2_experts(experts_module_list, config):
+        """
+        Build a single object with gate_up_proj and down_proj from a ModuleList of
+        DeepseekV2MLP-style experts (each with gate_proj, up_proj, down_proj).
+        Compatible with TTNNExperts.from_torch() so V2 MoE can reuse the V3 expert stack.
+        """
+        experts = list(experts_module_list)
+        gate_up_list = []
+        down_list = []
+        for expert in experts:
+            if expert is None:
+                continue
+            gate_w = expert.gate_proj.weight
+            up_w = expert.up_proj.weight
+            down_w = expert.down_proj.weight
+            gate_up_list.append(torch.cat([gate_w, up_w], dim=0))
+            down_list.append(down_w.T)
+        gate_up_proj = torch.stack(gate_up_list, dim=0)
+        down_proj = torch.stack(down_list, dim=0)
+        out = type("DeepseekV2ExpertsStack", (), {})()
+        out.config = config
+        out.gate_up_proj = gate_up_proj
+        out.down_proj = down_proj
+        return out
 
     def preprocess_weights_impl(self):
         if hasattr(self.gate, "init_parameters"):
@@ -1464,8 +1454,6 @@ class TTNNDeepseekV2MoE(TTNNModule):
         )
         topk_idx = topk_idx[:, :, :6]
         topk_weight = topk_weight[:, :, :6]
-        print("topk_idx.shape : ", topk_idx.shape)
-        print("topk_weight.shape : ", topk_weight.shape)
         # hidden_states_4d = ttnn.experimental.reduce_scatter_minimal_async(
         #     hidden_states_4d,
         #     persistent_output_buffers=None,
@@ -1491,9 +1479,7 @@ class TTNNDeepseekV2MoE(TTNNModule):
         # composer = ttnn.concat_mesh_to_tensor_composer(self.device, dim=-1)
         # hidden_states_4d = ttnn.aggregate_tensor(hidden_states_4d, composer)
         routed_output = self.experts(hidden_states_4d, topk_idx, topk_weight)
-        print("routed_output before slice : ", routed_output.shape)
         routed_output = routed_output[:, :, :, :1280]
-        print("routed_output : ", routed_output.shape)
 
         import numpy as np
 
@@ -1506,7 +1492,6 @@ class TTNNDeepseekV2MoE(TTNNModule):
 
         routed_output_og = torch.load("models/experimental/tt_symbiote/tests/input_test_moe/dump/routed_output.pt")
         passed, msg = check_with_pcc(routed_output.to_torch.squeeze(0), routed_output_og)
-        print("********** PCC: ", msg, passed)
         if hasattr(routed_output, "to_ttnn"):
             routed_output = routed_output.to_ttnn
         if self.shared_experts is not None:
@@ -1523,9 +1508,6 @@ class TTNNDeepseekV2MoE(TTNNModule):
                 multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
                 num_links=1,
             )
-
-            print("routed_output.shape : ", routed_output.shape)
-            print("shared_out.shape : ", shared_out.shape)
 
             routed_output = ttnn.add(routed_output, shared_out)
         return ttnn.reshape(routed_output, orig_shape)
