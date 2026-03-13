@@ -42,12 +42,15 @@ public:
     /**
      * Emit the complete ChannelAllocations CT arg block including tag, num_entries,
      * per-channel data, and channel-to-entry index mappings.
+     *
+     * @param ct_args Vector to append compile-time arguments to
+     * @param num_used_sender_channels_per_vc Number of active sender channels per VC
+     * @param is_receiver_channel_active_per_vc Whether the receiver channel is active per VC
      */
     void emit_channel_allocations_ct_args(
         std::vector<uint32_t>& ct_args,
-        size_t num_used_vc0_sender_channels,
-        size_t num_used_vc1_sender_channels,
-        size_t num_used_receiver_channels) const;
+        const std::array<size_t, builder_config::MAX_NUM_VCS>& num_used_sender_channels_per_vc,
+        const std::array<bool, builder_config::MAX_NUM_VCS>& is_receiver_channel_active_per_vc) const;
 
     /**
      * Get the number of slots for a specific sender channel in a VC.
