@@ -5,6 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -35,16 +38,21 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<0, 0>();
     constexpr auto src_b_args =
         TensorAccessorArgs<src_args.next_compile_time_args_offset(), src_args.next_common_runtime_args_offset()>();
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_src(cb_id_src);
+    experimental::CircularBuffer cb_src_b(cb_id_src_b);
+
 #if SRC_SHARDED
-    cb_reserve_back(cb_id_src, src_num_tiles);
-    cb_push_back(cb_id_src, src_num_tiles);
+    cb_src.reserve_back(src_num_tiles);
+    cb_src.push_back(src_num_tiles);
 #else
     const uint32_t src_tile_bytes = get_tile_size(cb_id_src);
     const auto src = TensorAccessor(src_args, src_addr, src_tile_bytes);
 #endif
 #if SRC_SHARDED_B
-    cb_reserve_back(cb_id_src_b, src_num_tiles_b);
-    cb_push_back(cb_id_src_b, src_num_tiles_b);
+    cb_src_b.reserve_back(src_num_tiles_b);
+    cb_src_b.push_back(src_num_tiles_b);
 #else
     const uint32_t src_tile_bytes_b = get_tile_size(cb_id_src_b);
     const auto src_b = TensorAccessor(src_b_args, src_addr_b, src_tile_bytes_b);
@@ -98,18 +106,22 @@ void kernel_main() {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
 #if !SRC_SHARDED
-                            cb_reserve_back(cb_id_src, onetile);
-                            uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
-                            noc_async_read_page(tile_offset + tw, src, l1_write_addr_src);
+                            cb_src.reserve_back(onetile);
+                            noc.async_read(
+                                src, cb_src, src_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
 #endif
 #if !SRC_SHARDED_B
                             // read a tile from src_b
-                            cb_reserve_back(cb_id_src_b, onetile);
-                            uint32_t l1_write_addr_b = get_write_ptr(cb_id_src_b);
-                            noc_async_read_page(tile_offset_b + tw, src_b, l1_write_addr_b);
+                            cb_src_b.reserve_back(onetile);
+                            noc.async_read(
+                                src_b,
+                                cb_src_b,
+                                src_tile_bytes_b,
+                                {.page_id = tile_offset_b + tw},
+                                {.offset_bytes = 0});
 #endif
 #if !SRC_SHARDED || !SRC_SHARDED_B
-                            noc_async_read_barrier();
+                            noc.async_read_barrier();
 #endif
 #if SRC_BCAST && !BCAST_LLK  // no sharding support for row bcast yet
                             FILL_TILE_WITH_FIRST_ROW(cb_id_src);
@@ -118,10 +130,10 @@ void kernel_main() {
                             FILL_TILE_WITH_FIRST_ROW_B(cb_id_src_b);
 #endif
 #if !SRC_SHARDED
-                            cb_push_back(cb_id_src, onetile);
+                            cb_src.push_back(onetile);
 #endif
 #if !SRC_SHARDED_B
-                            cb_push_back(cb_id_src_b, onetile);
+                            cb_src_b.push_back(onetile);
 #endif
                         }
                         if constexpr (!has_sharding) {

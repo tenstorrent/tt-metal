@@ -5,6 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -25,9 +28,12 @@ void kernel_main() {
 
     constexpr auto cb_id_src = tt::CBIndex::c_0;
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_src(cb_id_src);
+
 #if SRC_SHARDED
-    cb_reserve_back(cb_id_src, src_num_tiles);
-    cb_push_back(cb_id_src, src_num_tiles);
+    cb_src.reserve_back(src_num_tiles);
+    cb_src.push_back(src_num_tiles);
 #else
     constexpr uint32_t onetile = 1;
     constexpr auto src_args = TensorAccessorArgs<0, 0>();
@@ -67,11 +73,11 @@ void kernel_main() {
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
-                            cb_reserve_back(cb_id_src, onetile);
-                            uint32_t l1_write_addr_src = get_write_ptr(cb_id_src);
-                            noc_async_read_page(tile_offset + tw, src, l1_write_addr_src);
-                            noc_async_read_barrier();
-                            cb_push_back(cb_id_src, onetile);
+                            cb_src.reserve_back(onetile);
+                            noc.async_read(
+                                src, cb_src, src_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
+                            noc.async_read_barrier();
+                            cb_src.push_back(onetile);
                         }
                         if constexpr (!has_sharding) {
                             // next row of tiles should start at the first column

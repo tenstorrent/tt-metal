@@ -5,6 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 #include "ttnn/operations/eltwise/binary_ng/device/kernels/dataflow/fill_tile_utils.hpp"
 
 void kernel_main() {
@@ -39,6 +42,10 @@ void kernel_main() {
     constexpr auto src_args = TensorAccessorArgs<2, 0>();
     constexpr auto src_b_args =
         TensorAccessorArgs<src_args.next_compile_time_args_offset(), src_args.next_common_runtime_args_offset()>();
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_pred(predicate_cb);
+    experimental::CircularBuffer cb_b(src_b_cb);
 
     // #if !SRC_SHARDED_A
     const uint32_t src_tile_bytes = get_tile_size(predicate_cb);
@@ -94,45 +101,43 @@ void kernel_main() {
             for (uint32_t n = start_n; n < N && num_tiles_read < dst_num_tiles; ++n, start_c = 0) {
                 for (uint32_t c = start_c; c < C && num_tiles_read < dst_num_tiles; ++c, start_th = 0) {
 #if SRC_BCAST_A
-                    cb_reserve_back(predicate_cb, onetile);
+                    cb_pred.reserve_back(onetile);
 #if !SRC_SHARDED_A
-                    uint32_t l1_write_addr_src = get_write_ptr(predicate_cb);
-                    noc_async_read_page(tile_offset, src, l1_write_addr_src);
-                    noc_async_read_barrier();
+                    noc.async_read(src, cb_pred, src_tile_bytes, {.page_id = tile_offset}, {.offset_bytes = 0});
+                    noc.async_read_barrier();
 #endif
                     FILL_TILE_WITH_FIRST_ELEMENT(predicate_cb);
-                    cb_push_back(predicate_cb, onetile);
+                    cb_pred.push_back(onetile);
 #endif
 #if SRC_BCAST_B
-                    cb_reserve_back(src_b_cb, onetile);
+                    cb_b.reserve_back(onetile);
 #if !SRC_SHARDED_B
-                    uint32_t l1_write_addr_src_b = get_write_ptr(src_b_cb);
-                    noc_async_read_page(tile_offset_b, src_b, l1_write_addr_src_b);
-                    noc_async_read_barrier();
+                    noc.async_read(src_b, cb_b, src_tile_bytes_b, {.page_id = tile_offset_b}, {.offset_bytes = 0});
+                    noc.async_read_barrier();
 #endif
                     FILL_TILE_WITH_FIRST_ELEMENT_B(src_b_cb);
-                    cb_push_back(src_b_cb, onetile);
+                    cb_b.push_back(onetile);
 #endif
                     for (uint32_t th = start_th; th < Ht && num_tiles_read < dst_num_tiles; ++th) {
                         for (uint32_t tw = start_tw; tw < end_tw && num_tiles_read < dst_num_tiles;
                              ++tw, ++num_tiles_read) {
 #if !SRC_BCAST_A
-                            cb_reserve_back(predicate_cb, onetile);
+                            cb_pred.reserve_back(onetile);
 #if !SRC_SHARDED_A
-                            uint32_t l1_write_addr = get_write_ptr(predicate_cb);
-                            noc_async_read_page(tile_offset + tw, src, l1_write_addr);
-                            noc_async_read_barrier();
+                            noc.async_read(
+                                src, cb_pred, src_tile_bytes, {.page_id = tile_offset + tw}, {.offset_bytes = 0});
+                            noc.async_read_barrier();
 #endif
-                            cb_push_back(predicate_cb, onetile);
+                            cb_pred.push_back(onetile);
 #endif
 #if !SRC_BCAST_B
-                            cb_reserve_back(src_b_cb, onetile);
+                            cb_b.reserve_back(onetile);
 #if !SRC_SHARDED_B
-                            uint32_t l1_write_addr_b = get_write_ptr(src_b_cb);
-                            noc_async_read_page(tile_offset_b + tw, src_b, l1_write_addr_b);
-                            noc_async_read_barrier();
+                            noc.async_read(
+                                src_b, cb_b, src_tile_bytes_b, {.page_id = tile_offset_b + tw}, {.offset_bytes = 0});
+                            noc.async_read_barrier();
 #endif
-                            cb_push_back(src_b_cb, onetile);
+                            cb_b.push_back(onetile);
 #endif
                         }
                         if constexpr (!has_sharding) {
