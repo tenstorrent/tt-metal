@@ -17,6 +17,28 @@
 
 namespace ttnn::operations::experimental::padded_slice {
 
+namespace {
+
+ttnn::Tensor padded_slice_wrapper(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<int>& begins,
+    const ttnn::SmallVector<int>& ends,
+    const std::optional<ttnn::SmallVector<int>>& step,
+    const MemoryConfig& memory_config,
+    const std::optional<ttnn::Tensor>& output_tensor,
+    const std::optional<float>& pad_value) {
+    return ttnn::experimental::padded_slice(
+        input_tensor,
+        begins,
+        ends,
+        step.value_or(ttnn::SmallVector<int>(ends.size(), 1)),
+        memory_config,
+        output_tensor,
+        pad_value);
+}
+
+}  // namespace
+
 void bind_padded_slice(nb::module_& mod) {
     const auto* doc =
         R"doc(
@@ -47,14 +69,7 @@ void bind_padded_slice(nb::module_& mod) {
     ttnn::bind_function<"padded_slice", "ttnn.experimental.">(
         mod,
         doc,
-        static_cast<ttnn::Tensor (*)(
-            const ttnn::Tensor&,
-            const ttnn::SmallVector<int>&,
-            const ttnn::SmallVector<int>&,
-            const std::optional<ttnn::SmallVector<int>>&,
-            const MemoryConfig&,
-            const std::optional<ttnn::Tensor>&,
-            const std::optional<float>&)>(&ttnn::experimental::padded_slice<int>),
+        padded_slice_wrapper,
         nb::arg("input_tensor"),
         nb::arg("padded_slice_start"),
         nb::arg("padded_slice_end"),

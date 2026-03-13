@@ -19,9 +19,9 @@ namespace ttnn::experimental {
 template <typename T>
 ttnn::Tensor padded_slice(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<T>& padded_slice_start,
-    const ttnn::SmallVector<T>& padded_slice_end,
-    const ttnn::SmallVector<T>& padded_slice_step,
+    tt::stl::Span<const T> begins,
+    tt::stl::Span<const T> ends,
+    tt::stl::Span<const T> step,
     const MemoryConfig& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& /*pad_value*/) {
@@ -34,26 +34,19 @@ ttnn::Tensor padded_slice(
     TT_FATAL(input_rank == 4, "Only 4D tensors are supported for padded_slice");
 
     TT_FATAL(
-        input_rank == padded_slice_start.size(),
-        "Input rank {} and begins {} must have the same size",
-        input_rank,
-        padded_slice_start.size());
+        input_rank == begins.size(), "Input rank {} and begins {} must have the same size", input_rank, begins.size());
+    TT_FATAL(begins.size() == ends.size(), "Start {} and end {} must have the same size", begins.size(), ends.size());
     TT_FATAL(
-        padded_slice_start.size() == padded_slice_end.size(),
-        "Start {} and end {} must have the same size",
-        padded_slice_start.size(),
-        padded_slice_end.size());
-    TT_FATAL(
-        padded_slice_step.size() == padded_slice_start.size(),
+        step.size() == begins.size(),
         "Step {} must have the same size as start {} and end",
-        padded_slice_step.size(),
-        padded_slice_start.size());
+        step.size(),
+        begins.size());
 
-    bool no_step = std::ranges::all_of(padded_slice_step, [](uint32_t s) { return s == 1; });
-    bool starts_zero = std::ranges::all_of(padded_slice_start, [](uint32_t s) { return s == 0; });
+    bool no_step = std::ranges::all_of(step, [](uint32_t s) { return s == 1; });
+    bool starts_zero = std::ranges::all_of(begins, [](uint32_t s) { return s == 0; });
     bool ends_max = true;
-    for (size_t i = 0; i < padded_slice_end.size(); ++i) {
-        ends_max &= padded_slice_end[i] == input_shape[i];
+    for (size_t i = 0; i < ends.size(); ++i) {
+        ends_max &= ends[i] == input_shape[i];
         if (!ends_max) {
             break;
         }
@@ -85,15 +78,15 @@ ttnn::Tensor padded_slice(
     ttnn::SmallVector<uint32_t> modified_step(input_rank, 1);
 
     // Wrap indices and adjust begins, ends, and step
-    for (size_t i = 0; i < padded_slice_start.size(); ++i) {
+    for (size_t i = 0; i < begins.size(); ++i) {
         if constexpr (std::is_signed_v<T>) {
-            modified_begins[i] = ttnn::operations::data_movement::wrap_index(padded_slice_start[i], input_shape[i]);
-            modified_ends[i] = ttnn::operations::data_movement::wrap_index(padded_slice_end[i], input_shape[i]);
-            modified_step[i] = static_cast<uint32_t>(padded_slice_step[i]);
+            modified_begins[i] = operations::data_movement::wrap_index(begins[i], input_shape[i]);
+            modified_ends[i] = operations::data_movement::wrap_index(ends[i], input_shape[i]);
+            modified_step[i] = static_cast<uint32_t>(step[i]);
         } else {
-            modified_begins[i] = padded_slice_start[i];
-            modified_ends[i] = padded_slice_end[i];
-            modified_step[i] = padded_slice_step[i];
+            modified_begins[i] = begins[i];
+            modified_ends[i] = ends[i];
+            modified_step[i] = step[i];
         }
     }
 
@@ -159,19 +152,19 @@ ttnn::Tensor padded_slice(
 
 template ttnn::Tensor padded_slice<int>(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<int>& padded_slice_start,
-    const ttnn::SmallVector<int>& padded_slice_end,
-    const ttnn::SmallVector<int>& padded_slice_step,
-    const MemoryConfig& memory_config,
+    tt::stl::Span<const int> begins,
+    tt::stl::Span<const int> ends,
+    tt::stl::Span<const int> step,
+    const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
 template ttnn::Tensor padded_slice<uint32_t>(
     const ttnn::Tensor& input_tensor,
-    const ttnn::SmallVector<uint32_t>& padded_slice_start,
-    const ttnn::SmallVector<uint32_t>& padded_slice_end,
-    const ttnn::SmallVector<uint32_t>& padded_slice_step,
-    const MemoryConfig& memory_config,
+    tt::stl::Span<const uint32_t> begins,
+    tt::stl::Span<const uint32_t> ends,
+    tt::stl::Span<const uint32_t> step,
+    const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 

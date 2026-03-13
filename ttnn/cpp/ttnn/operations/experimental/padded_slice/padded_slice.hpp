@@ -13,30 +13,29 @@ namespace ttnn::experimental {
 
 template <typename T>
 Tensor padded_slice(
-    const Tensor& input_tensor,
-    const ttnn::SmallVector<T>& padded_slice_start,
-    const ttnn::SmallVector<T>& padded_slice_end,
-    const ttnn::SmallVector<T>& padded_slice_step,
-    const MemoryConfig& memory_config,
+    const ttnn::Tensor& input_tensor,
+    tt::stl::Span<const T> begins,
+    tt::stl::Span<const T> ends,
+    tt::stl::Span<const T> step,
+    const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<float>& pad_value = std::nullopt);
 
 template <typename T>
 Tensor padded_slice(
-    const Tensor& input_tensor,
-    const ttnn::SmallVector<T>& padded_slice_start,
-    const ttnn::SmallVector<T>& padded_slice_end,
-    const std::optional<ttnn::SmallVector<T>>& padded_slice_step,
-    const MemoryConfig& memory_config,
+    const ttnn::Tensor& input_tensor,
+    const ttnn::SmallVector<T>& begins,
+    const ttnn::SmallVector<T>& ends,
+    const ttnn::SmallVector<T>& step,
+    const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
     const std::optional<float>& pad_value = std::nullopt) {
-    const auto step_value = padded_slice_step.value_or(ttnn::SmallVector<T>(padded_slice_end.size(), 1));
     return padded_slice(
         input_tensor,
-        padded_slice_start,
-        padded_slice_end,
-        step_value,
-        memory_config,
+        tt::stl::Span<const T>(begins),
+        tt::stl::Span<const T>(ends),
+        tt::stl::Span<const T>(step),
+        memory_config_arg,
         optional_output_tensor,
         pad_value);
 }
