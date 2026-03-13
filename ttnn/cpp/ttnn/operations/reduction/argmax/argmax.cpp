@@ -4,7 +4,7 @@
 #include "device/argmax_device_operation.hpp"
 #include "device/argmax_utils.hpp"
 #include "ttnn/operations/reduction/argmax/argmax.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/decorators.hpp"
 
 #include <utility>
