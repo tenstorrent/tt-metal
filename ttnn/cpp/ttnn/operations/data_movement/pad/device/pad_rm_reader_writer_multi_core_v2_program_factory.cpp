@@ -19,15 +19,7 @@ using ttnn::operations::data_movement::float_to_uint16;
 using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
 namespace {
-uint32_t get_num_stick_per_barrier(const Tensor& input_tensor) {
-    uint32_t W = input_tensor.padded_shape()[3];
-    uint32_t W_bytes = W * input_tensor.element_size();
-    uint32_t num_stick_per_barrier = 0;
-    for (uint32_t cur_bytes = 0; cur_bytes < max_read_size; cur_bytes += W_bytes) {
-        num_stick_per_barrier++;
-    }
-    return num_stick_per_barrier;
-}
+uint32_t get_num_stick_per_barrier(const Tensor& input_tensor) { return 1; }
 
 std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime_args_rm(
     const Tensor& input_tensor,
@@ -243,7 +235,7 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
     }
     uint32_t cb_npages = get_num_stick_per_barrier(a);
-    const uint32_t buffer_reader_writer_async_factor = 16;
+    const uint32_t buffer_reader_writer_async_factor = 1;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(
             buffer_reader_writer_async_factor * cb_npages * stick_size_padded_aligned,
