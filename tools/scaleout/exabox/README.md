@@ -201,9 +201,9 @@ source python_env/bin/activate
 
 **Then run:**
 ```bash
-./tools/scaleout/exabox/recover_8x16.sh <hosts>
-# or
-./tools/scaleout/exabox/recover_4x32.sh <hosts>
+./tools/scaleout/exabox/recover.sh --hosts <hosts>
+# or for 8x16 configuration:
+./tools/scaleout/exabox/recover.sh --hosts <hosts> --config 8x16
 ```
 
 Look for `All Detected Links are healthy` in the output. If you see `could not access or execute an executable`, see [Recovery Script Fails](./TROUBLESHOOTING.md#recovery-script-fails-with-could-not-access-or-execute-an-executable).

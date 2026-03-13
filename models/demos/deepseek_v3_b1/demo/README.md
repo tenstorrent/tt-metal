@@ -27,7 +27,7 @@ Adjust `--cache-path` to your prepared weight cache location and `--layer-id-off
 ## Running the demo on single-pod:
 
 ```bash
-./tools/scaleout/exabox/recover_4x32.sh bh-glx-d06u08,bh-glx-d06u02,bh-glx-d05u08,bh-glx-d05u02 # Modify with your 4 hosts
+./tools/scaleout/exabox/recover.sh --hosts bh-glx-d06u08,bh-glx-d06u02,bh-glx-d05u08,bh-glx-d05u02 # Modify with your 4 hosts
 python3 models/demos/deepseek_v3_b1/scaleout_configs/generate_blitz_decode_pipeline_configs.py models/demos/deepseek_v3_b1/scaleout_configs/blitz_pipeline_config_single_pod.yaml # Generate pipeline config for 1 pod
 tt-run --mpi-args "--map-by rankfile:file=blitz_decode_pipeline_rank_file_single_pod --bind-to hwt:overload-allowed --host bh-glx-d05u02:4,bh-glx-d05u08:4,bh-glx-d06u02:4,bh-glx-d06u08:4 --tag-output" --rank-binding blitz_decode_pipeline_rank_binding_single_pod.yaml \
     python -m models.demos.deepseek_v3_b1.demo.cli --cache-path /mnt/models/deepseek-ai/deepseek_v3_b1_cache --layer-id-offset 4
