@@ -5,7 +5,7 @@
 See: .planning/PROJECT.md (updated 2026-03-12)
 
 **Core value:** Each PR is self-contained, correct, and independently reviewable
-**Current focus:** Phase 1 — Host Receiver Per-VC (In Progress)
+**Current focus:** Phase 3 — Host Sender Per-VC (Plan 01 complete)
 
 ## Phase Validation Procedure
 
@@ -27,26 +27,27 @@ build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric \
 tt-smi -r
 ```
 
-Note: The sanity test does NOT hang on `main`. Any hang is a regression introduced by this phase.
+Note: Neither the build nor the sanity test should hang. Any hang is a regression introduced by this phase.
 
 ---
 
 ## Current Phase
 
-**Phase 1: Host Receiver Per-VC**
+**Phase 3: Host Sender Per-VC — Plan 01 Complete (2026-03-13)**
 
-Partially complete. All allocator and builder host-side changes done:
-- `FabricStaticSizedChannelsAllocator`, `FabricRemoteChannelsAllocator` — receiver arrays collapsed to per-VC scalars
-- `FabricEriscDatamoverConfig` — `is_receiver_channel_active_per_vc` (bool)
-- `FabricBuilderContext` — `max_receiver_channels_per_vc_` (bool)
-- Dead builder fields removed
+Plan 01 completed:
+- Removed dead `AllocatorConstructionParams` struct from `fabric_builder_config.hpp` (flat-only, never instantiated)
+- Added `MAX_RISC_CORES_PER_ETH_CHAN = 2` constant to `builder_config` namespace
+- Changed `is_sender_channel_serviced_` and `is_receiver_channel_serviced_` outer dim to `MAX_RISC_CORES_PER_ETH_CHAN`
+- Updated `num_used_sender_channels` comment to document it as derived from `num_used_sender_channels_per_vc`
+- Build: PASSED (213/213 targets, zero errors)
 
-Remaining for Phase 1:
-- Verify compilation
-- Run tests to confirm no regressions
+Key decisions:
+- `MAX_RISC_CORES_PER_ETH_CHAN` added as separate constant (not alias) from `MAX_NUM_VCS` to distinguish RISC core indexing from VC indexing
+- `AllocatorConstructionParams` removal confirmed safe via grep — only definition existed, no users
 
-## Next Phase
+## Next Plan
 
-**Phase 2: Device Receiver Per-VC**
-Migrate device-side kernel code to per-VC receiver channel indexing.
-Key files: `fabric_erisc_router_ct_args.hpp`, `fabric_erisc_datamover_channels.hpp`, `fabric_erisc_router.cpp`
+**Phase 3 Plan 02: Host Sender Per-VC Logic**
+Migrate host-side sender channel arrays to per-VC indexing.
+Key files: `erisc_datamover_builder.hpp/cpp`, `fabric_builder_context.hpp/cpp`

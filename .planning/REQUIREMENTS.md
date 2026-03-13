@@ -23,8 +23,8 @@
 
 ### Host Sender Channels (PR 3)
 
-- [ ] **HS-01**: Sender channel arrays in allocators and builder use per-VC indexing where appropriate
-- [ ] **HS-02**: `num_used_sender_channels_per_vc` typing and naming is consistent and correct
+- [x] **HS-01**: Sender channel arrays in allocators and builder use per-VC indexing where appropriate
+- [x] **HS-02**: `num_used_sender_channels_per_vc` typing and naming is consistent and correct
 
 ### Device Sender Channels (PR 4)
 
