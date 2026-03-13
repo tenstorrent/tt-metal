@@ -14,7 +14,10 @@ namespace ttnn::experimental::prim {
 
 struct DeepseekMoEPostCombineTilizeProgramFactory {
     struct shared_variables_t {
-        uint32_t num_cores_to_be_used;
+        uint32_t reader_kernel_id;
+        uint32_t compute_kernel_id;
+        uint32_t writer_kernel_id;
+        std::vector<tt::tt_metal::CoreCoord> cores;
     };
 
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
