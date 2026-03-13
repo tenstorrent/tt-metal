@@ -8,10 +8,12 @@
 //
 // One bank per core means summing per-core bandwidths gives total DRAM bandwidth.
 //
-// Compile-time args (indices 0..2):
+// Compile-time args (indices 0..3):
 //   0: num_loops         – outer loop count
 //   1: pages_per_bank    – pages read per iteration from the assigned bank
 //   2: page_size_bytes   – bytes per page
+//   3: noc_wait_cycles   – cycles to busy-wait between consecutive NOC page issues;
+//                          0 = no throttle (maximum DRAM utilization)
 //
 // Runtime args (indices 0..2):
 //   0: dram_src_addr       – base DRAM buffer address (interleaved across banks)
@@ -26,6 +28,7 @@ void kernel_main() {
     constexpr uint32_t num_loops = get_compile_time_arg_val(0);
     constexpr uint32_t pages_per_bank = get_compile_time_arg_val(1);
     constexpr uint32_t page_size_bytes = get_compile_time_arg_val(2);
+    constexpr uint32_t noc_wait_cycles = get_compile_time_arg_val(3);
 
     const uint32_t dram_src_addr = get_arg_val<uint32_t>(0);
     const uint32_t eth_l1_staging_addr = get_arg_val<uint32_t>(1);
@@ -50,6 +53,15 @@ void kernel_main() {
         for (uint32_t p = 0; p < pages_per_bank; p++) {
             noc_async_read_one_packet_with_state(bank_noc_base + p * page_size_bytes, dst);
             dst += page_size_bytes;
+
+            // Throttle DRAM utilization by busy-waiting between NOC issue commands.
+            // noc_wait_cycles == 0 at compile time → this block is eliminated entirely.
+            if constexpr (noc_wait_cycles) {
+#pragma GCC unroll noc_wait_cycles
+                for (uint32_t k = 0; k < noc_wait_cycles; k++) {
+                    asm volatile("nop");
+                }
+            }
         }
         // eth_noc_async_read_barrier calls run_routing() in its wait loop,
         // keeping the cooperative base firmware alive on active ETH cores.

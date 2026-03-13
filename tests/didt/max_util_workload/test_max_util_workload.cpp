@@ -97,6 +97,15 @@ struct MaxUtilConfig {
     // ETH loop count: 8x fewer loops than compute to match kernel duration.
     uint32_t eth_num_wl_loops = 0;  // set by setup_eth_stream_config
 
+    // DRAM utilization target percentage [1, 100].
+    // 100 = maximum utilization (no wait between NOC page issues).
+    // Lower values insert busy-wait cycles between individual page-read commands
+    // to throttle the effective DRAM bandwidth.
+    uint32_t eth_dram_util_pct = 100;
+    // Cycles to busy-wait between consecutive NOC page issues; derived from
+    // eth_dram_util_pct by setup_eth_stream_config via kDramUtilToCyclesMap.
+    uint32_t eth_noc_wait_cycles = 0;
+
     // When true, all kernels perform a super-sync barrier at program start
     // before entering their main loop.
     bool super_sync = false;
@@ -143,6 +152,24 @@ static uint32_t get_fpu_utilization_pct() {
     return 92;
 }
 
+/// Reads MAX_UTIL_DRAM_UTILIZATION_PCT from the environment; defaults to 100.
+/// Valid range: [1, 100].  100 = maximum DRAM utilization (no throttle).
+static uint32_t get_dram_utilization_pct() {
+    const char* env = std::getenv("MAX_UTIL_DRAM_UTILIZATION_PCT");
+    if (env != nullptr) {
+        try {
+            int val = std::stoi(env);
+            if (val >= 1 && val <= 100) {
+                return static_cast<uint32_t>(val);
+            }
+        } catch (...) {
+        }
+        log_warning(
+            LogTest, "MAX_UTIL_DRAM_UTILIZATION_PCT='{}' is not an integer in [1, 100] – using default of 100", env);
+    }
+    return 100;
+}
+
 /// Reads MAX_UTIL_SUPER_SYNC from the environment.
 /// Any non-empty value other than "0" or "false" enables super-sync.
 /// Defaults to false.
@@ -172,9 +199,54 @@ static MaxUtilConfig full_grid_config(
     cfg.num_wl_loops = num_wl_loops;
     cfg.num_slow_wl_loops = num_slow_wl_loops;
     cfg.fpu_utilization_pct = get_fpu_utilization_pct();
+    cfg.eth_dram_util_pct = get_dram_utilization_pct();
     cfg.super_sync = super_sync;
     return cfg;
 }
+
+// ---------------------------------------------------------------------------
+// DRAM utilization throttle map
+//
+// Maps DRAM utilization percentage → noc_wait_cycles inserted between
+// consecutive NOC page-read issues in the ETH DRAM streaming kernel.
+// noc_wait_cycles == 0 means no throttle (maximum DRAM utilization).
+//
+// Values are placeholder estimates; calibrate on target hardware by measuring
+// achieved DRAM bandwidth at each setting and adjusting the cycle counts.
+// ---------------------------------------------------------------------------
+
+// clang-format off
+static const std::map<uint32_t, uint32_t> kDramUtilToCyclesMap = {
+    {10,  215},
+    {20,   95},
+    {30,   55},
+    {40,   35},
+    {50,   23},
+    {60,   15},
+    {70,    9},
+    {80,    5},
+    {90,    2},
+    {100,   0},
+};
+// clang-format on
+
+/// Returns the key in kDramUtilToCyclesMap nearest to @p pct.
+static uint32_t nearest_dram_pct(uint32_t pct) {
+    TT_ASSERT(!kDramUtilToCyclesMap.empty(), "kDramUtilToCyclesMap must not be empty");
+    auto it = kDramUtilToCyclesMap.lower_bound(pct);
+    if (it == kDramUtilToCyclesMap.end()) {
+        return std::prev(it)->first;
+    }
+    if (it == kDramUtilToCyclesMap.begin() || it->first == pct) {
+        return it->first;
+    }
+    auto prev = std::prev(it);
+    return (pct - prev->first <= it->first - pct) ? prev->first : it->first;
+}
+
+/// Converts a requested DRAM utilization percentage to a noc_wait_cycles value
+/// by snapping to the nearest entry in kDramUtilToCyclesMap.
+static uint32_t dram_pct_to_noc_wait_cycles(uint32_t pct) { return kDramUtilToCyclesMap.at(nearest_dram_pct(pct)); }
 
 // ---------------------------------------------------------------------------
 // eth_noc0_coord – translates a logical ETH core to its NOC0 physical
@@ -309,7 +381,17 @@ static shared_ptr<Buffer> setup_eth_stream_config(IDevice* device, MaxUtilConfig
     cfg.eth_pages_per_bank = (eth_l1_size - 16) / page_size_bytes;
 
     // ETH kernel runs 8x fewer loops than the compute kernel to match duration.
-    cfg.eth_num_wl_loops = std::max(1u, cfg.num_wl_loops / 8);
+    // Also scale by utilization percentage to match the compute kernel duration.
+    cfg.eth_num_wl_loops = std::max(1u, cfg.num_wl_loops / 8 * (cfg.eth_dram_util_pct / 100));
+
+    cfg.eth_noc_wait_cycles = dram_pct_to_noc_wait_cycles(cfg.eth_dram_util_pct);
+    const uint32_t matched_dram_pct = nearest_dram_pct(cfg.eth_dram_util_pct);
+    log_info(
+        LogTest,
+        "DRAM utilization: requested={}%  matched={}%  noc_wait_cycles={}",
+        cfg.eth_dram_util_pct,
+        matched_dram_pct,
+        cfg.eth_noc_wait_cycles);
 
     log_info(
         LogTest,
@@ -764,6 +846,7 @@ static Program build_program(IDevice* device, const MaxUtilConfig& cfg) {
                         cfg.eth_num_wl_loops,
                         cfg.eth_pages_per_bank,
                         cfg.eth_page_size,
+                        cfg.eth_noc_wait_cycles,  // 3: noc_wait_cycles (0 = max DRAM util)
                     },
             };
             eth_test_common::set_arch_specific_eth_config(eth_cfg);
@@ -1199,6 +1282,7 @@ void max_util_smoke(const shared_ptr<distributed::MeshDevice>& mesh_device) {
     cfg.num_iterations = 1;
     cfg.num_wl_loops = 1;
     cfg.fpu_utilization_pct = get_fpu_utilization_pct();
+    cfg.eth_dram_util_pct = get_dram_utilization_pct();
     cfg.super_sync = get_super_sync();
     EXPECT_TRUE(run_single_device(mesh_device, cfg));
 }
