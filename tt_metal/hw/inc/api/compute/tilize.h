@@ -241,11 +241,12 @@ ALWI void tilize_uninit_with_dt(uint32_t old_icb, uint32_t new_icb, uint32_t ocb
 }
 
 ALWI void fast_tilize_init(uint32_t icb, uint32_t full_dim, uint32_t ocb, uint32_t call_line = __builtin_LINE()) {
-    state_configure(icb, icb, ocb, call_line);
 #ifdef ARCH_BLACKHOLE
-    // Blackhole fallback
+    // Blackhole fallback to regular tilize (uses srcA only)
     tilize_init(icb, full_dim, ocb, call_line);
 #else
+    // fast_tilize uses both srcA and srcB unpackers
+    state_configure(icb, icb, ocb, call_line);
     UNPACK((llk_unpack_fast_tilize_init(icb, full_dim)));
     MATH((llk_math_fast_tilize_init(icb, full_dim == 1 ? 1 : 2)));
     PACK((llk_pack_fast_tilize_init(icb, ocb, full_dim == 1 ? 1 : 2)));
