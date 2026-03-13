@@ -168,8 +168,9 @@ class DecoderBlock2DBase(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
-        return MLA2D.prefill_model_config(hf_config, mesh_device)
+        return MLA2D.prefill_model_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
 
     @classmethod
     @abstractmethod
@@ -177,12 +178,13 @@ class DecoderBlock2DBase(DecoderBlockBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
         """
         Decode configuration for the MLA component of the decoder layer.
         This method should be implemented by subclasses to handle specific MLA configurations.
         """
-        return MLA2D.decode_model_config(hf_config, mesh_device)
+        return MLA2D.decode_model_config(hf_config, mesh_device, batch_size_per_row=batch_size_per_row)
 
     @classmethod
     @abstractmethod

@@ -108,6 +108,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        batch_size_per_row: int,
     ) -> ModelPrefillConfig:
         """Create the model configuration for prefill mode."""
         model_cfg = {
@@ -117,6 +118,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     hf_config,
                     mesh_device,
                     get_fabric_config(),
+                    batch_size_per_row=batch_size_per_row,
                 )
             ],
             "moe_decoder_block": [
@@ -124,6 +126,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     hf_config,
                     mesh_device,
                     get_fabric_config(),
+                    batch_size_per_row=batch_size_per_row,
                 )
             ],
             "norm": DistributedRMSNorm.prefill_model_config(hf_config, mesh_device),
@@ -138,9 +141,14 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        batch_size_per_row: int,
     ) -> ModelDecodeConfig:
         """Create the model configuration for decode mode."""
-        norm_config = DistributedRMSNorm.decode_model_config(hf_config, mesh_device)
+        norm_config = DistributedRMSNorm.decode_model_config(
+            hf_config,
+            mesh_device,
+            batch_size_per_row=batch_size_per_row,
+        )
         model_cfg = {
             "embedding": Embedding2D.decode_model_config(hf_config, mesh_device),
             "mlp_decoder_block": [
@@ -148,6 +156,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     hf_config,
                     mesh_device,
                     get_fabric_config(),
+                    batch_size_per_row=batch_size_per_row,
                 )
             ],
             "moe_decoder_block": [
@@ -155,6 +164,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     hf_config,
                     mesh_device,
                     get_fabric_config(),
+                    batch_size_per_row=batch_size_per_row,
                 )
             ],
             "norm_reshard": ReshardConfig(memory_config=norm_config["input_memory_config"]),
