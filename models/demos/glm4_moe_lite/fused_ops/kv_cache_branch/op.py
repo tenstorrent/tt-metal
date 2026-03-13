@@ -8,8 +8,9 @@ Fuses: DKV Matmul + Gather + RMSNorm + RoPE into a single dispatch.
 All intermediate CBs use TILE_1x32 format (1 row x 32 cols).
 RMSNorm uses REDUCE_ROW (not REDUCE_SCALAR) — natural scalar on 1-row tiles.
 
-Output: RMSNorm'd kv_nope [1,512] and k_rope [1,64] (post-RoPE)
-        as sharded TILE_1x32 tensors on their respective cores.
+Kernel reads input x, cos, sin directly from DRAM via NOC.
+Kernel writes nope+rope output directly to a DRAM tensor via NOC.
+Only the matmul weight reshard remains as a Python-side op.
 """
 
 import struct
@@ -40,26 +41,29 @@ class GLMKVCacheBranch:
         cos_tensor,
         sin_tensor,
         trans_mat_tensor,
-        nope_output_tensor,
-        rope_output_tensor,
+        kvpe_output_tensor,
+        rope_core_grid,
         epsilon: float = 1e-5,
     ):
         data_format = input_tensor.dtype
         device = input_tensor.device()
 
-        input_core_grid = input_tensor.memory_config().shard_spec.grid
-
-        # DKV Matmul weight grid
+        # DKV Matmul weight grid = full 18-core grid
         dkv_matmul_weights_mc = dkv_matmul_weights_tensor.memory_config()
         dkv_matmul_weights_core_grid = dkv_matmul_weights_mc.shard_spec.grid
         dkv_matmul_weights_tile = dkv_matmul_weights_tensor.get_tile()
         dkv_matmul_weights_shard_width = dkv_matmul_weights_mc.shard_spec.shape[1]
         dkv_matmul_out_w = dkv_matmul_weights_shard_width // dkv_matmul_weights_tile.tile_shape[1]
 
+        # Core grids derived from weight grid and rope_core_grid param
+        input_core_grid = dkv_matmul_weights_core_grid
+        krope_core_grid = rope_core_grid
+
         gather_noc0_receiver_semaphore_id = 2
         gather_noc1_receiver_semaphore_id = 3
 
-        dkv_matmul_k_num_tiles = 2048 // 32  # GLM hidden_size / tile_width
+        hidden_size = int(input_tensor.shape[-1])
+        dkv_matmul_k_num_tiles = hidden_size // 32
 
         TILE_1x32 = ttnn.Tile((1, 32))
         tile_1x32_size = TILE_1x32.get_tile_size(data_format)
@@ -76,7 +80,7 @@ class GLMKVCacheBranch:
         dkv_matmul_weights_cb = 8
         kv_rmsnorm_input_cb = 9  # gather destination / rmsnorm input (intermediate)
         kv_rmsnorm_gamma_cb = 10  # gamma weights (sharded)
-        kv_rmsnorm_output_cb = 11  # rmsnorm output -> nope_output_tensor
+        kv_rmsnorm_output_cb = 11  # rmsnorm output (intermediate, NCRISC writes to DRAM)
         k_rope_output_cb = 12
         kv_rmsnorm_x2_cb = 13  # intermediate: x^2
         kv_rmsnorm_var_cb = 14  # intermediate: variance
@@ -84,6 +88,8 @@ class GLMKVCacheBranch:
         kv_rmsnorm_eps_cb = 16  # intermediate: epsilon
 
         nope_num_tiles = 512 // 32  # 16 tiles of TILE_1x32
+        rope_dim = int(cos_tensor.shape[-1])
+        num_rope_cores = krope_core_grid.num_cores()
 
         # ================================================================
         # Compile-time args
@@ -107,7 +113,7 @@ class GLMKVCacheBranch:
         # ================================================================
         rms_core_grid = gamma_tensor.memory_config().shard_spec.grid
         rms_core = rms_core_grid.ranges()[0].start
-        dkv_gather_sender_grid = dkv_matmul_weights_core_grid.subtract(cos_tensor.memory_config().shard_spec.grid)
+        dkv_gather_sender_grid = dkv_matmul_weights_core_grid.subtract(krope_core_grid)
         dkv_gather_dest_noc_core = device.worker_core_from_logical_core(rms_core)
 
         dkv_gather_sender_cores_list = ttnn.corerange_to_cores(dkv_gather_sender_grid, row_wise=True)
@@ -117,8 +123,6 @@ class GLMKVCacheBranch:
         dkv_gather_data_size_bytes = dkv_gather_src_num_pages * tile_1x32_size
         dkv_gather_dst_total_pages = dkv_gather_num_senders * dkv_gather_src_num_pages
 
-        # Per-core sender index mapping — handles non-rectangular sender grids
-        # produced by CoreRangeSet.subtract() (same pattern as DSv3 post_sdpa/moe_routed_expert)
         dkv_gather_sender_idx_descriptor = PerCoreCompileTimeDescriptor(
             named_compile_time_arg="dkv_gather_sender_idx",
             core_values=[(core, idx) for idx, core in enumerate(dkv_gather_sender_cores_list)],
@@ -162,6 +166,7 @@ class GLMKVCacheBranch:
             ("cos_cb", cos_cb),
             ("sin_cb", sin_cb),
             ("trans_mat_cb", trans_mat_cb),
+            ("k_rope_output_cb", k_rope_output_cb),
             ("Wt", 1),
             ("Ht", 1),
         ]
@@ -178,12 +183,30 @@ class GLMKVCacheBranch:
             ("Ht", 1),
         ]
 
+        # DRAM I/O compile-time args for NCRISC
+        kvpe_dim = int(kvpe_output_tensor.shape[-1])
+        nope_bytes = nope_num_tiles * tile_1x32_size
+        cos_sin_dram_page_size = rope_dim * 2  # bf16
+        kvpe_out_dram_page_size = kvpe_dim * 2  # bf16
+
+        dram_io_ncrisc_args = [
+            ("cos_sin_dram_page_size", cos_sin_dram_page_size),
+            ("kvpe_out_dram_page_size", kvpe_out_dram_page_size),
+            ("kvpe_out_nope_bytes", nope_bytes),
+        ]
+
+        # Per-core tile offset for rope cores (0 for core 0, 1 for core 1)
+        rope_cores_list = ttnn.corerange_to_cores(krope_core_grid, row_wise=True)
+        krope_tile_offset_descriptor = PerCoreCompileTimeDescriptor(
+            named_compile_time_arg="krope_core_tile_offset",
+            core_values=[(core, idx) for idx, core in enumerate(rope_cores_list)],
+            other_value=0,
+        )
+
         # ================================================================
         # Circular Buffer descriptors
         # ================================================================
-        # Manual CB descriptor: tensor is ROW_MAJOR but kernel reads TILE_1x32 tiles
-        # (byte layout is identical for 1-row data).
-        hidden_size = input_tensor.memory_config().shard_spec.shape[1]
+        # Input CB: intermediate (kernel reads x from DRAM into this CB)
         input_tiles_per_core = hidden_size // 32
         dkv_matmul_input_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=dkv_matmul_input_cb,
@@ -215,20 +238,17 @@ class GLMKVCacheBranch:
         )
 
         # ---- RMSNorm input CB (gather destination, intermediate on rmsnorm core) ----
-        # Must also exist (as dummy) on ALL cores for consistent get_write_ptr in gather sender.
         rmsnorm_input_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=kv_rmsnorm_input_cb,
             data_format=data_format,
             page_size=tile_1x32_size,
             tile=ttnn.TileDescriptor(TILE_1x32),
         )
-        # On rmsnorm core: full size for all gathered tiles
         rmsnorm_input_cb_on_rms = ttnn.CBDescriptor(
             total_size=nope_num_tiles * tile_1x32_size,
             core_ranges=rms_core_grid,
             format_descriptors=[rmsnorm_input_cb_format],
         )
-        # On all other cores: dummy (same size for consistent get_write_ptr address)
         other_cores = input_core_grid.subtract(rms_core_grid)
         rmsnorm_input_cb_dummy = None
         if other_cores.num_cores() > 0:
@@ -241,9 +261,7 @@ class GLMKVCacheBranch:
         # ---- RMSNorm gamma CB (sharded on rmsnorm core, backed by gamma_tensor) ----
         rmsnorm_gamma_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(kv_rmsnorm_gamma_cb, gamma_tensor)
 
-        # ---- RMSNorm output CB (backed by nope_output_tensor on rmsnorm core) ----
-        # Manual CB descriptor: tensor is ROW_MAJOR but kernel writes TILE_1x32 tiles
-        # (byte layout is identical for 1-row data).
+        # ---- RMSNorm output CB (intermediate, NCRISC writes to DRAM) ----
         rmsnorm_output_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=kv_rmsnorm_output_cb,
             data_format=data_format,
@@ -256,7 +274,7 @@ class GLMKVCacheBranch:
             format_descriptors=[rmsnorm_output_cb_format],
         )
 
-        # ---- RMSNorm intermediate CBs (all TILE_1x32, on rmsnorm core only) ----
+        # ---- RMSNorm intermediate CBs ----
         def _make_rms_interm_cb(idx, num_tiles_alloc):
             fmt = ttnn.CBFormatDescriptor(
                 buffer_index=idx,
@@ -275,11 +293,8 @@ class GLMKVCacheBranch:
         rmsnorm_scaler_cb_descriptor = _make_rms_interm_cb(kv_rmsnorm_scaler_cb, 1)
         rmsnorm_eps_cb_descriptor = _make_rms_interm_cb(kv_rmsnorm_eps_cb, 1)
 
-        # RoPE CBs
-        krope_core_grid = cos_tensor.memory_config().shard_spec.grid
-
-        # Manual CB descriptors: tensors are ROW_MAJOR but kernel reads TILE_1x32 tiles.
-        cos_sin_tiles_per_core = cos_tensor.memory_config().shard_spec.shape[1] // 32
+        # ---- RoPE CBs (intermediate, kernel reads cos/sin from DRAM into these) ----
+        cos_sin_tiles_per_core = 1  # Each rope core gets rope_dim / num_rope_cores / 32 = 1 tile
         cos_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=cos_cb,
             data_format=data_format,
@@ -317,8 +332,7 @@ class GLMKVCacheBranch:
         cos_interm_cb_descriptor = _make_rope_interm_cb(cos_interm_cb, krope_core_grid)
         sin_interm_cb_descriptor = _make_rope_interm_cb(sin_interm_cb, krope_core_grid)
 
-        # Manual CB descriptor: tensor is ROW_MAJOR but kernel writes TILE_1x32 tiles.
-        rope_num_tiles_per_core = (rope_output_tensor.memory_config().shard_spec.shape[1]) // 32
+        # ---- RoPE output CB (intermediate, NCRISC writes to DRAM) ----
         k_rope_output_cb_format = ttnn.CBFormatDescriptor(
             buffer_index=k_rope_output_cb,
             data_format=data_format,
@@ -326,7 +340,7 @@ class GLMKVCacheBranch:
             tile=ttnn.TileDescriptor(TILE_1x32),
         )
         k_rope_output_cb_descriptor = ttnn.CBDescriptor(
-            total_size=rope_num_tiles_per_core * tile_1x32_size,
+            total_size=cos_sin_tiles_per_core * tile_1x32_size,
             core_ranges=krope_core_grid,
             format_descriptors=[k_rope_output_cb_format],
         )
@@ -346,16 +360,21 @@ class GLMKVCacheBranch:
         )
 
         # ================================================================
-        # RMSNorm runtime args (NCRISC: scaler/eps values; TRISC: CB indices)
+        # Runtime args
         # ================================================================
         scaler_bf16 = _bf16_to_uint16(1.0 / 512.0)  # 1/N where N=512 (kv_lora_rank)
         eps_bf16 = _bf16_to_uint16(epsilon)
 
+        # NCRISC common runtime args: RMSNorm params (0-3) + DRAM addresses (4-7)
         ncrisc_rmsnorm_rt_args = [
             kv_rmsnorm_scaler_cb,  # arg 0: cb_scaler
             kv_rmsnorm_eps_cb,  # arg 1: cb_eps
             scaler_bf16,  # arg 2: scaler_packed
             eps_bf16,  # arg 3: eps_packed
+            input_tensor.buffer_address(),  # arg 4: x DRAM address
+            cos_tensor.buffer_address(),  # arg 5: cos DRAM address
+            sin_tensor.buffer_address(),  # arg 6: sin DRAM address
+            kvpe_output_tensor.buffer_address(),  # arg 7: kvpe output DRAM address
         ]
         trisc_rmsnorm_rt_args = [
             kv_rmsnorm_input_cb,  # arg 0: input_cb
@@ -374,7 +393,11 @@ class GLMKVCacheBranch:
             kernel_source="models/demos/glm4_moe_lite/fused_ops/kv_cache_branch/kernels/kv_cache_branch_kernel.cpp",
             core_ranges=input_core_grid,
             ncrisc_named_compile_time_args=(
-                dkv_matmul_ncrisc_args + dkv_gather_sender_args + kv_rmsnorm_common_args + krope_ncrisc_args
+                dkv_matmul_ncrisc_args
+                + dkv_gather_sender_args
+                + kv_rmsnorm_common_args
+                + krope_ncrisc_args
+                + dram_io_ncrisc_args
             ),
             brisc_named_compile_time_args=(dkv_gather_receiver_args + kv_rmsnorm_common_args + krope_brisc_args),
             trisc_named_compile_time_args=(dkv_matmul_trisc_args + kv_rmsnorm_common_args + krope_trisc_args),
@@ -410,7 +433,10 @@ class GLMKVCacheBranch:
                     other_value=0,
                 ),
             ],
-            per_core_compile_time_descriptors=[dkv_gather_sender_idx_descriptor],
+            per_core_compile_time_descriptors=[
+                dkv_gather_sender_idx_descriptor,
+                krope_tile_offset_descriptor,
+            ],
             ncrisc_common_runtime_args=ncrisc_rmsnorm_rt_args,
             trisc_common_runtime_args=trisc_rmsnorm_rt_args,
         )
@@ -446,6 +472,7 @@ class GLMKVCacheBranch:
             semaphores=[gather_noc0_sem, gather_noc1_sem],
         )
 
+        # io_tensors: sharded tensors for CB backing + DRAM tensors for lifetime
         io_tensors = [
             input_tensor,
             dkv_matmul_weights_tensor,
@@ -453,8 +480,7 @@ class GLMKVCacheBranch:
             cos_tensor,
             sin_tensor,
             trans_mat_tensor,
-            nope_output_tensor,
-            rope_output_tensor,
+            kvpe_output_tensor,
         ]
         ttnn.generic_op(io_tensors, program_descriptor)
-        return nope_output_tensor, rope_output_tensor
+        return kvpe_output_tensor
