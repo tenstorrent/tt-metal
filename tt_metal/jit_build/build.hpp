@@ -162,11 +162,6 @@ protected:
     bool build_state_matches(const std::string& out_dir) const;
     void write_build_state_hash(const std::string& out_dir) const;
 
-    // Copy generated headers (chlkc_descriptors.h, etc.) from NFS to the scratch
-    // genfiles directory.  Must be called once per kernel BEFORE any parallel
-    // build() calls to avoid races on the shared scratch genfiles directory.
-    void ensure_scratch_genfiles(const JitBuildSettings* settings) const;
-
     bool need_compile(const std::string& out_dir, const std::string& obj) const;
     // When check_dir is non-empty, cache-hit checks (need_compile) use check_dir
     // while actual compilation writes to out_dir.  This enables scratch-mode:
@@ -186,6 +181,11 @@ public:
     JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config, const Hal& hal);
 
     void build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets = {}) const;
+
+    // Copy generated headers (chlkc_descriptors.h, etc.) from NFS to the scratch
+    // genfiles directory.  Must be called once per kernel BEFORE any parallel
+    // build() calls to avoid races on the shared scratch genfiles directory.
+    void ensure_scratch_genfiles(const JitBuildSettings* settings) const;
 
     const std::string& get_out_path() const { return this->out_path_; }
     const std::string& get_target_name() const { return this->target_name_; }
