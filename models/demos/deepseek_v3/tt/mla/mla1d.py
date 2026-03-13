@@ -1223,8 +1223,7 @@ class MLA1D(AbstractModule):
             page_table = torch.randperm(max_num_blocks, dtype=torch.int32)  # Randperm not necessary, but more rigorous
             page_table = page_table.reshape(batch_per_shard, even_int_div(max_num_blocks, batch_per_shard))
         assert page_table.numel() == paged_config.max_num_blocks
-
-        return ttnn.from_torch(
+        page_table_tt = ttnn.from_torch(
             page_table,
             dtype=ttnn.int32,
             layout=ttnn.ROW_MAJOR_LAYOUT,
@@ -1232,6 +1231,150 @@ class MLA1D(AbstractModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         )
+        try:
+            alias_mask = cls._compute_alias_mask_from_host(page_table)
+            cls.register_page_table_alias_mask(page_table_tt, alias_mask)
+        except Exception:
+            # Alias-mask caching is a best-effort optimization. If it fails here,
+            # the decode path recomputes the mask from the page table tensor.
+            pass
+        return page_table_tt
+
+    @staticmethod
+    def _compute_alias_mask_from_host(page_table_host: torch.Tensor) -> torch.Tensor:
+        if page_table_host.dim() != 2:
+            raise RuntimeError(f"Unexpected page table rank for alias mask: {tuple(page_table_host.shape)}")
+        num_rows = int(page_table_host.shape[0])
+        alias_mask = torch.zeros((num_rows,), dtype=torch.bool)
+        seen: dict[tuple[int, ...], int] = {}
+        for i in range(num_rows):
+            row = tuple(int(v) for v in page_table_host[i].tolist())
+            if row in seen:
+                alias_mask[i] = True
+            else:
+                seen[row] = i
+        return alias_mask
+
+    @classmethod
+    def _get_mtp_alias_mask_cache(cls) -> dict[int, torch.Tensor]:
+        cache = getattr(cls, "_mtp_alias_mask_cache", None)
+        if cache is None:
+            cache = {}
+            setattr(cls, "_mtp_alias_mask_cache", cache)
+        return cache
+
+    @classmethod
+    def register_page_table_alias_mask(cls, page_table_tensor: ttnn.Tensor, alias_mask: torch.Tensor) -> None:
+        cls._get_mtp_alias_mask_cache()[id(page_table_tensor)] = alias_mask.clone()
+
+    @classmethod
+    def _get_mtp_alias_runtime_cache(cls) -> dict[int, dict[tuple, dict[str, ttnn.Tensor]]]:
+        cache = getattr(cls, "_mtp_alias_runtime_cache", None)
+        if cache is None:
+            cache = {}
+            setattr(cls, "_mtp_alias_runtime_cache", cache)
+        return cache
+
+    @classmethod
+    def release_page_table_alias_runtime_cache(cls, page_table_tensor: ttnn.Tensor | None = None) -> None:
+        alias_mask_cache = getattr(cls, "_mtp_alias_mask_cache", None)
+        runtime_cache = getattr(cls, "_mtp_alias_runtime_cache", None)
+        if alias_mask_cache is None and runtime_cache is None:
+            return
+
+        page_table_ids = [id(page_table_tensor)] if page_table_tensor is not None else None
+        if alias_mask_cache is not None:
+            if page_table_ids is None:
+                alias_mask_cache.clear()
+            else:
+                for page_table_id in page_table_ids:
+                    alias_mask_cache.pop(page_table_id, None)
+
+        if runtime_cache is None:
+            return
+        if page_table_ids is None:
+            page_table_ids = list(runtime_cache.keys())
+        for page_table_id in page_table_ids:
+            states = runtime_cache.pop(page_table_id, None)
+            if not states:
+                continue
+            for state in states.values():
+                for tensor in state.values():
+                    ttnn.deallocate(tensor)
+
+    @classmethod
+    def _get_or_create_alias_split_state(
+        cls,
+        page_table: ttnn.Tensor,
+        position_idxs: ttnn.Tensor,
+        logical_shape: tuple[int, ...],
+        is_sharded: bool,
+        num_devices_eff: int,
+        per_shard: int,
+        prompt_row: torch.Tensor,
+        spec_row: torch.Tensor,
+    ) -> dict[str, ttnn.Tensor]:
+        mesh_device = position_idxs.device()
+        if mesh_device is None:
+            raise RuntimeError("Position tensor is missing mesh device for alias split state.")
+
+        state_key = (tuple(int(dim) for dim in logical_shape), bool(is_sharded), int(num_devices_eff), int(per_shard))
+        page_cache = cls._get_mtp_alias_runtime_cache().setdefault(id(page_table), {})
+        state = page_cache.get(state_key)
+        if state is not None:
+            return state
+
+        total_elems = 1
+        for dim in logical_shape:
+            total_elems *= int(dim)
+        per_shard_padded = total_elems // num_devices_eff
+
+        prompt_mask_host = torch.zeros((total_elems,), dtype=torch.int32)
+        spec_mask_host = torch.zeros((total_elems,), dtype=torch.int32)
+        for d in range(num_devices_eff):
+            start = d * per_shard_padded
+            prompt_mask_host[start : start + per_shard] = prompt_row
+            spec_mask_host[start : start + per_shard] = spec_row
+
+        mask_shape = tuple(int(dim) for dim in logical_shape)
+        prompt_mask_host = prompt_mask_host.reshape(mask_shape)
+        spec_mask_host = spec_mask_host.reshape(mask_shape)
+        inv_prompt_mask_host = torch.ones(mask_shape, dtype=torch.int32) - prompt_mask_host
+        inv_spec_mask_host = torch.ones(mask_shape, dtype=torch.int32) - spec_mask_host
+
+        mask_mesh_mapper = (
+            ttnn.ShardTensorToMesh(mesh_device, dim=0) if is_sharded else ttnn.ReplicateTensorToMesh(mesh_device)
+        )
+
+        state = {
+            "prompt_mask": ttnn.from_torch(
+                prompt_mask_host,
+                device=mesh_device,
+                mesh_mapper=mask_mesh_mapper,
+                dtype=ttnn.int32,
+            ),
+            "spec_mask": ttnn.from_torch(
+                spec_mask_host,
+                device=mesh_device,
+                mesh_mapper=mask_mesh_mapper,
+                dtype=ttnn.int32,
+            ),
+            "inv_prompt_mask": ttnn.from_torch(
+                inv_prompt_mask_host,
+                device=mesh_device,
+                mesh_mapper=mask_mesh_mapper,
+                dtype=ttnn.int32,
+            ),
+            "inv_spec_mask": ttnn.from_torch(
+                inv_spec_mask_host,
+                device=mesh_device,
+                mesh_mapper=mask_mesh_mapper,
+                dtype=ttnn.int32,
+            ),
+            "neg_one": ttnn.full_like(position_idxs, fill_value=-1),
+        }
+        page_cache[state_key] = state
+        return state
 
     @classmethod
     def create_state(
@@ -1794,15 +1937,115 @@ class MLA1D(AbstractModule):
         mesh_shape: tuple[int, int],
         row_idx: int | None,
     ) -> None:
-        # Update KVPE Cache
-        # 1,4,1(32),576 height sharded 1x4 [32,576]
-        ttnn.experimental.paged_update_cache(
-            kvpe_cache,
-            tt_kvpe,
-            update_idxs_tensor=position_idxs,
-            page_table=page_table,
-            mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+        def _get_alias_mask(page_table_tensor: ttnn.Tensor) -> torch.Tensor:
+            cache = cls._get_mtp_alias_mask_cache()
+            key = id(page_table_tensor)
+            if key in cache:
+                return cache[key]
+            mesh_device = page_table_tensor.device()
+            if mesh_device is None:
+                raise RuntimeError("Page table tensor is missing mesh device for alias mask.")
+            page_table_host = ttnn.to_torch(
+                page_table_tensor,
+                mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+            )
+            num_devices = mesh_device.shape[0] * mesh_device.shape[1]
+            if num_devices > 1 and page_table_host.shape[0] % num_devices == 0:
+                rows_per_device = page_table_host.shape[0] // num_devices
+                page_table_host = page_table_host.reshape(num_devices, rows_per_device, -1)[0]
+            alias_mask = cls._compute_alias_mask_from_host(page_table_host)
+            cls.register_page_table_alias_mask(page_table_tensor, alias_mask)
+            return alias_mask
+
+        mesh_device = kvpe_cache.device()
+        if mesh_device is None:
+            raise RuntimeError("Paged update cache requires a valid mesh device.")
+
+        # Split KVPE cache updates into prompt and speculation lanes to avoid aliasing races.
+        alias_mask = _get_alias_mask(page_table)
+        alias_mask_any = bool(alias_mask.any().item())
+        per_shard = int(alias_mask.numel())
+        num_devices = mesh_shape[1] if row_idx is not None else (mesh_shape[0] * mesh_shape[1])
+        logical_shape = (
+            position_idxs.logical_shape() if hasattr(position_idxs, "logical_shape") else position_idxs.shape
         )
+        total_elems = 1
+        for dim in logical_shape:
+            total_elems *= int(dim)
+        is_sharded = position_idxs.is_sharded() if hasattr(position_idxs, "is_sharded") else False
+        num_devices_eff = num_devices
+        if not is_sharded and per_shard > 0 and total_elems % per_shard == 0:
+            candidate = total_elems // per_shard
+            if candidate > 0 and candidate <= num_devices:
+                num_devices_eff = candidate
+
+        if not alias_mask_any:
+            ttnn.experimental.paged_update_cache(
+                kvpe_cache,
+                tt_kvpe,
+                update_idxs_tensor=position_idxs,
+                page_table=page_table,
+                mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+            )
+        elif per_shard <= 0 or num_devices_eff <= 0 or total_elems % num_devices_eff != 0:
+            ttnn.experimental.paged_update_cache(
+                kvpe_cache,
+                tt_kvpe,
+                update_idxs_tensor=position_idxs,
+                page_table=page_table,
+                mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+            )
+        else:
+            per_shard_padded = total_elems // num_devices_eff
+            if per_shard_padded < per_shard:
+                ttnn.experimental.paged_update_cache(
+                    kvpe_cache,
+                    tt_kvpe,
+                    update_idxs_tensor=position_idxs,
+                    page_table=page_table,
+                    mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+                )
+            else:
+                prompt_row = (~alias_mask).to(torch.int32)
+                spec_row = alias_mask.to(torch.int32)
+                split_state = cls._get_or_create_alias_split_state(
+                    page_table=page_table,
+                    position_idxs=position_idxs,
+                    logical_shape=tuple(int(dim) for dim in logical_shape),
+                    is_sharded=is_sharded,
+                    num_devices_eff=num_devices_eff,
+                    per_shard=per_shard,
+                    prompt_row=prompt_row,
+                    spec_row=spec_row,
+                )
+
+                tt_prompt_pos = ttnn.add(
+                    ttnn.multiply(position_idxs, split_state["prompt_mask"]),
+                    ttnn.multiply(split_state["neg_one"], split_state["inv_prompt_mask"]),
+                )
+                tt_spec_pos = ttnn.add(
+                    ttnn.multiply(position_idxs, split_state["spec_mask"]),
+                    ttnn.multiply(split_state["neg_one"], split_state["inv_spec_mask"]),
+                )
+
+                # Update KVPE Cache (prompt lanes first, spec lanes second)
+                ttnn.experimental.paged_update_cache(
+                    kvpe_cache,
+                    tt_kvpe,
+                    update_idxs_tensor=tt_prompt_pos,
+                    page_table=page_table,
+                    mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+                )
+                ttnn.experimental.paged_update_cache(
+                    kvpe_cache,
+                    tt_kvpe,
+                    update_idxs_tensor=tt_spec_pos,
+                    page_table=page_table,
+                    mesh_coords=set(get_mesh_coords(mesh_shape, row_idx)),
+                )
+
+                ttnn.deallocate(tt_prompt_pos)
+                ttnn.deallocate(tt_spec_pos)
 
     @classmethod
     def _fwd_decode_q_rope_nope(

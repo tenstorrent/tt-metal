@@ -18,6 +18,54 @@ from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
 
+def _prompt_text_for_index(prompts: list[str] | None, random_weights: bool, index: int) -> str:
+    if prompts is not None and index < len(prompts):
+        return prompts[index]
+    if random_weights:
+        return "[random-weights default prompt]"
+    return "[empty prompt]"
+
+
+def _build_output_data(
+    prompts: list[str] | None,
+    generations: list[dict],
+    statistics: dict,
+    random_weights: bool,
+) -> dict:
+    output_data = {
+        "prompts": prompts if prompts else [],
+        "generations": [],
+        "statistics": statistics,
+    }
+    for i, gen_result in enumerate(generations):
+        output_data["generations"].append(
+            {
+                "index": i + 1,
+                "prompt": _prompt_text_for_index(prompts, random_weights, i),
+                "text": gen_result.get("text"),
+            }
+        )
+    return output_data
+
+
+def _resolve_saved_output_path(prompts_file_path: Path | None, output_path_arg: str | None) -> Path | None:
+    if output_path_arg:
+        return Path(output_path_arg)
+    if prompts_file_path is not None:
+        return prompts_file_path.parent / f"{prompts_file_path.stem}_output.json"
+    return None
+
+
+def _write_json_output(path: Path, payload: dict, label: str) -> None:
+    try:
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2, ensure_ascii=False)
+        logger.info(f"{label} saved to '{path}'")
+        print(f"\n{label} saved to '{path}'\n")
+    except Exception as e:
+        raise SystemExit(f"Failed to write {label.lower()} '{path}': {e}")
+
+
 def _print_performance_metrics(results: dict) -> None:
     """Print performance metrics from results if available."""
     if "statistics" in results and results["statistics"]:
@@ -117,6 +165,18 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_true",
         default=False,
         help="Enable TTNN memory profiling dumps during setup",
+    )
+    p.add_argument(
+        "--mtp",
+        choices=["on", "off"],
+        default="off",
+        help="Control MTP usage: on (requires MTP weights), off (default).",
+    )
+    p.add_argument(
+        "--min-mtp-accept-rate",
+        type=float,
+        default=None,
+        help="If set, require MTP accept rate to be at least this value.",
     )
     p.add_argument(
         "--repeat-batches",
@@ -273,6 +333,8 @@ def run_demo(
     profile_decode: bool = False,
     sample_on_device: bool = False,
     force_recalculate: bool = False,
+    enable_mtp: bool = False,
+    min_mtp_accept_rate: float | None = None,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -294,7 +356,6 @@ def run_demo(
         require_safetensors=not random_weights,
         require_tokenizer=not random_weights,
     )
-
     requested_system_name = os.getenv("MESH_DEVICE")
     if requested_system_name is None:
         raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, or TG.")
@@ -319,6 +380,8 @@ def run_demo(
         # that tracing completes without buffer exhaustion for your target workload.
         BASE_TRACE_REGION_BYTES = 38_070_272
         trace_region_size = BASE_TRACE_REGION_BYTES + int(0.20 * BASE_TRACE_REGION_BYTES)
+        if enable_mtp:
+            trace_region_size = max(trace_region_size, 134_217_728)
         logger.info(f"Trace region size set to {trace_region_size}")
         mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
     else:
@@ -375,6 +438,8 @@ def run_demo(
                 force_recalculate=force_recalculate,
                 profile_decode=profile_decode,
                 sample_on_device=sample_on_device,
+                enable_mtp=enable_mtp,
+                min_mtp_accept_rate=min_mtp_accept_rate,
             )
         else:
             raise ValueError(f"Unsupported generator: {generator}")
@@ -400,14 +465,70 @@ def run_demo(
                 prompt_list = prompts
 
         # Multi-prompt generation
-        generations, statistics = gen.generate(
-            prompt_list,
-            max_new_tokens=max_new_tokens,
-            teacher_forcing=token_acc,
-            early_print_first_user=early_print_first_user,
-            repeat_batches=repeat_batches,
-            pre_tokenized=pre_tokenized_prompts,
-        )
+        use_mtp_path = gen.enable_mtp and token_acc is None and max_new_tokens > 1
+        max_prompts_per_batch = gen.batch_size
+        if use_mtp_path:
+            max_prompts_per_batch = max(1, gen.batch_size // 2)
+
+        if use_mtp_path and len(prompt_list) > max_prompts_per_batch:
+            logger.info(
+                f"MTP enabled with {len(prompt_list)} prompts; running in batches of up to {max_prompts_per_batch} "
+                "to reserve lanes for verify batching."
+            )
+            all_generations = []
+            all_stats = []
+            for start in range(0, len(prompt_list), max_prompts_per_batch):
+                batch_prompts = prompt_list[start : start + max_prompts_per_batch]
+                batch_pre_tokenized = (
+                    pre_tokenized_prompts[start : start + max_prompts_per_batch]
+                    if pre_tokenized_prompts is not None
+                    else None
+                )
+                batch_generations, batch_stats = gen.generate(
+                    batch_prompts,
+                    max_new_tokens=max_new_tokens,
+                    teacher_forcing=token_acc,
+                    early_print_first_user=early_print_first_user,
+                    repeat_batches=repeat_batches,
+                    pre_tokenized=batch_pre_tokenized,
+                )
+                all_generations.extend(batch_generations)
+                all_stats.append(batch_stats)
+
+            generations = all_generations
+            statistics = all_stats[-1] if all_stats else {}
+            if all_stats:
+                statistics["batch_count"] = len(all_stats)
+                mtp_accepts = [s.get("mtp_accepts") for s in all_stats if s.get("mtp_accepts") is not None]
+                mtp_verifies = [s.get("mtp_verifies") for s in all_stats if s.get("mtp_verifies") is not None]
+                if mtp_accepts and mtp_verifies:
+                    total_accepts = sum(int(x) for x in mtp_accepts)
+                    total_verifies = sum(int(x) for x in mtp_verifies)
+                    statistics["mtp_accepts"] = total_accepts
+                    statistics["mtp_accept_rate"] = (total_accepts / total_verifies) if total_verifies > 0 else 0.0
+                else:
+                    mtp_rates = [s.get("mtp_accept_rate") for s in all_stats if s.get("mtp_accept_rate") is not None]
+                    if mtp_rates:
+                        statistics["mtp_accept_rate"] = sum(mtp_rates) / len(mtp_rates)
+                for key in (
+                    "preparing_prefill_config",
+                    "preparing_decode_config",
+                    "inference_prefill",
+                    "inference_decode",
+                    "decode_forward_passes",
+                    "Full demo runtime",
+                ):
+                    if any(key in s for s in all_stats):
+                        statistics[key] = sum(float(s.get(key, 0) or 0) for s in all_stats)
+        else:
+            generations, statistics = gen.generate(
+                prompt_list,
+                max_new_tokens=max_new_tokens,
+                teacher_forcing=token_acc,
+                early_print_first_user=early_print_first_user,
+                repeat_batches=repeat_batches,
+                pre_tokenized=pre_tokenized_prompts,
+            )
 
         # Process all generations
         results = []
@@ -482,63 +603,30 @@ def main() -> None:
         profile_decode=args.profile_decode,
         sample_on_device=args.sample_on_device,
         force_recalculate=bool(args.force_recalculate),
+        enable_mtp=(args.mtp == "on"),
+        min_mtp_accept_rate=args.min_mtp_accept_rate,
     )
 
-    # If prompts were loaded from a JSON file, save output to JSON file instead of printing
-    if prompts_file_path:
-        # Use provided output path, or generate default: input_name + "_output.json"
-        if args.output_path:
-            output_path = Path(args.output_path)
-        else:
-            output_path = prompts_file_path.parent / f"{prompts_file_path.stem}_output.json"
+    saved_output_path = _resolve_saved_output_path(prompts_file_path, args.output_path)
 
-        # Prepare output data structure
-        output_data = {
-            "prompts": args.prompts if args.prompts else [],
-            "generations": [],
-            "statistics": results.get("statistics", {}),
-        }
-
-        # Add generation results
-        for i, gen_result in enumerate(results["generations"]):
-            prompt_text = ""
-            if args.prompts is not None and i < len(args.prompts):
-                prompt_text = args.prompts[i]
-            elif args.random_weights:
-                prompt_text = "[random-weights default prompt]"
-
-            output_data["generations"].append(
-                {
-                    "index": i + 1,
-                    "prompt": prompt_text if prompt_text else "[empty prompt]",
-                    "text": gen_result.get("text"),
-                }
-            )
-
-        # Write to JSON file
-        try:
-            with open(output_path, "w", encoding="utf-8") as f:
-                json.dump(output_data, f, indent=2, ensure_ascii=False)
-            logger.info(f"Results saved to '{output_path}'")
-            print(f"\nResults saved to '{output_path}'\n")
-        except Exception as e:
-            raise SystemExit(f"Failed to write output file '{output_path}': {e}")
+    # If prompts were loaded from a JSON file, save output to JSON file instead of printing.
+    # Only host rank 0 writes the shared file to avoid rank races corrupting the JSON.
+    if prompts_file_path and saved_output_path is not None:
+        output_data = _build_output_data(
+            prompts=args.prompts,
+            generations=results["generations"],
+            statistics=results.get("statistics", {}),
+            random_weights=bool(args.random_weights),
+        )
+        if int(os.getenv("TT_MESH_HOST_RANK", "0")) == 0:
+            _write_json_output(saved_output_path, output_data, "Results")
     else:
         # Print to terminal as before
         print("\n===== Generated =====\n")
 
         for i, gen_result in enumerate(results["generations"]):
-            prompt_text = ""
-            if args.prompts is not None and i < len(args.prompts):
-                prompt_text = args.prompts[i]
-            elif args.random_weights:
-                prompt_text = "[random-weights default prompt]"
-
             print("-" * 30)
-            if prompt_text:
-                print(f"Prompt[{i+1}]: {prompt_text}")
-            else:
-                print(f"Prompt[{i+1}]: [empty prompt]")
+            print(f"Prompt[{i+1}]: {_prompt_text_for_index(args.prompts, bool(args.random_weights), i)}")
             print(f"Generation[{i+1}]:")
             if gen_result.get("text") is not None:
                 print(gen_result["text"])  # type: ignore
