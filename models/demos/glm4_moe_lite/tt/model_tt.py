@@ -2354,7 +2354,10 @@ class Glm4MoeLiteDenseOnlyTT:
             ttnn.deallocate(x, force=False)
             x = x_next
             if _PROFILER_ENABLED and (layer_idx + 1) % _PROFILER_FLUSH_INTERVAL == 0:
-                ttnn.ReadDeviceProfiler(self.device)
+                try:
+                    ttnn.ReadDeviceProfiler(self.device)
+                except RuntimeError:
+                    pass
 
         # Preserve hidden state for MTP before final_norm consumes it.
         # Use ttnn.clone (not ttnn.copy) so the trace graph allocates a fresh
