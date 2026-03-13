@@ -43,6 +43,11 @@ namespace builder_config {
 // Number of Virtual Channels supported (VC0 and VC1)
 static constexpr std::size_t MAX_NUM_VCS = 2;
 
+// Maximum number of ERISC RISC-V cores per ethernet channel (1 on WH, up to 2 on BH)
+// NOTE: MAX_RISC_CORES_PER_ETH_CHAN == MAX_NUM_VCS by coincidence on current hardware.
+// Use MAX_RISC_CORES_PER_ETH_CHAN for arrays indexed by risc_id, MAX_NUM_VCS for VC logic.
+static constexpr std::size_t MAX_RISC_CORES_PER_ETH_CHAN = 2;
+
 // linear/mesh/ring/torus: for fabric with tensix extension, only one sender channel will be present on fabric router
 static constexpr std::size_t num_sender_channels_with_tensix_config = 1;
 
@@ -96,35 +101,5 @@ uint32_t get_vc0_downstream_edm_count(bool is_2D_routing);
 uint32_t get_vc1_downstream_edm_count(bool is_2D_routing);
 
 }  // namespace builder_config
-
-/**
- * Structure to hold all parameters needed for allocator construction.
- * This simplifies passing multiple parameters to allocator constructors.
- */
-struct AllocatorConstructionParams {
-    Topology topology;
-    FabricEriscDatamoverOptions options;
-    size_t num_used_sender_channels;
-    size_t num_used_receiver_channels;
-    size_t channel_buffer_size_bytes;
-    size_t available_channel_buffering_space;
-    std::vector<MemoryRegion> memory_regions;
-
-    AllocatorConstructionParams(
-        Topology topology,
-        const FabricEriscDatamoverOptions& options,
-        size_t num_used_sender_channels,
-        size_t num_used_receiver_channels,
-        size_t channel_buffer_size_bytes,
-        size_t available_channel_buffering_space,
-        const std::vector<MemoryRegion>& memory_regions) :
-        topology(topology),
-        options(options),
-        num_used_sender_channels(num_used_sender_channels),
-        num_used_receiver_channels(num_used_receiver_channels),
-        channel_buffer_size_bytes(channel_buffer_size_bytes),
-        available_channel_buffering_space(available_channel_buffering_space),
-        memory_regions(memory_regions) {}
-};
 
 }  // namespace tt::tt_fabric
