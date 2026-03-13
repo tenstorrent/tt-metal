@@ -204,7 +204,7 @@ class Llama(AbstractModuleBase):
 
 
 # C++ Llama bindings from _ttml.models.llama
-from ..._ttml.models.llama import (
+from _ttml.models.llama import (
     CppLlama,
     CppLlamaConfig,
     create_cpp_llama_model,

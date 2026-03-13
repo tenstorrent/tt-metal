@@ -12,7 +12,7 @@ import sys
 from .. import _ttml
 
 # --- C++ enums and classes from _ttml.models ---
-from .._ttml.models import (
+from _ttml.models import (
     BaseTransformer,
     KvCache,
     KvCacheConfig,
