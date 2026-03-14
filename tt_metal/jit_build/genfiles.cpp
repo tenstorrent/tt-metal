@@ -42,13 +42,11 @@ enum class UnpackToDestMode : uint8_t;
 
 namespace fs = std::filesystem;
 
-using namespace std;
-
 namespace tt::tt_metal {
 
 namespace {
 
-string get_kernel_source_to_include(const KernelSource& kernel_src) {
+std::string get_kernel_source_to_include(const KernelSource& kernel_src) {
     switch (kernel_src.source_type_) {
         case KernelSource::FILE_PATH: {
             return "#include \"" + kernel_src.path_.string() + "\"\n";
@@ -66,31 +64,31 @@ namespace simple_kernel_syntax {
 
 const std::regex kernel_main_pattern(R"(\bvoid\s+kernel_main\s*\(\s*\)\s*\{)");
 
-size_t find_kernel_main_definition(const string& source) {
+size_t find_kernel_main_definition(const std::string& source) {
     std::smatch match;
     if (std::regex_search(source, match, kernel_main_pattern)) {
         return static_cast<size_t>(match.position());
     }
-    return string::npos;
+    return std::string::npos;
 }
 
-bool has_legacy_syntax_markers(const string& source) {
+bool has_legacy_syntax_markers(const std::string& source) {
     // Check for legacy syntax markers: "namespace NAMESPACE" or "void MAIN"
     // If found, the file uses legacy syntax (possibly mixed with kernel_main for data movement)
-    return source.find("namespace NAMESPACE") != string::npos || source.find("void MAIN") != string::npos;
+    return source.find("namespace NAMESPACE") != std::string::npos || source.find("void MAIN") != std::string::npos;
 }
 
-size_t count_kernel_main_definitions(const string& source) {
+size_t count_kernel_main_definitions(const std::string& source) {
     auto begin = std::sregex_iterator(source.begin(), source.end(), kernel_main_pattern);
     auto end = std::sregex_iterator();
     return std::distance(begin, end);
 }
 
-bool is_used_in_source(const string& source) {
+bool is_used_in_source(const std::string& source) {
     // Use simplified syntax only if kernel_main is found AND no legacy markers present.
     // This handles kernels with multiple entrypoints that have kernel_main() for data movement
     // but legacy syntax for compute - we must not transform those.
-    if (find_kernel_main_definition(source) == string::npos) {
+    if (find_kernel_main_definition(source) == std::string::npos) {
         return false;
     }
     if (has_legacy_syntax_markers(source)) {
@@ -110,22 +108,22 @@ bool is_used_in_source(const string& source) {
 //   - Splits at "void kernel_main()"
 //   - Preamble (#includes) stays outside namespace
 //   - Function body wrapped in namespace, renamed to func_name
-string transform_to_legacy_syntax(const string& source, const char* ns_name, const char* func_name) {
+std::string transform_to_legacy_syntax(const std::string& source, const char* ns_name, const char* func_name) {
     size_t func_pos = find_kernel_main_definition(source);
-    if (func_pos == string::npos) {
+    if (func_pos == std::string::npos) {
         throw std::runtime_error("Could not find 'void kernel_main() {' in source");
     }
 
-    string preamble = source.substr(0, func_pos);
-    string function_part = source.substr(func_pos);
+    std::string preamble = source.substr(0, func_pos);
+    std::string function_part = source.substr(func_pos);
 
     // Rename kernel_main -> func_name
     size_t name_pos = function_part.find("kernel_main");
-    if (name_pos != string::npos) {
+    if (name_pos != std::string::npos) {
         function_part.replace(name_pos, strlen("kernel_main"), func_name);
     }
 
-    ostringstream result;
+    std::ostringstream result;
     result << preamble;
     result << "namespace " << ns_name << " {\n";
     result << function_part;
@@ -135,15 +133,15 @@ string transform_to_legacy_syntax(const string& source, const char* ns_name, con
 }  // namespace simple_kernel_syntax
 
 // Generates TRISC prolog: #define + #include for defines_generated.h
-string build_trisc_prolog(const char* trisc_define) {
-    ostringstream prolog;
+std::string build_trisc_prolog(const char* trisc_define) {
+    std::ostringstream prolog;
     prolog << "#define " << trisc_define << "\n";
     prolog << "#include \"defines_generated.h\"\n";
     return prolog.str();
 }
 
 // Writes content to a file, throwing on failure
-void write_file(const string& path, const string& content) {
+void write_file(const std::string& path, const std::string& content) {
     jit_build::utils::FileRenamer tmp(path);
     std::ofstream f(tmp.path());
     if (!f) {
@@ -162,10 +160,10 @@ void jit_build_genfiles_kernel_include(
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for BRISC/NCRISC/ERISC user kernel");
 
-    string out_dir = env.get_genfiles_kernel_root_path() + settings.get_full_kernel_name() + "/";
-    string kernel_header = out_dir + "kernel_includes.hpp";
+    std::string out_dir = env.get_genfiles_kernel_root_path() + settings.get_full_kernel_name() + "/";
+    std::string kernel_header = out_dir + "kernel_includes.hpp";
 
-    const string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
+    const std::string& kernel_src_to_include = get_kernel_source_to_include(kernel_src);
     write_file(kernel_header, kernel_src_to_include);
 }
 
@@ -174,13 +172,13 @@ void jit_build_genfiles_triscs_src(
     // Note: assumes dirs (and descriptors) already created
     log_trace(tt::LogBuildKernels, "Generating defines for TRISCs");
 
-    const string out_dir = env.get_genfiles_kernel_root_path() + settings.get_full_kernel_name() + "/";
-    const string unpack_cpp = out_dir + "chlkc_unpack.cpp";
-    const string math_cpp = out_dir + "chlkc_math.cpp";
-    const string pack_cpp = out_dir + "chlkc_pack.cpp";
-    const string isolate_sfpu_cpp = out_dir + "chlkc_isolate_sfpu.cpp";
+    const std::string out_dir = env.get_genfiles_kernel_root_path() + settings.get_full_kernel_name() + "/";
+    const std::string unpack_cpp = out_dir + "chlkc_unpack.cpp";
+    const std::string math_cpp = out_dir + "chlkc_math.cpp";
+    const std::string pack_cpp = out_dir + "chlkc_pack.cpp";
+    const std::string isolate_sfpu_cpp = out_dir + "chlkc_isolate_sfpu.cpp";
     // Read content for syntax detection (needed for both paths)
-    const string kernel_content = kernel_src.get_content();
+    const std::string kernel_content = kernel_src.get_content();
     const bool simplified = simple_kernel_syntax::is_used_in_source(kernel_content);
 
     if (simplified) {
@@ -194,10 +192,10 @@ void jit_build_genfiles_triscs_src(
     }
 
     // Build prologs (same for both syntaxes)
-    const string unpack_prolog = build_trisc_prolog("TRISC_UNPACK");
-    const string math_prolog = build_trisc_prolog("TRISC_MATH");
-    const string pack_prolog = build_trisc_prolog("TRISC_PACK");
-    const string isolate_sfpu_prolog = build_trisc_prolog("TRISC_ISOLATE_SFPU");
+    const std::string unpack_prolog = build_trisc_prolog("TRISC_UNPACK");
+    const std::string math_prolog = build_trisc_prolog("TRISC_MATH");
+    const std::string pack_prolog = build_trisc_prolog("TRISC_PACK");
+    const std::string isolate_sfpu_prolog = build_trisc_prolog("TRISC_ISOLATE_SFPU");
     // Determine kernel source for each TRISC.
     //
     // Why the if-else structure is necessary:
@@ -205,12 +203,12 @@ void jit_build_genfiles_triscs_src(
     // - Legacy syntax: use existing get_kernel_source_to_include() which returns:
     //   - FILE_PATH: #include directive (preserves file refs in compiler errors)
     //   - SOURCE_CODE: the source directly
-    string unpack_src, math_src, pack_src, isolate_sfpu_src;
+    std::string unpack_src, math_src, pack_src, isolate_sfpu_src;
     if (simplified) {
         // For FILE_PATH sources, add #line directive to preserve original file's line numbers
         // in compiler diagnostics and __LINE__ macro. This ensures error messages reference
         // the original kernel file, not the generated file.
-        string line_directive;
+        std::string line_directive;
         if (kernel_src.source_type_ == KernelSource::FILE_PATH) {
             line_directive = "#line 1 \"" + kernel_src.path_.string() + "\"\n";
         }
@@ -221,7 +219,7 @@ void jit_build_genfiles_triscs_src(
                                                 kernel_content, "chlkc_isolate_sfpu", "isolate_sfpu_main");
     } else {
         // Legacy: use existing helper that handles FILE_PATH vs SOURCE_CODE appropriately
-        const string src = get_kernel_source_to_include(kernel_src);
+        const std::string src = get_kernel_source_to_include(kernel_src);
         unpack_src = math_src = pack_src = isolate_sfpu_src = src;
     }
 
@@ -233,14 +231,14 @@ void jit_build_genfiles_triscs_src(
     // Here we generate an auxiliary header with defines added via add_define() call
     // this header is then included from the kernel
     // We also append the include path to generated dir to hlkc cmldline.
-    const string generated_defines_fname = out_dir + "defines_generated.h";
+    const std::string generated_defines_fname = out_dir + "defines_generated.h";
     jit_build::utils::FileRenamer tmp(generated_defines_fname);
     std::ofstream gen_defines_file(tmp.path());
     if (!gen_defines_file) {
         throw std::runtime_error("Cannot create file: " + generated_defines_fname);
     }
-    settings.process_defines([&gen_defines_file](const string& define, const string& value) {
-        gen_defines_file << "#define " << define << " " << value << endl;
+    settings.process_defines([&gen_defines_file](const std::string& define, const std::string& value) {
+        gen_defines_file << "#define " << define << " " << value << std::endl;
     });
     if (!gen_defines_file) {
         throw std::runtime_error("Failed to write file: " + generated_defines_fname);
@@ -277,9 +275,9 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_unpack_data
     bool fp32_dest_acc_en,
     std::vector<UnpackToDestMode> unpack_to_dest_mode,
     uint32_t max_cbs) {
-    vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr);
+    std::vector<DataFormat> src_formats = tt::get_unpack_src_formats(desc.buf_dataformat_arr);
 
-    vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
+    std::vector<DataFormat> dst_formats = tt::get_unpack_dst_formats(
         desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, std::move(unpack_to_dest_mode));
 
     TT_ASSERT(src_formats.size() == max_cbs);
@@ -305,16 +303,10 @@ std::pair<std::vector<DataFormat>, std::vector<DataFormat>> generate_pack_data_f
     bool bfp8_pack_precise,
     const tt::ARCH arch,
     uint32_t max_cbs) {
-    vector<DataFormat> src_formats = tt::get_pack_src_formats(
-        desc.buf_dataformat_arr,
-        unpack_conditional_dst_format,
-        fp32_dest_acc_en,
-        bfp8_pack_precise,
-        false,
-        arch);
+    std::vector<DataFormat> src_formats = tt::get_pack_src_formats(
+        desc.buf_dataformat_arr, unpack_conditional_dst_format, fp32_dest_acc_en, bfp8_pack_precise, false, arch);
 
-    vector<DataFormat> dst_formats = tt::get_pack_dst_formats(
-        desc.buf_dataformat_arr);
+    std::vector<DataFormat> dst_formats = tt::get_pack_dst_formats(desc.buf_dataformat_arr);
 
     TT_ASSERT(src_formats.size() == max_cbs);
     TT_ASSERT(dst_formats.size() == max_cbs);
@@ -490,9 +482,9 @@ void generate_all_descriptors(const JitBuildEnv& env, const JitBuildOptions& opt
     const uint32_t max_cbs = env.get_max_cbs();
     const tt_hlk_desc& desc = options.hlk_desc;
 
-    const string descriptors_path = options.path + "chlkc_descriptors.h";
+    const std::string descriptors_path = options.path + "chlkc_descriptors.h";
     jit_build::utils::FileRenamer tmp(descriptors_path);
-    ofstream out(tmp.path());
+    std::ofstream out(tmp.path());
     if (!out) {
         throw std::runtime_error("Cannot create file: " + descriptors_path);
     }
