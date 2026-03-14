@@ -16,6 +16,14 @@
 namespace tt::tt_fabric {
 
 /**
+ * Per-VC buffer slot configuration: how many sender and receiver slots for a given VC.
+ */
+struct VcSlotConfig {
+    size_t sender_slots = 0;
+    size_t receiver_slots = 0;
+};
+
+/**
  * Static-sized channels allocator implementation.
  * The `FabricStaticSizedChannelsAllocator` allocates memory for statically sized sender(outbound)
  * and receiver (inbound) fabric router channels. The entire set of channels do not need to be
