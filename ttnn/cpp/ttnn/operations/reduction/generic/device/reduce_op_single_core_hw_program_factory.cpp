@@ -46,9 +46,7 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
 
     tt::DataFormat scaler_cb_data_format =
-        (src0_cb_data_format == tt::DataFormat::Float32 && a.device()->arch() != tt::ARCH::BLACKHOLE)
-            ? tt::DataFormat::Float32
-            : tt::DataFormat::Float16_b;
+        src0_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
@@ -101,12 +99,15 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     std::vector<uint32_t> writer_compile_time_args = {output_cb_index};
     TensorAccessorArgs(*dst_buffer).append_to(writer_compile_time_args);
 
+    std::map<std::string, std::string> reduce_defines =
+        reduce_op_utils::get_defines(operation_attributes.math_op, tt::tt_metal::ReduceOpDim::HW);
+
     tt_metal::KernelHandle reader_kernel_id = tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
         "reader_unary_reduce_universal_start_id.cpp",
         core,
-        tt_metal::ReaderDataMovementConfig(reader_compile_time_args));
+        tt_metal::ReaderDataMovementConfig(reader_compile_time_args, reduce_defines));
 
     tt_metal::KernelHandle writer_kernel_id = tt_metal::CreateKernel(
         program,
@@ -121,8 +122,8 @@ ReduceSingleCoreHwProgramFactory::cached_program_t ReduceSingleCoreHwProgramFact
     };
 
     const std::string compute_kernel =
-        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_hw") +
-        (operation_attributes.negate ? "_neg" : "") + ".cpp";
+        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
+        (operation_attributes.negate ? "_hw_neg" : "") + ".cpp";
 
     tt_metal::CreateKernel(
         program,

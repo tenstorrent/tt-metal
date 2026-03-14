@@ -21,7 +21,8 @@ FORCE_INLINE void generate_inv_sqrt_hw_bcast_tile() {
 }
 
 void kernel_main() {
-    constexpr uint32_t cb_reduce_scaler = tt::CBIndex::c_1;
+    constexpr uint32_t cb_max_scaler = tt::CBIndex::c_1;
+    constexpr uint32_t cb_sum_scaler = tt::CBIndex::c_13;
 
 #if FUSED_SCALE_MASK
     constexpr uint32_t block_wt = get_compile_time_arg_val(0);
@@ -64,7 +65,11 @@ void kernel_main() {
 
             if (f == 0 && h == 0) {
                 dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                    cb_reduce_scaler,
+                    cb_max_scaler,
+                    ckernel::PoolType::MAX,
+                    ckernel::ReduceDim::REDUCE_ROW>();
+                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                    cb_sum_scaler,
                     ckernel::PoolType::SUM,
                     ckernel::ReduceDim::REDUCE_ROW>();
             }
@@ -72,7 +77,9 @@ void kernel_main() {
     }
 #elif defined(CAUSAL_MASK) && defined(SHARDED_CAUSAL_MASK)
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<cb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 #else
     cb_attn_obj.reserve_back(block_wt);
     uint32_t write_offset = 0;
@@ -85,11 +92,15 @@ void kernel_main() {
     cb_attn_obj.push_back(block_wt);
 
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<cb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 #endif
 
 #else
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_reduce_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<cb_max_scaler, ckernel::PoolType::MAX, ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::
+        calculate_and_prepare_reduce_scaler<cb_sum_scaler, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
 #endif
 }

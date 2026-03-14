@@ -130,7 +130,6 @@ void kernel_main() {
                     cb_in_2,
                     ckernel::PoolType::AVG,
                     ckernel::ReduceDim::REDUCE_SCALAR,
-                    tt::constants::TILE_WIDTH,
                     reduce_factor_w>();
 
                 constexpr uint32_t ones = 0x3F803F80;  // 2 packed bfloat16 into 1 uint32_t of value 1.0
@@ -142,7 +141,6 @@ void kernel_main() {
                         cb_in_4,
                         ckernel::PoolType::AVG,
                         ckernel::ReduceDim::REDUCE_SCALAR,
-                        tt::constants::TILE_WIDTH,
                         reduce_factor_c>();
                 }
 

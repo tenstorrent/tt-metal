@@ -69,7 +69,7 @@ PREFILL_CONFIG_TO_PCC = {
 # CONFIG_TO_PCC[arch][model_config_str][kv_cache_len] = (output_pcc, k_cache_pcc, v_cache_pcc)
 DECODE_CONFIG_TO_PCC = {
     DeviceSetup.WORMHOLE_B0: {
-        "BFLOAT16-L1_SHARDED": {128: (0.89, 0.92, 0.92), 1024: (0.96, 0.96, 0.97), 2047: (0.96, 0.96, 0.97)},
+        "BFLOAT16-L1_SHARDED": {128: (0.90, 0.93, 0.93), 1024: (0.97, 0.98, 0.98), 2047: (0.97, 0.96, 0.97)},
     },
     DeviceSetup.T3000: {
         "BFLOAT16-L1_SHARDED": {128: (0.88, 0.90, 0.91), 1024: (0.93, 0.94, 0.94), 2047: (0.94, 0.89, 0.87)}

@@ -36,7 +36,7 @@ void kernel_main() {
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_in0_obj(cb_id_in0);
-    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in1>(0.0f);
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_id_in1, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>(0.0f);
 
     constexpr uint32_t input_tile_bytes = get_tile_size(cb_id_in0);
 

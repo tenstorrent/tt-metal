@@ -378,6 +378,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     if (!large_tensor_needed) {
         reader_compile_time_args.push_back((std::uint32_t)use_welford);
     }
+    reader_compile_time_args.push_back(W);
     tt::tt_metal::TensorAccessorArgs(a.buffer()).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(b ? b->buffer() : nullptr).append_to(reader_compile_time_args);
     tt::tt_metal::TensorAccessorArgs(gamma ? gamma->buffer() : nullptr).append_to(reader_compile_time_args);
@@ -562,11 +563,6 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
             gamma_dram_addr,
             beta_dram_addr,
             b_dram_addr};
-        if (!(use_welford && large_tensor_needed)) {
-            reader_args.push_back(W);
-            reader_args.push_back(tile_width);
-            reader_args.push_back(tile_height);
-        }
         if (input_is_row_major) {
             reader_args.push_back(H_logical);
         }

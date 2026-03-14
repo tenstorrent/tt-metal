@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdint>
+#include "ttnn/cpp/ttnn/kernel_lib/reduce_helpers_dataflow.hpp"
 
 // Tile geometry constants for bf16 32x32 tiles with 16x16 faces
 namespace tile_constants {
@@ -111,38 +112,6 @@ void zero_buffer(uint32_t write_addr, int bytes) {
         bytes -= curr_bytes;
     }
     noc_async_read_barrier();
-}
-
-FORCE_INLINE void generate_reduce_scalar(
-    const uint32_t cb_reduce_ones_scalar, const uint32_t packed_scalar, const uint32_t n_activated_experts) {
-    // 32x32 tile where first row of each face should be {1.0bf16, 1.0bf16, ..., 1.0bf16} up until n_activated_experts
-    cb_reserve_back(cb_reduce_ones_scalar, 1);
-
-    uint32_t write_addr = get_write_ptr(cb_reduce_ones_scalar);
-    tt_l1_ptr uint16_t* write_ptr = reinterpret_cast<tt_l1_ptr uint16_t*>(write_addr);
-    // the uint32_t contains two bf16 values, so we write one face line/2 elements through pointer access:
-    uint16_t scalar = packed_scalar >> 16;
-    for (uint32_t i = 0; i < n_activated_experts; i++) {
-        write_ptr[i] = scalar;
-        if (i > rows_per_face - 1) {
-            write_ptr[i + elements_per_face - columns_per_face + 1] = scalar;
-        }
-    }
-    for (uint32_t i = n_activated_experts; i < rows_per_tile; i++) {
-        write_ptr[i] = 0;
-        if (i == rows_per_face) {
-            noc_async_read(get_noc_addr(MEM_ZEROS_BASE), write_addr + face_size_bytes, face_line_bytes);
-        }
-    }
-    uint32_t face_3_write_addr = write_addr + 2 * face_size_bytes;
-    uint32_t face_4_write_addr = write_addr + 3 * face_size_bytes;
-    // write first face line in face 1 to face 3 and face 2 to face 4
-    noc_async_read_barrier();
-    noc_async_read(get_noc_addr(write_addr), face_3_write_addr, face_line_bytes);
-    noc_async_read(get_noc_addr(write_addr + face_size_bytes), face_4_write_addr, face_line_bytes);
-    noc_async_read_barrier();
-
-    cb_push_back(cb_reduce_ones_scalar, 1);
 }
 
 FORCE_INLINE void generate_summed_experts_tiles(
@@ -426,7 +395,6 @@ void kernel_main() {
     constexpr uint32_t summed_experts_per_group = get_named_compile_time_arg_val("summed_experts_per_group");
     constexpr uint32_t num_group_tiles = get_named_compile_time_arg_val("num_group_tiles");
     constexpr uint32_t cb_reduce_ones_scalar = get_named_compile_time_arg_val("cb_reduce_ones_scalar");
-    constexpr uint32_t packed_one_scalar = get_named_compile_time_arg_val("packed_one_scalar");
     constexpr uint32_t packed_route_scale = get_named_compile_time_arg_val("packed_route_scale");
     constexpr uint32_t n_activated_experts = get_named_compile_time_arg_val("n_activated_experts");
 
@@ -452,7 +420,10 @@ void kernel_main() {
     // I see no performance difference generating these internally inside the writer kernel
     generate_index_tiles(cb_expert_index_template, width_tiles, indices_page_size);
     generate_group_indices_tiles(cb_group_index_template, width_tiles, n_groups);
-    generate_reduce_scalar(cb_reduce_ones_scalar, packed_one_scalar, n_activated_experts);
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_reduce_ones_scalar,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_ROW>(n_activated_experts);
     write_single_scalar(cb_epsilon_scalar, packed_epsilon);
     write_single_scalar(cb_route_scale_scalar, packed_route_scale);
 
