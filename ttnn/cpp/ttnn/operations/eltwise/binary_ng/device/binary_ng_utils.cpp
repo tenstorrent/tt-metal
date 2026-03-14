@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -370,7 +370,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
     using enum OpConfig::SfpuBinaryOp;
 
     std::optional<std::string> int_data_format;
-    if (dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16) {
+    if (dtype == DataType::INT32 || dtype == DataType::UINT32 || dtype == DataType::UINT16 || dtype == DataType::UINT8) {
         int_data_format = (dtype == DataType::INT32) ? "Int32" : (dtype == DataType::UINT32) ? "UInt32" : "UInt16";
     }
     switch (sfpu_binary_op) {
@@ -426,6 +426,7 @@ std::pair<std::string, std::string> get_sfpu_init_fn(OpConfig::SfpuBinaryOp sfpu
             return {
                 "binary_shift_tile_init();",
                 fmt::format("binary_logical_right_shift_tile<DataFormat::{}>", int_data_format.value_or("Int32"))};
+        case BITWISE_AND:
         case BITWISE_AND:
             return {
                 "binary_bitwise_tile_init();",
