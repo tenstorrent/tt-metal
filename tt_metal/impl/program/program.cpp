@@ -74,6 +74,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include "host_api.hpp"
+#include "tt_metal.hpp"  // WriteRuntimeArgsToDevice
 #include "kernels/kernel.hpp"
 #include <tt_stl/reflection.hpp>
 #include <impl/dispatch/dispatch_query_manager.hpp>
