@@ -1,0 +1,23 @@
+// SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+//
+// SPDX-License-Identifier: Apache-2.0
+
+#pragma once
+
+#include "metal/ttnn_all_includes.hpp"
+
+namespace ttml::metal::ops::swiglu_gate_up::device {
+
+struct operation_attributes_t {};
+
+struct tensor_args_t {
+    ttnn::Tensor input;
+    ttnn::Tensor w1;
+    ttnn::Tensor w3;
+};
+
+using spec_return_value_t = std::vector<ttnn::TensorSpec>;
+
+using tensor_return_value_t = ttnn::Tensor;
+
+}  // namespace ttml::metal::ops::swiglu_gate_up::device

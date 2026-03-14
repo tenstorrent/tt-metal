@@ -9,6 +9,11 @@
 
 #include "metal/ttnn_all_includes.hpp"
 
+/** Round \p val up to the next multiple of \p multiple. */
+inline constexpr uint32_t round_up(uint32_t val, uint32_t multiple) {
+    return ((val + multiple - 1U) / multiple) * multiple;
+}
+
 inline uint32_t get_block_size(uint32_t num_inner, const uint32_t max_block_size = 4U) {
     for (uint32_t block_size = max_block_size; block_size > 1U; block_size--) {
         if (num_inner % block_size == 0) {  // if num_inner is divisible by block_size - choose this block_size
