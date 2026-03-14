@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 08-01-PLAN.md
-last_updated: "2026-03-14T16:01:34Z"
+stopped_at: Completed 08-02-PLAN.md
+last_updated: "2026-03-14T16:08:37Z"
 progress:
   total_phases: 10
-  completed_phases: 5
-  total_plans: 7
-  completed_plans: 7
+  completed_phases: 6
+  total_plans: 8
+  completed_plans: 8
 ---
 
 # Project State
@@ -47,19 +47,25 @@ Note: Neither the build nor the sanity test should hang. Any hang is a regressio
 
 ## Current Phase
 
-**Phase 8: Host-Side Per-VC Consolidation — Plan 01 Complete (2026-03-14)**
+**Phase 8: Host-Side Per-VC Consolidation — Complete (2026-03-14)**
 
 Plan 01 completed:
 - Merged symmetric _vc0/_vc1 constants into per_vc arrays in fabric_builder_config
 - Unified get_vc0/get_vc1_downstream_edm_count into get_downstream_edm_count_for_vc(vc, is_2D)
 - Merged initialize_vc0_mappings/initialize_vc1_mappings into initialize_vc_mappings(vc)
 - Updated all call sites including test files
+
+Plan 02 completed:
+- Converted _vc0/_vc1 locals in erisc_datamover_builder to per_vc arrays
+- Replaced individual named_args assignments with fmt::format loop
+- Added enable_first_level_ack_per_vc = {enable_first_level_ack, 0}
 - Build: PASSED (zero new errors)
 - Sanity test: PASSED (all 12 latency golden comparisons passed, no hangs)
 
 Key decisions:
 - Asymmetric constants kept standalone (no symmetric counterpart to merge)
 - initialize_vc_mappings uses if/else branching for VC-specific logic
+- fmt::format loop for per-VC named_args produces identical key strings for device compatibility
 
 **Phase 7: Reorganize Buffer Slot Configs by VC — Plan 01 Complete (2026-03-14)**
 
@@ -107,10 +113,10 @@ Key decisions:
 
 ## Session
 
-**Last session:** 2026-03-14T16:01:34Z
-**Stopped at:** Completed 08-01-PLAN.md
+**Last session:** 2026-03-14T16:08:37Z
+**Stopped at:** Completed 08-02-PLAN.md
 
 ## Next Plan
 
-**Phase 8 Plan 01 complete — per-VC API established**
-Per-VC array constants and unified functions ready for plan 02 call site migration.
+**Phase 8 complete — all host builder code migrated to per-VC API**
+No _vc0/_vc1 split patterns remain in host builder code. Ready for Phase 9.
