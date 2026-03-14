@@ -11,7 +11,7 @@
 | 5 | 1/1 | Complete    | 2026-03-14 | Pending |
 | 6 | 1/1 | Complete    | 2026-03-14 | Pending |
 | 7 | Reorganize buffer slot configs by VC | Replace PerVcBufferSlots with VcSlotConfig array pattern | Phase 7 goal | Complete (2026-03-14) |
-| 8 | Host-side per-VC consolidation | Merge _vc0/_vc1 constants and functions into _per_vc arrays across host builders | Phase 8 goal | Pending |
+| 8 | 1/2 | In Progress|  | Pending |
 | 9 | Device-side kernel per-VC templates | Add per-VC template helpers to device kernel headers and router | Phase 9 goal | Pending |
 | 10 | Split channel_allocs into per-VC in device CT args | Separate channel_allocs into per-VC channel allocations in device CT args | Phase 10 goal | Pending |
 
@@ -146,7 +146,7 @@ Plans:
 **Goal:** Merge all remaining _vc0/_vc1 named constants and split functions into _per_vc arrays and unified functions across host builder code.
 **Requirements**: Phase 8 goal (additive beyond original 18 requirements)
 **Depends on:** Phase 7
-**Plans:** 2 plans
+**Plans:** 1/2 plans executed
 
 Plans:
 - [ ] 08-01-PLAN.md — Merge constants to _per_vc arrays in fabric_builder_config; merge channel mapping init functions; build + test

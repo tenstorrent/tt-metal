@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Phase 8 context gathered
-last_updated: "2026-03-14T15:43:16.883Z"
+stopped_at: Completed 08-01-PLAN.md
+last_updated: "2026-03-14T16:01:34Z"
 progress:
   total_phases: 10
   completed_phases: 5
-  total_plans: 6
-  completed_plans: 6
+  total_plans: 7
+  completed_plans: 7
 ---
 
 # Project State
@@ -19,7 +19,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-12)
 
 **Core value:** Each PR is self-contained, correct, and independently reviewable
-**Current focus:** Phase 7 — Reorganize buffer slot configs by VC in allocator
+**Current focus:** Phase 8 — Host-side per-VC consolidation
 
 ## Phase Validation Procedure
 
@@ -46,6 +46,20 @@ Note: Neither the build nor the sanity test should hang. Any hang is a regressio
 ---
 
 ## Current Phase
+
+**Phase 8: Host-Side Per-VC Consolidation — Plan 01 Complete (2026-03-14)**
+
+Plan 01 completed:
+- Merged symmetric _vc0/_vc1 constants into per_vc arrays in fabric_builder_config
+- Unified get_vc0/get_vc1_downstream_edm_count into get_downstream_edm_count_for_vc(vc, is_2D)
+- Merged initialize_vc0_mappings/initialize_vc1_mappings into initialize_vc_mappings(vc)
+- Updated all call sites including test files
+- Build: PASSED (zero new errors)
+- Sanity test: PASSED (all 12 latency golden comparisons passed, no hangs)
+
+Key decisions:
+- Asymmetric constants kept standalone (no symmetric counterpart to merge)
+- initialize_vc_mappings uses if/else branching for VC-specific logic
 
 **Phase 7: Reorganize Buffer Slot Configs by VC — Plan 01 Complete (2026-03-14)**
 
@@ -93,10 +107,10 @@ Key decisions:
 
 ## Session
 
-**Last session:** 2026-03-14T15:43:16.878Z
-**Stopped at:** Phase 8 context gathered
+**Last session:** 2026-03-14T16:01:34Z
+**Stopped at:** Completed 08-01-PLAN.md
 
 ## Next Plan
 
-**Phase 7 complete — all 1 plans done**
-All 7 per-VC refactor phases complete. Allocator slot config internals now use per-VC array-of-struct pattern consistent with all other subsystems.
+**Phase 8 Plan 01 complete — per-VC API established**
+Per-VC array constants and unified functions ready for plan 02 call site migration.
