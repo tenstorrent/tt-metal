@@ -61,8 +61,10 @@ constexpr uint32_t BUFFER_SIZE_ARRAY_START_IDX = NUM_BUFFERS_ARRAY_START_IDX + N
 constexpr uint32_t CONNECTION_INFO_BASE_ADDR_ARRAY_START_IDX = BUFFER_SIZE_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
 constexpr uint32_t CONNECTION_HANDSHAKE_BASE_ADDR_ARRAY_START_IDX =
     CONNECTION_INFO_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
-constexpr uint32_t FLOW_CONTROL_BASE_ADDR_ARRAY_START_IDX =
+constexpr uint32_t CONNECTION_HANDSHAKE_L1_BASE_ADDR_ARRAY_START_IDX =
     CONNECTION_HANDSHAKE_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
+constexpr uint32_t FLOW_CONTROL_BASE_ADDR_ARRAY_START_IDX =
+    CONNECTION_HANDSHAKE_L1_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
 constexpr uint32_t CHANNEL_BUFFER_BASE_ADDR_ARRAY_START_IDX =
     FLOW_CONTROL_BASE_ADDR_ARRAY_START_IDX + NUM_CHANNEL_TYPES;
 
@@ -73,6 +75,8 @@ constexpr size_t BUFFER_SIZE_BYTES = get_compile_time_arg_val(BUFFER_SIZE_ARRAY_
 constexpr size_t connection_info_base_address = get_compile_time_arg_val(CONNECTION_INFO_BASE_ADDR_ARRAY_START_IDX);
 constexpr size_t connection_handshake_base_address =
     get_compile_time_arg_val(CONNECTION_HANDSHAKE_BASE_ADDR_ARRAY_START_IDX);
+constexpr size_t connection_handshake_l1_base_address =
+    get_compile_time_arg_val(CONNECTION_HANDSHAKE_L1_BASE_ADDR_ARRAY_START_IDX);
 constexpr size_t sender_flow_control_base_address = get_compile_time_arg_val(FLOW_CONTROL_BASE_ADDR_ARRAY_START_IDX);
 constexpr size_t channels_base_l1_address = get_compile_time_arg_val(CHANNEL_BUFFER_BASE_ADDR_ARRAY_START_IDX);
 

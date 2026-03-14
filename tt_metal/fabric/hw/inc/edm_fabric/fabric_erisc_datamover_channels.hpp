@@ -43,6 +43,16 @@ FORCE_INLINE auto wrap_increment(T val, size_t max) {
     return (val == max - 1) ? 0 : val + 1;
 }
 
+// type wrapper that returns reg_ptr when the channel type is 0;
+// this support overlay scratch registers being used on worker
+// or router channel 0
+template<size_t ChannelIndex>
+using ChannelMemoryType = typename std::conditional<
+    ChannelIndex == 0,
+    volatile tt_reg_ptr uint32_t*,
+    volatile tt_l1_ptr uint32_t*
+>::type;
+
 // This class implements the interface for static sized sender channels.
 // Static sized sender channels have a fixed number of buffer slots, defined
 // at router initialization, and persistent for the lifetime of the router.
@@ -385,13 +395,25 @@ using SenderEthChannelBuffers = StaticSizedSenderEthChannelBuffers<HEADER_TYPE, 
 
 // Base class for channel worker interfaces
 // Derived classes implement specific counter management strategies.
-template <uint8_t WORKER_HANDSHAKE_NOC, typename DERIVED>
+template <uint8_t WORKER_HANDSHAKE_NOC, typename DERIVED, typename ConnectionSemaphorePtrType>
 struct EdmChannelWorkerInterface {
+
+    // explicitly check ConnectionSemaphorePtrType
+    //
+    static_assert(
+        std::is_same_v<ConnectionSemaphorePtrType, volatile tt_reg_ptr uint32_t*> ||
+            std::is_same_v<ConnectionSemaphorePtrType, volatile tt_l1_ptr uint32_t*> ||
+                std::is_same_v<ConnectionSemaphorePtrType, volatile tt_reg_ptr uint32_t* const> ||
+                    std::is_same_v<ConnectionSemaphorePtrType, volatile tt_l1_ptr uint32_t* const>,
+        "ConnectionSemaphorePtrType must be a (volatile [tt_reg_ptr | tt_l1_ptr] uint32_t* [const]) type"
+    );
+
     EdmChannelWorkerInterface() :
         worker_location_info_ptr(nullptr),
         cached_worker_semaphore_address(0),
         connection_live_semaphore(nullptr),
-        sender_sync_noc_cmd_buf(write_at_cmd_buf) {}
+        sender_sync_noc_cmd_buf(write_at_cmd_buf) {
+        }
 
     EdmChannelWorkerInterface(
         // TODO: PERF: See if we can make this non-volatile and then only
@@ -402,7 +424,7 @@ struct EdmChannelWorkerInterface {
         // packet... Then we'll also be able to cache the uint64_t addr of the worker
         // semaphore directly (saving on regenerating it each time)
         volatile EDMChannelWorkerLocationInfo* worker_location_info_ptr,
-        volatile tt_l1_ptr uint32_t* const connection_live_semaphore,
+        ConnectionSemaphorePtrType connection_live_semaphore,
         uint8_t sender_sync_noc_cmd_buf,
         uint8_t edm_read_counter_initial_value) :
         worker_location_info_ptr(worker_location_info_ptr),
@@ -454,7 +476,7 @@ struct EdmChannelWorkerInterface {
             worker_info.worker_teardown_semaphore_address);
 
         // Set connection to unused so it's available for next worker
-        *this->connection_live_semaphore = tt::tt_fabric::connection_interface::unused_connection_value;
+        set_connection_live_semaphore(tt::tt_fabric::connection_interface::unused_connection_value);
 
         this->copy_read_counter_to_worker_location_info();
 
@@ -472,35 +494,48 @@ struct EdmChannelWorkerInterface {
     }
 
     [[nodiscard]] FORCE_INLINE bool has_worker_teardown_request() const {
-        return *connection_live_semaphore == tt::tt_fabric::connection_interface::close_connection_request_value;
+        return *(connection_live_semaphore) ==
+            tt::tt_fabric::connection_interface::close_connection_request_value;
     }
 
+    FORCE_INLINE uint32_t get_connection_live_semaphore() const {
+        return *(connection_live_semaphore);
+    }
+
+    FORCE_INLINE void set_connection_live_semaphore(uint32_t const value) const {
+        *(connection_live_semaphore) = value;
+    }
 
     volatile tt_l1_ptr EDMChannelWorkerLocationInfo* worker_location_info_ptr;
     uint64_t cached_worker_semaphore_address = 0;
-    volatile tt_l1_ptr uint32_t* const connection_live_semaphore;
+    ConnectionSemaphorePtrType connection_live_semaphore;
     uint8_t sender_sync_noc_cmd_buf;
 };
 
 // Derived class for static-sized sender channels with fixed number of buffer slots.
 // This implements the interface for channels with a known, fixed NUM_BUFFERS at compile time.
-template <uint8_t WORKER_HANDSHAKE_NOC, uint8_t NUM_BUFFERS>
+template <uint8_t WORKER_HANDSHAKE_NOC, uint8_t NUM_BUFFERS, typename ConnectionSemaphorePtrType>
 struct StaticSizedSenderChannelWorkerInterface
     : public EdmChannelWorkerInterface<
           WORKER_HANDSHAKE_NOC,
-          StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, NUM_BUFFERS>> {
+          StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, NUM_BUFFERS, ConnectionSemaphorePtrType>,
+          ConnectionSemaphorePtrType
+> {
     using Base = EdmChannelWorkerInterface<
         WORKER_HANDSHAKE_NOC,
-        StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, NUM_BUFFERS>>;
+        StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, NUM_BUFFERS, ConnectionSemaphorePtrType>,
+        ConnectionSemaphorePtrType
+    >;
 
-    static constexpr uint8_t num_buffers = NUM_BUFFERS;
+    static constexpr bool const is_tt_l1_ptr = std::is_same_v<std::remove_const_t<ConnectionSemaphorePtrType>, volatile tt_l1_ptr uint32_t*>;
+    static constexpr uint8_t const num_buffers = NUM_BUFFERS;
 
     StaticSizedSenderChannelWorkerInterface() : Base(), read_counter_update_src_address(0) {}
 
     StaticSizedSenderChannelWorkerInterface(
         volatile EDMChannelWorkerLocationInfo* worker_location_info_ptr,
         volatile tt_l1_ptr uint32_t* const remote_producer_write_counter,
-        volatile tt_l1_ptr uint32_t* const connection_live_semaphore,
+        ConnectionSemaphorePtrType connection_live_semaphore,
         uint8_t sender_sync_noc_cmd_buf,
         uint8_t edm_read_counter_initial_value,
         uint32_t read_counter_update_src_address = 0) :
@@ -523,21 +558,40 @@ struct StaticSizedSenderChannelWorkerInterface
 
     template <bool enable_noc_flush = true>
     FORCE_INLINE void notify_worker_of_read_counter_update_impl() {
-        noc_inline_dw_write<InlineWriteDst::L1, true, enable_noc_flush>(
-            this->cached_worker_semaphore_address,
-            local_read_counter.counter,
-            0xf,
-            WORKER_HANDSHAKE_NOC,
-            NOC_UNICAST_WRITE_VC,
-            read_counter_update_src_address);
+        if constexpr(is_tt_l1_ptr) {
+            // For L1, we need to flush the updated read counter to ensure visibility to the worker
+            noc_inline_dw_write<InlineWriteDst::L1, true>(
+                this->cached_worker_semaphore_address,
+                local_read_counter.counter,
+                0xf,
+                WORKER_HANDSHAKE_NOC,
+                NOC_UNICAST_WRITE_VC,
+                read_counter_update_src_address);
+        }
+        else {
+            // For REG, we can skip the flush since it's a direct register write}
+            noc_inline_dw_write<InlineWriteDst::REG, true>(
+                this->cached_worker_semaphore_address,
+                local_read_counter.counter,
+                0xf,
+                WORKER_HANDSHAKE_NOC,
+                NOC_UNICAST_WRITE_VC,
+                read_counter_update_src_address);
+        }
     }
 
     template <bool enable_deadlock_avoidance>
     FORCE_INLINE void notify_persistent_connection_of_free_space_impl(int32_t inc_val) {
         auto packed_val = pack_value_for_inc_on_write_stream_reg_write(inc_val);
-        noc_inline_dw_write<InlineWriteDst::REG, true>(
-            this->cached_worker_semaphore_address, packed_val, 0xf, WORKER_HANDSHAKE_NOC);
-    }
+        if constexpr(is_tt_l1_ptr) {
+            noc_inline_dw_write<InlineWriteDst::L1, true>(
+                this->cached_worker_semaphore_address, packed_val, 0xf, WORKER_HANDSHAKE_NOC);
+        }
+        else {
+            noc_inline_dw_write<InlineWriteDst::REG, true>(
+                this->cached_worker_semaphore_address, packed_val, 0xf, WORKER_HANDSHAKE_NOC);
+        }
+}
 
     // Write counter management methods
     template <bool SKIP_CONNECTION_LIVENESS_CHECK>
@@ -558,11 +612,11 @@ struct StaticSizedSenderChannelWorkerInterface
     ChannelCounter<NUM_BUFFERS> local_read_counter;
 };
 
-// A tuple of EDM channel worker interfaces
-template <uint8_t WORKER_HANDSHAKE_NOC, size_t... BufferSizes>
+// A tuple of EDM channel worker interfaces (using static-sized implementation)
+template <uint8_t WORKER_HANDSHAKE_NOC, typename ConnectionSemaphorePtrType, size_t... BufferSizes>
 struct EdmChannelWorkerInterfaceTuple {
     // tuple of StaticSizedSenderChannelWorkerInterface<BufferSizes>...
-    std::tuple<tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, BufferSizes>...>
+    std::tuple<tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<WORKER_HANDSHAKE_NOC, BufferSizes, ConnectionSemaphorePtrType>...>
         channel_worker_interfaces;
 
     template <size_t I>
@@ -571,11 +625,39 @@ struct EdmChannelWorkerInterfaceTuple {
     }
 };
 
+// Heterogeneous tuple wrapper with channel_worker_interfaces member
+template <uint8_t WORKER_HANDSHAKE_NOC, typename TupleType>
+struct HeterogeneousEdmChannelWorkerInterfaceTuple {
+    TupleType channel_worker_interfaces;
+
+    template <size_t I>
+    FORCE_INLINE decltype(auto) get() {
+        return std::get<I>(channel_worker_interfaces);
+    }
+
+    template <size_t I>
+    FORCE_INLINE decltype(auto) get() const {
+        return std::get<I>(channel_worker_interfaces);
+    }
+};
+
+// Heterogeneous tuple where each channel can have different pointer type
+template <uint8_t WORKER_HANDSHAKE_NOC, size_t... BufferSizes, size_t... Indices>
+auto make_heterogeneous_worker_interfaces_impl(std::index_sequence<Indices...>) {
+    using TupleType = std::tuple<
+        tt::tt_fabric::StaticSizedSenderChannelWorkerInterface<
+            WORKER_HANDSHAKE_NOC,
+            BufferSizes,
+            ChannelMemoryType<Indices>>...
+    >;
+    return HeterogeneousEdmChannelWorkerInterfaceTuple<WORKER_HANDSHAKE_NOC, TupleType>{};
+}
+
 template <uint8_t WORKER_HANDSHAKE_NOC, auto& ChannelBuffers>
 struct EdmChannelWorkerInterfaces {
     template <size_t... Is>
-    static auto make(std::index_sequence<Is...>) {
-        return EdmChannelWorkerInterfaceTuple<WORKER_HANDSHAKE_NOC, ChannelBuffers[Is]...>{};
+    static auto make(std::index_sequence<Is...> seq) {
+        return make_heterogeneous_worker_interfaces_impl<WORKER_HANDSHAKE_NOC, ChannelBuffers[Is]...>(seq);
     }
 };
 
