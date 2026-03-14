@@ -43,16 +43,13 @@ struct MoveDeviceOperation {
         const operation_attributes_t& operation_attributes,
         const tensor_args_t& tensor_args,
         tensor_return_value_t& tensor_return_value);
-
-    static tt::stl::hash::hash_t compute_program_hash(
-        const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args);
 };
 
 }  // namespace ttnn::prim
 
 namespace ttnn::prim {
 ttnn::prim::MoveDeviceOperation::tensor_return_value_t move(
-    const MoveInputTensorSnapshot& input_snapshot,
+    const Tensor& input_tensor,
     const Tensor& output_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const ttnn::prim::MoveOpParallelizationStrategy& move_op_parallelization_strategy);
