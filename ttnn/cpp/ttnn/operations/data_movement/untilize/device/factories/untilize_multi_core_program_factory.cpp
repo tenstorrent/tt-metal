@@ -461,18 +461,11 @@ void UntilizeMultiCoreProgramFactory::override_runtime_arguments(
     bool block_reader = cached_program.shared_variables.has_uneven_sharding;
 
     // Reader
-    if (input_is_sharded && block_reader) {
-        // Uneven sharding: update src_addr in reader runtime args
-        auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
-        for (const CoreCoord& core : cores_with_runtime_args) {
-            auto& runtime_args = reader_args_by_core[core.x][core.y];
-            runtime_args[0] = src_buffer->address();
-        }
-    } else if (input_is_sharded) {
-        // Even sharding: CB is backed by the sharded buffer
+    if (input_is_sharded && !block_reader) {
+        // Even sharding with pack_untilize: CB is backed by the sharded buffer
         UpdateDynamicCircularBufferAddress(program, cb_src0, *src_buffer);
     } else {
-        // Interleaved input
+        // Block reader (sharded) or interleaved: update src_addr in reader runtime args
         auto& reader_args_by_core = GetRuntimeArgs(program, reader_kernel_id);
         for (const CoreCoord& core : cores_with_runtime_args) {
             auto& runtime_args = reader_args_by_core[core.x][core.y];
