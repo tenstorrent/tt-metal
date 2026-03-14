@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 09-02-PLAN.md
-last_updated: "2026-03-14T22:18:51.230Z"
+stopped_at: Completed 09-03-PLAN.md
+last_updated: "2026-03-14T22:34:45.896Z"
 progress:
   total_phases: 10
-  completed_phases: 6
+  completed_phases: 7
   total_plans: 11
-  completed_plans: 10
+  completed_plans: 11
 ---
 
 # Project State
@@ -47,7 +47,20 @@ Note: Neither the build nor the sanity test should hang. Any hang is a regressio
 
 ## Current Phase
 
-**Phase 9: Device-Side Kernel Per-VC Templates — Plan 02 Complete (2026-03-14)**
+**Phase 9: Device-Side Kernel Per-VC Templates — Plan 03 Complete (2026-03-14)**
+
+Plan 03 completed:
+- Migrated all `run_sender_channel_step` call sites in `execute_main_loop` to pass `std::get<VC>(tuple)` per-VC arrays
+- VC1 call sites now use VC-local sender_channel_index 0,1,2,3 (not global ACTUAL_VC0_SENDER_CHANNELS+N)
+- super_speedy_mode direct accesses converted from `tuple[0]` to `std::get<0>(tuple)[0]`
+- Converted `initialize_state_for_txq1_active_mode_sender_side` to per-VC constexpr dispatch
+- Converted `edm_read_counter` init loop to fold-expression over index_sequence
+- Fixed SENDER_NUM_BUFFERS_ARRAY_VC0/VC1 constexpr OOB bug via MAX-padded intermediary
+- Build: PASSED; Sanity test: all 12 golden latency comparisons passed, no hangs
+
+Key decisions:
+- execute_main_loop call sites use std::get<0>(tuple) for VC0 and std::get<1>(tuple) for VC1; VC1 sender_channel_index is VC-local (0,1,2,3), not global
+- SENDER_NUM_BUFFERS_ARRAY_VC0/VC1 fixed via MAX_NUM_SENDER_CHANNELS-padded intermediary SENDER_NUM_BUFFERS_ARRAY_ALL to avoid constexpr OOB in RISC-V GCC 15.1.0
 
 Plan 02 completed:
 - Added `SenderFreeSlotsTuple`, `SenderConnectionEstablishedTuple`, `SenderFromReceiverCreditsTuple` type aliases splitting flat arrays into per-VC tuples
@@ -56,7 +69,6 @@ Plan 02 completed:
 - Updated `run_sender_channel_step` to accept per-VC sized arrays; `sender_channel_index` is now VC-local, global derived via `vc_sender_channel_start_per_vc[VC]`
 - Updated `populate_local_sender_channel_free_slots_stream_id_ordered_map` and `wait_for_static_connection_to_ready` for per-VC tuple
 - Replaced flat declarations in `run_fabric_edm_main_loop` and `kernel_main`
-- Build: EXPECTED compile errors in execute_main_loop call sites (Plan 03 will fix)
 
 Key decisions:
 - `any_sender_channels_active` dispatches via fold expression over MAX_NUM_VCS; run_sender_channel_step now uses VC-local sender_channel_index with global derivation via vc_sender_channel_start_per_vc; SenderFreeSlotsTuple is canonical per-VC free-slots type
@@ -142,10 +154,10 @@ Key decisions:
 
 ## Session
 
-**Last session:** 2026-03-14T22:18:51.226Z
-**Stopped at:** Completed 09-02-PLAN.md
+**Last session:** 2026-03-14T22:34:45.892Z
+**Stopped at:** Completed 09-03-PLAN.md
 
 ## Next Plan
 
-**Phase 9 Plan 01 complete — per-VC CT-arg infrastructure ready**
-Per-VC constexpr arrays and template accessor in `fabric_erisc_router_ct_args.hpp`. Ready for Phase 9 Plan 02 (runtime array splitting and loop templating in `fabric_erisc_router.cpp`).
+**Phase 9 complete — full per-VC sender channel migration on device side done**
+All three plans executed: CT-arg foundation (01), type aliases + helper function templating (02), execute_main_loop call site migration (03). Kernel compiles and sanity test passes. Ready for Phase 10.
