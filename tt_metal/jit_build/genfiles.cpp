@@ -40,7 +40,6 @@
 
 enum class UnpackToDestMode : uint8_t;
 
-namespace fs = std::filesystem;
 
 namespace tt::tt_metal {
 
