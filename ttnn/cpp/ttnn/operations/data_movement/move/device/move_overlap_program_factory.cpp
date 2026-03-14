@@ -58,21 +58,21 @@ std::vector<CoreRange> get_multicast_regions(const CoreRangeSet& all_cores, cons
 }  // namespace
 
 MoveOverlapProgramFactory::cached_program_t MoveOverlapProgramFactory::create(
-    const MoveOperationAttributes& /*operation_attributes*/,
-    const MoveTensorArgs& tensor_args,
+    const MoveOperationAttributes& operation_attributes,
+    const MoveTensorArgs& /*tensor_args*/,
     Tensor& tensor_return_value) {
     using namespace tt::constants;
 
-    const Tensor& input = tensor_args.input_tensor;
+    const MoveInputTensorSnapshot& input = operation_attributes.input_snapshot;
     const Tensor& output = tensor_return_value;
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    const bool tilized = input.layout() == Layout::TILE;
-    const uint32_t page_size = input.buffer()->page_size();
+    const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype);
+    const bool tilized = input.layout == Layout::TILE;
+    const uint32_t page_size = input.buffer_page_size;
 
     const uint32_t num_pages =
-        tilized ? (output.physical_volume() / TILE_HW) : (output.physical_volume() / output.padded_shape()[-1]);
+        tilized ? (input.physical_volume / TILE_HW) : (output.physical_volume() / output.padded_shape()[-1]);
     const tt::tt_metal::IDevice* device = output.device();
     const CoreCoord compute_with_storage_grid_size = device->compute_with_storage_grid_size();
     const uint32_t num_cores_y = compute_with_storage_grid_size.y;
@@ -93,7 +93,7 @@ MoveOverlapProgramFactory::cached_program_t MoveOverlapProgramFactory::create(
 
     auto semaphore_id = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
 
-    Buffer* src_buffer = input.buffer();
+    Buffer* src_buffer = input.buffer.get();
     Buffer* dst_buffer = output.buffer();
 
     std::vector<uint32_t> compile_time_args = {cb_index};
@@ -180,16 +180,15 @@ MoveOverlapProgramFactory::cached_program_t MoveOverlapProgramFactory::create(
 
 void MoveOverlapProgramFactory::override_runtime_arguments(
     MoveOverlapProgramFactory::cached_program_t& cached_program,
-    const MoveOperationAttributes& /*operation_attributes*/,
-    const MoveTensorArgs& tensor_args,
+    const MoveOperationAttributes& operation_attributes,
+    const MoveTensorArgs& /*tensor_args*/,
     Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
 
     auto& program = cached_program.program;
-    const Tensor& input = tensor_args.input_tensor;
+    const MoveInputTensorSnapshot& input = operation_attributes.input_snapshot;
     Tensor& output = tensor_return_value;
 
-    Buffer* src_buffer = input.buffer();
     Buffer* dst_buffer = output.buffer();
     const uint32_t num_cores = cached_program.shared_variables.num_cores;
     const tt::tt_metal::KernelHandle reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
@@ -201,7 +200,7 @@ void MoveOverlapProgramFactory::override_runtime_arguments(
 
     for (const CoreCoord& core : cores) {
         auto& runtime_args = GetRuntimeArgs(program, reader_kernel_id, core);
-        runtime_args[0] = src_buffer->address();
+        runtime_args[0] = input.buffer_address;
         runtime_args[1] = dst_buffer->address();
     }
 }
