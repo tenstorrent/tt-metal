@@ -370,7 +370,7 @@
   cmd: |
     uv pip install --system -r models/demos/qwen25_vl/requirements.txt
     python -c "import nltk; nltk.download('punkt'); nltk.download('wordnet')"
-    CI=true HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b MESH_DEVICE=T3K pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
+    HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Qwen pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
   skus:
     bh_llmbox:
       timeout: 10
