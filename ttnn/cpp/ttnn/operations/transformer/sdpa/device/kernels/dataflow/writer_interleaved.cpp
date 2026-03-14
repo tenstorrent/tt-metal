@@ -75,7 +75,9 @@ void kernel_main() {
     dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
         cb_identity_scale_in,
         ckernel::PoolType::SUM,
-        ckernel::ReduceDim::REDUCE_ROW>();
+        ckernel::ReduceDim::REDUCE_ROW,
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+        /*compute_uses_reduce_tile=*/true>();
     generate_bcast_col_scalar(cb_col_identity, identity_scalar_packed);
 
     // Lightweight mask: generate a single -inf tile once, leave permanently fronted.

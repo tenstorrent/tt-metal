@@ -16,7 +16,7 @@ void kernel_main() {
 
     constexpr uint32_t cb_id_in2 = 2;
     dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_id_in2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        calculate_and_prepare_reduce_scaler<cb_id_in2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_COL>();
 
     constexpr uint32_t cb_id_in0 = 0;
 

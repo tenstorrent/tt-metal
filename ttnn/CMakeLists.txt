@@ -124,8 +124,10 @@ target_sources(
             cpp/ttnn/kernel/kernel_utils.hpp
             cpp/ttnn/kernel_lib/binary_op_helpers.hpp
             cpp/ttnn/kernel_lib/binary_op_helpers.inl
-            cpp/ttnn/kernel_lib/cb_helpers.hpp
-            cpp/ttnn/kernel_lib/cb_helpers.inl
+            cpp/ttnn/kernel_lib/cb_helpers_compute.hpp
+            cpp/ttnn/kernel_lib/cb_helpers_compute.inl
+            cpp/ttnn/kernel_lib/cb_helpers_dataflow.hpp
+            cpp/ttnn/kernel_lib/cb_helpers_dataflow.inl
             cpp/ttnn/kernel_lib/common_types.hpp
             cpp/ttnn/kernel_lib/copy_tile_helpers.hpp
             cpp/ttnn/kernel_lib/copy_tile_helpers.inl

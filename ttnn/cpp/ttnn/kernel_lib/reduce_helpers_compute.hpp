@@ -6,12 +6,6 @@
 #include <type_traits>
 
 #include "api/compute/reduce.h"
-#include "api/compute/cb_api.h"
-#include "api/compute/tile_move_copy.h"
-#include "api/compute/pack.h"
-#include "api/debug/assert.h"
-#include "tt-metalium/circular_buffer_constants.h"
-#include "ttnn/cpp/ttnn/kernel_lib/dest_helpers.hpp"
 #include "ttnn/cpp/ttnn/kernel_lib/common_types.hpp"
 /**
  * @file reduce_helpers_compute.hpp
@@ -246,56 +240,6 @@ template <typename T>
 inline constexpr bool is_post_reduce_op_v = is_post_reduce_op<T>::value;
 
 // =============================================================================
-// Helper Functions
-// =============================================================================
-
-/**
- * @brief Short reduce init - only reconfigures unpacker and math, not packer
- *
- * This is needed after copy_tile_to_dst_init_short_with_dt which only reconfigures
- * the unpacker for copy operations. After the copy, we need to restore unpacker and
- * math config for reduce operations without touching the packer configuration.
- *
- * Equivalent to reduce_init but skips packer reconfiguration (llk_pack_reduce_mask_config).
- * Packer configuration from the initial reduce_init call remains valid.
- *
- * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX)
- * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
- * @tparam enforce_fp32_accumulation Enable accumulation in full FP32 precision
- * @param old_cbid The previous CB ID (accumulator CB) to reconfigure from
- * @param input_cb The input CB ID to reduce from
- * @param scaler_cb The scaler CB ID
- */
-template <PoolType reduce_type, ReduceDim reduce_dim, bool enforce_fp32_accumulation = false>
-ALWI void reduce_init_short_with_dt(uint32_t old_cbid, uint32_t input_cb, uint32_t scaler_cb);
-
-/**
- * @brief Helper to extract dst_index from accumulation type
- *
- * Returns the configured dst_index when AccumulateT is Accumulate,
- * or 0 (default) when AccumulateT is NoAccumulation.
- */
-template <typename AccumulateT>
-ALWI constexpr uint32_t get_dst_index(const AccumulateT& accumulate);
-
-/**
- * @brief Helper function to reload accumulator tile into DST register
- *
- * When AccumulateT is Accumulate and iteration > 0:
- * 1. Loads accumulator tile from cb_accumulator to DST[dst_index]
- * 2. Re-initializes reduce operation (critical after copy_tile corrupts SRCA config)
- *
- * When AccumulateT is NoAccumulation: compiles to nothing (zero overhead)
- *
- * @tparam reduce_type The type of reduce operation (SUM, AVG, MAX)
- * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_SCALAR, etc.)
- * @tparam AccumulateT Either Accumulate (enables accumulation) or NoAccumulation (zero overhead)
- * @tparam enforce_fp32_accumulation Whether to enforce FP32 accumulation
- */
-template <PoolType reduce_type, ReduceDim reduce_dim, typename AccumulateT, bool enforce_fp32_accumulation>
-ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, const AccumulateT& accumulate);
-
-// =============================================================================
 // Main Reduce Function
 // =============================================================================
 
@@ -336,8 +280,6 @@ ALWI void reload_accumulator_if_needed(uint32_t input_cb, uint32_t scaler_cb, co
  * @tparam reduce_dim The dimension to reduce (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR) - required explicit parameter
  * @tparam input_policy Input handling policy (default: WaitAndPopPerTile - streaming mode)
  * @tparam reconfig_mode Data format reconfiguration mode (default: INPUT_AND_OUTPUT)
- *
- * @note FP32 accumulation is auto-detected from ENABLE_FP32_DEST_ACC define via get_fp32_dest_acc_enabled()
  *
  * @param input_cb Input circular buffer containing tiles to reduce
  * @param scaler_cb Circular buffer containing scaler tile

@@ -168,13 +168,15 @@ void kernel_main() {
         PoolType::AVG,
         ReduceDim::REDUCE_ROW,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         cb_in,
         cb_scaler,
         cb_ex_partial,
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
-    reconfig_data_format_srca(cb_in, cb_ex_external);
+    // After matmul-path reduce: SRCA=cb_scaler, SRCB=cb_in
+    // Set up for global reduce (cb_ex_external on SRCA) and restore SRCB=cb_scaler
+    reconfig_data_format(cb_ex_external, cb_scaler);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
     if constexpr (is_allgather_worker) {
@@ -278,12 +280,14 @@ void kernel_main() {
         PoolType::AVG,
         ReduceDim::REDUCE_ROW,
         compute_kernel_lib::ReduceInputPolicy::NoWaitNoPop,
-        compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
+        compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT>(
         cb_xmm2,
         cb_scaler,
         cb_ex_partial2,
         compute_kernel_lib::ReduceInputBlockShape::of(block_h, num_reduce_tiles_per_block_h, 1),
         compute_kernel_lib::ReduceInputMemoryLayout::with_row_stride(block_w));
+    // After matmul-path reduce: SRCA=cb_scaler, SRCB=cb_xmm2 — restore reduce convention
+    reconfig_data_format(cb_xmm2, cb_scaler);
     cb_pop_front(cb_xmm2, num_tiles_per_block);
 
     // global reduce, cb_ex <-- cb_ex_external, cb_ex_partial
