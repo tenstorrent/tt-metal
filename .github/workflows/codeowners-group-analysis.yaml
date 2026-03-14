@@ -1044,61 +1044,104 @@ jobs:
             done
           fi
 
-          # Helper function to check if two file lists have any overlap
-          files_have_overlap() {
-            local files1="$1"
-            local files2="$2"
-            if [ -z "$files1" ] || [ -z "$files2" ]; then
-              return 1
-            fi
-            # Convert comma-separated lists to arrays and check for any common file
-            IFS=',' read -ra FILES1_ARRAY <<< "$files1"
-            IFS=',' read -ra FILES2_ARRAY <<< "$files2"
-            for file1 in "${FILES1_ARRAY[@]}"; do
-              for file2 in "${FILES2_ARRAY[@]}"; do
-                if [ "$file1" = "$file2" ]; then
-                  return 0  # Found overlap
-                fi
-              done
-            done
-            return 1  # No overlap
-          }
-
+          # Check approvals per-file to ensure correct ownership matching
           for key in "${GROUP_KEYS[@]}"; do
             files="${GROUP_FILES[$key]}"
             members="${GROUP_MEMBERS_LIST[$key]}"
-            combined_members="$members"
-            has_other_groups=false
-            for other_key in "${GROUP_KEYS[@]}"; do
-              if [ "$other_key" != "$key" ] && files_have_overlap "$files" "${GROUP_FILES[$other_key]}"; then
-                other_members="${GROUP_MEMBERS_LIST[$other_key]}"
-                [ -n "$other_members" ] && combined_members="$combined_members,$other_members" && has_other_groups=true
+
+            # Track which files have been approved by direct members vs shared members
+            IFS=',' read -ra FILES_ARRAY <<< "$files"
+            all_files_approved=true
+            direct_approvers_set=""
+            shared_approvers_set=""
+
+            for file in "${FILES_ARRAY[@]}"; do
+              [ -z "$file" ] && continue
+
+              # Find all groups that own this specific file
+              file_owners=""
+              for check_key in "${GROUP_KEYS[@]}"; do
+                # Use -F for fixed string matching to handle filenames with regex metacharacters
+                if echo "${GROUP_FILES[$check_key]}" | tr ',' '\n' | grep -Fqx -- "$file"; then
+                  check_members="${GROUP_MEMBERS_LIST[$check_key]}"
+                  [ -n "$check_members" ] && file_owners="$file_owners,$check_members"
+                fi
+              done
+              file_owners=$(echo "$file_owners" | sed 's/^,//')
+
+              # Check if any owner of this file has approved
+              file_approved=false
+              if [ -n "$file_owners" ]; then
+                IFS=',' read -ra FILE_OWNERS_ARRAY <<< "$file_owners"
+                for owner in "${FILE_OWNERS_ARRAY[@]}"; do
+                  [ -z "$owner" ] && continue
+                  # Use exact match to avoid substring issues (e.g., "bob" vs "bobby")
+                  if echo "$APPROVED_REVIEWERS" | tr ',' '\n' | grep -qx "$owner"; then
+                    file_approved=true
+                    # Determine if this is a direct member or shared member of current group
+                    if echo "$members" | tr ',' '\n' | grep -qx "$owner"; then
+                      # Direct member - add to direct approvers if not already present
+                      if ! echo "$direct_approvers_set" | tr ',' '\n' | grep -qx "$owner"; then
+                        [ -n "$direct_approvers_set" ] && direct_approvers_set="$direct_approvers_set,"
+                        direct_approvers_set="$direct_approvers_set$owner"
+                      fi
+                    else
+                      # Shared member - add to shared approvers if not already present
+                      if ! echo "$shared_approvers_set" | tr ',' '\n' | grep -qx "$owner"; then
+                        [ -n "$shared_approvers_set" ] && shared_approvers_set="$shared_approvers_set,"
+                        shared_approvers_set="$shared_approvers_set$owner"
+                      fi
+                    fi
+                    # Don't break - continue checking to collect all approvers for this file
+                  fi
+                done
+              fi
+
+              if [ "$file_approved" = false ]; then
+                all_files_approved=false
+                break
               fi
             done
-            direct_approved="" shared_approved=""
-            if [ -n "$combined_members" ]; then
-              IFS=',' read -ra COMBINED_ARRAY <<< "$combined_members"
-              for member in "${COMBINED_ARRAY[@]}"; do
-                [ -z "$member" ] && continue
-                if echo "$APPROVED_REVIEWERS" | grep -q "$member"; then
+
+            # Only format approver names if all files are approved (to avoid unnecessary API calls)
+            if [ "$all_files_approved" = true ] && { [ -n "$direct_approvers_set" ] || [ -n "$shared_approvers_set" ]; }; then
+              direct_approved=""
+              shared_approved=""
+
+              if [ -n "$direct_approvers_set" ]; then
+                IFS=',' read -ra DIRECT_ARRAY <<< "$direct_approvers_set"
+                for member in "${DIRECT_ARRAY[@]}"; do
+                  [ -z "$member" ] && continue
                   USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
                   USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
                   [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$member"
-                  if [ "$has_other_groups" = true ] && ! echo "$members" | grep -q "$member"; then
-                    shared_approved="$shared_approved$USER_NAME, "
-                  else
-                    direct_approved="$direct_approved$USER_NAME, "
-                  fi
-                fi
-              done
+                  direct_approved="$direct_approved$USER_NAME, "
+                done
+                direct_approved=$(echo "$direct_approved" | sed 's/, $//')
+              fi
+
+              if [ -n "$shared_approvers_set" ]; then
+                IFS=',' read -ra SHARED_ARRAY <<< "$shared_approvers_set"
+                for member in "${SHARED_ARRAY[@]}"; do
+                  [ -z "$member" ] && continue
+                  USER_DATA=$(curl -s -H "Authorization: Bearer ${{ secrets.CODEOWNERS_GROUP_ANALYSIS_PAT }}" -H "Accept: application/vnd.github.v3+json" "https://api.github.com/users/$member" 2>/dev/null)
+                  USER_NAME=$(echo "$USER_DATA" | jq -r '.name // empty' 2>/dev/null)
+                  [ -z "$USER_NAME" ] || [ "$USER_NAME" = "null" ] && USER_NAME="$member"
+                  shared_approved="$shared_approved$USER_NAME, "
+                done
+                shared_approved=$(echo "$shared_approved" | sed 's/, $//')
+              fi
+
+              approved_names=""
+              [ -n "$direct_approved" ] && [ -n "$shared_approved" ] && approved_names="$direct_approved, $shared_approved (shared)"
+              [ -n "$direct_approved" ] && [ -z "$shared_approved" ] && approved_names="$direct_approved"
+              [ -z "$direct_approved" ] && [ -n "$shared_approved" ] && approved_names="$shared_approved (shared)"
+
+              GROUP_IS_APPROVED["$key"]="true"
+              GROUP_APPROVED_BY["$key"]="$approved_names"
+            else
+              GROUP_IS_APPROVED["$key"]="false"
             fi
-            direct_approved=$(echo "$direct_approved" | sed 's/, $//')
-            shared_approved=$(echo "$shared_approved" | sed 's/, $//')
-            approved_names=""
-            [ -n "$direct_approved" ] && [ -n "$shared_approved" ] && approved_names="$direct_approved, $shared_approved (shared)"
-            [ -n "$direct_approved" ] && [ -z "$shared_approved" ] && approved_names="$direct_approved"
-            [ -z "$direct_approved" ] && [ -n "$shared_approved" ] && approved_names="$shared_approved (shared)"
-            [ -n "$approved_names" ] && GROUP_IS_APPROVED["$key"]="true" && GROUP_APPROVED_BY["$key"]="$approved_names" || GROUP_IS_APPROVED["$key"]="false"
           done
 
           PENDING_GROUPS="" APPROVED_GROUPS="" PENDING_COUNT=0 APPROVED_COUNT=0
