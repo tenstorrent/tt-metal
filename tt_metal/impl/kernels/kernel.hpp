@@ -138,6 +138,13 @@ public:
     std::vector<uint32_t> compile_time_args() const { return compile_time_args_; }
     std::unordered_map<std::string, uint32_t> named_compile_time_args() const { return named_compile_time_args_; }
 
+    const NamedRuntimeArgNamespaces& named_runtime_arg_namespaces() const { return named_runtime_arg_namespaces_; }
+    void set_named_runtime_arg_namespaces(const NamedRuntimeArgNamespaces& namespaces) {
+        named_runtime_arg_namespaces_ = namespaces;
+    }
+    const NamedCTArgNamespaces& named_ct_arg_namespaces() const { return named_ct_arg_namespaces_; }
+    void set_named_ct_arg_namespaces(const NamedCTArgNamespaces& namespaces) { named_ct_arg_namespaces_ = namespaces; }
+
     // Note: When watcher assert is enabled, vector is stored as [count | args...]
     std::vector<uint32_t>& runtime_args(const CoreCoord& logical_core);
     RuntimeArgsData& runtime_args_data(const CoreCoord& logical_core);
@@ -163,6 +170,8 @@ public:
     void process_compile_time_args(std::function<void(const std::vector<uint32_t>& values)>) const override;
     void process_named_compile_time_args(
         std::function<void(const std::unordered_map<std::string, uint32_t>& named_args)>) const override;
+    void process_named_runtime_args(std::function<void(const NamedRuntimeArgNamespaces&)>) const override;
+    void process_named_ct_arg_namespaces(std::function<void(const NamedCTArgNamespaces&)>) const override;
     void process_include_paths(const std::function<void(const std::string& path)>&) const override;
 
     void validate_runtime_args_size(
@@ -224,6 +233,8 @@ protected:
     CoreRangeSet core_range_set_;
     std::vector<uint32_t> compile_time_args_;
     std::unordered_map<std::string, uint32_t> named_compile_time_args_;
+    NamedRuntimeArgNamespaces named_runtime_arg_namespaces_;
+    NamedCTArgNamespaces named_ct_arg_namespaces_;
     std::vector<std::vector<std::vector<uint32_t>>> core_to_runtime_args_;
     std::vector<std::vector<RuntimeArgsData>> core_to_runtime_args_data_;
     uint32_t common_runtime_args_count_{0};

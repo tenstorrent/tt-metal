@@ -40,6 +40,7 @@ set(UNIT_TESTS_API_SOURCES
     test_kernel_creation.cpp
     test_memory_pin.cpp
     test_noc.cpp
+    test_named_runtime_args.cpp
     test_runtime_args.cpp
     test_semaphores.cpp
     test_shape_base.cpp
