@@ -2722,10 +2722,11 @@ void kernel_main() {
         mcast.init(mcast_args);
     }
 
+    constexpr uint32_t persistent_mode = get_named_compile_time_arg_val("persistent_mode");
+    constexpr uint32_t persistent_next_iter_sem_addr = get_named_compile_time_arg_val("persistent_next_iter_sem_addr");
+    uint32_t iteration = 0;
     while (true) {
 #if defined(COMPILE_FOR_BRISC)
-        constexpr uint32_t persistent_mode = get_named_compile_time_arg_val("persistent_mode");
-        constexpr uint32_t persistent_next_iter_sem_addr = get_named_compile_time_arg_val("persistent_next_iter_sem_addr");
         if constexpr (persistent_mode) {
             constexpr bool is_bcast_sender = get_named_compile_time_arg_val("bcast_is_sender") == 1;
             if constexpr (is_bcast_sender && Core::is_sender_core) {
@@ -2746,6 +2747,12 @@ void kernel_main() {
 #endif
         setup_moe_sharded_buffers();
         moe_body();
+        if constexpr (!persistent_mode) {
+            iteration++;
+            if (iteration >= num_iterations) {
+                break;
+            }
+        }
     }
 
     // ====================================================================
