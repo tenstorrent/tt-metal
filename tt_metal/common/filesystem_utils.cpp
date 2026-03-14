@@ -50,18 +50,16 @@ void sync_filesystem(const std::filesystem::path& path) {
         fd = ::open(parent.string().c_str(), O_RDONLY | O_DIRECTORY);
     }
 
-    if (fd != -1) {
-        if (::syncfs(fd) != 0) {
-            log_debug(tt::LogMetal, "syncfs failed for {}: {}", path_str, ::strerror(errno));
-        }
-        if (::close(fd) != 0) {
-            log_debug(tt::LogMetal, "close failed after syncfs for {}: {}", path_str, ::strerror(errno));
-        }
-        return;
-    } else {
+    if (fd == -1) {
         log_debug(tt::LogMetal, "Failed to open path for syncfs: {}: {}", path_str, ::strerror(errno));
+        return;
     }
-    return;
+    if (::syncfs(fd) != 0) {
+        log_debug(tt::LogMetal, "syncfs failed for {}: {}", path_str, ::strerror(errno));
+    }
+    if (::close(fd) != 0) {
+        log_debug(tt::LogMetal, "close failed after syncfs for {}: {}", path_str, ::strerror(errno));
+    }
 #else
     ::sync();
 #endif

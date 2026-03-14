@@ -259,6 +259,46 @@ IntType parse_int_token(const std::string& token, const std::string& context) {
 
 bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token)) == "all"; }
 
+/** Return MPI/mesh rank from process environment for Inspector RPC port selection, or -1 if not set.
+ * Prefer OMPI_COMM_WORLD_RANK / PMI_RANK so that when multiple processes share TT_MESH_HOST_RANK=0
+ * (e.g. run_cluster_validation under mpirun), each still gets a distinct port.
+ *
+ * Thread Safety Note:
+ * This function uses std::getenv() which is not thread-safe on all platforms
+ * (environment variables may be modified by other threads concurrently).
+ * RunTimeOptions is typically a singleton - port-related methods should ideally
+ * be called during initialization or with appropriate synchronization if called
+ * concurrently from multiple threads. The rank value is deterministic once the
+ * process starts, so computing it once at construction would be ideal.
+ */
+int get_rank_from_env() {
+    const char* rank_str = std::getenv("OMPI_COMM_WORLD_RANK");
+    if (rank_str) {
+        try {
+            return std::stoi(rank_str);
+        } catch (...) {
+            return -1;
+        }
+    }
+    rank_str = std::getenv("PMI_RANK");
+    if (rank_str) {
+        try {
+            return std::stoi(rank_str);
+        } catch (...) {
+            return -1;
+        }
+    }
+    rank_str = std::getenv("TT_MESH_HOST_RANK");
+    if (rank_str) {
+        try {
+            return std::stoi(rank_str);
+        } catch (...) {
+            return -1;
+        }
+    }
+    return -1;
+}
+
 }  // namespace
 
 RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/kernels/") {
@@ -366,48 +406,6 @@ const std::string& RunTimeOptions::get_core_grid_override_todeprecate() const {
 }
 
 const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->system_kernel_dir; }
-
-namespace {
-/** Return MPI/mesh rank from process environment for Inspector RPC port selection, or -1 if not set.
- * Prefer OMPI_COMM_WORLD_RANK / PMI_RANK so that when multiple processes share TT_MESH_HOST_RANK=0
- * (e.g. run_cluster_validation under mpirun), each still gets a distinct port.
- *
- * Thread Safety Note:
- * This function uses std::getenv() which is not thread-safe on all platforms
- * (environment variables may be modified by other threads concurrently).
- * RunTimeOptions is typically a singleton - port-related methods should ideally
- * be called during initialization or with appropriate synchronization if called
- * concurrently from multiple threads. The rank value is deterministic once the
- * process starts, so computing it once at construction would be ideal.
- */
-int get_rank_from_env() {
-    const char* rank_str = std::getenv("OMPI_COMM_WORLD_RANK");
-    if (rank_str) {
-        try {
-            return std::stoi(rank_str);
-        } catch (...) {
-            return -1;
-        }
-    }
-    rank_str = std::getenv("PMI_RANK");
-    if (rank_str) {
-        try {
-            return std::stoi(rank_str);
-        } catch (...) {
-            return -1;
-        }
-    }
-    rank_str = std::getenv("TT_MESH_HOST_RANK");
-    if (rank_str) {
-        try {
-            return std::stoi(rank_str);
-        } catch (...) {
-            return -1;
-        }
-    }
-    return -1;
-}
-}  // namespace
 
 uint16_t RunTimeOptions::get_effective_inspector_rpc_server_port() const {
     int rank = this->cached_mpi_rank_;
