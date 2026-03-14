@@ -1,29 +1,23 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
 import torch
 import numpy as np
-from loguru import logger
 
 
 def inverse_sigmoid(x, eps: float = 1e-7):
-    device = x.device()
+    x = ttnn.to_layout(x, layout=ttnn.TILE_LAYOUT)
+    x_clamped = ttnn.clip(x, eps, 1.0 - eps)
+    x_neg = ttnn.neg(x_clamped)
+    one_minus_x = ttnn.add(x_neg, 1.0)
+    one_minus_x = ttnn.clip(one_minus_x, eps, float("inf"))
 
-    x_torch = ttnn.to_torch(x).to(torch.float32)
-    x_torch = torch.clamp(x_torch, min=eps, max=1.0 - eps)
-    one_minus_x = 1.0 - x_torch
+    ratio = ttnn.div(x_clamped, one_minus_x)
+    result = ttnn.log(ratio)
 
-    one_minus_x = torch.clamp(one_minus_x, min=eps)
-    x_torch = torch.clamp(x_torch, min=eps)
-    result = torch.log(x_torch / one_minus_x)
-    if torch.isnan(result).any() or torch.isinf(result).any():
-        logger.warning(f"NaN/Inf in inverse_sigmoid! Clamping output")
-        result = torch.nan_to_num(result, nan=0.0, posinf=10.0, neginf=-10.0)
-
-    result_ttnn = ttnn.from_torch(result, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
-
-    return result_ttnn
+    return result
 
 
 def limit_period(val, offset: float = 0.5, period: float = np.pi):
