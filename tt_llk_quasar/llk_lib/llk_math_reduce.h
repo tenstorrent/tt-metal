@@ -48,8 +48,8 @@ inline void _llk_math_reduce_col_mop_config_(const TileShape& tile_shape)
     const std::uint32_t MOP_OUTER_LOOP          = 1;
     const std::uint32_t MOP_INNER_LOOP          = (tile_shape.num_faces >= 2) ? (tile_shape.num_faces >> 1) : tile_shape.num_faces;
     constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
-    constexpr bool RUN_FID_LOOPS       = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
-    const std::uint32_t replay_buf_len = 2 + (2 * NUM_FIDELITY_PHASES);
+    constexpr bool RUN_FID_LOOPS           = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
+    constexpr std::uint32_t replay_buf_len = 2 + (RUN_FID_LOOPS ? (2 * NUM_FIDELITY_PHASES) : 0);
 
     load_replay_buf(
         0,
@@ -106,7 +106,7 @@ inline void _llk_math_reduce_row_mop_config_(const TileShape& tile_shape)
     constexpr std::uint32_t MOP_OUTER_LOOP      = 1;
     constexpr std::uint32_t MOP_INNER_LOOP      = 1;
     // Replay buf max len is 32, NUM_FIDELITY_PHASES will be larger than 3, hypothetical limit of 19 + 12 = 31
-    constexpr std::uint32_t replay_buf_len = 19 + (4 * NUM_FIDELITY_PHASES);
+    constexpr std::uint32_t replay_buf_len = 19 + (RUN_FID_LOOPS ? (4 * NUM_FIDELITY_PHASES) : 0);
 
     load_replay_buf(
         0,
@@ -219,8 +219,9 @@ inline void _llk_math_reduce_scalar_mop_config_(const TileShape& tile_shape)
     constexpr std::uint32_t MOP_OUTER_LOOP      = 1;
     constexpr std::uint32_t MOP_INNER_LOOP      = 1;
     constexpr std::uint32_t NUM_FIDELITY_PHASES = MATH_FIDELITY_TYPE == ckernel::MathFidelity::LoFi ? 0 : to_underlying(MATH_FIDELITY_TYPE) - 1;
-    const std::uint32_t replay_buf_len          = 6 + tile_shape.num_faces - 1 + ((tile_shape.num_faces - 1) * NUM_FIDELITY_PHASES) + (2 * NUM_FIDELITY_PHASES);
     constexpr bool RUN_FID_LOOPS = (MATH_FIDELITY_TYPE != ckernel::MathFidelity::LoFi && (POOL_TYPE == PoolType::AVG || POOL_TYPE == PoolType::SUM));
+    const std::uint32_t replay_buf_len =
+        6 + tile_shape.num_faces - 1 + (RUN_FID_LOOPS ? ((tile_shape.num_faces - 1) * NUM_FIDELITY_PHASES) + (2 * NUM_FIDELITY_PHASES) : 0);
 
     load_replay_buf(
         0,
