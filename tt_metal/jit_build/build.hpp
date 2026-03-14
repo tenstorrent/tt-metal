@@ -28,8 +28,6 @@ class Hal;
 
 static constexpr uint32_t CACHE_LINE_ALIGNMENT = 64;
 
-static const std::string SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME = ".SUCCESS";
-
 template <typename T>
 using vector_cache_aligned = std::vector<T, tt::stl::aligned_allocator<T, CACHE_LINE_ALIGNMENT>>;
 
@@ -194,5 +192,10 @@ void jit_build_once(size_t hash, const std::function<void()>& build_fn);
 
 // Clear the JIT build cache so that subsequent jit_build_once() calls re-execute.
 void jit_build_cache_clear();
+
+// Counter for observing JIT build entrypoint invocations in tests/debugging.
+// This counts calls to jit_build*, not build attempts skipped by jit_build_once.
+uint64_t jit_build_get_invocation_count();
+void jit_build_reset_invocation_count();
 
 }  // namespace tt::tt_metal

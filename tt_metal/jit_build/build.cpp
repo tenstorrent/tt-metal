@@ -7,7 +7,6 @@
 #include "jit_build_cache.hpp"
 #include "jit_device_config.hpp"
 
-#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdio>
@@ -50,6 +49,9 @@ namespace tt::tt_metal {
 
 namespace {
 
+// Counter for profiling / debugging / unit testing JIT build.
+std::atomic<uint64_t> jit_build_invocation_count{0};
+
 void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
     log_error(tt::LogBuildKernels, "{} {} failure -- cmd: {}", target_name, op, cmd);
     std::ifstream file{log_file};
@@ -59,12 +61,6 @@ void build_failure(const string& target_name, const string& op, const string& cm
     } else {
         TT_THROW("Failed to open {} failure log file {}", op, log_file);
     }
-}
-
-void write_successful_jit_build_marker(const JitBuildState& build, const JitBuildSettings* settings) {
-    const string out_dir = (settings == nullptr) ? build.get_out_path() + "/"
-                                                 : build.get_out_path() + settings->get_full_kernel_name() + "/";
-    std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
 }
 
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
@@ -756,19 +752,20 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     // ZoneScoped;
+    ++jit_build_invocation_count;
 
     build.build(settings);
-    write_successful_jit_build_marker(build, settings);
 }
 
 void jit_build_for_processors(std::span<const JitBuildState* const> targets, const JitBuildSettings* settings) {
+    ++jit_build_invocation_count;
     TT_ASSERT(!targets.empty());
     const JitBuildState& primary = *targets[0];
     primary.build(settings, targets);
-    write_successful_jit_build_marker(primary, settings);
 }
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
+    ++jit_build_invocation_count;
     std::vector<std::shared_future<void>> events;
     for (const auto& build : build_subset) {
         // Capture the necessary objects by reference
@@ -776,9 +773,6 @@ void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* 
     }
 
     sync_build_steps(events);
-    for (const auto& build : build_subset) {
-        write_successful_jit_build_marker(build, settings);
-    }
 }
 
 void launch_build_step(const std::function<void()>& build_func, std::vector<std::shared_future<void>>& events) {
@@ -796,5 +790,9 @@ void jit_build_once(size_t hash, const std::function<void()>& build_fn) {
 }
 
 void jit_build_cache_clear() { JitBuildCache::inst().clear(); }
+
+uint64_t jit_build_get_invocation_count() { return jit_build_invocation_count; }
+
+void jit_build_reset_invocation_count() { jit_build_invocation_count = 0; }
 
 }  // namespace tt::tt_metal

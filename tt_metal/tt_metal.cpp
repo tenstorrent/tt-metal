@@ -45,6 +45,8 @@
 #include "lightmetal/lightmetal_capture.hpp"
 #include <tt-metalium/experimental/lightmetal/lightmetal_binary.hpp>
 #include <tt-metalium/experimental/lightmetal/lightmetal_api.hpp>
+#include <tt-metalium/experimental/offline_kernel_compile.hpp>
+#include <fmt/format.h>
 #include "llrt.hpp"
 #include <tt-logger/tt-logger.hpp>
 #include <tt_metal_profiler.hpp>
@@ -1606,6 +1608,36 @@ void UpdateDynamicCircularBufferAddress(
     auto circular_buffer = program.impl().get_circular_buffer(cb_handle);
     TT_FATAL(circular_buffer->is_global_circular_buffer(), "CircularBuffer must be linked to a GlobalCircularBuffer!");
     circular_buffer->set_global_circular_buffer(global_circular_buffer);
+}
+
+PrecompiledKernelNotFoundError::PrecompiledKernelNotFoundError(
+    std::string kernel_name,
+    size_t compile_hash,
+    std::string precompiled_dir,
+    PrecompiledKernelConfig::FallbackPolicy fallback_policy) :
+    std::runtime_error(fmt::format(
+        "Precompiled kernel binary not found. Kernel: \"{}\", compile_hash: {:#x}, searched in: \"{}\". "
+        "Either build/install the offline binaries there, set PrecompiledKernelConfig::fallback_policy to "
+        "JitCompile, or catch PrecompiledKernelNotFoundError for details.",
+        kernel_name,
+        compile_hash,
+        precompiled_dir)),
+    kernel_name_(std::move(kernel_name)),
+    compile_hash_(compile_hash),
+    precompiled_dir_(std::move(precompiled_dir)),
+    fallback_policy_(fallback_policy) {}
+
+KernelHandle CreateKernelFromPrecompiled(
+    Program& program,
+    const std::string& file_name,
+    const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
+    const std::variant<DataMovementConfig, ComputeConfig>& config,
+    const PrecompiledKernelConfig& precompiled_config) {
+    std::visit([](const auto& cfg) { ValidateKernelConfigDefines(cfg.defines); }, config);
+
+    KernelHandle kernel_handle = CreateKernel(program, file_name, core_spec, config);
+    program.impl().get_kernel(kernel_handle)->set_precompiled_config(precompiled_config);
+    return kernel_handle;
 }
 
 namespace quasar {
