@@ -13,6 +13,7 @@ Schema design:
 
 import json
 import hashlib
+import copy
 import os
 import re
 import psycopg2
@@ -70,6 +71,34 @@ def extract_model_family(source_file, hf_model):
     return None
 
 
+_OBJECT_ADDR_RE = re.compile(r" at 0x[0-9a-fA-F]+")
+
+
+def _normalize_for_hash(obj):
+    """Normalize arguments in-place for stable config_hash computation.
+
+    Same logic as model_tracer/generic_ops_tracer.py so that hashes
+    computed here match hashes computed by the tracer.
+    """
+    if isinstance(obj, dict):
+        if "hash" in obj and isinstance(obj["hash"], int):
+            del obj["hash"]
+        if "shard_spec" in obj and obj["shard_spec"] is None:
+            obj["shard_spec"] = "None"
+        for k in list(obj.keys()):
+            v = obj[k]
+            if isinstance(v, str):
+                obj[k] = _OBJECT_ADDR_RE.sub("", v)
+            else:
+                _normalize_for_hash(v)
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            if isinstance(item, str):
+                obj[i] = _OBJECT_ADDR_RE.sub("", item)
+            else:
+                _normalize_for_hash(item)
+
+
 def compute_config_hash(operation_name, arguments, hardware, mesh_config):
     """Compute SHA-256 hash for configuration deduplication.
 
@@ -80,6 +109,36 @@ def compute_config_hash(operation_name, arguments, hardware, mesh_config):
         "arguments": arguments,
         "hardware": hardware,
         "mesh": mesh_config,
+    }
+    return hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
+
+
+def compute_config_hash_v2(operation_name, arguments, machine_info):
+    """Compute config_hash from V2-format arguments and machine_info.
+
+    Uses the same normalization as the tracer (generic_ops_tracer.py)
+    so that hashes are consistent regardless of which code path
+    produced the JSON.
+    """
+    hash_args = copy.deepcopy(arguments)
+    _normalize_for_hash(hash_args)
+
+    hardware = None
+    if machine_info:
+        board_type = machine_info.get("board_type")
+        if board_type:
+            device_series = machine_info.get("device_series")
+            if isinstance(device_series, list):
+                device_series = device_series[0] if device_series else None
+            hardware = (board_type, device_series, machine_info.get("card_count", 1))
+
+    # V2 format stores placement per-tensor, not in machine_info,
+    # so mesh_config is always None (matches the tracer's behavior).
+    normalized = {
+        "operation": operation_name,
+        "arguments": hash_args,
+        "hardware": hardware,
+        "mesh": None,
     }
     return hashlib.sha256(json.dumps(normalized, sort_keys=True).encode()).hexdigest()
 
@@ -803,9 +862,10 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2_5", model_filter=N
 
             config_dict = {"arguments": arguments}
 
-            # Include config_hash for direct correlation with database
-            if config_hash:
-                config_dict["config_hash"] = config_hash
+            # config_hash is recomputed below after machine_info is built,
+            # so that V2-reconstructed JSON uses the same hash as the tracer.
+            # Store the DB hash temporarily for fallback.
+            db_config_hash = config_hash
 
             # V2 format: use executions array
             if schema == "ttnn_ops_v2_5":
@@ -867,6 +927,16 @@ def reconstruct_from_db(output_path=None, schema="ttnn_ops_v2_5", model_filter=N
 
                 if machine_info:
                     config_dict["machine_info"] = machine_info
+
+            # Recompute config_hash from V2 arguments using the same
+            # normalization as the tracer, so hashes are consistent.
+            first_mi = None
+            if "executions" in config_dict and config_dict["executions"]:
+                first_mi = config_dict["executions"][0].get("machine_info")
+            elif "machine_info" in config_dict and config_dict["machine_info"]:
+                mi_list = config_dict["machine_info"]
+                first_mi = mi_list[0] if isinstance(mi_list, list) else mi_list
+            config_dict["config_hash"] = compute_config_hash_v2(op_name, arguments, first_mi)
 
             configurations.append(config_dict)
 

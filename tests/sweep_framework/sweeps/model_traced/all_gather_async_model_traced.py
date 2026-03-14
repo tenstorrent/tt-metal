@@ -488,14 +488,32 @@ def run(
                 ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(num_iters)
             ]
 
+        # Create persistent output buffers when use_broadcast is enabled
+        # (matches reference test pattern in test_minimal_all_gather_async.py)
+        persistent_output_buffers = []
+        if use_broadcast and is_model_traced:
+            output_shape = list(torch_reference.shape)
+            persistent_output_buffers = [
+                ttnn.from_torch(
+                    torch.zeros(output_shape),
+                    device=device,
+                    layout=layout,
+                    dtype=input_dtype,
+                    memory_config=output_memory_config if output_memory_config else ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
+                )
+                for _ in range(num_iters)
+            ]
+
         for i in range(num_iters):
             try:
                 start_time = start_measuring_time()
 
                 if is_model_traced:
-                    # Build kwargs to match the model trace exactly: include
-                    # mesh_device, and only pass optional args that were
-                    # present (non-None) in the original model call.
+                    # Build kwargs matching the reference test pattern
+                    # (test_minimal_all_gather_async.py::run_all_gather_impl).
+                    # subdevice_id is always passed; persistent_output_buffer
+                    # is created locally (not from traced JSON).
                     op_kwargs = {
                         "dim": dim,
                         "multi_device_global_semaphore": ccl_semaphore_handles[i],
@@ -503,15 +521,14 @@ def run(
                         "topology": topology,
                         "cluster_axis": cluster_axis,
                         "mesh_device": device,
+                        "subdevice_id": worker_sub_device_id,
                     }
                     if output_memory_config is not None:
                         op_kwargs["memory_config"] = output_memory_config
                     if barrier_semaphore_handles:
                         op_kwargs["barrier_semaphore"] = barrier_semaphore_handles[i]
-                    if persistent_output_buffer is not None:
-                        op_kwargs["persistent_output_buffer"] = persistent_output_buffer
-                    if subdevice_id is not None:
-                        op_kwargs["subdevice_id"] = worker_sub_device_id
+                    if persistent_output_buffers:
+                        op_kwargs["persistent_output_buffer"] = persistent_output_buffers[i]
                     if chunks_per_sync is not None:
                         op_kwargs["chunks_per_sync"] = chunks_per_sync
                     if num_workers_per_link is not None:
