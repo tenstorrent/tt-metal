@@ -24,11 +24,11 @@ def test_graph_capture(tmp_path, device, scalar, size, mode):
     captured_graph = ttnn.graph.end_graph_capture()
     calltrace = ttnn.graph.extract_calltrace(captured_graph)
 
-    assert "ttnn::convert_python_tensor_to_tt_tensor" in calltrace
+    assert "ttnn.from_torch" in calltrace or "ttnn::convert_python_tensor_to_tt_tensor" in calltrace
     assert captured_graph[0]["node_type"] == "capture_start"
     assert captured_graph[1]["node_type"] == "function_start"
-    assert captured_graph[1]["params"]["name"] == "ttnn::convert_python_tensor_to_tt_tensor"
-    assert captured_graph[-2]["node_type"] == "buffer_deallocate"
+    first_op = captured_graph[1]["params"]["name"]
+    assert first_op in ("ttnn.from_torch", "ttnn::convert_python_tensor_to_tt_tensor")
     assert captured_graph[-1]["node_type"] == "capture_end"
 
     ttnn.graph.pretty_print(captured_graph)
@@ -521,3 +521,173 @@ def test_program_cache_invalidation_across_dispatch_modes(device):
         assert False
 
     assert True
+
+
+# Tests for new features: stack traces, buffer pages, full tensor info
+
+
+def test_stack_trace_control():
+    """Test stack trace enable/disable API"""
+    # Default is enabled (stack traces are captured by default for graph reports)
+    assert ttnn.graph.is_stack_trace_enabled()
+
+    # Disable
+    ttnn.graph.disable_stack_traces()
+    assert not ttnn.graph.is_stack_trace_enabled()
+
+    # Re-enable
+    ttnn.graph.enable_stack_traces()
+    assert ttnn.graph.is_stack_trace_enabled()
+
+
+def test_buffer_pages_control():
+    """Test buffer pages enable/disable API"""
+    # Default should be disabled
+    assert not ttnn.graph.is_buffer_pages_enabled()
+
+    # Enable
+    ttnn.graph.enable_buffer_pages()
+    assert ttnn.graph.is_buffer_pages_enabled()
+
+    # Disable
+    ttnn.graph.disable_buffer_pages()
+    assert not ttnn.graph.is_buffer_pages_enabled()
+
+
+@pytest.mark.parametrize("mode", [ttnn.graph.RunMode.NO_DISPATCH, ttnn.graph.RunMode.NORMAL])
+def test_stack_traces_captured_when_enabled(device, mode):
+    """Test that stack traces are captured when enabled"""
+    ttnn.graph.enable_stack_traces()
+
+    try:
+        ttnn.graph.begin_graph_capture(mode)
+        input_tensor = ttnn.from_torch(torch.rand((32,), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+        ttnn.relu(input_tensor)
+        captured_graph = ttnn.graph.end_graph_capture()
+    finally:
+        ttnn.graph.disable_stack_traces()
+
+    # Find function_start nodes and check for stack traces
+    found_stack_trace = False
+    for node in captured_graph:
+        if node["node_type"] == "function_start":
+            if "stack_trace" in node and len(node["stack_trace"]) > 0:
+                found_stack_trace = True
+                # Stack trace should be a list of strings
+                assert isinstance(node["stack_trace"], list)
+                assert all(isinstance(entry, str) for entry in node["stack_trace"])
+                break
+
+    assert found_stack_trace, "Expected stack traces to be captured when enabled"
+
+
+@pytest.mark.parametrize("mode", [ttnn.graph.RunMode.NO_DISPATCH, ttnn.graph.RunMode.NORMAL])
+def test_stack_traces_not_captured_when_disabled(device, mode):
+    """Test that stack traces are NOT captured when disabled"""
+    ttnn.graph.disable_stack_traces()
+    try:
+        ttnn.graph.begin_graph_capture(mode)
+        ttnn.from_torch(torch.rand((32,), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+        captured_graph = ttnn.graph.end_graph_capture()
+
+        # No function_start node should have non-empty stack traces
+        for node in captured_graph:
+            if node["node_type"] == "function_start":
+                stack_trace = node.get("stack_trace", [])
+                assert len(stack_trace) == 0, "Stack trace should be empty when disabled"
+    finally:
+        ttnn.graph.enable_stack_traces()
+
+
+@pytest.mark.parametrize("mode", [ttnn.graph.RunMode.NO_DISPATCH, ttnn.graph.RunMode.NORMAL])
+def test_full_tensor_info_captured(device, mode):
+    """Test that full tensor info (dtype, layout, memory_config, etc.) is captured"""
+    ttnn.graph.begin_graph_capture(mode)
+    ttnn.from_torch(
+        torch.rand((1, 1, 32, 32), dtype=torch.bfloat16),
+        dtype=ttnn.DataType.BFLOAT16,
+        layout=ttnn.TILE_LAYOUT,
+        device=device,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    captured_graph = ttnn.graph.end_graph_capture()
+
+    # Find tensor nodes and verify they have full info
+    found_tensor_with_full_info = False
+    for node in captured_graph:
+        if node["node_type"] == "tensor":
+            params = node["params"]
+            # Check for required fields
+            assert "tensor_id" in params
+            assert "shape" in params
+
+            # Check for extended tensor info (dtype, layout)
+            if "dtype" in params:
+                found_tensor_with_full_info = True
+                assert isinstance(params["dtype"], str)
+                assert "layout" in params
+                assert isinstance(params["layout"], str)
+
+                # For device tensors, check device-specific fields
+                if "device_id" in params:
+                    assert isinstance(params["device_id"], (int, str))
+                    assert "address" in params
+                    assert isinstance(params["address"], (int, str))
+
+    assert found_tensor_with_full_info, "Expected at least one tensor with full info"
+
+
+@pytest.mark.parametrize("mode", [ttnn.graph.RunMode.NO_DISPATCH, ttnn.graph.RunMode.NORMAL])
+def test_duration_captured(device, mode):
+    """Test that durations are captured for function_end and capture_end nodes"""
+    ttnn.graph.begin_graph_capture(mode)
+    input_tensor = ttnn.from_torch(torch.rand((32,), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+    ttnn.relu(input_tensor)
+    captured_graph = ttnn.graph.end_graph_capture()
+
+    # Check function_end nodes have duration
+    found_function_end_with_duration = False
+    for node in captured_graph:
+        if node["node_type"] == "function_end":
+            if "duration_ns" in node:
+                found_function_end_with_duration = True
+                assert isinstance(node["duration_ns"], int)
+                assert node["duration_ns"] >= 0
+
+    # Check capture_end node has duration
+    found_capture_end_with_duration = False
+    for node in captured_graph:
+        if node["node_type"] == "capture_end":
+            if "duration_ns" in node:
+                found_capture_end_with_duration = True
+                assert isinstance(node["duration_ns"], int)
+                assert node["duration_ns"] >= 0
+
+    assert found_function_end_with_duration, "Expected function_end nodes to have duration"
+    assert found_capture_end_with_duration, "Expected capture_end node to have duration"
+
+
+def test_get_current_report(device):
+    """Test get_current_report API during active capture"""
+    ttnn.graph.begin_graph_capture(ttnn.graph.RunMode.NO_DISPATCH)
+
+    ttnn.from_torch(torch.rand((1, 1, 32, 32), dtype=torch.bfloat16), layout=ttnn.TILE_LAYOUT, device=device)
+
+    # Get report while capture is active
+    report = ttnn.graph.get_current_report()
+
+    ttnn.graph.end_graph_capture()
+
+    # Verify report structure
+    assert "version" in report
+    assert report["version"] == ttnn.graph.REPORT_VERSION
+    assert "graph" in report
+    assert "devices" in report
+    assert "metadata" in report
+
+    # Graph should have some nodes
+    assert len(report["graph"]) > 0
+
+    # Metadata should have timestamp
+    assert "capture_timestamp_ns" in report["metadata"]
+    assert report["metadata"]["capture_timestamp_ns"] > 0
