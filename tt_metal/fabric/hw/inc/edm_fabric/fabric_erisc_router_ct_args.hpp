@@ -82,6 +82,19 @@ constexpr size_t MAX_NUM_RECEIVER_CHANNELS = NAMED_CT_ARG("MAX_NUM_RECEIVER_CHAN
 constexpr size_t MAX_NUM_SENDER_CHANNELS_VC0 = (MAX_NUM_SENDER_CHANNELS >= 9) ? 5 : 4;
 constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = MAX_NUM_SENDER_CHANNELS - MAX_NUM_SENDER_CHANNELS_VC0;
 constexpr size_t VC1_SENDER_CHANNEL_START = MAX_NUM_SENDER_CHANNELS_VC0;
+constexpr size_t VC0_SENDER_CHANNEL_START_CONST = 0;
+
+// Number of virtual channels — used to size per-VC arrays below.
+// Matches builder_config::MAX_NUM_VCS on the host side (always 2).
+constexpr size_t MAX_NUM_VCS = 2;
+
+// Per-VC arrays that consolidate the symmetric scalar VC constants above.
+// These are the foundational compile-time arrays consumed by Plan 02/03 when
+// flat cross-VC iteration is converted to templated per-VC functions.
+constexpr std::array<size_t, MAX_NUM_VCS> MAX_NUM_SENDER_CHANNELS_PER_VC = {
+    MAX_NUM_SENDER_CHANNELS_VC0, MAX_NUM_SENDER_CHANNELS_VC1};
+constexpr std::array<size_t, MAX_NUM_VCS> vc_sender_channel_start_per_vc = {
+    VC0_SENDER_CHANNEL_START_CONST, VC1_SENDER_CHANNEL_START};
 
 // ============================================================================
 // Downstream tensix connections
@@ -149,6 +162,13 @@ constexpr size_t VC0_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC0_DOWNSTREAM_EDM_SIZE
 constexpr size_t VC1_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC1_DOWNSTREAM_EDM_SIZE");
 constexpr size_t ACTUAL_VC0_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC0_SENDER_CHANNELS");
 constexpr size_t ACTUAL_VC1_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC1_SENDER_CHANNELS");
+
+// Per-VC arrays for actual sender channel counts and first-level ACK enable flags.
+// Complement the foundational arrays defined near MAX_NUM_SENDER_CHANNELS_PER_VC above.
+constexpr std::array<size_t, MAX_NUM_VCS> ACTUAL_SENDER_CHANNELS_PER_VC = {
+    ACTUAL_VC0_SENDER_CHANNELS, ACTUAL_VC1_SENDER_CHANNELS};
+constexpr std::array<bool, MAX_NUM_VCS> ENABLE_FIRST_LEVEL_ACK_PER_VC = {
+    ENABLE_FIRST_LEVEL_ACK_VC0, ENABLE_FIRST_LEVEL_ACK_VC1};
 
 // Remote channel info (always available; 0 when inactive)
 constexpr size_t remote_worker_sender_channel = NAMED_CT_ARG("REMOTE_WORKER_SENDER_CHANNEL");
