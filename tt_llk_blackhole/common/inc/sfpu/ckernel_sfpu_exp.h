@@ -164,6 +164,21 @@ void _calculate_exponential_(const std::uint16_t exp_base_scale_factor /* 1.0f i
 {
     if constexpr (FAST_APPROX && APPROXIMATION_MODE && CLAMP_NEGATIVE)
     {
+#ifdef DISABLE_SFPLOADMACRO
+        for (int d = 0; d < ITERATIONS; d++)
+        {
+            TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
+            TTI_SFPSWAP(0, p_sfpu::LREG14, p_sfpu::LREG0, 9);
+            TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
+            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
+            TTI_SFPSHFT(15, p_sfpu::LREG0, p_sfpu::LREG0, 1);
+            TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
+            sfpi::dst_reg++;
+        }
+#else
+        // Code below is hand-unrolled for 8 iterations
+        static_assert(ITERATIONS == 8);
+
         // Sanitize the input values by loading from DEST, comparing against the value -88.5, and if the input value is more negative than that, swap the input
         // value with -88.5 and store back to DEST
         //  - in other words, after the sanitize step, the values in DEST will be in the range {-88.5 , +inf}
@@ -253,7 +268,23 @@ void _calculate_exponential_(const std::uint16_t exp_base_scale_factor /* 1.0f i
         TTI_SFPNOP;
         // TTI_SFPNOP;
         // TTI_SFPNOP;
+#endif
     }
+#ifdef DISABLE_SFPLOADMACRO
+    else if constexpr (FAST_APPROX && APPROXIMATION_MODE)
+    {
+        for (int d = 0; d < ITERATIONS; d++)
+        {
+            TTI_SFPLOAD(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
+            TTI_SFPMAD(p_sfpu::LREG12, p_sfpu::LREG0, p_sfpu::LREG13, p_sfpu::LREG0, 0);
+            TTI_SFP_STOCH_RND(0, 0, 0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPSTOCHRND_MOD1_FP32_TO_INT16);
+            TTI_SFPSHFT2(p_sfpu::LREG0, p_sfpu::LREG14, p_sfpu::LREG1, 5); // lreg[1] = lreg[0] << 15
+            TTI_SFPSETSGN(0, p_sfpu::LREG1, p_sfpu::LREG0, 0);             // lreg[0] preserves sign, copies e/m from lreg[1]
+            TTI_SFPSTORE(p_sfpu::LREG0, 0, ADDR_MOD_7, 0);
+            sfpi::dst_reg++;
+        }
+    }
+#else
     else if constexpr (FAST_APPROX && APPROXIMATION_MODE && ITERATIONS == 8)
     {
         // =======================================================================
@@ -319,6 +350,7 @@ void _calculate_exponential_(const std::uint16_t exp_base_scale_factor /* 1.0f i
     {
         static_assert(ITERATIONS == 8 || ITERATIONS == 32, "This version of exponential only supports 8 or 32 iterations.");
     }
+#endif
     else
     {
         // Unroll 8 best for approx, unroll 0 for precise, compiler figures this out
@@ -379,6 +411,7 @@ inline void _init_exponential_()
         TTI_SFPLOADI(0, 0x8, hi16(B_minus_C));
         TTI_SFPCONFIG(0, 13, 0); // SFPCONFIG Dest 13 = LREG[13] = (B-C) =  32500.818359375       = 0x46fde9a3
 
+#ifndef DISABLE_SFPLOADMACRO
         // Next, set up the macro instructions which will be necessary
         //  - for the sanitize function: we will need a SWAP instruction
         //  - for the main computation function: we will need MAD, ROUND, and SHIFT instructions
@@ -465,6 +498,7 @@ inline void _init_exponential_()
 
         // Reset LoadMacroConfig[Lane].Misc for all lanes, in case it has been previously set by another use of macros.
         TTI_SFPCONFIG(0, 8, 1);
+#endif
     }
     else if constexpr (FAST_APPROX && APPROXIMATION_MODE)
     {
@@ -543,6 +577,7 @@ inline void _init_exponential_()
         TTI_SFPLOADI(0, 0x8, 0);  // Upper 16 bits = 0
         TTI_SFPCONFIG(0, 14, 0);  // Store in LREG[14]
 
+#ifndef DISABLE_SFPLOADMACRO
         // ===================================================================
         // Program Macro Instructions via Backdoor Load
         // ===================================================================
@@ -637,6 +672,7 @@ inline void _init_exponential_()
         TTI_SFPSHFT2(p_sfpu::LREG1, p_sfpu::LREG14, p_sfpu::LREG4, 5);
 
         TTI_SFPNOP;
+#endif
     }
     else if constexpr (APPROXIMATION_MODE)
     {

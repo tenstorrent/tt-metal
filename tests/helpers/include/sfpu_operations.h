@@ -78,7 +78,7 @@ void call_sfpu_operation(SfpuType operation, std::uint32_t math_format = 0, floa
                 static_assert(ITERATIONS == 32);
                 for (int i = 0; i < 4; i++)
                 {
-                    _calculate_exponential_<APPROX_MODE, false /* scale_en */, ITERATIONS, FAST_MODE, false /* skip_positive_check */, CLAMP_NEGATIVE>(
+                    _calculate_exponential_<APPROX_MODE, false /* scale_en */, 8, FAST_MODE, false /* skip_positive_check */, CLAMP_NEGATIVE>(
                         p_sfpu::kCONST_1_FP16B /* exp_base_scale_factor */);
                     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
                     TTI_SETRWC(p_setrwc::CLR_NONE, p_setrwc::CR_D, 8, 0, 0, p_setrwc::SET_D);
