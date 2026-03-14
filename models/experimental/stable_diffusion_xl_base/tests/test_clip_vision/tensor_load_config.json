@@ -1,0 +1,2787 @@
+{
+  "resampler.norm_out.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.norm_out.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.proj_out.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "resampler.proj_out.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.latents": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.0.attn.to_out.0.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.0.attn.to_v.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.0.ln1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "resampler.layers.0.ln1.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "resampler.layers.0.ln0.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.0.ln0.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.proj_in.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "resampler.proj_in.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.30.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.30.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.30.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.30.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.30.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.30.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.30.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.30.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.30.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.30.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.30.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.30.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.29.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.29.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.29.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.29.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.29.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.29.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.29.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.29.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.29.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.29.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.29.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.29.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.28.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.28.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.28.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.28.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.28.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.28.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.28.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.28.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.28.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.28.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.28.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.28.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.27.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.27.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.27.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.27.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.27.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.27.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.27.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.27.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.27.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.27.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.27.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.27.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.26.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.26.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.26.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.26.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.26.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.26.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.26.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.26.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.26.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.26.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.26.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.26.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.25.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.25.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.25.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.25.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.25.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.25.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.25.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.25.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.25.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.25.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.25.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.25.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.24.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.24.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.24.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.24.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.24.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.24.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.24.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.24.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.24.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.24.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.24.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.24.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.23.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.23.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.23.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.23.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.23.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.23.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.23.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.23.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.23.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.23.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.23.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.23.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.22.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.22.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.22.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.22.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.22.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.22.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.22.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.22.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.22.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.22.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.22.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.22.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.21.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.21.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.21.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.21.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.21.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.21.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.21.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.21.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.21.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.21.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.21.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.21.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.20.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.20.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.20.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.20.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.20.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.20.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.20.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.20.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.20.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.20.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.20.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.20.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.19.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.19.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.19.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.19.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.19.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.19.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.19.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.19.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.19.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.19.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.19.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.19.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.18.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.18.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.18.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.18.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.18.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.18.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.18.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.18.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.18.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.18.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.18.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.18.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.17.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.17.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.17.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.17.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.17.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.17.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.17.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.17.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.17.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.17.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.17.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.17.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.16.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.16.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.16.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.16.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.16.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.16.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.16.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.16.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.16.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.16.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.16.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.16.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.15.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.15.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.15.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.15.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.15.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.15.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.15.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.15.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.15.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.15.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.15.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.15.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.14.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.14.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.14.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.14.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.14.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.14.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.14.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.14.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.14.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.14.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.14.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.14.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.13.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.13.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.13.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.13.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.13.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.13.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.13.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.13.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.13.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.13.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.13.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.13.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.12.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.12.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.12.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.12.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.12.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.12.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.12.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.12.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.12.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.12.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.12.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.12.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.11.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.11.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.11.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.11.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.11.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.11.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.11.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.11.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.11.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.11.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.11.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.11.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.10.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.10.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.10.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.10.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.10.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.10.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.10.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.10.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.10.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.10.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.10.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.10.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.9.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.9.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.9.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.9.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.9.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.9.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.9.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.9.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.9.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.9.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.9.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.9.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.8.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.8.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.8.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.8.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.8.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.8.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.8.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.8.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.8.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.8.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.8.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.8.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.7.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.7.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.7.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.7.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.7.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.7.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.7.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.7.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.7.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.7.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.7.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.7.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.6.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.6.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.6.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.6.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.6.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.6.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.6.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.6.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.6.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.6.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.6.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.6.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.5.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.5.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.5.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.5.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.5.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.5.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.5.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.5.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.5.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.5.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.5.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.5.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.4.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.4.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.4.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.4.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.4.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.4.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.4.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.4.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.4.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.4.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.4.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.4.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.3.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.3.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.3.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.3.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.3.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.3.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.3.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.3.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.3.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.3.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.3.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.3.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.2.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.2.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.2.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.2.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.2.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.2.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.2.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.2.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.2.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.2.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.2.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.2.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.1.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.1.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.1.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.1.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.1.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.1.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.1.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.1.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.1.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.1.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.1.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.1.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.0.mlp.fc2.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.0.mlp.fc2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.0.mlp.fc1.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.0.mlp.fc1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.0.layer_norm2.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.0.layer_norm2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.0.self_attn.out_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.0.self_attn.out_proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.0.self_attn.v_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.0.self_attn.v_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.0.layer_norm1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.encoder.layers.0.layer_norm1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.pre_layrnorm.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "image_encoder.vision_model.pre_layrnorm.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "__POSITION_IDS__": {
+    "layout": "ROW_MAJOR",
+    "dtype": "INT32",
+    "on_device": false
+  },
+  "image_encoder.vision_model.embeddings.position_embedding.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.embeddings.patch_embedding.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.embeddings.class_embedding": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.0.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.0.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.0.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.0.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.1.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.1.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.1.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.1.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.2.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.2.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.2.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.2.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.3.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.3.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.3.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.3.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.4.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.4.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.4.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.4.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.5.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.5.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.5.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.5.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.6.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.6.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.6.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.6.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.7.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.7.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.7.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.7.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.8.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.8.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.8.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.8.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.9.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.9.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.9.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.9.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.10.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.10.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.10.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.10.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.11.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.11.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.11.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.11.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.12.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.12.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.12.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.12.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.13.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.13.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.13.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.13.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.14.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.14.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.14.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.14.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.15.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.15.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.15.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.15.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.16.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.16.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.16.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.16.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.17.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.17.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.17.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.17.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.18.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.18.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.18.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.18.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.19.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.19.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.19.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.19.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.20.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.20.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.20.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.20.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.21.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.21.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.21.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.21.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.22.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.22.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.22.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.22.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.23.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.23.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.23.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.23.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.24.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.24.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.24.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.24.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.25.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.25.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.25.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.25.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.26.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.26.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.26.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.26.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.27.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.27.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.27.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.27.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.28.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.28.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.28.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.28.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.29.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.29.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.29.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.29.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.30.self_attn.k_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.30.self_attn.k_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.30.self_attn.q_proj.bias": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "image_encoder.vision_model.encoder.layers.30.self_attn.q_proj.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "resampler.layers.0.attn.to_k.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.0.attn.to_q.weight": {
+    "layout": "ROW_MAJOR",
+    "dtype": "BFLOAT16",
+    "on_device": false
+  },
+  "resampler.layers.0.ff.1.net.2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.0.ff.1.net.0.proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.0.ff.0.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.0.ff.0.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.1.attn.to_out.0.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.1.attn.to_v.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.1.ln1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.1.ln1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.1.ln0.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.1.ln0.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.1.attn.to_k.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.1.attn.to_q.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.1.ff.1.net.2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.1.ff.1.net.0.proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.1.ff.0.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.1.ff.0.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.2.attn.to_out.0.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.2.attn.to_v.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.2.ln1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.2.ln1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.2.ln0.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.2.ln0.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.2.attn.to_k.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.2.attn.to_q.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.2.ff.1.net.2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.2.ff.1.net.0.proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.2.ff.0.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.2.ff.0.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.3.attn.to_out.0.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.3.attn.to_v.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.3.ln1.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.3.ln1.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.3.ln0.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.3.ln0.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.3.attn.to_k.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.3.attn.to_q.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.3.ff.1.net.2.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.3.ff.1.net.0.proj.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.3.ff.0.bias": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  },
+  "resampler.layers.3.ff.0.weight": {
+    "layout": "TILE",
+    "dtype": "BFLOAT16",
+    "on_device": true
+  }
+}
