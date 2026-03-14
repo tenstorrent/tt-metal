@@ -316,6 +316,19 @@ def run(
         # all_gather_async below. Don't use build_op_kwargs to avoid leaking extra
         # traced keys (use_broadcast, subdevice_id) that conflict or are invalid.
 
+        # Coerce numeric params to correct types — the master JSON / sweep
+        # framework may deliver them as floats (e.g., dim=3.0).
+        if dim is not None:
+            dim = int(dim)
+        if cluster_axis is not None:
+            cluster_axis = int(cluster_axis)
+        if num_links is not None:
+            num_links = int(num_links)
+        if num_iters is not None:
+            num_iters = int(num_iters)
+        if use_broadcast is not None:
+            use_broadcast = bool(use_broadcast)
+
         if num_links is None:
             num_links = 1
         if num_iters is None:
@@ -367,15 +380,26 @@ def run(
 
             torch_global = torch.rand(global_shape).bfloat16()
 
-            # Golden reference for device 0 after all_gather: the gather dim
-            # is fully present but non-gathered sharded dims remain split.
-            ref_slices = [slice(None)] * len(global_shape)
-            for axis_idx, sd in enumerate(shard_dims):
-                if sd is not None and axis_idx != cluster_axis:
-                    esd = sd if sd >= 0 else len(input_shape) + sd
-                    ref_slices[esd] = slice(0, input_shape[esd])
+            # Golden reference for device 0 after all_gather:
+            # The op concatenates per-device chunks along `dim` (effective_dim),
+            # which may differ from the shard dimension on cluster_axis.
+            # Extract device-0's row/column of chunks and concat along `dim`.
+            cluster_size = mesh_shape[cluster_axis]
+            chunks = []
+            for i in range(cluster_size):
+                slices = [slice(None)] * len(global_shape)
+                for axis_idx, sd in enumerate(shard_dims):
+                    if sd is not None:
+                        esd = sd if sd >= 0 else len(input_shape) + sd
+                        size = input_shape[esd]
+                        if axis_idx == cluster_axis:
+                            slices[esd] = slice(i * size, (i + 1) * size)
+                        else:
+                            # Device 0's slice on non-gathered axes
+                            slices[esd] = slice(0, size)
+                chunks.append(torch_global[tuple(slices)])
 
-            torch_reference = torch_global[tuple(ref_slices)]
+            torch_reference = torch.cat(chunks, dim=effective_dim)
             torch_input = torch_global
         else:
             # 1D mesh or unparseable placement: shard only along gather dim.
