@@ -147,6 +147,14 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                 continue;
             }
             auto* device = mesh_device_->impl().get_device(coord);
+            std::cout << "[SD] Launching program on mesh_coord=" << coord << " device_id=" << device->id()
+                      << " cores=[";
+            for (uint32_t ct = 0; ct < program_cores.size(); ct++) {
+                for (const auto& core : program_cores[ct]) {
+                    std::cout << core.str() << ", ";
+                }
+            }
+            std::cout << "]" << std::endl;
             if (asynchronous_slow_dispatch_enabled_) {
                 auto it = logical_cores_for_previous_workload_.find(device->id());
                 if (it != logical_cores_for_previous_workload_.end()) {

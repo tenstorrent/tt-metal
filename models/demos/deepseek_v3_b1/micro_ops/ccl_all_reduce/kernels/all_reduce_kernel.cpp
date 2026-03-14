@@ -41,7 +41,7 @@ void kernel_main() {
             get_named_compile_time_arg_val("core_noc_y")>;
 
         // Dummy WriterCTArgs - not used by NCRISC but needed for Op template
-        using WriterCTArgs = Sender::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+        using WriterCTArgs = Sender::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
         Sender::RTArgs args{};
         args.tensor_address = get_common_arg_val<uint32_t>(0);
@@ -82,7 +82,6 @@ void kernel_main() {
         using ReaderCTArgs = Sender::ReaderCTArgs<0, 0, 0, 0, 0>;
 
         using WriterCTArgs = Sender::WriterCTArgs<
-            get_named_compile_time_arg_val("packet_header_cb_id"),
             get_named_compile_time_arg_val("packet_cb_id"),
             get_named_compile_time_arg_val("l1_alignment"),
             get_named_compile_time_arg_val("input_num_tiles"),

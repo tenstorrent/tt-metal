@@ -21,9 +21,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("device_role"),
         get_named_compile_time_arg_val("num_tiles"),
         get_named_compile_time_arg_val("local_cb"),
-        get_named_compile_time_arg_val("received_cb_r1"),
-        get_named_compile_time_arg_val("received_cb_r2"),
-        get_named_compile_time_arg_val("received_cb_r3"),
+        get_named_compile_time_arg_val("received_cb"),
         get_named_compile_time_arg_val("is_fabric_core")>;
 
     // Reader runtime args (from common args)
@@ -75,9 +73,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("device_role"),
         get_named_compile_time_arg_val("num_tiles"),
         get_named_compile_time_arg_val("local_cb"),
-        get_named_compile_time_arg_val("received_cb_r1"),
-        get_named_compile_time_arg_val("received_cb_r2"),
-        get_named_compile_time_arg_val("received_cb_r3"),
+        get_named_compile_time_arg_val("received_cb"),
         get_named_compile_time_arg_val("output_cb"),
         get_named_compile_time_arg_val("scratch_cb"),
         get_named_compile_time_arg_val("is_fabric_core")>;

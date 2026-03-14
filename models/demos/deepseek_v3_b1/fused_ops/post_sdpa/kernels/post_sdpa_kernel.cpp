@@ -224,7 +224,6 @@ void kernel_main() {
 #ifndef SKIP_CCL
     // CCL Sender BRISC CTArgs (sends via fabric)
     using CCLSenderWriterCTArgs = deepseek_b1_ops::AllReduceSender::WriterCTArgs<
-        get_named_compile_time_arg_val("ccl_sender_packet_header_cb_id"),
         get_named_compile_time_arg_val("ccl_sender_packet_cb_id"),
         get_named_compile_time_arg_val("ccl_sender_l1_alignment"),
         get_named_compile_time_arg_val("ccl_sender_input_num_tiles"),
@@ -583,7 +582,7 @@ void kernel_main() {
         noc_semaphore_set(gather3_completion_semaphore_addr, 0);
 
         // Dummy WriterCTArgs - not used by NCRISC but needed for Op template
-        using DummyWriterCTArgs = deepseek_b1_ops::AllReduceSender::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
+        using DummyWriterCTArgs = deepseek_b1_ops::AllReduceSender::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
 
         deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
         ccl_sender_args.tensor_address = get_common_arg_val<uint32_t>(0);
