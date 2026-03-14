@@ -30,6 +30,7 @@ import subprocess
 import json
 import copy
 import hashlib
+import re
 from tqdm import tqdm
 import argparse
 from datetime import datetime
@@ -409,6 +410,10 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
         # Note: tensor_placements are now stored per-tensor in the arguments
         # instead of globally in machine_info, to avoid ambiguity
 
+        # Strip Python object memory addresses (e.g. global_semaphore at 0x...)
+        # from argument values so they don't pollute deduplication or storage
+        _sanitize_object_addresses(arguments)
+
         return {
             "operation": operation_name,
             "arguments": arguments,
@@ -418,6 +423,38 @@ def convert_json_to_master_format(json_file, test_source, machine_info):
     except Exception as e:
         print(f"⚠️ Error processing {json_file}: {e}")
         return None
+
+
+def _sanitize_object_addresses(obj):
+    """Recursively strip Python object memory addresses from all string values."""
+    if isinstance(obj, dict):
+        for k in list(obj.keys()):
+            v = obj[k]
+            if isinstance(v, str):
+                obj[k] = _strip_object_addresses(v)
+            elif isinstance(v, (dict, list)):
+                _sanitize_object_addresses(v)
+    elif isinstance(obj, list):
+        for i, item in enumerate(obj):
+            if isinstance(item, str):
+                obj[i] = _strip_object_addresses(item)
+            elif isinstance(item, (dict, list)):
+                _sanitize_object_addresses(item)
+
+
+_OBJECT_ADDR_RE = re.compile(r" at 0x[0-9a-fA-F]+")
+
+
+def _strip_object_addresses(value):
+    """Strip Python object memory addresses from a string value.
+
+    Converts e.g. '<ttnn._ttnn.global_semaphore.global_semaphore object at 0x782ac28d15f0>'
+    to '<ttnn._ttnn.global_semaphore.global_semaphore object>' so that
+    runtime pointer values don't affect deduplication or hashing.
+    """
+    if isinstance(value, str):
+        return _OBJECT_ADDR_RE.sub("", value)
+    return value
 
 
 def _normalize_for_hash(obj):
@@ -437,11 +474,18 @@ def _normalize_for_hash(obj):
         if "shard_spec" in obj and obj["shard_spec"] is None:
             obj["shard_spec"] = "None"
 
-        for v in obj.values():
-            _normalize_for_hash(v)
+        for k in list(obj.keys()):
+            v = obj[k]
+            if isinstance(v, str):
+                obj[k] = _strip_object_addresses(v)
+            else:
+                _normalize_for_hash(v)
     elif isinstance(obj, list):
-        for item in obj:
-            _normalize_for_hash(item)
+        for i, item in enumerate(obj):
+            if isinstance(item, str):
+                obj[i] = _strip_object_addresses(item)
+            else:
+                _normalize_for_hash(item)
 
 
 def update_master_file(master_file_path, operations, test_source):
