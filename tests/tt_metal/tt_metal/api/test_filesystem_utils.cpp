@@ -279,8 +279,8 @@ TEST_F(FilesystemUtilsTest, SafeHardLinkOrCopy_WorksWithDirectoryInPath) {
 }
 
 TEST_F(FilesystemUtilsTest, SafeHardLinkOrCopy_OverwritesExisting) {
-    std::filesystem::path target = create_test_file("target.txt", "new content");
-    std::filesystem::path existing = create_test_file("existing.txt", "old content");
+    std::filesystem::path target = create_test_file("target.txt", "new content here");
+    std::filesystem::path existing = create_test_file("existing.txt", "old");
 
     // Verify original content is different
     EXPECT_NE(std::filesystem::file_size(target), std::filesystem::file_size(existing));
