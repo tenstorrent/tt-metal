@@ -15,12 +15,16 @@
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include <tt-metalium/device.hpp>
+#include <tt-metalium/kernel_types.hpp>
 #include <tt-metalium/experimental/fabric/routing_table_generator.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include "tt_metal/fabric/fabric_edm_packet_header.hpp"
 #include <tt-metalium/tt_align.hpp>
 
 namespace tt::tt_fabric::fabric_tests {
+
+// Default NOC used by sender workers when not explicitly configured.
+static constexpr tt::tt_metal::NOC DEFAULT_SENDER_NOC = tt::tt_metal::RISCV_0_default;
 
 // Performance test mode - replaces separate latency_test_mode and benchmark_mode booleans
 enum class PerformanceTestMode {
