@@ -19,8 +19,7 @@ using ttnn::operations::data_movement::float_to_uint16;
 using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
 namespace {
-// uint32_t get_num_stick_per_barrier(uint32_t stick_size_bytes) {
-//     uint32_t num_stick_per_barrier = 0;
+
 uint32_t get_num_stick_per_barrier(const Tensor& input_tensor) {
     uint32_t W = input_tensor.padded_shape()[3];
     uint32_t W_bytes = W * input_tensor.element_size();
@@ -287,7 +286,7 @@ PadRmReaderWriterMultiCoreDefaultProgramFactory::create(
         tt::tt_metal::SetRuntimeArgs(program, reader_kernel_id, core, all_runtime_args[i].first);
         tt::tt_metal::SetRuntimeArgs(program, writer_kernel_id, core, all_runtime_args[i].second);
     }
-    uint32_t cb_npages = get_num_stick_per_barrier(a);  // AL: Should this be a.padded_shape or output.padded_shape?
+    uint32_t cb_npages = get_num_stick_per_barrier(a);
     const uint32_t buffer_reader_writer_async_factor = 16;
     tt::tt_metal::CircularBufferConfig cb_src0_config =
         tt::tt_metal::CircularBufferConfig(
@@ -346,8 +345,7 @@ void PadRmReaderWriterMultiCoreDefaultProgramFactory::override_runtime_arguments
         uint32_t output_shard_width = dst_tensor.shard_spec().has_value()
                                           ? dst_tensor.shard_spec().value().shape[1]
                                           : dst_tensor.nd_shard_spec().value().shard_shape[-1];
-        num_output_pages_in_row = tt::div_up(
-            operation_attributes.output_padded_shape[-1], output_shard_width);  // AL: change first index from 3 to -1?
+        num_output_pages_in_row = tt::div_up(operation_attributes.output_padded_shape[-1], output_shard_width);
     }
 
     auto all_runtime_args = get_runtime_args_rm(

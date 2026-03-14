@@ -28,8 +28,7 @@ void kernel_main() {
         uint32_t l1_read_addr = get_read_ptr(cb_out0);
 
         for (uint32_t i = 0; i < num_sticks_per_barrier && iter < num_sticks_per_core; ++i, ++iter) {
-            uint32_t tmp_addr =
-                l1_read_addr;  // AL: maybe change the inner loop to use and update a tmp_addr instead of l1_read_addr
+            uint32_t tmp_addr = l1_read_addr;
             for (uint32_t p = 0; p < num_output_pages_in_row - 1; p++) {
                 uint64_t write_noc_addr = s.get_noc_addr(i_page + p);
                 noc_async_write(tmp_addr, write_noc_addr, output_page_size);
