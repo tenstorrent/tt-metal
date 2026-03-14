@@ -273,7 +273,14 @@ def convert_hf_qkv_to_meta_format(loaded_weights, head_dim):
             n_heads = tensor.shape[0] // head_dim
             converted_weights[key] = reverse_permute(tensor, n_heads, tensor.shape[0], 1).squeeze(-1)
         elif "q_norm.weight" in key or "k_norm.weight" in key:
-            converted_weights[key] = reverse_permute_1d(tensor)
+            dim = tensor.shape[-1]
+            if dim > head_dim:
+                n_heads = dim // head_dim
+                chunks = tensor.view(n_heads, head_dim)
+                permuted = torch.stack([reverse_permute_1d(c) for c in chunks])
+                converted_weights[key] = permuted.view(-1)
+            else:
+                converted_weights[key] = reverse_permute_1d(tensor)
         else:
             # Keep all other weights unchanged
             converted_weights[key] = tensor

@@ -717,17 +717,23 @@ class TT_CCL:
             ag_persistent_buffers_all[seqlen] = ag_persistent_buffers
 
         # Additional buffers for fixed lengths (1 Tile = 32)
-        buffers_fixed_length = (
-            {
-                "LM_HEAD": [(4, 1, 32, 16384)],
-                "SAMPLING": [(1, 1, 32, 128 * 1024)],
+        # Buffer sizes depend on per-device vocab size after sharding across 8 row devices
+        if self.is_olmo:
+            # OLMo: padded_vocab_size=100288, per_device=12536, tile-aligned=12544
+            buffers_fixed_length = {
+                "LM_HEAD": [(4, 1, 32, 12544)],
+                "SAMPLING": [(1, 1, 32, 12544 * 8)],
             }
-            if not self.is_qwen
-            else {
+        elif self.is_qwen:
+            buffers_fixed_length = {
                 "LM_HEAD": [(4, 1, 32, 19456)],
                 "SAMPLING": [(1, 1, 32, 19456 * 8)],
             }
-        )
+        else:
+            buffers_fixed_length = {
+                "LM_HEAD": [(4, 1, 32, 16384)],
+                "SAMPLING": [(1, 1, 32, 128 * 1024)],
+            }
         for key, shape in buffers_fixed_length.items():
             tt_buffer = ttnn.as_tensor(
                 torch.zeros(shape[0]),

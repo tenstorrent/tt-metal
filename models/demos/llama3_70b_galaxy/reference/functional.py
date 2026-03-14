@@ -385,8 +385,6 @@ def attention_forward(
     k = k.view(batch, seq_len, n_kv_heads, head_dim)
     v = v.view(batch, seq_len, n_kv_heads, head_dim)
 
-    # OLMo has NO QK-norm (unlike Qwen3)
-
     # Apply RoPE
     q, k = apply_rotary_emb_cos_sin(q, k, cos[:seq_len], sin[:seq_len])
 
@@ -432,6 +430,9 @@ def attention_forward_decode(
     head_dim: int = 128,
     sliding_window: Optional[int] = None,
     mscale: float = 1.0,
+    q_norm_weight: Optional[torch.Tensor] = None,
+    k_norm_weight: Optional[torch.Tensor] = None,
+    norm_eps: float = 1e-6,
 ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """Attention forward pass for decode mode with KV cache.
 
@@ -447,6 +448,9 @@ def attention_forward_decode(
         head_dim: Head dimension
         sliding_window: Sliding window size (None for full attention)
         mscale: YaRN attention scaling factor
+        q_norm_weight: Optional QK-norm weight for Q [n_heads * head_dim]
+        k_norm_weight: Optional QK-norm weight for K [n_kv_heads * head_dim]
+        norm_eps: Epsilon for QK-norm
 
     Returns:
         Tuple of (output, updated_cache_k, updated_cache_v)
@@ -456,9 +460,19 @@ def attention_forward_decode(
     n_rep = n_heads // n_kv_heads
 
     # QKV projections
-    q = F.linear(x, wq).view(batch, 1, n_heads, head_dim)
-    k = F.linear(x, wk).view(batch, 1, n_kv_heads, head_dim)
-    v = F.linear(x, wv).view(batch, 1, n_kv_heads, head_dim)
+    q = F.linear(x, wq)  # [batch, 1, n_heads * head_dim]
+    k = F.linear(x, wk)  # [batch, 1, n_kv_heads * head_dim]
+    v = F.linear(x, wv)
+
+    # Apply QK-norm on flat Q/K before head splitting (OLMo style)
+    if q_norm_weight is not None:
+        q = rmsnorm_forward(q, q_norm_weight, norm_eps)
+    if k_norm_weight is not None:
+        k = rmsnorm_forward(k, k_norm_weight, norm_eps)
+
+    q = q.view(batch, 1, n_heads, head_dim)
+    k = k.view(batch, 1, n_kv_heads, head_dim)
+    v = v.view(batch, 1, n_kv_heads, head_dim)
 
     # Apply RoPE at current position
     q, k = apply_rotary_emb_cos_sin(q, k, cos[start_pos : start_pos + 1], sin[start_pos : start_pos + 1])
@@ -629,6 +643,67 @@ def decoder_block_forward(
     h = h + mlp_out
 
     return h
+
+
+def decoder_block_forward_decode(
+    x: torch.Tensor,
+    attention_norm_weight: torch.Tensor,
+    ffn_norm_weight: torch.Tensor,
+    wq: torch.Tensor,
+    wk: torch.Tensor,
+    wv: torch.Tensor,
+    wo: torch.Tensor,
+    w1: torch.Tensor,
+    w2: torch.Tensor,
+    w3: torch.Tensor,
+    cos: torch.Tensor,
+    sin: torch.Tensor,
+    cache_k: torch.Tensor,
+    cache_v: torch.Tensor,
+    start_pos: int,
+    n_heads: int = 40,
+    n_kv_heads: int = 8,
+    head_dim: int = 128,
+    sliding_window: Optional[int] = None,
+    mscale: float = 1.0,
+    norm_eps: float = 1e-6,
+    q_norm_weight: Optional[torch.Tensor] = None,
+    k_norm_weight: Optional[torch.Tensor] = None,
+) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+    """OLMo decoder block forward (decode mode with KV cache).
+
+    Returns:
+        Tuple of (output, updated_cache_k, updated_cache_v)
+    """
+    h = x
+    h_normed = rmsnorm_forward(h, attention_norm_weight, norm_eps)
+    attn_out, cache_k, cache_v = attention_forward_decode(
+        h_normed,
+        wq,
+        wk,
+        wv,
+        wo,
+        cos,
+        sin,
+        cache_k,
+        cache_v,
+        start_pos,
+        n_heads=n_heads,
+        n_kv_heads=n_kv_heads,
+        head_dim=head_dim,
+        sliding_window=sliding_window,
+        mscale=mscale,
+        q_norm_weight=q_norm_weight,
+        k_norm_weight=k_norm_weight,
+        norm_eps=norm_eps,
+    )
+    h = h + attn_out
+
+    h_normed = rmsnorm_forward(h, ffn_norm_weight, norm_eps)
+    mlp_out = swiglu_mlp_forward(h_normed, w1, w2, w3)
+    h = h + mlp_out
+
+    return h, cache_k, cache_v
 
 
 # ==============================================================================

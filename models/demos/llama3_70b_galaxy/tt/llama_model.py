@@ -130,11 +130,8 @@ class TtTransformer(LightweightModule):
             # First initialization of prefill CCLs and prefetcher. It needs to be after initialization of layers, norm and lm_head since those switch modes as well
             # This initialization is required to avoid race condition due to all buffers and semaphores not being allocated at initialization
             self.switch_mode("prefill")
-            if not self.args.is_qwen:
-                self.setup_prefill()
-            self.is_prefill_setup = True
 
-        if mode == "decode" and self.prefetcher_setup is not None:
+        if mode == "decode" and self.prefetcher_setup is not None and self.is_decode_setup:
             self.tt_tensors = self.prefetcher_setup.get_input_tensors()
         self.tt_rot_mats_prefill = None
 
@@ -158,6 +155,7 @@ class TtTransformer(LightweightModule):
                 mode="prefill",
                 allocate_prefill_buffers=self.allocate_prefill_buffers,
                 is_qwen=True if self.args.is_qwen else False,
+                is_olmo=getattr(self.args, "is_olmo", False),
             )
         else:
             self.tt_ccl = self.tt_ccl_prefill
@@ -520,7 +518,7 @@ class TtTransformer(LightweightModule):
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
                 dim=3,
-                num_links=3,
+                num_links=self.args.model_config.get("GALAXY_NUM_LINKS", 1),
                 cluster_axis=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="SAMPLING",
@@ -644,7 +642,7 @@ class TtTransformer(LightweightModule):
             tt_logits = self.tt_ccl.line_all_gather(
                 tt_logits[0],
                 dim=3,
-                num_links=3,
+                num_links=self.args.model_config.get("GALAXY_NUM_LINKS", 1),
                 cluster_axis=0,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 buffer_key="SAMPLING",

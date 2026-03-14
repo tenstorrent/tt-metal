@@ -6,9 +6,10 @@ OLMo-3.1-32B Reference Implementation.
 Module-based implementation for verification against HuggingFace and TTNN.
 Key differences from Qwen3-32B:
 - 40 Q heads (not 64)
-- No QK-norm
+- QK-norm (per-head RMSNorm applied after QKV projection, before RoPE)
 - YaRN RoPE (not linear scaling)
 - Hybrid sliding window attention (3 sliding + 1 full)
+- Post-sublayer norm (norm applied after each sublayer, before residual add)
 - intermediate_size=27648 (not 25600)
 """
 
@@ -206,7 +207,11 @@ class Attention(nn.Module):
         self.wv = nn.Linear(args.dim, args.n_kv_heads * args.head_dim, bias=False)
         self.wo = nn.Linear(args.n_heads * args.head_dim, args.dim, bias=False)
 
-        # NO QK-norm in OLMo (unlike Qwen3)
+        # QK-norm: global RMSNorm over the full Q/K vectors (matching HF Olmo3Attention)
+        # q_norm_weight: [n_heads * head_dim] = [5120]
+        # k_norm_weight: [n_kv_heads * head_dim] = [1024]
+        self.q_norm_weight = nn.Parameter(torch.ones(args.n_heads * args.head_dim))
+        self.k_norm_weight = nn.Parameter(torch.ones(args.n_kv_heads * args.head_dim))
 
         # KV cache
         self.cache_k = torch.zeros((args.max_batch_size, args.max_seq_len, args.n_kv_heads, args.head_dim))
@@ -226,12 +231,23 @@ class Attention(nn.Module):
 
         # QKV projections
         xq, xk, xv = self.wq(x), self.wk(x), self.wv(x)
+        # xq: [bsz, seqlen, n_heads*head_dim], xk: [bsz, seqlen, n_kv_heads*head_dim]
+
+        # QK-norm: global RMSNorm over the full Q/K flat vectors (matching HF Olmo3Attention)
+        # Applied BEFORE head reshape, normalizing all heads together
+        def _global_rms_norm(t, weight):
+            t_f = t.float()
+            rms = torch.rsqrt(t_f.pow(2).mean(-1, keepdim=True) + 1e-6)
+            return (t_f * rms * weight.to(t_f.device)).type_as(t)
+
+        xq = _global_rms_norm(xq, self.q_norm_weight)  # [bsz, seqlen, n_heads*head_dim]
+        xk = _global_rms_norm(xk, self.k_norm_weight)  # [bsz, seqlen, n_kv_heads*head_dim]
 
         xq = xq.view(bsz, seqlen, self.n_heads, self.head_dim)
         xk = xk.view(bsz, seqlen, self.n_kv_heads, self.head_dim)
         xv = xv.view(bsz, seqlen, self.n_kv_heads, self.head_dim)
 
-        # Apply RoPE (NO QK-norm in OLMo)
+        # Apply RoPE
         xq, xk = apply_rotary_emb(xq, xk, freqs_cis=freqs_cis)
 
         # Update cache
@@ -313,9 +329,12 @@ class TransformerBlock(nn.Module):
         freqs_cis: torch.Tensor,
         mask: Optional[torch.Tensor],
     ):
-        # Pre-norm architecture
-        h = x + self.attention(self.attention_norm(x), start_pos, freqs_cis, mask)
-        out = h + self.feed_forward(self.ffn_norm(h))
+        # Post-sublayer norm (OLMo3 actual architecture):
+        # norm applied AFTER each sublayer, BEFORE the residual add.
+        # attention_norm = post_attention_layernorm (HF key)
+        # ffn_norm       = post_feedforward_layernorm (HF key)
+        h = x + self.attention_norm(self.attention(x, start_pos, freqs_cis, mask))
+        out = h + self.ffn_norm(self.feed_forward(h))
         return out
 
 
@@ -442,9 +461,14 @@ class Transformer(nn.Module):
             layer.feed_forward.w1.weight.data = hf_layer.mlp.gate_proj.weight.data.clone()
             layer.feed_forward.w2.weight.data = hf_layer.mlp.down_proj.weight.data.clone()
             layer.feed_forward.w3.weight.data = hf_layer.mlp.up_proj.weight.data.clone()
-            # Norms
-            layer.attention_norm.weight.data = hf_layer.input_layernorm.weight.data.clone()
-            layer.ffn_norm.weight.data = hf_layer.post_attention_layernorm.weight.data.clone()
+            # Norms — OLMo3 post-sublayer-norm:
+            # attention_norm applied AFTER attention = post_attention_layernorm
+            # ffn_norm       applied AFTER FFN       = post_feedforward_layernorm
+            layer.attention_norm.weight.data = hf_layer.post_attention_layernorm.weight.data.clone()
+            layer.ffn_norm.weight.data = hf_layer.post_feedforward_layernorm.weight.data.clone()
+            # QK-norm: global [n_heads*head_dim] and [n_kv_heads*head_dim] weights
+            layer.attention.q_norm_weight.data = hf_layer.self_attn.q_norm.weight.data.clone()
+            layer.attention.k_norm_weight.data = hf_layer.self_attn.k_norm.weight.data.clone()
 
         model.norm.weight.data = hf_model.model.norm.weight.data.clone()
         model.output.weight.data = hf_model.lm_head.weight.data.clone()

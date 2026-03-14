@@ -55,6 +55,7 @@ class TtLlamaAttention(LightweightModule):
 
         # OLMo has 5 local Q heads (not 8), requiring non-fused RoPE in decode mode
         self.is_olmo = getattr(configuration, "is_olmo", False)
+        self.n_local_heads_padded = 8 if (self.is_olmo and self.n_local_heads < 8) else self.n_local_heads
         self.cluster_shape = configuration.cluster_shape
 
         # TODO: Fix this once all-gather supports < tile_size
@@ -268,101 +269,196 @@ class TtLlamaAttention(LightweightModule):
         if tt_ccl.mode == "decode":
             self.prefetch(prefetcher_setup, tt_ccl)
 
-        # If we are using qk_norm, we need to add a layer norm to the q and k
         q_norm_str = f"{layer_name}.q_norm"
         k_norm_str = f"{layer_name}.k_norm"
 
-        # Initialize QK norm if weights are present in state_dict
         if f"{q_norm_str}.weight" in self.state_dict:
             self.qk_norm = True
 
-            # Memory configurations for QK norm
-            self.reshape_intermediate_q_mem_cfg = ttnn.create_sharded_memory_config(
-                shape=(64, 128),  # [1, 8, 8 (32), 128] ==> *[1, 1, 64, 128]* ==> [1, 1, 64, 32 * 4 = 128]
-                core_grid=ttnn.CoreRangeSet(
-                    [
-                        ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))
-                    ]  # This captures the fact that we are using 1 core (height sharded)
-                ),  # resharding tensor to 1 core
-                strategy=ttnn.ShardStrategy.HEIGHT,  # Literally stating to the device to perform height sharding
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
-            self.reshape_intermediate_k_mem_cfg = ttnn.create_sharded_memory_config(
-                shape=(64, 128),  # [1, 8, 8 (32), 128] ==> *[1, 1, 64, 128]* ==> [1, 1, 64, 32 * 4 = 128]
-                core_grid=ttnn.CoreRangeSet(
-                    [
-                        ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0))
-                    ]  # This captures the fact that we are using 1 core (height sharded)
-                ),  # resharding tensor to 1 core
-                strategy=ttnn.ShardStrategy.HEIGHT,  # Literally stating to the device to perform height sharding
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
+            if self.is_olmo:
+                # OLMo QK-norm: norm applied AFTER head split (post llama_rs_create_heads).
+                # q_norm [5120] = 40 heads × 128, k_norm [1024] = 8 KV heads × 128.
+                # Per device (8 TP on axis-0): 5 real Q heads + 3 padded, 1 K head.
+                #
+                # K norm is exact (1 head, weight [128]).
+                # Q norm uses per-head normalization with correct per-head weights:
+                #   reshape Q[1,8,32,128] → [1,1,256,128], rms_norm with ones[128],
+                #   reshape back, multiply by per-head weight [1,8,1,128].
+                SHARD_HEIGHT = 32
+                q_norm_full = self.state_dict[q_norm_str + ".weight"]  # [5120]
+                k_norm_full = self.state_dict[k_norm_str + ".weight"]  # [1024]
+                n_real_q_heads = self.n_local_heads  # 5
+                n_padded_q_heads = self.n_local_heads_padded  # 8
+                n_kv_heads_local = self.n_local_kv_heads  # 1
+                n_tp = self.num_devices_per_group  # 8
 
-            self.reshape_output_q_mem_cfg = ttnn.create_sharded_memory_config(
-                shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
-                core_grid=ttnn.CoreRangeSet(
-                    [ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1))]
-                ),  # resharding tensor to cores
-                strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
+                # K norm weight: [1024] → per device [128] → format [1, 1, 4, 32]
+                k_dim = k_norm_full.shape[0]
+                k_norm_torch = (
+                    k_norm_full.unsqueeze(0).view(1, 1, k_dim).reshape([1, 1, k_dim // SHARD_HEIGHT, SHARD_HEIGHT])
+                )
+                self.olmo_k_norm_weight = ttnn.as_tensor(
+                    k_norm_torch,
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=(2, None), mesh_shape=configuration.cluster_shape
+                    ),
+                )
 
-            self.reshape_output_k_mem_cfg = ttnn.create_sharded_memory_config(
-                shape=(64, 32),  # [1, 8, 8, 128] ==> [1, 1, 64, 128] ==> *[1, 1, 64, 32 * 4 = 128]*
-                core_grid=ttnn.CoreRangeSet(
-                    [ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 3))]
-                ),  # resharding tensor to cores
-                strategy=ttnn.ShardStrategy.WIDTH,  # Literally stating to the device to perform width sharding
-                orientation=ttnn.ShardOrientation.ROW_MAJOR,
-                use_height_and_width_as_shard_shape=True,
-            )
+                # Q rms_norm "ones" weight: [128] replicated on all devices
+                # Used for normalization step (weight=1 means just normalize, no scale)
+                ones_torch = torch.ones(1, 1, self.head_dim // SHARD_HEIGHT, SHARD_HEIGHT)
+                self.olmo_q_norm_ones = ttnn.as_tensor(
+                    ones_torch,
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+                )
 
-            # Program configuration for norm
-            block_w = 128 // 4 // 32
-            # Find largest value <= 4 that evenly divides block_w
-            subblock_w = 1
-            while subblock_w > 0:
-                if block_w % subblock_w == 0:
-                    break
-                subblock_w -= 1
-            self.norm_program_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
-                compute_with_storage_grid_size=[2, 2],
-                subblock_w=subblock_w,
-                block_h=2,  # 64 // 32
-                block_w=block_w,
-                inplace=False,
-            )
+                # Q per-head scaling weight: [1, n_padded*n_tp, 1, 128] → shard to [1, 8, 1, 128] per device
+                # Each device's 5 real heads get their trained weight; 3 padded heads get ones
+                total_padded_heads = n_padded_q_heads * n_tp  # 64
+                q_head_weight_torch = torch.ones(1, total_padded_heads, 1, self.head_dim)
+                for dev in range(n_tp):
+                    for h in range(n_real_q_heads):
+                        global_head = dev * n_real_q_heads + h
+                        local_idx = dev * n_padded_q_heads + h
+                        w_start = global_head * self.head_dim
+                        q_head_weight_torch[0, local_idx, 0, :] = q_norm_full[w_start : w_start + self.head_dim]
+                self.olmo_q_head_weight = ttnn.as_tensor(
+                    q_head_weight_torch,
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=(1, None), mesh_shape=configuration.cluster_shape
+                    ),
+                )
 
-            # Create Q norm
-            self.q_norm = RMSNorm(
-                device=self.mesh_device,
-                dim=self.head_dim,
-                state_dict=self.state_dict,
-                state_dict_prefix=None,
-                weight_dtype=ttnn.bfloat16,
-                weight_key=q_norm_str,
-                sharded_program_config=self.norm_program_cfg,
-                sharded_output_config=self.reshape_output_q_mem_cfg,
-            )
+                # Q per-head scaling weight for prefill: [n_real*n_tp, head_dim] → shard to [n_real, head_dim] per device
+                # Shape [1, n_real*n_tp, 1, head_dim] = [1, 40, 1, 128], sharded across row devices
+                q_head_weight_prefill = torch.ones(1, n_real_q_heads * n_tp, 1, self.head_dim)
+                for dev in range(n_tp):
+                    for h in range(n_real_q_heads):
+                        global_head = dev * n_real_q_heads + h
+                        local_idx = dev * n_real_q_heads + h
+                        w_start = global_head * self.head_dim
+                        q_head_weight_prefill[0, local_idx, 0, :] = q_norm_full[w_start : w_start + self.head_dim]
+                self.olmo_q_head_weight_prefill = ttnn.as_tensor(
+                    q_head_weight_prefill,
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.TILE_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=(1, None), mesh_shape=configuration.cluster_shape
+                    ),
+                )
+                self.olmo_q_per_device_dim = q_norm_full.shape[0] // n_tp  # 640
+                self.olmo_k_per_device_dim = k_dim // n_tp  # 128
 
-            # Create K norm
-            self.k_norm = RMSNorm(
-                device=self.mesh_device,
-                dim=self.head_dim,
-                state_dict=self.state_dict,
-                state_dict_prefix=None,
-                weight_dtype=ttnn.bfloat16,
-                weight_key=k_norm_str,
-                sharded_program_config=self.norm_program_cfg,
-                sharded_output_config=self.reshape_output_k_mem_cfg,
-            )
+                # Store raw CPU weights for host-side global norm in prefill
+                self.olmo_q_norm_cpu = q_norm_full.clone()  # [5120]
+                self.olmo_k_norm_cpu = k_norm_full.clone()  # [1024]
 
-            self.q_norm_weight = self.state_dict[q_norm_str + ".weight"]
-            self.k_norm_weight = self.state_dict[k_norm_str + ".weight"]
+                # Full-dim Q norm weight for prefill: normalize over all local Q dims (640)
+                # instead of per-head (128), matching HF's Olmo3RMSNorm(5120) more closely.
+                # Shape [1, 1, 5120//32, 32] = [1, 1, 160, 32], sharded to [1, 1, 20, 32] per device
+                q_dim = q_norm_full.shape[0]  # 5120
+                q_norm_full_2d = q_norm_full.view(1, 1, q_dim // SHARD_HEIGHT, SHARD_HEIGHT)
+                self.olmo_q_norm_weight_full_prefill = ttnn.as_tensor(
+                    q_norm_full_2d,
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=(2, None), mesh_shape=configuration.cluster_shape
+                    ),
+                )
 
+                # Full-dim K norm weight for prefill: normalize over all local K dims (128)
+                # Shape [1, 1, 1024//32, 32] = [1, 1, 32, 32], sharded to [1, 1, 4, 32] per device
+                k_norm_full_2d = k_norm_full.view(1, 1, k_dim // SHARD_HEIGHT, SHARD_HEIGHT)
+                self.olmo_k_norm_weight_full_prefill = ttnn.as_tensor(
+                    k_norm_full_2d,
+                    device=self.mesh_device,
+                    dtype=ttnn.bfloat16,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.ShardTensor2dMesh(
+                        self.mesh_device, dims=(2, None), mesh_shape=configuration.cluster_shape
+                    ),
+                )
+            else:
+                # Qwen3-style per-head QK-norm (weight [head_dim]=128, applied after head split)
+                self.reshape_intermediate_q_mem_cfg = ttnn.create_sharded_memory_config(
+                    shape=(64, 128),
+                    core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                self.reshape_intermediate_k_mem_cfg = ttnn.create_sharded_memory_config(
+                    shape=(64, 128),
+                    core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(3, 0))]),
+                    strategy=ttnn.ShardStrategy.HEIGHT,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                self.reshape_output_q_mem_cfg = ttnn.create_sharded_memory_config(
+                    shape=(64, 32),
+                    core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(2, 1))]),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                self.reshape_output_k_mem_cfg = ttnn.create_sharded_memory_config(
+                    shape=(64, 32),
+                    core_grid=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 2), ttnn.CoreCoord(2, 3))]),
+                    strategy=ttnn.ShardStrategy.WIDTH,
+                    orientation=ttnn.ShardOrientation.ROW_MAJOR,
+                    use_height_and_width_as_shard_shape=True,
+                )
+                block_w = 128 // 4 // 32
+                subblock_w = 1
+                while subblock_w > 0:
+                    if block_w % subblock_w == 0:
+                        break
+                    subblock_w -= 1
+                self.norm_program_cfg = ttnn.LayerNormShardedMultiCoreProgramConfig(
+                    compute_with_storage_grid_size=[2, 2],
+                    subblock_w=subblock_w,
+                    block_h=2,
+                    block_w=block_w,
+                    inplace=False,
+                )
+                self.q_norm = RMSNorm(
+                    device=self.mesh_device,
+                    dim=self.head_dim,
+                    state_dict=self.state_dict,
+                    state_dict_prefix=None,
+                    weight_dtype=ttnn.bfloat16,
+                    weight_key=q_norm_str,
+                    sharded_program_config=self.norm_program_cfg,
+                    sharded_output_config=self.reshape_output_q_mem_cfg,
+                )
+                self.k_norm = RMSNorm(
+                    device=self.mesh_device,
+                    dim=self.head_dim,
+                    state_dict=self.state_dict,
+                    state_dict_prefix=None,
+                    weight_dtype=ttnn.bfloat16,
+                    weight_key=k_norm_str,
+                    sharded_program_config=self.norm_program_cfg,
+                    sharded_output_config=self.reshape_output_k_mem_cfg,
+                )
         else:
             self.qk_norm = False
 
@@ -437,6 +533,7 @@ class TtLlamaAttention(LightweightModule):
         try:
             from loguru import logger
 
+            ttnn_shape = list(tensor.shape)
             torch_tensor = ttnn.to_torch(
                 tensor,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=self.cluster_shape),
@@ -446,7 +543,7 @@ class TtLlamaAttention(LightweightModule):
             max_val = torch_tensor.float().abs().max().item()
             status = "OK" if not (has_inf or has_nan) else "BAD"
             logger.info(
-                f"    ATTN [{status}] {name}: shape={list(torch_tensor.shape)}, max={max_val:.4e}, Inf={has_inf}, NaN={has_nan}"
+                f"    ATTN [{status}] {name}: ttnn_shape={ttnn_shape}, concat_shape={list(torch_tensor.shape)}, max={max_val:.4e}, Inf={has_inf}, NaN={has_nan}"
             )
         except Exception as e:
             from loguru import logger
@@ -490,14 +587,9 @@ class TtLlamaAttention(LightweightModule):
         ###
         # Reshape and rotary embeddings
         ###
-        # NOTE: OLMo decode is BLOCKED due to llama_rs_create_heads kernel bug
-        # The kernel ignores num_kv_heads=1 and outputs K/V with 8 heads instead of 1,
-        # causing NaN values. See BRINGUP_LOG.md for details.
-        # For now, use the same path as Llama/Qwen (which works for 8:1 GQA ratio)
-        if False:  # Disabled - OLMo decode workaround (incomplete)
-            pass
-        else:
-            # Standard path for Llama/Qwen
+        if self.is_olmo and self.qk_norm:
+            # OLMo QK-norm: keep fused reduce+heads, apply norm post-split.
+            # llama_rs_create_heads → Q[1,8,32,128], K[1,1,32,128], V[1,1,32,128]
             (
                 q_heads_pre_rot_1BQD,
                 k_heads_pre_rot_1BKD,
@@ -510,62 +602,90 @@ class TtLlamaAttention(LightweightModule):
                 qkv_memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
                 use_optimal_ccl_for_llama=True,
             )
+            ttnn.deallocate(xqkv_fused_sharded)
+
+            # Save original non-overlapping memory configs (from llama_rs_create_heads)
+            q_mem_cfg = q_heads_pre_rot_1BQD.memory_config()
+            k_mem_cfg = k_heads_pre_rot_1BKD.memory_config()
+
+            # K norm: exact (1 head per device, rms_norm over 128 elements)
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, ttnn.DRAM_MEMORY_CONFIG)
+            k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.TILE_LAYOUT)
+            k_heads_pre_rot_1BKD = ttnn.rms_norm(k_heads_pre_rot_1BKD, weight=self.olmo_k_norm_weight, epsilon=1e-6)
+            k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
+            k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, k_mem_cfg)
+
+            # Q norm: per-head normalize, then apply per-head trained weights.
+            # Reshape [1,8,32,128] → [1,1,256,128] to normalize each head's 128-dim slice
+            q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, ttnn.DRAM_MEMORY_CONFIG)
+            q_batch = q_heads_pre_rot_1BQD.shape[2]  # actual batch dim (e.g., 32)
+            q_heads_pre_rot_1BQD = ttnn.reshape(
+                q_heads_pre_rot_1BQD, [1, 1, self.n_local_heads_padded * q_batch, self.head_dim]
+            )
+            q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.TILE_LAYOUT)
+            q_heads_pre_rot_1BQD = ttnn.rms_norm(q_heads_pre_rot_1BQD, weight=self.olmo_q_norm_ones, epsilon=1e-6)
+            q_heads_pre_rot_1BQD = ttnn.reshape(
+                q_heads_pre_rot_1BQD, [1, self.n_local_heads_padded, q_batch, self.head_dim]
+            )
+            # Apply per-head trained weights: Q[1,8,32,128] * weight[1,8,1,128]
+            q_heads_pre_rot_1BQD = ttnn.multiply(q_heads_pre_rot_1BQD, self.olmo_q_head_weight)
+            q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT)
+            q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, q_mem_cfg)
+        else:
+            (
+                q_heads_pre_rot_1BQD,
+                k_heads_pre_rot_1BKD,
+                v_heads_1BKD,
+            ) = self.tt_ccl.llama_rs_create_heads(
+                xqkv_fused_sharded,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                dim=3,
+                qkv_memory_config=self.model_config["CREATE_HEAD_OUTPUT_MEMCFG"],
+                use_optimal_ccl_for_llama=True,
+            )
+            ttnn.deallocate(xqkv_fused_sharded)
+
+            if self.qk_norm:
+                # Qwen3-style per-head QK-norm (after head split)
+                rm_mem_cfg_q = q_heads_pre_rot_1BQD.memory_config()
+                rm_mem_cfg_k = k_heads_pre_rot_1BKD.memory_config()
+                q_heads_pre_rot_1BQD = ttnn.to_memory_config(
+                    q_heads_pre_rot_1BQD, memory_config=self.reshape_intermediate_q_mem_cfg
+                )
+                k_heads_pre_rot_1BKD = ttnn.to_memory_config(
+                    k_heads_pre_rot_1BKD, memory_config=self.reshape_intermediate_k_mem_cfg
+                )
+                q_heads_pre_rot_1BQD = ttnn.view(q_heads_pre_rot_1BQD, [1, 1, 64, 128])
+                k_heads_pre_rot_1BKD = ttnn.view(k_heads_pre_rot_1BKD, [1, 1, 64, 128])
+                q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.TILE_LAYOUT)
+                k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.TILE_LAYOUT)
+                q_imm_cfg = q_heads_pre_rot_1BQD.memory_config()
+                k_imm_cfg = k_heads_pre_rot_1BKD.memory_config()
+                q_heads_pre_rot_1BQD = ttnn.to_memory_config(
+                    q_heads_pre_rot_1BQD, memory_config=self.reshape_output_q_mem_cfg
+                )
+                k_heads_pre_rot_1BKD = ttnn.to_memory_config(
+                    k_heads_pre_rot_1BKD, memory_config=self.reshape_output_k_mem_cfg
+                )
+                q_heads_pre_rot_1BQD = self.q_norm(
+                    q_heads_pre_rot_1BQD, mode="decode", in_sharded=True, out_sharded=True
+                )
+                k_heads_pre_rot_1BKD = self.k_norm(
+                    k_heads_pre_rot_1BKD, mode="decode", in_sharded=True, out_sharded=True
+                )
+                q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=q_imm_cfg)
+                k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=k_imm_cfg)
+                q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT)
+                k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
+                q_heads_pre_rot_1BQD = ttnn.view(q_heads_pre_rot_1BQD, [1, 8, 8, 128])
+                k_heads_pre_rot_1BKD = ttnn.view(k_heads_pre_rot_1BKD, [1, 8, 8, 128])
+                q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=rm_mem_cfg_q)
+                k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=rm_mem_cfg_k)
+
         self._debug_check_attn("q_heads_pre_rot", q_heads_pre_rot_1BQD)
         self._debug_check_attn("k_heads_pre_rot", k_heads_pre_rot_1BKD)
         self._debug_check_attn("v_heads", v_heads_1BKD)
-
-        if self.qk_norm:
-            rm_mem_cfg_q = q_heads_pre_rot_1BQD.memory_config()
-            rm_mem_cfg_k = k_heads_pre_rot_1BKD.memory_config()
-
-            q_heads_pre_rot_1BQD = ttnn.to_memory_config(
-                q_heads_pre_rot_1BQD, memory_config=self.reshape_intermediate_q_mem_cfg
-            )
-            k_heads_pre_rot_1BKD = ttnn.to_memory_config(
-                k_heads_pre_rot_1BKD, memory_config=self.reshape_intermediate_k_mem_cfg
-            )
-
-            # Reshape and prepare tensors for QK norm
-            q_heads_pre_rot_1BQD = ttnn.view(q_heads_pre_rot_1BQD, [1, 1, 64, 128])  # [1, 8, 8, 128] => [1, 1, 64, 128]
-            k_heads_pre_rot_1BKD = ttnn.view(
-                k_heads_pre_rot_1BKD, [1, 1, 64, 128]
-            )  # [1, 8, 1 (8), 128]] => [1, 1, 64, 128]
-
-            q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.TILE_LAYOUT)
-            k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.TILE_LAYOUT)
-
-            q_heads_intermediate_after_reshape_mem_cfg = q_heads_pre_rot_1BQD.memory_config()
-            k_heads_intermediate_after_reshape_mem_cfg = k_heads_pre_rot_1BKD.memory_config()
-
-            q_heads_pre_rot_1BQD = ttnn.to_memory_config(
-                q_heads_pre_rot_1BQD, memory_config=self.reshape_output_q_mem_cfg
-            )
-            k_heads_pre_rot_1BKD = ttnn.to_memory_config(
-                k_heads_pre_rot_1BKD, memory_config=self.reshape_output_k_mem_cfg
-            )
-
-            # Apply QK norm
-            q_heads_pre_rot_1BQD = self.q_norm(q_heads_pre_rot_1BQD, mode="decode", in_sharded=True, out_sharded=True)
-            k_heads_pre_rot_1BKD = self.k_norm(k_heads_pre_rot_1BKD, mode="decode", in_sharded=True, out_sharded=True)
-
-            q_heads_pre_rot_1BQD = ttnn.to_memory_config(
-                q_heads_pre_rot_1BQD, memory_config=q_heads_intermediate_after_reshape_mem_cfg
-            )
-            k_heads_pre_rot_1BKD = ttnn.to_memory_config(
-                k_heads_pre_rot_1BKD, memory_config=k_heads_intermediate_after_reshape_mem_cfg
-            )
-
-            q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT)
-            k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
-
-            q_heads_pre_rot_1BQD = ttnn.view(q_heads_pre_rot_1BQD, [1, 8, 8, 128])
-            k_heads_pre_rot_1BKD = ttnn.view(k_heads_pre_rot_1BKD, [1, 8, 8, 128])  # ==> [1, 8, 1 (8), 128]
-
-            q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, memory_config=rm_mem_cfg_q)
-            k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, memory_config=rm_mem_cfg_k)
-
-        # print("done create qkv heads")
-        ttnn.deallocate(xqkv_fused_sharded)
 
         # Q, K Rotary Embeddings
         # Note: Fused RoPE requires num_heads * head_dim = 1024 for row-major tensors
@@ -727,21 +847,25 @@ class TtLlamaAttention(LightweightModule):
         decode_num_heads = 8 if (self.is_olmo and self.n_local_heads < 8) else self.n_local_heads
 
         if self.is_olmo:
-            attn_gathered = self.tt_ccl.line_all_gather(
-                attn_output_1G4D_sharded,
-                dim=1,
-                cluster_axis=1,
-                num_links=self.model_config["GALAXY_NUM_LINKS"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            # OLMo wo matmul: use local SDPA output directly (no all_gather needed).
+            # sdpa_output shape per device: [1, n_local_heads_padded, batch, head_dim]
+            #   = [1, 8, 32, 128]
+            # Correct reshape: [1, 1, batch, n_local_heads * head_dim] = [1, 1, 32, 1024]
+            # so that each row of the matmul represents one user's head outputs.
+            # Each col device computes a partial dot product over its 8 (padded) heads;
+            # the line_all_reduce (cluster_axis=0) below sums contributions from all 8 col groups.
+            #
+            # IMPORTANT: Convert to DRAM_MEMORY_CONFIG before reshape to avoid data corruption
+            # when reshaping a sharded (HEIGHT_SHARDED) tensor.
+            sdpa_dram = ttnn.to_memory_config(attn_output_1G4D_sharded, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(attn_output_1G4D_sharded)
 
-            batch = attn_gathered.shape[1]  # 32
-            head_dim = attn_gathered.shape[3]  # 128
-            attn_sliced = ttnn.slice(attn_gathered, [0, 0, 0, 0], [1, batch, decode_num_heads, head_dim])
-            attn_reshaped = ttnn.reshape(attn_sliced, [1, 1, batch, decode_num_heads * head_dim])
-            attn_output_cat = ttnn.to_memory_config(attn_reshaped, ttnn.DRAM_MEMORY_CONFIG)
-            ttnn.deallocate(attn_gathered)
+            n_heads_local = sdpa_dram.shape[1]  # 8 (padded local Q heads)
+            batch_all = sdpa_dram.shape[2]  # 32 (full batch from paged SDPA)
+            head_dim_local = sdpa_dram.shape[3]  # 128
+
+            attn_output_cat = ttnn.reshape(sdpa_dram, [1, 1, batch_all, n_heads_local * head_dim_local])
+            self._debug_check_attn("attn_output_cat", attn_output_cat)
         else:
             # Standard path for Llama/Qwen - use all_gather_concat
             attn_output_cat = self.tt_ccl.all_gather_concat(  # [1, 1, 32, 1024]
@@ -757,13 +881,17 @@ class TtLlamaAttention(LightweightModule):
 
         # Ensure attn_output_cat is tilized for WO matmul
         if attn_output_cat.get_layout() != ttnn.TILE_LAYOUT:
-            # Must convert to interleaved memory before tilizing sharded tensors
-            attn_output_cat = ttnn.to_memory_config(attn_output_cat, ttnn.DRAM_MEMORY_CONFIG)
-            attn_output_cat = ttnn.to_layout(attn_output_cat, ttnn.TILE_LAYOUT)
-            # Convert back to sharded for WO matmul
-            attn_output_cat = ttnn.to_memory_config(
-                attn_output_cat, self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"]
-            )
+            if self.is_olmo:
+                # OLMo: keep in DRAM, just tilize (wo_interleaved is DRAM too)
+                attn_output_cat = ttnn.to_layout(attn_output_cat, ttnn.TILE_LAYOUT)
+            else:
+                # Must convert to interleaved memory before tilizing sharded tensors
+                attn_output_cat = ttnn.to_memory_config(attn_output_cat, ttnn.DRAM_MEMORY_CONFIG)
+                attn_output_cat = ttnn.to_layout(attn_output_cat, ttnn.TILE_LAYOUT)
+                # Convert back to sharded for WO matmul
+                attn_output_cat = ttnn.to_memory_config(
+                    attn_output_cat, self.model_config["SHARDED_ATTN_WO_INPUT_RING_MEMCFG"]
+                )
 
         # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
         if self.is_olmo:
@@ -819,6 +947,54 @@ class TtLlamaAttention(LightweightModule):
 
         return dense_out_reduced
 
+    def _olmo_qk_norm_global(self, heads_tensor, weight_tensor, local_dim, n_heads):
+        """OLMo global QK-norm via host roundtrip for exact match with HF.
+
+        HF normalizes Q over 5120 dims and K over 1024 dims before head split.
+        We read local heads to host, concatenate across row devices to get the full
+        dimension, apply RMSNorm globally, then push each device's portion back.
+        Prefill-only (not traced).
+        """
+        import torch
+
+        seq = heads_tensor.shape[2]
+        q_flat = ttnn.reshape(heads_tensor, [1, 1, seq, local_dim])
+        q_flat = ttnn.to_layout(q_flat, ttnn.TILE_LAYOUT)
+
+        q_host = ttnn.to_torch(
+            q_flat,
+            mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(1, 3), mesh_shape=self.cluster_shape),
+        ).float()
+        ttnn.deallocate(q_flat)
+        ttnn.deallocate(heads_tensor)
+
+        n_rows, n_cols = self.cluster_shape
+        col_w = q_host.shape[3] // n_cols
+
+        q_global = torch.cat([q_host[:, r : r + 1, :, :col_w] for r in range(n_rows)], dim=-1)
+        full_dim = q_global.shape[-1]
+
+        is_q = full_dim == self.olmo_q_norm_cpu.shape[0]
+        cpu_weight = self.olmo_q_norm_cpu if is_q else self.olmo_k_norm_cpu
+
+        variance = q_global.pow(2).mean(-1, keepdim=True)
+        q_normed_global = q_global * torch.rsqrt(variance + 1e-6) * cpu_weight
+
+        result = torch.zeros(1, n_rows, seq, n_cols * col_w, dtype=torch.bfloat16)
+        for r in range(n_rows):
+            chunk = q_normed_global[:, :, :, r * col_w : (r + 1) * col_w].bfloat16()
+            for c in range(n_cols):
+                result[:, r, :, c * col_w : (c + 1) * col_w] = chunk
+
+        result_dev = ttnn.from_torch(
+            result,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=self.mesh_device,
+            mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(1, 3), mesh_shape=self.cluster_shape),
+        )
+        return ttnn.reshape(result_dev, [1, n_heads, seq, self.head_dim])
+
     def forward_prefill(
         self,
         x_11SH,
@@ -829,6 +1005,7 @@ class TtLlamaAttention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
         batch_size=1,
+        skip_input_dealloc=False,
     ):
         if batch_size > 1:
             x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
@@ -860,12 +1037,13 @@ class TtLlamaAttention(LightweightModule):
         #     memory_config=ttnn.DRAM_MEMORY_CONFIG,
         # )
 
-        ttnn.deallocate(x_11SH)
+        if not skip_input_dealloc:
+            ttnn.deallocate(x_11SH)
 
         xqkv_fused = self.tt_ccl.line_all_reduce(
             xqkv,
             cluster_axis=1,
-            num_links=3,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="QKV",
             batch_size=batch_size,
@@ -875,10 +1053,11 @@ class TtLlamaAttention(LightweightModule):
         if seq_len > 2048:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
 
+        # OLMo QK-norm is applied AFTER nlp_create_qkv_heads (per-head, like decode path)
+
         if batch_size > 1:
             xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
 
-        # split qkv into heads
         (
             q_heads_1QSD_pre_rot,
             k_heads_1KSD_pre_rot,
@@ -891,19 +1070,46 @@ class TtLlamaAttention(LightweightModule):
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
 
-        # ttnn.deallocate(xqkv_fused)
-
         ###
         # Rotary embeddings
         ###
 
-        if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+        if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:
             q_heads_1QSD_pre_rot_bf8 = q_heads_1QSD_pre_rot
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
             ttnn.deallocate(q_heads_1QSD_pre_rot_bf8)
 
-        if self.qk_norm:
+        if self.qk_norm and not self.is_olmo:
             q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
+        elif self.is_olmo and self.qk_norm:
+            # OLMo QK-norm: distributed RMS across 8 row devices for exact global normalization.
+            # HF normalizes Q over 5120 dims (all 40 heads) before head split.
+            # Each row device has 640 dims (5 heads × 128). Use rms_norm_pre/post_all_gather
+            # with line_all_gather on cluster_axis=0 to compute global variance.
+            q_seq = q_heads_1QSD_pre_rot.shape[2]
+            q_flat = ttnn.reshape(q_heads_1QSD_pre_rot, [1, 1, q_seq, self.n_local_heads * self.head_dim])
+            q_flat = ttnn.to_layout(q_flat, ttnn.TILE_LAYOUT)
+            q_stats = ttnn.rms_norm_pre_all_gather(
+                q_flat, compute_kernel_config=self.compute_kernel_config_hifi2, dtype=ttnn.bfloat16
+            )
+            q_stats_gathered = self.tt_ccl.line_all_gather(
+                q_stats,
+                dim=3,
+                cluster_axis=0,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(q_stats)
+            q_normed_flat = ttnn.rms_norm_post_all_gather(
+                q_flat,
+                q_stats_gathered,
+                epsilon=1e-6,
+                weight=self.olmo_q_norm_weight_full_prefill,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+            )
+            ttnn.deallocate(q_flat)
+            ttnn.deallocate(q_heads_1QSD_pre_rot)
+            q_heads_1QSD_pre_rot = ttnn.reshape(q_normed_flat, [1, self.n_local_heads, q_seq, self.head_dim])
 
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
@@ -914,13 +1120,35 @@ class TtLlamaAttention(LightweightModule):
         )
         ttnn.deallocate(q_heads_1QSD_pre_rot)
 
-        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:  # Rotary embeddings require bfloat16 inputs
+        if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:
             k_heads_1KSD_pre_rot_bf8 = k_heads_1KSD_pre_rot
             k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
             ttnn.deallocate(k_heads_1KSD_pre_rot_bf8)
 
-        if self.qk_norm:
+        if self.qk_norm and not self.is_olmo:
             k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
+        elif self.is_olmo and self.qk_norm:
+            # OLMo K norm: distributed RMS across 8 row devices for exact global normalization.
+            # HF normalizes K over 1024 dims (all 8 KV heads). Each row device has 128.
+            k_heads_1KSD_pre_rot = ttnn.to_layout(k_heads_1KSD_pre_rot, ttnn.TILE_LAYOUT)
+            k_stats = ttnn.rms_norm_pre_all_gather(
+                k_heads_1KSD_pre_rot, compute_kernel_config=self.compute_kernel_config_hifi2, dtype=ttnn.bfloat16
+            )
+            k_stats_gathered = self.tt_ccl.line_all_gather(
+                k_stats,
+                dim=3,
+                cluster_axis=0,
+                num_links=1,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(k_stats)
+            k_heads_1KSD_pre_rot = ttnn.rms_norm_post_all_gather(
+                k_heads_1KSD_pre_rot,
+                k_stats_gathered,
+                epsilon=1e-6,
+                weight=self.olmo_k_norm_weight_full_prefill,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+            )
 
         # k_heads_1KSD = k_heads_1KSD_pre_rot
         k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
@@ -1094,7 +1322,7 @@ class TtLlamaAttention(LightweightModule):
         output_11SH_reduced = self.tt_ccl.line_all_reduce(
             output_11SH,
             cluster_axis=0,
-            num_links=3,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="WO_AG" if seq_len <= 4096 else "WO",
         )
@@ -1114,6 +1342,7 @@ class TtLlamaAttention(LightweightModule):
         chunk_start_idx=None,
         kv_cache=None,
         batch_size=1,
+        skip_input_dealloc=False,
     ):
         if mode == "prefill":
             return self.forward_prefill(
@@ -1125,6 +1354,7 @@ class TtLlamaAttention(LightweightModule):
                 chunk_start_idx=chunk_start_idx,
                 kv_cache=kv_cache,
                 batch_size=batch_size,
+                skip_input_dealloc=skip_input_dealloc,
             )
         else:
             return self.forward_decode(x, current_pos, rot_mats, page_table=page_table, kv_cache=kv_cache)

@@ -21,23 +21,36 @@ from time import time
 from datetime import datetime
 from loguru import logger
 import os
+import math
 import ttnn
 import pytest
 
 
 from models.demos.llama3_70b_galaxy.tt.llama_common import (
     PagedAttentionConfig,
+    precompute_freqs_yarn,
+    gather_cos_sin,
 )
 from models.demos.llama3_70b_galaxy.tt.llama_model import TtTransformer
-from models.demos.llama3_70b_galaxy.tt.llama_embedding import TtLlamaEmbedding
 from models.demos.llama3_70b_galaxy.tt.olmo_model_config import TtOlmoModelArgs
 from models.common.sampling.tt_sampling import TTSampling
 from models.demos.llama3_70b_galaxy.demo.demo_common import load_inputs_simple
+from models.tt_transformers.tt.common import copy_host_to_device
 
 from models.perf.benchmarking_utils import BenchmarkProfiler, BenchmarkData
 from models.demos.llama3_70b_galaxy.tt.model_config import LlamaOptimizations
 
 from transformers import GPT2Tokenizer
+
+
+def get_padded_prefill_len(seq_len: int) -> int:
+    if seq_len <= 128:
+        return 128
+    if seq_len <= 1024:
+        return 1024
+    else:
+        return 2 ** (seq_len - 1).bit_length()
+
 
 # Maximum number of times `tokens_per_second_per_user` is allowed to be outside the `tsu_range`
 # before triggering an assertion failure. Allows occasional dips while ensuring
@@ -84,15 +97,16 @@ def run_olmo_demo(
     assert batch_size <= 32, "Max batch size currently supported is 32"
     assert max_seq_len <= max_supported_seq_len, "Max sequence length must be less than 128k tokens"
 
+    sampling_batch = max(batch_size, 32)
     top_k = sampling_params["top_k"]
     if isinstance(top_k, int):
-        top_k = torch.tensor([top_k] * batch_size)
+        top_k = torch.tensor([top_k] * sampling_batch)
     top_p = sampling_params["top_p"]
     if isinstance(top_p, float):
-        top_p = torch.tensor([top_p] * batch_size)
+        top_p = torch.tensor([top_p] * sampling_batch)
     temperature = sampling_params["temperature"]
     if isinstance(temperature, float):
-        temperature = torch.tensor([temperature] * batch_size)
+        temperature = torch.tensor([temperature] * sampling_batch)
     seed = sampling_params["seed"]
 
     dummy_weights = False
@@ -141,7 +155,7 @@ def run_olmo_demo(
     state_dict = model_args.load_state_dict()
     profiler.end("weight_loading")
 
-    page_table_tt = None
+    page_table = None
     if paged_attention:
         paged_cache_max_seq_len = (
             paged_attention_config.block_size
@@ -162,16 +176,9 @@ def run_olmo_demo(
             model_args.batch_size_per_device_group,
             paged_attention_config.max_num_blocks // model_args.batch_size_per_device_group,
         )
-        page_table_tt = ttnn.from_torch(
-            page_table,
-            device=mesh_device,
-            dtype=ttnn.int32,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
-        )
-        logger.info("Page table tensor done")
+        logger.info("Page table created")
 
-    # Load TTNN OLMo model
+    # Load TTNN OLMo model (decode_mode_only=False for prefill+decode)
     logger.info("Loading weights to device...")
     profiler.start("loading_weights_to_device")
     tt_model = TtTransformer(
@@ -182,15 +189,170 @@ def run_olmo_demo(
         weight_cache_path=model_args.weight_cache_path(dtype),
         paged_attention_config=paged_attention_config,
         enable_prefetcher_performance_mode=enable_prefetcher_performance_mode,
-        decode_mode_only=True,
+        decode_mode_only=False,
     )
-    tt_embd = TtLlamaEmbedding(
-        mesh_device=mesh_device,
-        args=model_args,
-        weight_cache_path=model_args.weight_cache_path(dtype),
-        state_dict=state_dict,
-        dtype=ttnn.bfloat16,  # Row major layout requires bfloat16
+    profiler.end("loading_weights_to_device")
+    logger.info("Finished loading weights to device. Model is in prefill mode.")
+
+    # Encode prompts
+    if dummy_weights:
+        encoded_prompts = [
+            [128000, 2028, 374, 264, 1296]
+        ] * model_args.max_batch_size  # "This is a test" encoded prompt
+    else:
+        encoded_prompts = [tokenizer.encode(prompt, add_special_tokens=True) for prompt in input_prompts]
+
+    eos_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 50256
+    user_done = [False] * batch_size
+
+    # ===================== PREFILL PHASE =====================
+    logger.info("=" * 60)
+    logger.info("PREFILL PHASE")
+    logger.info("=" * 60)
+    profiler.start("inference_prefill")
+
+    max_prompt_length = max([len(prompt) for prompt in encoded_prompts])
+    padded_prefill_len = get_padded_prefill_len(max_prompt_length)
+    prompt_lengths = [len(encoded_prompts[b]) for b in range(batch_size)]
+    logger.info(f"Max prompt length: {max_prompt_length}, padded: {padded_prefill_len}")
+
+    # Compute YaRN RoPE for prefill
+    ttnn_cos, ttnn_sin, _ = precompute_freqs_yarn(
+        dim=model_args.head_dim,
+        end=model_args.max_seq_len * 2,
+        theta=model_args.rope_theta,
+        scaling_factor=model_args.rope_scaling_factor,
+        original_max_position_embeddings=model_args.original_max_position_embeddings,
+        beta_fast=model_args.yarn_beta_fast,
+        beta_slow=model_args.yarn_beta_slow,
+        attention_factor=model_args.yarn_attention_factor,
     )
+    position_ids = torch.arange(padded_prefill_len)
+    cos_gathered, sin_gathered = gather_cos_sin(position_ids, ttnn_cos, ttnn_sin)
+    rot_mats_prefill = [
+        ttnn.from_torch(
+            cos_gathered,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        ),
+        ttnn.from_torch(
+            sin_gathered,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        ),
+    ]
+    tt_model.tt_rot_mats_prefill = rot_mats_prefill
+
+    # Get KV cache from model layers (needed for prefill to write to)
+    kv_cache = [layer.attention.layer_past for layer in tt_model.layers]
+
+    # Prepare page table for prefill
+    block_size = paged_attention_config.block_size if paged_attention else 64
+    num_prefill_blocks = math.ceil(padded_prefill_len / block_size)
+
+    # Pad prompts to padded_prefill_len
+    padded_prompts = [
+        encoded_prompts[b] + [eos_token_id] * (padded_prefill_len - len(encoded_prompts[b])) for b in range(batch_size)
+    ]
+
+    # --- Prefill with trace: warmup (compile), capture, execute ---
+    first_decode_tokens = []
+    all_outputs_per_user = [[] for _ in range(batch_size)]
+
+    # Build inputs for user 0 (used for warmup + trace capture)
+    def _build_prefill_inputs(user_id):
+        user_tokens = torch.tensor(padded_prompts[user_id], dtype=torch.long).unsqueeze(0)
+        if paged_attention:
+            user_within_group = user_id % model_args.batch_size_per_device_group
+            pt_user = torch.ones(32, num_prefill_blocks, dtype=torch.int32) * -1
+            pt_user[user_id, :] = page_table[user_within_group, :num_prefill_blocks]
+        else:
+            pt_user = None
+        return user_tokens, pt_user
+
+    # Step 1: Warmup / compile run (eager, first user)
+    logger.info("Prefill warmup (compile)...")
+    profiler.start("compile_prefill")
+    warmup_tokens, warmup_pt = _build_prefill_inputs(0)
+    host_inputs = tt_model.prepare_prefill_inputs_host(warmup_tokens, user_id=0, page_table=warmup_pt)
+    device_inputs = copy_host_to_device(host_inputs, mesh_device=mesh_device)
+    transformed_inputs = tt_model.transform_prefill_inputs_device(*device_inputs)
+    tt_out_warmup = tt_model.ttnn_prefill_forward(
+        *transformed_inputs,
+        kv_cache=kv_cache,
+        batch_size=1,
+    )
+    ttnn.synchronize_device(mesh_device)
+    profiler.end("compile_prefill")
+    logger.info("Prefill warmup done.")
+
+    # Reset KV cache after warmup to avoid stale data from compile run
+    for layer in tt_model.layers:
+        k_cache, v_cache = layer.attention.layer_past
+        k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
+        v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+
+    # Step 2: Capture prefill trace
+    logger.info("Capturing prefill trace...")
+    tt_model.set_enable_trace(True)
+    host_inputs = tt_model.prepare_prefill_inputs_host(warmup_tokens, user_id=0, page_table=warmup_pt)
+    device_inputs_trace = copy_host_to_device(host_inputs, mesh_device=mesh_device)
+    prefill_trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+    transformed_inputs = tt_model.transform_prefill_inputs_device(*device_inputs_trace)
+    tt_out_trace = tt_model.ttnn_prefill_forward(
+        *transformed_inputs,
+        kv_cache=kv_cache,
+        batch_size=1,
+    )
+    ttnn.end_trace_capture(mesh_device, prefill_trace_id, cq_id=0)
+    ttnn.synchronize_device(mesh_device)
+    logger.info("Prefill trace captured.")
+
+    # Reset KV cache after trace capture to clear stale data
+    for layer in tt_model.layers:
+        k_cache, v_cache = layer.attention.layer_past
+        k_cache = ttnn.mul(k_cache, 0, output_tensor=k_cache)
+        v_cache = ttnn.mul(v_cache, 0, output_tensor=v_cache)
+
+    # Step 3: Execute trace for each user
+    profiler.start("inference_prefill")
+    for user_id in range(batch_size):
+        prompt_len = prompt_lengths[user_id]
+        user_tokens, user_pt = _build_prefill_inputs(user_id)
+
+        host_inputs = tt_model.prepare_prefill_inputs_host(user_tokens, user_id=user_id, page_table=user_pt)
+        copy_host_to_device(host_tensors=host_inputs, device_tensors=device_inputs_trace)
+        ttnn.execute_trace(mesh_device, prefill_trace_id, cq_id=0, blocking=False)
+
+        # process_output_prefill runs LM head + CCL outside the trace
+        first_tok = tt_model.process_output_prefill(tt_out_trace, last_token_idx=prompt_len - 1)
+        ttnn.synchronize_device(mesh_device)
+        first_decode_tokens.append(int(first_tok[0]))
+
+        all_outputs_per_user[user_id] = encoded_prompts[user_id][:]
+        all_outputs_per_user[user_id].append(first_decode_tokens[-1])
+
+        if user_id < 4 or user_id % 8 == 0:
+            decoded_tok = tokenizer.decode([first_decode_tokens[-1]])
+            logger.info(
+                f"Prefill user {user_id}: prompt_len={prompt_len}, first_token={first_decode_tokens[-1]} ({decoded_tok})"
+            )
+
+    profiler.end("inference_prefill")
+    ttnn.release_trace(mesh_device, prefill_trace_id)
+    tt_model.set_enable_trace(False)
+    logger.info(f"Prefill complete for {batch_size} users.")
+
+    # ===================== SWITCH TO DECODE MODE =====================
+    logger.info("Switching to decode mode...")
+    tt_model.switch_mode("decode")
+    logger.info("Switched to decode mode.")
+
+    # Create sampling with decode CCL
     tt_sampling = TTSampling(
         args=model_args,
         mesh_device=mesh_device,
@@ -199,31 +361,16 @@ def run_olmo_demo(
         p=top_p,
         temp=temperature,
     )
-    profiler.end("loading_weights_to_device")
-    logger.info("Finished loading weights to device.")
 
-    # Keep track of generated outputs to print out every iteration
-    if dummy_weights:
-        encoded_prompts = [
-            [128000, 2028, 374, 264, 1296]
-        ] * model_args.max_batch_size  # "This is a test" encoded prompt
-    else:
-        # Use OLMo tokenizer encoding
-        encoded_prompts = [tokenizer.encode(prompt, add_special_tokens=True) for prompt in input_prompts]
+    # ===================== DECODE PHASE =====================
+    logger.info("=" * 60)
+    logger.info("DECODE PHASE")
+    logger.info("=" * 60)
 
-    # Prefill by decode: start at first token; pad to 32 (tile size)
-    max_prompt_length = max([len(prompt) for prompt in encoded_prompts])
-    # Use OLMo EOS token for padding (GPT2 EOS is typically 50256 or use pad_token_id)
-    eos_token_id = tokenizer.eos_token_id if tokenizer.eos_token_id is not None else 50256
-    padded_token_prompts = [prompt + [eos_token_id] * (max_prompt_length - len(prompt)) for prompt in encoded_prompts]
-    encoded_prompts_tensor_whole_sequence = torch.tensor([padded_token_prompts[b] for b in range(batch_size)])
-
-    user_done = [False] * batch_size  # Keeps track when a user reaches EoD token
-
-    logger.info("Starting decode...")
-    # Initial positions
-    decoding_pos = [start_pos] * batch_size
-    current_pos = torch.tensor([decoding_pos[b] for b in range(batch_size)])
+    # Decode starts from the end of each user's prompt (always 32 entries, -1 for inactive users)
+    current_pos = torch.full((32,), -1, dtype=torch.long)
+    for b in range(batch_size):
+        current_pos[b] = prompt_lengths[b]
 
     current_pos_tensor = ttnn.from_torch(
         current_pos,
@@ -231,36 +378,39 @@ def run_olmo_demo(
         dtype=ttnn.int32,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
-            dims=(None, 0) if (batch_size > 1) else (None, None),
+            dims=(None, 0),
             mesh_shape=model_args.cluster_shape,
         ),
     )
 
-    logger.info("Current pos tensor done")
-
-    # Get cos/sin matrices for the current position of each user
     rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos, return_rot_idxs=True)
 
-    logger.info("Rot mats done")
-
-    # Prepare the encoded prompts for the decode input
+    # First decode tokens from prefill (always 32 entries for TG mesh)
+    first_tokens_padded = first_decode_tokens[:batch_size] + [0] * (32 - batch_size)
+    first_tokens_tensor = torch.tensor(first_tokens_padded).reshape(1, 1, 1, 32)
     tt_out_tok = ttnn.from_torch(
-        encoded_prompts_tensor_whole_sequence[:, :1].reshape(1, 1, 1, batch_size),
+        first_tokens_tensor,
         device=mesh_device,
         dtype=ttnn.uint32,
         layout=ttnn.ROW_MAJOR_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
-    sub_core_grids = ttnn.CoreRangeSet(
-        [
-            ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
-            ttnn.CoreRange(ttnn.CoreCoord(5, 0), ttnn.CoreCoord(6, 9)),
-        ]
-    )
 
-    # Compile
-    logger.info(f"Compiling model trace...")
+    # Decode page table (sharded for decode)
+    if paged_attention:
+        page_table_tt = ttnn.from_torch(
+            page_table,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
+        )
+    else:
+        page_table_tt = None
+
+    # Compile decode
+    logger.info("Compiling decode trace...")
     if layers == 1:
         num_compile_iters = 10
     elif layers == 5:
@@ -268,9 +418,7 @@ def run_olmo_demo(
     else:
         num_compile_iters = 1
     for i in range(num_compile_iters):
-        tt_decode_input = tt_embd(tt_out_tok)
-        # logger.info(f"tt_decode_input done")
-
+        tt_decode_input = tt_model.embd(tt_out_tok)
         tt_out = tt_model(
             tt_decode_input,
             current_pos_tensor,
@@ -278,10 +426,9 @@ def run_olmo_demo(
             mode="decode",
             page_table=page_table_tt,
         )
-
-        # Sampling
-        _, logprobs = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)  # Compile once with setting the seed
-        logger.info(f"Sampling done")
+        ttnn.manual_seed(seed, sub_core_grids=model_args.sub_core_grids, device=mesh_device)
+        _ = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)
+        logger.info(f"Decode compile iteration {i} done")
 
     if not stress_test:
         ttnn.plus_one(current_pos_tensor, sub_core_grids=model_args.sub_core_grids, skip_negative_entries=True)
@@ -290,16 +437,70 @@ def run_olmo_demo(
             sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
         )
 
-    _, logprobs = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)
+    _ = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)
 
+    # Capture decode trace
+    logger.info("Capturing decode trace...")
+    profiler.start("capture_decode_trace")
+
+    tt_model.tt_ccl.reset_gather_and_buffer_idx()
+
+    decode_trace_id = ttnn.begin_trace_capture(mesh_device, cq_id=0)
+
+    rot_mats = tt_model.rope_setup.get_rm_rot_mats(rot_mat_idxs)
+    tt_decode_input = tt_model.embd(tt_out_tok)
+    tt_out = tt_model(
+        tt_decode_input,
+        current_pos_tensor,
+        rot_mats=rot_mats,
+        mode="decode",
+        page_table=page_table_tt,
+    )
+    _ = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)
+
+    if not stress_test:
+        ttnn.plus_one(current_pos_tensor, sub_core_grids=model_args.sub_core_grids, skip_negative_entries=True)
+        ttnn.plus_one(
+            rot_mat_idxs,
+            sub_core_grids=ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(1, 0))]),
+        )
+
+    ttnn.end_trace_capture(mesh_device, decode_trace_id, cq_id=0)
     ttnn.synchronize_device(mesh_device)
-    logger.info("Compile done. Starting decode loop (no trace)...")
 
+    # Reset decode state for actual generation
+    current_pos_reset = ttnn.from_torch(
+        current_pos,
+        dtype=ttnn.int32,
+        mesh_mapper=ttnn.ShardTensor2dMesh(
+            mesh_device,
+            dims=(None, 0),
+            mesh_shape=model_args.cluster_shape,
+        ),
+    )
+    ttnn.copy_host_to_device_tensor(current_pos_reset, current_pos_tensor)
+
+    tt_out_tok_reset = ttnn.from_torch(
+        first_tokens_tensor,
+        dtype=ttnn.uint32,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
+    )
+    ttnn.copy_host_to_device_tensor(tt_out_tok_reset, tt_out_tok)
+
+    rot_mat_idxs_reset = tt_model.rope_setup.get_rm_rot_idxs(current_pos, on_host=True)
+    ttnn.copy_host_to_device_tensor(rot_mat_idxs_reset, rot_mat_idxs)
+
+    profiler.end("capture_decode_trace")
+    ttnn.synchronize_device(mesh_device)
+    logger.info("Decode trace captured. Starting decode loop...")
+
+    # ===================== DECODE LOOP =====================
     iteration = 0
     users_decoding = True
     tokens_per_second_per_user_token127 = None
 
-    all_outputs = []
+    all_outputs = list(encoded_prompts[0]) + [first_decode_tokens[0]]
     all_log_probs = []
     profiler.start(f"inference_decode", iteration=iteration)
 
@@ -307,73 +508,74 @@ def run_olmo_demo(
     tsu_failures = 0
     all_tokens_per_second_per_user = []
     failed_tokens_per_second_per_user = []
+    tt_out_toks_cpu = []
     iteration_time_start = time()
-    current_iteration = 0
+
+    num_decode_tokens = max_generated_tokens - max_prompt_length
+    if num_decode_tokens <= 0:
+        num_decode_tokens = max_generated_tokens
 
     while users_decoding:
-        if iteration in range(len(encoded_prompts[0])):
-            current_iteration = iteration
-            all_outputs.append(encoded_prompts[0][iteration])
-            all_log_probs.append(torch.ones((1, 1, 1, batch_size)))
-            tt_out_tok_update = ttnn.from_torch(
-                encoded_prompts_tensor_whole_sequence[:, iteration].reshape(1, 1, 1, batch_size),
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, None), mesh_shape=model_args.cluster_shape),
+        ttnn.execute_trace(mesh_device, decode_trace_id, cq_id=0, blocking=True)
+
+        tt_out_toks_cpu.append(tt_out_tok.cpu(blocking=True, cq_id=0))
+        tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out_toks_cpu[-1])[0])[0, 0, 0, :batch_size]
+        all_outputs.append(tt_output_torch.tolist()[0])
+
+        iteration_time_ends = time()
+        iteration_time = iteration_time_ends - iteration_time_start
+        tokens_per_second_per_user = 1 / iteration_time
+        all_tokens_per_second_per_user.append(tokens_per_second_per_user)
+
+        if not is_ci_env or iteration < 200 or iteration % 1000 == 0:
+            logger.info(
+                f"Decode iter {iteration}: tok/s/user={tokens_per_second_per_user:.2f}, "
+                f"Throughput={batch_size/iteration_time:.2f} tok/s, "
+                f"Time={1000*iteration_time:.2f} ms"
             )
-            ttnn.copy_host_to_device_tensor(tt_out_tok_update, tt_out_tok)
-        else:
-            current_iteration = iteration
+            if not is_ci_env:
+                logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
 
-        rot_mats, rot_mat_idxs = tt_model.rope_setup.get_rm_rot_mats(current_pos_tensor, return_rot_idxs=True)
-        tt_decode_input = tt_embd(tt_out_tok)
-        tt_out = tt_model(
-            tt_decode_input,
-            current_pos_tensor,
-            rot_mats=rot_mats,
-            mode="decode",
-            page_table=page_table_tt,
-        )
-        _, logprobs = tt_sampling(tt_out[0], tt_out_tok=tt_out_tok)
+        if iteration == 127:
+            tokens_per_second_per_user_token127 = tokens_per_second_per_user
 
-        if not stress_test:
-            ttnn.plus_one(current_pos_tensor, sub_core_grids=model_args.sub_core_grids, skip_negative_entries=True)
+        iteration_time_start = time()
+        iteration += 1
 
-        ttnn.synchronize_device(mesh_device)
-
-        if iteration >= len(encoded_prompts[0]):
-            tt_output_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_out_tok.cpu(blocking=True))[0])[
-                0, 0, 0, :batch_size
-            ]
-            all_outputs.append(tt_output_torch.tolist()[0])
-
-            iteration_time_ends = time()
-            iteration_time = iteration_time_ends - iteration_time_start
-            tokens_per_second_per_user = 1 / iteration_time
-            all_tokens_per_second_per_user.append(tokens_per_second_per_user)
-
-            if not is_ci_env or iteration < 200 or iteration % 1000 == 0:
-                logger.info(
-                    f"Iteration {iteration}: tok/s/user={tokens_per_second_per_user:.2f}, "
-                    f"Throughput={batch_size/iteration_time:.2f} tok/s, "
-                    f"Time={1000*iteration_time:.2f} ms"
-                )
-                if not is_ci_env:
-                    logger.info("[User 0] {}".format("".join(tokenizer.decode(all_outputs))))
-
-            if iteration == 127:
-                tokens_per_second_per_user_token127 = tokens_per_second_per_user
-
-            iteration_time_start = time()
-
-        if current_iteration + 1 >= max_generated_tokens:
+        if iteration >= num_decode_tokens:
             users_decoding = False
 
-        iteration += 1
+    ttnn.release_trace(mesh_device, decode_trace_id)
 
     # Finish profiling at the end of all batches inference
     profiler.end(profiler_step_name)
     profiler.end("run")
+
+    # Report TTFT and decode performance summary
+    compile_prefill_time = profiler.get_duration("compile_prefill")
+    compile_decode_time = profiler.get_duration("capture_decode_trace")
+    avg_ttft = profiler.get_duration("inference_prefill")
+    num_decode_iters = len(all_tokens_per_second_per_user)
+    if num_decode_iters > 0:
+        avg_decode_iter_time = sum(1.0 / t for t in all_tokens_per_second_per_user) / num_decode_iters
+        avg_decode_tok_s_user = num_decode_iters / sum(1.0 / t for t in all_tokens_per_second_per_user)
+        avg_decode_tok_s = avg_decode_tok_s_user * batch_size
+    else:
+        avg_decode_iter_time = 0
+        avg_decode_tok_s_user = 0
+        avg_decode_tok_s = 0
+
+    logger.info("=" * 60)
+    logger.info("PERFORMANCE SUMMARY")
+    logger.info("=" * 60)
+    logger.info(f"Prefill compile time: {round(compile_prefill_time, 2)}s")
+    logger.info(f"Decode compile time: {round(compile_decode_time, 2)}s")
+    logger.info(f"Time to First Token (TTFT): {round(avg_ttft * 1000, 2)} ms")
+    logger.info(
+        f"Decode speed: {round(avg_decode_iter_time * 1000, 2)} ms/tok @ {round(avg_decode_tok_s_user, 2)} tok/s/user ({round(avg_decode_tok_s, 2)} tok/s throughput)"
+    )
+    logger.info(f"Batch size: {batch_size}, Layers: {layers}, Prefill len: {padded_prefill_len}")
+    logger.info("=" * 60)
 
     if is_ci_env and tokens_per_second_per_user_token127 is not None:
         benchmark_data.add_measurement(profiler, 0, profiler_step_name, "tsu_e2e", tokens_per_second_per_user_token127)
@@ -439,15 +641,15 @@ def run_olmo_demo(
 @pytest.mark.parametrize(
     "weights, layers, input_prompts, instruct, repeat_batches, max_seq_len, batch_size, max_generated_tokens, paged_attention, page_params, sampling_params, stress_test, start_pos",
     [
-        (  # full demo, batch 32
+        (  # full demo, batch 1
             "instruct",
             64,
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
             False,  # instruct mode
             1,  # repeat_batches
             128 * 1024,  # max_seq_len
-            32,  # batch_size
-            2000,  # max_generated_tokens
+            1,  # batch_size
+            200,  # max_generated_tokens
             True,  # paged_attention
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
             {"top_k": 1, "top_p": 0.00, "temperature": 0.0, "seed": 42},  # sampling_params
@@ -574,8 +776,7 @@ def run_olmo_demo(
     [
         {
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
-            "trace_region_size": 12726272,
-            # "trace_region_size": 10459136,
+            "trace_region_size": 184915840,
             "fabric_config": True,
         }
     ],

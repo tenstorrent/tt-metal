@@ -376,22 +376,28 @@ class TestOlmoDecodeTTNNNumerical:
         passing, pcc = comp_pcc(ref[0, 0], out, 0.99)
         logger.info(f"RMSNorm PCC: {pcc:.6f}")
 
-    def test_decode_single_layer_numerical(self, mesh_device, reset_seeds, ensure_gc):
-        """Test single decode layer with TTNN and track numerical values."""
+    def test_decode_single_layer_pcc(self, mesh_device, reset_seeds, ensure_gc):
+        """Test single decode layer PCC against PyTorch reference with QK-norm."""
         from models.demos.llama3_70b_galaxy.tt.olmo_model_config import TtOlmoModelArgs
         from models.demos.llama3_70b_galaxy.tt.llama_decoder import TtTransformerBlock
         from models.demos.llama3_70b_galaxy.tt.llama_rope import TtLlamaRotarySetup
         from models.demos.llama3_70b_galaxy.tt.llama_ccl import TT_CCL
+        from models.demos.llama3_70b_galaxy.reference.functional import (
+            decoder_block_forward_decode,
+            init_kv_cache,
+        )
+        from models.demos.llama3_70b_galaxy.reference.yarn_rope import YaRNConfig, precompute_yarn_freqs
 
         batch_size = 32
         max_seq_len = 256
+        start_pos = 127
         dtype = ttnn.bfloat8_b
 
         model_args = TtOlmoModelArgs(mesh_device, max_batch_size=batch_size, max_seq_len=max_seq_len)
         model_args.n_layers = 1
         state_dict = model_args.load_state_dict()
 
-        # Setup without prefetcher
+        # Setup sub-devices
         all_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 9))])
         all_sub_device = ttnn.SubDevice([all_core_range_set])
         worker_sub_device_id = ttnn.SubDeviceId(0)
@@ -401,7 +407,6 @@ class TestOlmoDecodeTTNNNumerical:
 
         tt_ccl = TT_CCL(mesh_device, model_args, worker_sub_device_id, mode="decode", is_olmo=True)
 
-        # Setup RoPE
         rope_setup = TtLlamaRotarySetup(
             mesh_device,
             batch_size,
@@ -413,7 +418,6 @@ class TestOlmoDecodeTTNNNumerical:
         )
         transformation_mats = rope_setup.get_both_trans_mats()
 
-        # Create decoder
         tt_model = TtTransformerBlock(
             args=model_args,
             mesh_device=mesh_device,
@@ -426,34 +430,102 @@ class TestOlmoDecodeTTNNNumerical:
             tt_ccl=tt_ccl,
         )
 
-        # Test with different input scales
-        for scale in [0.02, 0.1, 1.0]:
-            logger.info(f"\n=== Testing with input scale {scale} ===")
+        # ===== TTNN Forward =====
+        torch.manual_seed(42)
+        pt_input = torch.randn(batch_size, 1, model_args.dim)
+        check_tensor_stats("Input", pt_input)
 
-            pt_input = torch.randn(batch_size, 1, model_args.dim) * scale
-            check_tensor_stats(f"PyTorch input (scale={scale})", pt_input)
+        tt_input = model_args.prepare_residual_tensor_decode(
+            pt_input.clone(), model_args.model_config["DECODE_RESIDUAL_MEMCFG"]
+        )
 
-            tt_input = model_args.prepare_residual_tensor_decode(
-                pt_input.clone(), model_args.model_config["DECODE_RESIDUAL_MEMCFG"]
-            )
+        current_pos = torch.tensor([start_pos] * batch_size)
+        current_pos_tt = ttnn.from_torch(
+            current_pos,
+            device=mesh_device,
+            dtype=ttnn.int32,
+            mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=(8, 4)),
+        )
+        rot_mats = rope_setup.get_rm_rot_mats(current_pos)
 
-            current_pos = torch.tensor([127] * batch_size)
-            current_pos_tt = ttnn.from_torch(
-                current_pos,
-                device=mesh_device,
-                dtype=ttnn.int32,
-                mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(None, 0), mesh_shape=(8, 4)),
-            )
+        tt_out, _ = tt_model(tt_input, None, current_pos_tt, rot_mats=rot_mats, mode="decode")
+        tt_out_torch = ttnn.to_torch(
+            tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=(8, 4))
+        )[:, 0:1, :batch_size, : model_args.dim].view(batch_size, 1, model_args.dim)
+        check_tensor_stats("TTNN output", tt_out_torch)
 
-            rot_mats = rope_setup.get_rm_rot_mats(current_pos)
+        # ===== Reference Forward =====
+        import os, glob
+        from safetensors import safe_open
 
-            tt_out, _ = tt_model(tt_input, None, current_pos_tt, rot_mats=rot_mats, mode="decode")
+        hf_model = os.path.expanduser(os.environ.get("HF_MODEL", ""))
+        base_path = hf_model
+        if os.path.exists(os.path.join(base_path, "snapshots")):
+            snap_dirs = glob.glob(os.path.join(base_path, "snapshots", "*"))
+            if snap_dirs:
+                base_path = snap_dirs[0]
 
-            out_torch = ttnn.to_torch(
-                tt_out, mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(1, 3), mesh_shape=(8, 4))
-            )[:, 0:1, :batch_size, : model_args.dim].view(batch_size, 1, model_args.dim)
+        raw_sd = {}
+        for f in sorted(glob.glob(os.path.join(base_path, "model*.safetensors"))):
+            with safe_open(f, framework="pt", device="cpu") as sf:
+                for key in sf.keys():
+                    if "layers.0." in key:
+                        raw_sd[key] = sf.get_tensor(key)
 
-            check_tensor_stats(f"TTNN output (scale={scale})", out_torch)
+        prefix = "model.layers.0"
+        wq = raw_sd[f"{prefix}.self_attn.q_proj.weight"].float()
+        wk = raw_sd[f"{prefix}.self_attn.k_proj.weight"].float()
+        wv = raw_sd[f"{prefix}.self_attn.v_proj.weight"].float()
+        wo = raw_sd[f"{prefix}.self_attn.o_proj.weight"].float()
+        w1 = raw_sd[f"{prefix}.mlp.gate_proj.weight"].float()
+        w2 = raw_sd[f"{prefix}.mlp.down_proj.weight"].float()
+        w3 = raw_sd[f"{prefix}.mlp.up_proj.weight"].float()
+        attn_norm_w = raw_sd[f"{prefix}.post_attention_layernorm.weight"].float()
+        ffn_norm_w = raw_sd[f"{prefix}.post_feedforward_layernorm.weight"].float()
+        q_norm_w = raw_sd.get(f"{prefix}.self_attn.q_norm.weight", None)
+        k_norm_w = raw_sd.get(f"{prefix}.self_attn.k_norm.weight", None)
+        if q_norm_w is not None:
+            q_norm_w = q_norm_w.float()
+        if k_norm_w is not None:
+            k_norm_w = k_norm_w.float()
+
+        yarn_config = YaRNConfig.from_olmo()
+        ref_cos, ref_sin, mscale = precompute_yarn_freqs(yarn_config, seq_len=max_seq_len)
+
+        n_heads, n_kv_heads, head_dim = model_args.n_heads, model_args.n_kv_heads, model_args.head_dim
+        cache_k, cache_v = init_kv_cache(batch_size, max_seq_len, n_kv_heads, head_dim)
+
+        ref_out, _, _ = decoder_block_forward_decode(
+            pt_input.float(),
+            attn_norm_w,
+            ffn_norm_w,
+            wq,
+            wk,
+            wv,
+            wo,
+            w1,
+            w2,
+            w3,
+            ref_cos,
+            ref_sin,
+            cache_k,
+            cache_v,
+            start_pos,
+            n_heads=n_heads,
+            n_kv_heads=n_kv_heads,
+            head_dim=head_dim,
+            mscale=mscale,
+            norm_eps=1e-6,
+            q_norm_weight=q_norm_w,
+            k_norm_weight=k_norm_w,
+        )
+        check_tensor_stats("Reference output", ref_out)
+
+        # ===== PCC =====
+        passing, pcc_msg = comp_pcc(ref_out, tt_out_torch, 0.90)
+        logger.info(f"Decode 1-layer PCC: {pcc_msg}")
+        logger.info(f"TTNN Inf: {torch.isinf(tt_out_torch).any()}, NaN: {torch.isnan(tt_out_torch).any()}")
+        logger.info(f"Ref  Inf: {torch.isinf(ref_out).any()}, NaN: {torch.isnan(ref_out).any()}")
 
         tt_ccl.close()
-        logger.info("\nNumerical test complete - check above for overflow points")
+        assert passing, f"Decode PCC {pcc_msg} < 0.90"

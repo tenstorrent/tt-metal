@@ -1,15 +1,16 @@
 # OLMo-3.1-32B Bring-up Log
 
-## Current Status (2026-03-13)
+## Current Status (2026-03-14)
 
 ### Summary
 | Component | Status | Performance |
 |-----------|--------|-------------|
-| **Prefill (1 layer)** | ✅ DONE | PCC=0.9998, 50s total (cache gen + run) |
+| **Prefill (1 layer)** | ✅ DONE | Hidden PCC=0.9943, Logits PCC=0.901 (post vocab-padding fix) |
 | **Decode (64 layers, traced)** | ✅ DONE | 40.6 ms/iter, 789 tok/s (traced). Inf in output due to QK-norm weight mismatch |
 | **Decode (1 layer, traced)** | ✅ DONE | 0.7 ms/iter, 44.7k tok/s (traced) |
-| **Device-side CCL** | ✅ DONE | ALL 5/5 operations on device (no host ops) |
-| **End-to-End Demo** | 🟡 IN PROGRESS | Prefill + decode both working separately; need transition validation |
+| **Device-side CCL** | ✅ DONE | ALL operations on device (no host ops) |
+| **End-to-End PCC (1 layer)** | 🟡 IN PROGRESS | Post-norm arch fix done. MLP CCL fix in testing (all_gather+reduce_nc) |
+| **End-to-End Demo** | 🟡 IN PROGRESS | Prefill + decode both working separately; need PCC validation |
 | **Tracing (Prefill)** | ✅ DONE | Added enable_trace flag to skip input deallocation |
 | **Tracing (Decode)** | ✅ DONE | All host ops removed; trace capture works |
 
@@ -39,14 +40,13 @@
 - [x] Trace capture working: 1-layer 0.7ms/iter (44.7k tok/s), 64-layer 40.6ms/iter (789 tok/s)
 - [x] Fabric reliability: RELAXED_INIT required for this Galaxy cluster
 
-### Device-side CCL Operations (5/5 Complete)
+### Device-side CCL Operations (All Device, No Host Ops)
 | Operation | Status | Location | Notes |
 |-----------|--------|----------|-------|
-| MLP FF1/FF3 all_gather | ✅ Device | `llama_mlp.py` | Uses BINARY_MUL buffer (3456 unpadded width, DRAM) |
-| MLP W2 all_reduce | ✅ Device | `llama_mlp.py` | Uses FF2_OUT_RING_MEMCFG_OLMO |
-| MLP W1/W3 reduce_scatter | ✅ Device | `llama_mlp.py` | Slice 3840→3456, then device reduce_scatter to DRAM |
+| MLP W1/W3 column reduce | ✅ Device | `llama_mlp.py` | all_gather(dim=0) + fast_reduce_nc (matches tt_transformers TG pattern) |
+| MLP W2 row reduce | ✅ Device | `llama_mlp.py` | Uses FF2_OUT_RING_MEMCFG_OLMO → line_all_reduce |
 | Attention WO all_reduce | ✅ Device | `llama_attention.py` | Uses device line_all_reduce |
-| Attention post-SDPA all_gather | ✅ Device | `llama_attention.py` | Device line_all_gather to DRAM |
+| Attention post-SDPA reshape | ✅ Device | `llama_attention.py` | DRAM reshape (no all_gather for local heads) |
 | LM Head all_reduce | ✅ Device | `lm_head.py` | Decomposed: device reduce_scatter + all_gather |
 
 ### Key Fix: ttnn.slice Aliasing
@@ -73,11 +73,19 @@ BINARY_MUL buffer (OLMo)         # 3456 width (unpadded intermediate), DRAM
 
 ### End-to-End Demo
 - [x] Fix prefill QKV unpadding (matmul grid config) — PCC=0.9998
-- [ ] Validate prefill → decode transition
-- [ ] Performance benchmark (tok/s measurement)
+- [x] E2E demo passing (1L + 64L) with traced decode
+- [x] Fix post-norm architecture mismatch (OLMo decode path in llama_decoder.py)
+- [x] Fix attention WO matmul overflow (reshape + tilization)
+- [x] Fix MLP CCL: all_gather + fast_reduce_nc (no host ops)
+- [ ] Validate E2E PCC (1 layer prefill + decode vs CPU reference)
+- [ ] Performance benchmark (tok/s measurement with proper prefill)
 
 ### Numerical Accuracy
-- [ ] 64-layer decode produces Inf in output (QK-norm weight mismatch during model loading)
+- [x] **Prefill logits PCC fixed (0.128 → 0.901)**: Root cause was `padded_vocab_size = nearest_32(100278) = 100288`, which gave per-device shard of 12536 — NOT tile-aligned (12536 % 32 ≠ 0). TTNN tile-pads 12536 → 12544, so all_gather concatenated 8×12544=100352 physical elements with 8 interleaved zeros per shard boundary, shifting vocab token indices. Fix: pad to nearest multiple of 8×32=256 → `padded_vocab_size=100352`, shard=12544=392×32 (tile-aligned). Qwen3/Llama70B vocab sizes happen to be multiples of 256 so they were unaffected. Deleted stale lm_head + embedding weight caches after fix.
+- [x] Fixed post-norm architecture (OLMo norm-after-sublayer, not Llama pre-norm)
+- [x] Fixed attention WO overflow (incorrect all_gather + reshape corruption)
+- [x] Fixed MLP reduce_scatter Inf (switched to all_gather + fast_reduce_nc)
+- [ ] Decode PCC validation pending (device reset needed after segfault)
 - [ ] "Removed incompatible OLMo QK-norm weight" messages during load need investigation
 
 ### Code Cleanup
@@ -994,7 +1002,7 @@ pytest models/demos/llama3_70b_galaxy/tests/test_olmo_decoder_prefill.py::test_o
 **Run Commands**:
 ```bash
 # Quick 3L demo (tests sliding window pattern: 3 sliding + 1 full)
-export HF_MODEL=~/models/models--allenai--Olmo-3.1-32B-Think
+export HF_MODEL=~/.cache/huggingface/hub/models--allenai--Olmo-3.1-32B-Think
 export LINE_RS=1
 pytest models/demos/llama3_70b_galaxy/demo/demo_olmo_decode.py -v -k "quick"
 
@@ -1015,6 +1023,93 @@ pytest models/demos/llama3_70b_galaxy/demo/demo_olmo_decode.py -v -k "single"
 | mini-stress-test | 64 | 2048 | Short stress test |
 | measure-device-perf | 10 | 1 | Device perf measurement |
 | nd-hang-test | 64 | 20000 | ND hang detection |
+
+### 2026-03-14 (E2E PCC Debugging - Post-Norm + Decode CCL Fixes)
+**Status**: MLP CCL fix in testing
+**PCC**: Prefill logits PCC=0.901 (1 layer), Decode PCC in progress
+
+**Completed**:
+- [x] Created `test_olmo_e2e_pcc.py` with step-by-step PCC validation (prefill, decode, E2E)
+- [x] Built CPU reference model (`reference/olmo.py`) with post-sublayer-norm architecture
+- [x] Fixed reference model `build_ref_model` to accept `max_batch_size` parameter
+- [x] Fixed post-norm architecture in `llama_decoder.py` decode path (OLMo-specific `elif` block)
+- [x] Fixed attention decode: removed incorrect `line_all_gather` for WO, use local SDPA→reshape→DRAM
+- [x] Fixed attention decode: DRAM-before-reshape to prevent sharded tensor corruption
+- [x] Fixed attention decode: OLMo-specific tilization path (keep in DRAM for WO matmul)
+- [x] Fixed MLP decode: replaced `line_reduce_scatter` (produced Inf) with `line_all_gather(dim=0)` + `fast_reduce_nc`
+- [x] Fixed MLP decode: corrected deallocation order for `ttnn.slice` aliases
+- [x] Fixed MLP decode: removed unnecessary `ttnn.slice` before w2 (ff1ff3 already 3456 wide)
+- [x] Removed ALL host-side ops (`line_all_reduce_host`, `line_reduce_scatter_host`)
+
+**Key Architectural Fixes**:
+
+1. **Post-sublayer-norm decode path** (`llama_decoder.py`):
+   OLMo applies normalization AFTER attention/MLP (before residual add), unlike Llama/Qwen pre-norm.
+   ```
+   OLMo:  x_attn = Attention(x) → h = x + Norm(x_attn) → x_ff = MLP(h) → out = h + Norm(x_ff)
+   Llama: x_attn = Attention(Norm(x)) → h = x + x_attn → x_ff = MLP(Norm(h)) → out = h + x_ff
+   ```
+
+2. **Attention WO matmul fix** (`llama_attention.py`):
+   - Removed incorrect `line_all_gather` that gathered 8 heads across row devices (produced [1,32,32,128])
+   - Local SDPA output [1,8,32,128] reshaped to [1,1,32,1024] per device in DRAM
+   - OLMo-specific tilization: stays in DRAM (not resharded to SHARDED_ATTN_WO_INPUT_RING_MEMCFG)
+
+3. **MLP W1/W3 column reduction** (`llama_mlp.py`):
+   - `reduce_scatter_minimal_async` produced Inf from valid input (likely padding garbage summed)
+   - `line_all_reduce_host` worked but violated "no host ops" requirement
+   - **Final fix**: `line_all_gather(dim=0, cluster_axis=1)` + `fast_reduce_nc(dims=[0])`
+     - Matches tt_transformers TG pattern for models with dim < 8192
+     - Ring matmul → DRAM → slice to 3456 → all_gather across 4 cols → local sum → 3456 per device
+
+**Root Cause Analysis - reduce_scatter_minimal_async Inf**:
+Ring matmul output (SHARDED_FF12_OUT_RING_MEMCFG) has 3840 elements per device (padded from 3456).
+The padding region (3456-3840) contains uninitialized values from the matmul kernel.
+`reduce_scatter_minimal_async` sums all 3840 elements across 4 columns, including garbage.
+Sum of garbage across 4 devices can overflow to Inf. The all_gather+reduce approach avoids
+this by slicing to 3456 BEFORE cross-device communication.
+
+**Remaining**:
+- [ ] Re-run E2E PCC test after device reset (last run hit segfault/device hang)
+- [ ] Validate decode PCC with 1 layer vs CPU reference
+- [ ] Validate E2E token generation matches CPU reference
+
+**Test Commands**:
+```bash
+export HF_MODEL=~/.cache/huggingface/hub/models--allenai--Olmo-3.1-32B-Think
+export LINE_RS=1
+pytest models/demos/llama3_70b_galaxy/tests/test_olmo_e2e_pcc.py -xvs
+```
+
+---
+
+### 2026-03-13 (E2E Demo Fixed - Trace Capture)
+**Status**: ✅ E2E Demo PASSED (1L and 64L)
+
+**Problem**:
+- Demo was missing trace capture — ran the decode loop eagerly after compile, causing `TT_FATAL: Input must be UINT32 or BFLOAT16` at the embedding op
+- After compile iterations, tensor state was invalid for eager re-execution
+
+**Fix Applied**:
+1. Added trace capture after compile loop (matching Qwen32 demo pattern):
+   - `tt_model.tt_ccl.reset_gather_and_buffer_idx()`
+   - `ttnn.begin_trace_capture` → embedding → forward → sampling → plus_one → `ttnn.end_trace_capture`
+2. Added position/token reset before decode loop (copy_host_to_device_tensor for current_pos, tt_out_tok, rot_mat_idxs)
+3. Decode loop uses `ttnn.execute_trace(mesh_device, trace_id, ...)` instead of eager ops
+4. Added `ttnn.release_trace` at end of decode loop
+
+**Performance** (64L, batch=32, traced):
+- ~18.5 tok/s/user
+- ~589 tok/s batch throughput
+- ~54 ms/iteration
+
+**Test Results**:
+```
+PASSED demo_olmo_decode.py::test_olmo_demo[...-single]  (1L, 50 iters, 19.3s)
+PASSED demo_olmo_decode.py::test_olmo_demo[...-full]    (64L, 2000 iters, 153s)
+```
+
+**Note**: Output is repetitive/non-coherent because this is prefill-by-decode (no batched prefill). Each prompt token is fed one-at-a-time through the decode path, so the model doesn't attend to full context during prompt processing. Coherent output requires proper prefill integration.
 
 ---
 

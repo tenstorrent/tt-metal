@@ -102,8 +102,7 @@ class TtOlmoModelArgs(TtModelArgs):
         self.n_kv_heads = 8
         self.intermediate_dim = 27648  # OLMo has 27648 (not 25600)
 
-        # OLMo3 HAS QK-norm (q_norm: [5120], k_norm: [1024])
-        self.qk_norm = False  # OLMo does NOT have QK-norm (unlike Qwen3)
+        self.qk_norm = True  # OLMo3 has QK-norm (q_norm: [5120], k_norm: [1024])
         self.is_qwen = False
         self.is_olmo = True
         self.unfuse_res_add = True
@@ -1358,7 +1357,17 @@ class TtOlmoModelArgs(TtModelArgs):
         self.full_model_n_layers = self.n_layers
         self.norm_eps = params.get("rms_norm_eps", 1e-6)
         self.vocab_size = params.get("vocab_size", 100278)
-        self.padded_vocab_size = nearest_32(self.vocab_size)
+        # Pad vocab to multiple of (num_vocab_devices * tile_size) = 8*32 = 256
+        # so each device's shard (padded_vocab_size // 8) is tile-aligned (multiple of 32).
+        # Without this, tile-padding inside each shard shifts vocab token positions after gather,
+        # causing ~87% of logit comparisons to compare the wrong tokens (PCC ~0.128).
+        # e.g. 100278 -> nearest_32=100288 -> per_device=12536 (not mult of 32, tile-pads to 12544)
+        #      after gather: 8*12544=100352 physical but vocab tokens are at wrong indices.
+        # Fix: 100278 -> nearest_256=100352 -> per_device=12544 (mult of 32, no extra padding).
+        _vocab_shard_tile_align = 8 * 32  # 8 vocab-sharding devices * 32 tile size = 256
+        self.padded_vocab_size = (
+            (self.vocab_size + _vocab_shard_tile_align - 1) // _vocab_shard_tile_align
+        ) * _vocab_shard_tile_align
         self.head_dim = params.get("head_dim", self.dim // self.n_heads)
         self.max_context_len = params.get("max_position_embeddings", 65536)
 
@@ -1480,13 +1489,8 @@ class TtOlmoModelArgs(TtModelArgs):
         state_dict = standardize_hf_keys(state_dict)
         state_dict = convert_hf_to_meta(state_dict, self.head_dim)
 
-        # Filter out OLMo q_norm/k_norm weights - they have different shapes
-        # OLMo q_norm: [5120] (full dim), k_norm: [1024] (n_kv_heads * head_dim)
-        # This is incompatible with the Qwen3-style QK-norm that operates on head_dim
-        keys_to_remove = [k for k in state_dict.keys() if ".q_norm." in k or ".k_norm." in k]
-        for k in keys_to_remove:
-            del state_dict[k]
-            logger.debug(f"Removed incompatible OLMo QK-norm weight: {k}")
+        # OLMo QK-norm weights: q_norm [5120], k_norm [1024]
+        # These are kept and applied before head splitting (unlike Qwen3's per-head norm)
 
         return state_dict
 

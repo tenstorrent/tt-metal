@@ -141,9 +141,9 @@ class TtLlamaMLP(LightweightModule):
 
             logger.error(f"    MLP [ERROR] {name}: {e}")
 
-    def forward(self, x: ttnn.Tensor, mode, batch_size=1) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, mode, batch_size=1, skip_input_dealloc=False) -> ttnn.Tensor:
         if mode == "prefill":
-            return self.forward_prefill(x, batch_size=batch_size)
+            return self.forward_prefill(x, batch_size=batch_size, skip_input_dealloc=skip_input_dealloc)
 
         # Choose program config based on prefetcher status
         # NO_PREFETCH configs have num_global_cb_receivers=1 (don't require global_cb)
@@ -163,8 +163,10 @@ class TtLlamaMLP(LightweightModule):
             # OLMo and non-prefetcher path: Use sharded weights with program config
             # The sharded weights (self.w1, self.w3) have correct K=dim/4=1280 for decode input
             # Ring matmul requires sharded output, so use SHARDED_FF12_OUT_RING_MEMCFG
-            # OLMo uses host-side reduce_scatter due to L1/memory config constraints
+            # OLMo: all_gather(dim=0) + fast_reduce_nc to sum across 4 column devices
+            # (matches tt_transformers approach for TG models with dim < 8192)
             if is_olmo:
+                self._debug_check_mlp("olmo_ff_input", x)
                 unpadded_width = self.args.intermediate_dim_per_tp  # 3456
 
                 w1_out = ttnn.linear(
@@ -177,17 +179,28 @@ class TtLlamaMLP(LightweightModule):
                     program_config=pc_1_3,
                     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
                 )
+                self._debug_check_mlp("olmo_w1_out", w1_out)
                 w1_out_dram = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(w1_out)
                 w1_out_unpadded = ttnn.slice(w1_out_dram, [0, 0, 0, 0], [1, 1, 32, unpadded_width])
-                w1_out_reduced = self.tt_ccl.line_reduce_scatter(
+                w1_gathered = self.tt_ccl.line_all_gather(
                     w1_out_unpadded,
+                    dim=0,
                     cluster_axis=1,
                     num_links=self.model_config["GALAXY_NUM_LINKS"],
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    use_noc1_only=False,
                 )
+                ttnn.deallocate(w1_out_unpadded)
                 ttnn.deallocate(w1_out_dram)
+                w1_out_reduced = ttnn.experimental.fast_reduce_nc(
+                    w1_gathered,
+                    dims=[0],
+                    output=None,
+                    compute_kernel_config=None,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(w1_gathered)
+                self._debug_check_mlp("olmo_w1_reduced", w1_out_reduced)
 
                 w3_out = ttnn.linear(
                     x,
@@ -200,17 +213,28 @@ class TtLlamaMLP(LightweightModule):
                     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
                 )
                 ttnn.deallocate(x)
+                self._debug_check_mlp("olmo_w3_out", w3_out)
                 w3_out_dram = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(w3_out)
                 w3_out_unpadded = ttnn.slice(w3_out_dram, [0, 0, 0, 0], [1, 1, 32, unpadded_width])
-                w3_out_reduced = self.tt_ccl.line_reduce_scatter(
+                w3_gathered = self.tt_ccl.line_all_gather(
                     w3_out_unpadded,
+                    dim=0,
                     cluster_axis=1,
                     num_links=self.model_config["GALAXY_NUM_LINKS"],
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    use_noc1_only=False,
                 )
+                ttnn.deallocate(w3_out_unpadded)
                 ttnn.deallocate(w3_out_dram)
+                w3_out_reduced = ttnn.experimental.fast_reduce_nc(
+                    w3_gathered,
+                    dims=[0],
+                    output=None,
+                    compute_kernel_config=None,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+                ttnn.deallocate(w3_gathered)
+                self._debug_check_mlp("olmo_w3_reduced", w3_out_reduced)
             else:
                 # W1 matmul
                 w1_out = ttnn.linear(
@@ -308,15 +332,7 @@ class TtLlamaMLP(LightweightModule):
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
         if is_olmo and mode == "decode":
-            w2_in = self.tt_ccl.line_all_gather(
-                ff1ff3,
-                dim=3,
-                cluster_axis=1,
-                num_links=self.model_config["GALAXY_NUM_LINKS"],
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                buffer_key="BINARY_MUL",
-                use_optimal_ccl_for_llama=True,
-            )
+            w2_in = ff1ff3
         else:
             ff2_in_mem_config = self.model_config["FF2_IN_RING_MEMCFG"]
             w2_in = self.tt_ccl.line_all_gather(
@@ -328,8 +344,7 @@ class TtLlamaMLP(LightweightModule):
                 buffer_key="BINARY_MUL",
                 use_optimal_ccl_for_llama=False if mode == "prefill" else True,
             )
-
-        ttnn.deallocate(ff1ff3)
+            ttnn.deallocate(ff1ff3)
 
         if is_olmo and mode == "decode":
             w2_out = ttnn.linear(
@@ -380,7 +395,7 @@ class TtLlamaMLP(LightweightModule):
 
         return w2_out_reduced
 
-    def forward_prefill(self, x: ttnn.Tensor, batch_size=1) -> ttnn.Tensor:
+    def forward_prefill(self, x: ttnn.Tensor, batch_size=1, skip_input_dealloc=False) -> ttnn.Tensor:
         """
         w1 -> gate_proj
         w2 -> down_proj
@@ -424,7 +439,7 @@ class TtLlamaMLP(LightweightModule):
         w1_out_reduced = self.tt_ccl.line_reduce_scatter(
             w1_out,
             cluster_axis=1,
-            num_links=3,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=w1_out.memory_config(),
             buffer_key="FF1",
             dim=3,
@@ -454,11 +469,12 @@ class TtLlamaMLP(LightweightModule):
                 compute_kernel_config=self.args.compute_kernel_config_lofi,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
-        ttnn.deallocate(x)
+        if not skip_input_dealloc:
+            ttnn.deallocate(x)
         w3_out_reduced = self.tt_ccl.line_reduce_scatter(
             w3_out,
             cluster_axis=1,
-            num_links=3,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=w3_out.memory_config(),
             buffer_key="FF3",
             dim=3,
@@ -473,7 +489,12 @@ class TtLlamaMLP(LightweightModule):
             memory_config=w1_out.memory_config(),
         )
         w2_in_gathered = self.tt_ccl.line_all_gather(
-            w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
+            w2_in,
+            cluster_axis=1,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
+            memory_config=w3_out.memory_config(),
+            buffer_key="FF3",
+            dim=3,
         )
         ttnn.deallocate(w2_in)
 
@@ -499,7 +520,7 @@ class TtLlamaMLP(LightweightModule):
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,
             cluster_axis=0,
-            num_links=3,
+            num_links=self.model_config["GALAXY_NUM_LINKS"],
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
             buffer_key="FF2",
             batch_size=batch_size,

@@ -46,12 +46,13 @@ class LMHead(LightweightModule):
         cache_file_name_decode = (
             None
             if args.dummy_weights
-            else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0_dram_width_sharded_decode"
+            else weight_cache_path
+            / f"output_lm_head_{num_splits}_split_shard_0_v{self.padded_vocab_size}_dram_width_sharded_decode"
         )
         cache_file_name_prefill = (
             None
             if args.dummy_weights
-            else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0_dram_prefill"
+            else weight_cache_path / f"output_lm_head_{num_splits}_split_shard_0_v{self.padded_vocab_size}_dram_prefill"
         )
         padded_lm_head = torch.zeros(1, 1, args.dim, self.padded_vocab_size)
         padded_lm_head[:, :, :, : self.vocab_size] = torch_output_weights
@@ -140,9 +141,8 @@ class LMHead(LightweightModule):
 
     def forward(self, x: ttnn.Tensor, worker_sub_device_id, mode):
         outputs = []
-        num_links = 3
+        num_links = self.args.model_config.get("GALAXY_NUM_LINKS", 1)
         if mode == "decode":
-            num_links = self.args.model_config["GALAXY_NUM_LINKS"]
             for weight, pc in zip(self.output_weights_decode, self.program_configs):
                 x = ttnn.to_memory_config(x, self.args.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"])
                 output = ttnn.linear(
@@ -158,15 +158,16 @@ class LMHead(LightweightModule):
 
                 outputs.append(output)
         else:
+            is_minimal_config = hasattr(self.prefill_pc, "M_block_size")
             for weight, pc in zip(self.output_weights_prefill, self.program_configs):
-                output = ttnn.linear(
-                    x,
-                    weight,
+                linear_kwargs = dict(
                     compute_kernel_config=self.compute_kernel_config,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                    program_config=self.prefill_pc,
                     dtype=ttnn.bfloat8_b,
                 )
+                if not is_minimal_config:
+                    linear_kwargs["program_config"] = self.prefill_pc
+                output = ttnn.linear(x, weight, **linear_kwargs)
                 # Minimal matmul is not giving any performance improvement over linear
                 # output = ttnn.experimental.minimal_matmul(
                 #     input_tensor=x,
@@ -182,7 +183,7 @@ class LMHead(LightweightModule):
         outputs_reduced = []
         is_olmo = getattr(self.args, "is_olmo", False)
         for output in outputs:
-            if is_olmo:
+            if is_olmo and mode == "decode":
                 output_dram = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(output)
                 rs_output = self.tt_ccl.line_reduce_scatter(
