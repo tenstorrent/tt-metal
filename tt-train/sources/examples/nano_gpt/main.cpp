@@ -486,6 +486,10 @@ int main(int argc, char **argv) {
                     ttml::datasets::create_in_memory_token_dataset<ttml::tokenizers::CharTokenizer>(
                         std::get<std::string>(data_source), sequence_length);
 
+                if (!tokenizer) {
+                    throw std::runtime_error("Failed to create CharTokenizer");
+                }
+
                 std::visit(
                     [&](auto &&arg) { arg.vocab_size = tokenizer->get_vocab_size(); }, model_config.transformer_config);
 
