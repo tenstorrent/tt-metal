@@ -1069,7 +1069,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
     auto input_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(input_tensors);
     auto output_tensor = tt::tt_metal::experimental::unit_mesh::aggregate(output_tensors);
 
-    mesh_device_->quiesce_devices();
+    mesh_device_->impl().quiesce_devices();
 
     // =========================================================================
     // Configuration - hardcoded for this test case
@@ -1369,7 +1369,7 @@ TEST_F(MeshDevice1x4FabricFixture, TestGenericOpAllGather) {
 
     log_info(tt::LogTest, "Executing all_gather via generic_op with MUX...");
     ttnn::generic_op(std::vector<Tensor>{input_tensor, output_tensor}, mesh_program_descriptor);
-    mesh_device_->quiesce_devices();
+    mesh_device_->impl().quiesce_devices();
 
     auto disaggregated_output = tt::tt_metal::experimental::unit_mesh::disaggregate(output_tensor);
     for (uint32_t dev_idx = 0; dev_idx < ring_size; dev_idx++) {
@@ -1510,8 +1510,8 @@ TEST_F(Fabric1DFixtureGeneric, TestLinearFabricUnicastNocUnicastWrite) {
         receiver_mesh_program_descriptor);
     ttnn::generic_op(
         std::vector<Tensor>{device_input_tensor_sender, device_output_tensor_sender}, sender_mesh_program_descriptor);
-    sender_device->quiesce_devices();
-    receiver_device->quiesce_devices();
+    sender_device->impl().quiesce_devices();
+    receiver_device->impl().quiesce_devices();
 
     std::vector<uint32_t> sender_status;
     tt::tt_metal::detail::ReadFromDeviceL1(
