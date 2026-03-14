@@ -166,25 +166,56 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
 
     const auto& host_storage = tensor.host_storage();
 
+    // Deduplicate replicated shards: two shards are duplicates if their coordinates differ only
+    // along Replicate dimensions. The deduplication key is built from coordinates at sharded
+    // dimensions only.
+    const auto& placements = tensor.tensor_topology().placements();
+    const auto& mesh_shape = tensor.tensor_topology().distribution_shape();
+    size_t unique_keys = 1;
+    for (size_t dim = 0; dim < placements.size(); ++dim) {
+        if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
+            unique_keys *= mesh_shape[dim];
+        }
+    }
+    std::vector<uint64_t> dedup_key_to_offset(unique_keys, std::numeric_limits<uint64_t>::max());
+
     std::vector<flatbuffers::Offset<ttnn::flatbuffer::TensorShard>> shards_vector;
     // Used to deduplicate buffer addresses for replicated tensor data.
     std::unordered_map<const std::byte*, uint64_t> buffer_to_offset;
+
     uint64_t next_buffer_offset = 0;
-    for (const auto& coord : host_storage.buffer().shard_coords()) {
-        // Iterate over local populated shards.
+    // Iterate over distribution coordinates and map to physical coordinates via the topology.
+    const auto& topology_mesh_coords = tensor.tensor_topology().mesh_coords();
+    size_t dist_idx = 0;
+    for (const auto& dist_coord : tt::tt_metal::distributed::MeshCoordinateRange(mesh_shape)) {
+        const auto& coord = topology_mesh_coords[dist_idx++];
+
         if (const auto& buffer = host_storage.buffer().get_shard(coord); buffer.has_value()) {
             const auto* buffer_address = buffer->view_bytes().data();
             const std::size_t buffer_size = buffer->view_bytes().size();
 
             uint64_t shard_buffer_offset = next_buffer_offset;
-            if (auto [it, inserted] = buffer_to_offset.try_emplace(buffer_address, shard_buffer_offset); inserted) {
-                // Encountered a new buffer, add it to the buffers vector.
+
+            size_t key = 0;
+            for (size_t dim = 0; dim < placements.size(); ++dim) {
+                if (std::holds_alternative<tt::tt_metal::distributed::MeshMapperConfig::Shard>(placements[dim])) {
+                    key = key * mesh_shape[dim] + dist_coord[dim];
+                }
+            }
+
+            if (dedup_key_to_offset.at(key) != std::numeric_limits<uint64_t>::max()) {
+                // Shards whose coordinates differ only along replicated dimensions are identical.
+                shard_buffer_offset = dedup_key_to_offset.at(key);
+            } else if (auto it = buffer_to_offset.find(buffer_address); it != buffer_to_offset.end()) {
+                // If two shards share the same buffer, they are identical.
+                shard_buffer_offset = it->second;
+            } else {
                 next_buffer_offset += buffer_size;
                 buffers.push_back(*buffer);
-            } else {
-                // Point to the existing buffer.
-                shard_buffer_offset = it->second;
             }
+
+            buffer_to_offset.emplace(buffer_address, shard_buffer_offset);
+            dedup_key_to_offset.at(key) = shard_buffer_offset;
 
             auto inline_storage = ttnn::flatbuffer::InlineFileStorage(shard_buffer_offset, buffer_size);
             auto mesh_coord_offset = to_flatbuffer(coord, builder);
