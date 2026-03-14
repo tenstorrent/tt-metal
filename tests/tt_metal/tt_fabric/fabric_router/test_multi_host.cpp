@@ -352,12 +352,6 @@ TEST(MultiHost, TestDual2x4Fabric1DSanity) {
 }
 
 TEST(MultiHost, TestSplit2x2ControlPlaneInit) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
-        tt::tt_metal::ClusterType::N300_2x2) {
-        log_info(tt::LogTest, "This test is only for N300 2x2");
-        GTEST_SKIP();
-    }
-
     const std::filesystem::path split_2x2_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_2x2_mesh_graph_descriptor.textproto";
@@ -417,12 +411,6 @@ TEST(MultiHost, TestSplit2x2Fabric1DSanity) {
 }
 
 TEST(MultiHost, TestBigMesh2x4ControlPlaneInit) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
-        tt::tt_metal::ClusterType::N300_2x2) {
-        log_info(tt::LogTest, "This test is only for N300 2x2");
-        GTEST_SKIP();
-    }
-
     const std::filesystem::path big_mesh_2x4_mesh_graph_desc_path =
         std::filesystem::path(tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir()) /
         "tests/tt_metal/tt_fabric/custom_mesh_descriptors/t3k_dual_host_mesh_graph_descriptor.textproto";
@@ -437,12 +425,6 @@ TEST(MultiHost, TestBigMesh2x4ControlPlaneInit) {
 }
 
 TEST(MultiHost, TestBigMesh2x4Fabric2DSanity) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
-        tt::tt_metal::ClusterType::N300_2x2) {
-        log_info(tt::LogTest, "This test is only for N300 2x2");
-        GTEST_SKIP();
-    }
-
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_2D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
@@ -465,12 +447,6 @@ TEST(MultiHost, TestBigMesh2x4Fabric2DSanity) {
 }
 
 TEST(MultiHost, TestBigMesh2x4Fabric1DSanity) {
-    if (tt::tt_metal::MetalContext::instance().get_cluster().get_cluster_type() !=
-        tt::tt_metal::ClusterType::N300_2x2) {
-        log_info(tt::LogTest, "This test is only for N300 2x2");
-        GTEST_SKIP();
-    }
-
     tt::tt_metal::MetalContext::instance().set_fabric_config(
         tt::tt_fabric::FabricConfig::FABRIC_1D, tt::tt_fabric::FabricReliabilityMode::STRICT_SYSTEM_HEALTH_SETUP_MODE);
     tt::tt_metal::MetalContext::instance().initialize_fabric_config();
