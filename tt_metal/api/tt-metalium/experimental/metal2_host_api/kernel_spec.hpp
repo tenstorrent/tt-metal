@@ -28,9 +28,8 @@ struct KernelSpec {
     // Basic kernel info
     ///////////////////////////////////////////////////////////////////
 
-    // Kernel identifier
-    // A handle used to reference this kernel within the ProgramSpec
-    std::variant<KernelSpecID, KernelSpecName> unique_id;
+    // Kernel identifier: used to reference this kernel within the ProgramSpec
+    KernelSpecName unique_id;
 
     // Kernel source
     std::string source;
@@ -41,7 +40,7 @@ struct KernelSpec {
     // The set of device nodes on which the kernel will run
     using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
     Nodes target_nodes;
-    
+
     // Threading
     // Number of kernel threads (this can be specified globally or per-node)
     uint8_t num_threads = 1;
@@ -73,17 +72,17 @@ struct KernelSpec {
     // DFB bindings
     enum class DFBEndpointType { PRODUCER, CONSUMER, RELAY };
     struct DFBBinding {
-        std::variant<DFBSpecID, DFBSpecName> dfb_spec_id;  // identify the DFB within the ProgramSpec
-        std::string local_accessor_name;                   // DFB accessor name (used in the kernel source code)
-        DFBEndpointType endpoint_type;                     // producer, consumer, or relay
-        DFBAccessPattern access_pattern;                   // strided, blocked, or contiguous
+        DFBSpecName dfb_spec_name;          // identify the DFB within the ProgramSpec
+        std::string local_accessor_name;    // DFB accessor name (used in the kernel source code)
+        DFBEndpointType endpoint_type;      // producer, consumer, or relay
+        DFBAccessPattern access_pattern;    // strided, blocked, or contiguous
     };
     std::vector<DFBBinding> dfb_bindings;
 
     // Semaphore bindings
     struct SemaphoreBinding {
-        std::variant<SemaphoreSpecId, SemaphoreSpecName> semaphore_spec_id; // identify the semaphore within the ProgramSpec
-        std::string accessor_name;                                          // semaphore accessor name (used in the kernel source code)
+        SemaphoreSpecName semaphore_spec_name; // identify the semaphore within the ProgramSpec
+        std::string accessor_name;             // semaphore accessor name (used in the kernel source code)
     };
     std::vector<SemaphoreBinding> semaphore_bindings;
 
@@ -95,7 +94,7 @@ struct KernelSpec {
     using CompileTimeArgBindings = std::unordered_map<std::string, uint32_t>;
     CompileTimeArgBindings compile_time_arg_bindings;
     // TODO -- extend to support arbitrary POD types, including user-defined structs.
-    
+
 
     //////////////////////////////////////////////////////////////////////////////
     // Runtime argument schema / declaration
@@ -142,7 +141,7 @@ struct ComputeKernelSpec : public KernelSpec {
 
         // "Unpack to dest" mode must be specified on a per-DFB basis
         // unpack_to_dest_mode maps DFB identifier to UnpackToDestMode
-        using UnpackToDestModeEntry = std::pair<std::variant<DFBSpecID, DFBSpecName>, ::UnpackToDestMode>;
+        using UnpackToDestModeEntry = std::pair<DFBSpecName, ::UnpackToDestMode>;
         std::vector<UnpackToDestModeEntry> unpack_to_dest_mode = {}; // empty vector means default mode
     };
     std::optional<Gen1TensixComputeConfig> gen1_tensix_compute_config = std::nullopt;
@@ -158,7 +157,7 @@ struct ComputeKernelSpec : public KernelSpec {
 
         // "Unpack to dest" mode must be specified on a per-DFB basis
         // unpack_to_dest_mode maps DFB identifier to UnpackToDestMode
-        using UnpackToDestModeEntry = std::pair<std::variant<DFBSpecID, DFBSpecName>, ::UnpackToDestMode>;
+        using UnpackToDestModeEntry = std::pair<DFBSpecName, ::UnpackToDestMode>;
         std::vector<UnpackToDestModeEntry> unpack_to_dest_mode = {}; // empty vector means default mode
     };
     std::optional<Gen2TensixComputeConfig> gen2_tensix_compute_config = std::nullopt;
@@ -180,8 +179,8 @@ struct DataMovementKernelSpec : public KernelSpec {
     // TODO: Get rid of the manual specification of processor and NOC.
     // (or at least make them optional)
     struct Gen1DataMovementConfig {
-        tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;  
-        tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;                                    
+        tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
+        tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;
         tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
     };
 

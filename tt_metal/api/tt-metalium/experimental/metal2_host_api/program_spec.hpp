@@ -12,7 +12,7 @@
 #include <tt-metalium/experimental/metal2_host_api/kernel_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/dataflow_buffer_spec.hpp>
 #include <tt-metalium/experimental/metal2_host_api/semaphore_spec.hpp>
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp> 
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
@@ -34,17 +34,17 @@ struct ProgramSpec {
     std::vector<WorkerSpec> workers;
 };
 
-// ProgramRunParams describes the mutable properties of a Program, 
+// ProgramRunParams describes the mutable properties of a Program,
 // which are specified anew for each Program execution
 //   (analogous to function arguments)
 struct ProgramRunParams {
 
     ////////////////////////////////////////////////////////////////////////
-    // Kernel runtime arguments 
+    // Kernel runtime arguments
     ////////////////////////////////////////////////////////////////////////
     struct KernelRunParams {
         // Kernel identifier
-        std::variant<KernelSpecID, KernelSpecName> kernel_spec_id;
+        KernelSpecName kernel_spec_name;
 
         // Defined runtime arguments (named & typed)
         //   TODO
@@ -60,7 +60,7 @@ struct ProgramRunParams {
 
         // Unnamed common runtime arguments (shared by all cores of a kernel)
         // (specified for all nodes)
-        using CommonRuntimeArgs = std::vector<uint32_t>; 
+        using CommonRuntimeArgs = std::vector<uint32_t>;
         CommonRuntimeArgs common_runtime_args;
     };
     std::vector<KernelRunParams> kernel_run_params;
@@ -72,7 +72,7 @@ struct ProgramRunParams {
 
     struct DFBRunParams {
         // DFB identifier
-        std::variant<DFBSpecID, DFBSpecName> dfb_id;
+        DFBSpecName dfb_spec_name;
 
         // DFB size overrides
         // DFB sizes specified in the ProgramSpec can (optionally) be overridden per Program execution.

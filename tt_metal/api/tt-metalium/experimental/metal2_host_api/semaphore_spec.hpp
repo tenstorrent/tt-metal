@@ -10,19 +10,16 @@
 #include <variant>
 #include <vector>
 
-#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp> 
+#include <tt-metalium/experimental/metal2_host_api/node_coord.hpp>
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
-using SemaphoreSpecId = uint32_t;
 using SemaphoreSpecName = std::string;
 
-struct SemaphoreSpec { 
+struct SemaphoreSpec {
 
-    // Semaphore identifier
-    // A handle used to reference this Semaphore within the ProgramSpec
-    std::variant<SemaphoreSpecId, SemaphoreSpecName> unique_id;  
-    // (I'm considering removing either the string or uint32_t option. Both is annoying. Thoughts?)
+    // Semaphore identifier: used to reference this Semaphore within the ProgramSpec
+    SemaphoreSpecName unique_id;
 
     // Target nodes
     using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
@@ -36,7 +33,7 @@ struct SemaphoreSpec {
     // Initial value
     // NOTE: Setting a non-zero initial value is not supported on Gen2 architectures.
     // Runtime wants to deprecate this feature for ALL architectures
-    uint32_t initial_value = 0;  
+    uint32_t initial_value = 0;
 
     // Backing memory
     // NOTE: Register-backed semaphores are only supported on Gen2 architectures.
@@ -45,4 +42,4 @@ struct SemaphoreSpec {
 
 };
 
-}  // namespace tt::tt_metal::experimental::metal2_host_api 
+}  // namespace tt::tt_metal::experimental::metal2_host_api

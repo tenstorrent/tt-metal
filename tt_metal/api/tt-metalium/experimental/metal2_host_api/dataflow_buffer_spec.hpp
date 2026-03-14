@@ -16,20 +16,13 @@
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
-using DFBSpecID = uint32_t;
 using DFBSpecName = std::string;
-
 enum class DFBAccessPattern {STRIDED, BLOCKED, CONTIGUOUS};
-
-
-
 
 struct DataflowBufferSpec {
 
-    // DFB identifier
-    // A handle used to reference this DFB within the ProgramSpec
-    std::variant<DFBSpecID, DFBSpecName> unique_id;
-    // (I intend to remove either the string or uint32_t option. Having both is annoying. Thoughts?)
+    // DFB identifier: used to reference this DFB within the ProgramSpec
+    DFBSpecName unique_id;
 
     // Target nodes
     using Nodes = std::variant<NodeCoord, NodeRange, NodeRangeSet>;
@@ -74,7 +67,7 @@ struct DataflowBufferSpec {
     // Aliased DFBs are logically distinct, but physically share the same backing memory.
     // All aliased DFBs must have size and target nodes, and must mutually declare each other as aliases.
     // (Aliased DFBs offer NO guarantees against data clobbering; the kernel author must ensure safety.)
-    using DFBIdentifiers = std::vector<std::variant<DFBSpecID, std::string>>;
+    using DFBIdentifiers = std::vector<DFBSpecName>;
     std::optional<DFBIdentifiers> alias_with = std::nullopt;
 
 
