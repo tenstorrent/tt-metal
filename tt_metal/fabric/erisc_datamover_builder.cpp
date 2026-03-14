@@ -972,21 +972,19 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         compute_edge_facing_flags(control_plane, this->local_fabric_node_id, this->my_eth_channel);
 
     // Get actual downstream EDM counts from the adapter (actual connections made)
-    uint32_t num_vc0_downstream_edms = this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(0);
-
     bool needs_vc1 = config.is_receiver_channel_active_per_vc[1];
-    // Get actual VC1 downstream EDM count from adapter (only relevant for multi-mesh 2D routing)
-    uint32_t num_vc1_downstream_edms =
-        needs_vc1 ? this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(1) : 0;
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> num_downstream_edms_per_vc = {
+        this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(0),
+        needs_vc1 ? this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(1) : 0};
     bool z_router_enabled = fabric_context.has_z_router_on_device(control_plane, local_fabric_node_id);
 
     log_debug(
         LogFabric,
-        "z_router_enabled: {}, needs_vc1: {}, num_vc0_downstream_edms: {}, num_vc1_downstream_edms: {}",
+        "z_router_enabled: {}, needs_vc1: {}, num_downstream_edms_per_vc[0]: {}, num_downstream_edms_per_vc[1]: {}",
         z_router_enabled,
         needs_vc1,
-        num_vc0_downstream_edms,
-        num_vc1_downstream_edms);
+        num_downstream_edms_per_vc[0],
+        num_downstream_edms_per_vc[1]);
     // Calculate array sizes for downstream EDMs based on masks
     // Size = position of highest set bit + 1 (e.g., mask 0x5 = size 3, mask 0x3 = size 2)
     auto calc_array_size_from_mask = [](uint32_t mask) -> uint32_t {
@@ -997,28 +995,29 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         return 32 - __builtin_clz(mask);
     };
 
-    uint32_t vc0_downstream_edm_size =
-        calc_array_size_from_mask(this->receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(0));
-    uint32_t vc1_downstream_edm_size =
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> downstream_edm_size_per_vc = {
+        calc_array_size_from_mask(this->receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(0)),
         needs_vc1
             ? calc_array_size_from_mask(this->receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(1))
-            : 0;
+            : 0};
 
     // Ensure minimum size of 1 to avoid zero-sized arrays (causes undefined behavior when accessed)
     // Even if mask is 0 (no downstream connections), we need at least 1 element for the array template
-    if (vc0_downstream_edm_size == 0) {
-        vc0_downstream_edm_size = 1;
-    }
-    if (needs_vc1 && vc1_downstream_edm_size == 0) {
-        vc1_downstream_edm_size = 1;
+    for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        if ((vc == 0 || needs_vc1) && downstream_edm_size_per_vc[vc] == 0) {
+            downstream_edm_size_per_vc[vc] = 1;
+        }
     }
 
-    auto actual_sender_channels_vc0 = actual_sender_channels_per_vc_.has_value()
-                                          ? actual_sender_channels_per_vc_.value()[0]
-                                          : config.num_used_sender_channels_per_vc[0];
-    auto actual_sender_channels_vc1 = actual_sender_channels_per_vc_.has_value()
-                                          ? actual_sender_channels_per_vc_.value()[1]
-                                          : config.num_used_sender_channels_per_vc[1];
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> actual_sender_channels_per_vc;
+    for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        actual_sender_channels_per_vc[vc] = actual_sender_channels_per_vc_.has_value()
+                                                ? actual_sender_channels_per_vc_.value()[vc]
+                                                : config.num_used_sender_channels_per_vc[vc];
+    }
+
+    // VC0 uses first-level ack; VC1 does not use bubble flow control
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> enable_first_level_ack_per_vc = {this->enable_first_level_ack, 0};
 
     // ===== Build named compile-time args (all non-pool/channel-mapping args) =====
     std::unordered_map<std::string, uint32_t> named_args;
@@ -1100,8 +1099,14 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["NUM_SENDER_CHANNELS"] = static_cast<uint32_t>(num_sender_channels);
     named_args["NUM_RECEIVER_CHANNELS"] = static_cast<uint32_t>(num_receiver_channels);
     named_args["NUM_DOWNSTREAM_CHANNELS"] = static_cast<uint32_t>(config.num_fwd_paths);
-    named_args["NUM_DOWNSTREAM_SENDERS_VC0"] = num_vc0_downstream_edms;
-    named_args["NUM_DOWNSTREAM_SENDERS_VC1"] = num_vc1_downstream_edms;
+    // Per-VC named_args via loop (key strings must match device kernel expectations exactly)
+    for (uint32_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        named_args[fmt::format("NUM_DOWNSTREAM_SENDERS_VC{}", vc)] = num_downstream_edms_per_vc[vc];
+        named_args[fmt::format("ENABLE_FIRST_LEVEL_ACK_VC{}", vc)] = enable_first_level_ack_per_vc[vc];
+        named_args[fmt::format("VC{}_DOWNSTREAM_EDM_SIZE", vc)] = downstream_edm_size_per_vc[vc];
+        named_args[fmt::format("ACTUAL_VC{}_SENDER_CHANNELS", vc)] =
+            static_cast<uint32_t>(actual_sender_channels_per_vc[vc]);
+    }
     named_args["WAIT_FOR_HOST_SIGNAL"] = static_cast<uint32_t>(this->wait_for_host_signal ? 1 : 0);
     named_args["SWITCH_INTERVAL"] = static_cast<uint32_t>(this->firmware_context_switch_interval);
     named_args["FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR"] = this->fuse_receiver_flush_and_completion_ptr;
@@ -1111,14 +1116,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["HANDSHAKE_ADDR"] = static_cast<uint32_t>(this->handshake_address);
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);
     named_args["FABRIC_TENSIX_EXTENSION_MUX_MODE"] = this->has_tensix_extension;
-    named_args["ENABLE_FIRST_LEVEL_ACK_VC0"] = this->enable_first_level_ack;
-    named_args["ENABLE_FIRST_LEVEL_ACK_VC1"] = 0;  // VC1 does not use bubble flow control
     named_args["ENABLE_RISC_CPU_DATA_CACHE"] = enable_risc_cpu_data_cache;
     named_args["Z_ROUTER_ENABLED"] = z_router_enabled;
-    named_args["VC0_DOWNSTREAM_EDM_SIZE"] = vc0_downstream_edm_size;
-    named_args["VC1_DOWNSTREAM_EDM_SIZE"] = vc1_downstream_edm_size;
-    named_args["ACTUAL_VC0_SENDER_CHANNELS"] = static_cast<uint32_t>(actual_sender_channels_vc0);
-    named_args["ACTUAL_VC1_SENDER_CHANNELS"] = static_cast<uint32_t>(actual_sender_channels_vc1);
 
     // --- Remote channel info (always emitted; 0 when inactive) ---
     named_args["SKIP_SRC_CH_ID_UPDATE"] = skip_src_ch_id_update ? 1 : 0;
@@ -1266,7 +1265,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // Credit amortization named compile-time args
     uint32_t sender_amort_freq = 0;
     uint32_t receiver_amort_freq = 0;
-    if (actual_sender_channels_vc0 == 1) {
+    if (actual_sender_channels_per_vc[0] == 1) {
         auto* static_alloc =
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
         if (static_alloc != nullptr) {
@@ -1285,10 +1284,10 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // Emit local channel allocations
     auto* static_alloc_ptr = dynamic_cast<FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
     TT_FATAL(static_alloc_ptr != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator");
-    const std::array<size_t, builder_config::MAX_NUM_VCS> actual_sender_channels_per_vc = {
-        actual_sender_channels_vc0, actual_sender_channels_vc1};
+    const std::array<size_t, builder_config::MAX_NUM_VCS> actual_sender_channels_per_vc_sized = {
+        actual_sender_channels_per_vc[0], actual_sender_channels_per_vc[1]};
     static_alloc_ptr->emit_channel_allocations_ct_args(
-        ct_args, actual_sender_channels_per_vc, config.is_receiver_channel_active_per_vc);
+        ct_args, actual_sender_channels_per_vc_sized, config.is_receiver_channel_active_per_vc);
 
     // Emit remote channel allocations
     ct_args.push_back(0xabaddad6);
