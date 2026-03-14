@@ -1102,5 +1102,60 @@ TEST_F(MeshBufferTestSuite, EnqueueWriteDeviceLocalShardedBufferWithPinnedMemory
     }
 }
 
+// On a single host all coords are local, so this test exercises the SD sharded buffer
+// write/read path but does not trigger the remote-coord crash directly. For that,
+// run with TT_MESH_ID=0 TT_MESH_HOST_RANK=0 on T3K with the dual-host mesh descriptor.
+class SDMeshBufferFixture : public ::testing::Test {
+protected:
+    void SetUp() override {
+        if (!getenv("TT_METAL_SLOW_DISPATCH_MODE")) {
+            GTEST_SKIP() << "Requires TT_METAL_SLOW_DISPATCH_MODE=1";
+        }
+        const auto system_shape = MetalContext::instance().get_system_mesh().shape();
+        mesh_device_ = MeshDevice::create(
+            MeshDeviceConfig(system_shape), DEFAULT_L1_SMALL_SIZE, DEFAULT_TRACE_REGION_SIZE, 1, DispatchCoreConfig{});
+    }
+
+    void TearDown() override {
+        if (mesh_device_) {
+            mesh_device_->close();
+            mesh_device_.reset();
+        }
+    }
+
+    std::shared_ptr<MeshDevice> mesh_device_;
+};
+
+TEST_F(SDMeshBufferFixture, ShardedBufferWriteReadRoundtrip) {
+    const uint32_t num_rows = mesh_device_->num_rows();
+    const uint32_t num_cols = mesh_device_->num_cols();
+    const uint32_t shard_w = 1024;
+
+    const Shape2D global_buffer_shape{num_rows, shard_w * num_cols};
+    const uint32_t global_size = global_buffer_shape.height() * global_buffer_shape.width() * sizeof(uint32_t);
+
+    const DeviceLocalBufferConfig per_device_config{
+        .page_size = shard_w * sizeof(uint32_t), .buffer_type = BufferType::DRAM, .bottom_up = false};
+
+    const ShardedBufferConfig sharded_config{
+        .global_size = global_size,
+        .global_buffer_shape = global_buffer_shape,
+        .shard_shape = {1, shard_w},
+        .shard_orientation = ShardOrientation::ROW_MAJOR,
+    };
+
+    auto mesh_buffer = MeshBuffer::create(sharded_config, per_device_config, mesh_device_.get());
+
+    std::vector<uint32_t> src(global_buffer_shape.height() * global_buffer_shape.width());
+    std::iota(src.begin(), src.end(), 0);
+
+    EnqueueWriteMeshBuffer(mesh_device_->mesh_command_queue(), mesh_buffer, src);
+
+    std::vector<uint32_t> dst;
+    EnqueueReadMeshBuffer(mesh_device_->mesh_command_queue(), dst, mesh_buffer);
+
+    EXPECT_EQ(dst, src);
+}
+
 }  // namespace
 }  // namespace tt::tt_metal::distributed::test
