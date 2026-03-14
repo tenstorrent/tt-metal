@@ -34,12 +34,27 @@ def create_cicd_json_for_data_analysis(
     github_runner_environment,
     github_pipeline_json_filename,
     github_jobs_json_filename,
+    github_artifacts_json_filename=None,
 ):
     with open(github_pipeline_json_filename) as github_pipeline_json_file:
         github_pipeline_json = json.load(github_pipeline_json_file)
 
     with open(github_jobs_json_filename) as github_jobs_json_file:
         github_jobs_json = json.load(github_jobs_json_file)
+
+    # Load artifact names if the file exists
+    artifact_names = None
+    if github_artifacts_json_filename:
+        try:
+            with open(github_artifacts_json_filename) as github_artifacts_json_file:
+                github_artifacts_json = json.load(github_artifacts_json_file)
+                artifacts = github_artifacts_json.get("artifacts", [])
+                artifact_names = [artifact["name"] for artifact in artifacts]
+                logger.info(f"Loaded {len(artifact_names)} artifact names")
+        except FileNotFoundError:
+            logger.warning(f"Artifacts file {github_artifacts_json_filename} not found")
+        except Exception as e:
+            logger.warning(f"Error loading artifacts file: {e}")
 
     raw_pipeline = get_pipeline_row_from_github_info(github_runner_environment, github_pipeline_json, github_jobs_json)
 
@@ -103,6 +118,7 @@ def create_cicd_json_for_data_analysis(
 
     pipeline = pydantic_models.Pipeline(
         **raw_pipeline,
+        artifact_names=artifact_names,
         jobs=jobs,
     )
 
