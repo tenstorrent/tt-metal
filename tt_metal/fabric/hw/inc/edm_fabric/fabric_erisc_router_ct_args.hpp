@@ -712,10 +712,22 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_
 // Per-VC SENDER_NUM_BUFFERS arrays — sliced from the flat SENDER_NUM_BUFFERS_ARRAY.
 // Sized to MAX_NUM_SENDER_CHANNELS_VC0/VC1 (max capacity) so they can be indexed by
 // per-VC channel index without requiring ACTUAL_VCn_SENDER_CHANNELS as a template arg.
+// Build a MAX_NUM_SENDER_CHANNELS-padded intermediary so extract_vc_sender_channels can
+// safely index the full per-VC max range (SENDER_NUM_BUFFERS_ARRAY is NUM_SENDER_CHANNELS-sized).
+constexpr auto build_sender_num_buffers_all_() {
+    std::array<size_t, MAX_NUM_SENDER_CHANNELS> padded{};
+    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+        padded[i] = SENDER_NUM_BUFFERS_ARRAY[i];
+    }
+    return padded;
+}
+constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY_ALL = build_sender_num_buffers_all_();
 constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS_VC0> SENDER_NUM_BUFFERS_ARRAY_VC0 =
-    extract_vc_sender_channels<size_t, 0, MAX_NUM_SENDER_CHANNELS_VC0, NUM_SENDER_CHANNELS>(SENDER_NUM_BUFFERS_ARRAY);
+    extract_vc_sender_channels<size_t, 0, MAX_NUM_SENDER_CHANNELS_VC0, MAX_NUM_SENDER_CHANNELS>(
+        SENDER_NUM_BUFFERS_ARRAY_ALL);
 constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS_VC1> SENDER_NUM_BUFFERS_ARRAY_VC1 =
-    extract_vc_sender_channels<size_t, 1, MAX_NUM_SENDER_CHANNELS_VC1, NUM_SENDER_CHANNELS>(SENDER_NUM_BUFFERS_ARRAY);
+    extract_vc_sender_channels<size_t, 1, MAX_NUM_SENDER_CHANNELS_VC1, MAX_NUM_SENDER_CHANNELS>(
+        SENDER_NUM_BUFFERS_ARRAY_ALL);
 
 }  // namespace tt::tt_fabric
 
