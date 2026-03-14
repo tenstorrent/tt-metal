@@ -47,6 +47,7 @@ on:
         default: false
 jobs:
   define-cpp-tests:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     outputs:
       cpp-tests: ${{ steps.compute-tests.outputs.cpp-tests }}
@@ -89,6 +90,7 @@ jobs:
           cat "$GITHUB_OUTPUT"
   cpp-unit-tests:
     needs: define-cpp-tests
+    timeout-minutes: 120
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines

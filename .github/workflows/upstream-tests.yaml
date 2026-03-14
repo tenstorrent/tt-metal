@@ -64,6 +64,7 @@ jobs:
       build-umd-tests: true
       tracy: true
   get-image-tags:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     outputs:
       image-tag-suffix: ${{ steps.set-image-tag-suffix.outputs.image-tag-suffix }}
@@ -112,6 +113,7 @@ jobs:
       - build-artifact
       - build-artifact
       - get-image-tags
+    timeout-minutes: 120
     permissions:
       packages: write
       contents: read
@@ -243,6 +245,7 @@ jobs:
     needs:
       - get-image-tags
       - build-images
+    timeout-minutes: 60
     runs-on:
       - arch-wormhole_b0
       - topology-6u
@@ -273,6 +276,7 @@ jobs:
     needs:
       - get-image-tags
       - build-images
+    timeout-minutes: 120
     runs-on:
       - arch-blackhole
       - topology-6u
@@ -298,6 +302,7 @@ jobs:
     needs:
       - get-image-tags
       - build-images
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -339,6 +344,7 @@ jobs:
     needs:
       - get-image-tags
       - build-images
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -372,6 +378,7 @@ jobs:
     needs:
       - get-image-tags
       - build-images
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:
@@ -416,6 +423,7 @@ jobs:
       - test-bh-p300-image
       - test-bh-multicard-image
       - test-bh-glx-image
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     outputs:
       images-to-push: ${{ steps.calculate-images.outputs.images-to-push }}
@@ -577,6 +585,7 @@ jobs:
       }}
     needs:
       - calculate-to-publish
+    timeout-minutes: 120
     permissions:
       packages: write
       contents: read

@@ -33,6 +33,7 @@ on:
         description: "Filter for gtest"
 jobs:
   data-movement-tests:
+    timeout-minutes: 120
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines

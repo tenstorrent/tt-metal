@@ -30,6 +30,7 @@ on:
 
 jobs:
   load-test-matrix:
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     outputs:
       matrix: ${{ steps.filter-matrix.outputs.matrix || steps.build-matrix.outputs.matrix }}
@@ -73,6 +74,7 @@ jobs:
 
   blackhole-demo-tests:
     needs: load-test-matrix
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:

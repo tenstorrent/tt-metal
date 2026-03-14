@@ -23,6 +23,7 @@ on:
 
 jobs:
   tg-op-perf-tests:
+    timeout-minutes: 240
     strategy:
       fail-fast: false
       matrix:

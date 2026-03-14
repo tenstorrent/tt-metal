@@ -32,6 +32,7 @@ on:
 
 jobs:
   galaxy-apc-fast-tests:
+    timeout-minutes: 120
     strategy:
       fail-fast: false
       matrix:

@@ -100,6 +100,7 @@ jobs:
   # Wormhole T3K - UDM tests (separate from t3000-fast-tests to avoid affecting other pipelines)
   wh-t3k-udm-tests:
     if: ${{ inputs.run-wh-t3k-fabric-tests }}
+    timeout-minutes: 120
     runs-on:
       - tt-ubuntu-2204-N300-llmbox-stable
     container:
@@ -155,6 +156,7 @@ jobs:
   # Wormhole 6U - Galaxy Quick Health (most of quick-6u-health, skipping 2 tests)
   wh-6u-fabric-tests:
     if: ${{ inputs.run-wh-6u-fabric-tests }}
+    timeout-minutes: 120
     runs-on:
       - topology-6u
       - arch-wormhole_b0
@@ -249,6 +251,7 @@ jobs:
   # Blackhole - Multi-card unit tests
   generate-bh-matrix:
     if: ${{ inputs.run-bh-multi-card-unit-tests }}
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     outputs:
       runner-matrix: ${{ steps.set-runner-matrix.outputs.matrix }}
@@ -300,6 +303,7 @@ jobs:
   bh-multi-card-unit-tests:
     if: ${{ inputs.run-bh-multi-card-unit-tests }}
     needs: generate-bh-matrix
+    timeout-minutes: 120
     strategy:
       # Do not fail-fast because we need to ensure all tests go to completion
       # so we try not to get hanging machines
