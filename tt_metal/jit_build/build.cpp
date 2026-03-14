@@ -708,9 +708,9 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
         const size_t total = cache_total_srcs_.load(std::memory_order_acquire);
         const size_t compiled_total = cache_compiled_count_.load(std::memory_order_acquire);
         const size_t hits_total = total - compiled_total;
-        log_debug(
+        log_info(
             tt::LogBuildKernels,
-            "JIT cache: {}/{} hits ({:.1f}%){}",
+            "JIT cache stats: {}/{} hits ({:.1f}%){}",
             hits_total,
             total,
             100.0 * static_cast<double>(hits_total) / static_cast<double>(total),
