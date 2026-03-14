@@ -105,6 +105,11 @@ class TTNNLinearInputShardedWeightSharded(TTNNLinear):
         self.tt_weight_host = self.weight
 
     def move_weights_to_device_impl(self):
+        import sys
+
+        module_name = getattr(self, "module_name", self.__class__.__name__)
+        print(f"  [Linear] {module_name} - preprocessing weight...", flush=True)
+        sys.stdout.flush()
         if isinstance(self.tt_weight_host, torch.Tensor):
             self.tt_weight_host = preprocess_linear_weight(
                 self.tt_weight_host,
@@ -112,6 +117,8 @@ class TTNNLinearInputShardedWeightSharded(TTNNLinear):
                 layout=ttnn.TILE_LAYOUT,
                 weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.weight_dim),
             )
+        print(f"  [Linear] {module_name} - preprocessing bias...", flush=True)
+        sys.stdout.flush()
         if isinstance(self.tt_bias_host, torch.Tensor):
             self.tt_bias_host = preprocess_linear_bias(
                 self.tt_bias_host,
@@ -119,8 +126,18 @@ class TTNNLinearInputShardedWeightSharded(TTNNLinear):
                 layout=ttnn.TILE_LAYOUT,
                 weights_mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=self.input_dim),
             )
+        print(f"  [Linear] {module_name} - to_device weight...", flush=True)
+        sys.stdout.flush()
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
+        print(f"  [Linear] {module_name} - to_device bias...", flush=True)
+        sys.stdout.flush()
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
+        print(f"  [Linear] {module_name} - synchronize_device...", flush=True)
+        sys.stdout.flush()
+        # Synchronize to prevent mesh fabric congestion during sequential weight loading
+        ttnn.synchronize_device(self.device)
+        print(f"  [Linear] {module_name} - DONE", flush=True)
+        sys.stdout.flush()
 
 
 class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
@@ -128,25 +145,89 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
 
     def __init__(self, in_features, out_features) -> None:
         super().__init__(in_features, out_features, input_dim=-1, weight_dim=-2)
+        self._persistent_rs_output_buffers = {}  # Dict keyed by shape signature
+
+    def _allocate_persistent_buffers_if_needed(self, output_tensor: ttnn.Tensor):
+        """Allocate persistent output buffers keyed by output shape.
+
+        Required for traced execution where buffer addresses must remain constant.
+        """
+        num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
+        if num_devices == 1:
+            return None  # No CCL needed
+
+        output_shape = list(output_tensor.shape)
+        output_shape[3] = output_shape[3] // num_devices
+        shape_key = tuple(output_shape)
+
+        if shape_key not in self._persistent_rs_output_buffers:
+            self._persistent_rs_output_buffers[shape_key] = ttnn.from_torch(
+                torch.zeros(output_shape),  # Use scattered shape
+                device=self.device,
+                layout=ttnn.TILE_LAYOUT,
+                dtype=output_tensor.dtype,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=3),  # Shard on dim 3
+            )
+        return self._persistent_rs_output_buffers[shape_key]
+
+    def _preallocate_ccl_buffers(self, output_shapes, dtype=ttnn.bfloat16):
+        """Pre-allocate CCL output buffers for given shapes.
+
+        Must be called BEFORE traced forward pass to avoid CCL deadlock.
+
+        Args:
+            output_shapes: List of tuples representing expected output shapes.
+            dtype: Data type for the buffers (default: ttnn.bfloat16)
+        """
+        num_devices = self.device.get_num_devices() if hasattr(self.device, "get_num_devices") else 1
+        if num_devices == 1:
+            return
+
+        for full_output_shape in output_shapes:
+            scattered_shape = list(full_output_shape)
+            scattered_shape[3] = scattered_shape[3] // num_devices
+            shape_key = tuple(scattered_shape)
+
+            if shape_key not in self._persistent_rs_output_buffers:
+                self._persistent_rs_output_buffers[shape_key] = ttnn.from_torch(
+                    torch.zeros(scattered_shape),
+                    device=self.device,
+                    layout=ttnn.TILE_LAYOUT,
+                    dtype=dtype,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    mesh_mapper=ttnn.shard_tensor_to_mesh_mapper(self.device, dim=3),
+                )
+
+    def move_weights_to_device_impl(self):
+        """Move weights to device."""
+        super().move_weights_to_device_impl()
+        # CCL buffers are lazily allocated in _allocate_persistent_buffers_if_needed()
+        # during the forward pass to avoid device fabric congestion during preprocessing
 
     @run_on_devices(DeviceArch.T3K)
     def forward(self, input_tensor: ttnn.Tensor) -> ttnn.Tensor:
         """Forward pass through linear layer."""
-        if len(input_tensor.tensor_topology().placements()) == 1:
-            assert (
-                input_tensor.tensor_topology().placements()[0].dim == self.input_dim
-            ), f"Input tensor must be sharded on dimension {self.input_dim}."
-        elif len(input_tensor.tensor_topology().placements()) == 2:
-            assert (
-                input_tensor.tensor_topology().placements()[0].dim == 0
-            ), f"Input tensor must be sharded on batch dim (0)."
-            assert (
-                input_tensor.tensor_topology().placements()[1].dim == self.input_dim
-            ), f"Input tensor must be sharded on dimension {self.input_dim}."
+        placements = input_tensor.tensor_topology().placements()
+
+        if len(placements) == 1:
+            # Check if it's a shard placement (has dim attribute)
+            if hasattr(placements[0], "dim"):
+                assert (
+                    placements[0].dim == self.input_dim
+                ), f"Input tensor must be sharded on dimension {self.input_dim}."
+            # If PlacementReplicate (no dim), allow it for chained pipelines
+        elif len(placements) == 2:
+            p0, p1 = placements[0], placements[1]
+            if hasattr(p0, "dim"):
+                assert p0.dim == 0, f"Input tensor must be sharded on batch dim (0)."
+            if hasattr(p1, "dim"):
+                assert p1.dim == self.input_dim, f"Input tensor must be sharded on dimension {self.input_dim}."
+        elif len(placements) == 0:
+            # No placements - replicated tensor, allow for chained pipelines
+            pass
         else:
-            raise RuntimeError(
-                f"Input tensor must be sharded on either batch dim (0) or input dim ({self.input_dim}), but got tensor with placements: {input_tensor.tensor_topology().placements()}"
-            )
+            raise RuntimeError(f"Unexpected number of placements: {len(placements)}")
         if input_tensor.layout != ttnn.TILE_LAYOUT:
             input_tensor = ttnn.to_layout(input_tensor, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
         input_tensor_shape = list(input_tensor.shape)
@@ -155,9 +236,10 @@ class TTNNLinearIColShardedWRowSharded(TTNNLinearInputShardedWeightSharded):
             input_shape.insert(1, 1)  # Add batch dimensions if needed
         input_tensor = ttnn.reshape(input_tensor, input_shape)
         tt_output = ttnn.linear(input_tensor, self.tt_weight, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        persistent_buffer = self._allocate_persistent_buffers_if_needed(tt_output)
         tt_output = ttnn.experimental.reduce_scatter_minimal_async(
             tt_output,
-            persistent_output_buffers=None,
+            persistent_output_buffers=persistent_buffer,
             dim=3,
             multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
             barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
@@ -214,6 +296,10 @@ class TTNNLinearLLamaIColShardedWRowSharded(TTNNLinearIColShardedWRowSharded):
             )
         self.tt_weight = ttnn.to_device(self.tt_weight_host, self.device)
         self.tt_bias = ttnn.to_device(self.tt_bias_host, self.device) if self.tt_bias_host is not None else None
+        # Synchronize to prevent mesh fabric congestion during sequential weight loading
+        ttnn.synchronize_device(self.device)
+        # CCL buffers are lazily allocated in _allocate_persistent_buffers_if_needed()
+        # during the forward pass to avoid device fabric congestion during preprocessing
 
     @deallocate_weights_after
     @run_on_devices(DeviceArch.T3K)

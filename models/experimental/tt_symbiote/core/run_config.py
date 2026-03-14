@@ -827,13 +827,21 @@ def _compute_tensor_signature(tensor) -> Tuple:
     return ()
 
 
-def _compute_args_signature(args) -> Tuple:
-    """Compute signature for all tensor args."""
+def _compute_args_signature(args, kwargs=None) -> Tuple:
+    """Compute signature for all tensor args and kwargs."""
     sigs = []
     for arg in args:
         sig = _compute_tensor_signature(arg)
         if sig:
             sigs.append(sig)
+
+    # Also extract tensor signatures from kwargs (sorted for deterministic ordering)
+    if kwargs:
+        for k in sorted(kwargs.keys()):
+            sig = _compute_tensor_signature(kwargs[k])
+            if sig:
+                sigs.append((k, sig))  # Include key name to distinguish kwargs
+
     return tuple(sigs)
 
 
@@ -914,9 +922,64 @@ class TracedRun(LightweightRun):
     @classmethod
     def release_all(cls) -> None:
         """Release all cached traces."""
+        # Collect devices and synchronize first
+        devices_to_sync = set()
         for entry in cls._trace_cache.values():
-            ttnn.release_trace(entry.device, entry.trace_id)
+            devices_to_sync.add(entry.device)
+
+        for device in devices_to_sync:
+            try:
+                ttnn.synchronize_device(device)
+            except Exception:
+                pass
+
+        # First pass: Release all traces BEFORE deallocating tensors
+        for entry in cls._trace_cache.values():
+            try:
+                ttnn.release_trace(entry.device, entry.trace_id)
+            except Exception:
+                pass
+
+        # Second pass: Deallocate tensors AFTER traces are released
+        for entry in cls._trace_cache.values():
+            for trace_input in entry.trace_inputs:
+                if trace_input is not None:
+                    try:
+                        if isinstance(trace_input, ttnn.Tensor):
+                            ttnn.deallocate(trace_input)
+                    except Exception:
+                        pass
+            cls._deallocate_output(entry.trace_output)
+            if hasattr(entry.trace_inputs, "clear"):
+                entry.trace_inputs.clear()
+            entry.trace_output = None
+
         cls._trace_cache.clear()
+
+    @staticmethod
+    def _deallocate_output(output) -> None:
+        """Recursively deallocate output tensors."""
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        if output is None:
+            return
+
+        if isinstance(output, TorchTTNNTensor) and output.ttnn_tensor is not None:
+            try:
+                ttnn.deallocate(output.ttnn_tensor)
+            except Exception:
+                pass
+        elif isinstance(output, ttnn.Tensor):
+            try:
+                ttnn.deallocate(output)
+            except Exception:
+                pass
+        elif isinstance(output, (list, tuple)):
+            for item in output:
+                TracedRun._deallocate_output(item)
+        elif isinstance(output, dict):
+            for v in output.values():
+                TracedRun._deallocate_output(v)
 
     @classmethod
     def release(cls, module_name: str) -> int:
@@ -928,9 +991,10 @@ class TracedRun(LightweightRun):
         return len(to_remove)
 
     @staticmethod
-    def _make_cache_key(module_name: str, args) -> Tuple:
-        """Create cache key from module name and input signatures."""
-        return (module_name, _compute_args_signature(args))
+    def _make_cache_key(module_name: str, args, kwargs=None) -> Tuple:
+        """Create cache key from module name and tensor signatures from args and kwargs."""
+        kwargs = kwargs or {}
+        return (module_name, _compute_args_signature(args, kwargs))
 
     @staticmethod
     def _copy_inputs_to_trace_buffer(new_args, trace_inputs) -> None:
@@ -950,6 +1014,38 @@ class TracedRun(LightweightRun):
             elif hasattr(arg, "ttnn_tensor") and arg.ttnn_tensor is not None:
                 ttnn.copy(arg.ttnn_tensor, trace_input)
                 trace_idx += 1
+
+    @staticmethod
+    def _clone_trace_output(output):
+        """Clone trace output to avoid buffer aliasing issues."""
+        from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+        if isinstance(output, TorchTTNNTensor):
+            if output.ttnn_tensor is not None:
+                # Allocate fresh buffer and copy data to guarantee independent output
+                src = output.ttnn_tensor
+                new_tensor = ttnn.allocate_tensor_on_device(
+                    src.shape, src.dtype, src.layout, src.device(), src.memory_config()
+                )
+                ttnn.copy(src, new_tensor)
+                return TorchTTNNTensor(new_tensor, dtype=output.dtype)
+            else:
+                return output.clone()
+        elif isinstance(output, ttnn.Tensor):
+            # Handle raw ttnn.Tensor directly
+            src = output
+            new_tensor = ttnn.allocate_tensor_on_device(
+                src.shape, src.dtype, src.layout, src.device(), src.memory_config()
+            )
+            ttnn.copy(src, new_tensor)
+            return new_tensor
+        elif isinstance(output, (list, tuple)):
+            cloned = [TracedRun._clone_trace_output(item) for item in output]
+            return type(output)(cloned)
+        elif isinstance(output, dict):
+            return {k: TracedRun._clone_trace_output(v) for k, v in output.items()}
+        else:
+            return output
 
     @staticmethod
     def _capture_trace(module, func_args, func_kwargs, cache_key) -> TraceEntry:
@@ -988,7 +1084,7 @@ class TracedRun(LightweightRun):
 
         # Warm-up
         trace_output = module.forward(*func_args, **func_kwargs)
-        # Capture
+        # Capture trace
         trace_id = ttnn.begin_trace_capture(device, cq_id=cq_id)
         _ = module.forward(*trace_func_args, **func_kwargs)
         ttnn.end_trace_capture(device, trace_id, cq_id=cq_id)
@@ -1035,14 +1131,6 @@ class TracedRun(LightweightRun):
         # Check if this module is trace-enabled
         global _TRACE_RUNNING
         if not is_trace_enabled(self) or _TRACE_RUNNING:
-            if _TRACE_RUNNING:
-                print(
-                    f"{self.__class__.__name__}: {self.module_name} on device {self.device} [Not Trace-Enabled, Already Running Trace Elsewhere, Running Normally]"
-                )
-            else:
-                print(
-                    f"{self.__class__.__name__}: {self.module_name} on device {self.device} [Not Trace-Enabled, Running Normally]"
-                )
             # Fall back to normal execution
             result = self.forward(*func_args, **func_kwargs)
             end = time.time()
@@ -1053,20 +1141,17 @@ class TracedRun(LightweightRun):
             return post_process_ttnn_module_output(self, result)
 
         # Traced execution path
-        cache_key = TracedRun._make_cache_key(self.module_name, func_args)
+        cache_key = TracedRun._make_cache_key(self.module_name, func_args, func_kwargs)
 
         if cache_key in TracedRun._trace_cache:
             # Execute cached trace
-            print(f"{self.__class__.__name__}: {self.module_name} on device {self.device} [TRACED]")
             entry = TracedRun._trace_cache[cache_key]
             TracedRun._copy_inputs_to_trace_buffer(func_args, entry.trace_inputs)
             ttnn.execute_trace(entry.device, entry.trace_id, cq_id=TracedRun._cq_id, blocking=False)
-            result = entry.trace_output
+            ttnn.synchronize_device(entry.device)  # Wait for trace to complete
+            result = TracedRun._clone_trace_output(entry.trace_output)
         else:
             _TRACE_RUNNING = True
-            print(
-                f"{self.__class__.__name__}: {self.module_name} on device {self.device} [First Run - Capturing Trace]"
-            )
             # Capture new trace
             begin2 = time.time()
             entry = TracedRun._capture_trace(self, func_args, func_kwargs, cache_key)
@@ -1074,7 +1159,7 @@ class TracedRun(LightweightRun):
             DispatchManager.record_timing(
                 "TTNN", self.module_name, self.__class__.__name__ + "_capture_trace", {}, end2 - begin2
             )
-            result = entry.trace_output
+            result = TracedRun._clone_trace_output(entry.trace_output)
             _TRACE_RUNNING = False
         end = time.time()
         DispatchManager.record_timing("TTNN", self.module_name, self.__class__.__name__ + "_forward", {}, end - begin)
