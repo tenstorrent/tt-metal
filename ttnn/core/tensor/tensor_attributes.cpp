@@ -10,6 +10,17 @@
 
 namespace tt::tt_metal {
 
+bool GhostSpecAccessGuard::check_ghost_spec_ = true;
+
+void GhostSpecAccessGuard::fault() {
+    if (!check_ghost_spec_) {
+        log_error(tt::LogAlways, "Ghost spec access detected in whitelisted function");
+        return;
+    }
+
+    TT_THROW("Ghost spec access");
+}
+
 TensorAttributes::TensorAttributes(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
     storage_(std::move(storage)), tensor_spec_(std::move(tensor_spec)), tensor_topology_(std::move(tensor_topology)) {}
 
@@ -18,8 +29,7 @@ Storage& TensorAttributes::get_storage() { return storage_; }
 const TensorSpec& TensorAttributes::get_tensor_spec() const {
     if (const auto* device_storage = std::get_if<DeviceStorage>(&storage_); device_storage != nullptr) {
         if (!device_storage->is_allocated()) {
-            TT_FATAL(device_storage->mesh_buffer != nullptr, "Boom! Nullptr");
-            TT_FATAL(device_storage->mesh_buffer->is_allocated(), "Boom! Not allocated");
+            GhostSpecAccessGuard::fault();
         }
     }
     return tensor_spec_;
