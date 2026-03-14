@@ -1027,9 +1027,29 @@ struct SenderKernelTrafficConfig {
 
     bool has_packets_to_send() const { return num_packets_processed < metadata.num_packets; }
 
+    template <bool BENCHMARK_MODE>
+    FORCE_INLINE void send_packets_stateful(const uint32_t num_packets, const uint32_t num_warmup) {
+        ASSERT(connection_ptr_ != nullptr);
+        auto* conn = static_cast<WorkerToFabricEdmSender*>(connection_ptr_);
+
+        // Perform stateful noc send by filling buffers with headers, first, then performing credit-only NOC sends
+        // Phase 1: Warmup — send actual headers to fill all buffer slots
+        const uint32_t warmup_end = (num_packets < num_warmup) ? num_packets : num_warmup;
+        for (uint32_t pkt = 0; pkt < warmup_end; pkt++) {
+            this->template send_one_packet<BENCHMARK_MODE, false>();
+        }
+
+        fabric_tests::detail::setup_credit_update_noc_state(*conn, get_fabric_worker_noc());
+
+        // Phase 2: Steady state — credit-only sends with stateful NOC
+        for (uint32_t pkt = warmup_end; pkt < num_packets; pkt++) {
+            this->template send_one_packet<BENCHMARK_MODE, true>();
+        }
+    }
+
     // Send exactly one packet per call (round-robin scheduling)
     // Returns: true if packet was sent, false if blocked (no credits)
-    template <bool BENCHMARK_MODE>
+    template <bool BENCHMARK_MODE, bool STATEFUL_NOC = false>
     bool send_one_packet() {
         // STEP 1: Check credits BEFORE sending (non-benchmark mode only)
         if constexpr (!BENCHMARK_MODE) {
@@ -1039,10 +1059,19 @@ struct SenderKernelTrafficConfig {
         }
 
         // STEP 2: Wait for space
-        connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
-
-        // STEP 3: Send packet
-        if constexpr (!BENCHMARK_MODE) {
+        if constexpr (BENCHMARK_MODE){
+            connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
+            // STEP 3: Send packet
+            auto* conn = static_cast<WorkerToFabricEdmSender*>(connection_ptr_);
+            if (num_packets_processed < conn->num_buffers_per_channel) {
+                conn->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
+            } else {
+                conn->advance_buffer_slot_write_index();
+                conn->update_edm_buffer_free_slots<STATEFUL_NOC>();
+            }
+        } else {
+            connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
+            // STEP 3: Send packet
             if (payload_size_bytes > 0 && payload_buffer_) {
                 payload_buffer_->fill_data(metadata.seed);
 
@@ -1050,11 +1079,11 @@ struct SenderKernelTrafficConfig {
                 connection_manager_->send_payload_without_header<BENCHMARK_MODE>(
                     connection_ptr_, connection_idx_, payload_buffer_->get_physical_address(), payload_size_bytes);
             }
+            // Send header
+            connection_manager_->send_header_non_blocking<BENCHMARK_MODE>(
+                connection_ptr_, connection_idx_, (uint32_t)packet_header);
         }
 
-        // Send header
-        connection_manager_->send_header_non_blocking<BENCHMARK_MODE>(
-            connection_ptr_, connection_idx_, (uint32_t)packet_header);
 
         // STEP 4: Update state (after successful send)
         if constexpr (!BENCHMARK_MODE) {
