@@ -306,3 +306,134 @@
   owner_id: U09ELB03XRU # Stephen Osborne
   team: models
   model-name: wan2.2-t2v-a14b
+
+- name: llama3-8b performance batch-32
+  cmd: HF_MODEL=models/tt_transformers/model_params/Meta-Llama-3-8B TT_CACHE_PATH=models/tt_transformers/model_params/Meta-Llama-3-8B pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  skus:
+    bh_llmbox:
+      timeout: 10
+    bh_deskbox:
+      timeout: 10
+    bh_loudbox:
+      timeout: 10
+    bh_p300:
+      timeout: 10
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: llama3-8b
+
+- name: qwen2.5-32b-instruct performance batch-32
+  cmd: HF_MODEL=models/tt_transformers/model_params/Qwen2.5-32B-Instruct TT_CACHE_PATH=models/tt_transformers/model_params/Qwen2.5-32B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  skus:
+    bh_llmbox:
+      timeout: 10
+    bh_loudbox:
+      timeout: 10
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+  model-name: qwen2.5-32b-instruct
+
+- name: qwen2.5-72b-instruct performance batch-32
+  cmd: HF_MODEL=models/tt_transformers/model_params/Qwen2.5-72B-Instruct TT_CACHE_PATH=models/tt_transformers/model_params/Qwen2.5-72B-Instruct pytest models/tt_transformers/demo/simple_text_demo.py -k "performance and ci-32" --max_seq_len 131072 --timeout=600
+  skus:
+    bh_llmbox:
+      timeout: 10
+    bh_loudbox:
+      timeout: 10
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+  model-name: qwen2.5-72b-instruct
+
+- name: qwen2.5-vl-32b-instruct performance batch-32
+  cmd: |
+    uv pip install -r models/demos/qwen25_vl/requirements.txt
+    python -c "import nltk; nltk.download('punkt'); nltk.download('wordnet')"
+    CI=true HF_MODEL=$qwen25_vl_32b TT_CACHE_PATH=$tt_cache_32b MESH_DEVICE=T3K pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
+  skus:
+    bh_llmbox:
+      timeout: 10
+    bh_loudbox:
+      timeout: 10
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+  model-name: qwen2.5-vl-32b-instruct
+
+- name: qwen2.5-vl-72b performance batch-32
+  cmd: |
+    uv pip install --system -r models/demos/qwen25_vl/requirements.txt
+    python -c "import nltk; nltk.download('punkt'); nltk.download('wordnet')"
+    HF_HUB_CACHE=/localdev/blackhole_demos/huggingface_data/Qwen pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
+  skus:
+    bh_llmbox:
+      timeout: 10
+    bh_loudbox:
+      timeout: 10
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+  model-name: qwen2.5-vl-72b
+
+
+- name: qwen3-vl-32b performance batch-32
+  cmd: HF_MODEL=models/tt_transformers/model_params/Qwen3-VL-32B-Instruct TT_CACHE_PATH=models/tt_transformers/model_params/Qwen3-VL-32B-Instruct pytest models/demos/qwen3_vl/tests/ --ignore=models/demos/qwen3_vl/tests/test_ci_dispatch.py -v
+  skus:
+    bh_llmbox:
+      timeout: 10
+    bh_loudbox:
+      timeout: 10
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U08GELBB1AP # Ambrose Ling
+  team: models
+  model-name: qwen3-vl-32b
+
+- name: mistral-small-3.1-24b pipeline_tests
+  cmd: HF_MODEL=models/tt_transformers/model_params/Mistral-Small-3.1-24B-Instruct-2503 TT_CACHE_PATH=models/tt_transformers/model_params/Mistral-Small-3.1-24B-Instruct-2503 MESH_DEVICE=T3K pytest --timeout 600 models/experimental/mistral_24b/tests/pipeline_tests
+  skus:
+    bh_llmbox:
+      timeout: 10
+    bh_loudbox:
+      timeout: 10
+    bh_quietbox_2:
+      timeout: 10
+  owner_id: U03PUAKE719 # Miguel Tairum
+  team: models
+  model-name: mistral-small-3.1-24b
+
+- name: gpt-oss-20b performance
+  cmd: HF_MODEL=openai/gpt-oss-20b TT_CACHE_PATH=openai/gpt-oss-20b pytest models/demos/gpt_oss/demo/text_demo.py -k "performance" --timeout=600
+  skus:
+    bh_llmbox:
+      timeout: 15
+    bh_loudbox:
+      timeout: 15
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+  model-name: gpt-oss-20b
+
+- name: gpt-oss-120b performance
+  cmd: HF_MODEL=openai/gpt-oss-120b TT_CACHE_PATH=/mnt/MLPerf/huggingface/tt_cache pytest models/demos/gpt_oss/demo/text_demo.py -k "performance" --timeout=1200
+  skus:
+    bh_loudbox:
+      timeout: 30
+  owner_id: U08TJ70UFRT # Harry Andrews
+  team: models
+  model-name: gpt-oss-120b
+
+- name: Mochi pipeline performance
+  cmd: TT_DIT_CACHE_DIR="/tmp/TT_DIT_CACHE" pytest models/tt_dit/tests/models/mochi/test_pipeline_mochi.py -k "4x8sp1tp0" --timeout=1500
+  skus:
+    bh_loudbox:
+      timeout: 20
+  owner_id: U09ELB03XRU # Stephen Osborne
+  team: models
+  model-name: mochi

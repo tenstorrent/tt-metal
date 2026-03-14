@@ -10,7 +10,7 @@ from loguru import logger
 import ttnn
 from models.tt_transformers.tt.ccl import TT_CCL
 from models.tt_transformers.tt.model_config import ModelArgs
-from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0
+from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
 
 from models.experimental.mistral_24b.tt.vision_attention import TtMistralImageAttention as TtLlamaImageAttention
 
@@ -18,7 +18,7 @@ from ttnn import ConcatMeshToTensor
 
 
 @torch.no_grad()
-@run_for_wormhole_b0()
+@run_for_wormhole_b0_or_blackhole
 @pytest.mark.parametrize(
     "mesh_device",
     [
@@ -112,7 +112,11 @@ def test_vision_attention(mesh_device, seq_len, batch_size):
         :, :, :, : tt_out.shape[-1]
     ]
     tt_output_torch = tt_output_torch.squeeze(0)
-    reference_output = reference_model(pt_attention_input, attention_mask, position_embeddings=(cos, sin))[0]
+    reference_output = reference_model(
+        pt_attention_input.float(),
+        attention_mask.float(),
+        position_embeddings=(cos.float(), sin.float()),
+    )[0]
     pcc_required = 0.99
 
     passing, pcc_message = comp_pcc(reference_output, tt_output_torch, pcc_required)
