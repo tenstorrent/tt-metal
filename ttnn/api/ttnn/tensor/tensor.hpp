@@ -20,7 +20,6 @@
 #include <tt-metalium/host_buffer.hpp>
 #include <tt-metalium/buffer.hpp>
 #include <tt-metalium/tile.hpp>
-#include <tt-metalium/device.hpp>
 
 #include <tt_stl/optional_reference.hpp>
 
