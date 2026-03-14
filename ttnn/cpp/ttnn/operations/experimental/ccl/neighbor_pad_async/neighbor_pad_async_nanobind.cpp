@@ -39,8 +39,6 @@ void bind_neighbor_pad_async_op(nb::module_& mod, const ccl_operation_t& operati
             nb::arg("num_links") = nb::none(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("topology") = ttnn::ccl::Topology::Linear,
-            nb::arg("secondary_cluster_axis") = nb::none(),
-            nb::arg("secondary_mesh_shape") = nb::none(),
             nb::arg("persistent_output_buffer") = nb::none()});
 }
 
