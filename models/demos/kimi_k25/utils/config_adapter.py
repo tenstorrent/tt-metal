@@ -168,6 +168,7 @@ class KimiK25Config:
 
     # ---- Context / vocab ----
     max_position_embeddings: int = 131072
+    max_seq_len: int = 131072  # alias exposed for DSV3 test infra (hf_config_short sets this to 128)
     vocab_size: int = 163840
     bos_token_id: int = 1
     eos_token_id: int = 163585
