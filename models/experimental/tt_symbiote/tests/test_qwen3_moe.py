@@ -215,7 +215,7 @@ class TestQwen3MoE:
 
         ttnn_model = TTNNQwen3MoE.from_torch(model)
         set_device(ttnn_model, mesh_device)
-        outputs_ttnn = ttnn_model.forward_validate(inputs)
+        outputs_ttnn = ttnn_model(inputs)
 
         pcc, max_diff, mean_diff = _compute_pcc(outputs_torch, outputs_ttnn)
         print(f"Qwen3NextSparseMoeBlock (random) PCC: {pcc:.6f}, Max Diff: {max_diff:.6f}, Mean Diff: {mean_diff:.6f}")
@@ -232,7 +232,7 @@ class TestQwen3MoE:
 
         ttnn_model = TTNNQwen3MoE.from_torch(model)
         set_device(ttnn_model, mesh_device)
-        outputs_ttnn = ttnn_model.forward_validate(inputs)
+        outputs_ttnn = ttnn_model(inputs)
 
         pcc, max_diff, mean_diff = _compute_pcc(outputs_torch, outputs_ttnn)
         print(f"Qwen3NextSparseMoeBlock (real) PCC: {pcc:.6f}, Max Diff: {max_diff:.6f}, Mean Diff: {mean_diff:.6f}")
