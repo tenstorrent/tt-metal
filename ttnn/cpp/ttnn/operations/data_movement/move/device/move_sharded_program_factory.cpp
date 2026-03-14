@@ -15,23 +15,23 @@
 namespace ttnn::prim {
 
 MoveShardedProgramFactory::cached_program_t MoveShardedProgramFactory::create(
-    const MoveOperationAttributes& /*operation_attributes*/,
-    const MoveTensorArgs& tensor_args,
+    const MoveOperationAttributes& operation_attributes,
+    const MoveTensorArgs& /*tensor_args*/,
     Tensor& tensor_return_value) {
     using namespace tt::constants;
     using namespace tt::tt_metal;
-    const Tensor& input = tensor_args.input_tensor;
+    const MoveInputTensorSnapshot& input = operation_attributes.input_snapshot;
     Tensor& output = tensor_return_value;
 
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
-    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype());
-    const auto shard_spec = input.shard_spec().value();
+    tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input.dtype);
+    const auto shard_spec = input.shard_spec.value();
     const auto shard_shape = shard_spec.shape;
     const auto shard_grid = shard_spec.grid;
-    const auto& input_shape = input.logical_shape();
-    const DataType input_dtype = input.dtype();
-    const Layout input_layout = input.layout();
+    const auto& input_shape = input.logical_shape;
+    const DataType input_dtype = input.dtype;
+    const Layout input_layout = input.layout;
     TT_FATAL(
         input_layout == output.layout() && input_dtype == output.dtype() &&
             shard_shape == output.shard_spec().value().shape && input_shape == output.logical_shape(),
@@ -39,13 +39,13 @@ MoveShardedProgramFactory::cached_program_t MoveShardedProgramFactory::create(
     const uint32_t src_cb_sharded = tt::CBIndex::c_0;
     const uint32_t dst_cb_sharded = tt::CBIndex::c_1;
 
-    const uint32_t total_size_bytes = input.buffer()->aligned_size_per_bank();
-    const uint32_t page_size_bytes = input.buffer()->aligned_page_size();
+    const uint32_t total_size_bytes = input.buffer_aligned_size_per_bank;
+    const uint32_t page_size_bytes = input.buffer_aligned_page_size;
 
     CircularBufferConfig src_cb_sharded_config =
         CircularBufferConfig(total_size_bytes, {{src_cb_sharded, cb_data_format}})
             .set_page_size(src_cb_sharded, page_size_bytes);
-    src_cb_sharded_config.set_globally_allocated_address(*input.buffer());
+    src_cb_sharded_config.set_globally_allocated_address(*input.buffer.get());
     const CBHandle src_sharded_cb = tt::tt_metal::CreateCircularBuffer(program, shard_grid, src_cb_sharded_config);
 
     CircularBufferConfig dst_cb_sharded_config =
@@ -54,19 +54,19 @@ MoveShardedProgramFactory::cached_program_t MoveShardedProgramFactory::create(
     dst_cb_sharded_config.set_globally_allocated_address(*output.buffer());
     const CBHandle dst_sharded_cb = tt::tt_metal::CreateCircularBuffer(program, shard_grid, dst_cb_sharded_config);
 
-    const uint32_t input_buffer_address = input.buffer()->address();
+    const uint32_t input_buffer_address = input.buffer_address;
     const uint32_t output_buffer_address = output.buffer()->address();
 
     const uint32_t move_chunk_size_bytes = output_buffer_address - input_buffer_address;
     TT_FATAL(
-        input.buffer()->alignment() == output.buffer()->alignment(),
+        input.buffer_alignment == output.buffer()->alignment(),
         "Expected input buffer alignment ({} B) and output buffer alignment ({} B) to be equal",
-        input.buffer()->alignment(),
+        input.buffer_alignment,
         output.buffer()->alignment());
     TT_FATAL(
-        move_chunk_size_bytes % input.buffer()->alignment() == 0,
+        move_chunk_size_bytes % input.buffer_alignment == 0,
         "Expected chunk size bytes to move to be {} byte aligned.",
-        input.buffer()->alignment());
+        input.buffer_alignment);
     const uint32_t num_chunks = total_size_bytes / move_chunk_size_bytes;
     const uint32_t remainder_chunk_size_bytes = total_size_bytes % move_chunk_size_bytes;
 
@@ -93,22 +93,22 @@ MoveShardedProgramFactory::cached_program_t MoveShardedProgramFactory::create(
 
 void MoveShardedProgramFactory::override_runtime_arguments(
     MoveShardedProgramFactory::cached_program_t& cached_program,
-    const MoveOperationAttributes& /*operation_attributes*/,
-    const MoveTensorArgs& tensor_args,
+    const MoveOperationAttributes& operation_attributes,
+    const MoveTensorArgs& /*tensor_args*/,
     Tensor& tensor_return_value) {
     using namespace tt::tt_metal;
 
     Program& program = cached_program.program;
-    const Tensor& input = tensor_args.input_tensor;
+    const MoveInputTensorSnapshot& input = operation_attributes.input_snapshot;
     Tensor& output = tensor_return_value;
 
-    Buffer* src_buffer = input.buffer();
+    Buffer* src_buffer = input.buffer.get();
     Buffer* dst_buffer = output.buffer();
 
     UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.src_sharded_cb, *src_buffer);
     UpdateDynamicCircularBufferAddress(program, cached_program.shared_variables.dst_sharded_cb, *dst_buffer);
 
-    const uint32_t input_buffer_address = src_buffer->address();
+    const uint32_t input_buffer_address = input.buffer_address;
     const uint32_t output_buffer_address = dst_buffer->address();
     const uint32_t move_chunk_size_bytes = output_buffer_address - input_buffer_address;
     const uint32_t num_chunks = cached_program.shared_variables.total_size_bytes / move_chunk_size_bytes;
