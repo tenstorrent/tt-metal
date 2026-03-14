@@ -2,8 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from importlib.machinery import SourceFileLoader
-from importlib.util import module_from_spec
+from importlib.util import spec_from_file_location, module_from_spec
 from .sweeps import (
     SWEEP_SOURCES_DIR,
     permutations,
@@ -32,10 +31,13 @@ for file_name in sorted(SWEEP_SOURCES_DIR.glob("**/*.py")):
 def create_test_function(file_name):
     base_name = os.path.basename(file_name)
     base_name = os.path.splitext(base_name)[0]
-    loader = SourceFileLoader(f"sweep_module_{base_name}", str(file_name))
-    spec = loader.spec
+    spec = spec_from_file_location(f"sweep_module_{base_name}", str(file_name))
+    if spec is None:
+        raise RuntimeError(f"Failed to load sweep module: spec_from_file_location returned None for {file_name!r}")
+    if spec.loader is None:
+        raise RuntimeError(f"Failed to load sweep module: spec has no loader for {file_name!r}")
     sweep_module = module_from_spec(spec)
-    loader.exec_module(sweep_module)
+    spec.loader.exec_module(sweep_module)
     base_name = base_name + ".csv"
     sweep_tests = []
     for sweep_test_index, parameter_list in enumerate(permutations(sweep_module.parameters)):
