@@ -19,7 +19,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-12)
 
 **Core value:** Each PR is self-contained, correct, and independently reviewable
-**Current focus:** Phase 6 — Stream Register Assignment
+**Current focus:** Phase 7 — Reorganize buffer slot configs by VC in allocator
 
 ## Phase Validation Procedure
 
