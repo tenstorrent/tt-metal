@@ -132,6 +132,7 @@ enum class UnaryOpType {
     LOGIT,
     XIELU,
     LGAMMA,
+    DIGAMMA,
 };
 
 enum class VecMode {
