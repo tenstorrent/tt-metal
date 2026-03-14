@@ -9,7 +9,7 @@
 | 3 | 1/2 | Complete    | 2026-03-13 | Pending |
 | 4 | Device Sender Per-VC | Complete    | 2026-03-13 | Complete (2026-03-13) |
 | 5 | 1/1 | Complete    | 2026-03-14 | Pending |
-| 6 | 1/1 | Complete   | 2026-03-14 | Pending |
+| 6 | 1/1 | Complete    | 2026-03-14 | Pending |
 
 ---
 
