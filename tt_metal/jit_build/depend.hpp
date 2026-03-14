@@ -44,7 +44,7 @@ void write_dependency_hashes(
 
 // Returns true if all dependencies' hashes match those stored in `hash_file`.
 // Paths in the hash_file are resolved relative to `out_dir` if they are relative.
-bool dependencies_up_to_date(std::istream& hash_file, const std::string& out_dir);
+bool dependencies_up_to_date(std::istream& hash_file, const std::string& out_dir = {});
 
 // Returns true if all dependencies' hashes match those stored in the .dephash file.
 bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj);

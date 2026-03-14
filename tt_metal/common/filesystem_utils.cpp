@@ -74,8 +74,7 @@ bool safe_remove(const std::filesystem::path& path) {
             return false;
         }
         // If we got an ESTALE on is_directory check, retry below
-        if (ec && !is_estale_error(ec)) {
-            // Non-ESTALE error during is_directory check
+        if (ec && !is_estale_error(ec) && !is_not_found_error(ec)) {
             log_warning(tt::LogMetal, "Failed to check if {} is directory: {}", path.string(), ec.message());
             return false;
         }
