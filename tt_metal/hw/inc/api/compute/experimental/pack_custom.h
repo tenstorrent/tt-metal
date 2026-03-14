@@ -4,7 +4,14 @@
 
 #pragma once
 
-#include "common_globals.h"
+#include "api/compute/common_globals.h"
+#if defined(ARCH_BLACKHOLE) && defined(TRISC_PACK)
+#include "experimental/llk_pack_custom_api.h"
+#endif
+
+// WARNING: Experimental API for SDPA optimizations only.
+// This header has no corresponding tests in the llk-test infrastructure.
+// Do not use outside of SDPA optimization workflows.
 
 namespace ckernel {
 
