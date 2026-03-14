@@ -99,7 +99,7 @@ class DecoderLayer:
         batch_size=1,
     ):
         seqlen = hidden_states.shape[-2]
-        if seqlen > 64 * 1024:
+        if seqlen > 32 * 1024:
             # Reallocate hidden states to prevent memory fragmentation.
             hidden_states = ttnn.move(hidden_states)
 
