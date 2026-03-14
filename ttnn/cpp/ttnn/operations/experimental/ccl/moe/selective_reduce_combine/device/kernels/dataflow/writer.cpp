@@ -77,7 +77,9 @@ void kernel_main() {
     constexpr uint32_t linearized_mesh_coord = get_named_compile_time_arg_val("linearized_mesh_coord");
     constexpr auto topology = tt::tt_fabric::Topology(get_named_compile_time_arg_val("topology"));
     constexpr uint32_t num_mux_workers_per_link = get_named_compile_time_arg_val("num_mux_workers_per_link");
-
+    constexpr uint32_t compute_sync_semaphore_id = get_named_compile_time_arg_val("compute_sync_semaphore_id");
+    constexpr uint32_t compute_cores_per_combine_core =
+        get_named_compile_time_arg_val("compute_cores_per_combine_core");
     constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(0);
     constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(1);
     constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(2);
@@ -107,6 +109,9 @@ void kernel_main() {
     const auto dest_token_segment_offset_bytes = get_arg_val<uint32_t>(rt_arg_count++);
     const auto init_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
     const auto global_semaphore_addr = get_arg_val<uint32_t>(rt_arg_count++);
+    const bool is_init_sync_core = get_arg_val<uint32_t>(rt_arg_count++);
+
+    const auto compute_sync_semaphore_addr = get_semaphore(compute_sync_semaphore_id);
 
     // rt_arg_count does not get incremented
     MuxSyncCoreArgs sync_args(rt_arg_count);
@@ -135,7 +140,7 @@ void kernel_main() {
         directions, fabric_connections, rt_arg_count);
 
     const uint64_t init_noc_semaphore_addr = get_noc_addr(init_semaphore_addr);
-    if (sync_args.is_sync_core && use_init_semaphore) {
+    if (is_init_sync_core && use_init_semaphore) {
         send_init_semaphore_to_configured_targets<
             linearized_mesh_coord,
             topology,
@@ -172,7 +177,7 @@ void kernel_main() {
 
     if constexpr (use_init_semaphore) {
         auto* init_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(init_semaphore_addr);
-        if (sync_args.is_sync_core) {
+        if (is_init_sync_core) {
             noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
             const uint64_t semaphore_mc_addr =
                 get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, init_semaphore_addr);
@@ -186,6 +191,9 @@ void kernel_main() {
         noc_semaphore_set(init_semaphore_ptr, 0);
     }
 
+    auto* compute_sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(compute_sync_semaphore_addr);
+    uint32_t compute_sync_semaphore_val = compute_cores_per_combine_core;
+    bool needs_barrier = false;
     for (uint32_t e = 0; e < num_local_experts; ++e) {
         auto* expert_token_activations_ptr =
             token_activations_l1_ptr + token_activation_offsets[e] * activations_stride_elm;
@@ -213,6 +221,11 @@ void kernel_main() {
                 mesh_rows,
                 mesh_cols,
                 replicate_axis>(st);
+
+            DPRINT << "WAITING FOR COMPUTE " << compute_sync_semaphore_val << "\n";
+
+            noc_semaphore_wait(compute_sync_semaphore_ptr, compute_sync_semaphore_val);
+            compute_sync_semaphore_val += compute_cores_per_combine_core;
 
             if (dest_device_idx == linearized_mesh_coord) {
                 const uint64_t output_noc_addr =

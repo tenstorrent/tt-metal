@@ -5,6 +5,8 @@
 #include "moe_compute_program_factory.hpp"
 #include "moe_compute_device_operation_types.hpp"
 
+#include "ttnn/global_semaphore.hpp"
+
 #include <algorithm>
 #include <numeric>
 #include <tuple>
@@ -43,6 +45,7 @@ std::tuple<
     CoreRangeSet,            // T CoreRangeSet
     CoreRangeSet,            // MM CoreRangeSet
     CoreRangeSet,            // T + MM CoreRangeSet
+    CoreRangeSet,            // Combine CoreRangeSet
     std::vector<CoreCoord>,  // Combine vector of CoreCoord
     CoreRange,               // T bounding box
     CoreRange>               // MM bounding box
@@ -93,6 +96,7 @@ get_cores(ttnn::MeshDevice* mesh_device) {
         tilize_core_range_set,
         matmul_core_range_set,
         tilize_matmul_core_range_set,
+        combine_core_range_set,
         combine_cores,
         tilize_bounding_box,
         matmul_bounding_box};
@@ -116,7 +120,7 @@ namespace ttnn::experimental::prim {
 
 // expose a helper function so callers know what cores are available for subsequently running a2a combine
 std::vector<ttnn::CoreCoord> get_moe_combine_cores(ttnn::MeshDevice* mesh_device) {
-    constexpr auto combine_cores_return_index = 5;
+    constexpr auto combine_cores_return_index = 6;
 
     const auto get_cores_return = get_cores(mesh_device);
 
@@ -131,9 +135,34 @@ MoEComputeMeshWorkloadFactory::cached_mesh_workload_t MoEComputeMeshWorkloadFact
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, MoEComputeMeshWorkloadFactory::shared_variables_t> shared_variables;
 
+    auto* mesh_device = tensor_args.tilize_input_tensor.device();
+    const auto
+        [tilize_cores_mw,
+         matmul_cores_mw,
+         tilize_core_range_set_mw,
+         matmul_core_range_set_mw,
+         tilize_matmul_core_range_set_mw,
+         combine_core_range_set,
+         combine_cores_mw,
+         tilize_bounding_box_mw,
+         matmul_bounding_box_mw] = get_cores(mesh_device);
+
+    auto init_barrier_semaphore =
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_core_range_set, 0);
+    auto final_barrier_semaphore = args.combine_params.optional_cross_device_semaphore.value_or(
+        ttnn::global_semaphore::create_global_semaphore(mesh_device, combine_core_range_set, 0));
+
+    tt::tt_metal::distributed::Synchronize(mesh_device, std::nullopt, {});
+
     for (const auto& coord : tensor_coords.coords()) {
-        auto cached_program =
-            MoEComputeMeshWorkloadFactory::create_at(args, coord, tensor_args, tensor_return_value, tensor_coords);
+        auto cached_program = MoEComputeMeshWorkloadFactory::create_at(
+            args,
+            coord,
+            tensor_args,
+            tensor_return_value,
+            tensor_coords,
+            init_barrier_semaphore,
+            final_barrier_semaphore);
         workload.add_program(ttnn::MeshCoordinateRange(coord), std::move(cached_program.program));
         shared_variables.emplace(coord, std::move(cached_program.shared_variables));
     }
@@ -146,7 +175,9 @@ MoEComputeMeshWorkloadFactory::create_at(
     const ttnn::MeshCoordinate& mesh_coordinate,
     const MoEComputeInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value,
-    const ttnn::MeshCoordinateRangeSet&) {
+    const ttnn::MeshCoordinateRangeSet& mesh_coordinates,
+    const GlobalSemaphore& init_barrier_semaphore,
+    const GlobalSemaphore& final_barrier_semaphore) {
     tt::tt_metal::Program program = tt::tt_metal::CreateProgram();
 
     // Alignment
@@ -187,6 +218,8 @@ MoEComputeMeshWorkloadFactory::create_at(
     const ttnn::Tensor& tilize_expert_activation_output_tensor = tensor_return_value.at(1);
     const ttnn::Tensor& tilize_e_t_output_tensor = tensor_return_value.at(2);
     const ttnn::Tensor& tilize_output_tensor = tensor_return_value.at(3);
+    const ttnn::Tensor& matmul_output_tensor = tensor_return_value.at(4);
+    ttnn::Tensor& output_tensor = tensor_return_value.at(5);
 
     [[maybe_unused]] const auto& tilize_per_expert_total_tokens_output_shape =
         tilize_per_expert_total_tokens_output_tensor.tensor_spec().logical_shape();
@@ -241,6 +274,7 @@ MoEComputeMeshWorkloadFactory::create_at(
          tilize_core_range_set,
          matmul_core_range_set,
          tilize_matmul_core_range_set,
+         combine_core_range_set,
          combine_cores,
          tilize_bounding_box,
          matmul_bounding_box] = get_cores(mesh_device);
@@ -291,6 +325,7 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     // Create semaphores for ring synchronization between cores
     // Each core will have a semaphore that its predecessor will signal
+    // reuse the same semaphore location for signaling combine cores that per expert data is available
     const uint32_t ring_semaphore_id = tt::tt_metal::CreateSemaphore(program, matmul_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
@@ -309,6 +344,19 @@ MoEComputeMeshWorkloadFactory::create_at(
     // Tilize drain-sync core signals to all matmul cores that a full chunk is ready
     auto matmul_chunk_ready_semaphore_id =
         tt::tt_metal::CreateSemaphore(program, tilize_matmul_core_range_set, INVALID);
+
+    //-------------------------------------------------------------------------
+    // Tilize/MatMul and Combine sync semaphore
+    //-------------------------------------------------------------------------
+
+    // Tilize drain-sync core signals combine sync core (which then multicasts to the rest)
+    // that metadata is ready and task splitting can proceed.
+    const auto tilize_combine_sync_semaphore_id =
+        tt::tt_metal::CreateSemaphore(program, combine_core_range_set, INVALID);
+
+    // Matmul dm1 signals combine cores when data is written; combine writer waits on this semaphore.
+    const auto matmul_combine_sync_semaphore_id =
+        tt::tt_metal::CreateSemaphore(program, combine_core_range_set, INVALID);
 
     //-------------------------------------------------------------------------
     // Tilize work split
@@ -672,7 +720,8 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"mesh_rows", mesh_view.num_rows()},
         {"mesh_cols", mesh_view.num_cols()},
         {"linearized_mesh_coord", linearized_mesh_coord},
-        {"cluster_axis", (uint32_t)args.cluster_axis.value()},
+        {"cluster_axis",
+         (uint32_t)(args.combine_params.axis.has_value() ? args.combine_params.axis.value() : 1)},
 
         // Coordinates for non-drain-sync to drain-sync synchronization
         {"drain_core_noc_x", (uint32_t)tilize_drain_core_physical.x},
@@ -707,7 +756,11 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"tilize_chunk_ready_semaphore_id", tilize_chunk_ready_semaphore_id},
         {"matmul_chunk_ready_semaphore_id", matmul_chunk_ready_semaphore_id},
         {"previous_chunk_sent_semaphore_id", previous_chunk_sent_semaphore_id},
-        {"initial_gather_semaphore_id", initial_gather_semaphore_id}};
+        {"initial_gather_semaphore_id", initial_gather_semaphore_id},
+        // Tilize -> combine: drain core signals combine when metadata is ready
+        {"combine_sync_semaphore_id", tilize_combine_sync_semaphore_id},
+        {"combine_sync_noc_x", (uint32_t)mesh_device->worker_core_from_logical_core(combine_cores.at(0)).x},
+        {"combine_sync_noc_y", (uint32_t)mesh_device->worker_core_from_logical_core(combine_cores.at(0)).y}};
 
     std::vector<uint32_t> tilize_compile_time_args = {};
     tt::tt_metal::TensorAccessorArgs(tilize_input_tensor.buffer()).append_to(tilize_compile_time_args);
@@ -932,9 +985,11 @@ MoEComputeMeshWorkloadFactory::create_at(
         {"tile_height", tile_height},
         {"tile_width", tile_width},
         {"tile_width_size_bytes", tile_width * tt::datum_size(tilize_output_dataformat)},
-        {"num_tokens_total", tokens},
+        {"num_tokens_total", tokens},  // tokenizer input tensor shape
         {"height_shard_dim", output_height_shard_dim},
         {"width_shard_dim", output_width_shard_dim},
+        // Matmul -> combine: dm1 increments this on combine cores when data is written
+        {"matmul_combine_sync_semaphore_id", matmul_combine_sync_semaphore_id},
     };
 
     // Create kernels for the program
@@ -975,18 +1030,9 @@ MoEComputeMeshWorkloadFactory::create_at(
             .compile_args = matmul_compile_time_args,
             .named_compile_args = matmul_named_compile_time_args});
 
-    const ttnn::CoreRangeSet output_shard_core_range_set(combine_cores);
-    auto combine_dm1_kernel_handle = tt::tt_metal::CreateKernel(
-        program,
-        "ttnn/cpp/ttnn/operations/experimental/ccl/moe_compute/device/kernels/combine_dm1.cpp",
-        output_shard_core_range_set,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0, .noc = tt::tt_metal::NOC::NOC_1});
-
-    // Create semaphore on combine cores for source->combine completion signaling.
-    // The dm1 kernel uses get_semaphore(ring_semaphore_id) to compute the remote address,
-    // so the combine cores need a semaphore at the same ID.
-    const uint32_t combine_semaphore_id = tt::tt_metal::CreateSemaphore(program, output_shard_core_range_set, 0);
+    //-------------------------------------------------------------------------
+    // ring ordering
+    //-------------------------------------------------------------------------
 
     // Create optimal ring ordering for NOC1 to minimize traffic conflicts
     // NOC1 routes: decreasing y (top) first, then decreasing x (left)
@@ -1065,10 +1111,50 @@ MoEComputeMeshWorkloadFactory::create_at(
         log_debug(tt::LogOp, "{} -> DRAM {} -> ring pos {}", core.str(), dram_bank, ring_pos);
     }
 
-    const std::vector<uint32_t> combine_runtime_args = {combine_semaphore_id};
-    for (const auto& core : combine_cores) {
-        tt::tt_metal::SetRuntimeArgs(program, combine_dm1_kernel_handle, core, combine_runtime_args);
-    }
+    //-------------------------------------------------------------------------
+    // Combine stage
+    //-------------------------------------------------------------------------
+
+    // Combine parameters (copy from args and set worker_cores for this mesh)
+    TT_FATAL(args.combine_params.num_links > 0, "num_links must be greater than 0");
+    TT_FATAL(
+        !args.combine_params.axis.has_value() || args.combine_params.axis.value() < 2,
+        "cluster_axis must be 0 or 1");
+
+    auto combine_params = args.combine_params;
+    combine_params.worker_cores = combine_cores;
+    // MoE compute op does not have an optional output tensor in its API; combine writes to the
+    // tensor we create (output_tensor) passed explicitly to build_selective_reduce_combine_program_artifacts.
+    ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensor_args{
+        .dense_input_tensor = matmul_output_tensor,
+        .dense_activations_tensor = tilize_expert_activation_output_tensor,
+        .dense_token_maps_tensor = tilize_e_t_output_tensor,
+        .dense_token_counts_tensor = tilize_per_expert_total_tokens_output_tensor
+        //.optional_output_tensor = std::nullopt,
+    };
+    auto selective_reduce_combine_artifacts = build_selective_reduce_combine_program_artifacts(
+        program,
+        combine_params,
+        mesh_coordinate,
+        mesh_coordinates.coords(),
+        combine_tensor_args,
+        output_tensor,
+        init_barrier_semaphore,
+        final_barrier_semaphore,
+        tilize_combine_sync_semaphore_id,
+        matmul_combine_sync_semaphore_id);
+
+    auto combine_reader_kernel_id = selective_reduce_combine_artifacts.reader_kernel_id;
+    auto combine_writer_kernel_id = selective_reduce_combine_artifacts.writer_kernel_id;
+    auto combine_init_semaphore = selective_reduce_combine_artifacts.init_semaphore;
+    auto combine_cross_device_semaphore = selective_reduce_combine_artifacts.cross_device_semaphore;
+
+    //    if (combine_dm1_kernel_handle_opt.has_value() && combine_semaphore_id_opt.has_value()) {
+    //        const std::vector<uint32_t> combine_runtime_args = {*combine_semaphore_id_opt};
+    //        for (const auto& core : combine_cores) {
+    //            tt::tt_metal::SetRuntimeArgs(program, *combine_dm1_kernel_handle_opt, core, combine_runtime_args);
+    //        }
+    //    }
 
     //-------------------------------------------------------------------------
     // Cached program
@@ -1081,12 +1167,15 @@ MoEComputeMeshWorkloadFactory::create_at(
          .matmul_kernel_handles = {matmul_dm0_kernel_handle, matmul_dm1_kernel_handle, matmul_compute_kernel_handle},
          .matmul_cores = matmul_cores,
          .sharded_output_cb_handle = sharded_output_cb_handle,
-         .matmul_writer_cb_handle=matmul_writer_cb_handle}};
+         .matmul_writer_cb_handle = matmul_writer_cb_handle,
+         .combine_kernel_handles = {combine_reader_kernel_id, combine_writer_kernel_id},
+         .combine_cores = combine_cores,
+         .combine_global_semaphores = {init_barrier_semaphore, final_barrier_semaphore}}};
 }
 
 void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const MoEComputeParams&,
+    const MoEComputeParams& args,
     const MoEComputeInputs& tensor_args,
     std::vector<ttnn::Tensor>& tensor_return_value) {
     // output tensors
@@ -1094,6 +1183,8 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
     const ttnn::Tensor& tilize_expert_activation_output_tensor = tensor_return_value.at(1);
     const ttnn::Tensor& tilize_e_t_output_tensor = tensor_return_value.at(2);
     const ttnn::Tensor& tilize_output_tensor = tensor_return_value.at(3);
+    // const ttnn::Tensor& matmul_output_tensor = tensor_return_value.at(4);
+    ttnn::Tensor& output_tensor = tensor_return_value.at(5);
 
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
@@ -1142,6 +1233,37 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
                 matmul_runtime_args.at(3) = tensor_args.matmul_w2_tensor.buffer()->address();
                 matmul_runtime_args.at(4) = tilize_output_tensor.buffer()->address();
             }
+        }
+
+        //-------------------------------------------------------------------------
+        // Combine
+        //-------------------------------------------------------------------------
+
+        {
+            auto reader_kernel_id = shared_variables.combine_kernel_handles.at(0);
+            auto writer_kernel_id = shared_variables.combine_kernel_handles.at(1);
+            auto cores = shared_variables.combine_cores;
+            auto init_semaphore = shared_variables.combine_global_semaphores.at(0);
+            auto cross_device_semaphore = shared_variables.combine_global_semaphores.at(1);
+
+            // MoE compute op does not have an optional output tensor; do not pass it in tensor_args.
+            ttnn::experimental::prim::SelectiveReduceCombineTensors combine_tensor_args{
+                .dense_input_tensor = tilize_output_tensor,
+                .dense_activations_tensor = tilize_expert_activation_output_tensor,
+                .dense_token_maps_tensor = tilize_e_t_output_tensor,
+                .dense_token_counts_tensor = tilize_per_expert_total_tokens_output_tensor,
+                .optional_output_tensor = std::nullopt,
+            };
+            selective_reduce_combine_helper_override_runtime_arguments(
+                program,
+                reader_kernel_id,
+                writer_kernel_id,
+                cores,
+                combine_tensor_args,
+                output_tensor,
+                init_semaphore,
+                cross_device_semaphore,
+                args.combine_params.optional_cross_device_semaphore);
         }
     }
 }
