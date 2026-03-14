@@ -34,6 +34,7 @@
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/circular_buffer_constants.h>
+#include "llrt/hal_proc_set.hpp"  // IWYU pragma: export
 
 enum class AddressableCoreType : uint8_t;
 
@@ -59,34 +60,6 @@ enum class HalDramMemAddrType : uint8_t { BARRIER = 0, PROFILER = 1, UNRESERVED 
 enum class HalTensixHarvestAxis : uint8_t { ROW = 0x1, COL = 0x2 };
 
 enum class NoCTopologyType : uint8_t { MESH = 0, TORUS = 1 };
-
-// A set of processors distinguishing programmable core type and index within that core type.
-// See get_processor_index and get_processor_class_and_type_from_index.
-class HalProcessorSet {
-private:
-    std::array<uint32_t, NumHalProgrammableCoreTypes> masks_{};
-
-public:
-    void add(HalProgrammableCoreType core_type, uint32_t processor_index) {
-        masks_[static_cast<size_t>(core_type)] |= (1u << processor_index);
-    }
-    bool contains(HalProgrammableCoreType core_type, uint32_t processor_index) const {
-        return (masks_[static_cast<size_t>(core_type)] & (1u << processor_index)) != 0;
-    }
-    bool empty() const {
-        for (const auto& mask : masks_) {
-            if (mask != 0) {
-                return false;
-            }
-        }
-        return true;
-    }
-    // Returns the bitmask of processors for the given core type.
-    // Bit i set <=> processor index i is in the set.
-    uint32_t get_processor_mask(HalProgrammableCoreType core_type) const {
-        return masks_[static_cast<size_t>(core_type)];
-    }
-};
 
 // Compile-time maximum for processor types count for any arch.  Useful for creating bitsets.
 static constexpr int MAX_PROCESSOR_TYPES_COUNT = 24;
