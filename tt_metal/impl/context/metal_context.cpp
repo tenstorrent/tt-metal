@@ -507,6 +507,13 @@ distributed::SystemMesh& MetalContext::get_system_mesh() {
 void MetalContext::set_custom_fabric_topology(
     const std::string& mesh_graph_desc_file,
     const std::map<tt_fabric::FabricNodeId, ChipId>& logical_mesh_chip_id_to_physical_chip_id_mapping) {
+    // If the custom topology is already set to the same values, nothing needs to change.
+    // This avoids the assertion on active devices when the topology is being re-applied
+    // between parameterized test iterations in the same suite (e.g., MultiMeshDeviceFabricFixture).
+    if (custom_mesh_graph_desc_path_.has_value() && custom_mesh_graph_desc_path_.value() == mesh_graph_desc_file &&
+        logical_mesh_chip_id_to_physical_chip_id_mapping_ == logical_mesh_chip_id_to_physical_chip_id_mapping) {
+        return;
+    }
     TT_FATAL(
         !device_manager_->is_initialized() || device_manager_->get_all_active_devices().empty(),
         "Modifying control plane requires no devices to be active");
