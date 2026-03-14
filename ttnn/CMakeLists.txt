@@ -534,6 +534,7 @@ target_sources(
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}/api ${CMAKE_CURRENT_SOURCE_DIR}/cpp
         FILES
             api/tools/profiler/op_profiler.hpp
+            api/tools/profiler/op_profiler_serialize.hpp
             api/ttnn/async_runtime.hpp
             api/ttnn/cluster.hpp
             api/ttnn/common/constants.hpp
@@ -628,6 +629,7 @@ target_sources(
         cpp/ttnn/operations/copy/typecast/device/typecast_rm_chunked_program_factory.cpp
         cpp/ttnn/operations/copy/typecast/device/typecast_sharded_program_factory.cpp
         cpp/ttnn/operations/copy/typecast/typecast.cpp
+        cpp/tools/profiler/op_profiler_json.cpp
 )
 
 target_include_directories(
