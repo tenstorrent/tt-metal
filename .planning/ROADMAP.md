@@ -1,6 +1,6 @@
 # Roadmap: PR #39538 Decomposition
 
-**6 phases** | **18 requirements mapped** | All v1 requirements covered ✓
+**7 phases** | **18 requirements mapped** | All v1 requirements covered ✓
 
 | # | Phase | Goal | Requirements | Status |
 |---|-------|------|--------------|--------|
@@ -10,6 +10,7 @@
 | 4 | Device Sender Per-VC | Complete    | 2026-03-13 | Complete (2026-03-13) |
 | 5 | 1/1 | Complete    | 2026-03-14 | Pending |
 | 6 | 1/1 | Complete    | 2026-03-14 | Pending |
+| 7 | Reorganize buffer slot configs by VC | Replace PerVcBufferSlots with VcSlotConfig array pattern | Phase 7 goal | Pending |
 
 ---
 
@@ -116,15 +117,24 @@ Plans:
 1. Stream register assignment uses per-VC indexing
 2. No flat stream register arrays that mix VC assignment
 
-### Phase 7: Reorganize buffer slot configs by VC in allocator
+---
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+## Phase 7: Reorganize buffer slot configs by VC in allocator
+
+**Goal:** Restructure buffer slot configuration internals in FabricStaticSizedChannelsAllocator to use per-VC array-of-struct indexing, replacing PerVcBufferSlots with VcSlotConfig and collapsing output parameters into return types.
+**Requirements**: Phase 7 goal (additive beyond original 18 requirements)
 **Depends on:** Phase 6
-**Plans:** 0 plans
+**Plans:** 1 plan
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 7 to break down)
+- [ ] 07-01-PLAN.md — Define VcSlotConfig struct; convert tables and get_optimal_num_slots_per_vc to per-VC array return; restructure configure_buffer_slots_helper signature; build + sanity test
+
+**Success criteria:**
+1. PerVcBufferSlots struct removed entirely
+2. VcSlotConfig struct with per-VC array pattern used by all static tables
+3. get_optimal_num_slots_per_vc returns array-of-VcSlotConfig instead of 8 output ref scalars
+4. configure_buffer_slots_helper uses struct return instead of 4 output array params
+5. CT args wire format unchanged — sanity test passes
 
 ---
 *Roadmap created: 2026-03-12*
