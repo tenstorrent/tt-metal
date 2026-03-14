@@ -36,9 +36,7 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     tt::DataFormat src0_cb_data_format = tt_metal::datatype_to_dataformat_converter(a.dtype());
     uint32_t src0_single_tile_size = tt::tile_size(src0_cb_data_format);
     tt::DataFormat scaler_cb_data_format =
-        (src0_cb_data_format == tt::DataFormat::Float32 && a.device()->arch() != tt::ARCH::BLACKHOLE)
-            ? tt::DataFormat::Float32
-            : tt::DataFormat::Float16_b;
+        src0_cb_data_format == tt::DataFormat::Float32 ? tt::DataFormat::Float32 : tt::DataFormat::Float16_b;
     uint32_t scaler_single_tile_size = tt::tile_size(scaler_cb_data_format);
     tt::DataFormat dst_cb_data_format = tt_metal::datatype_to_dataformat_converter(output.dtype());
     uint32_t dst_single_tile_size = tt::tile_size(dst_cb_data_format);
@@ -144,10 +142,14 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         tt_metal::CreateCircularBuffer(program, all_cores, cb_ineg_config);
     }
 
+    std::map<std::string, std::string> reduce_defines =
+        reduce_op_utils::get_defines(operation_attributes.math_op, tt::tt_metal::ReduceOpDim::H);
+
     if (use_width_sharding) {
         std::vector<uint32_t> reader_compile_time_args = {src0_cb_index, src1_cb_index, scaler_cb_index, scaler_bits};
         std::map<std::string, std::string> reader_defines;
         reader_defines["REDUCE_SCALER"] = "1";
+        reader_defines.insert(reduce_defines.begin(), reduce_defines.end());
         reader_kernel_id = tt_metal::CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/dataflow/"
@@ -159,10 +161,11 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
         std::vector<uint32_t> reader_compile_time_args = {Ht, Wt, HtWt, scaler_bits};
         TensorAccessorArgs(*src0_buffer).append_to(reader_compile_time_args);
 
-        // Pass DEST config as defines so reader can compute DEST_AUTO_LIMIT
+        // Pass DEST config and reduce defines so reader can compute DEST_AUTO_LIMIT and scaler format
         std::map<std::string, std::string> reader_defines;
         reader_defines["ENABLE_FP32_DEST_ACC"] = fp32_dest_acc_en ? "1" : "0";
         reader_defines["DST_SYNC_FULL"] = dst_full_sync_en ? "1" : "0";
+        reader_defines.insert(reduce_defines.begin(), reduce_defines.end());
 
         reader_kernel_id = tt_metal::CreateKernel(
             program,
@@ -194,8 +197,6 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
             all_cores,
             tt_metal::WriterDataMovementConfig(writer_compile_time_args));
     }
-    std::map<std::string, std::string> reduce_defines =
-        reduce_op_utils::get_defines(operation_attributes.math_op, tt::tt_metal::ReduceOpDim::H);
     std::vector<uint32_t> compute_kernel_args_group_1 = {
         Ht,                         // Ht
         num_cols_per_core_group_1,  // Wt
@@ -203,8 +204,8 @@ ReduceMultiCoreHProgramFactory::cached_program_t ReduceMultiCoreHProgramFactory:
     };
 
     const std::string compute_kernel =
-        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce_h") +
-        (operation_attributes.negate ? "_neg" : "") + ".cpp";
+        std::string("ttnn/cpp/ttnn/operations/reduction/generic/device/kernels/compute/reduce") +
+        (operation_attributes.negate ? "_h_neg" : "") + ".cpp";
 
     tt_metal::CreateKernel(
         program,

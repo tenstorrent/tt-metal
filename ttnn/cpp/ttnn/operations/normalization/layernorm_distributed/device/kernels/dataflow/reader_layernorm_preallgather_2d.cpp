@@ -47,10 +47,15 @@ void kernel_main() {
     const auto src_a = TensorAccessor(src_args, src_addr, src0_tile_bytes);
 
     // Generate constant tiles for reduce scalar
-    dataflow_kernel_lib::
-        calculate_and_prepare_reduce_scaler<cb_reduce, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+    dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+        cb_reduce,
+        ckernel::PoolType::SUM,
+        ckernel::ReduceDim::REDUCE_ROW,
+        dataflow_kernel_lib::SUM_AND_MAX_REDUCE_FACTOR,
+        /*compute_uses_reduce_tile=*/true>();
     if (is_merge_core) {
-        dataflow_kernel_lib::prepare_reduce_scaler<cb_zero>(0.0f);
+        dataflow_kernel_lib::prepare_reduce_scaler<cb_zero, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>(
+            0.0f);
     }
 
     uint32_t inp_tile_idx = tile_offset;
