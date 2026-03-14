@@ -1,6 +1,6 @@
 # Roadmap: PR #39538 Decomposition
 
-**7 phases** | **18 requirements mapped** | All v1 requirements covered ✓
+**10 phases** | **18 requirements mapped** | All v1 requirements covered ✓
 
 | # | Phase | Goal | Requirements | Status |
 |---|-------|------|--------------|--------|
@@ -10,7 +10,10 @@
 | 4 | Device Sender Per-VC | Complete    | 2026-03-13 | Complete (2026-03-13) |
 | 5 | 1/1 | Complete    | 2026-03-14 | Pending |
 | 6 | 1/1 | Complete    | 2026-03-14 | Pending |
-| 7 | Reorganize buffer slot configs by VC | Replace PerVcBufferSlots with VcSlotConfig array pattern | Phase 7 goal | Pending |
+| 7 | Reorganize buffer slot configs by VC | Replace PerVcBufferSlots with VcSlotConfig array pattern | Phase 7 goal | Complete (2026-03-14) |
+| 8 | Host-side per-VC consolidation | Merge _vc0/_vc1 constants and functions into _per_vc arrays across host builders | Phase 8 goal | Pending |
+| 9 | Device-side kernel per-VC templates | Add per-VC template helpers to device kernel headers and router | Phase 9 goal | Pending |
+| 10 | Split channel_allocs into per-VC in device CT args | Separate channel_allocs into per-VC channel allocations in device CT args | Phase 10 goal | Pending |
 
 ---
 
@@ -135,6 +138,77 @@ Plans:
 3. get_optimal_num_slots_per_vc returns array-of-VcSlotConfig instead of 8 output ref scalars
 4. configure_buffer_slots_helper uses struct return instead of 4 output array params
 5. CT args wire format unchanged — sanity test passes
+
+---
+
+## Phase 8: Host-side per-VC consolidation
+
+**Goal:** Merge all remaining _vc0/_vc1 named constants and split functions into _per_vc arrays and unified functions across host builder code.
+**Requirements**: Phase 8 goal (additive beyond original 18 requirements)
+**Depends on:** Phase 7
+
+**Files:**
+- `fabric_builder_config.hpp` — Merge `num_sender_channels_z_router_vc0`/`_vc1` → `_per_vc` array; merge `num_downstream_edms_2d_vc0`/`_vc1` → `_per_vc`; merge two function decls → `get_downstream_edm_count_for_vc(vc, is_2D)`
+- `fabric_builder_config.cpp` — Implement unified `get_downstream_edm_count_for_vc` with switch on vc
+- `erisc_datamover_builder.cpp` — Locals `num_vc0_downstream_edms` etc → `_per_vc[]`; loop-based `named_args` assignment
+- `fabric_router_channel_mapping.hpp/.cpp` — `initialize_vc0_mappings`/`_vc1_mappings` → `initialize_vc_mappings(vc)`
+- `fabric_tensix_builder.cpp` — Call-site updates
+- `router_connection_mapping.cpp` — Call-site updates
+
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 8 to break down)
+
+**Success criteria:**
+1. No `_vc0`/`_vc1` suffixed constants or functions remain in `fabric_builder_config`
+2. All host builder call sites use unified per-VC function or array indexing
+3. `initialize_vc_mappings(vc)` replaces split vc0/vc1 init functions
+4. CT args wire format unchanged — sanity test passes
+
+---
+
+## Phase 9: Device-side kernel per-VC templates
+
+**Goal:** Add per-VC template helpers to device kernel headers and refactor router kernel to use templated per-VC functions.
+**Requirements**: Phase 9 goal (additive beyond original 18 requirements)
+**Depends on:** Phase 8
+
+**Files:**
+- `fabric_erisc_router_ct_args.hpp` — Per-VC helper templates (`get_sender_ch_live_check_skip<vc>`, `is_vc_sender_channel_serviced<vc,ch>`, etc.)
+- `fabric_erisc_datamover_channels.hpp` — Per-VC changes
+- `compile_time_arg_tmp.hpp` — Per-VC changes
+- `edm_fabric_flow_control_helpers.hpp` — Per-VC changes
+- `fabric_erisc_router.cpp` — `any_sender_channels_active` → templated per-VC version; `update_telemetry` templated
+
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 9 to break down)
+
+**Success criteria:**
+1. Per-VC template helpers exist for sender channel queries
+2. `any_sender_channels_active` is templated on VC with per-VC free_slots arrays
+3. No flat cross-VC sender channel arrays remain in device kernel code
+4. Kernels compile and fabric tests pass
+
+---
+
+## Phase 10: Split channel_allocs into per-VC in device CT args
+
+**Goal:** Split the unified `channel_allocs` in device CT args into per-VC channel allocations, completing the per-VC separation at the host-device boundary.
+**Requirements**: Phase 10 goal (additive beyond original 18 requirements)
+**Depends on:** Phase 9
+
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd:plan-phase 10 to break down)
+
+**Success criteria:**
+1. Device CT args use per-VC channel allocation structures instead of unified `channel_allocs`
+2. Host emission and device parsing agree on per-VC format
+3. Kernels compile and fabric tests pass
 
 ---
 *Roadmap created: 2026-03-12*
