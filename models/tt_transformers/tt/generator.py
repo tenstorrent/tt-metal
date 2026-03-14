@@ -1565,6 +1565,19 @@ class Generator(WarmupForwardMixin):
                 raise ValueError(f"Invalid type of tt_out: {type(tt_out[i])}")
         return (torch.cat(logits, 0), torch.cat(log_probs, 0))
 
+    # Note: This function is called by vLLM
+    def sync_and_read_decode_output(self, tt_decode_output, is_tokens=False):
+        """Synchronize all devices, read decode output to host, and process.
+
+        Used by the async decode path: the caller submitted a trace with
+        read_from_device=False and now needs to collect the results.
+        """
+        # Sync should not be needed, as the reading itself will force a sync.
+        # for i in range(self.data_parallel):
+        #     ttnn.synchronize_device(self.model[i].mesh_device)
+        to_host = self.read_decode_output(tt_decode_output)
+        return self.process_decode_output_host(to_host, is_tokens=is_tokens)
+
     def _decode_forward_no_trace(
         self,
         position_id,
