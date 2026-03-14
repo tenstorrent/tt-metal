@@ -101,11 +101,11 @@ static json get_kernels_json(ChipId device_id, const Program& program) {
 // ---------------------------------------------------------------------------
 
 std::string assemble_device_op_json(
-    const OpProfileData& data,
-    tt::stl::hash::hash_t program_hash,
-    ChipId device_id,
-    bool program_cache_hit,
-    const tt::tt_metal::Program& program) {
+    [[maybe_unused]] const OpProfileData& data,
+    [[maybe_unused]] tt::stl::hash::hash_t program_hash,
+    [[maybe_unused]] ChipId device_id,
+    [[maybe_unused]] bool program_cache_hit,
+    [[maybe_unused]] const tt::tt_metal::Program& program) {
 #if defined(TRACY_ENABLE)
     json j;
     j["global_call_count"] = data.operation_id;
