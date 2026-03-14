@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "pad_rm_reader_writer_multi_core_v2_program_factory.hpp"
+#include "pad_rm_reader_writer_multi_core_default_program_factory.hpp"
 
 #include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/hal.hpp>
@@ -19,6 +19,7 @@ using ttnn::operations::data_movement::float_to_uint16;
 using ttnn::operations::data_movement::pack_two_uint16_into_uint32;
 
 namespace {
+
 uint32_t get_num_stick_per_barrier(const Tensor& input_tensor) {
     uint32_t W = input_tensor.padded_shape()[3];
     uint32_t W_bytes = W * input_tensor.element_size();
@@ -37,7 +38,9 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
     const CoreRangeSet& core_group_1,
     uint32_t num_w_sticks_per_core_group_1,
     const CoreRangeSet& core_group_2,
-    uint32_t num_w_sticks_per_core_group_2) {
+    uint32_t num_w_sticks_per_core_group_2,
+    uint32_t num_input_pages_in_row,
+    uint32_t num_output_pages_in_row) {
     auto* input_buffer = input_tensor.buffer();
     auto* output_buffer = output_tensor.buffer();
     auto input_shape = input_tensor.padded_shape();
@@ -73,7 +76,7 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
             input_buffer->address(),
             num_sticks_per_core,
             num_sticks_per_barrier,
-            curr_sticks_read,
+            curr_sticks_read * num_input_pages_in_row,
             front_pad[-4],
             front_pad[-3],
             front_pad[-2],
@@ -82,7 +85,10 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 
         // writer
         std::vector<uint32_t> writer_runtime_args = {
-            output_buffer->address(), num_sticks_per_core, num_sticks_per_barrier, curr_sticks_write};
+            output_buffer->address(),
+            num_sticks_per_core,
+            num_sticks_per_barrier,
+            curr_sticks_write * num_output_pages_in_row};
 
         ret_val[i] = {reader_runtime_args, writer_runtime_args};
 
@@ -113,7 +119,8 @@ std::vector<std::pair<std::vector<uint32_t>, std::vector<uint32_t>>> get_runtime
 }
 }  // namespace
 
-PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMultiCoreV2ProgramFactory::create(
+PadRmReaderWriterMultiCoreDefaultProgramFactory::cached_program_t
+PadRmReaderWriterMultiCoreDefaultProgramFactory::create(
     const PadParams& operation_attributes, const PadInputs& tensor_args, Tensor& output) {
     const auto& a = tensor_args.input;
     const auto& pad_value = operation_attributes.pad_value;
@@ -136,6 +143,31 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
     uint32_t stick_size_padded_aligned = tt::align(stick_size_padded, hal::get_l1_alignment());
     uint32_t stick_size_padded_DRAM_aligned = tt::align(stick_size_padded, hal::get_dram_alignment());
     uint32_t row_major_min_bytes = 16;
+
+    // Input page-based addressing
+    uint32_t num_input_pages_in_row = 1;
+    uint32_t input_page_size = a.buffer()->page_size();
+    uint32_t input_aligned_page_size = a.buffer()->aligned_page_size();
+    uint32_t size_of_valid_data_in_last_input_page_in_row = a.buffer()->page_size();
+    if (a.is_sharded()) {
+        uint32_t shard_width =
+            a.shard_spec().has_value() ? a.shard_spec().value().shape[1] : a.nd_shard_spec().value().shard_shape[-1];
+        num_input_pages_in_row = tt::div_up(a.logical_shape()[-1], shard_width);
+        size_of_valid_data_in_last_input_page_in_row = stick_size - (num_input_pages_in_row - 1) * input_page_size;
+    }
+
+    // Output page-based addressing
+    uint32_t num_output_pages_in_row = 1;
+    uint32_t output_page_size = output.buffer()->page_size();
+    uint32_t output_aligned_page_size = output.buffer()->aligned_page_size();
+    uint32_t size_of_valid_data_in_last_output_page_in_row = output.buffer()->page_size();
+    if (output.is_sharded()) {
+        uint32_t output_shard_width = output.shard_spec().has_value() ? output.shard_spec().value().shape[1]
+                                                                      : output.nd_shard_spec().value().shard_shape[-1];
+        num_output_pages_in_row = tt::div_up(W_padded, output_shard_width);
+        size_of_valid_data_in_last_output_page_in_row =
+            stick_size_padded - (num_output_pages_in_row - 1) * output_page_size;
+    }
 
     tt::DataFormat cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(a.dtype());
 
@@ -209,11 +241,21 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
         (std::uint32_t)(stick_size_padded_end / row_major_min_bytes),
         (std::uint32_t)(stick_size_padded / row_major_min_bytes),
         (std::uint32_t)stick_size_padded_aligned,
-        (std::uint32_t)unaligned};
+        (std::uint32_t)unaligned,
+        (std::uint32_t)num_input_pages_in_row,
+        (std::uint32_t)input_page_size,
+        (std::uint32_t)input_aligned_page_size,
+        (std::uint32_t)size_of_valid_data_in_last_input_page_in_row};
     TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
 
     std::vector<uint32_t> writer_ct_args = {
-        (std::uint32_t)src0_cb_index, (std::uint32_t)stick_size_padded, (std::uint32_t)stick_size_padded_aligned};
+        (std::uint32_t)src0_cb_index,
+        (std::uint32_t)stick_size_padded,
+        (std::uint32_t)stick_size_padded_aligned,
+        (std::uint32_t)num_output_pages_in_row,
+        (std::uint32_t)output_page_size,
+        (std::uint32_t)output_aligned_page_size,
+        (std::uint32_t)size_of_valid_data_in_last_output_page_in_row};
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
 
     KernelHandle reader_kernel_id = CreateKernel(
@@ -235,7 +277,9 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
         core_group_1,
         num_sticks_padded_per_core_group_1,
         core_group_2,
-        num_sticks_padded_per_core_group_2);
+        num_sticks_padded_per_core_group_2,
+        num_input_pages_in_row,
+        num_output_pages_in_row);
 
     for (uint32_t i = 0; i < cores_in_order.size(); i++) {
         CoreCoord core = cores_in_order[i];
@@ -261,9 +305,9 @@ PadRmReaderWriterMultiCoreV2ProgramFactory::cached_program_t PadRmReaderWriterMu
          std::move(cores_in_order)}};
 }
 
-void PadRmReaderWriterMultiCoreV2ProgramFactory::override_runtime_arguments(
+void PadRmReaderWriterMultiCoreDefaultProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
-    const PadParams& /*operation_attributes*/,
+    const PadParams& operation_attributes,
     const PadInputs& tensor_args,
     Tensor& output) {
     const auto& src_tensor = tensor_args.input;
@@ -289,6 +333,21 @@ void PadRmReaderWriterMultiCoreV2ProgramFactory::override_runtime_arguments(
 
     const auto& cores_in_order = cached_program.shared_variables.cores_with_rtargs;
 
+    uint32_t num_input_pages_in_row = 1;
+    if (src_tensor.is_sharded()) {
+        uint32_t shard_width = src_tensor.shard_spec().has_value() ? src_tensor.shard_spec().value().shape[1]
+                                                                   : src_tensor.nd_shard_spec().value().shard_shape[-1];
+        num_input_pages_in_row = tt::div_up(src_tensor.logical_shape()[-1], shard_width);
+    }
+
+    uint32_t num_output_pages_in_row = 1;
+    if (dst_tensor.is_sharded()) {
+        uint32_t output_shard_width = dst_tensor.shard_spec().has_value()
+                                          ? dst_tensor.shard_spec().value().shape[1]
+                                          : dst_tensor.nd_shard_spec().value().shard_shape[-1];
+        num_output_pages_in_row = tt::div_up(operation_attributes.output_padded_shape[-1], output_shard_width);
+    }
+
     auto all_runtime_args = get_runtime_args_rm(
         src_tensor,
         dst_tensor,
@@ -297,7 +356,9 @@ void PadRmReaderWriterMultiCoreV2ProgramFactory::override_runtime_arguments(
         core_group_1,
         num_sticks_padded_per_core_group_1,
         core_group_2,
-        num_sticks_padded_per_core_group_2);
+        num_sticks_padded_per_core_group_2,
+        num_input_pages_in_row,
+        num_output_pages_in_row);
 
     for (uint32_t i = 0; i < cores_in_order.size(); i++) {
         CoreCoord core = cores_in_order[i];
