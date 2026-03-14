@@ -1149,6 +1149,82 @@ class TT_CCL:
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
 
+    def line_all_gather_matmul(
+        self,
+        input_tensor_mesh,
+        weight_tensor,
+        dim,
+        cluster_axis,
+        memory_config,
+        num_links=1,
+        matmul_config=None,
+        compute_kernel_config=None,
+        dtype=None,
+    ):
+        """
+        Fused AllGather + MatMul for prefill using all_gather_minimal_matmul_async.
+        Config aligned with unit test (test_llama_ag_mm_comparison): grid from matmul_config,
+        effective_num_links from grid divisibility (grid_x % num_links when force_transpose=True),
+        num_workers_per_link and num_buffers_per_channel=8.
+        """
+        topology = ttnn.Topology.Ring
+        force_transpose = True
+
+        # Reshape input to [1, 1, S, x] for prefill
+        B = input_tensor_mesh.shape[1]
+        input_tensor_mesh = ttnn.reshape(
+            input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
+        )
+
+        # Core grid from matmul config (same as test: compute_with_storage_grid_size)
+        grid_size = getattr(matmul_config, "compute_with_storage_grid_size", None)
+        if grid_size is None:
+            raise ValueError("matmul_config must have compute_with_storage_grid_size for fused AG+MM")
+        if hasattr(grid_size, "x"):
+            core_grid = ttnn.CoreCoord(grid_size.x, grid_size.y)
+        else:
+            core_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
+
+        # Effective num_links from grid divisibility (test logic: grid_x % num_links when force_transpose)
+        # Always find the maximum num_links that divides the grid axis evenly
+        div_axis = core_grid.x if force_transpose else core_grid.y
+        effective_num_links = 1  # default
+        for nl in [4, 3, 2, 1]:
+            if div_axis % nl == 0:
+                effective_num_links = nl
+                break
+
+        # num_workers_per_link: same as test (max_workers_total = grid.x when force_transpose)
+        max_workers_total = core_grid.x if force_transpose else core_grid.y
+        num_workers_per_link = max(1, min(8 // effective_num_links, max_workers_total // effective_num_links))
+
+        # Semaphores: op expects list of 2 (same as test)
+        sem_current = self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]]
+        sem_next = self.gather_semaphore_handles[cluster_axis][(self.gather_idx[cluster_axis] + 1) % self.num_cbs]
+        if isinstance(sem_current, list):
+            semaphores = sem_current + sem_next
+        else:
+            semaphores = [sem_current, sem_next]
+
+        output = ttnn.experimental.all_gather_minimal_matmul_async(
+            input_tensor=input_tensor_mesh,
+            weight_tensor=weight_tensor,
+            config=matmul_config,
+            compute_kernel_config=compute_kernel_config,
+            multi_device_global_semaphore=semaphores,
+            num_links=effective_num_links,
+            topology=topology,
+            cluster_axis=cluster_axis,
+            memory_config=memory_config,
+            dtype=dtype,
+            force_transpose=force_transpose,
+            num_workers_per_link=num_workers_per_link,
+            num_buffers_per_channel=8,
+        )
+
+        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
+        return output[0]
+
     def ring_all_gather(
         self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, buffer_key=None, reverse_order=False
     ):
@@ -1165,7 +1241,9 @@ class TT_CCL:
         )
         # persistent_buffers = None
 
-        num_links = 4
+        # Use 1 link for FF3 when FF2_AG_1_LINK so non-fused path matches fused op config (7×8 → 1 link)
+        if not (buffer_key == "FF3" and self.model_config.get("FF2_AG_1_LINK", False)):
+            num_links = 4
         if reverse_order:
             all_gather_function = ttnn.experimental.all_gather_async_reversed
         else:
@@ -1190,82 +1268,6 @@ class TT_CCL:
                 ttnn_tensor_out = ttnn.reshape(ttnn_tensor_out, (1, B, seqlen // B, ttnn_tensor_out.shape[-1]))
         self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
         return ttnn_tensor_out
-
-    def line_all_gather_matmul(
-        self,
-        input_tensor_mesh,
-        weight_tensor,
-        dim,
-        cluster_axis,
-        memory_config,
-        matmul_config,
-        compute_kernel_config,
-        dtype=ttnn.bfloat8_b,
-    ):
-        """
-        Fused AllGather + MatMul for prefill using all_gather_minimal_matmul_async.
-
-        Uses 6-column grids (6×8 or 6×9) to enable 3 links for better AllGather bandwidth.
-        The grid column count must be divisible by num_links (6 % 3 == 0).
-
-        Performance: ~17% faster than separate AG + MM for FF2 step.
-        """
-        topology = ttnn.Topology.Ring
-        force_transpose = True
-
-        # Reshape input to [1, 1, S, x] for prefill
-        B = input_tensor_mesh.shape[1]
-        input_tensor_mesh = ttnn.reshape(
-            input_tensor_mesh, (1, 1, B * input_tensor_mesh.shape[-2], input_tensor_mesh.shape[-1])
-        )
-
-        # Get grid size from matmul config
-        grid_size = matmul_config.compute_with_storage_grid_size
-        if hasattr(grid_size, "x"):
-            core_grid = ttnn.CoreCoord(grid_size.x, grid_size.y)
-        else:
-            core_grid = ttnn.CoreCoord(grid_size[0], grid_size[1])
-
-        # Find maximum num_links that divides the grid axis evenly
-        # For 6-column grid: 6 % 3 == 0, so num_links = 3
-        # For 7-column grid: 7 is prime, so num_links = 1
-        div_axis = core_grid.x if force_transpose else core_grid.y
-        num_links = 1
-        for nl in [4, 3, 2, 1]:
-            if div_axis % nl == 0:
-                num_links = nl
-                break
-
-        # num_workers_per_link calculation
-        max_workers_total = core_grid.x if force_transpose else core_grid.y
-        num_workers_per_link = max(1, min(8 // num_links, max_workers_total // num_links))
-
-        # Semaphores: op expects list of 2
-        sem_current = self.gather_semaphore_handles[cluster_axis][self.gather_idx[cluster_axis]]
-        sem_next = self.gather_semaphore_handles[cluster_axis][(self.gather_idx[cluster_axis] + 1) % self.num_cbs]
-        if isinstance(sem_current, list):
-            semaphores = sem_current + sem_next
-        else:
-            semaphores = [sem_current, sem_next]
-
-        output = ttnn.experimental.all_gather_minimal_matmul_async(
-            input_tensor=input_tensor_mesh,
-            weight_tensor=weight_tensor,
-            config=matmul_config,
-            compute_kernel_config=compute_kernel_config,
-            multi_device_global_semaphore=semaphores,
-            num_links=num_links,
-            topology=topology,
-            cluster_axis=cluster_axis,
-            memory_config=memory_config,
-            dtype=dtype,
-            force_transpose=force_transpose,
-            num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=8,
-        )
-
-        self.gather_idx[cluster_axis] = (self.gather_idx[cluster_axis] + 1) % self.num_cbs
-        return output[0]
 
     def all_gather_concat(
         self, input_tensor_mesh, dim, cluster_axis, memory_config, num_links=1, num_heads=8, use_noc1_only=False

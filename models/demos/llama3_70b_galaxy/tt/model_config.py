@@ -891,9 +891,12 @@ class TtModelArgs:
                 Returns the best minimal matmul config for prefill FF2 based on sequence length.
                 Configurations are optimized based on sweep results.
 
-                Uses 6-column grids (6×8 or 6×9) to enable 3 links in the fused
-                AllGather+MatMul op for better performance (~17% FF2 speedup, ~3.4% TTFT improvement).
+                When USE_FUSED_AG_MM=1, uses 6-column grids (6×8 or 6×9) to enable 3 links
+                in the fused AllGather+MatMul op for better performance.
                 """
+                # Check if fused AG+MM is enabled - use 6-column grids to enable 3 links
+                use_fused = os.environ.get("USE_FUSED_AG_MM", "0") == "1"
+
                 # Best configurations from sweep results for each M value
                 if seq_len <= 4096:
                     return ttnn.MinimalMatmulConfig(
@@ -904,15 +907,17 @@ class TtModelArgs:
                         subblock_w=2,
                         compute_with_storage_grid_size=ttnn.CoreCoord(7, 9),
                     )
-                elif seq_len <= 16384:  # Both 8K and 16K
+                elif (
+                    seq_len <= 16384
+                ):  # Both 8K and 16K; subblock 2×2 to match unit test (test_llama_ag_mm_comparison) for comparable fused op results
                     return ttnn.MinimalMatmulConfig(
                         M_block_size=8,
                         K_block_size=8,
                         N_block_size=8,
                         subblock_h=2,
                         subblock_w=2,
-                        # 6×8 grid enables 3 links (6 % 3 == 0) vs 7×8 which only allows 1 link
-                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
+                        # Use 6×8 for fused path (enables 3 links), 7×8 for non-fused
+                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 8) if use_fused else ttnn.CoreCoord(7, 8),
                     )
                 elif seq_len <= 32768:
                     return ttnn.MinimalMatmulConfig(
@@ -921,8 +926,8 @@ class TtModelArgs:
                         N_block_size=8,
                         subblock_h=4,
                         subblock_w=2,
-                        # 6×8 grid enables 3 links
-                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
+                        # Use 6×8 for fused path (enables 3 links), 7×8 for non-fused
+                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 8) if use_fused else ttnn.CoreCoord(7, 8),
                     )
                 elif seq_len <= 65536:
                     return ttnn.MinimalMatmulConfig(
@@ -931,8 +936,8 @@ class TtModelArgs:
                         N_block_size=8,
                         subblock_h=2,
                         subblock_w=4,
-                        # 6×8 grid enables 3 links
-                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 8),
+                        # Use 6×8 for fused path (enables 3 links), 7×8 for non-fused
+                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 8) if use_fused else ttnn.CoreCoord(7, 8),
                     )
                 else:  # For seq_len >= 131072
                     return ttnn.MinimalMatmulConfig(
@@ -941,11 +946,20 @@ class TtModelArgs:
                         N_block_size=8,
                         subblock_h=2,
                         subblock_w=4,
-                        # 6×9 grid enables 3 links
-                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 9),
+                        # Use 6×9 for fused path (enables 3 links), 7×9 for non-fused
+                        compute_with_storage_grid_size=ttnn.CoreCoord(6, 9) if use_fused else ttnn.CoreCoord(7, 9),
                     )
 
             self.model_config["PREFILL_FF2_MINIMAL_MATMUL_CONFIG"] = prefill_ff2_minimal_matmul_config
+            # Fused AllGather+MatMul for FF2 prefill (same config as test_llama_ag_mm_comparison).
+            # Enable: set model_config["USE_FUSED_AG_MM"]=True or env USE_FUSED_AG_MM=1. Default False.
+            default_fused = os.environ.get("USE_FUSED_AG_MM", "0") == "1"
+            self.model_config["USE_FUSED_AG_MM"] = self.model_config.get("USE_FUSED_AG_MM", default_fused)
+            # Use 1 link for FF2 AllGather in non-fused path (apples-to-apples with fused on 7×8).
+            # Enable: env FF2_AG_1_LINK=1. Default False.
+            self.model_config["FF2_AG_1_LINK"] = self.model_config.get(
+                "FF2_AG_1_LINK", os.environ.get("FF2_AG_1_LINK", "0") == "1"
+            )
 
             def w2_prg_config(seq_len):
                 if seq_len == 128:

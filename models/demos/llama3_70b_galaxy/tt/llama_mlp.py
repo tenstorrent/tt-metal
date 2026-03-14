@@ -286,23 +286,9 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )
-        # For shorter sequence lengths use separate AllGather + MatMul
-        # For longer sequences (>= 4096), use fused AllGather+MatMul for ~17% FF2 speedup
-        if seq_len < 4096 or batch_size > 1:
-            w2_in_gathered = self.tt_ccl.line_all_gather(
-                w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
-            )
-            ttnn.deallocate(w2_in)
-            w2_out = ttnn.linear(
-                w2_in_gathered,
-                self.w2_interleaved,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
-                dtype=ttnn.bfloat8_b,
-                program_config=short_lens_pc_2,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
-        else:
-            # Fused AllGather + MatMul: uses 6×8/6×9 grid with 3 links for better AG bandwidth
+
+        # Fused AllGather+MatMul path (same config as unit test: grid, num_links from divisibility, num_workers_per_link, etc.)
+        if self.model_config.get("USE_FUSED_AG_MM", False) and seq_len >= 4096 and batch_size == 1:
             w2_out = self.tt_ccl.line_all_gather_matmul(
                 w2_in,
                 self.w2_interleaved,
@@ -314,6 +300,36 @@ class TtLlamaMLP(LightweightModule):
                 dtype=ttnn.bfloat8_b,
             )
             ttnn.deallocate(w2_in)
+        else:
+            # Separate AllGather + MatMul path (use 1 link when FF2_AG_1_LINK for apples-to-apples with fused)
+            num_links_ag = 1 if self.model_config.get("FF2_AG_1_LINK", False) else 3
+            w2_in_gathered = self.tt_ccl.line_all_gather(
+                w2_in,
+                cluster_axis=1,
+                num_links=num_links_ag,
+                memory_config=w3_out.memory_config(),
+                buffer_key="FF3",
+                dim=3,
+            )
+            ttnn.deallocate(w2_in)
+
+            if seq_len < 4096 or batch_size > 1:
+                w2_out = ttnn.linear(
+                    w2_in_gathered,
+                    self.w2_interleaved,
+                    compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                    dtype=ttnn.bfloat8_b,
+                    program_config=short_lens_pc_2,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+            else:
+                w2_out = ttnn.experimental.minimal_matmul(
+                    input_tensor=w2_in_gathered,
+                    weight_tensor=self.w2_interleaved,
+                    config=minimal_pc_2,
+                    compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,
