@@ -2953,3 +2953,191 @@ class TTNNBailingMoEAttention(TTNNModule):
             past_key_values,
             cache_position,
         )
+
+
+def _gated_attention_rotate_half_ttnn(x):
+    half_dim = x.shape[-1] // 2
+    x1 = x[..., :half_dim]
+    x2 = x[..., half_dim:]
+    return ttnn.concat([ttnn.neg(x2), x1], dim=-1)
+
+
+def _gated_attention_apply_rotary_ttnn(q, k, cos, sin):
+    cos = ttnn.unsqueeze(cos, 1)
+    sin = ttnn.unsqueeze(sin, 1)
+    rotary_dim = cos.shape[-1]
+    full_dim = q.shape[-1]
+    q_rot = q[..., :rotary_dim]
+    k_rot = k[..., :rotary_dim]
+    q_embed = ttnn.add(
+        ttnn.multiply(q_rot, cos),
+        ttnn.multiply(_gated_attention_rotate_half_ttnn(q_rot), sin),
+    )
+    k_embed = ttnn.add(
+        ttnn.multiply(k_rot, cos),
+        ttnn.multiply(_gated_attention_rotate_half_ttnn(k_rot), sin),
+    )
+    if rotary_dim < full_dim:
+        q_pass = q[..., rotary_dim:]
+        k_pass = k[..., rotary_dim:]
+        q_embed = ttnn.concat([q_embed, q_pass], dim=-1)
+        k_embed = ttnn.concat([k_embed, k_pass], dim=-1)
+    return q_embed, k_embed
+
+
+def _gated_attention_rms_norm_zero_centered_ttnn(x, weight, eps=1e-6):
+    x_sq = ttnn.multiply(x, x)
+    variance = ttnn.mean(x_sq, dim=-1, keepdim=True)
+    inv_rms = ttnn.rsqrt(ttnn.add(variance, eps))
+    x_normed = ttnn.multiply(x, inv_rms)
+    scale = ttnn.add(weight, 1.0)
+    return ttnn.multiply(x_normed, scale)
+
+
+def _gated_attention_sdpa_config(device, seq_len):
+    grid_size = device.compute_with_storage_grid_size()
+    q_chunk = 256 if seq_len >= 2048 else 64
+    return ttnn.SDPAProgramConfig(
+        compute_with_storage_grid_size=grid_size,
+        q_chunk_size=q_chunk,
+        k_chunk_size=q_chunk,
+        exp_approx_mode=False,
+    )
+
+
+def gated_attention_forward_ttnn(
+    hidden_states,
+    q_proj_weight,
+    k_proj_weight,
+    v_proj_weight,
+    o_proj_weight,
+    q_norm_weight,
+    k_norm_weight,
+    cos,
+    sin,
+    num_attention_heads,
+    num_key_value_heads,
+    head_dim,
+    device,
+    norm_eps=1e-6,
+):
+    B = hidden_states.shape[0]
+    T = hidden_states.shape[1]
+    scaling = head_dim**-0.5
+    qg = ttnn.linear(hidden_states, q_proj_weight)
+    qg = ttnn.reshape(qg, [B, T, num_attention_heads, head_dim * 2])
+    query_states, gate = ttnn.chunk(qg, 2, dim=-1)
+    gate = ttnn.reshape(gate, [B, T, num_attention_heads * head_dim])
+    query_states = _gated_attention_rms_norm_zero_centered_ttnn(query_states, q_norm_weight, eps=norm_eps)
+    query_states = ttnn.transpose(query_states, 1, 2)
+    key_states = ttnn.linear(hidden_states, k_proj_weight)
+    key_states = ttnn.reshape(key_states, [B, T, num_key_value_heads, head_dim])
+    key_states = _gated_attention_rms_norm_zero_centered_ttnn(key_states, k_norm_weight, eps=norm_eps)
+    key_states = ttnn.transpose(key_states, 1, 2)
+    value_states = ttnn.linear(hidden_states, v_proj_weight)
+    value_states = ttnn.reshape(value_states, [B, T, num_key_value_heads, head_dim])
+    value_states = ttnn.transpose(value_states, 1, 2)
+    query_states, key_states = _gated_attention_apply_rotary_ttnn(query_states, key_states, cos, sin)
+    attn_output = ttnn.transformer.scaled_dot_product_attention(
+        query_states,
+        key_states,
+        value_states,
+        is_causal=True,
+        scale=scaling,
+        program_config=_gated_attention_sdpa_config(device, T),
+        compute_kernel_config=ttnn.WormholeComputeKernelConfig(
+            math_fidelity=ttnn.MathFidelity.HiFi4,
+            math_approx_mode=False,
+            fp32_dest_acc_en=True,
+            packer_l1_acc=False,
+        ),
+    )
+    attn_output = ttnn.transpose(attn_output, 1, 2)
+    attn_output = ttnn.reshape(attn_output, [B, T, num_attention_heads * head_dim])
+    gate = ttnn.sigmoid(gate)
+    attn_output = ttnn.multiply(attn_output, gate)
+    attn_output = ttnn.linear(attn_output, o_proj_weight)
+    return attn_output
+
+
+class TTNNQwen3NextGatedAttention(TTNNModule):
+    def __init__(self):
+        super().__init__()
+
+    @classmethod
+    def from_torch(cls, torch_attn):
+        new_attn = cls()
+        new_attn._fallback_torch_layer = torch_attn
+        new_attn.num_attention_heads = torch_attn.config.num_attention_heads
+        new_attn.num_key_value_heads = torch_attn.config.num_key_value_heads
+        new_attn.head_dim = torch_attn.head_dim
+        new_attn.norm_eps = torch_attn.config.rms_norm_eps
+        return new_attn
+
+    def preprocess_weights_impl(self):
+        t = self._fallback_torch_layer
+        self.tt_q_proj = ttnn.from_torch(
+            t.q_proj.weight.T.contiguous().to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        self.tt_k_proj = ttnn.from_torch(
+            t.k_proj.weight.T.contiguous().to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        self.tt_v_proj = ttnn.from_torch(
+            t.v_proj.weight.T.contiguous().to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        self.tt_o_proj = ttnn.from_torch(
+            t.o_proj.weight.T.contiguous().to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        self.tt_q_norm = ttnn.from_torch(
+            t.q_norm.weight.unsqueeze(0).unsqueeze(0).unsqueeze(0).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        self.tt_k_norm = ttnn.from_torch(
+            t.k_norm.weight.unsqueeze(0).unsqueeze(0).unsqueeze(0).to(torch.bfloat16),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+
+    def move_weights_to_device_impl(self):
+        self.tt_q_proj = ttnn.to_device(self.tt_q_proj, self.device)
+        self.tt_k_proj = ttnn.to_device(self.tt_k_proj, self.device)
+        self.tt_v_proj = ttnn.to_device(self.tt_v_proj, self.device)
+        self.tt_o_proj = ttnn.to_device(self.tt_o_proj, self.device)
+        self.tt_q_norm = ttnn.to_device(self.tt_q_norm, self.device)
+        self.tt_k_norm = ttnn.to_device(self.tt_k_norm, self.device)
+
+    def forward(self, hidden_states, position_embeddings):
+        cos, sin = position_embeddings
+        if isinstance(hidden_states, TorchTTNNTensor):
+            hidden_states = hidden_states.to_ttnn
+        if isinstance(cos, torch.Tensor):
+            cos = ttnn.from_torch(cos.to(torch.bfloat16), device=self.device, layout=ttnn.TILE_LAYOUT)
+        if isinstance(sin, torch.Tensor):
+            sin = ttnn.from_torch(sin.to(torch.bfloat16), device=self.device, layout=ttnn.TILE_LAYOUT)
+        if hidden_states.layout != ttnn.TILE_LAYOUT:
+            hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        return gated_attention_forward_ttnn(
+            hidden_states,
+            self.tt_q_proj,
+            self.tt_k_proj,
+            self.tt_v_proj,
+            self.tt_o_proj,
+            self.tt_q_norm,
+            self.tt_k_norm,
+            cos,
+            sin,
+            self.num_attention_heads,
+            self.num_key_value_heads,
+            self.head_dim,
+            self.device,
+            norm_eps=self.norm_eps,
+        )
