@@ -14,7 +14,33 @@
 namespace ttnn::experimental::prim {
 
 void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& /*operation_attributes*/, const tensor_args_t& /*tensor_args*/) {}
+    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
+    const auto& token_activations_tensor = tensor_args.dense_activations_tensor;
+
+    const auto num_devices = token_activations_tensor.device()->get_view().num_devices();
+
+    const auto experts = operation_attributes.experts;
+    const auto batch_size = operation_attributes.batch_size;
+    const auto seq_size = operation_attributes.seq_size;
+    const auto total_tokens = batch_size * seq_size;
+
+    const auto experts_per_device = experts / num_devices;
+
+    const uint32_t activations_stride_elm = token_activations_tensor.logical_shape()[-1] / total_tokens;
+
+    const auto datum_size =
+        tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(token_activations_tensor.dtype()));
+
+    const auto alignmnent = (token_activations_tensor.memory_config().buffer_type() == BufferType::L1)
+                                ? hal::get_l1_alignment()
+                                : hal::get_dram_alignment();
+    const uint32_t expected_activations_stride_elm =
+        tt::align((2 * experts_per_device + 1) * datum_size, alignmnent) / datum_size;
+
+    TT_FATAL(
+        activations_stride_elm == expected_activations_stride_elm,
+        "The token activations tensor is expected to have aligned 2 * experts_per_device + 1 elements per token");
+}
 
 SelectiveReduceCombineDeviceOperation::spec_return_value_t SelectiveReduceCombineDeviceOperation::compute_output_specs(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
