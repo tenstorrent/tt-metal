@@ -40,6 +40,7 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
+#include <tuple>
 #include <type_traits>
 
 using namespace tt::tt_fabric;
@@ -47,6 +48,18 @@ using namespace tt::tt_fabric;
 // Type alias for cleaner access to 2D mesh routing constants
 using MeshRoutingFields = tt::tt_fabric::RoutingFieldsConstants::Mesh;
 using LowLatencyFields = tt::tt_fabric::RoutingFieldsConstants::LowLatency;
+
+// ============================================================================
+// Per-VC runtime array type aliases
+// These tuple types split flat sender-channel arrays into per-VC scoped arrays.
+// ============================================================================
+using SenderFreeSlotsTuple =
+    std::tuple<std::array<uint32_t, MAX_NUM_SENDER_CHANNELS_VC0>, std::array<uint32_t, MAX_NUM_SENDER_CHANNELS_VC1>>;
+using SenderConnectionEstablishedTuple =
+    std::tuple<std::array<bool, MAX_NUM_SENDER_CHANNELS_VC0>, std::array<bool, MAX_NUM_SENDER_CHANNELS_VC1>>;
+using SenderFromReceiverCreditsTuple = std::tuple<
+    std::array<SenderChannelFromReceiverCredits, MAX_NUM_SENDER_CHANNELS_VC0>,
+    std::array<SenderChannelFromReceiverCredits, MAX_NUM_SENDER_CHANNELS_VC1>>;
 
 /*
 
@@ -1382,15 +1395,38 @@ FORCE_INLINE void establish_edm_connection(
     local_sender_channel_worker_interface.template cache_producer_noc_addr<ENABLE_RISC_CPU_DATA_CACHE, USE_DYNAMIC_CREDIT_ADDR>();
 }
 
-bool any_sender_channels_active(
-    const std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
-    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
+template <
+    size_t VC,
+    size_t NUM_VC_SENDER_CHANNELS,
+    const std::array<size_t, NUM_VC_SENDER_CHANNELS>& VC_SENDER_NUM_BUFFERS>
+bool any_sender_channels_active_vc(
+    const std::array<uint32_t, NUM_VC_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
+    for (size_t i = 0; i < NUM_VC_SENDER_CHANNELS; i++) {
         if (get_ptr_val(local_sender_channel_free_slots_stream_ids[i]) !=
-            static_cast<int32_t>(SENDER_NUM_BUFFERS_ARRAY[i])) {
+            static_cast<int32_t>(VC_SENDER_NUM_BUFFERS[i])) {
             return true;
         }
     }
     return false;
+}
+
+// Dispatch across all VCs using a fold expression over index_sequence.
+bool any_sender_channels_active(const SenderFreeSlotsTuple& free_slots_tuple) {
+    return [&]<size_t... VCs>(std::index_sequence<VCs...>) {
+        return (... || [&]<size_t VC>() -> bool {
+            if constexpr (VC == 0) {
+                return any_sender_channels_active_vc<
+                    0,
+                    MAX_NUM_SENDER_CHANNELS_VC0,
+                    tt::tt_fabric::SENDER_NUM_BUFFERS_ARRAY_VC0>(std::get<0>(free_slots_tuple));
+            } else {
+                return any_sender_channels_active_vc<
+                    1,
+                    MAX_NUM_SENDER_CHANNELS_VC1,
+                    tt::tt_fabric::SENDER_NUM_BUFFERS_ARRAY_VC1>(std::get<1>(free_slots_tuple));
+            }
+        }.template operator()<VCs>());
+    }(std::make_index_sequence<MAX_NUM_VCS>{});
 }
 
 /*
@@ -1486,7 +1522,7 @@ void run_coordinated_context_switch_to_base_firmware(
 }
 template <typename LocalTelemetryT>
 FORCE_INLINE void update_telemetry(
-    const std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids_ordered,
+    const SenderFreeSlotsTuple& local_sender_channel_free_slots_stream_ids_ordered,
     bool tx_progress,
     bool rx_progress,
     LocalTelemetryT& local_fabric_telemetry,
@@ -1722,6 +1758,9 @@ FORCE_INLINE
     return progress;
 };
 
+// sender_channel_index is now a VC-local index (0-based within VC).
+// VC_RECEIVER_CHANNEL doubles as the VC index (0 = VC0, 1 = VC1).
+// The global sender channel index is vc_sender_channel_start_per_vc[VC_RECEIVER_CHANNEL] + sender_channel_index.
 template <
     uint8_t VC_RECEIVER_CHANNEL,
     uint8_t sender_channel_index,
@@ -1730,7 +1769,7 @@ template <
     typename EdmChannelWorkerIFs,
     typename RemoteEthReceiverChannels,
     typename ReceiverPointersT,
-    size_t NUM_SENDER_CHANNELS,
+    size_t NUM_VC_SENDER_CHANNELS,
     typename LocalTelemetryT>
 #if !defined(FABRIC_2D_VC1_ACTIVE)
 FORCE_INLINE
@@ -1741,23 +1780,26 @@ FORCE_INLINE
         EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
         ReceiverPointersT& outbound_to_receiver_channel_pointers,
         RemoteEthReceiverChannels& remote_receiver_channels,
-        std::array<bool, NUM_SENDER_CHANNELS>& channel_connection_established,
-        std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids,
-        std::array<SenderChannelFromReceiverCredits, NUM_SENDER_CHANNELS>& sender_channel_from_receiver_credits,
+        std::array<bool, NUM_VC_SENDER_CHANNELS>& channel_connection_established,
+        std::array<uint32_t, NUM_VC_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids,
+        std::array<SenderChannelFromReceiverCredits, NUM_VC_SENDER_CHANNELS>& sender_channel_from_receiver_credits,
         PerfTelemetryRecorder& perf_telemetry_recorder,
         LocalTelemetryT& local_fabric_telemetry) {
-    if constexpr (is_sender_channel_serviced[sender_channel_index]) {
+    // Compute global sender channel index from VC-local index
+    constexpr uint8_t global_sender_channel_index =
+        static_cast<uint8_t>(vc_sender_channel_start_per_vc[VC_RECEIVER_CHANNEL]) + sender_channel_index;
+    if constexpr (is_sender_channel_serviced[global_sender_channel_index]) {
         // the cache is invalidated here because the channel will read some
         // L1 locations to see if it can make progress
         router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
 
         return run_sender_channel_step_impl<
-            sender_channel_index,
+            global_sender_channel_index,
             to_receiver_packets_sent_streams[VC_RECEIVER_CHANNEL],
-            sender_ch_live_check_skip[sender_channel_index],
+            sender_ch_live_check_skip[global_sender_channel_index],
             enable_first_level_ack>(
-            local_sender_channels.template get<sender_channel_index>(),
-            local_sender_channel_worker_interfaces.template get<sender_channel_index>(),
+            local_sender_channels.template get<global_sender_channel_index>(),
+            local_sender_channel_worker_interfaces.template get<global_sender_channel_index>(),
             outbound_to_receiver_channel_pointers,
             remote_receiver_channels.template get<VC_RECEIVER_CHANNEL>(),
             channel_connection_established[sender_channel_index],
@@ -2133,7 +2175,6 @@ template <
     typename DownstreamSenderVC0T,
     typename DownstreamSenderVC1T,
     typename LocalRelayInterfaceT,
-    size_t NUM_SENDER_CHANNELS,
     typename EthSenderChannels,
     typename EthReceiverChannels,
     typename RemoteEthReceiverChannels,
@@ -2158,7 +2199,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     TransactionIdTrackerCH1& receiver_channel_1_trid_tracker,
 #endif  // FABRIC_2D_VC1_ACTIVE
     std::array<uint8_t, num_eth_ports>& port_direction_table,
-    std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
+    SenderFreeSlotsTuple& local_sender_channel_free_slots_stream_ids) {
     size_t did_nothing_count = 0;
     using FabricTelemetryT = FabricTelemetry;
     FabricTelemetryT local_fabric_telemetry{};
@@ -2201,8 +2242,9 @@ FORCE_INLINE void run_fabric_edm_main_loop(
         receiver_channel_pointers_ch0.set_src_chan_id(BufferIndex{0}, remote_worker_sender_channel);
     }
 
-    std::array<bool, NUM_SENDER_CHANNELS> channel_connection_established =
-        initialize_array<NUM_SENDER_CHANNELS, bool, false>();
+    SenderConnectionEstablishedTuple channel_connection_established{
+        initialize_array<MAX_NUM_SENDER_CHANNELS_VC0, bool, false>(),
+        initialize_array<MAX_NUM_SENDER_CHANNELS_VC1, bool, false>()};
 
     PerfTelemetryRecorder inner_loop_perf_telemetry_collector = build_perf_telemetry_recorder<perf_telemetry_mode>();
     auto local_perf_telemetry_buffer =
@@ -2210,8 +2252,20 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
     auto receiver_channel_response_credit_senders =
         init_receiver_channel_response_credit_senders<NUM_RECEIVER_CHANNELS>();
-    auto sender_channel_from_receiver_credits =
-        init_sender_channel_from_receiver_credits_flow_controllers<NUM_SENDER_CHANNELS>();
+    // Per-VC sender channel from receiver credits: each VC's array uses global channel indices.
+    // VC0 channels use global indices 0..MAX_NUM_SENDER_CHANNELS_VC0-1.
+    // VC1 channels use global indices vc_sender_channel_start_per_vc[1]..NUM_SENDER_CHANNELS-1.
+    auto sender_channel_from_receiver_credits = [&]() -> SenderFromReceiverCreditsTuple {
+        auto vc0_array = init_sender_channel_from_receiver_credits_flow_controllers<MAX_NUM_SENDER_CHANNELS_VC0>();
+        auto vc1_array = [&]() {
+            std::array<SenderChannelFromReceiverCredits, MAX_NUM_SENDER_CHANNELS_VC1> arr;
+            for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS_VC1; i++) {
+                new (&arr[i]) SenderChannelFromReceiverCredits(vc_sender_channel_start_per_vc[1] + i);
+            }
+            return arr;
+        }();
+        return SenderFromReceiverCreditsTuple{std::move(vc0_array), std::move(vc1_array)};
+    }();
 
     // This value defines the number of loop iterations we perform of the main control sequence before exiting
     // to check for termination and context switch. Removing the these checks from the inner loop can drastically
@@ -2573,14 +2627,23 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     }
 }
 
-template <typename EdmChannelWorkerIFs, size_t NUM_SENDER_CHANNELS>
+template <typename EdmChannelWorkerIFs>
 void
 #ifdef FABRIC_2D
     __attribute__((noinline))
 #endif
     wait_for_static_connection_to_ready(
         EdmChannelWorkerIFs& local_sender_channel_worker_interfaces,
-        std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
+        SenderFreeSlotsTuple& local_sender_channel_free_slots_stream_ids) {
+    // Look up the stream ID for a global sender channel index from the per-VC tuple.
+    auto get_free_slots_stream_id = [&](size_t global_idx) -> uint32_t {
+        if (global_idx < MAX_NUM_SENDER_CHANNELS_VC0) {
+            return std::get<0>(local_sender_channel_free_slots_stream_ids)[global_idx];
+        } else {
+            return std::get<1>(
+                local_sender_channel_free_slots_stream_ids)[global_idx - vc_sender_channel_start_per_vc[1]];
+        }
+    };
     auto establish_static_connection_from_receiver_side = [&](auto& interface, size_t sender_channel_idx) {
         if (!sender_ch_live_check_skip[sender_channel_idx]) {
             return;
@@ -2588,7 +2651,7 @@ void
         while (!connect_is_requested(*interface.connection_live_semaphore)) {
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
         }
-        establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids[sender_channel_idx]);
+        establish_edm_connection(interface, get_free_slots_stream_id(sender_channel_idx));
     };
     if constexpr (multi_txq_enabled) {
         tuple_for_each_constexpr(
@@ -2685,13 +2748,20 @@ void
 #endif
 }
 
-// copy the sender_channel_free_slots_stream_ids (in L1) to local memory for performance.
-template <size_t NUM_SENDER_CHANNELS>
+// copy the sender_channel_free_slots_stream_ids (in L1) to per-VC tuple for performance.
+// Each VC's array uses VC-local indices; the global stream ID is read using the VC start offset.
 void populate_local_sender_channel_free_slots_stream_id_ordered_map(
     uint32_t has_downstream_edm_vc0_buffer_connection,
-    std::array<uint32_t, NUM_SENDER_CHANNELS>& local_sender_channel_free_slots_stream_ids) {
-    for (size_t i = 0; i < NUM_SENDER_CHANNELS; i++) {
-        local_sender_channel_free_slots_stream_ids[i] = sender_channel_free_slots_stream_ids[i];
+    SenderFreeSlotsTuple& local_sender_channel_free_slots_stream_ids) {
+    constexpr size_t vc0_start = vc_sender_channel_start_per_vc[0];
+    constexpr size_t vc1_start = vc_sender_channel_start_per_vc[1];
+    for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS_VC0; i++) {
+        std::get<0>(local_sender_channel_free_slots_stream_ids)[i] =
+            sender_channel_free_slots_stream_ids[vc0_start + i];
+    }
+    for (size_t i = 0; i < MAX_NUM_SENDER_CHANNELS_VC1; i++) {
+        std::get<1>(local_sender_channel_free_slots_stream_ids)[i] =
+            sender_channel_free_slots_stream_ids[vc1_start + i];
     }
 }
 
@@ -3068,13 +3138,9 @@ void kernel_main() {
     //////////////////////////////
     //////////////////////////////
 
-    // Hack for mux mode until all remaining VC1 logic is removed from fabric
-    // Needed so `downstream_edm_noc_interfaces_vc0` can be initialized properly below
-    // Issue #33360 TODO: Create a new array for downstream receiver stream IDs
-    // so we can remove this hack.
-    std::array<uint32_t, NUM_SENDER_CHANNELS> local_sender_channel_free_slots_stream_ids;
-    // std::array<uint32_t, NUM_SENDER_CHANNELS == 1 ? 2 : NUM_SENDER_CHANNELS>
-    // local_sender_channel_free_slots_stream_ids;
+    // Per-VC tuple holding sender channel free-slots stream IDs, split by VC.
+    // Replaces the flat std::array<uint32_t, NUM_SENDER_CHANNELS> for per-VC scoped access.
+    SenderFreeSlotsTuple local_sender_channel_free_slots_stream_ids;
 
     const auto& local_sem_for_teardown_from_downstream_edm =
         take_first_n_elements<NUM_DOWNSTREAM_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(my_sem_for_teardown_from_edm);
