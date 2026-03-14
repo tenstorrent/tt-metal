@@ -30,6 +30,263 @@ def pad_to_tile(dim, tile_size):
     return ((dim + tile_size - 1) // tile_size) * tile_size
 
 
+def _run_matmul_2d_interleaved_in0_sharded_in1(
+    device,
+    batch,
+    seq_len,
+    k,
+    n,
+    in0_dtype=ttnn.bfloat16,
+    in1_dtype=ttnn.bfloat8_b,
+    out_dtype=ttnn.bfloat16,
+    has_bias=False,
+    bias_dtype=None,
+    num_dram_banks=12,
+    expected_pcc=0.999,
+):
+    """
+    Run matmul with DRAM interleaved in0 and DRAM sharded in1 using
+    MatmulMultiCoreReuseMultiCastProgramConfig (2D multicast).
+    batch == 1: in1 WIDTH_SHARDED in DRAM, fuse_batch=True
+    batch > 1: in1 HEIGHT_SHARDED in DRAM, fuse_batch=False
+    """
+    if bias_dtype is None:
+        bias_dtype = in1_dtype
+    torch.manual_seed(0)
+    tile_h = 32
+    tile_w = 32
+
+    # --- Hardware Validation ---
+    device_banks = device.dram_grid_size().x
+    if device_banks < num_dram_banks:
+        pytest.skip(f"Device has {device_banks} DRAM banks, need {num_dram_banks}")
+
+    bias_torch = None
+    bias_t = None
+
+    # ==========================================
+    # 1. TENSOR SETUP & MEMORY SHARDING
+    # ==========================================
+    if batch == 1:
+        # UNBATCHED PATH: Shard the weights (in1) across the N dimension (Width)
+        n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_dram_banks)
+
+        in0_shape = [1, 1, seq_len, k]
+        in1_shape = [1, 1, k, n]
+
+        in0 = torch.randn(in0_shape, dtype=torch.bfloat16)
+        in1 = torch.randn(in1_shape, dtype=torch.bfloat16)
+
+        # in0 is always Standard DRAM Interleaved
+        in0_t = ttnn.from_torch(
+            in0,
+            dtype=in0_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # in1 requires a specific Shard Specification defining how it breaks across cores
+        # Use tile-padded k because TILE_LAYOUT pads the tensor's K dim to next multiple of 32
+        in1_shard_shape = [pad_to_tile(k, tile_w), n_padded // num_dram_banks]
+        in1_shard_grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
+        )
+        in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        in1_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec
+        )
+        in1_t = ttnn.from_torch(
+            in1,
+            dtype=in1_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=in1_memory_config,
+        )
+
+        if has_bias:
+            bias_shape = [1, 1, tile_h, n]
+            bias_torch = torch.randn(bias_shape, dtype=torch.bfloat16)
+            bias_t = ttnn.from_torch(
+                bias_torch,
+                dtype=bias_dtype,
+                layout=ttnn.TILE_LAYOUT,
+                device=device,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+    else:
+        # BATCHED PATH: Shard the weights (in1) across the Batch dimension (Height)
+        batch_padded = pad_batch_to_dram_banks(batch, num_dram_banks)
+        batches_per_bank = batch_padded // num_dram_banks
+        k_padded = pad_to_tile(k, tile_w)
+        n_padded = pad_to_tile(n, tile_w)
+
+        in0_orig = torch.randn([1, batch, seq_len, k], dtype=torch.bfloat16)
+        in1_orig = torch.randn([1, batch, k, n], dtype=torch.bfloat16)
+
+        in0_t = ttnn.from_torch(
+            in0_orig,
+            dtype=in0_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        dram_shard_grid = ttnn.CoreRangeSet(
+            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
+        )
+        in1_shard_shape = [batches_per_bank * k_padded, n_padded]
+        in1_shard_spec = ttnn.ShardSpec(dram_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        in1_memory_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec
+        )
+        in1_t = ttnn.from_torch(
+            in1_orig,
+            dtype=in1_dtype,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=in1_memory_config,
+        )
+
+    # ==========================================
+    # 2. HARDWARE GRID & CACHE MATH
+    # ==========================================
+    # Pad to tile boundaries to match what TILE_LAYOUT produces on device
+    seq_len_padded = pad_to_tile(seq_len, tile_h)
+    k_tiled = pad_to_tile(k, tile_w)
+    n_tiled = pad_to_tile(n, tile_w)
+
+    # Calculate how many 32x32 tiles make up the (padded) matrices
+    device_grid = device.compute_with_storage_grid_size()
+    M_tiles = seq_len_padded // tile_h
+    K_tiles = k_tiled // tile_w
+    N_tiles = n_tiled // tile_w
+
+    # Determine the compute grid shape (grid_x and grid_y) by finding the largest
+    # number of cores that evenly divide the Output Matrix dimensions (N and M).
+    grid_x = 1
+    for x in range(min(device_grid.x, N_tiles), 0, -1):
+        if N_tiles % x == 0:
+            grid_x = x
+            break
+
+    grid_y = 1
+    for y in range(min(device_grid.y, M_tiles), 0, -1):
+        if M_tiles % y == 0:
+            grid_y = y
+            break
+
+    # Calculate workload per core
+    in0_block_h = M_tiles // grid_y
+    out_block_w = N_tiles // grid_x
+    per_core_M = in0_block_h
+    per_core_N = out_block_w
+
+    # Calculate in0_block_w: Finds the largest chunk of the K dimension we can
+    # process at once without overflowing the Circular Buffers (CBs) on the chip.
+    max_cb_tiles = 256
+    in0_block_w = K_tiles
+    while in0_block_w > 1:
+        if K_tiles % in0_block_w == 0 and in0_block_w * out_block_w * 2 <= max_cb_tiles:
+            break
+        in0_block_w -= 1
+    while in0_block_w > 1 and in0_block_h * in0_block_w * 2 > max_cb_tiles:
+        in0_block_w = in0_block_w // 2
+        if K_tiles % in0_block_w != 0:
+            while in0_block_w > 1 and K_tiles % in0_block_w != 0:
+                in0_block_w -= 1
+
+    # Calculate out_block_h: Ensures the final output and intermediate fp32 math
+    # fits inside the ~1.2MB L1 cache limit of the cores.
+    max_l1_usage = 1200 * 1024
+    out_block_h = in0_block_h
+    for candidate_h in range(in0_block_h, 0, -1):
+        if in0_block_h % candidate_h != 0:
+            continue
+        in0_cb = candidate_h * in0_block_w * 2 * 2048
+        in1_cb = out_block_w * in0_block_w * 2 * 2048
+        interm0_cb = candidate_h * out_block_w * 4096
+        output_cb = candidate_h * out_block_w * 2048
+        total = in0_cb + in1_cb + interm0_cb + output_cb
+        if total <= max_l1_usage:
+            out_block_h = candidate_h
+            break
+
+    # Calculate subblock dimensions (Hardware limitation: h * w must be <= 4)
+    out_subblock_w = 1
+    for sw in range(min(out_block_w, 4), 0, -1):
+        if out_block_w % sw == 0:
+            out_subblock_w = sw
+            break
+    max_sh = 4 // out_subblock_w
+    out_subblock_h = 1
+    for sh in range(min(out_block_h, max_sh), 0, -1):
+        if out_block_h % sh == 0:
+            out_subblock_h = sh
+            break
+
+    # ==========================================
+    # 3. EXECUTION & VALIDATION
+    # ==========================================
+    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+        compute_with_storage_grid_size=(grid_x, grid_y),
+        in0_block_w=in0_block_w,
+        out_subblock_h=out_subblock_h,
+        out_subblock_w=out_subblock_w,
+        out_block_h=out_block_h,
+        out_block_w=out_block_w,
+        per_core_M=per_core_M,
+        per_core_N=per_core_N,
+        transpose_mcast=False,
+        fused_activation=None,
+        fuse_batch=(batch == 1),
+    )
+
+    compute_kernel_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+        math_approx_mode=True,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+
+    if has_bias and batch == 1:
+        output_t = ttnn.linear(
+            in0_t,
+            in1_t,
+            bias=bias_t,
+            program_config=program_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=out_dtype,
+            compute_kernel_config=compute_kernel_config,
+        )
+    else:
+        output_t = ttnn.matmul(
+            in0_t,
+            in1_t,
+            program_config=program_config,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            dtype=out_dtype,
+            compute_kernel_config=compute_kernel_config,
+        )
+
+    output_tensor = ttnn.to_torch(output_t)
+    if batch == 1:
+        # Slice padded output back to original logical dimensions
+        output_tensor = output_tensor[:, :, :seq_len, :n]
+        pt_out = torch.matmul(in0, in1)
+        if has_bias:
+            num_bias_repeats = (seq_len + tile_h - 1) // tile_h
+            bias_repeated = torch.repeat_interleave(bias_torch, num_bias_repeats, dim=2)
+            bias_repeated = bias_repeated[:, :, :seq_len, :]  # match pt_out length (padded repeat can exceed)
+            pt_out = pt_out + bias_repeated
+    else:
+        output_tensor = output_tensor[:, :batch, :seq_len, :n]
+        pt_out = torch.matmul(in0_orig, in1_orig)
+
+    assert_with_pcc(pt_out, output_tensor, expected_pcc)
+
+
 @skip_for_blackhole("Deepseek tests target Wormhole")
 @pytest.mark.parametrize(
     "test_case",
@@ -823,205 +1080,16 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
     This exercises the prefill when forced to use the decode optimised weight sharding
     i.e. in1 is DRAM sharded - width for unbatched, and height (by batch) for batched matmuls
     """
-    torch.manual_seed(0)
-
-    batch = test_case["batch"]
-    k = test_case["k"]
-    n = test_case["n"]
-    in1_dtype = test_case["in1_dtype"]
-    expected_pcc = test_case["expected_pcc"]
-    tile_w = 32
-    tile_h = 32
-    num_dram_banks = test_case.get("num_dram_banks", 12)
-
-    device_banks = device.dram_grid_size().x
-
-    if device_banks < num_dram_banks:
-        pytest.skip("Device has less DRAM banks than required for test")
-
-    if batch == 1:
-        # --- Unbatched: in1 DRAM WIDTH sharded ---
-        n_padded = pad_to_dram_banks(n, tile_w, tile_w * num_dram_banks)
-
-        in0_shape = [1, 1, seq_len, k]
-        in1_shape = [1, 1, k, n]
-
-        in0 = torch.randn(in0_shape, dtype=torch.bfloat16)
-        in1 = torch.randn(in1_shape, dtype=torch.bfloat16)
-
-        in0_t = ttnn.from_torch(
-            in0,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        in1_shard_shape = [k, n_padded // num_dram_banks]
-        in1_shard_grid = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
-        )
-        in1_shard_spec = ttnn.ShardSpec(in1_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-        in1_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec
-        )
-        in1_t = ttnn.from_torch(
-            in1,
-            dtype=in1_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=in1_memory_config,
-        )
-    else:
-        # --- Batched: in1 DRAM HEIGHT sharded by batch (matching test_matmul_batched_dram_sharded) ---
-        batch_padded = pad_batch_to_dram_banks(batch, num_dram_banks)
-        batches_per_bank = batch_padded // num_dram_banks
-        k_padded = pad_to_tile(k, tile_w)
-        n_padded = pad_to_tile(n, tile_w)
-
-        in0_orig = torch.randn([1, batch, seq_len, k], dtype=torch.bfloat16)
-        in1_orig = torch.randn([1, batch, k, n], dtype=torch.bfloat16)
-
-        in0_t = ttnn.from_torch(
-            in0_orig,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-
-        dram_shard_grid = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_dram_banks - 1, 0))}
-        )
-        in1_shard_shape = [batches_per_bank * k_padded, n_padded]
-        in1_shard_spec = ttnn.ShardSpec(dram_shard_grid, in1_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
-        in1_memory_config = ttnn.MemoryConfig(
-            ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, in1_shard_spec
-        )
-        in1_t = ttnn.from_torch(
-            in1_orig,
-            dtype=in1_dtype,
-            layout=ttnn.TILE_LAYOUT,
-            device=device,
-            memory_config=in1_memory_config,
-        )
-
-    # Compute 2D grid size
-    M_tiles = seq_len // tile_h
-    K_tiles = k // tile_w
-    N_tiles = n // tile_w
-
-    # grid_x splits N dimension; grid_y splits M dimension
-    # grid_x only needs to divide N_tiles (not K_tiles)
-    grid_x = 1
-    for x in range(min(8, N_tiles), 0, -1):
-        if N_tiles % x == 0:
-            grid_x = x
-            break
-
-    grid_y = 1
-    for y in range(min(8, M_tiles), 0, -1):
-        if M_tiles % y == 0:
-            grid_y = y
-            break
-
-    grid_size = (grid_x, grid_y)
-
-    in0_block_h = M_tiles // grid_y
-    out_block_h = in0_block_h
-    out_block_w = N_tiles // grid_x
-
-    # in0_block_w (inner dim block) must divide K_tiles.
-    # Target: keep in1 CB tiles (in0_block_w * out_block_w * 2) under ~256 tiles
-    # while maximizing in0_block_w to minimize inner loop iterations.
-    max_in1_cb_tiles = 256  # ~140 KB for bfloat8_b with double buffering
-    in0_block_w = K_tiles
-    while in0_block_w > 1:
-        if K_tiles % in0_block_w == 0 and in0_block_w * out_block_w * 2 <= max_in1_cb_tiles:
-            break
-        in0_block_w -= 1
-    # Ensure in0 CB is also reasonable
-    while in0_block_w > 1 and in0_block_h * in0_block_w * 2 > max_in1_cb_tiles:
-        in0_block_w = in0_block_w // 2
-        if K_tiles % in0_block_w != 0:
-            # Find next valid divisor
-            while in0_block_w > 1 and K_tiles % in0_block_w != 0:
-                in0_block_w -= 1
-
-    # Determine out_block_h to make sure the matmul will fit in L1.
-    # CBs that scale with out_block_h * out_block_w:
-    #   interm0 (fp32): out_block_h * out_block_w * 4096 bytes
-    #   output (bf16):  out_block_h * out_block_w * 2048 bytes
-    #   in0 (bf16):     out_block_h * in0_block_w * 2 * 2048 bytes (double-buffered)
-    # Target: total CB usage < ~1.2 MB (leaving headroom in 1.5 MB L1)
-    max_l1_usage = 1200 * 1024  # ~1.2 MB target
-    per_core_M = out_block_h
-    per_core_N = out_block_w
-    actual_out_block_h = out_block_h
-    for candidate_h in range(out_block_h, 0, -1):
-        if out_block_h % candidate_h != 0:
-            continue
-        # Estimate CB sizes
-        in0_cb = candidate_h * in0_block_w * 2 * 2048  # bf16 double-buffered
-        in1_cb = out_block_w * in0_block_w * 2 * 1088  # bf8b double-buffered
-        interm0_cb = candidate_h * out_block_w * 4096  # fp32
-        output_cb = candidate_h * out_block_w * 2048  # bf16
-        total = in0_cb + in1_cb + interm0_cb + output_cb
-        if total <= max_l1_usage:
-            actual_out_block_h = candidate_h
-            break
-
-    # Subblock calculation (h * w <= 4, hardware limit)
-    out_subblock_w = 1
-    for sw in range(min(out_block_w, 4), 0, -1):
-        if out_block_w % sw == 0:
-            out_subblock_w = sw
-            break
-    max_sh = 4 // out_subblock_w
-    out_subblock_h = 1
-    for sh in range(min(actual_out_block_h, max_sh), 0, -1):
-        if actual_out_block_h % sh == 0:
-            out_subblock_h = sh
-            break
-
-    program_config = ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-        compute_with_storage_grid_size=grid_size,
-        in0_block_w=in0_block_w,
-        out_subblock_h=out_subblock_h,
-        out_subblock_w=out_subblock_w,
-        out_block_h=actual_out_block_h,
-        out_block_w=out_block_w,
-        per_core_M=per_core_M,
-        per_core_N=per_core_N,
-        transpose_mcast=False,
-        fused_activation=None,
-        fuse_batch=(batch == 1),
+    _run_matmul_2d_interleaved_in0_sharded_in1(
+        device=device,
+        batch=test_case["batch"],
+        seq_len=seq_len,
+        k=test_case["k"],
+        n=test_case["n"],
+        in0_dtype=ttnn.bfloat16,
+        in1_dtype=test_case["in1_dtype"],
+        out_dtype=ttnn.bfloat16,
+        has_bias=False,
+        num_dram_banks=test_case.get("num_dram_banks", 12),
+        expected_pcc=test_case["expected_pcc"],
     )
-
-    compute_kernel_config = ttnn.init_device_compute_kernel_config(
-        device.arch(),
-        math_fidelity=ttnn.MathFidelity.LoFi,
-        math_approx_mode=True,
-        fp32_dest_acc_en=True,
-        packer_l1_acc=True,
-    )
-
-    output_t = ttnn.matmul(
-        in0_t,
-        in1_t,
-        program_config=program_config,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        dtype=ttnn.bfloat16,
-        compute_kernel_config=compute_kernel_config,
-    )
-
-    # Validate
-    output_tensor = ttnn.to_torch(output_t)
-    if batch == 1:
-        pt_out = torch.matmul(in0, in1)
-    else:
-        output_tensor = output_tensor[:, :batch, :seq_len, :n]
-        pt_out = torch.matmul(in0_orig, in1_orig)
-
-    pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
-    assert pcc_passed, f"PCC check failed: {pcc_message}"
