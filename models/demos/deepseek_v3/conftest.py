@@ -15,6 +15,10 @@ from models.demos.deepseek_v3.utils.test_utils import get_valid_system_names, lo
 from tests.scripts.common import get_updated_device_params
 
 RESET_WEIGHT_CACHE_OPTION = "--recalculate-weights"
+RECALCULATE_WEIGHT_CACHE_DEMO_TIMEOUT_SECONDS = 6 * 60 * 60
+DEEPSEEK_DEMO_NODEID_PREFIX = "models/demos/deepseek_v3/demo/"
+DEEPSEEK_TESTS_NODEID_PREFIX = "models/demos/deepseek_v3/tests/"
+MULTIHOST_WEIGHT_CACHE_TEST_TIMEOUT_SECONDS = 30 * 60
 
 # Shared test parametrization constants
 # Prefill sequence lengths: powers of 2 from 128 to 128K
@@ -305,6 +309,79 @@ def pytest_configure(config):
     )
 
 
+def _get_timeout_override_marker(item, timeout_seconds: float) -> pytest.MarkDecorator:
+    timeout_marker = item.get_closest_marker("timeout")
+    if timeout_marker is None:
+        return pytest.mark.timeout(timeout_seconds)
+
+    args = list(timeout_marker.args)
+    kwargs = dict(timeout_marker.kwargs)
+    if args:
+        args[0] = timeout_seconds
+    elif "timeout" in kwargs:
+        kwargs["timeout"] = timeout_seconds
+    else:
+        args = [timeout_seconds]
+
+    return pytest.mark.timeout(*args, **kwargs)
+
+
+def _maybe_extend_demo_timeout_for_weight_recalculation(config: pytest.Config, item: pytest.Item) -> None:
+    if not config.getoption(RESET_WEIGHT_CACHE_OPTION):
+        return
+    if not item.nodeid.startswith(DEEPSEEK_DEMO_NODEID_PREFIX):
+        return
+    if "force_recalculate_weight_config" not in item.fixturenames:
+        return
+
+    timeout_marker = item.get_closest_marker("timeout")
+    current_timeout = None
+    if timeout_marker is not None:
+        current_timeout = timeout_marker.args[0] if timeout_marker.args else timeout_marker.kwargs.get("timeout")
+        try:
+            current_timeout = float(current_timeout)
+        except (TypeError, ValueError):
+            current_timeout = None
+
+    if current_timeout is not None and current_timeout >= RECALCULATE_WEIGHT_CACHE_DEMO_TIMEOUT_SECONDS:
+        return
+
+    # Cold-cache demo weight generation can take hours, so relax the timeout only
+    # when the user explicitly asks pytest to recalculate cached weights.
+    item.add_marker(
+        _get_timeout_override_marker(item, RECALCULATE_WEIGHT_CACHE_DEMO_TIMEOUT_SECONDS),
+        append=False,
+    )
+
+
+def _maybe_extend_test_timeout_for_multihost_weight_cache(current_device: str, item: pytest.Item) -> None:
+    if current_device not in {"TG", "DUAL", "QUAD"}:
+        return
+    if not item.nodeid.startswith(DEEPSEEK_TESTS_NODEID_PREFIX):
+        return
+    if "force_recalculate_weight_config" not in item.fixturenames:
+        return
+
+    timeout_marker = item.get_closest_marker("timeout")
+    current_timeout = None
+    if timeout_marker is not None:
+        current_timeout = timeout_marker.args[0] if timeout_marker.args else timeout_marker.kwargs.get("timeout")
+        try:
+            current_timeout = float(current_timeout)
+        except (TypeError, ValueError):
+            current_timeout = None
+
+    if current_timeout is not None and current_timeout >= MULTIHOST_WEIGHT_CACHE_TEST_TIMEOUT_SECONDS:
+        return
+
+    # Shared-cache publication/visibility for multihost DeepSeek tests regularly
+    # exceeds pytest's default 300s even when the code under test is healthy.
+    item.add_marker(
+        _get_timeout_override_marker(item, MULTIHOST_WEIGHT_CACHE_TEST_TIMEOUT_SECONDS),
+        append=False,
+    )
+
+
 def pytest_collection_modifyitems(config, items):
     """
     Check if tests have requires_device marker and skip them during collection if current device doesn't match.
@@ -316,6 +393,9 @@ def pytest_collection_modifyitems(config, items):
         pytest.exit(f"Could not determine device type during collection: {e}", returncode=1)
 
     for item in items:
+        _maybe_extend_demo_timeout_for_weight_recalculation(config, item)
+        _maybe_extend_test_timeout_for_multihost_weight_cache(current_device, item)
+
         marker = item.get_closest_marker("requires_device")
         if marker:
             # Get device_types from marker - can be single value or list

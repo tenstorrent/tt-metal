@@ -5,6 +5,9 @@ from __future__ import annotations
 
 import fcntl
 import json
+import os
+import socket
+import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
@@ -17,6 +20,13 @@ import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
 from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION
 from models.demos.deepseek_v3.utils.run_config import WeightConfig
+
+_MULTIHOST_CACHE_COORD_DIR = ".multihost_cache"
+_MULTIHOST_DECISION_FILE = "decision.json"
+_MULTIHOST_GENERATION_LOCK = "generation.lock"
+_MULTIHOST_POLL_INTERVAL_SECONDS = 0.1
+_MULTIHOST_WAIT_LOG_INTERVAL_SECONDS = 10 * 60
+_HOSTNAME = socket.gethostname().split(".", 1)[0]
 
 
 @contextmanager
@@ -105,6 +115,282 @@ def _try_load_cached_config(config_path: Path, weight_cache_path: Path, force_re
     return normalize_weight_config_paths(weight_cache_path, weight_config)
 
 
+def _load_cached_config_without_visibility_checks(config_path: Path, weight_cache_path: Path) -> WeightConfig:
+    _wait_for_path_exists(config_path, description="config.json")
+
+    with locked_file(config_path, "r", exclusive=False) as f:
+        weight_config = json.load(f, object_hook=try_decode_saved_weight)
+
+    validate_weight_config_paths(weight_cache_path, weight_config, require_files_exist=False)
+    _wait_for_weight_config_paths(weight_cache_path, weight_config, context="rank-0 cache hit")
+    logger.info(f"Using weights cached at {weight_cache_path}")
+    return normalize_weight_config_paths(weight_cache_path, weight_config)
+
+
+def _write_json_atomic(path: Path, payload: dict[str, Any], *, encoder: type[json.JSONEncoder] | None = None) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp_path = path.with_name(f".{path.name}.tmp.{os.getpid()}")
+    with tmp_path.open("w") as f:
+        json.dump(payload, f, cls=encoder)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, path)
+
+
+def _write_weight_config_json(config_path: Path, weight_config: WeightConfig) -> None:
+    _write_json_atomic(config_path, weight_config, encoder=WeightConfigEncoder)
+
+
+def _is_multihost_distributed() -> bool:
+    if not ttnn.distributed_context_is_initialized():
+        return False
+    try:
+        return int(ttnn.distributed_context_get_size()) > 1
+    except Exception:
+        return False
+
+
+def _get_distributed_rank() -> int:
+    if not _is_multihost_distributed():
+        return 0
+    return int(ttnn.distributed_context_get_rank())
+
+
+def _distributed_barrier() -> None:
+    if _is_multihost_distributed():
+        ttnn.distributed_context_barrier()
+
+
+def _get_multihost_coord_paths(weight_cache_path: Path) -> tuple[Path, Path]:
+    coord_dir = weight_cache_path / _MULTIHOST_CACHE_COORD_DIR
+    return coord_dir / _MULTIHOST_DECISION_FILE, coord_dir / _MULTIHOST_GENERATION_LOCK
+
+
+def _write_multihost_decision(decision_path: Path, *, mode: str) -> None:
+    _write_json_atomic(
+        decision_path,
+        {
+            "mode": mode,
+            "pid": os.getpid(),
+            "rank": _get_distributed_rank(),
+        },
+    )
+
+
+def _maybe_log_wait(last_log_time: float | None, message: str) -> float:
+    now = time.monotonic()
+    if last_log_time is None or now - last_log_time >= _MULTIHOST_WAIT_LOG_INTERVAL_SECONDS:
+        logger.info(message)
+        return now
+    return last_log_time
+
+
+def _find_first_missing_weight_file(root_path: Path, weight_config: WeightConfig) -> Path | None:
+    if isinstance(weight_config, dict):
+        entries = weight_config.values()
+    elif isinstance(weight_config, (list, tuple)):
+        entries = weight_config
+    else:
+        return None
+
+    for entry in entries:
+        if entry is None:
+            continue
+        if isinstance(entry, SavedWeight):
+            effective_path = entry.path if entry.path.is_absolute() else root_path / entry.path
+            if not effective_path.exists():
+                return effective_path
+        else:
+            missing_path = _find_first_missing_weight_file(root_path, entry)
+            if missing_path is not None:
+                return missing_path
+
+    return None
+
+
+def _read_multihost_decision(decision_path: Path) -> dict[str, Any]:
+    last_log_time = None
+    while True:
+        try:
+            with locked_file(decision_path, "r", exclusive=False) as f:
+                payload = json.load(f)
+            mode = payload.get("mode")
+            if mode not in {"hit", "miss"}:
+                raise RuntimeError(f"Invalid multihost cache decision payload in {decision_path}: {payload}")
+            return payload
+        except FileNotFoundError as e:
+            last_log_time = _maybe_log_wait(
+                last_log_time,
+                f"Still waiting for {decision_path.name} to become visible on host {_HOSTNAME}: {decision_path} ({e})",
+            )
+        except json.JSONDecodeError as e:
+            last_log_time = _maybe_log_wait(
+                last_log_time,
+                f"Still waiting for {decision_path.name} to become readable on host {_HOSTNAME}: {decision_path} ({e})",
+            )
+        time.sleep(_MULTIHOST_POLL_INTERVAL_SECONDS)
+
+
+def _wait_for_path_exists(path: Path, *, description: str) -> None:
+    last_log_time = None
+    while True:
+        if path.exists():
+            return
+        last_log_time = _maybe_log_wait(
+            last_log_time,
+            f"Still waiting for {path.name} to become visible on host {_HOSTNAME}: {path} ({description})",
+        )
+        time.sleep(_MULTIHOST_POLL_INTERVAL_SECONDS)
+
+
+def _wait_for_weight_config_paths(root_path: Path, weight_config: WeightConfig, *, context: str) -> None:
+    last_log_time = None
+    while True:
+        try:
+            validate_weight_config_paths(root_path, weight_config)
+            return
+        except ValueError as e:
+            if "references missing file" not in str(e):
+                raise
+            missing_path = _find_first_missing_weight_file(root_path, weight_config)
+            wait_target = str(missing_path) if missing_path is not None else str(root_path)
+            wait_name = missing_path.name if missing_path is not None else "<unknown>"
+            last_log_time = _maybe_log_wait(
+                last_log_time,
+                f"Still waiting for {wait_name} to become visible on host {_HOSTNAME}: {wait_target} during {context}",
+            )
+            time.sleep(_MULTIHOST_POLL_INTERVAL_SECONDS)
+
+
+def _prepare_state_dicts(
+    hf_config: PretrainedConfig,
+    state_dicts: tuple[dict[str, torch.Tensor] | None, ...] | None,
+    *,
+    random_weights: bool,
+    model_path: str | None,
+    single_layer: str | None,
+) -> tuple[dict[str, torch.Tensor] | None, ...]:
+    if state_dicts is not None:
+        return state_dicts
+
+    logger.info("State dict was not provided, preparing from random weights or model path")
+    from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
+
+    model_state = prepare_model_state_dict(
+        hf_config=hf_config,
+        random_weights=random_weights,
+        model_path=model_path,
+        single_layer=single_layer,
+    )
+    return (model_state,)
+
+
+def _convert_and_cache_weight_config(
+    *,
+    ModuleClass: type["models.demos.deepseek_v3.utils.abstract_module.AbstractModule"],
+    hf_config: PretrainedConfig,
+    state_dicts: tuple[dict[str, torch.Tensor] | None, ...] | None,
+    weight_cache_path: Path,
+    config_path: Path,
+    mesh_device: ttnn.Device,
+    random_weights: bool,
+    model_path: str | None,
+    single_layer: str | None,
+    require_files_exist: bool,
+    write_config: bool,
+    wait_for_visibility: bool,
+) -> WeightConfig:
+    logger.info(f"Caching weights at {weight_cache_path}")
+    state_dicts = _prepare_state_dicts(
+        hf_config,
+        state_dicts,
+        random_weights=random_weights,
+        model_path=model_path,
+        single_layer=single_layer,
+    )
+
+    logger.info("Converting weights to TTNN SavedWeight format...")
+    weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
+    validate_weight_config_paths(weight_cache_path, weight_config, require_files_exist=require_files_exist)
+    if write_config:
+        _write_weight_config_json(config_path, weight_config)
+    if wait_for_visibility:
+        _wait_for_weight_config_paths(
+            weight_cache_path, weight_config, context="first-time multihost cache publication"
+        )
+
+    normalized_config = normalize_weight_config_paths(weight_cache_path, weight_config)
+    logger.info("Done converting weights to TTNN SavedWeight format")
+    return normalized_config
+
+
+def _get_weight_config_multihost(
+    *,
+    ModuleClass: type["models.demos.deepseek_v3.utils.abstract_module.AbstractModule"],
+    hf_config: PretrainedConfig,
+    state_dicts: tuple[dict[str, torch.Tensor] | None, ...] | None,
+    weight_cache_path: Path,
+    config_path: Path,
+    mesh_device: ttnn.Device,
+    force_recalculate: bool,
+    random_weights: bool,
+    model_path: str | None,
+    single_layer: str | None,
+) -> WeightConfig:
+    decision_path, lock_path = _get_multihost_coord_paths(weight_cache_path)
+    rank = _get_distributed_rank()
+
+    if rank == 0:
+        with locked_file(lock_path, "a+", exclusive=True):
+            cached_config = _try_load_cached_config(config_path, weight_cache_path, force_recalculate)
+            decision_mode = "hit" if cached_config is not None else "miss"
+            _write_multihost_decision(decision_path, mode=decision_mode)
+            _distributed_barrier()
+            try:
+                if decision_mode == "hit":
+                    return cached_config
+                return _convert_and_cache_weight_config(
+                    ModuleClass=ModuleClass,
+                    hf_config=hf_config,
+                    state_dicts=state_dicts,
+                    weight_cache_path=weight_cache_path,
+                    config_path=config_path,
+                    mesh_device=mesh_device,
+                    random_weights=random_weights,
+                    model_path=model_path,
+                    single_layer=single_layer,
+                    require_files_exist=True,
+                    write_config=True,
+                    wait_for_visibility=False,
+                )
+            finally:
+                _distributed_barrier()
+                decision_path.unlink(missing_ok=True)
+
+    _distributed_barrier()
+    decision = _read_multihost_decision(decision_path)
+    try:
+        if decision["mode"] == "hit":
+            return _load_cached_config_without_visibility_checks(config_path, weight_cache_path)
+
+        return _convert_and_cache_weight_config(
+            ModuleClass=ModuleClass,
+            hf_config=hf_config,
+            state_dicts=state_dicts,
+            weight_cache_path=weight_cache_path,
+            config_path=config_path,
+            mesh_device=mesh_device,
+            random_weights=random_weights,
+            model_path=model_path,
+            single_layer=single_layer,
+            require_files_exist=False,
+            write_config=False,
+            wait_for_visibility=True,
+        )
+    finally:
+        _distributed_barrier()
+
+
 def get_weight_config(
     ModuleClass: type["models.demos.deepseek_v3.utils.abstract_module.AbstractModule"],
     hf_config: PretrainedConfig,
@@ -149,45 +435,44 @@ def get_weight_config(
     )
     config_path = weight_cache_path / "config.json"
 
+    if _is_multihost_distributed():
+        return _get_weight_config_multihost(
+            ModuleClass=ModuleClass,
+            hf_config=hf_config,
+            state_dicts=state_dicts,
+            weight_cache_path=weight_cache_path,
+            config_path=config_path,
+            mesh_device=mesh_device,
+            force_recalculate=force_recalculate,
+            random_weights=random_weights,
+            model_path=model_path,
+            single_layer=single_layer,
+        )
+
     # Try to load from cache
     cached_config = _try_load_cached_config(config_path, weight_cache_path, force_recalculate)
     if cached_config is not None:
         return cached_config
 
-    # Cache miss - need to convert weights
-    logger.info(f"Caching weights at {weight_cache_path}")
-    if state_dicts is None:
-        logger.info("State dict was not provided, preparing from random weights or model path")
-        from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
-
-        model_state = prepare_model_state_dict(
-            hf_config=hf_config,
-            random_weights=random_weights,
-            model_path=model_path,
-            single_layer=single_layer,
-        )
-        state_dicts = (model_state,)
-
-    # Convert weights to TT tensors-on-disk and build weight_config
-    logger.info("Converting weights to TTNN SavedWeight format...")
-
-    weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
-
-    # Validate the converted weight config
-    validate_weight_config_paths(weight_cache_path, weight_config)
-
-    # Save config with relative paths for portability
-    # Use exclusive lock to prevent concurrent writes and corruption
-    with locked_file(config_path, "w", exclusive=True) as f:
-        json.dump(weight_config, f, cls=WeightConfigEncoder)
-
-    # Return normalized config with absolute paths for runtime use
-    normalized_config = normalize_weight_config_paths(weight_cache_path, weight_config)
-    logger.info("Done converting weights to TTNN SavedWeight format")
-    return normalized_config
+    return _convert_and_cache_weight_config(
+        ModuleClass=ModuleClass,
+        hf_config=hf_config,
+        state_dicts=state_dicts,
+        weight_cache_path=weight_cache_path,
+        config_path=config_path,
+        mesh_device=mesh_device,
+        random_weights=random_weights,
+        model_path=model_path,
+        single_layer=single_layer,
+        require_files_exist=True,
+        write_config=True,
+        wait_for_visibility=False,
+    )
 
 
-def validate_weight_config_paths(root_path: Path, weight_config: WeightConfig, path_prefix: str = "") -> None:
+def validate_weight_config_paths(
+    root_path: Path, weight_config: WeightConfig, path_prefix: str = "", *, require_files_exist: bool = True
+) -> None:
     """
     Validate that all SavedWeight paths in the weight config exist and have the correct suffix.
 
@@ -195,6 +480,8 @@ def validate_weight_config_paths(root_path: Path, weight_config: WeightConfig, p
         root_path: Base path for resolving relative SavedWeight paths
         weight_config: Weight configuration (dict, list, tuple, or nested structures)
         path_prefix: Prefix for error messages to indicate location in nested structure
+        require_files_exist: If False, validate path structure and suffixes but do not require
+            the referenced files to be visible on the current host yet.
 
     Raises:
         ValueError: If any SavedWeight path is invalid (missing file, wrong suffix, etc.)
@@ -230,14 +517,14 @@ def validate_weight_config_paths(root_path: Path, weight_config: WeightConfig, p
                 )
 
             # Validate file exists
-            if not effective_path.exists():
+            if require_files_exist and not effective_path.exists():
                 raise ValueError(
                     f"SavedWeight at '{current_prefix}' references missing file. "
                     f"Resolved path: {effective_path} (original: {entry.path})"
                 )
         else:
             # Recursively validate nested structures
-            validate_weight_config_paths(root_path, entry, current_prefix)
+            validate_weight_config_paths(root_path, entry, current_prefix, require_files_exist=require_files_exist)
 
 
 def normalize_weight_config_paths(root_path: Path, weight_config: WeightConfig) -> WeightConfig:
