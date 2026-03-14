@@ -111,7 +111,7 @@ TEST_F(ConnectionRegistryTest, RecordSingleConnection) {
 
 TEST_F(ConnectionRegistryTest, RecordMultipleConnections) {
     // Record 3 different connections
-    constexpr uint32_t num_test_connections = builder_config::num_downstream_edms_2d_vc0;
+    constexpr uint32_t num_test_connections = builder_config::num_downstream_edms_2d_per_vc[0];
     for (uint32_t i = 0; i < num_test_connections; ++i) {
         RouterConnectionRecord record{
             .source_node = FabricNodeId(MeshId{0}, i),
@@ -211,7 +211,7 @@ TEST_F(ConnectionRegistryTest, GetConnectionsFromSource_MultipleMatches) {
     RoutingDirection source_dir = RoutingDirection::N;
 
     // Add 3 connections from same source
-    constexpr uint32_t num_connections = builder_config::num_downstream_edms_2d_vc0;
+    constexpr uint32_t num_connections = builder_config::num_downstream_edms_2d_per_vc[0];
     for (uint32_t i = 0; i < num_connections; ++i) {
         RouterConnectionRecord record{
             .source_node = source_node,
@@ -596,7 +596,7 @@ TEST_F(ConnectionRegistryTest, Phase1_5_QueryMultiTargetByType) {
     FabricNodeId device0(MeshId{0}, 0);
 
     // Add 3 MESH_TO_Z connections (multi-target scenario)
-    constexpr uint32_t num_connections = builder_config::num_downstream_edms_2d_vc0;
+    constexpr uint32_t num_connections = builder_config::num_downstream_edms_2d_per_vc[0];
     for (uint32_t i = 0; i < num_connections; ++i) {
         RouterConnectionRecord record{
             .source_node = device0,
@@ -694,7 +694,7 @@ TEST_F(ConnectionRegistryTest, Phase2_MeshRouter_2D_WithZ_MultipleTargets) {
         true);  // Has Z router
 
     // Verify mapping: receiver channel 0 has 4 downstream targets (3 INTRA_MESH + 1 MESH_TO_Z)
-    constexpr uint32_t num_intra_mesh_targets = builder_config::num_downstream_edms_2d_vc0;
+    constexpr uint32_t num_intra_mesh_targets = builder_config::num_downstream_edms_2d_per_vc[0];
     constexpr uint32_t num_mesh_to_z_targets = 1;
     constexpr uint32_t total_targets = num_intra_mesh_targets + num_mesh_to_z_targets;
 
@@ -750,7 +750,7 @@ TEST_F(ConnectionRegistryTest, Phase2_ZRouter_VC1_FourTargets) {
     auto mapping = RouterConnectionMapping::for_z_router();
 
     // Verify mapping: receiver channel 0 on VC1 has 4 downstream targets
-    constexpr uint32_t num_z_targets = builder_config::num_sender_channels_z_router_vc1;
+    constexpr uint32_t num_z_targets = builder_config::num_sender_channels_z_router_per_vc[1];
 
     auto targets = mapping.get_downstream_targets(1, 0);  // VC1, receiver channel 0
     ASSERT_EQ(targets.size(), num_z_targets);

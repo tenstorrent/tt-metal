@@ -688,6 +688,28 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
     uint32_t hop_cmd,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     LocalRelayInterfaceT& local_relay_interface) {
+#if defined(ARCH_WORMHOLE) && defined(FABRIC_2D_VC1_ACTIVE)
+    bool ret_val = true;
+    if (hop_cmd & MeshRoutingFields::FORWARD_EAST) {
+        ret_val = ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST>(
+                                 downstream_edm_interfaces, local_relay_interface);
+    }
+    if (hop_cmd & MeshRoutingFields::FORWARD_WEST) {
+        ret_val = ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, WEST>(
+                                 downstream_edm_interfaces, local_relay_interface);
+    }
+    if (hop_cmd & MeshRoutingFields::FORWARD_SOUTH) {
+        ret_val =
+            ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, SOUTH>(
+                           downstream_edm_interfaces, local_relay_interface);
+    }
+    if (hop_cmd & MeshRoutingFields::FORWARD_NORTH) {
+        ret_val =
+            ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, NORTH>(
+                           downstream_edm_interfaces, local_relay_interface);
+    }
+    return ret_val;
+#else
     bool ret_val = false;
 
     using eth_chan_directions::EAST;
@@ -804,6 +826,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
         default: __builtin_unreachable();
     }
     return ret_val;
+#endif
 }
 
 #else
@@ -1489,7 +1512,7 @@ FORCE_INLINE void update_telemetry(
     if constexpr (FABRIC_TELEMETRY_HEARTBEAT_RX) {
         bool receiver_idle = false;
         if (!rx_progress) {
-            receiver_idle = (get_ptr_val<to_receiver_packets_sent_streams[0]>() == 0);
+            receiver_idle = (get_ptr_val<to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL]>() == 0);
         }
         if (rx_progress || receiver_idle) {
             volatile RiscTimestampV2* rx_heartbeat_addr =
@@ -2162,7 +2185,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
 
     auto receiver_channel_pointers = ChannelPointersTuple<ReceiverChannelPointers, RECEIVER_NUM_BUFFERS_ARRAY>::make();
     // Workaround the perf regression in RingAsLinear test.
-    auto receiver_channel_pointers_ch0 = receiver_channel_pointers.template get<0>();
+    auto receiver_channel_pointers_ch0 = receiver_channel_pointers.template get<VC0_RECEIVER_CHANNEL>();
     receiver_channel_pointers_ch0.reset();
 
 #if defined(FABRIC_2D_VC1_ACTIVE)
@@ -2170,7 +2193,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
     auto outbound_to_receiver_channel_pointer_ch1 =
         outbound_to_receiver_channel_pointers.template get<VC1_RECEIVER_CHANNEL>();
 
-    auto receiver_channel_pointers_ch1 = receiver_channel_pointers.template get<1>();
+    auto receiver_channel_pointers_ch1 = receiver_channel_pointers.template get<VC1_RECEIVER_CHANNEL>();
     receiver_channel_pointers_ch1.reset();
 #endif  // FABRIC_2D_VC1_ACTIVE
 
@@ -2210,7 +2233,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             uint32_t tx_progress = 0;
             uint32_t rx_progress = 0;
 
-            if constexpr (is_sender_channel_serviced[0]) {
+            if constexpr (is_sender_channel_serviced[VC0_SENDER_CHANNEL_START]) {
                 open_perf_recording_window(inner_loop_perf_telemetry_collector);
             }
 
@@ -2218,7 +2241,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
             if constexpr (FABRIC_TELEMETRY_BANDWIDTH) {
                 loop_start_cycles = get_timestamp();
             }
-            if constexpr (super_speedy_mode && is_sender_channel_serviced[0]) {
+            if constexpr (super_speedy_mode && is_sender_channel_serviced[VC0_SENDER_CHANNEL_START]) {
                 auto check_connection_status =
                     !channel_connection_established[0] ||
                     local_sender_channel_worker_interfaces.template get<0>().has_worker_teardown_request();
@@ -2233,7 +2256,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 if constexpr (super_speedy_mode) {
                     router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
 
-                    if constexpr (is_sender_channel_serviced[0]) {
+                    if constexpr (is_sender_channel_serviced[VC0_SENDER_CHANNEL_START]) {
                         tx_progress |= run_sender_channel_step_speedy<
                             0,
                             to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
@@ -2250,38 +2273,38 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             local_speedy_sender_state);
                     }
 
-                    if constexpr (is_receiver_channel_serviced[0]) {
+                    if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
 #if defined(FABRIC_2D_VC0_CROSSOVER_TO_VC1)
                         rx_progress |= run_receiver_channel_step_speedy<
-                            0,
-                            to_receiver_packets_sent_streams[0],
+                            VC0_RECEIVER_CHANNEL,
+                            to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
                             ENABLE_FIRST_LEVEL_ACK_VC0,
                             VC1_DOWNSTREAM_EDM_SIZE,
                             decltype(receiver_channel_0_trid_tracker)>(
-                            local_receiver_channels.template get<0>(),
+                            local_receiver_channels.template get<VC0_RECEIVER_CHANNEL>(),
                             downstream_edm_noc_interfaces_vc1,
                             local_relay_interface,
                             receiver_channel_pointers_ch0,
                             receiver_channel_0_trid_tracker,
                             port_direction_table,
-                            receiver_channel_response_credit_senders[0],
+                            receiver_channel_response_credit_senders[VC0_RECEIVER_CHANNEL],
                             routing_table,
                             local_fabric_telemetry,
                             local_speedy_receiver_state);
 #else
                         rx_progress |= run_receiver_channel_step_speedy<
-                            0,
-                            to_receiver_packets_sent_streams[0],
+                            VC0_RECEIVER_CHANNEL,
+                            to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL],
                             ENABLE_FIRST_LEVEL_ACK_VC0,
                             VC0_DOWNSTREAM_EDM_SIZE,
                             decltype(receiver_channel_0_trid_tracker)>(
-                            local_receiver_channels.template get<0>(),
+                            local_receiver_channels.template get<VC0_RECEIVER_CHANNEL>(),
                             downstream_edm_noc_interfaces_vc0,
                             local_relay_interface,
                             receiver_channel_pointers_ch0,
                             receiver_channel_0_trid_tracker,
                             port_direction_table,
-                            receiver_channel_response_credit_senders[0],
+                            receiver_channel_response_credit_senders[VC0_RECEIVER_CHANNEL],
                             routing_table,
                             local_fabric_telemetry,
                             local_speedy_receiver_state);
@@ -2308,7 +2331,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                     // Inter-mesh routers receive neighbor mesh's locally generated traffic on VC0.
                     // This VC0 traffic needs to be forwarded over VC1 in the receiving mesh.
                     rx_progress |= run_receiver_channel_step<
-                        0,
+                        VC0_RECEIVER_CHANNEL,
                         ENABLE_FIRST_LEVEL_ACK_VC0,
                         VC1_DOWNSTREAM_EDM_SIZE,  // Explicit size for VC1 downstream interfaces
                         DownstreamSenderVC1T,
@@ -2324,7 +2347,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                         local_fabric_telemetry);
 #else
                     rx_progress |= run_receiver_channel_step<
-                        0,
+                        VC0_RECEIVER_CHANNEL,
                         ENABLE_FIRST_LEVEL_ACK_VC0,
                         VC0_DOWNSTREAM_EDM_SIZE,  // Explicit size for VC0 downstream interfaces
                         DownstreamSenderVC0T,
@@ -2441,7 +2464,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                             local_fabric_telemetry);
                     }
                     rx_progress |= run_receiver_channel_step<
-                        1,
+                        VC1_RECEIVER_CHANNEL,
                         ENABLE_FIRST_LEVEL_ACK_VC1,
                         VC1_DOWNSTREAM_EDM_SIZE,  // Explicit size for VC1 downstream interfaces
                         DownstreamSenderVC1T,
@@ -2495,7 +2518,7 @@ FORCE_INLINE void run_fabric_edm_main_loop(
                 run_routing_without_noc_sync_coordinated_as_non_master(termination_signal_ptr);
             }
 
-            if constexpr (is_sender_channel_serviced[0]) {
+            if constexpr (is_sender_channel_serviced[VC0_SENDER_CHANNEL_START]) {
                 close_perf_recording_window(inner_loop_perf_telemetry_collector);
                 if constexpr (perf_telemetry_mode != PerfTelemetryRecorderType::NONE) {
                     if (captured_an_event(inner_loop_perf_telemetry_collector) ||
@@ -2715,11 +2738,11 @@ FORCE_INLINE void teardown(
     if constexpr (NUM_ACTIVE_ERISCS > 1) {
         wait_for_other_local_erisc();
     }
-    if constexpr (is_receiver_channel_serviced[0]) {
+    if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
         receiver_channel_0_trid_tracker.all_buffer_slot_transactions_acked();
     }
 #if defined(FABRIC_2D_VC1_ACTIVE)
-    if constexpr (is_receiver_channel_serviced[1]) {
+    if constexpr (is_receiver_channel_serviced[VC1_RECEIVER_CHANNEL]) {
         receiver_channel_1_trid_tracker.all_buffer_slot_transactions_acked();
     }
 #endif
@@ -2840,11 +2863,11 @@ void kernel_main() {
         receiver_txq_id == sender_txq_id || receiver_txq_id == 1,
         "For multi-txq mode, the only currently supported configuration is sender_txq_id=0 and receiver_txq_id=1");
     if constexpr (receiver_txq_id != sender_txq_id) {
-        constexpr bool is_erisc_that_sets_up_second_txq = is_receiver_channel_serviced[0];
+        constexpr bool is_erisc_that_sets_up_second_txq = is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL];
         if constexpr (is_erisc_that_sets_up_second_txq) {
             initialize_state_for_txq1_active_mode();
         }
-        if constexpr (is_sender_channel_serviced[0]) {
+        if constexpr (is_sender_channel_serviced[VC0_SENDER_CHANNEL_START]) {
             initialize_state_for_txq1_active_mode_sender_side();
         }
     }
@@ -2858,7 +2881,7 @@ void kernel_main() {
     // Initialize stream register state for credit management across the Ethernet link.
     // We make sure to do this before we handshake to guarantee that the registers are
     // initialized before the other side has any possibility of modifying them.
-    init_ptr_val<to_receiver_packets_sent_streams[0]>(0);
+    init_ptr_val<to_receiver_packets_sent_streams[VC0_RECEIVER_CHANNEL]>(0);
     init_ptr_val<to_sender_packets_acked_streams[0]>(0);
     init_ptr_val<to_sender_packets_acked_streams[1]>(0);
     init_ptr_val<to_sender_packets_completed_streams[0]>(0);
@@ -2878,7 +2901,7 @@ void kernel_main() {
     }
 
     if constexpr (is_2d_fabric) {
-        init_ptr_val<to_receiver_packets_sent_streams[1]>(0);
+        init_ptr_val<to_receiver_packets_sent_streams[VC1_RECEIVER_CHANNEL]>(0);
         init_ptr_val<to_sender_packets_acked_streams[2]>(0);
         init_ptr_val<to_sender_packets_acked_streams[3]>(0);
 
@@ -3174,8 +3197,8 @@ void kernel_main() {
                         // This is our local stream register for the copy of the downstream router's
                         // free slots
                         receiver_channel_free_slots_stream_id,
-                        receiver_channel_forwarding_data_cmd_buf_ids[0],
-                        receiver_channel_forwarding_sync_cmd_buf_ids[0]);
+                        receiver_channel_forwarding_data_cmd_buf_ids[VC0_RECEIVER_CHANNEL],
+                        receiver_channel_forwarding_sync_cmd_buf_ids[VC0_RECEIVER_CHANNEL]);
                 // Only receiver channel servicing cores should be setting up the noc cmd buf.
                 if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
                     downstream_edm_noc_interfaces_vc0[compact_index]
@@ -3223,8 +3246,8 @@ void kernel_main() {
                         downstream_vc1_noc_interface_buffer_index_local_addr,
                         get_vc1_downstream_sender_channel_free_slots_stream_id(compact_index),
                         receiver_channel_free_slots_stream_id,
-                        receiver_channel_forwarding_data_cmd_buf_ids[1],
-                        receiver_channel_forwarding_sync_cmd_buf_ids[1]);
+                        receiver_channel_forwarding_data_cmd_buf_ids[VC1_RECEIVER_CHANNEL],
+                        receiver_channel_forwarding_sync_cmd_buf_ids[VC1_RECEIVER_CHANNEL]);
                 // Only receiver channel servicing cores should be setting up the noc cmd buf.
                 if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
                     downstream_edm_noc_interfaces_vc1[compact_index]
@@ -3269,8 +3292,8 @@ void kernel_main() {
                 StreamId{local_tensix_relay_free_slots_stream_id},
                 // Local stream: our copy of relay's free slots - dedicated stream ID for relay
                 StreamId{tensix_relay_local_free_slots_stream_id},
-                receiver_channel_forwarding_data_cmd_buf_ids[0],
-                receiver_channel_forwarding_sync_cmd_buf_ids[0]);
+                receiver_channel_forwarding_data_cmd_buf_ids[VC0_RECEIVER_CHANNEL],
+                receiver_channel_forwarding_sync_cmd_buf_ids[VC0_RECEIVER_CHANNEL]);
 
             // Setup NOC command buffer for relay interface
             if constexpr (NUM_ACTIVE_ERISCS == 1 && !FORCE_ALL_PATHS_TO_USE_SAME_NOC) {
@@ -3455,7 +3478,7 @@ void kernel_main() {
         }
     } else {
         // We can check just the first index because all receiver channels are serviced by the same core
-        if constexpr (is_receiver_channel_serviced[0]) {
+        if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL]) {
             if (has_downstream_edm_vc0_buffer_connection) {
                 downstream_edm_noc_interfaces_vc0[0]
                     .template open<false, use_posted_writes_for_connection_open, tt::tt_fabric::worker_handshake_noc>();
@@ -3472,7 +3495,7 @@ void kernel_main() {
 #if !defined(FABRIC_2D_VC1_ACTIVE)
     POSTCODE(tt::tt_fabric::EDMStatus::VCS_OPENED);
 #endif
-    if constexpr (is_receiver_channel_serviced[0] and NUM_ACTIVE_ERISCS > 1) {
+    if constexpr (is_receiver_channel_serviced[VC0_RECEIVER_CHANNEL] and NUM_ACTIVE_ERISCS > 1) {
         // Two erisc mode requires us to reorder the cmd buf programming/state setting
         // because we need to reshuffle some of our cmd_buf/noc assignments around for
         // just the fabric bringup phase. These calls are also located earlier for the
@@ -3493,7 +3516,7 @@ void kernel_main() {
         }
     }
 #if defined(FABRIC_2D_VC1_ACTIVE)
-    if constexpr (is_receiver_channel_serviced[1] and NUM_ACTIVE_ERISCS > 1) {
+    if constexpr (is_receiver_channel_serviced[VC1_RECEIVER_CHANNEL] and NUM_ACTIVE_ERISCS > 1) {
         // Two erisc mode requires us to reorder the cmd buf programming/state setting
         // because we need to reshuffle some of our cmd_buf/noc assignments around for
         // just the fabric bringup phase. These calls are also located earlier for the

@@ -165,6 +165,62 @@ struct StreamRegAssignments {
     // overlay scratch register
     static constexpr uint32_t eth_retrain_link_sync_stream_id = 30;
 
+    // --- Per-VC receiver pkts-sent stream IDs (indexed by VC: 0=VC0, 1=VC1) ---
+    static constexpr std::array<uint32_t, 2> to_receiver_pkts_sent_ids_per_vc = {
+        to_receiver_0_pkts_sent_id,  // VC0
+        to_receiver_1_pkts_sent_id,  // VC1
+    };
+
+    // --- Per-VC sender pkts-acked stream IDs (indexed by [vc][vc_relative_channel]) ---
+    // VC0 channels 0-3 use IDs 2-5. VC1 has no first-level acks (all zero placeholders).
+    static constexpr std::array<std::array<uint32_t, 4>, 2> to_sender_pkts_acked_ids_per_vc = {{
+        {to_sender_0_pkts_acked_id,
+         to_sender_1_pkts_acked_id,
+         to_sender_2_pkts_acked_id,
+         to_sender_3_pkts_acked_id},  // VC0
+        {0, 0, 0, 0},                 // VC1 (no first-level acks)
+    }};
+
+    // --- Per-VC sender pkts-completed stream IDs (indexed by [vc][vc_relative_channel]) ---
+    // VC0 channels 0-3 = IDs 6-9, VC1 channels 0-3 = IDs 10-13
+    static constexpr std::array<std::array<uint32_t, 4>, 2> to_sender_pkts_completed_ids_per_vc = {{
+        {to_sender_0_pkts_completed_id,
+         to_sender_1_pkts_completed_id,
+         to_sender_2_pkts_completed_id,
+         to_sender_3_pkts_completed_id},  // VC0
+        {to_sender_4_pkts_completed_id,
+         to_sender_5_pkts_completed_id,
+         to_sender_6_pkts_completed_id,
+         to_sender_7_pkts_completed_id},  // VC1
+    }};
+
+    // --- Per-VC receiver free-slots stream IDs (indexed by [vc][downstream_edge_index 0-3]) ---
+    // VC0 edges 1-4 = IDs 14-17, VC1 edges 1-4 = IDs 18-21
+    static constexpr std::array<std::array<uint32_t, 4>, 2> vc_free_slots_from_downstream_edge_ids = {{
+        {vc_0_free_slots_from_downstream_edge_1,
+         vc_0_free_slots_from_downstream_edge_2,
+         vc_0_free_slots_from_downstream_edge_3,
+         vc_0_free_slots_from_downstream_edge_4},  // VC0
+        {vc_1_free_slots_from_downstream_edge_1,
+         vc_1_free_slots_from_downstream_edge_2,
+         vc_1_free_slots_from_downstream_edge_3,
+         vc_1_free_slots_from_downstream_edge_4},  // VC1
+    }};
+
+    // --- Per-VC sender free-slots stream IDs (indexed by [vc][vc_relative_channel]) ---
+    // VC0 channels 0-3 = flat sender channels 0-3 = IDs 22-25
+    // VC1 channels 0-3 = flat sender channels 4-7 = IDs 26-29
+    static constexpr std::array<std::array<uint32_t, 4>, 2> sender_channel_free_slots_stream_ids_per_vc = {{
+        {sender_channel_0_free_slots_stream_id,
+         sender_channel_1_free_slots_stream_id,
+         sender_channel_2_free_slots_stream_id,
+         sender_channel_3_free_slots_stream_id},  // VC0
+        {sender_channel_4_free_slots_stream_id,
+         sender_channel_5_free_slots_stream_id,
+         sender_channel_6_free_slots_stream_id,
+         sender_channel_7_free_slots_stream_id},  // VC1
+    }};
+
     static const auto& get_all_stream_ids() {
         static constexpr std::array stream_ids = {
             to_receiver_0_pkts_sent_id,
@@ -312,14 +368,17 @@ struct FabricEriscDatamoverConfig {
         Topology topology,
         FabricEriscDatamoverOptions options,
         const std::array<std::size_t, builder_config::MAX_NUM_VCS>& sender_channels_per_vc,
-        const std::array<std::size_t, builder_config::MAX_NUM_VCS>& receiver_channels_per_vc);
+        const std::array<bool, builder_config::MAX_NUM_VCS>& is_receiver_channel_active_per_vc);
 
     std::size_t channel_buffer_size_bytes = 0;
 
-    std::size_t num_used_sender_channels = 0;    // Total across all VCs (duplicate in allocator... don't modify)
+    std::size_t num_used_sender_channels = 0;    // Derived total: sum(num_used_sender_channels_per_vc). Use
+                                                 // num_used_sender_channels_per_vc for per-VC logic.
     std::size_t num_used_receiver_channels = 0;  // Total across all VCs (duplicate in allocator... don't modify)
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {0, 0};    // Per-VC sender channel counts
-    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_receiver_channels_per_vc = {0, 0};  // Per-VC receiver channel counts
+    std::array<std::size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {
+        0, 0};  // Per-VC sender channel counts
+    std::array<bool, builder_config::MAX_NUM_VCS> is_receiver_channel_active_per_vc = {
+        false, false};  // Whether each VC has an active receiver channel
     std::size_t num_fwd_paths = 0;
     std::size_t sender_txq_id = 0;
     std::size_t receiver_txq_id = 0;
@@ -572,11 +631,6 @@ public:
     std::array<std::shared_ptr<tt::tt_fabric::FabricChannelAllocator>, builder_config::max_downstream_edms>
         downstream_allocators = {};
 
-    std::array<size_t, builder_config::num_max_receiver_channels> receiver_channels_num_buffers = {};
-    std::array<size_t, builder_config::num_max_receiver_channels> remote_receiver_channels_num_buffers = {};
-    std::array<size_t, builder_config::num_max_receiver_channels> local_receiver_channels_buffer_address = {};
-    std::array<size_t, builder_config::num_max_receiver_channels> remote_receiver_channels_base_address = {};
-
     std::array<size_t, builder_config::num_max_sender_channels> local_sender_channels_connection_info_addr = {};
 
     size_t termination_signal_ptr = 0;
@@ -619,8 +673,11 @@ public:
 
 private:
     // Per-RISC channel servicing flags [risc_id][channel_id]
-    std::array<std::array<bool, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS> is_sender_channel_serviced_{};
-    std::array<std::array<bool, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS> is_receiver_channel_serviced_{};
+    // Outer dim is MAX_RISC_CORES_PER_ETH_CHAN (not MAX_NUM_VCS — they are equal by coincidence on current HW)
+    std::array<std::array<bool, builder_config::num_max_sender_channels>, builder_config::MAX_RISC_CORES_PER_ETH_CHAN>
+        is_sender_channel_serviced_{};
+    std::array<std::array<bool, builder_config::num_max_receiver_channels>, builder_config::MAX_RISC_CORES_PER_ETH_CHAN>
+        is_receiver_channel_serviced_{};
 
     // Apply channel trimming overrides: disables unused sender/receiver channels
     // and stores overrides for compile-time arg generation (RX forwarding disable flags).

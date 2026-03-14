@@ -74,7 +74,7 @@ TEST_F(RouterConnectionMappingTest, MappingDriven_INTRA_MESH_Connections) {
 
     // 2D Mesh router: receiver channel 0 has 3 INTRA_MESH targets (peers in 3 directions)
     auto targets = mesh_mapping.get_downstream_targets(0, 0);
-    EXPECT_EQ(targets.size(), builder_config::num_downstream_edms_2d_vc0);
+    EXPECT_EQ(targets.size(), builder_config::num_downstream_edms_2d_per_vc[0]);
 
     // All targets should be INTRA_MESH
     for (const auto& target : targets) {
@@ -262,13 +262,13 @@ TEST_F(RouterConnectionMappingTest, ConnectionTypeFiltering_LocalOnly) {
     int intra_mesh_count = 0;
 
     // Check VC0 (should be empty or reserved)
-    for (uint32_t ch = 0; ch < builder_config::num_sender_channels_z_router_vc0; ++ch) {
+    for (uint32_t ch = 0; ch < builder_config::num_sender_channels_z_router_per_vc[0]; ++ch) {
         auto vc0_targets = z_mapping.get_downstream_targets(0, ch);
         EXPECT_EQ(vc0_targets.size(), 0);  // VC0 unused for Z router
     }
 
     // Check VC1 (should have Z_TO_MESH for all mesh directions)
-    for (uint32_t ch = 0; ch < builder_config::num_sender_channels_z_router_vc1; ++ch) {
+    for (uint32_t ch = 0; ch < builder_config::num_sender_channels_z_router_per_vc[1]; ++ch) {
         auto vc1_targets = z_mapping.get_downstream_targets(1, ch);
         for (const auto& target : vc1_targets) {
             if (target.type == ConnectionType::Z_TO_MESH) {
@@ -325,7 +325,7 @@ TEST_F(RouterConnectionMappingTest, MultiVC_ZRouter_VC0_and_VC1) {
 
     // VC0 should have no sender targets (Z receives on VC0, doesn't send)
     bool has_vc0_targets = false;
-    for (uint32_t ch = 0; ch < builder_config::num_sender_channels_z_router_vc0; ++ch) {
+    for (uint32_t ch = 0; ch < builder_config::num_sender_channels_z_router_per_vc[0]; ++ch) {
         if (z_mapping.has_targets(0, ch)) {
             has_vc0_targets = true;
             break;
@@ -335,7 +335,7 @@ TEST_F(RouterConnectionMappingTest, MultiVC_ZRouter_VC0_and_VC1) {
 
     // VC1 should have sender targets (Z sends on VC1)
     bool has_vc1_targets = false;
-    for (uint32_t ch = 0; ch < builder_config::num_sender_channels_z_router_vc1; ++ch) {
+    for (uint32_t ch = 0; ch < builder_config::num_sender_channels_z_router_per_vc[1]; ++ch) {
         if (z_mapping.has_targets(1, ch)) {
             has_vc1_targets = true;
             break;
