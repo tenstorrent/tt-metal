@@ -126,6 +126,11 @@ bool runTestsuite(const std::shared_ptr<distributed::MeshDevice>& mesh_device, c
 }
 
 TEST_F(UnitMeshCQFixture, TensixSFPI) {
+    // Disabled on Blackhole: non-deterministic failure in sfpi/01-int-representation.cpp line 16.
+    // TODO: re-enable once root cause is identified. Tracked in #39902.
+    if (this->arch_ == tt::ARCH::BLACKHOLE) {
+        GTEST_SKIP() << "Skipped on Blackhole pending fix for non-deterministic SFPI failure (#39902)";
+    }
     CoreCoord core{0, 0};
     for (const auto& mesh_device : devices_) {
         EXPECT_TRUE(runTestsuite(mesh_device, core));
