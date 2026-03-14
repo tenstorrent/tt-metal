@@ -41,6 +41,7 @@
 #include "tracy/Tracy.hpp"
 #include "profiler_types.hpp"
 #include "common/tt_backend_api_types.hpp"
+#include "common/filesystem_utils.hpp"
 #include "context/metal_context.hpp"
 #include <umd/device/types/core_coordinates.hpp>
 #include <umd/device/types/arch.hpp>
@@ -1022,8 +1023,8 @@ void dumpJsonNocTraces(
     ChipId device_id,
     const std::filesystem::path& output_dir) {
     // create output directory if it does not exist
-    std::filesystem::create_directories(output_dir);
-    if (!std::filesystem::is_directory(output_dir)) {
+    tt::filesystem::safe_create_directories(output_dir);
+    if (!tt::filesystem::safe_is_directory(output_dir).value_or(false)) {
         log_error(
             tt::LogMetal,
             "Could not write profiler noc traces to '{}' because the directory path could not be created!",
@@ -1074,14 +1075,14 @@ void dumpDeviceResultsToCSV(
     int device_core_frequency,
     uint32_t max_compute_cores,
     const std::filesystem::path& log_path) {
-    TT_ASSERT(std::filesystem::exists(log_path.parent_path()));
+    TT_ASSERT(tt::filesystem::safe_exists(log_path.parent_path()).value_or(false));
     TT_ASSERT(log_path.extension() == ".csv");
 
     // open CSV log file
     std::ofstream log_file_ofs;
 
     // append to existing CSV log file if it already exists
-    if (std::filesystem::exists(log_path)) {
+    if (tt::filesystem::safe_exists(log_path).value_or(false)) {
         log_file_ofs.open(log_path, std::ios_base::app);
     } else {
         log_file_ofs.open(log_path);
@@ -2106,14 +2107,14 @@ DeviceProfiler::DeviceProfiler(const IDevice* device, const bool new_logs [[mayb
     }
 
     this->device_logs_output_dir = std::filesystem::path(get_profiler_logs_dir());
-    std::filesystem::create_directories(this->device_logs_output_dir);
+    tt::filesystem::safe_create_directories(this->device_logs_output_dir);
 
     if (new_logs) {
         std::filesystem::path log_path = this->device_logs_output_dir / DEVICE_SIDE_LOG;
-        std::filesystem::remove(log_path);
+        tt::filesystem::safe_remove(log_path);
 
         std::filesystem::path device_perf_report_path = this->device_logs_output_dir / PROFILER_DEVICE_PERF_REPORT_NAME;
-        std::filesystem::remove(device_perf_report_path);
+        tt::filesystem::safe_remove(device_perf_report_path);
     }
 
     MetalContext::instance().profiler_state_manager()->device_programs_perf_analyses_map[this->device_id] = {};
@@ -2210,10 +2211,10 @@ void DeviceProfiler::freshDeviceLog() {
         return;
     }
     std::filesystem::path log_path = device_logs_output_dir / DEVICE_SIDE_LOG;
-    std::filesystem::remove(log_path);
+    tt::filesystem::safe_remove(log_path);
 
     std::filesystem::path device_perf_report_path = device_logs_output_dir / PROFILER_DEVICE_PERF_REPORT_NAME;
-    std::filesystem::remove(device_perf_report_path);
+    tt::filesystem::safe_remove(device_perf_report_path);
 #endif
 }
 
@@ -2222,7 +2223,7 @@ void DeviceProfiler::setOutputDir(const std::string& new_output_dir) {
     if (!getDeviceProfilerState()) {
         return;
     }
-    std::filesystem::create_directories(new_output_dir);
+    tt::filesystem::safe_create_directories(new_output_dir);
     device_logs_output_dir = new_output_dir;
 #endif
 }
@@ -2301,8 +2302,8 @@ void DeviceProfiler::processResults(
 }
 
 void DeviceProfiler::dumpRoutingInfo() const {
-    std::filesystem::create_directories(noc_trace_data_output_dir);
-    if (!std::filesystem::is_directory(noc_trace_data_output_dir)) {
+    tt::filesystem::safe_create_directories(noc_trace_data_output_dir);
+    if (!tt::filesystem::safe_is_directory(noc_trace_data_output_dir).value_or(false)) {
         log_error(
             tt::LogMetal,
             "Could not dump topology to '{}' because the directory path could not be created!",
@@ -2314,8 +2315,8 @@ void DeviceProfiler::dumpRoutingInfo() const {
 }
 
 void DeviceProfiler::dumpClusterCoordinates() const {
-    std::filesystem::create_directories(noc_trace_data_output_dir);
-    if (!std::filesystem::is_directory(noc_trace_data_output_dir)) {
+    tt::filesystem::safe_create_directories(noc_trace_data_output_dir);
+    if (!tt::filesystem::safe_is_directory(noc_trace_data_output_dir).value_or(false)) {
         log_error(
             tt::LogMetal,
             "Could not dump cluster coordinates to '{}' because the directory path could not be created!",

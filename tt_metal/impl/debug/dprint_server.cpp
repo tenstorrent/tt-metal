@@ -42,6 +42,7 @@
 #include "debug_helpers.hpp"
 #include "dprint_server.hpp"
 #include "dprint_parser.hpp"
+#include "common/filesystem_utils.hpp"
 #include "fmt/base.h"
 #include "hal_types.hpp"
 #include "hostdev/device_print_common.h"
@@ -670,7 +671,7 @@ DPrintServer::Impl::Impl(llrt::RunTimeOptions& rtoptions) {
 
     // Set the output stream according to RTOptions, either a file name or stdout if none specified.
     std::filesystem::path output_dir(rtoptions.get_logs_dir() + logfile_path);
-    std::filesystem::create_directories(output_dir);
+    tt::filesystem::safe_create_directories(output_dir);
     if (!file_name.empty() && !one_file_per_risc) {
         outfile_ = new ofstream(file_name);
     }

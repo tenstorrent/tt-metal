@@ -49,6 +49,7 @@
 #include "tt_metal/impl/context/metal_context.hpp"
 #include "tt_metal/llrt/rtoptions.hpp"
 #include "tt_metal/llrt/tt_cluster.hpp"
+#include "tt_metal/common/filesystem_utils.hpp"
 #include "hostdevcommon/fabric_common.h"
 
 #include "umd/device/types/core_coordinates.hpp"
@@ -263,7 +264,7 @@ void export_channel_trimming_capture(tt::tt_metal::MetalEnvImpl& env) {
     // Write to file
     std::filesystem::path output_path =
         std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "reports" / "channel_trimming_capture.yaml";
-    std::filesystem::create_directories(output_path.parent_path());
+    tt::filesystem::safe_create_directories(output_path.parent_path());
 
     std::ofstream out_file(output_path);
     if (!out_file.is_open()) {

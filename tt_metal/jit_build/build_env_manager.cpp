@@ -253,7 +253,7 @@ void BuildEnvManager::build_firmware(ChipId device_id, bool ignore_precompiled) 
     ZoneScoped;
     const auto& build_env = get_device_build_env(device_id);
     if (!ignore_precompiled && build_env.firmware_precompiled) {
-        log_info(
+        log_debug(
             tt::LogBuildKernels,
             "Using pre-compiled firmware from: {}",
             build_env.build_env.get_firmware_binary_root());

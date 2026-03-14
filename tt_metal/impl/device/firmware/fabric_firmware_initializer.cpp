@@ -157,12 +157,15 @@ void FabricFirmwareInitializer::compile_and_configure_fabric() {
         return;
     }
 
+    size_t configured_count = 0;
     for (const auto& event : events) {
         auto* dev = event.get();
         if (dev) {
             dev->configure_fabric();
+            configured_count++;
         }
     }
+    log_info(tt::LogMetal, "Fabric initialized on {} devices", configured_count);
 }
 
 void FabricFirmwareInitializer::wait_for_fabric_router_sync(uint32_t timeout_ms) const {

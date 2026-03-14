@@ -14,7 +14,7 @@ JitBuildOptions::JitBuildOptions(const JitBuildEnv& env) : build_env(env), hlk_d
 
 void JitBuildOptions::set_name(const std::string& n) {
     name = n;
-    path = build_env.get_out_kernel_root_path() + n;
+    path = build_env.get_genfiles_kernel_root_path() + n;
 }
 
 void JitBuildOptions::set_hlk_math_fidelity_all_cores(MathFidelity math_fidelity) {

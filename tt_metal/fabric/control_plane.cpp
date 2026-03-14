@@ -43,6 +43,7 @@
 #include "hal_types.hpp"
 #include "tt_metal/common/env_lib.hpp"
 #include <tt-logger/tt-logger.hpp>
+#include "common/filesystem_utils.hpp"
 #include "mesh_coord.hpp"
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
 #include "llrt/metal_soc_descriptor.hpp"
@@ -3181,7 +3182,7 @@ void ControlPlane::validate_torus_setup(tt::tt_fabric::FabricConfig fabric_confi
     auto cabling_descriptor_path = get_galaxy_cabling_descriptor_path(fabric_config);
     // Check if the cabling descriptor file exists
     TT_ASSERT(
-        std::filesystem::exists(cabling_descriptor_path),
+        tt::filesystem::safe_exists(cabling_descriptor_path).value_or(false),
         "Cabling descriptor file not found: {}",
         cabling_descriptor_path);
 

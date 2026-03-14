@@ -19,6 +19,7 @@
 #include <tt-logger/tt-logger.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <experimental/fabric/control_plane.hpp>
+#include "common/filesystem_utils.hpp"
 #include <tt-metalium/kernel_types.hpp>
 #include <system_mesh.hpp>
 
@@ -205,6 +206,7 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_DISABLE_PRECOMPILED_FW,  // Disable use of pre-compiled firmware
     TT_METAL_BACKEND_DUMP_RUN_CMD,    // Dump JIT build commands to stdout
+    TT_METAL_JIT_SCRATCH,             // Local scratch directory for JIT compilation (avoids NFS during build)
 };
 
 // Environment variable name for TT-Metal root directory
@@ -257,12 +259,52 @@ IntType parse_int_token(const std::string& token, const std::string& context) {
 
 bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token)) == "all"; }
 
+/** Return MPI/mesh rank from process environment for Inspector RPC port selection, or -1 if not set.
+ * Prefer OMPI_COMM_WORLD_RANK / PMI_RANK so that when multiple processes share TT_MESH_HOST_RANK=0
+ * (e.g. run_cluster_validation under mpirun), each still gets a distinct port.
+ *
+ * Thread Safety Note:
+ * This function uses std::getenv() which is not thread-safe on all platforms
+ * (environment variables may be modified by other threads concurrently).
+ * RunTimeOptions is typically a singleton - port-related methods should ideally
+ * be called during initialization or with appropriate synchronization if called
+ * concurrently from multiple threads. The rank value is deterministic once the
+ * process starts, so computing it once at construction would be ideal.
+ */
+int get_rank_from_env() {
+    const char* rank_str = std::getenv("OMPI_COMM_WORLD_RANK");
+    if (rank_str) {
+        try {
+            return std::stoi(rank_str);
+        } catch (...) {
+            return -1;
+        }
+    }
+    rank_str = std::getenv("PMI_RANK");
+    if (rank_str) {
+        try {
+            return std::stoi(rank_str);
+        } catch (...) {
+            return -1;
+        }
+    }
+    rank_str = std::getenv("TT_MESH_HOST_RANK");
+    if (rank_str) {
+        try {
+            return std::stoi(rank_str);
+        } catch (...) {
+            return -1;
+        }
+    }
+    return -1;
+}
+
 }  // namespace
 
 RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/kernels/") {
 // Default assume package install path
 #ifdef TT_METAL_INSTALL_ROOT
-    if (std::filesystem::is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT))) {
+    if (tt::filesystem::safe_is_directory(std::filesystem::path(TT_METAL_INSTALL_ROOT)).value_or(false)) {
         this->root_dir = std::filesystem::path(TT_METAL_INSTALL_ROOT).string();
     }
     log_debug(tt::LogMetal, "initial root_dir: {}", this->root_dir);
@@ -281,7 +323,7 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
         // treat the current working directory as the repository root.
         std::filesystem::path current_working_directory = std::filesystem::current_path();
         std::filesystem::path tt_metal_subdirectory = current_working_directory / "tt_metal";
-        if (std::filesystem::is_directory(tt_metal_subdirectory)) {
+        if (tt::filesystem::safe_is_directory(tt_metal_subdirectory).value_or(false)) {
             this->root_dir = current_working_directory.string();
             log_debug(tt::LogMetal, "current working directory fallback root_dir: {}", this->root_dir);
         }
@@ -310,6 +352,11 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
 
     InitializeFromEnvVars();
 
+    // Cache MPI rank for Inspector RPC port selection.
+    // This must be done after InitializeFromEnvVars so all env vars are parsed,
+    // and the value is deterministic for the lifetime of the process.
+    this->cached_mpi_rank_ = get_rank_from_env();
+
     if (this->runtime_target_device_ != tt::TargetDevice::Silicon) {
         log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/mock target device");
         this->enable_2_erisc_mode = false;
@@ -333,6 +380,13 @@ const std::string& RunTimeOptions::get_cache_dir() const {
     return this->cache_dir_;
 }
 
+const std::string& RunTimeOptions::get_jit_scratch_dir() const {
+    if (!this->is_jit_scratch_dir_specified()) {
+        TT_THROW("Env var {} is not set.", "TT_METAL_JIT_SCRATCH");
+    }
+    return this->jit_scratch_dir_;
+}
+
 const std::string& RunTimeOptions::get_logs_dir() const { return logs_dir_; }
 
 const std::string& RunTimeOptions::get_kernel_dir() const {
@@ -352,6 +406,35 @@ const std::string& RunTimeOptions::get_core_grid_override_todeprecate() const {
 }
 
 const std::string& RunTimeOptions::get_system_kernel_dir() const { return this->system_kernel_dir; }
+
+uint16_t RunTimeOptions::get_effective_inspector_rpc_server_port() const {
+    int rank = this->cached_mpi_rank_;
+    uint32_t base = inspector_settings.rpc_server_port;
+    if (rank >= 0) {
+        uint32_t port = base + static_cast<uint32_t>(rank);
+        if (port > 65535) {
+            // Calculate how many ranks will collide on port 65535
+            uint32_t colliding_ranks = (base > 65535) ? 1 : (rank - (65535 - base) + 1);
+            log_warning(
+                tt::LogMetal,
+                "Inspector RPC port overflow: base_port={} + rank={} exceeds 65535, clamping to 65535. "
+                "Approximately {} rank(s) will share port 65535, causing connection conflicts. "
+                "Consider reducing TT_METAL_INSPECTOR_RPC_SERVER_PORT or rank count.",
+                base,
+                rank,
+                colliding_ranks);
+            port = 65535;
+        }
+        return static_cast<uint16_t>(port);
+    }
+    return static_cast<uint16_t>(base);
+}
+
+uint16_t RunTimeOptions::get_inspector_rpc_server_port() const { return get_effective_inspector_rpc_server_port(); }
+
+std::string RunTimeOptions::get_inspector_rpc_server_address() const {
+    return inspector_settings.rpc_server_host + ":" + std::to_string(get_effective_inspector_rpc_server_port());
+}
 
 // ============================================================================
 // ENVIRONMENT VARIABLE HANDLER
@@ -764,7 +847,7 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Multiple groups can be combined by OR-ing the values (e.g., 3 = FPU + PACK)
         // Note: Currently, only FPU counters are supported
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
-            sscanf(value, "%u", &this->profiler_perf_counter_mode);
+            ::sscanf(value, "%u", &this->profiler_perf_counter_mode);
             if (this->profiler_perf_counter_mode != 0) {
                 this->profiler_enabled = true;
             }
@@ -1358,6 +1441,17 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         // Default: false (legacy DPRINT is used)
         // Usage: export TT_METAL_DEVICE_PRINT=1
         case EnvVarID::TT_METAL_DEVICE_PRINT: this->use_device_print = is_env_enabled(value); break;
+
+        // TT_METAL_JIT_SCRATCH
+        // Local scratch directory for JIT compilation to avoid NFS ESTALE during
+        // SFPI builds.  When set, the compiler and linker write to this local
+        // directory and artifacts are merged back to the NFS cache atomically.
+        // Default: Not set (build directly to cache)
+        // Usage: export TT_METAL_JIT_SCRATCH=/tmp/tt-jit-build
+        case EnvVarID::TT_METAL_JIT_SCRATCH:
+            this->is_jit_scratch_dir_set = true;
+            this->jit_scratch_dir_ = normalize_path(value) + "/";
+            break;
     }
 }
 
@@ -1406,12 +1500,12 @@ void RunTimeOptions::ParseWatcherEnv() {
     for (const std::string& feature : all_features) {
         std::string env_var("TT_METAL_WATCHER_DISABLE_");
         env_var += feature;
-        if (getenv(env_var.c_str()) != nullptr) {
+        if (std::getenv(env_var.c_str()) != nullptr) {
             watcher_disabled_features.insert(feature);
         }
     }
 
-    const char* watcher_debug_delay_str = getenv("TT_METAL_WATCHER_DEBUG_DELAY");
+    const char* watcher_debug_delay_str = std::getenv("TT_METAL_WATCHER_DEBUG_DELAY");
     if (watcher_debug_delay_str != nullptr) {
         sscanf(watcher_debug_delay_str, "%u", &watcher_debug_delay);
         // Assert watcher is also enabled (TT_METAL_WATCHER=1)

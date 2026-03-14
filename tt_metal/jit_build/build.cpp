@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cerrno>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
@@ -17,7 +18,10 @@
 #include <iterator>
 #include <string>
 #include <string_view>
+#include <system_error>
 #include <vector>
+
+#include <unistd.h>
 
 #include <enchantum/enchantum.hpp>
 #include <fmt/base.h>
@@ -27,6 +31,7 @@
 
 #include <tt_stl/assert.hpp>
 #include "common/executor.hpp"
+#include "common/filesystem_utils.hpp"
 #include "common/stable_hash.hpp"
 #include "env_lib.hpp"
 #include "hal_types.hpp"
@@ -48,6 +53,9 @@ using namespace std;
 
 namespace tt::tt_metal {
 
+std::atomic<size_t> JitBuildState::cache_total_srcs_{0};
+std::atomic<size_t> JitBuildState::cache_compiled_count_{0};
+
 namespace {
 
 void build_failure(const string& target_name, const string& op, const string& cmd, const string& log_file) {
@@ -64,14 +72,89 @@ void build_failure(const string& target_name, const string& op, const string& cm
 void write_successful_jit_build_marker(const JitBuildState& build, const JitBuildSettings* settings) {
     const string out_dir = (settings == nullptr) ? build.get_out_path() + "/"
                                                  : build.get_out_path() + settings->get_full_kernel_name() + "/";
-    std::ofstream file(out_dir + SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME);
+    fs::path marker_path = fs::path(out_dir) / SUCCESSFUL_JIT_BUILD_MARKER_FILE_NAME;
+    auto tmp_path = jit_build::utils::FileRenamer::generate_temp_path(marker_path);
+    std::ofstream file(tmp_path);
+    file.close();
+    if (!file.fail()) {
+        tt::filesystem::safe_rename(tmp_path, marker_path, false);
+        tt::filesystem::sync_filesystem(out_dir);
+    }
 }
 
+// NFS write safety
+// -----------------
+// safe_hard_link_or_copy writes directly to the destination path.  When the
+// destination is on a shared NFS filesystem, callers MUST write to a unique
+// temporary path first, then atomically rename to the final name.  This
+// ensures concurrent multi-client writes are safe: each client writes to its
+// own temp file, and the last rename wins.  Last-writer-wins is acceptable
+// because all clients produce equivalent content (same source, same flags).
+//
+// No two clients ever call hard_link_or_copy with the same destination path.
+// Each call goes to a process-unique temp path from generate_temp_path(),
+// which embeds a 64-bit random per-process ID (collision probability ~2^-64).
+//
+// All NFS cache writes in this file follow this pattern:
+//   1. generate_temp_path(final_path) -> unique temp path per process
+//   2. hard_link_or_copy(source, temp_path)
+//   3. safe_rename(temp_path, final_path)
 void hard_link_or_copy(const std::filesystem::path& target, const std::filesystem::path& link) {
+    tt::filesystem::safe_hard_link_or_copy(target, link);
+}
+
+// Merge build artifacts from a local scratch directory to the NFS cache.
+// Copies each regular file atomically: write to a temp name, then rename.
+void merge_scratch_to_cache(const std::string& scratch_dir, const std::string& cache_dir) {
     std::error_code ec;
-    std::filesystem::create_hard_link(target, link, ec);
+    for (const auto& entry : fs::directory_iterator(scratch_dir, ec)) {
+        if (ec || !entry.is_regular_file(ec) || ec) {
+            continue;
+        }
+        const auto& src = entry.path();
+        fs::path dst = fs::path(cache_dir) / src.filename();
+
+        auto tmp_path = jit_build::utils::FileRenamer::generate_temp_path(dst);
+        if (!tt::filesystem::safe_hard_link_or_copy(src, tmp_path)) {
+            log_warning(tt::LogBuildKernels, "Failed to copy scratch artifact {} to {}", src.string(), tmp_path);
+            continue;
+        }
+        tt::filesystem::safe_rename(tmp_path, dst, false);
+    }
     if (ec) {
-        std::filesystem::copy_file(target, link, fs::copy_options::overwrite_existing);
+        log_warning(tt::LogBuildKernels, "Failed to iterate scratch directory {}: {}", scratch_dir, ec.message());
+    }
+}
+
+// Copy generated header/source files from the scratch kernel directory to the
+// NFS cache so future cache-hit checks and non-scratch builds can find them.
+// Recursively copies all regular files, preserving subdirectory structure.
+void copy_genfiles_to_cache(const std::string& scratch_dir, const std::string& nfs_dir) {
+    tt::filesystem::safe_create_directories(nfs_dir);
+    std::error_code ec;
+    for (const auto& entry : fs::recursive_directory_iterator(scratch_dir, ec)) {
+        if (ec) {
+            continue;
+        }
+        if (!entry.is_regular_file(ec)) {
+            continue;
+        }
+        // Compute relative path from scratch_dir to preserve subdirectory structure
+        fs::path relative_path = fs::relative(entry.path(), scratch_dir, ec);
+        if (ec) {
+            log_warning(
+                tt::LogBuildKernels, "Failed to compute relative path for {}: {}", entry.path().string(), ec.message());
+            continue;
+        }
+        fs::path nfs_dest_path = fs::path(nfs_dir) / relative_path;
+        // Create parent directories in NFS cache if needed
+        tt::filesystem::safe_create_directories(nfs_dest_path.parent_path());
+        auto tmp_path = jit_build::utils::FileRenamer::generate_temp_path(nfs_dest_path);
+        if (!tt::filesystem::safe_hard_link_or_copy(entry.path(), tmp_path)) {
+            log_warning(tt::LogBuildKernels, "Failed to copy generated file {} to {}", entry.path().string(), tmp_path);
+            continue;
+        }
+        tt::filesystem::safe_rename(tmp_path, nfs_dest_path, false);
     }
 }
 
@@ -80,7 +163,7 @@ void hard_link_or_copy(const std::filesystem::path& target, const std::filesyste
 std::string get_default_root_path() {
     const std::string emptyString;
     const std::string home_path = parse_env<std::string>("HOME", emptyString);
-    if (!home_path.empty() && std::filesystem::exists(home_path)) {
+    if (!home_path.empty() && tt::filesystem::safe_exists(home_path).value_or(false)) {
         return home_path + "/.cache/tt-metal-cache/";
     }
     return "/tmp/tt-metal-cache/";
@@ -117,7 +200,7 @@ void JitBuildEnv::init(
     bool sfpi_found = false;
     for (unsigned i = 0; i < 2; ++i) {
         auto gxx = sfpi_roots[i] + "/compiler/bin/riscv-tt-elf-g++";
-        if (std::filesystem::exists(gxx)) {
+        if (tt::filesystem::safe_exists(gxx).value_or(false)) {
             this->gpp_ += gxx + " ";
             this->gpp_include_dir_ = sfpi_roots[i] + "/include";
             log_debug(tt::LogBuildKernels, "Using {} sfpi at {}", i ? "system" : "local", sfpi_roots[i]);
@@ -308,6 +391,17 @@ void JitBuildEnv::init(
     this->out_firmware_root_ = fmt::format("{}{}/firmware/", this->out_root_, build_key_);
     this->out_kernel_root_ = fmt::format("{}{}/kernels/", this->out_root_, build_key_);
     this->firmware_binary_root_ = this->out_firmware_root_;
+
+    if (rtoptions.is_jit_scratch_dir_specified()) {
+        this->scratch_root_ = rtoptions.get_jit_scratch_dir();
+        this->scratch_firmware_root_ = fmt::format("{}{}/firmware/", this->scratch_root_, build_key_);
+        this->scratch_kernel_root_ = fmt::format("{}{}/kernels/", this->scratch_root_, build_key_);
+        log_debug(
+            tt::LogBuildKernels,
+            "JIT scratch enabled: compiling to {} before merging to {}",
+            this->scratch_root_,
+            this->out_root_);
+    }
 }
 
 JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& build_config, const Hal& hal) :
@@ -315,6 +409,12 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
     is_fw_(build_config.is_fw),
     process_defines_at_compile_(true),
     out_path_(build_config.is_fw ? env_.out_firmware_root_ : env_.out_kernel_root_),
+    scratch_path_([&]() -> std::string {
+        if (!env_.has_scratch()) {
+            return "";
+        }
+        return build_config.is_fw ? env_.scratch_firmware_root_ : env_.scratch_kernel_root_;
+    }()),
     cflags_(env.cflags_),
     defines_(env.defines_),
     includes_(env.includes_),
@@ -445,13 +545,28 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
 static constexpr std::string_view BUILD_STATE_HASH_FILE = ".build_state";
 
 bool JitBuildState::build_state_matches(const string& out_dir) const {
-    std::ifstream file(out_dir + string(BUILD_STATE_HASH_FILE));
-    if (!file.is_open()) {
+    std::string hash_path = out_dir + string(BUILD_STATE_HASH_FILE);
+    uint64_t stored_hash{};
+    bool hash_matches = false;
+
+    bool success = tt::filesystem::retry_on_estale([&]() {
+        errno = 0;
+        std::ifstream file(hash_path);
+        if (!file.is_open()) {
+            return false;
+        }
+        file >> stored_hash;
+        if (file.fail()) {
+            return false;
+        }
+        hash_matches = (stored_hash == build_state_hash_);
+        return true;
+    });
+
+    if (!success) {
         return false;
     }
-    uint64_t stored_hash{};
-    file >> stored_hash;
-    if (file.fail() || stored_hash != build_state_hash_) {
+    if (!hash_matches) {
         log_debug(
             tt::LogBuildKernels,
             "Build state hash mismatch in {}: stored={}, current={}",
@@ -469,7 +584,8 @@ void JitBuildState::write_build_state_hash(const string& out_dir) const {
     file << build_state_hash_;
 }
 
-void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* settings, size_t src_index) const {
+void JitBuildState::compile_one(
+    const string& out_dir, const JitBuildSettings* settings, size_t src_index, const string& canonical_dir) const {
     // ZoneScoped;
 
     string cmd{"cd " + out_dir + " && " + env_.gpp_};
@@ -524,7 +640,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     std::string temp_d_path = fs::path(obj_temp_path).replace_extension("d").string();
     cmd += this->cflags_;
     cmd += this->includes_;
-    // Add kernel-specific include paths (e.g., kernel source directory for relative includes)
+    // Add kernel-specific include paths (e.g. kernel source directory for relative includes)
     if (settings) {
         settings->process_include_paths([&cmd](const std::string& path) { cmd += fmt::format("-I{} ", path); });
     }
@@ -542,21 +658,22 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     // log file and dephash file can be renamed after compilation, but the .o file
     // needs to be renamed after link step to avoid LTO reading inconsistent object files.
     jit_build::utils::FileRenamer log_file(obj_path + ".log");
-    fs::remove(log_file.path());
+    tt::filesystem::safe_remove(log_file.path());
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands())) {
         build_failure(this->target_name_, "compile", cmd, log_file.path());
     }
-    jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash");
-    fs::remove(temp_d_path);  // .d file not needed after hash is written
+    jit_build::write_dependency_hashes(out_dir, obj_temp_path, obj_temp_path + ".dephash", canonical_dir);
+    tt::filesystem::safe_remove(temp_d_path);  // .d file not needed after hash is written
 }
 
 bool JitBuildState::need_compile(const string& out_dir, const string& obj) const {
-    return env_.get_rtoptions().get_force_jit_compile() || !fs::exists(out_dir + obj) ||
+    return env_.get_rtoptions().get_force_jit_compile() ||
+           !tt::filesystem::safe_exists(out_dir + obj).value_or(false) ||
            !jit_build::dependencies_up_to_date(out_dir, obj);
 }
 
 std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
-    const string& out_dir, const JitBuildSettings* settings, bool state_changed) const {
+    const string& out_dir, const JitBuildSettings* settings, bool state_changed, const string& check_dir) const {
     // ZoneScoped;
     TT_FATAL(
         this->srcs_.size() <= kMaxBuildBitset,
@@ -564,18 +681,41 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
         this->srcs_.size(),
         kMaxBuildBitset);
 
+    // When check_dir is provided (scratch mode), cache-hit decisions use the
+    // NFS cache directory while compilation output goes to out_dir (local scratch).
+    const string& cache_check_dir = check_dir.empty() ? out_dir : check_dir;
+
     std::bitset<kMaxBuildBitset> compiled;
     std::vector<std::shared_future<void>> events;
     for (size_t i = 0; i < this->srcs_.size(); ++i) {
-        if (state_changed || need_compile(out_dir, this->objs_[i])) {
+        if (state_changed || need_compile(cache_check_dir, this->objs_[i])) {
             compiled.set(i);
-            launch_build_step([this, &out_dir, settings, i] { this->compile_one(out_dir, settings, i); }, events);
+            launch_build_step(
+                [this, &out_dir, &check_dir, settings, i] { this->compile_one(out_dir, settings, i, check_dir); },
+                events);
         } else {
-            log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", out_dir, this->objs_[i]);
+            log_debug(tt::LogBuildKernels, "JIT build cache hit: {}{}", cache_check_dir, this->objs_[i]);
         }
     }
 
     sync_build_steps(events);
+
+    const size_t num_srcs = this->srcs_.size();
+    const size_t num_compiled = compiled.count();
+    cache_total_srcs_.fetch_add(num_srcs, std::memory_order_release);
+    cache_compiled_count_.fetch_add(num_compiled, std::memory_order_release);
+    if (num_srcs > 0) {
+        const size_t total = cache_total_srcs_.load(std::memory_order_acquire);
+        const size_t compiled_total = cache_compiled_count_.load(std::memory_order_acquire);
+        const size_t hits_total = total - compiled_total;
+        log_info(
+            tt::LogBuildKernels,
+            "JIT cache stats: {}/{} hits ({:.1f}%){}",
+            hits_total,
+            total,
+            100.0 * static_cast<double>(hits_total) / static_cast<double>(total),
+            state_changed ? " [state changed, full recompile]" : "");
+    }
 
     if (env_.get_rtoptions().get_watcher_enabled()) {
         dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
@@ -585,7 +725,8 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
 
 bool JitBuildState::need_link(const string& out_dir) const {
     std::string elf_path = out_dir + this->target_name_ + ".elf";
-    return !fs::exists(elf_path) || !jit_build::dependencies_up_to_date(out_dir, elf_path);
+    return !tt::filesystem::safe_exists(elf_path).value_or(false) ||
+           !jit_build::dependencies_up_to_date(out_dir, elf_path);
 }
 
 void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings, const string& link_objs) const {
@@ -622,7 +763,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
         log_info(tt::LogBuildKernels, "    g++ link cmd: {}", cmd);
     }
     jit_build::utils::FileRenamer log_file(elf_name + ".log");
-    fs::remove(log_file.path());
+    tt::filesystem::safe_remove(log_file.path());
     if (!tt::jit_build::utils::run_command(cmd, log_file.path(), env_.get_rtoptions().get_dump_build_commands())) {
         build_failure(this->target_name_, "link", cmd, log_file.path());
     }
@@ -632,7 +773,7 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
     hash_file.close();
     if (hash_file.fail()) {
         // Don't leave incomplete hash file
-        std::filesystem::remove(dephash_file.path());
+        tt::filesystem::safe_remove(dephash_file.path());
     }
 }
 
@@ -640,6 +781,14 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
 // weakens symbols in A so that it can be used as a "library" for B. B imports A's weakened symbols, B's symbols of the
 // same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
 // strong so to propagate link addresses
+//
+// NOTE: This function writes directly to the NFS cache directory (out_dir), not to scratch.
+// This is intentional because:
+//   - Weaken is called as part of the link stage, which already uses atomic temp+rename
+//     via FileRenamer for the output file
+//   - The input file (pathname_in) is already the final ELF in the cache directory
+//   - Unlike compilation which generates new objects, this is a transform of an existing file
+//   - The operation is idempotent - re-weakening the same ELF produces the same result
 void JitBuildState::weaken(const string& out_dir) const {
     // ZoneScoped;
 
@@ -658,13 +807,14 @@ void JitBuildState::weaken(const string& out_dir) const {
 
 void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const {
     // ZoneScoped;
-    static std::atomic<bool> new_log = true;
+    static std::atomic<bool> new_log{true};
     if (env_.get_rtoptions().get_profiler_enabled()) {
-        if (new_log.exchange(false) && std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
+        if (new_log.exchange(false) &&
+            tt::filesystem::safe_exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG).value_or(false)) {
             std::remove(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG.c_str());
         }
 
-        if (!std::filesystem::exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG)) {
+        if (!tt::filesystem::safe_exists(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG).value_or(false)) {
             tt::jit_build::utils::create_file(tt::tt_metal::NEW_PROFILER_ZONE_SRC_LOCATIONS_LOG);
         }
 
@@ -674,10 +824,34 @@ void JitBuildState::extract_zone_src_locations(const std::string& out_dir) const
     }
 }
 
+void JitBuildState::merge_genfiles_to_cache(const JitBuildSettings* settings) const {
+    if (scratch_path_.empty() || !settings) {
+        return;
+    }
+    auto kernel_name = settings->get_full_kernel_name();
+    std::string scratch_genfiles_dir = fmt::format("{}{}", this->scratch_path_, kernel_name);
+    std::string nfs_genfiles_dir = fmt::format("{}{}", this->out_path_, kernel_name);
+    copy_genfiles_to_cache(scratch_genfiles_dir, nfs_genfiles_dir);
+}
+
 void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitBuildState* const> link_targets) const {
     // ZoneScoped;
     auto kernel_name = settings ? std::string_view{settings->get_full_kernel_name()} : "";
-    std::string out_dir = fmt::format("{}{}{}/", this->out_path_, kernel_name, this->target_name_);
+
+    // NFS cache directory -- the canonical location for build artifacts and
+    // the path runtime reads binaries from.
+    std::string cache_dir = fmt::format("{}{}{}/", this->out_path_, kernel_name, this->target_name_);
+
+    // When scratch is configured, compile+link happens on local disk to
+    // avoid NFS ESTALE errors.  Results are merged to cache_dir afterwards.
+    // NOTE: merge_genfiles_to_cache() must be called by the caller before build()
+    // when multiple triscs share a kernel, to avoid races on the genfiles merge.
+    const bool use_scratch = !scratch_path_.empty();
+    std::string work_dir = cache_dir;
+    if (use_scratch) {
+        work_dir = fmt::format("{}{}{}/", this->scratch_path_, kernel_name, this->target_name_);
+        tt::filesystem::safe_create_directories(work_dir);
+    }
 
     // If no link targets are provided, use the current build state as the only link target
     const JitBuildState* self = this;
@@ -686,13 +860,14 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     }
     const size_t num_objs = this->objs_.size();
 
-    fs::create_directories(out_dir);
+    // Handle race conditions in directory creation - another thread may have created it
+    tt::filesystem::safe_create_directories(cache_dir);
 
     // Check build state once: if build parameters (flags, defines, includes from HAL, etc.)
     // have changed, force full recompilation and relinking.
-    bool state_changed = !build_state_matches(out_dir);
+    bool state_changed = !build_state_matches(cache_dir);
 
-    auto compiled = compile(out_dir, settings, state_changed);
+    auto compiled = compile(work_dir, settings, state_changed, use_scratch ? cache_dir : string{});
 
     string link_objs;
     // Populate link_objs once only when anything needs to be linked
@@ -701,7 +876,7 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
             return;
         }
         for (size_t i = 0; i < num_objs; ++i) {
-            auto temp_obj = out_dir + this->temp_objs_[i];
+            auto temp_obj = work_dir + this->temp_objs_[i];
             if (!compiled.test(i)) {
                 // If reusing up-to-date .o files, we should give them temporary names for linking because:
                 // 1. There is no guarantee that another process will not rename its compiled object to this .o during
@@ -709,7 +884,11 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
                 // 2. JIT compiler is not deterministic. Different .o files can be produced from the same source.
                 // 3. LTO linker opens the object file multiple times. Atomic rename doesn't prevent the linker from
                 //    getting confused.
-                hard_link_or_copy(out_dir + this->objs_[i], temp_obj);
+                //
+                // When using scratch, cached .o files live in cache_dir (NFS) and need
+                // to be copied to work_dir (local) for the linker.
+                const auto& src_dir = use_scratch ? cache_dir : work_dir;
+                hard_link_or_copy(src_dir + this->objs_[i], temp_obj);
             }
             link_objs += temp_obj;
             link_objs += " ";
@@ -717,46 +896,86 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
     };
 
     for (const auto* target : link_targets) {
-        string target_out_dir = fmt::format("{}{}{}/", target->out_path_, kernel_name, target->target_name_);
-        fs::create_directories(target_out_dir);
-        if (state_changed || compiled.any() || target->need_link(target_out_dir)) {
+        string target_cache_dir = fmt::format("{}{}{}/", target->out_path_, kernel_name, target->target_name_);
+        string target_work_dir = target_cache_dir;
+        if (use_scratch) {
+            target_work_dir = fmt::format("{}{}{}/", target->scratch_path_, kernel_name, target->target_name_);
+            tt::filesystem::safe_create_directories(target_work_dir);
+        }
+        tt::filesystem::safe_create_directories(target_cache_dir);
+
+        if (state_changed || compiled.any() || target->need_link(target_cache_dir)) {
             populate_link_objs();
-            target->link(target_out_dir, settings, link_objs);
+            target->link(target_work_dir, settings, link_objs);
             if (target->is_fw_) {
-                target->weaken(target_out_dir);
+                target->weaken(target_work_dir);
             }
-            // Record the build state used for linking so that future runs can detect
-            // when link-affecting flags (lflags, linker script, etc.) change.
-            target->write_build_state_hash(target_out_dir);
+            // Record the build state hash. In scratch mode, write to scratch first
+            // so merge_scratch_to_cache atomically copies it to NFS with the rest.
+            target->write_build_state_hash(target_work_dir);
+            if (use_scratch) {
+                merge_scratch_to_cache(target_work_dir, target_cache_dir);
+                tt::filesystem::sync_filesystem(target_cache_dir);
+            }
         }
     }
 
     if (!link_objs.empty()) {
-        // Rename the temporary .o and .dephash files after linking is done.
-        fs::path src_path = out_dir;
-        fs::path dst_path = out_dir;
-        for (size_t i = 0; i < num_objs; ++i) {
-            src_path.replace_filename(this->temp_objs_[i]);
-            dst_path.replace_filename(this->objs_[i]);
-            if (compiled.test(i)) {
-                fs::rename(src_path, dst_path);
-                src_path += ".dephash";
-                dst_path += ".dephash";
-                fs::rename(src_path, dst_path);
-            } else {
-                fs::remove(src_path);
+        if (use_scratch) {
+            // Merge compiled object files from scratch to NFS cache, renaming
+            // from temp names to final names in one step.
+            // Each process uses a unique temp path from generate_temp_path();
+            // no two clients write to the same NFS path in hard_link_or_copy.
+            for (size_t i = 0; i < num_objs; ++i) {
+                fs::path scratch_temp = fs::path(work_dir) / this->temp_objs_[i];
+                fs::path cache_final = fs::path(cache_dir) / this->objs_[i];
+                if (compiled.test(i)) {
+                    auto tmp_obj = jit_build::utils::FileRenamer::generate_temp_path(cache_final);
+                    hard_link_or_copy(scratch_temp, tmp_obj);
+                    tt::filesystem::safe_rename(tmp_obj, cache_final, false);
+
+                    fs::path scratch_dephash = fs::path(scratch_temp).concat(".dephash");
+                    fs::path cache_dephash = fs::path(cache_final).concat(".dephash");
+                    auto tmp_dephash = jit_build::utils::FileRenamer::generate_temp_path(cache_dephash);
+                    hard_link_or_copy(scratch_dephash, tmp_dephash);
+                    tt::filesystem::safe_rename(tmp_dephash, cache_dephash, false);
+                }
+                // Clean up scratch temp files
+                tt::filesystem::safe_remove(scratch_temp);
+                tt::filesystem::safe_remove(fs::path(scratch_temp).concat(".dephash"));
+            }
+            // Merge any remaining artifacts (log files, etc.)
+            merge_scratch_to_cache(work_dir, cache_dir);
+            tt::filesystem::sync_filesystem(cache_dir);
+        } else {
+            // Rename the temporary .o and .dephash files after linking is done.
+            // Handle race conditions - another thread may have already renamed/removed the file
+            fs::path src_path = cache_dir;
+            fs::path dst_path = cache_dir;
+            for (size_t i = 0; i < num_objs; ++i) {
+                src_path.replace_filename(this->temp_objs_[i]);
+                dst_path.replace_filename(this->objs_[i]);
+                if (compiled.test(i)) {
+                    tt::filesystem::safe_rename(src_path, dst_path, true);
+                    src_path += ".dephash";
+                    dst_path += ".dephash";
+                    tt::filesystem::safe_rename(src_path, dst_path, true);
+                } else {
+                    tt::filesystem::safe_remove(src_path);
+                }
             }
         }
     }
 
     // `extract_zone_src_locations` must be called every time, because it writes to a global file
     // that gets cleared in each run.
-    extract_zone_src_locations(out_dir);
+    extract_zone_src_locations(use_scratch ? work_dir : cache_dir);
 }
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     // ZoneScoped;
 
+    build.merge_genfiles_to_cache(settings);
     build.build(settings);
     write_successful_jit_build_marker(build, settings);
 }
@@ -764,14 +983,19 @@ void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
 void jit_build_for_processors(std::span<const JitBuildState* const> targets, const JitBuildSettings* settings) {
     TT_ASSERT(!targets.empty());
     const JitBuildState& primary = *targets[0];
+    primary.merge_genfiles_to_cache(settings);
     primary.build(settings, targets);
     write_successful_jit_build_marker(primary, settings);
 }
 
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings) {
+    // Merge genfiles from scratch to NFS cache once before launching parallel builds.
+    if (!build_subset.empty()) {
+        build_subset.begin()->merge_genfiles_to_cache(settings);
+    }
+
     std::vector<std::shared_future<void>> events;
     for (const auto& build : build_subset) {
-        // Capture the necessary objects by reference
         launch_build_step([&build, settings] { build.build(settings); }, events);
     }
 

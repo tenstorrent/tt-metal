@@ -44,6 +44,80 @@ run_quad_galaxy_unit_tests() {
 }
 
 ###############################################################################
+# Cluster connectivity validation
+#
+# The QUAD galaxy uses a torus topology (dims: [8, 16], RING in both X and Y)
+# with host_topology [1, 4]. The 4 hosts must be physically cabled in the
+# correct ring order for the topology mapper to succeed. If the host order
+# in MPI (--host flag) or the rankfile doesn't match the physical ring,
+# intra-mesh mapping will fail with:
+#   "Graph specified in MGD could not fit in the discovered physical topology"
+#
+# Expected physical ring: glx04 <-> glx03 <-> glx02 <-> glx01 <-> glx04
+# Verify with: ./build/test/tt_metal/tt_fabric/test_system_health
+###############################################################################
+
+validate_quad_connectivity() {
+  setup_quad_galaxy_env
+
+  local descriptor_path="${DESCRIPTOR_PATH:-/etc/mpirun}"
+  local mpirun_args="--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include $TCP_INTERFACE --tag-output"
+
+  echo "=== Validating QUAD galaxy cluster connectivity ===" >&2
+  echo "Hosts: $HOSTS" >&2
+  echo "Rankfile: $RANKFILE" >&2
+  echo "Cabling descriptor: ${descriptor_path}/cabling_descriptor.textproto" >&2
+  echo "Deployment descriptor: ${descriptor_path}/deployment_descriptor.textproto" >&2
+
+  mpirun-ulfm $mpirun_args \
+      -x TT_METAL_HOME=$(pwd) \
+      -x LD_LIBRARY_PATH=$(pwd)/build/lib \
+      ./build/tools/scaleout/run_cluster_validation \
+      --send-traffic \
+      --cabling-descriptor-path "${descriptor_path}/cabling_descriptor.textproto" \
+      --deployment-descriptor-path "${descriptor_path}/deployment_descriptor.textproto"
+
+  if [[ -x "./build/test/tt_metal/tt_fabric/test_system_health" ]]; then
+      echo "Running system health check..." >&2
+      mpirun-ulfm $mpirun_args \
+          -x TT_METAL_HOME=$(pwd) \
+          -x LD_LIBRARY_PATH=$(pwd)/build/lib \
+          ./build/test/tt_metal/tt_fabric/test_system_health
+  fi
+
+  echo "=== QUAD galaxy cluster connectivity validation passed ===" >&2
+}
+
+validate_dual_connectivity() {
+  setup_dual_galaxy_env
+
+  local descriptor_path="${DESCRIPTOR_PATH:-/etc/mpirun}"
+  local mpirun_args="--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include $TCP_INTERFACE --tag-output"
+
+  echo "=== Validating DUAL galaxy cluster connectivity ===" >&2
+  echo "Hosts: $HOSTS" >&2
+  echo "Rankfile: $RANKFILE" >&2
+
+  mpirun-ulfm $mpirun_args \
+      -x TT_METAL_HOME=$(pwd) \
+      -x LD_LIBRARY_PATH=$(pwd)/build/lib \
+      ./build/tools/scaleout/run_cluster_validation \
+      --send-traffic \
+      --cabling-descriptor-path "${descriptor_path}/cabling_descriptor.textproto" \
+      --deployment-descriptor-path "${descriptor_path}/deployment_descriptor.textproto"
+
+  if [[ -x "./build/test/tt_metal/tt_fabric/test_system_health" ]]; then
+      echo "Running system health check..." >&2
+      mpirun-ulfm $mpirun_args \
+          -x TT_METAL_HOME=$(pwd) \
+          -x LD_LIBRARY_PATH=$(pwd)/build/lib \
+          ./build/test/tt_metal/tt_fabric/test_system_health
+  fi
+
+  echo "=== DUAL galaxy cluster connectivity validation passed ===" >&2
+}
+
+###############################################################################
 # Environment setup helpers
 ###############################################################################
 
@@ -73,6 +147,11 @@ setup_dual_galaxy_env() {
     mkdir -p logs
     mkdir -p generated/artifacts
 
+    export TT_METAL_CACHE="${TT_METAL_CACHE:-$(pwd)/.cache/tt-metal-cache}"
+    export TT_METAL_LOGS_PATH="${TT_METAL_LOGS_PATH:-$(pwd)/generated/logs}"
+
+    sync
+
     if ! test -f "$RANKFILE"; then
         echo "File '$RANKFILE' does not exist."
         exit 1
@@ -81,6 +160,17 @@ setup_dual_galaxy_env() {
         echo "File '$RANK_BINDING_YAML' does not exist."
         exit 1
     fi
+
+    echo "=== DUAL Galaxy Environment ===" >&2
+    echo "  Hosts: $HOSTS" >&2
+    echo "  Rankfile: $RANKFILE" >&2
+    echo "  Rank Binding: $RANK_BINDING_YAML" >&2
+    echo "  MESH_DEVICE: DUAL" >&2
+    for host in ${HOSTS//,/ }; do
+        if ! ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$host" "echo '  Host $host: reachable'" 2>/dev/null; then
+            echo "  WARNING: Cannot reach host $host" >&2
+        fi
+    done
 
     export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
     _resolve_deepseekv3_cache
@@ -96,6 +186,11 @@ setup_quad_galaxy_env() {
     mkdir -p logs
     mkdir -p generated/artifacts
 
+    export TT_METAL_CACHE="${TT_METAL_CACHE:-$(pwd)/.cache/tt-metal-cache}"
+    export TT_METAL_LOGS_PATH="${TT_METAL_LOGS_PATH:-$(pwd)/generated/logs}"
+
+    sync
+
     if ! test -f "$RANKFILE"; then
         echo "File '$RANKFILE' does not exist."
         exit 1
@@ -104,6 +199,17 @@ setup_quad_galaxy_env() {
         echo "File '$RANK_BINDING_YAML' does not exist."
         exit 1
     fi
+
+    echo "=== QUAD Galaxy Environment ===" >&2
+    echo "  Hosts: $HOSTS" >&2
+    echo "  Rankfile: $RANKFILE" >&2
+    echo "  Rank Binding: $RANK_BINDING_YAML" >&2
+    echo "  MESH_DEVICE: QUAD" >&2
+    for host in ${HOSTS//,/ }; do
+        if ! ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$host" "echo '  Host $host: reachable'" 2>/dev/null; then
+            echo "  WARNING: Cannot reach host $host" >&2
+        fi
+    done
 
     export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
     _resolve_deepseekv3_cache
@@ -124,9 +230,31 @@ _demo_timeout() {
 
 # Helper: run a test command via tt-run using the current environment
 _run_deepseekv3_tt() {
-    tt-run --tcp-interface $TCP_INTERFACE --rank-binding "$RANK_BINDING_YAML" \
+    tt-run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "$MPI_ARGS" \
         "$@"
+}
+
+# Retry wrapper for transient multi-host failures (e.g., topology mapping timeouts).
+# Usage: _retry_deepseekv3_tt <max_attempts> <backoff_seconds> <args...>
+_retry_deepseekv3_tt() {
+    local max_attempts=$1; shift
+    local backoff=$1; shift
+    local attempt=1
+
+    while (( attempt <= max_attempts )); do
+        echo "=== Attempt $attempt/$max_attempts ===" >&2
+        if _run_deepseekv3_tt "$@"; then
+            return 0
+        fi
+        if (( attempt < max_attempts )); then
+            echo "Attempt $attempt failed. Retrying in ${backoff}s..." >&2
+            sleep "$backoff"
+        fi
+        (( attempt++ ))
+    done
+    echo "All $max_attempts attempts failed." >&2
+    return 1
 }
 
 ###############################################################################
@@ -148,7 +276,7 @@ run_quad_deepseekv3_unit_tests() {
     fail=0
     setup_quad_galaxy_env
 
-    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests/unit ; fail+=$?
+    _retry_deepseekv3_tt 2 30 pytest -svvv models/demos/deepseek_v3/tests/unit ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -174,7 +302,7 @@ run_quad_deepseekv3_module_tests() {
     fail=0
     setup_quad_galaxy_env
 
-    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests ; fail+=$?
+    _retry_deepseekv3_tt 2 30 pytest -svvv models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -337,6 +465,12 @@ main() {
     local test_function="${1:-all}"
 
     case "$test_function" in
+        "validate_quad_connectivity")
+            validate_quad_connectivity
+            ;;
+        "validate_dual_connectivity")
+            validate_dual_connectivity
+            ;;
         "unit_tests")
             run_quad_galaxy_unit_tests
             ;;
@@ -381,7 +515,7 @@ main() {
             ;;
         *)
             echo "Unknown test function: $test_function" 1>&2
-            echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, quad_demo, dual_demo_stress, quad_demo_stress, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all" 1>&2
+            echo "Available options: validate_quad_connectivity, validate_dual_connectivity, unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, quad_demo, dual_demo_stress, quad_demo_stress, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all" 1>&2
             exit 1
             ;;
     esac
