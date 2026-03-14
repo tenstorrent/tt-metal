@@ -38,8 +38,8 @@
 
 ### Stream Reg Assignment (PR 6)
 
-- [ ] **SR-01**: Host stream register assignment table uses per-VC indexing for both sender and receiver
-- [ ] **SR-02**: Stream register map correctly assigns registers per-VC
+- [x] **SR-01**: Host stream register assignment table uses per-VC indexing for both sender and receiver
+- [x] **SR-02**: Stream register map correctly assigns registers per-VC
 
 ## Out of Scope
 

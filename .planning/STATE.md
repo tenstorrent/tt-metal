@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 05-channel-allocator-01-PLAN.md
-last_updated: "2026-03-14T00:07:53.488Z"
+stopped_at: Completed 06-stream-reg-assignment-01-PLAN.md
+last_updated: "2026-03-14T00:45:00Z"
 progress:
   total_phases: 6
-  completed_phases: 3
-  total_plans: 4
-  completed_plans: 4
+  completed_phases: 4
+  total_plans: 5
+  completed_plans: 5
 ---
 
 # Project State
@@ -19,7 +19,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-12)
 
 **Core value:** Each PR is self-contained, correct, and independently reviewable
-**Current focus:** Phase 5 — Channel Allocator
+**Current focus:** Phase 6 — Stream Register Assignment
 
 ## Phase Validation Procedure
 
@@ -47,6 +47,21 @@ Note: Neither the build nor the sanity test should hang. Any hang is a regressio
 
 ## Current Phase
 
+**Phase 6: Stream Register Assignment — Plan 01 Complete (2026-03-14)**
+
+Plan 01 completed:
+- Added five per-VC grouping array members to `StreamRegAssignments` in `erisc_datamover_builder.hpp`
+- Replaced all 33 positional `stream_ids[N]` accesses in the CT-arg emission block with named `StreamRegAssignments::*_per_vc` array references
+- All existing named scalar constexpr members preserved; `get_all_stream_ids()` preserved
+- Wire format preserved: CT arg name strings and numerical stream ID values unchanged
+- Build: PASSED (zero new errors)
+- Sanity test: PASSED (all 12 latency golden comparisons passed, no hangs)
+
+Key decisions:
+- Inner array dimension set to 4 (2D mesh max channels per VC) — z-router VC0 has 5 but uses named constants directly
+- VC1 pkts-acked row is all-zero placeholders since VC1 has no first-level acks
+- `get_all_stream_ids()` retained unchanged to preserve backward compatibility
+
 **Phase 5: Channel Allocator — Plan 01 Complete (2026-03-14)**
 
 Plan 01 completed:
@@ -64,9 +79,9 @@ Key decisions:
 ## Session
 
 **Last session:** 2026-03-14
-**Stopped at:** Completed 05-channel-allocator-01-PLAN.md
+**Stopped at:** Completed 06-stream-reg-assignment-01-PLAN.md
 
 ## Next Plan
 
-**Phase 5 complete — all 1 plans done**
-All 6 phases complete. Allocator API is fully per-VC across constructor + emit methods.
+**Phase 6 complete — all 1 plans done**
+All planned per-VC refactor phases complete. StreamRegAssignments now expresses per-VC structure at the type level.
