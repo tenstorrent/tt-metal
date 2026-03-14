@@ -1,3 +1,4 @@
+# Sanity tests: validates basic functionality across WH and BH after each merge to main.
 name: "Sanity tests"
 
 on:
