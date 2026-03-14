@@ -170,18 +170,13 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     is_model_traced = "input_a_memory_config" in test_vector
 
     if is_model_traced:
+        # Model traced vectors are pre-validated by the tracer.
+        # Do NOT check device count here — vector generation may run on a
+        # smaller machine (e.g., N150) than the actual test runner (Galaxy).
         input_shape = test_vector.get("input_shape")
         if input_shape and isinstance(input_shape, (list, tuple)):
             if len(input_shape) == 0:
                 return True, "Empty input shape"
-
-        # Check mesh_device_shape: skip configs that need more devices than available
-        tp = test_vector.get("input_a_tensor_placement")
-        if isinstance(tp, dict):
-            mesh = _parse_mesh_shape(tp.get("mesh_device_shape"))
-            if mesh and prod(mesh) > NUM_DEVICES:
-                return True, f"Mesh {mesh} requires {prod(mesh)} devices, only {NUM_DEVICES} available"
-
         return False, None
 
     # Original validation for generality/lead_model suites
