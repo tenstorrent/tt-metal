@@ -9,8 +9,10 @@ from loguru import logger
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from models.common.utility_functions import skip_with_llk_assert
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize(
     "input_shape, grid_shape",
     [
@@ -75,6 +77,7 @@ def test_grid_sample_random_grid(device, input_shape, mode, align_corners, grid_
     assert allclose_passed, f"Test failed allclose comparison (atol={atol}, rtol={rtol})"
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize(
     "input_shape, grid_shape",
     [
@@ -144,6 +147,7 @@ def test_grid_sample_near_uniform_grid(device, input_shape, mode, align_corners,
     assert allclose_passed, f"Test failed allclose comparison (atol={atol}, rtol={rtol})"
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize(
     "input_shape",
     [
@@ -199,6 +203,7 @@ def test_grid_sample_identity_transform(device, input_shape, mode, align_corners
     logger.info(f"Identity check: {identity_message}")
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize(
     "input_shape",
     [
