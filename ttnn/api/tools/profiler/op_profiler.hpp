@@ -147,7 +147,9 @@ inline json get_base_json(
 #endif  // TRACY_ENABLE
 
 inline std::string op_meta_data_serialized_json(
-    uint32_t opID, const tt::tt_metal::operation::ExternalOperation& op, const std::vector<Tensor>& input_tensors) {
+    [[maybe_unused]] uint32_t opID,
+    [[maybe_unused]] const tt::tt_metal::operation::ExternalOperation& op,
+    [[maybe_unused]] const std::vector<Tensor>& input_tensors) {
 #if defined(TRACY_ENABLE)
     if (!is_op_profiler_env_var_set()) {
         return {};
