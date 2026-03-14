@@ -13,7 +13,6 @@
 #include "autograd/tensor.hpp"
 #include "core/compute_kernel_config.hpp"
 #include "core/tt_tensor_utils.hpp"
-#include "metal/operations.hpp"
 #include "ttnn/operations/creation.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/eltwise/unary/unary.hpp"
@@ -91,15 +90,42 @@ autograd::TensorPtr layernorm(
         &autograd::ctx().get_device(),
         tensor->get_value().memory_config());
     auto rstd = ttnn::empty_like(mean);
+    auto output = ttnn::empty_like(tensor->get_value());
 
-    auto out_tensors =
-        ttml::metal::layernorm_fw(tensor->get_value(), gamma->get_value(), beta_val, 1e-6F, /* return_mean_std */ true);
+    auto out_tensors = ttnn::moreh_layer_norm(
+        tensor->get_value(),
+        1,
+        1e-6F,
+        /* gamma */ gamma->get_value(),
+        /* beta */ beta_val,
+        output,
+        mean,
+        rstd,
+        /* memory_config */ std::nullopt,
+        /* compute_kernel_config */ std::nullopt);
 
     auto out = autograd::create_tensor(out_tensors[0].value());
     mean = out_tensors[1].value();
     rstd = out_tensors[2].value();
+
     autograd::GradFunction grad = [tensor, out, mean, rstd, gamma, beta_opt]() {
-        auto res = ttml::metal::layernorm_bw(tensor->get_value(), gamma->get_value(), mean, rstd, out->get_grad());
+        auto input_grad = ttnn::empty_like(tensor->get_value());
+        auto gamma_grad = ttnn::empty_like(gamma->get_value());
+        auto beta_grad = beta_opt.has_value() ? ttnn::empty_like(beta_opt.value()->get_value()) : ttnn::Tensor();
+
+        auto res = ttnn::moreh_layer_norm_backward(
+            out->get_grad(),
+            tensor->get_value(),
+            mean,
+            rstd,
+            1,
+            gamma->get_value(),
+            input_grad,
+            gamma_grad,
+            beta_opt.has_value() ? beta_grad : ttnn::Tensor(),
+            /* memory_config */ std::nullopt,
+            /* compute_kernel_config */ std::nullopt);
+
         tensor->add_grad(res[0].value());
         gamma->add_grad(res[1].value());
         if (beta_opt.has_value()) {
