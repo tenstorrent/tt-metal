@@ -33,8 +33,8 @@
 
 ### Channel Allocator (PR 5)
 
-- [ ] **CA-01**: Channel allocator uses both per-VC receiver and sender channel data
-- [ ] **CA-02**: Allocator API is consistent — no mixed flat/per-VC indexing
+- [x] **CA-01**: Channel allocator uses both per-VC receiver and sender channel data
+- [x] **CA-02**: Allocator API is consistent — no mixed flat/per-VC indexing
 
 ### Stream Reg Assignment (PR 6)
 

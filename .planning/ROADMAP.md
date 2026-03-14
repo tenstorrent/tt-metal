@@ -8,7 +8,7 @@
 | 2 | Device Receiver Per-VC | Migrate device-side receiver channel indexing to per-VC | DR-01 to DR-04 | Pending |
 | 3 | 1/2 | Complete    | 2026-03-13 | Pending |
 | 4 | Device Sender Per-VC | Complete    | 2026-03-13 | Complete (2026-03-13) |
-| 5 | Channel Allocator | Update allocator to use both per-VC sender and receiver | CA-01 to CA-02 | Pending |
+| 5 | 1/1 | Complete   | 2026-03-14 | Pending |
 | 6 | Stream Reg Assignment | Update host stream reg assignment table/map for per-VC | SR-01 to SR-02 | Pending |
 
 ---
@@ -90,7 +90,7 @@ Plans:
 
 **Requirements:** CA-01, CA-02
 
-**Plans:** 1 plan
+**Plans:** 1/1 plans complete
 
 Plans:
 - [ ] 05-01-PLAN.md — Update emit_channel_allocations_ct_args signatures to per-VC arrays on both allocators; update call site; build + sanity test

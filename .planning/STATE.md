@@ -3,12 +3,12 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-13T23:42:02.334Z"
+last_updated: "2026-03-14T00:05:06.505Z"
 progress:
   total_phases: 6
-  completed_phases: 2
-  total_plans: 3
-  completed_plans: 3
+  completed_phases: 3
+  total_plans: 4
+  completed_plans: 4
 ---
 
 # Project State
@@ -46,20 +46,26 @@ Note: Neither the build nor the sanity test should hang. Any hang is a regressio
 
 ## Current Phase
 
-**Phase 4: Device Sender Per-VC — Plan 01 Complete (2026-03-13)**
+**Phase 5: Channel Allocator — Plan 01 Complete (2026-03-14)**
 
 Plan 01 completed:
-- Added `VC0_SENDER_CHANNEL_START = 0` to `fabric_erisc_router_ct_args.hpp` after `VC1_RECEIVER_CHANNEL`, completing sender/receiver naming symmetry
-- Replaced all 5 `is_sender_channel_serviced[0]` literal guard expressions in `fabric_erisc_router.cpp` with `is_sender_channel_serviced[VC0_SENDER_CHANNEL_START]`
+- Updated `FabricStaticSizedChannelsAllocator::emit_channel_allocations_ct_args` to accept per-VC arrays instead of flat scalars
+- Updated `FabricRemoteChannelsAllocator::emit_channel_allocations_ct_args` to accept per-VC bool array instead of flat count
+- Updated single call site in `erisc_datamover_builder.cpp` to pass per-VC arrays
 - Build: PASSED (zero new errors)
 - Sanity test: PASSED (all 12 latency tests passed golden comparison, no hangs)
 
 Key decisions:
-- `VC0_SENDER_CHANNEL_START` placed adjacent to `VC0/VC1_RECEIVER_CHANNEL` block in `ct_args.hpp` to group all VC start index constants together
-- `run_sender_channel_step` template call flat indices (0-4) left unchanged — they are absolute kernel slot indices, not VC-start guards
-- RT arg parsing loops (`for i < MAX_NUM_SENDER_CHANNELS`) left unchanged — flat wire format intact (DS-02)
+- Derive local flat scalars at top of function body to keep existing downstream logic unchanged — minimizes diff surface
+- Remote allocator iterates per-VC bool array for sequential entry index emission — semantically identical, now correctly scoped
+- Retain `actual_sender_channels_vc0/vc1` and `num_receiver_channels` locals in builder (still used by NOC/cmd-buf loops above the emit calls)
+
+## Session
+
+**Last session:** 2026-03-14
+**Stopped at:** Completed 05-channel-allocator-01-PLAN.md
 
 ## Next Plan
 
-**Phase 4 complete — all 1 plans done**
-Ready for Phase 5 (Channel Allocator).
+**Phase 5 complete — all 1 plans done**
+All 6 phases complete. Allocator API is fully per-VC across constructor + emit methods.
