@@ -107,6 +107,11 @@ Plans:
 
 **Requirements:** SR-01, SR-02
 
+**Plans:** 1 plan
+
+Plans:
+- [ ] 06-01-PLAN.md — Add per-VC grouping arrays to StreamRegAssignments; update CT-arg emission to use per-VC accessors; build + sanity test
+
 **Success criteria:**
 1. Stream register assignment uses per-VC indexing
 2. No flat stream register arrays that mix VC assignment
