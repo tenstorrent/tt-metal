@@ -102,6 +102,25 @@ def hf_config_single_layer(hf_config: KimiK25Config) -> KimiK25Config:
     return cfg
 
 
+
+
+@pytest.fixture(scope="function")
+def hf_config_short(request, hf_config: KimiK25Config) -> KimiK25Config:
+    """One-layer Kimi config with reduced max_seq_len for fast single-layer tests.
+
+    Mirrors DSV3's ``hf_config_short`` fixture so that DSV3 test helpers
+    (e.g. ``run_test_forward_pass_mla2d``) can be reused without modification.
+
+    Environment variables:
+        KIMI_MAX_SEQ_LEN_OVERRIDE: Override ``max_seq_len`` for longer sequence tests.
+            Example: ``KIMI_MAX_SEQ_LEN_OVERRIDE=4096 pytest test_mla.py``
+    """
+    cfg = deepcopy(hf_config)
+    cfg.num_hidden_layers = getattr(request, "param", 1)
+    override = os.getenv("KIMI_MAX_SEQ_LEN_OVERRIDE")
+    cfg.max_seq_len = int(override) if override else 128
+    return cfg
+
 @pytest.fixture(scope="session")
 def cache_path() -> Path:
     """Directory for converted TTNN weight tensors."""
