@@ -7,7 +7,7 @@
 
 // Make n reads defined by num_reads
 // Writes to Specified Circular Buffers in L1
-// Expects n provided src_addr, src_noc_x, src_noc_y, and cb_id_in
+// Supports interleaved and sharded/ND-sharded inputs (page-based addressing).
 void kernel_main() {
     const uint32_t num_pages = get_arg_val<uint32_t>(0);
     const uint32_t start_tensor = get_arg_val<uint32_t>(1);
@@ -16,8 +16,10 @@ void kernel_main() {
     constexpr uint32_t cb_id_in = get_compile_time_arg_val(0);
     constexpr uint32_t num_tensors = get_compile_time_arg_val(1);
     constexpr uint32_t page_size_base_idx = 2;
-    constexpr auto tensor_accessor_args =
-        make_tensor_accessor_args_tuple<num_tensors, page_size_base_idx + num_tensors>();
+    constexpr uint32_t num_pages_in_row_base_idx = page_size_base_idx + num_tensors;
+    constexpr uint32_t size_of_valid_data_base_idx = num_pages_in_row_base_idx + num_tensors;
+    constexpr uint32_t tensor_accessor_args_base_idx = size_of_valid_data_base_idx + num_tensors;
+    constexpr auto tensor_accessor_args = make_tensor_accessor_args_tuple<num_tensors, tensor_accessor_args_base_idx>();
 
     // ublocks size defined in pages
     constexpr uint32_t ublock_size_pages = 1;
@@ -40,23 +42,32 @@ void kernel_main() {
 
     uint32_t curr_tensor = start_tensor;
     uint32_t curr_tensor_id = start_tensor_id;
-    // FIX RM CONCAT WIDTH
     for (uint32_t i = 0; i < num_pages; ++i) {
         cb_reserve_back(cb_id_in, ublock_size_pages);
         uint32_t l1_write_addr = get_write_ptr(cb_id_in);
 #ifdef WIDTH_CONCAT
-        // For width concat we know we start at curr_tensor=0
-        // num_pages_per_block[curr_tensor] is always one for width concat
+        // For width concat read from each tensor in order; support multi-page per row (sharded/ND-sharded)
         for (uint32_t j = 0; j < num_tensors; ++j) {
-            auto read_addr =
-                abstract_tensor_accessor_wrappers[curr_tensor].get_noc_addr(page_id_per_tensor[curr_tensor]);
-            auto page_size = kernel_compile_time_args[page_size_base_idx + curr_tensor];
-            noc_async_read(read_addr, l1_write_addr, page_size);
-            l1_write_addr += page_size;
-            page_id_per_tensor[curr_tensor]++;
-            curr_tensor++;
+            const uint32_t npir = kernel_compile_time_args[num_pages_in_row_base_idx + j];
+            const uint32_t page_sz = kernel_compile_time_args[page_size_base_idx + j];
+            const uint32_t size_last = kernel_compile_time_args[size_of_valid_data_base_idx + j];
+            const uint32_t base_page_id = page_id_per_tensor[j];
+            if (npir == 1) {
+                uint64_t read_addr = abstract_tensor_accessor_wrappers[j].get_noc_addr(base_page_id);
+                noc_async_read(read_addr, l1_write_addr, page_sz);
+                l1_write_addr += page_sz;
+            } else {
+                for (uint32_t p = 0; p < npir - 1; ++p) {
+                    uint64_t read_addr = abstract_tensor_accessor_wrappers[j].get_noc_addr(base_page_id + p);
+                    noc_async_read(read_addr, l1_write_addr, page_sz);
+                    l1_write_addr += page_sz;
+                }
+                uint64_t read_addr = abstract_tensor_accessor_wrappers[j].get_noc_addr(base_page_id + npir - 1);
+                noc_async_read(read_addr, l1_write_addr, size_last);
+                l1_write_addr += size_last;
+            }
+            page_id_per_tensor[j] += npir;
         }
-        curr_tensor = 0;
 #else
         auto read_addr = abstract_tensor_accessor_wrappers[curr_tensor].get_noc_addr(page_id_per_tensor[curr_tensor]);
         auto page_size = kernel_compile_time_args[page_size_base_idx + curr_tensor];
