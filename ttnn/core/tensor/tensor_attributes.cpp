@@ -17,7 +17,10 @@ const Storage& TensorAttributes::get_storage() const { return storage_; }
 Storage& TensorAttributes::get_storage() { return storage_; }
 const TensorSpec& TensorAttributes::get_tensor_spec() const {
     if (const auto* device_storage = std::get_if<DeviceStorage>(&storage_); device_storage != nullptr) {
-        TT_FATAL(device_storage->is_allocated(), "Boom!");
+        if (!device_storage->is_allocated()) {
+            TT_FATAL(device_storage->mesh_buffer != nullptr, "Boom! Nullptr");
+            TT_FATAL(device_storage->mesh_buffer->is_allocated(), "Boom! Not allocated");
+        }
     }
     return tensor_spec_;
 }
