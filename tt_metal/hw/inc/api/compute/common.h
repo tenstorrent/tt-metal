@@ -110,6 +110,21 @@ FORCE_INLINE T get_common_arg_val(int arg_idx) {
     return *((tt_l1_ptr T*)(get_common_arg_addr(arg_idx)));
 }
 
+#include "api/rt_arg.h"
+
+// Unified accessor for named runtime args.
+// Usage: uint32_t n = rt_args::get<rt_args::my_op::num_tiles>();
+namespace rt_args {
+template <Arg arg, typename T = uint32_t>
+FORCE_INLINE T get() {
+    if constexpr (arg.dispatch == Dispatch::COMMON) {
+        return get_common_arg_val<T>(arg.index);
+    } else {
+        return get_arg_val<T>(arg.index);
+    }
+}
+}  // namespace rt_args
+
 // clang-format off
 /**
  * Returns the absolute logical X coordinate value that this kernel is running on. The absolute coordinate
