@@ -10,6 +10,7 @@
 #include "ttnn/operations/data_movement/clone/clone.hpp"
 #include "ttnn/operations/core/core.hpp"  // for to_layout
 #include <tt-logger/tt-logger.hpp>
+#include <tt-metalium/hal.hpp>
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -25,6 +26,10 @@ ConcatDeviceOperation::program_factory_t ConcatDeviceOperation::select_program_f
 
     const auto& input_tensors = tensor_args.input_tensors;
     const bool is_sharded = input_tensors[0].is_sharded();
+
+    if (const auto& first_nd_shard_spec = input_tensors[0].nd_shard_spec(); first_nd_shard_spec.has_value()) {
+        return ConcatProgramFactory{};
+    }
 
     if (!is_sharded) {
         return ConcatProgramFactory{};
@@ -61,13 +66,16 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
     TT_FATAL(!input_tensors.empty(), "need 1 or more tensors");
 
     const auto& first_input = input_tensors[0];
+    const auto first_input_page_size = first_input.buffer()->page_size();
     auto shape_first = first_input.padded_shape();
     TT_FATAL(args.dim < shape_first.rank(), "ConcatDeviceOperation dim specified is larger than input tensor rank.");
     shape_first[args.dim] = 0;
     bool shard_first = input_tensors[0].is_sharded();
     bool warn_about_alignment = false;
+    const auto& first_nd_shard_spec = first_input.nd_shard_spec();  // can be nullopt
+    const bool nd_sharded = first_nd_shard_spec.has_value();
 
-    for (int i = 0; i < input_tensors.size(); i++) {
+    for (size_t i = 0; i < input_tensors.size(); ++i) {
         const Tensor& in_ref = input_tensors[i];
         TT_FATAL(in_ref.buffer(), "Operand to concat needs to be allocated in a buffer on device.");
         TT_FATAL(in_ref.device(), "Operand to concat needs to be on device.");
@@ -87,7 +95,68 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
         }
         TT_FATAL(curr_shape == shape_first, "concat tensors differ in shape across non-concat dimensions.");
         TT_FATAL(in_ref.is_sharded() == shard_first, "All tensors must be sharded or all must be interleaved");
-        if (shard_first) {
+        if (nd_sharded) {
+            TT_FATAL(in_ref.nd_shard_spec().has_value(), "ND Sharded tensors must have a shard spec.");
+            TT_FATAL(
+                in_ref.nd_shard_spec().value().grid == first_nd_shard_spec.value().grid,
+                "ND Sharded tensors must have the same grid.");
+            TT_FATAL(
+                in_ref.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
+                "Block sharded inputs necessary for ND sharded tensors");
+            const auto& first_shard_shape = first_nd_shard_spec.value().shard_shape;
+            const auto& curr_shard_shape = in_ref.nd_shard_spec().value().shard_shape;
+            TT_FATAL(
+                first_shard_shape.rank() == curr_shard_shape.rank(),
+                "ND Sharded tensors must have shard shapes with the same rank. "
+                "First tensor shard rank: {}, Current tensor shard rank: {}",
+                first_shard_shape.rank(),
+                curr_shard_shape.rank());
+            const uint32_t shard_width = curr_shard_shape[-1];
+            const uint32_t page_size_bytes = in_ref.buffer()->page_size();
+            const uint32_t alignment_requirement = hal::get_l1_alignment();
+            TT_FATAL(
+                page_size_bytes == in_ref.buffer()->aligned_page_size(),
+                "Input shard width {} gives page size {} bytes, which must be aligned to {} bytes for ND sharded "
+                "tensor",
+                shard_width,
+                page_size_bytes,
+                alignment_requirement);
+            TT_FATAL(
+                page_size_bytes == first_input_page_size,
+                "ND sharded tensors should have the same page size for concat operation: expected {} vs. found {}",
+                first_input_page_size,
+                page_size_bytes);
+
+            const tt::tt_metal::Shape& first_logical_shape = in_ref.logical_shape();
+            const tt::tt_metal::Shape& first_padded_shape = in_ref.padded_shape();
+
+            TT_FATAL(
+                first_logical_shape == first_padded_shape,
+                "ND Sharded tensors must have shard logical and padded shapes the same. "
+                "First tensor shard rank: {}, Current tensor shard rank: {}",
+                first_logical_shape,
+                first_padded_shape);
+            // verify dimensions
+            for (uint32_t dim_idx = 0; dim_idx < first_shard_shape.rank(); ++dim_idx) {
+                if (dim_idx == args.dim) {
+                    // Concat dimension is allowed to differ
+                    continue;
+                }
+                TT_FATAL(
+                    first_shard_shape[dim_idx] == curr_shard_shape[dim_idx],
+                    "ND Sharded tensors must have the same shard shape in all dimensions except the concat "
+                    "dimension (dim={}). "
+                    "Dimension {} differs: first tensor shard shape[{}]={}, current tensor shard shape[{}]={}",
+                    args.dim,
+                    dim_idx,
+                    dim_idx,
+                    first_shard_shape[dim_idx],
+                    dim_idx,
+                    curr_shard_shape[dim_idx]);
+            }  // for dim_idx
+
+            // if nd sharded ends
+        } else if (shard_first) {
             TT_FATAL(in_ref.shard_spec().has_value(), "Sharded tensors must have a shard spec.");
             TT_FATAL(
                 in_ref.shard_spec().value().grid == first_input.shard_spec().value().grid,
@@ -112,7 +181,19 @@ void ConcatDeviceOperation::validate_on_program_cache_miss(
             "row-major then retilizing. This may have adverse performance impacts.",
             args.dim);
     }
-    if (shard_first) {
+
+    if (nd_sharded) {
+        TT_FATAL(
+            args.output_mem_config.nd_shard_spec().has_value(),
+            "ND Sharded output memory config should be specified for concat nd sharded tensors");
+        TT_FATAL(
+            args.output_mem_config.nd_shard_spec().value().grid == first_nd_shard_spec.value().grid,
+            "ND Sharded output and inputs must have the same grid.");
+        TT_FATAL(
+            args.output_mem_config.memory_layout() == TensorMemoryLayout::BLOCK_SHARDED,
+            "Block sharded output necessary for ND sharded tensors concat");
+        // if nd sharded ends
+    } else if (shard_first) {
         const auto memory_layout = first_input.memory_config().memory_layout();
         TT_FATAL(
             args.output_mem_config.memory_layout() == memory_layout,
@@ -150,8 +231,29 @@ TensorSpec ConcatDeviceOperation::compute_output_specs(
         shape_out[args.dim] += curr_shape[args.dim];
     }
 
+    const auto& ref_nd_spec = ref_in_tensor.nd_shard_spec();
+    if (!ref_nd_spec.has_value()) {
+        return TensorSpec(
+            shape_out, TensorLayout(ref_in_tensor.dtype(), PageConfig(ref_in_tensor.layout()), args.output_mem_config));
+    }
+
+    // output memory config is constant, btw
+    // When ref input has ND sharding, build output memory config with derived NdShardSpec:
+    // same grid/orientation/strategy. Use first input's shard_shape for calculations.
+    const auto& first_spec = ref_nd_spec.value();
+    ttnn::Shape output_shard_shape = first_spec.shard_shape;
+
+    NdShardSpec output_nd_spec(
+        std::move(output_shard_shape), first_spec.grid, first_spec.orientation, first_spec.shard_distribution_strategy);
+    const MemoryConfig output_mem_config(ref_in_tensor.memory_config().buffer_type(), std::move(output_nd_spec));
+
+    // ensure correct memory config for verification routine
+    if (args.output_mem_config == ttnn::DRAM_MEMORY_CONFIG ||   // default if it came empty
+        !args.output_mem_config.nd_shard_spec().has_value()) {  // output for nd sharding should be the same as input
+        const_cast<decltype(args.output_mem_config)&>(args.output_mem_config) = output_mem_config;
+    }
     return TensorSpec(
-        shape_out, TensorLayout(ref_in_tensor.dtype(), PageConfig(ref_in_tensor.layout()), args.output_mem_config));
+        shape_out, TensorLayout(ref_in_tensor.dtype(), PageConfig(ref_in_tensor.layout()), output_mem_config));
 }
 
 Tensor ConcatDeviceOperation::create_output_tensors(
