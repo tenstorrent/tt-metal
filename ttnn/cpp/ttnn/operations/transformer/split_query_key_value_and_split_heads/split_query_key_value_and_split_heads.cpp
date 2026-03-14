@@ -54,7 +54,11 @@ std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_
 }
 }  // namespace detail
 
-std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::invoke(
+}  // namespace ttnn::operations::transformer
+
+namespace ttnn::transformer {
+
+std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
     const Tensor& input_tensor,
     const std::optional<Tensor>& input_tensor_kv,
     const uint32_t num_heads,
@@ -112,7 +116,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
 
         auto outputs = ttnn::experimental::nlp_create_qkv_heads_falcon7b(
             input_4d, memory_config.value_or(input_tensor.memory_config()));
-        return detail::reshape_outputs_of_split_query_key_value_and_split_heads(
+        return ttnn::operations::transformer::detail::reshape_outputs_of_split_query_key_value_and_split_heads(
             {std::get<0>(outputs), std::get<1>(outputs), std::get<2>(outputs)},
             sequence_size,
             sequence_size_padded,
@@ -187,7 +191,7 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
 
         const auto input_tensor_4d = ttnn::experimental::view(
             input_tensor, ttnn::Shape{padded_input_shape[0], 1, padded_input_shape[1], padded_input_shape[2]});
-        return detail::reshape_outputs_of_split_query_key_value_and_split_heads(
+        return ttnn::operations::transformer::detail::reshape_outputs_of_split_query_key_value_and_split_heads(
             ttnn::experimental::create_qkv_heads(
                 input_tensor_4d,
                 num_heads,
@@ -214,8 +218,8 @@ std::tuple<Tensor, Tensor, Tensor> SplitQueryKeyValueAndSplitHeadsOperation::inv
         num_kv_heads.value_or(num_heads),
         transpose_key,
         memory_config.value_or(input_tensor.memory_config()));
-    return detail::reshape_outputs_of_split_query_key_value_and_split_heads(
+    return ttnn::operations::transformer::detail::reshape_outputs_of_split_query_key_value_and_split_heads(
         outputs, sequence_size, sequence_size_padded, transpose_key);
 }
 
-}  // namespace ttnn::operations::transformer
+}  // namespace ttnn::transformer
