@@ -45,13 +45,16 @@ uint32_t get_downstream_edm_count(bool is_2D_routing) {
     return is_2D_routing ? builder_config::max_downstream_edms : builder_config::num_downstream_edms_1d;
 }
 
-uint32_t get_vc0_downstream_edm_count(bool is_2D_routing) {
-    return is_2D_routing ? builder_config::num_downstream_edms_2d_vc0 : builder_config::num_downstream_edms_vc0;
-}
-
-uint32_t get_vc1_downstream_edm_count(bool is_2D_routing) {
-    TT_FATAL(is_2D_routing, "VC1 is only supported for 2D routing");
-    return builder_config::num_downstream_edms_2d_vc1;
+uint32_t get_downstream_edm_count_for_vc(uint32_t vc, bool is_2D_routing) {
+    switch (vc) {
+        case 0:
+            return is_2D_routing ? builder_config::num_downstream_edms_2d_per_vc[0]
+                                 : builder_config::num_downstream_edms_vc0;
+        case 1:
+            TT_FATAL(is_2D_routing, "VC1 is only supported for 2D routing");
+            return builder_config::num_downstream_edms_2d_per_vc[1];
+        default: TT_THROW("VC {} out of bounds (size {})", vc, builder_config::MAX_NUM_VCS);
+    }
 }
 
 }  // namespace tt::tt_fabric::builder_config

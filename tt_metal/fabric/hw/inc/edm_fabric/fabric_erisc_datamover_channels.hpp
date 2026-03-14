@@ -215,7 +215,11 @@ public:
     }
 
     FORCE_INLINE uint32_t channel_base_address() const {
-        return static_cast<uint32_t>(this->buffer_addresses[0]);
+        if constexpr (NUM_BUFFERS == 0) {
+            return 0;
+        } else {
+            return static_cast<uint32_t>(this->buffer_addresses[0]);
+        }
     }
 
 private:

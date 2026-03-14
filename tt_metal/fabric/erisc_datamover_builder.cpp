@@ -727,14 +727,11 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
             uint32_t worker_channel = get_worker_connected_sender_channel();
             this->is_sender_channel_serviced_[risc_id][worker_channel] = true;
 
-            // All receiver channels serviced in MUX mode
-            size_t receiver_offset = 0;
+            // All receiver channels serviced in MUX mode (indexed by VC directly)
             for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-                size_t num_channels = receiver_counts[vc];
-                for (size_t i = 0; i < num_channels; ++i) {
-                    this->is_receiver_channel_serviced_[risc_id][receiver_offset + i] = true;
+                if (receiver_counts[vc] > 0) {
+                    this->is_receiver_channel_serviced_[risc_id][vc] = true;
                 }
-                receiver_offset += num_channels;
             }
         } else {
             // Normal mode: Enable channels based on per-VC counts AND this RISC's responsibility
@@ -753,13 +750,11 @@ FabricEriscDatamoverBuilder::FabricEriscDatamoverBuilder(
             }
 
             if (services_receivers) {
-                size_t receiver_offset = 0;
+                // Index receiver channels by VC directly (no flat offset)
                 for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-                    size_t num_channels = receiver_counts[vc];
-                    for (size_t i = 0; i < num_channels; ++i) {
-                        this->is_receiver_channel_serviced_[risc_id][receiver_offset + i] = true;
+                    if (receiver_counts[vc] > 0) {
+                        this->is_receiver_channel_serviced_[risc_id][vc] = true;
                     }
-                    receiver_offset += num_channels;
                 }
             }
         }
@@ -900,7 +895,8 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // are waiting for the handshake to complete.
     const size_t default_handshake_context_switch_timeout = 4096;
     size_t num_sender_channels = config.num_used_sender_channels;
-    size_t num_receiver_channels = config.num_used_receiver_channels;
+    // Receiver channels always = MAX_NUM_VCS (1 per VC, inactive VCs have 0 buffers)
+    constexpr size_t num_receiver_channels = builder_config::MAX_NUM_VCS;
 
     auto dispatch_core_type = get_core_type_from_config(
         tt::tt_metal::MetalContext::instance().get_dispatch_core_manager().get_dispatch_core_config());
@@ -969,22 +965,23 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     const auto [is_intermesh_router_on_edge, is_intramesh_router_on_edge] =
         compute_edge_facing_flags(control_plane, this->local_fabric_node_id, this->my_eth_channel);
 
-    // Get actual downstream EDM counts from the adapter (actual connections made)
-    uint32_t num_vc0_downstream_edms = this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(0);
+    // VC0 is always active; higher VCs are active only if they have receiver channels configured
+    auto is_vc_active = [&](size_t vc) { return (vc == 0) || (config.num_used_receiver_channels_per_vc[vc] > 0); };
 
-    bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0;
-    // Get actual VC1 downstream EDM count from adapter (only relevant for multi-mesh 2D routing)
-    uint32_t num_vc1_downstream_edms =
-        needs_vc1 ? this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(1) : 0;
+    // Get actual downstream EDM counts from the adapter (actual connections made) per VC
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> num_downstream_edms_per_vc = {};
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        num_downstream_edms_per_vc[vc] =
+            is_vc_active(vc) ? this->receiver_channel_to_downstream_adapter->get_downstream_edm_count_for_vc(vc) : 0;
+    }
     bool z_router_enabled = fabric_context.has_z_router_on_device(control_plane, local_fabric_node_id);
 
     log_debug(
         LogFabric,
-        "z_router_enabled: {}, needs_vc1: {}, num_vc0_downstream_edms: {}, num_vc1_downstream_edms: {}",
+        "z_router_enabled: {}, num_downstream_edms_per_vc: [{}, {}]",
         z_router_enabled,
-        needs_vc1,
-        num_vc0_downstream_edms,
-        num_vc1_downstream_edms);
+        num_downstream_edms_per_vc[0],
+        num_downstream_edms_per_vc[1]);
     // Calculate array sizes for downstream EDMs based on masks
     // Size = position of highest set bit + 1 (e.g., mask 0x5 = size 3, mask 0x3 = size 2)
     auto calc_array_size_from_mask = [](uint32_t mask) -> uint32_t {
@@ -995,28 +992,24 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         return 32 - __builtin_clz(mask);
     };
 
-    uint32_t vc0_downstream_edm_size =
-        calc_array_size_from_mask(this->receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(0));
-    uint32_t vc1_downstream_edm_size =
-        needs_vc1
-            ? calc_array_size_from_mask(this->receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(1))
-            : 0;
-
-    // Ensure minimum size of 1 to avoid zero-sized arrays (causes undefined behavior when accessed)
-    // Even if mask is 0 (no downstream connections), we need at least 1 element for the array template
-    if (vc0_downstream_edm_size == 0) {
-        vc0_downstream_edm_size = 1;
-    }
-    if (needs_vc1 && vc1_downstream_edm_size == 0) {
-        vc1_downstream_edm_size = 1;
+    std::array<uint32_t, builder_config::MAX_NUM_VCS> downstream_edm_size_per_vc = {};
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        downstream_edm_size_per_vc[vc] =
+            is_vc_active(vc) ? calc_array_size_from_mask(
+                                   this->receiver_channel_to_downstream_adapter->get_downstream_edm_mask_for_vc(vc))
+                             : 0;
+        // Ensure minimum size of 1 to avoid zero-sized arrays (causes undefined behavior when accessed)
+        if (is_vc_active(vc) && downstream_edm_size_per_vc[vc] == 0) {
+            downstream_edm_size_per_vc[vc] = 1;
+        }
     }
 
-    auto actual_sender_channels_vc0 = actual_sender_channels_per_vc_.has_value()
-                                          ? actual_sender_channels_per_vc_.value()[0]
-                                          : config.num_used_sender_channels_per_vc[0];
-    auto actual_sender_channels_vc1 = actual_sender_channels_per_vc_.has_value()
-                                          ? actual_sender_channels_per_vc_.value()[1]
-                                          : config.num_used_sender_channels_per_vc[1];
+    std::array<size_t, builder_config::MAX_NUM_VCS> actual_sender_channels_per_vc = {};
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        actual_sender_channels_per_vc[vc] = actual_sender_channels_per_vc_.has_value()
+                                                ? actual_sender_channels_per_vc_.value()[vc]
+                                                : config.num_used_sender_channels_per_vc[vc];
+    }
 
     // ===== Build named compile-time args (all non-pool/channel-mapping args) =====
     std::unordered_map<std::string, uint32_t> named_args;
@@ -1058,6 +1051,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["ETH_RETRAIN_LINK_SYNC_STREAM_ID"] = stream_ids[32];
 
     // --- Max channel counts ---
+    named_args["MAX_NUM_VCS"] = builder_config::MAX_NUM_VCS;
     named_args["MAX_NUM_SENDER_CHANNELS"] = builder_config::num_max_sender_channels;
     named_args["MAX_NUM_RECEIVER_CHANNELS"] = builder_config::num_max_receiver_channels;
 
@@ -1068,8 +1062,9 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["NUM_SENDER_CHANNELS"] = static_cast<uint32_t>(num_sender_channels);
     named_args["NUM_RECEIVER_CHANNELS"] = static_cast<uint32_t>(num_receiver_channels);
     named_args["NUM_DOWNSTREAM_CHANNELS"] = static_cast<uint32_t>(config.num_fwd_paths);
-    named_args["NUM_DOWNSTREAM_SENDERS_VC0"] = num_vc0_downstream_edms;
-    named_args["NUM_DOWNSTREAM_SENDERS_VC1"] = num_vc1_downstream_edms;
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        named_args[fmt::format("NUM_DOWNSTREAM_SENDERS_VC{}", vc)] = num_downstream_edms_per_vc[vc];
+    }
     named_args["WAIT_FOR_HOST_SIGNAL"] = static_cast<uint32_t>(this->wait_for_host_signal ? 1 : 0);
     named_args["SWITCH_INTERVAL"] = static_cast<uint32_t>(this->firmware_context_switch_interval);
     named_args["FUSE_RECEIVER_FLUSH_AND_COMPLETION_PTR"] = this->fuse_receiver_flush_and_completion_ptr;
@@ -1079,14 +1074,17 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     named_args["HANDSHAKE_ADDR"] = static_cast<uint32_t>(this->handshake_address);
     named_args["CHANNEL_BUFFER_SIZE"] = static_cast<uint32_t>(this->channel_buffer_size);
     named_args["FABRIC_TENSIX_EXTENSION_MUX_MODE"] = this->has_tensix_extension;
-    named_args["ENABLE_FIRST_LEVEL_ACK_VC0"] = this->enable_first_level_ack;
-    named_args["ENABLE_FIRST_LEVEL_ACK_VC1"] = 0;  // VC1 does not use bubble flow control
+    // Per-VC first level ack: VC0 may use bubble flow control, VC1+ does not
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        named_args[fmt::format("ENABLE_FIRST_LEVEL_ACK_VC{}", vc)] = (vc == 0) ? this->enable_first_level_ack : 0;
+    }
     named_args["ENABLE_RISC_CPU_DATA_CACHE"] = enable_risc_cpu_data_cache;
     named_args["Z_ROUTER_ENABLED"] = z_router_enabled;
-    named_args["VC0_DOWNSTREAM_EDM_SIZE"] = vc0_downstream_edm_size;
-    named_args["VC1_DOWNSTREAM_EDM_SIZE"] = vc1_downstream_edm_size;
-    named_args["ACTUAL_VC0_SENDER_CHANNELS"] = static_cast<uint32_t>(actual_sender_channels_vc0);
-    named_args["ACTUAL_VC1_SENDER_CHANNELS"] = static_cast<uint32_t>(actual_sender_channels_vc1);
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        named_args[fmt::format("VC{}_DOWNSTREAM_EDM_SIZE", vc)] = downstream_edm_size_per_vc[vc];
+        named_args[fmt::format("ACTUAL_VC{}_SENDER_CHANNELS", vc)] =
+            static_cast<uint32_t>(actual_sender_channels_per_vc[vc]);
+    }
 
     // --- Remote channel info (always emitted; 0 when inactive) ---
     named_args["SKIP_SRC_CH_ID_UPDATE"] = skip_src_ch_id_update ? 1 : 0;
@@ -1221,20 +1219,19 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
         named_args["RESOURCE_USAGE_CAPTURE_OUTPUT_L1_ADDRESS"] =
             static_cast<uint32_t>(config.datapath_usage_l1_address);
     }
-    if (channel_trimming_overrides_.has_value()) {
-        named_args["DISABLE_RX_CH0_FORWARDING"] =
-            channel_trimming_overrides_->is_receiver_channel_data_forwarded(0) ? 0 : 1;
-        named_args["DISABLE_RX_CH1_FORWARDING"] =
-            channel_trimming_overrides_->is_receiver_channel_data_forwarded(1) ? 0 : 1;
-    } else {
-        named_args["DISABLE_RX_CH0_FORWARDING"] = 0;
-        named_args["DISABLE_RX_CH1_FORWARDING"] = 0;
+    for (size_t ch = 0; ch < builder_config::num_max_receiver_channels; ++ch) {
+        if (channel_trimming_overrides_.has_value()) {
+            named_args[fmt::format("DISABLE_RX_CH{}_FORWARDING", ch)] =
+                channel_trimming_overrides_->is_receiver_channel_data_forwarded(ch) ? 0 : 1;
+        } else {
+            named_args[fmt::format("DISABLE_RX_CH{}_FORWARDING", ch)] = 0;
+        }
     }
 
     // Credit amortization named compile-time args
     uint32_t sender_amort_freq = 0;
     uint32_t receiver_amort_freq = 0;
-    if (actual_sender_channels_vc0 == 1) {
+    if (actual_sender_channels_per_vc[0] == 1) {
         auto* static_alloc =
             dynamic_cast<tt::tt_fabric::FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
         if (static_alloc != nullptr) {
@@ -1254,7 +1251,7 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     auto* static_alloc_ptr = dynamic_cast<FabricStaticSizedChannelsAllocator*>(config.channel_allocator.get());
     TT_FATAL(static_alloc_ptr != nullptr, "Channel allocator must be a FabricStaticSizedChannelsAllocator");
     static_alloc_ptr->emit_channel_allocations_ct_args(
-        ct_args, actual_sender_channels_vc0, actual_sender_channels_vc1, num_receiver_channels);
+        ct_args, actual_sender_channels_per_vc[0], actual_sender_channels_per_vc[1], num_receiver_channels);
 
     // Emit remote channel allocations
     ct_args.push_back(0xabaddad6);
@@ -1316,14 +1313,11 @@ std::vector<uint32_t> FabricEriscDatamoverBuilder::get_runtime_args() const {
             this->downstream_vcs_sender_channel_buffer_index_semaphore_id[8]),  // 9th channel for Z routers
     };
 
-    // Pack VC0 runtime args
-    receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(0, rt_args);
-
-    // Pack VC1 runtime args if VC1 is configured
-    // Both inter-mesh and intra-mesh routers have VC1 in multi-mesh topologies
-    bool needs_vc1 = config.num_used_receiver_channels_per_vc[1] > 0;
-    if (needs_vc1) {
-        receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(1, rt_args);
+    // Pack per-VC runtime args
+    for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
+        if (config.num_used_receiver_channels_per_vc[vc] > 0) {
+            receiver_channel_to_downstream_adapter->pack_inbound_channel_rt_args(vc, rt_args);
+        }
     }
 
     // Pack runtime args - device side reads fixed MAX_NUM_SENDER_CHANNELS values
