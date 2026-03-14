@@ -367,7 +367,7 @@ jobs:
           PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
           COMMENT_AUTHOR="${{ needs.parse-comment.outputs.comment-author }}"
 
-          CONFIRMATION="✅ **CodeOwners Bypass Approval Granted**\n\nThis PR has been approved by @$COMMENT_AUTHOR (metalium-developers-infra team) using the bypass mechanism.\n\n⚠️ **Note:** This bypass should only be used for emergency fixes or when standard approval process is blocked."
+          CONFIRMATION=$'✅ **CodeOwners Bypass Approval Granted**\n\nThis PR has been approved by @'"$COMMENT_AUTHOR"$' (metalium-developers-infra team) using the bypass mechanism.\n\n⚠️ **Note:** This bypass should only be used for emergency fixes or when standard approval process is blocked.'
 
           TEMP_JSON_FILE=$(mktemp)
           jq -n --arg body "$CONFIRMATION" '{"body": $body}' > "$TEMP_JSON_FILE"
@@ -392,7 +392,7 @@ jobs:
           PR_NUMBER="${{ needs.find-pr.outputs.pr-number }}"
           COMMENT_AUTHOR="${{ needs.parse-comment.outputs.comment-author }}"
 
-          UNAUTHORIZED_MSG="❌ **Access Denied**: The \`/codeowners bypass\` command can only be used by members of the \`@tenstorrent/metalium-developers-infra\` team.\n\nUser @$COMMENT_AUTHOR is not authorized to use this command.\n\nIf you need bypass approval, please contact a member of the infra team."
+          UNAUTHORIZED_MSG=$'❌ **Access Denied**: The `/codeowners bypass` command can only be used by members of the `@tenstorrent/metalium-developers-infra` team.\n\nUser @'"$COMMENT_AUTHOR"$' is not authorized to use this command.\n\nIf you need bypass approval, please contact a member of the infra team.'
 
           TEMP_JSON_FILE=$(mktemp)
           jq -n --arg body "$UNAUTHORIZED_MSG" '{"body": $body}' > "$TEMP_JSON_FILE"
