@@ -158,7 +158,7 @@ class WanAttentionBlock(Module):
 
         # Split T (batch) across all devices to reduce redundant SDPA compute.
         # SDPA batch elements are independent, so they can be trivially partitioned.
-        total_devices = self.mesh_device.num_devices()
+        total_devices = self.mesh_device.get_num_devices()
         BT = B * T
         split_t = total_devices > 1 and T > 1
         if split_t:
