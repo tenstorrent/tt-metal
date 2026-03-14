@@ -222,6 +222,7 @@ init_packages() {
                 "gcc-c++"
                 "make"
                 "llvm"
+                "llvm-devel"
                 "clang"
                 "clang-tools-extra" # for linker-wrapper
                 "cmake"
@@ -238,6 +239,8 @@ init_packages() {
                 "libstdc++"
                 "tbb-devel"
                 "capstone-devel"
+                "boost-devel"
+                "gmp-devel"
                 "wget"
                 "curl"
                 "vim-common" # Includes xxd
@@ -304,13 +307,118 @@ prep_ubuntu_system() {
 
 prep_redhat_system() {
     echo "[INFO] Preparing Red Hat family system..."
-    # TODO: Implement Red Hat family system preparation
+
+    # Enable CodeReady Builder (crb) repo for EL9 - provides ninja-build, etc.
+    if [[ "$OS_ID" == "rocky" || "$OS_ID" == "almalinux" || "$OS_ID" == "centos" ]]; then
+        echo "[INFO] Enabling CRB (CodeReady Builder) repository..."
+        dnf config-manager --set-enabled crb 2>/dev/null || \
+            dnf config-manager --enable crb 2>/dev/null || \
+            echo "[WARNING] Could not enable CRB repository. Some packages may not be available."
+    elif [[ "$OS_ID" == "rhel" ]]; then
+        echo "[INFO] Enabling CodeReady Builder repository for RHEL..."
+        subscription-manager repos --enable codeready-builder-for-rhel-${OS_VERSION%%.*}-x86_64-rpms 2>/dev/null || \
+            echo "[WARNING] Could not enable CodeReady Builder. Some packages may not be available."
+    fi
+
+    # Install EPEL if available (provides extra packages)
+    if ! rpm -q epel-release &>/dev/null; then
+        echo "[INFO] Installing EPEL repository..."
+        dnf install -y epel-release 2>/dev/null || \
+            echo "[WARNING] Could not install EPEL. Some packages may not be available."
+    fi
+
+    # Install llvm-toolset which bundles clang and llvm for EL systems
+    echo "[INFO] Installing llvm-toolset..."
+    dnf install -y llvm-toolset 2>/dev/null || true
+
+    dnf makecache
+
+    # Build libisl from source (v0.23+ required but not in EL9 repos)
+    install_libisl_from_source
+
+    # Configure OpenMPI paths for RHEL-family distributions
+    configure_redhat_openmpi_paths
+}
+
+install_libisl_from_source() {
+    local ISL_VERSION="0.26"
+    local ISL_URL="https://libisl.sourceforge.io/isl-${ISL_VERSION}.tar.gz"
+    local ISL_PREFIX="/usr"
+
+    # Check if libisl is already installed with sufficient version
+    if ldconfig -p 2>/dev/null | grep -q 'libisl.so.23'; then
+        echo "[INFO] libisl.so.23 already available, skipping source build."
+        return
+    fi
+
+    echo "[INFO] Building libisl ${ISL_VERSION} from source (not available in EL9 repos)..."
+
+    # Install build dependencies for libisl
+    dnf install -y gmp-devel autoconf automake libtool 2>/dev/null || true
+
+    local TEMP_DIR=$(mktemp -d)
+    cd "$TEMP_DIR"
+
+    wget -q --show-progress -O "isl-${ISL_VERSION}.tar.gz" "$ISL_URL"
+    tar xzf "isl-${ISL_VERSION}.tar.gz"
+    cd "isl-${ISL_VERSION}"
+
+    ./configure --prefix="$ISL_PREFIX"
+    make -j"$(nproc)"
+    make install
+
+    # Update linker cache
+    ldconfig
+
+    cd /
+    rm -rf "$TEMP_DIR"
+
+    echo "[INFO] libisl ${ISL_VERSION} installed successfully."
+}
+
+configure_redhat_openmpi_paths() {
+    # On RHEL-family distros, OpenMPI is installed under /usr/lib64/openmpi
+    # rather than in the standard PATH. We need to configure the environment.
+    local OPENMPI_BASE="/usr/lib64/openmpi"
+
+    if [ -d "$OPENMPI_BASE" ]; then
+        echo "[INFO] Configuring OpenMPI paths for RHEL-family distribution..."
+
+        # Create a profile script that will be sourced on login
+        cat > /etc/profile.d/tt-metal-openmpi.sh << 'OPENMPI_PROFILE'
+# TT-Metal OpenMPI configuration for RHEL-family distributions
+export PATH=/usr/lib64/openmpi/bin:$PATH
+export LD_LIBRARY_PATH=/usr/lib64/openmpi/lib:${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}
+export C_INCLUDE_PATH=/usr/lib64/openmpi/include:${C_INCLUDE_PATH:+:$C_INCLUDE_PATH}
+export CPLUS_INCLUDE_PATH=/usr/lib64/openmpi/include:${CPLUS_INCLUDE_PATH:+:$CPLUS_INCLUDE_PATH}
+export PKG_CONFIG_PATH=/usr/lib64/openmpi/lib/pkgconfig:${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}
+OPENMPI_PROFILE
+        chmod 644 /etc/profile.d/tt-metal-openmpi.sh
+
+        # Also source it for the current session
+        source /etc/profile.d/tt-metal-openmpi.sh
+
+        echo "[INFO] OpenMPI paths configured. Profile script installed at /etc/profile.d/tt-metal-openmpi.sh"
+    fi
 }
 
 # We currently have an affinity to clang as it is more thoroughly tested in CI
 # However g++-12 and later should also work
 
 install_llvm() {
+    if is_redhat_based; then
+        # On RHEL-family, clang is provided by llvm-toolset (already installed in prep_redhat_system)
+        echo "[INFO] Verifying LLVM/Clang installation on RHEL-family system..."
+        if command -v clang &> /dev/null; then
+            local clang_version=$(clang --version 2>/dev/null | head -1)
+            echo "[INFO] Found: $clang_version"
+        else
+            echo "[WARNING] Clang not found. Installing llvm-toolset..."
+            dnf install -y llvm-toolset clang clang-tools-extra
+        fi
+        return
+    fi
+
     # Only install LLVM on debian-based systems
     if ! is_debian_based; then
         echo "[WARNING] Skipping LLVM installation for non-debian distribution ($OS_ID)"
@@ -390,10 +498,14 @@ install_mpi_ulfm() {
         return
     fi
 
+    if is_redhat_based; then
+        install_mpi_ulfm_redhat
+        return
+    fi
+
     # Check if OS is Ubuntu/Debian-based
     if ! is_debian_based; then
-        echo "[WARNING] MPI ULFM installation is currently only supported on Ubuntu/Debian-based distributions"
-        echo "[WARNING] This function needs to be expanded to support $OS_ID"
+        echo "[WARNING] MPI ULFM installation is currently only supported on Ubuntu/Debian and RHEL-family distributions"
         return
     fi
 
@@ -422,14 +534,75 @@ install_mpi_ulfm() {
     apt-get install -f -y "$TMP_DIR/$DEB_FILE"
 }
 
+install_mpi_ulfm_redhat() {
+    echo "[INFO] Building OpenMPI with ULFM support from source for RHEL-family..."
+
+    local OMPI_TAG="v5.0.7"
+    local OMPI_PREFIX="/opt/openmpi-${OMPI_TAG}-ulfm"
+
+    # Check if already installed
+    if [ -x "${OMPI_PREFIX}/bin/mpirun" ]; then
+        echo "[INFO] OpenMPI ULFM is already installed at ${OMPI_PREFIX}. Skipping."
+        return
+    fi
+
+    # Install build dependencies
+    dnf install -y autoconf automake bison flex gfortran gawk \
+        libevent-devel libibverbs-devel libmpc-devel libzstd-devel \
+        mpfr-devel patchutils pmix-devel texinfo zlib-devel \
+        expat-devel gmp-devel perl 2>/dev/null || true
+
+    local TEMP_DIR=$(mktemp -d)
+    cd "$TEMP_DIR"
+
+    echo "[INFO] Cloning OpenMPI ${OMPI_TAG}..."
+    git clone --branch "${OMPI_TAG}" --depth 1 https://github.com/open-mpi/ompi.git ompi-src
+    cd ompi-src
+    git submodule update --init --recursive
+
+    echo "[INFO] Configuring OpenMPI with ULFM support..."
+    ./autogen.pl
+    ./configure \
+        --prefix="${OMPI_PREFIX}" \
+        --with-ft=ulfm \
+        --enable-wrapper-rpath \
+        --enable-mpirun-prefix-by-default \
+        --disable-mca-dso \
+        --disable-dlopen
+
+    echo "[INFO] Building OpenMPI (this may take a while)..."
+    make -j"$(nproc)"
+    make install
+
+    cd /
+    rm -rf "$TEMP_DIR"
+
+    # Configure environment for this OpenMPI install
+    cat > /etc/profile.d/tt-metal-openmpi-ulfm.sh << ULFM_PROFILE
+# TT-Metal OpenMPI ULFM configuration
+export PATH=${OMPI_PREFIX}/bin:\$PATH
+export LD_LIBRARY_PATH=${OMPI_PREFIX}/lib:\${LD_LIBRARY_PATH:+:\$LD_LIBRARY_PATH}
+export CPATH=${OMPI_PREFIX}/include
+export PKG_CONFIG_PATH=${OMPI_PREFIX}/lib/pkgconfig:\${PKG_CONFIG_PATH:+:\$PKG_CONFIG_PATH}
+ULFM_PROFILE
+    chmod 644 /etc/profile.d/tt-metal-openmpi-ulfm.sh
+    source /etc/profile.d/tt-metal-openmpi-ulfm.sh
+
+    echo "[INFO] OpenMPI ULFM ${OMPI_TAG} installed at ${OMPI_PREFIX}"
+}
+
 # We don't really want to have hugepages dependency
 # This could be removed in the future
 
 configure_hugepages() {
+    if is_redhat_based; then
+        configure_hugepages_redhat
+        return
+    fi
+
     # Check if OS is Ubuntu/Debian-based
     if ! is_debian_based; then
-        echo "[WARNING] Hugepages configuration is currently only supported on Ubuntu/Debian-based distributions"
-        echo "[WARNING] This function needs to be expanded to support $OS_ID"
+        echo "[WARNING] Hugepages configuration is currently only supported on Ubuntu/Debian and RHEL-family distributions"
         return
     fi
 
@@ -444,6 +617,40 @@ configure_hugepages() {
     sudo systemctl enable --now 'dev-hugepages\x2d1G.mount'
     sudo systemctl enable --now tenstorrent-hugepages.service
     rm -rf "$TEMP_DIR"
+}
+
+configure_hugepages_redhat() {
+    echo "[INFO] Configuring hugepages for RHEL-family distribution..."
+
+    # Try to install RPM version of tt-system-tools if available
+    local TT_TOOLS_LINK=$(wget -qO- https://api.github.com/repos/tenstorrent/tt-system-tools/releases/latest | jq -r '.assets[] | select(.name | endswith(".rpm")) | .browser_download_url')
+
+    if [ -n "$TT_TOOLS_LINK" ] && [ "$TT_TOOLS_LINK" != "null" ]; then
+        local TT_TOOLS_NAME=$(basename "$TT_TOOLS_LINK")
+        echo "[INFO] Installing Tenstorrent Hugepages Service $TT_TOOLS_NAME..."
+        TEMP_DIR=$(mktemp -d)
+        wget -P "$TEMP_DIR" "$TT_TOOLS_LINK"
+        rpm -Uvh "$TEMP_DIR/$TT_TOOLS_NAME" || dnf install -y "$TEMP_DIR/$TT_TOOLS_NAME"
+        rm -rf "$TEMP_DIR"
+    else
+        echo "[WARNING] No RPM package found for tt-system-tools. Configuring hugepages manually..."
+    fi
+
+    # Configure hugepages manually as fallback
+    echo "[INFO] Setting up 1G hugepages..."
+
+    # Ensure hugepages mount exists
+    if ! mountpoint -q /dev/hugepages-1G 2>/dev/null; then
+        mkdir -p /dev/hugepages-1G
+        mount -t hugetlbfs -o pagesize=1G none /dev/hugepages-1G 2>/dev/null || \
+            echo "[WARNING] Could not mount 1G hugepages. This may require kernel parameters."
+    fi
+
+    # Set number of hugepages (default: 1)
+    echo 1 > /sys/kernel/mm/hugepages/hugepages-1048576kB/nr_hugepages 2>/dev/null || \
+        echo "[WARNING] Could not set hugepages count. You may need to add 'hugepagesz=1G hugepages=1' to kernel cmdline."
+
+    echo "[INFO] Hugepages configuration complete for RHEL-family."
 }
 
 install() {
