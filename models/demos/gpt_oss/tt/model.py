@@ -1,7 +1,6 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
-
 import torch
 from loguru import logger
 
@@ -288,6 +287,14 @@ class Model:
         ccl_manager = CCLManager(mesh_device, num_links=4 if mesh_device.shape[0] > 1 else 1)
 
         # Create instance using direct initialization
+        # Fix max_local_batch_size for row-sharded mode with small batches.
+        # ModelArgs sets max_local_batch_size = max_batch_size when <= 32, but
+        # with row-sharding each row only handles max_batch_size / num_rows users.
+        max_local = args.max_local_batch_size
+        if users_row_sharded and mesh_device.shape[0] > 1:
+            max_local = max(1, args.max_batch_size // mesh_device.shape[0])
+            args.max_local_batch_size = max_local
+
         instance = cls.__new__(cls)
         instance.__init__(
             mesh_device=mesh_device,
@@ -299,7 +306,7 @@ class Model:
             paged_attention_config=paged_attention_config,
             mesh_config=mesh_config,
             create_kv_cache=create_kv_cache,
-            max_local_batch_size=args.max_local_batch_size,
+            max_local_batch_size=max_local,
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput_experts,
         )
@@ -345,6 +352,15 @@ class Model:
         # Determine mode based on current_pos presence
         mode = Mode.DECODE if current_pos is not None else Mode.PREFILL
 
+        # For row-sharded batched prefill, each mesh row has 1 user, so the
+        # local batch size for attention reshaping must be 1 (not global batch),
+        # and user_id must be 0 (local to each row's single user).
+        local_batch_size = batch_size
+        local_user_id = user_id
+        if not is_decode and batch_size > 1 and self.users_row_sharded:
+            local_batch_size = 1
+            local_user_id = 0
+
         # Process through decoder layers
         for i, decoder_layer in enumerate(self.layers):
             layer_kv_cache = kv_cache[i] if kv_cache is not None else None
@@ -356,10 +372,17 @@ class Model:
                 page_table=page_table,
                 kv_cache=layer_kv_cache,
                 is_decode=is_decode,
-                user_id=user_id,
-                batch_size=batch_size,
+                user_id=local_user_id,
+                batch_size=local_batch_size,
             )
         logits = hidden_states
+
+        # Batched prefill with get_last_token == -1: return hidden states before
+        # norm/lm_head so ttnn_prefill_forward can gather row-sharded data first,
+        # then run norm+lm_head on the combined tensor.
+        # This matches the base Transformer pattern (model.py line ~720).
+        if not is_decode and get_last_token == -1:
+            return hidden_states
 
         if get_last_token != -1:
             if len(logits.shape) == 3:
@@ -484,14 +507,60 @@ class Model:
             batch_size=batch_size,
         )
 
+        # When returning hidden states for batched prefill with row-sharding,
+        # each device only has its local row's portion ([1, 1, seq_len, hidden_dim]).
+        # The generator expects the full [1, 1, batch*seq_len, hidden_dim] replicated
+        # on all devices so it can reshape to [batch, 1, seq_len, hidden_dim].
+        # Gather from all rows on host and replicate back.
+        if get_last_token == -1 and batch_size > 1 and self.users_row_sharded:
+            logits = self._gather_row_sharded_hidden_states(logits, batch_size)
+
         return logits
+
+    def _gather_row_sharded_hidden_states(self, hidden_states, batch_size):
+        """Gather row-sharded hidden states into a single replicated tensor.
+
+        After batched prefill with row-sharding, each mesh row holds one user's
+        hidden states [1, 1, seq_len, hidden_dim] (replicated across TP columns
+        after attention all-reduce + MLP all_to_all_combine). This reads from
+        one device per row, concatenates on host, and returns a replicated
+        [1, 1, batch*seq_len, hidden_dim] tensor matching what the generator expects.
+        """
+        num_rows = self.mesh_device.shape[0]
+        num_cols = self.mesh_device.shape[1]
+        device_tensors = ttnn.get_device_tensors(hidden_states)
+
+        row_tensors = []
+        for row in range(num_rows):
+            # Column 0 of each row (all columns have identical replicated data)
+            device_idx = row * num_cols
+            row_tensors.append(ttnn.to_torch(device_tensors[device_idx]))
+
+        # Each tensor is [1, 1, seq_len, hidden_dim]
+        # Cat along dim 0 → [batch_size, 1, seq_len, hidden_dim]
+        # Flatten → [1, 1, batch_size * seq_len, hidden_dim]
+        combined = torch.cat(row_tensors, dim=0)
+        B, one, S, H = combined.shape
+        combined = combined.reshape(1, 1, B * S, H).contiguous()
+
+        hidden_states.deallocate(True)
+
+        return ttnn.from_torch(
+            combined,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
 
     def process_logits_after_prefill_trace(self, logits, last_token_idx):
         """
-        Post-process traced prefill output to the 32-token tile containing `last_token_idx`.
+        Post-process traced prefill output: slice, then apply norm + lm_head.
 
-        Unlike tt_transformers `Transformer`, GPT-OSS `ttnn_prefill_forward` already
-        applies final norm + lm_head, so this method only slices logits.
+        The trace captures ttnn_prefill_forward which returns hidden states
+        (before norm + lm_head) when get_last_token == -1. This matches the
+        base Transformer pattern — slice to the 32-row tile block, then run
+        norm + lm_head on the small tensor.
         """
         get_last_token = (last_token_idx // 32) * 32
         logits = ttnn.slice(
@@ -499,7 +568,192 @@ class Model:
             (0, 0, get_last_token, 0),
             (1, 1, get_last_token + 32, logits.shape[-1]),
         )
+        logits = self._apply_norm_and_lm_head(logits)
         return logits
+
+    def extract_last_tokens_batched_prefill(self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len):
+        """Extract each user's last-token hidden state from batched prefill output.
+
+        After all decoder layers, hidden states are replicated across all mesh devices
+        (attention all-reduce + MLP all_to_all_combine + column all_reduce). We read
+        from a single device, extract per-user rows on host, and replicate back.
+
+        Args:
+            hidden_states: [padded_batch, 1, prefill_seq_len, hidden_dim] on device (replicated)
+            last_token_idx_list: list of length padded_batch with per-user last token positions
+            padded_batch: number of user slots
+            prefill_seq_len: padded sequence length per user
+
+        Returns:
+            user_tokens: [1, 1, padded_batch, hidden_dim] replicated on all devices, TILE_LAYOUT
+        """
+        active_indices = [lt for lt in last_token_idx_list if lt > 0]
+        all_same = len(set(active_indices)) <= 1
+
+        if all_same and active_indices:
+            # Optimized path: all users share the same last token index.
+            # Slice just the 32-row tile block containing that index.
+            common_last = active_indices[0]
+            get_last = (common_last // 32) * 32
+            R = common_last % 32
+            block = ttnn.slice(
+                hidden_states,
+                (0, 0, get_last, 0),
+                (padded_batch, 1, get_last + 32, hidden_states.shape[-1]),
+            )
+        else:
+            block = hidden_states
+            R = None
+
+        # Read from device 0 -- all devices have the same replicated data.
+        device_tensors = ttnn.get_device_tensors(block)
+        host_full = ttnn.to_torch(device_tensors[0])
+
+        if R is not None:
+            # All users have the same last token at row R within the 32-row block.
+            combined = host_full[:, :, R : R + 1, :].reshape(1, 1, padded_batch, -1).contiguous()
+        else:
+            # Different last token indices -- extract each user's row individually.
+            rows = []
+            for slot in range(padded_batch):
+                lt_idx = last_token_idx_list[slot]
+                rows.append(host_full[slot : slot + 1, :, lt_idx : lt_idx + 1, :])
+            combined = torch.cat(rows, dim=0).reshape(1, 1, padded_batch, -1).contiguous()
+
+        # Send back to all devices with replication (hidden states are replicated,
+        # not TP-sharded, after MLP all_reduce).
+        user_tokens = ttnn.from_torch(
+            combined,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.mesh_device),
+        )
+        return user_tokens
+
+    def process_logits_after_batched_prefill(self, hidden_states, last_token_idx_list, padded_batch, prefill_seq_len):
+        """Extract last tokens and run norm + lm_head once for all users."""
+        user_tokens = self.extract_last_tokens_batched_prefill(
+            hidden_states, last_token_idx_list, padded_batch, prefill_seq_len
+        )
+        return self._apply_norm_and_lm_head(user_tokens)
+
+    def _apply_norm_and_lm_head(self, hidden_states):
+        """Apply final norm and lm_head to extracted hidden states.
+
+        Used by the generator after extract_last_tokens_batched_prefill
+        to compute logits on the small [1, 1, batch, hidden_dim] tensor
+        instead of the full [1, 1, B*S, hidden_dim] tensor.
+        """
+        hidden_states = self.norm(hidden_states)
+        logits = ttnn.matmul(hidden_states, self.lm_head_weight, dtype=ttnn.bfloat8_b)
+        hidden_states.deallocate(True)
+        return logits
+
+    def sample_batched_prefill(self, hidden_states, last_token_idx, padded_batch, prefill_seq_len, sampling_params):
+        """On-device sampling for batched prefill with non-tile-aligned batches.
+
+        Extracts per-user last-token hidden states, applies norm + lm_head on
+        the small tensor, pads to 32 for the sampling module, and samples on device.
+
+        With sampling_dp > 1 (row-sharded), the sampling module expects:
+        - Params: [max_batch_size * sampling_dp] sharded across rows
+        - Logits: [1, 1, max_batch_size, vocab/tp] per row
+
+        We place each user at slot 0 of its row's 32-slot block.
+
+        Args:
+            hidden_states: [padded_batch, 1, prefill_seq_len, hidden_dim] on device
+            last_token_idx: list of per-user last token positions
+            padded_batch: number of user slots
+            prefill_seq_len: padded sequence length per user
+            sampling_params: SamplingParams from the generator
+
+        Returns:
+            (tokens, log_probs): tokens is 1D tensor of length padded_batch
+        """
+        from models.common.sampling.generator import format_sampling_params
+
+        # 1. Extract per-user last-token hidden states → [1, 1, padded_batch, hidden_dim]
+        user_hidden = self.extract_last_tokens_batched_prefill(
+            hidden_states, last_token_idx, padded_batch, prefill_seq_len
+        )
+
+        # 2. Apply norm + lm_head → [1, 1, padded_batch, vocab/tp] column-sharded
+        user_logits = self._apply_norm_and_lm_head(user_hidden)
+
+        # 3. Read logits to host for row-parallel placement
+        num_rows = self.mesh_device.shape[0]
+        num_cols = self.mesh_device.shape[1]
+        device_tensors = ttnn.get_device_tensors(user_logits)
+
+        # Read all TP columns from row 0 (all rows have identical replicated data)
+        col_tensors = [ttnn.to_torch(device_tensors[col]) for col in range(num_cols)]
+        # col_tensors[col]: [1, 1, padded_batch, vocab_per_col]
+
+        # 4. Build per-row padded logits: [num_rows, 1, 32, full_vocab]
+        SAMPLING_BATCH = self.sampling.tt_sampling.max_batch_size  # 32
+        full_vocab = sum(t.shape[-1] for t in col_tensors)
+
+        # Concatenate across columns → [1, 1, padded_batch, full_vocab]
+        full_user_logits = torch.cat(col_tensors, dim=-1).squeeze(0).squeeze(0)  # [padded_batch, full_vocab]
+
+        # Place each user at slot 0 of its row
+        per_row = torch.zeros(num_rows, 1, SAMPLING_BATCH, full_vocab, dtype=torch.bfloat16)
+        for slot in range(padded_batch):
+            row = slot % num_rows
+            local_slot = slot // num_rows
+            per_row[row, 0, local_slot, :] = full_user_logits[slot]
+
+        user_logits.deallocate(True)
+
+        # 5. Send back to device: shard rows across mesh rows, columns across mesh cols
+        tt_logits = ttnn.from_torch(
+            per_row,
+            device=self.mesh_device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+            mesh_mapper=ttnn.ShardTensor2dMesh(
+                self.mesh_device, dims=(0, -1), mesh_shape=tuple(self.mesh_device.shape)
+            ),
+        )
+
+        # 6. Format sampling params for total_param_size (SAMPLING_BATCH * sampling_dp)
+        total_param_size = SAMPLING_BATCH * self.sampling_dp
+        combined_params = format_sampling_params(sampling_params, total_param_size)
+        self.sampling.reset_sampling_params(combined_params)
+        self.sampling.reset_output_state()
+
+        # 7. Sample on device
+        tt_tokens, tt_log_probs = self.sampling.sample(tt_logits, enable_trace=False)
+
+        ttnn.synchronize_device(self.mesh_device)
+
+        # 8. Read results — each row produced SAMPLING_BATCH tokens.
+        # Tokens are replicated across TP columns after sampling's internal all-gather,
+        # so read from column 0 of each row.
+        tok_devs = ttnn.get_device_tensors(tt_tokens)
+        tokens_out = torch.zeros(padded_batch, dtype=torch.long)
+        for slot in range(padded_batch):
+            row = slot % num_rows
+            local_slot = slot // num_rows
+            dev_idx = row * num_cols  # column 0 of this row
+            row_tokens = ttnn.to_torch(tok_devs[dev_idx])
+            tokens_out[slot] = row_tokens.flatten()[local_slot].long()
+
+        if tt_log_probs is not None:
+            lp_devs = ttnn.get_device_tensors(tt_log_probs)
+            lp_out = torch.zeros(padded_batch, dtype=torch.float32)
+            for slot in range(padded_batch):
+                row = slot % num_rows
+                local_slot = slot // num_rows
+                dev_idx = row * num_cols
+                row_lp = ttnn.to_torch(lp_devs[dev_idx])
+                lp_out[slot] = row_lp.flatten()[local_slot].float()
+        else:
+            lp_out = None
+
+        return tokens_out, lp_out
 
     def prepare_inputs_decode(self, tokens, current_pos, page_table=None):
         """
@@ -527,23 +781,43 @@ class Model:
             # Ensure position indices are non-negative (matches tt-transformers)
             B = current_pos.shape[0]
             rot_current_pos = torch.maximum(current_pos, torch.tensor(0, dtype=torch.int64))
-            rot_current_pos = rot_current_pos.reshape(1, B)  # [1, batch]
-            assert rot_current_pos.shape == (1, B), "rot_current_pos must be a [1, batch] tensor"
-            assert torch.min(rot_current_pos) >= 0, "rot_current_pos must be non-negative"
-            # Add padding if needed
-            pad_size = nearest_32(B) - B
-            rot_current_pos = torch.nn.functional.pad(rot_current_pos, (0, pad_size), "constant", 0)
-            mesh_mapper = (
-                ttnn.ShardTensor2dMesh(self.mesh_device, dims=(-1, None), mesh_shape=self.mesh_device.shape)
-                if self.users_row_sharded
-                else ttnn.ReplicateTensorToMesh(self.mesh_device)
-            )
-            rope_idxs = ttnn.as_tensor(
-                rot_current_pos,
-                dtype=ttnn.uint32,
-                layout=ttnn.ROW_MAJOR_LAYOUT,
-                mesh_mapper=mesh_mapper,
-            )
+
+            if self.users_row_sharded:
+                # Row-sharded: each mesh row processes its own user(s).
+                # Build [num_rows, pad_per_row] tensor so that after sharding
+                # with dims=(0, None), each row gets its user's position at
+                # the correct local slot (index 0 for 1 user/row).
+                num_rows = self.mesh_device.shape[0]
+                users_per_row = B // num_rows
+                pad_per_row = nearest_32(users_per_row)
+                row_positions = torch.zeros(num_rows, pad_per_row, dtype=torch.int64)
+                for slot in range(B):
+                    row = slot % num_rows
+                    local_slot = slot // num_rows
+                    row_positions[row, local_slot] = rot_current_pos[slot]
+                mesh_mapper = ttnn.ShardTensor2dMesh(
+                    self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape
+                )
+                rope_idxs = ttnn.as_tensor(
+                    row_positions,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=mesh_mapper,
+                )
+            else:
+                rot_current_pos = rot_current_pos.reshape(1, B)  # [1, batch]
+                assert rot_current_pos.shape == (1, B), "rot_current_pos must be a [1, batch] tensor"
+                assert torch.min(rot_current_pos) >= 0, "rot_current_pos must be non-negative"
+                # Add padding if needed
+                pad_size = nearest_32(B) - B
+                rot_current_pos = torch.nn.functional.pad(rot_current_pos, (0, pad_size), "constant", 0)
+                mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
+                rope_idxs = ttnn.as_tensor(
+                    rot_current_pos,
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                    mesh_mapper=mesh_mapper,
+                )
 
             return rope_idxs
 
@@ -632,6 +906,10 @@ class Model:
         # Embed the tokens
         device = None if trace_enabled else self.mesh_device
 
+        # Auto-detect batched prefill when generator passes [batch, seq_len] with batch_size > 1
+        if not batched_prefill and batch_size > 1 and tokens.dim() == 2 and tokens.shape[0] == batch_size:
+            batched_prefill = True
+
         if batched_prefill:
             # Row-parallel batched prefill: tokens is [num_rows, seq_len]
             # Shard across mesh rows so each row gets one user's tokens [1, seq_len]
@@ -671,9 +949,13 @@ class Model:
         tt_chunk_page_table = None
         if page_table is not None:
             if self.users_row_sharded and page_table.shape[0] > 1:
-                # Multi-user prefill: shard page table across rows
+                # Multi-user prefill: the generator pads page_table to [32, blocks]
+                # but with row-sharding we need exactly [num_rows, blocks] so each
+                # mesh row gets its user's single [1, blocks] page table entry.
+                num_rows = self.mesh_device.shape[0]
+                page_table_rows = page_table[:num_rows]  # [num_rows, blocks]
                 tt_page_table = ttnn.from_torch(
-                    page_table,
+                    page_table_rows,
                     device=device,
                     mesh_mapper=ttnn.ShardTensor2dMesh(
                         self.mesh_device, dims=(0, None), mesh_shape=self.mesh_device.shape
@@ -734,9 +1016,26 @@ class Model:
         before calling this method, so on-device allgather is not possible.
         """
         if is_tokens or is_log_probs:
-            concat_out = self.concat_device_output(tt_out)
-            # Token IDs or log probs: shape [1, 1, B] or [1, 1, 1, B] -> [B]
-            return concat_out.reshape(-1)[:B]
+            if self.users_row_sharded:
+                # With sampling_dp > 1, each row independently samples 32 tokens.
+                # User slot i is on row (i % num_rows) at local position (i // num_rows).
+                # Read column 0 from each row (tokens are replicated across columns
+                # after sampling's internal all-gather).
+                num_rows = self.mesh_device.shape[0]
+                num_cols = self.mesh_device.shape[1]
+                device_tensors = ttnn.get_device_tensors(tt_out)
+                result = torch.zeros(B, dtype=torch.long)
+                for slot in range(B):
+                    row = slot % num_rows
+                    local_slot = slot // num_rows
+                    dev_idx = row * num_cols  # column 0 of this row
+                    row_tokens = ttnn.to_torch(device_tensors[dev_idx]).flatten()
+                    result[slot] = row_tokens[local_slot].long()
+                return result
+            else:
+                concat_out = self.concat_device_output(tt_out)
+                # Token IDs or log probs: shape [1, 1, B] or [1, 1, 1, B] -> [B]
+                return concat_out.reshape(-1)[:B]
 
         # Host-side TP gather: concatenate TP shards per row, then DP rows.
         config = self.mesh_config.get_config(Mode.DECODE)
