@@ -1,6 +1,7 @@
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
-"""Tests MoE modules with TTNN acceleration."""
+
+"""Tests MoE modules with TTNN acceleration (GLM-4.7-Flash)."""
 
 import os
 
@@ -12,15 +13,13 @@ from models.experimental.tt_symbiote.modules.moe import (
     Glm4MoeConfig,
     Glm4MoeMoE,
     TTNNMoE,
-    TTNNQwen3MoE,
 )
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.core.utils import compare_fn_outputs
 
 
-# Model path and layer index for real-weights tests.
-# Use Qwen3-Coder-Next with TTNNQwen3MoE; for GLM-4 use TTNNMoE.
-REAL_WEIGHTS_MODEL_PATH = "Qwen/Qwen3-Coder-Next"
+# GLM-4.7-Flash MoE layer for real-weights tests.
+REAL_WEIGHTS_MODEL_PATH = "zai-org/GLM-4.7-Flash"
 REAL_WEIGHTS_LAYER_INDEX = 1
 
 # Device mesh shape. Must be set in env so TTNNMoE run_on_devices can resolve architecture (e.g. T3K).
@@ -75,8 +74,8 @@ def default_moe_config():
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 245760, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING}], indirect=True
 )
-def test_glm4_moe_full(mesh_device, default_moe_config, real_weights):
-    """Test full Glm4MoeMoE module with TTNN acceleration."""
+def test_glm4_moe_full(mesh_device, default_glm_config, real_weights):
+    """Test full Glm4MoeMoE module with TTNN acceleration (GLM-4.7-Flash)."""
     if real_weights:
         from transformers import AutoModelForCausalLM
 
@@ -93,11 +92,7 @@ def test_glm4_moe_full(mesh_device, default_moe_config, real_weights):
     batch_size, seq_len = 1, 115
     inputs = torch.randn((batch_size, seq_len, hidden_size), dtype=torch.bfloat16)
     outputs_torch = model(inputs)
-    # Qwen3NextSparseMoeBlock uses TTNNQwen3MoE; GLM-4/DeepSeek use TTNNMoE
-    if type(model).__name__ == "Qwen3NextSparseMoeBlock":
-        ttnn_model = TTNNQwen3MoE.from_torch(model)
-    else:
-        ttnn_model = TTNNMoE.from_torch(model)
+    ttnn_model = TTNNMoE.from_torch(model)
     set_device(ttnn_model, mesh_device)
     outputs_ttnn = ttnn_model(inputs)
     compare_fn_outputs(outputs_torch, outputs_ttnn, "Glm4MoeMoE")
