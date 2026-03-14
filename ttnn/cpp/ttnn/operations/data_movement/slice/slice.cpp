@@ -97,14 +97,67 @@ ttnn::Tensor SliceOperation::invoke(
             modified_begins[input_rank - 2] % tile_shape[0] == 0);
     };
 
+    auto is_slicing_within_tile = [&modified_begins, &modified_ends, &input_rank, &tile_shape]() -> bool {
+        // Only check last two dimensions since tiles only affect those
+        if (input_rank < 2) {
+            return false;  // 1D tensors don't have meaningful tile boundaries
+        }
+
+        uint32_t height_start = modified_begins[input_rank - 2];
+        uint32_t height_end = modified_ends[input_rank - 2];
+        uint32_t width_start = modified_begins[input_rank - 1];
+        uint32_t width_end = modified_ends[input_rank - 1];
+
+        uint32_t tile_height = tile_shape[0];
+        uint32_t tile_width = tile_shape[1];
+
+        // Check if slicing within a single tile
+        // This means the slice doesn't span the full tile in at least one dimension
+        if (height_end > height_start && width_end > width_start) {
+            uint32_t start_tile_h = height_start / tile_height;
+            uint32_t end_tile_h = (height_end - 1) / tile_height;  // -1 because end is exclusive
+            uint32_t start_tile_w = width_start / tile_width;
+            uint32_t end_tile_w = (width_end - 1) / tile_width;  // -1 because end is exclusive
+
+            // We're within a single tile if start and end are in the same tile
+            bool in_same_tile = (start_tile_h == end_tile_h) && (start_tile_w == end_tile_w);
+
+            // But we also need to check if we're not taking the full tile
+            if (in_same_tile) {
+                uint32_t height_in_tile = height_end - height_start;
+                uint32_t width_in_tile = width_end - width_start;
+
+                // We're within a tile if we're not taking the full tile dimensions
+                bool not_full_tile_height = (height_in_tile < tile_height) || (height_start % tile_height != 0) ||
+                                            (height_end % tile_height != 0);
+                bool not_full_tile_width =
+                    (width_in_tile < tile_width) || (width_start % tile_width != 0) || (width_end % tile_width != 0);
+
+                return not_full_tile_height || not_full_tile_width;
+            }
+        }
+
+        return false;
+    };
+
     bool rm_only = false;
     bool one_dimensional = input_rank == 1;
     bool handled_tile_alignment = one_dimensional ? true : check_handled_tile_alignment();
 
+    // Check if we're slicing within a tile (only relevant for TILE layout)
+    bool slicing_within_tile = input_tensor.layout() == Layout::TILE ? is_slicing_within_tile() : false;
+
     Tensor input = input_tensor;
-    rm_only =
-        (input_tensor.layout() == Layout::TILE &&
-         (!no_step || one_dimensional || input_tensor.is_sharded() || !handled_tile_alignment));
+    // Use row-major path if:
+    // 1. Input is NOT in TILE layout, OR
+    // 2. Input is in TILE layout AND any of these conditions apply:
+    //    - Has non-unit steps (strided slice)
+    //    - Is 1D tensor
+    //    - Slicing within a tile (partial tile, not full tile extraction)
+    //    - Slice boundaries are not tile-aligned
+    rm_only = (input_tensor.layout() != Layout::TILE) ||
+              (input_tensor.layout() == Layout::TILE &&
+               (!no_step || one_dimensional || slicing_within_tile || !handled_tile_alignment));
     if (rm_only) {
         if (!no_step) {
             TT_FATAL(input.dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
