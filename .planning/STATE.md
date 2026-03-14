@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Completed 09-01-PLAN.md
-last_updated: "2026-03-14T22:07:52.866Z"
+stopped_at: Completed 09-02-PLAN.md
+last_updated: "2026-03-14T22:18:51.230Z"
 progress:
   total_phases: 10
   completed_phases: 6
   total_plans: 11
-  completed_plans: 9
+  completed_plans: 10
 ---
 
 # Project State
@@ -47,7 +47,20 @@ Note: Neither the build nor the sanity test should hang. Any hang is a regressio
 
 ## Current Phase
 
-**Phase 9: Device-Side Kernel Per-VC Templates — Plan 01 Complete (2026-03-14)**
+**Phase 9: Device-Side Kernel Per-VC Templates — Plan 02 Complete (2026-03-14)**
+
+Plan 02 completed:
+- Added `SenderFreeSlotsTuple`, `SenderConnectionEstablishedTuple`, `SenderFromReceiverCreditsTuple` type aliases splitting flat arrays into per-VC tuples
+- Replaced `any_sender_channels_active` with `any_sender_channels_active_vc<VC>` template + fold-expression dispatch wrapper
+- Updated `update_telemetry` to accept `SenderFreeSlotsTuple` instead of flat array
+- Updated `run_sender_channel_step` to accept per-VC sized arrays; `sender_channel_index` is now VC-local, global derived via `vc_sender_channel_start_per_vc[VC]`
+- Updated `populate_local_sender_channel_free_slots_stream_id_ordered_map` and `wait_for_static_connection_to_ready` for per-VC tuple
+- Replaced flat declarations in `run_fabric_edm_main_loop` and `kernel_main`
+- Build: EXPECTED compile errors in execute_main_loop call sites (Plan 03 will fix)
+
+Key decisions:
+- `any_sender_channels_active` dispatches via fold expression over MAX_NUM_VCS; run_sender_channel_step now uses VC-local sender_channel_index with global derivation via vc_sender_channel_start_per_vc; SenderFreeSlotsTuple is canonical per-VC free-slots type
+- NUM_SENDER_CHANNELS removed from run_fabric_edm_main_loop template (no longer deducible after flat-array param replaced with SenderFreeSlotsTuple)
 
 Plan 01 completed:
 - Added `MAX_NUM_VCS = 2` device-side constexpr and four per-VC foundation arrays to `fabric_erisc_router_ct_args.hpp`
@@ -129,8 +142,8 @@ Key decisions:
 
 ## Session
 
-**Last session:** 2026-03-14T22:07:52.862Z
-**Stopped at:** Completed 09-01-PLAN.md
+**Last session:** 2026-03-14T22:18:51.226Z
+**Stopped at:** Completed 09-02-PLAN.md
 
 ## Next Plan
 
