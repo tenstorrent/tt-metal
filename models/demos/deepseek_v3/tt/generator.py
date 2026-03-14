@@ -87,12 +87,13 @@ class DeepseekGenerator(WarmupForwardMixin):
         force_recalculate: bool = False,
         profile_decode: bool = False,
         sample_on_device: bool = False,
+        sampling_params: SamplingParams = SamplingParams(temperature=1.0, top_p=0.0, top_k=1),
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
         self.cache_dir = cache_dir
         self.sample_on_device = sample_on_device
-
+        self.sampling_params = sampling_params
         # Load HF config + tokenizer
         self.hf_config = (
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
@@ -141,13 +142,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                 tt_ccl=self.ccl,
                 enable_internal_trace=enable_internal_trace_sampling,
             )
-            # Use default sampling params (top-k=1, top-p=0.0, temperature=1.0) i.e. argmax sampling for device sampling
-            self.sampling_params = SamplingParams(
-                temperature=[1.0] * self.batch_size,
-                top_k=[1] * self.batch_size,
-                top_p=[0.0] * self.batch_size,
-                seed=[42] * self.batch_size,
-            )
+
             self._reset_sampling_state(self.sampling_params, self.batch_size, self.batch_size_per_row)
 
         logger.info(f"Sampling mode: {'device' if self.sample_on_device else 'host'}")
@@ -616,6 +611,59 @@ class DeepseekGenerator(WarmupForwardMixin):
     def _sample_greedy_on_host(self, logits: torch.Tensor) -> torch.Tensor:
         return torch.argmax(logits, dim=-1)  # [B]
 
+    def _sample_on_host(self, logits: torch.Tensor) -> torch.Tensor | int:
+        """Sample on host using top-k/top-p/temperature from sampling_params."""
+        if self.sampling_params is None:
+            return torch.argmax(logits, dim=-1)
+
+        if self.sampling_params.temperature <= 0:
+            return torch.argmax(logits, dim=-1)
+
+        scores = logits / self.sampling_params.temperature
+
+        if self.sampling_params.top_k > 0:
+            top_k = min(self.sampling_params.top_k, scores.shape[-1])
+            kth_values = torch.topk(scores, top_k, dim=-1).values[..., -1, None]
+            scores = scores.masked_fill(scores < kth_values, float("-inf"))
+
+        if 0.0 < self.sampling_params.top_p < 1.0:
+            sorted_scores, sorted_indices = torch.sort(scores, descending=True, dim=-1)
+            sorted_probs = torch.softmax(sorted_scores, dim=-1)
+            cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
+            remove_mask = cumulative_probs > self.sampling_params.top_p
+            remove_mask[..., 0] = False
+            sorted_scores = sorted_scores.masked_fill(remove_mask, float("-inf"))
+
+            filtered_scores = torch.full_like(scores, float("-inf"))
+            filtered_scores.scatter_(dim=-1, index=sorted_indices, src=sorted_scores)
+            scores = filtered_scores
+
+        probs = torch.softmax(scores, dim=-1)
+        row_sums = probs.sum(dim=-1)
+        valid_rows = torch.isfinite(probs).all(dim=-1) & torch.isfinite(row_sums) & (row_sums > 0)
+
+        # Honor sampling.seed (if provided) for deterministic host-side sampling.
+        generator: torch.Generator | None = None
+        if self.sampling_params.seed is not None:
+            generator = torch.Generator(device=probs.device).manual_seed(int(self.sampling_params.seed))
+
+        if valid_rows.all():
+            if generator is None:
+                return torch.multinomial(probs, num_samples=1).squeeze(-1)
+            return torch.multinomial(probs, num_samples=1, generator=generator).squeeze(-1)
+
+        sampled_tokens = torch.argmax(logits, dim=-1)
+        if valid_rows.any():
+            if generator is None:
+                sampled_tokens[valid_rows] = torch.multinomial(probs[valid_rows], num_samples=1).squeeze(-1)
+            else:
+                sampled_tokens[valid_rows] = torch.multinomial(
+                    probs[valid_rows],
+                    num_samples=1,
+                    generator=generator,
+                ).squeeze(-1)
+        return sampled_tokens
+
     def _pad_batch(self, tokens_list: List[List[int]], batch_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """Pad/pack a list of token id sequences to batch of size batch_size.
 
@@ -769,7 +817,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                         ), "prefill_logits should be a torch.Tensor on host"
                         # Sample only from the actual last prompt position for this user.
                         last_token_logits = prefill_logits[0, 0, max(prompt_len - 1, 0), :]
-                        pred_token = self._sample_greedy_on_host(last_token_logits)
+                        pred_token = int(self._sample_on_host(last_token_logits.unsqueeze(0)).item())
                     prefill_tokens.append(torch.tensor(pred_token, dtype=torch.int64))
                     self.ccl.reset_sem_counters()
                 prefill_tokens = torch.stack(prefill_tokens)
@@ -850,7 +898,8 @@ class DeepseekGenerator(WarmupForwardMixin):
                             ttnn.deallocate(pred_tokens_device)
                     else:
                         assert isinstance(decode_logits, torch.Tensor), "decode_logits should be a torch.Tensor on host"
-                        pred_tokens = self._sample_greedy_on_host(decode_logits)
+                        # pred_tokens = self._sample_greedy_on_host(decode_logits)
+                        pred_tokens = self._sample_on_host(decode_logits)
 
                     if teacher_forcing is not None:
                         # Record user-0 prediction for accuracy, then force teacher token.
