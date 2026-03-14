@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include "dev_mem_map.h"
 #include "experimental/noc.h"
 
 namespace experimental {
@@ -37,7 +38,11 @@ namespace experimental {
 template <ProgrammableCoreType core_type = ProgrammableCoreType::TENSIX>
 class Semaphore {
 public:
-    explicit Semaphore(uint32_t semaphore_id) : local_l1_addr_(get_semaphore<core_type>(semaphore_id)) {}
+    explicit Semaphore(uint32_t semaphore_id) : local_l1_addr_(get_semaphore<core_type>(semaphore_id)) {
+#ifdef ARCH_QUASAR
+        local_l1_addr_ += MEM_L1_UNCACHED_BASE;
+#endif
+    }
 
     /**
      * @brief Increment the semaphore by the specified value.
@@ -60,7 +65,11 @@ public:
      * @param vc The virtual channel to use for the transaction (default is NOC_UNICAST_WRITE_VC).
      */
     void up(const Noc& noc, uint32_t noc_x, uint32_t noc_y, uint32_t value, uint8_t vc = NOC_UNICAST_WRITE_VC) {
-        uint64_t dest_noc_addr = get_noc_addr(noc_x, noc_y, local_l1_addr_);
+#ifdef ARCH_QUASAR
+        const uint64_t dest_noc_addr = get_noc_addr(noc_x, noc_y, local_l1_addr_ - MEM_L1_UNCACHED_BASE);
+#else
+        const uint64_t dest_noc_addr = get_noc_addr(noc_x, noc_y, local_l1_addr_);
+#endif
         noc_semaphore_inc(dest_noc_addr, value, noc.get_noc_id(), vc);
     }
 
@@ -131,13 +140,18 @@ public:
         uint32_t noc_y_end,
         uint32_t num_dests,
         bool linked = false) {
-        uint64_t multicast_addr =
-            get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, local_l1_addr_, noc.get_noc_id());
+#ifdef ARCH_QUASAR
+        const uintptr_t local_l1_addr = local_l1_addr_ - MEM_L1_UNCACHED_BASE;
+#else
+        const uintptr_t local_l1_addr = local_l1_addr_;
+#endif
+        const uint64_t multicast_addr =
+            get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, local_l1_addr, noc.get_noc_id());
         if constexpr (mcast_mode == Noc::McastMode::INCLUDE_SRC) {
             noc_semaphore_set_multicast_loopback_src(
-                local_l1_addr_, multicast_addr, num_dests, linked, noc.get_noc_id());
+                local_l1_addr, multicast_addr, num_dests, linked, noc.get_noc_id());
         } else if constexpr (mcast_mode == Noc::McastMode::EXCLUDE_SRC) {
-            noc_semaphore_set_multicast(local_l1_addr_, multicast_addr, num_dests, linked, noc.get_noc_id());
+            noc_semaphore_set_multicast(local_l1_addr, multicast_addr, num_dests, linked, noc.get_noc_id());
         }
     }
 
@@ -161,13 +175,18 @@ public:
         uint32_t noc_y_end,
         uint32_t value,
         uint32_t num_dests) {
-        uint64_t multicast_addr =
+#ifdef ARCH_QUASAR
+        const uint64_t multicast_addr = get_noc_multicast_addr(
+            noc_x_start, noc_y_start, noc_x_end, noc_y_end, local_l1_addr_ - MEM_L1_UNCACHED_BASE, noc.get_noc_id());
+#else
+        const uint64_t multicast_addr =
             get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, local_l1_addr_, noc.get_noc_id());
+#endif
         noc_semaphore_inc_multicast(multicast_addr, value, num_dests, noc.get_noc_id());
     }
 
 private:
-    uint32_t local_l1_addr_;
+    uintptr_t local_l1_addr_;
 };
 
 }  // namespace experimental
