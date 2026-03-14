@@ -109,7 +109,7 @@ Custom markers can be emitted via `ctx().get_profiler().read_results(device, "my
 Install pandas, matplotlib and ipywidgets to use companion jupyter notebook. Open the companion notebook and point it to your freshly‑generated CSV:
 
 ```bash
-jupyter lab notebooks/profiler_results.ipynb
+jupyter lab tt-train/tools/profiling/profiling_analysis_single_exp.ipynb
 ```
 
 The notebook walks you through:
