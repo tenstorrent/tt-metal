@@ -19,8 +19,10 @@ using json = nlohmann::json;
 namespace tt::tt_metal::op_profiler {
 
 // ---------------------------------------------------------------------------
-// Internal helpers — JSON conversion from plain data structs
+// Internal helpers — only needed when Tracy is enabled
 // ---------------------------------------------------------------------------
+
+#if defined(TRACY_ENABLE)
 
 static json tensor_meta_to_json(const TensorMeta& m) {
     json ret;
@@ -94,6 +96,8 @@ static json get_kernels_json(ChipId device_id, const Program& program) {
     ret["kernel_sizes"] = std::move(kernelSizes);
     return ret;
 }
+
+#endif  // TRACY_ENABLE
 
 // ---------------------------------------------------------------------------
 // assemble_device_op_json — non-template, compiled once
