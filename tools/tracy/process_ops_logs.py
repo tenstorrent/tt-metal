@@ -127,6 +127,38 @@ OPS_CSV_HEADER = [
     "MATH Util Median (%)",
     "MATH Util Max (%)",
     "Avg Math util on full grid (%)",
+    "Unpacker0 Write Efficiency Min (%)",
+    "Unpacker0 Write Efficiency Median (%)",
+    "Unpacker0 Write Efficiency Max (%)",
+    "Unpacker0 Write Efficiency Avg (%)",
+    "Unpacker1 Write Efficiency Min (%)",
+    "Unpacker1 Write Efficiency Median (%)",
+    "Unpacker1 Write Efficiency Max (%)",
+    "Unpacker1 Write Efficiency Avg (%)",
+    "Unpacker Write Efficiency Min (%)",
+    "Unpacker Write Efficiency Median (%)",
+    "Unpacker Write Efficiency Max (%)",
+    "Unpacker Write Efficiency Avg (%)",
+    "Packer Efficiency Min (%)",
+    "Packer Efficiency Median (%)",
+    "Packer Efficiency Max (%)",
+    "Packer Efficiency Avg (%)",
+    "FPU Execution Efficiency Min (%)",
+    "FPU Execution Efficiency Median (%)",
+    "FPU Execution Efficiency Max (%)",
+    "FPU Execution Efficiency Avg (%)",
+    "Math Pipeline Utilization Min (%)",
+    "Math Pipeline Utilization Median (%)",
+    "Math Pipeline Utilization Max (%)",
+    "Math Pipeline Utilization Avg (%)",
+    "Math-to-Pack Handoff Efficiency Min (%)",
+    "Math-to-Pack Handoff Efficiency Median (%)",
+    "Math-to-Pack Handoff Efficiency Max (%)",
+    "Math-to-Pack Handoff Efficiency Avg (%)",
+    "Unpacker-to-Math Data Flow Min (%)",
+    "Unpacker-to-Math Data Flow Median (%)",
+    "Unpacker-to-Math Data Flow Max (%)",
+    "Unpacker-to-Math Data Flow Avg (%)",
 ]
 
 
@@ -432,6 +464,110 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
     EVENT_CORE_COORDS_IDX = 4
     PERF_COUNTER_ID = 9090
 
+    # Counter type enum from perf_counters.hpp (IDs 0..94: 95 entries including UNDEF=0)
+    COUNTER_TYPE_NAMES = {
+        0: "UNDEF",
+        # FPU Group (3)
+        1: "FPU_COUNTER",
+        2: "SFPU_COUNTER",
+        3: "MATH_COUNTER",
+        # TDMA_UNPACK Group (11)
+        4: "DATA_HAZARD_STALLS_MOVD2A",
+        5: "MATH_INSTRN_STARTED",
+        6: "MATH_INSTRN_AVAILABLE",
+        7: "SRCB_WRITE_AVAILABLE",
+        8: "SRCA_WRITE_AVAILABLE",
+        9: "UNPACK0_BUSY_THREAD0",
+        10: "UNPACK1_BUSY_THREAD0",
+        11: "UNPACK0_BUSY_THREAD1",
+        12: "UNPACK1_BUSY_THREAD1",
+        13: "SRCB_WRITE",
+        14: "SRCA_WRITE",
+        # TDMA_PACK Group (3)
+        15: "PACKER_DEST_READ_AVAILABLE",
+        16: "PACKER_BUSY",
+        17: "AVAILABLE_MATH",
+        # INSTRN_THREAD Group (61)
+        18: "CFG_INSTRN_AVAILABLE_0",
+        19: "CFG_INSTRN_AVAILABLE_1",
+        20: "CFG_INSTRN_AVAILABLE_2",
+        21: "SYNC_INSTRN_AVAILABLE_0",
+        22: "SYNC_INSTRN_AVAILABLE_1",
+        23: "SYNC_INSTRN_AVAILABLE_2",
+        24: "THCON_INSTRN_AVAILABLE_0",
+        25: "THCON_INSTRN_AVAILABLE_1",
+        26: "THCON_INSTRN_AVAILABLE_2",
+        27: "XSEARCH_INSTRN_AVAILABLE_0",
+        28: "XSEARCH_INSTRN_AVAILABLE_1",
+        29: "XSEARCH_INSTRN_AVAILABLE_2",
+        30: "MOVE_INSTRN_AVAILABLE_0",
+        31: "MOVE_INSTRN_AVAILABLE_1",
+        32: "MOVE_INSTRN_AVAILABLE_2",
+        33: "FPU_INSTRN_AVAILABLE_0",
+        34: "FPU_INSTRN_AVAILABLE_1",
+        35: "FPU_INSTRN_AVAILABLE_2",
+        36: "UNPACK_INSTRN_AVAILABLE_0",
+        37: "UNPACK_INSTRN_AVAILABLE_1",
+        38: "UNPACK_INSTRN_AVAILABLE_2",
+        39: "PACK_INSTRN_AVAILABLE_0",
+        40: "PACK_INSTRN_AVAILABLE_1",
+        41: "PACK_INSTRN_AVAILABLE_2",
+        42: "THREAD_STALLS_0",
+        43: "THREAD_STALLS_1",
+        44: "THREAD_STALLS_2",
+        45: "WAITING_FOR_SRCA_CLEAR",
+        46: "WAITING_FOR_SRCB_CLEAR",
+        47: "WAITING_FOR_SRCA_VALID",
+        48: "WAITING_FOR_SRCB_VALID",
+        49: "WAITING_FOR_THCON_IDLE_0",
+        50: "WAITING_FOR_THCON_IDLE_1",
+        51: "WAITING_FOR_THCON_IDLE_2",
+        52: "WAITING_FOR_UNPACK_IDLE_0",
+        53: "WAITING_FOR_UNPACK_IDLE_1",
+        54: "WAITING_FOR_UNPACK_IDLE_2",
+        55: "WAITING_FOR_PACK_IDLE_0",
+        56: "WAITING_FOR_PACK_IDLE_1",
+        57: "WAITING_FOR_PACK_IDLE_2",
+        58: "WAITING_FOR_MATH_IDLE_0",
+        59: "WAITING_FOR_MATH_IDLE_1",
+        60: "WAITING_FOR_MATH_IDLE_2",
+        61: "WAITING_FOR_NONZERO_SEM_0",
+        62: "WAITING_FOR_NONZERO_SEM_1",
+        63: "WAITING_FOR_NONZERO_SEM_2",
+        64: "WAITING_FOR_NONFULL_SEM_0",
+        65: "WAITING_FOR_NONFULL_SEM_1",
+        66: "WAITING_FOR_NONFULL_SEM_2",
+        67: "WAITING_FOR_MOVE_IDLE_0",
+        68: "WAITING_FOR_MOVE_IDLE_1",
+        69: "WAITING_FOR_MOVE_IDLE_2",
+        70: "WAITING_FOR_MMIO_IDLE_0",
+        71: "WAITING_FOR_MMIO_IDLE_1",
+        72: "WAITING_FOR_MMIO_IDLE_2",
+        73: "WAITING_FOR_SFPU_IDLE_0",
+        74: "WAITING_FOR_SFPU_IDLE_1",
+        75: "WAITING_FOR_SFPU_IDLE_2",
+        76: "THREAD_INSTRUCTIONS_0",
+        77: "THREAD_INSTRUCTIONS_1",
+        78: "THREAD_INSTRUCTIONS_2",
+        # L1 Group (16, mux-dependent)
+        79: "NOC_RING0_INCOMING_1",
+        80: "NOC_RING0_INCOMING_0",
+        81: "NOC_RING0_OUTGOING_1",
+        82: "NOC_RING0_OUTGOING_0",
+        83: "L1_ARB_TDMA_BUNDLE_1",
+        84: "L1_ARB_TDMA_BUNDLE_0",
+        85: "L1_ARB_UNPACKER",
+        86: "L1_NO_ARB_UNPACKER",
+        87: "NOC_RING1_INCOMING_1",
+        88: "NOC_RING1_INCOMING_0",
+        89: "NOC_RING1_OUTGOING_1",
+        90: "NOC_RING1_OUTGOING_0",
+        91: "TDMA_BUNDLE_1_ARB",
+        92: "TDMA_BUNDLE_0_ARB",
+        93: "TDMA_EXT_UNPACK_9_10",
+        94: "TDMA_PACKER_2_WR",
+    }
+
     try:
         # Process events: extract metadata, add timestamp and coords
         perf_counter_events = []
@@ -439,6 +575,15 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
             metadata = event[EVENT_METADATA_IDX]
             if metadata["id"] == PERF_COUNTER_ID:
                 meta_dict = json.loads(metadata["meta_data"].replace(";", ",").replace("'", '"'))
+
+                # Decode counter type to human-readable name
+                counter_type_raw = meta_dict.get("counter type", 0)
+                # Handle both integer ID and string name formats
+                if isinstance(counter_type_raw, str):
+                    counter_type_name = counter_type_raw
+                else:
+                    counter_type_name = COUNTER_TYPE_NAMES.get(counter_type_raw, f"UNKNOWN_{counter_type_raw}")
+
                 perf_counter_events.append(
                     {
                         "run_host_id": metadata["run_host_id"],
@@ -447,7 +592,9 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
                         "core_x": event[EVENT_CORE_COORDS_IDX][0],
                         "core_y": event[EVENT_CORE_COORDS_IDX][1],
                         "risc_type": event[EVENT_RISC_TYPE_IDX],
-                        **meta_dict,
+                        "counter type": counter_type_name,  # Use human-readable name
+                        "value": meta_dict.get("value", 0),
+                        "ref cnt": meta_dict.get("ref cnt", 0),
                     }
                 )
 
@@ -456,6 +603,161 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
     except (KeyError, TypeError, AttributeError) as e:
         logger.exception("Failed to extract perf counter events: %s", e)
     return None
+
+
+def print_counter_statistics_summary(perf_counter_df: pd.DataFrame, device_id: int) -> None:
+    """Print statistics for all raw performance counters."""
+    if perf_counter_df is None or perf_counter_df.empty:
+        return
+
+    print("\n" + "=" * 100)
+    print(f"PERFORMANCE COUNTER STATISTICS - DEVICE {device_id}")
+    print("=" * 100)
+
+    # Group by operation
+    grouped = perf_counter_df.groupby(["run_host_id", "trace_id_count"])
+    total_ops = len(grouped)
+
+    print(f"\nTotal operations with counter data: {total_ops}")
+
+    # Get all unique counter types
+    counter_types = sorted(perf_counter_df["counter type"].unique())
+
+    print("\n" + "=" * 100)
+    print("RAW COUNTER VALUES")
+    print("=" * 100)
+    print(f"{'Counter Type':<40} {'Statistic':<12} {'Ops':>8} {'Min':>15} {'Median':>15} {'Max':>15} {'Avg':>15}")
+    print("-" * 100)
+
+    for counter_type in counter_types:
+        counter_data = perf_counter_df[perf_counter_df["counter type"] == counter_type]
+        counter_grouped = counter_data.groupby(["run_host_id", "trace_id_count"])
+
+        # Calculate statistics across operations
+        min_vals = counter_grouped["value"].min()
+        median_vals = counter_grouped["value"].median()
+        max_vals = counter_grouped["value"].max()
+        avg_vals = counter_grouped["value"].mean()
+
+        ops_with_data = len(counter_grouped)
+
+        # Print value statistics
+        print(
+            f"{counter_type:<40} {'Value':<12} {ops_with_data:>8} "
+            f"{min_vals.min():>15.1f} {median_vals.median():>15.1f} "
+            f"{max_vals.max():>15.1f} {avg_vals.mean():>15.1f}"
+        )
+
+    print("\n" + "=" * 100)
+    print("COUNTER REFERENCE COUNTS")
+    print("=" * 100)
+    print(f"{'Counter Type':<40} {'Statistic':<12} {'Ops':>8} {'Min':>15} {'Median':>15} {'Max':>15} {'Avg':>15}")
+    print("-" * 100)
+
+    for counter_type in counter_types:
+        counter_data = perf_counter_df[perf_counter_df["counter type"] == counter_type]
+        counter_grouped = counter_data.groupby(["run_host_id", "trace_id_count"])
+
+        # Calculate statistics for reference counts
+        min_refs = counter_grouped["ref cnt"].min()
+        median_refs = counter_grouped["ref cnt"].median()
+        max_refs = counter_grouped["ref cnt"].max()
+        avg_refs = counter_grouped["ref cnt"].mean()
+
+        ops_with_data = len(counter_grouped)
+
+        # Print ref count statistics
+        print(
+            f"{counter_type:<40} {'Ref Count':<12} {ops_with_data:>8} "
+            f"{min_refs.min():>15.1f} {median_refs.median():>15.1f} "
+            f"{max_refs.max():>15.1f} {avg_refs.mean():>15.1f}"
+        )
+
+    print("\n" + "=" * 100)
+    print("COUNTER UTILIZATION (%)")
+    print("=" * 100)
+    print(f"{'Counter Type':<40} {'Statistic':<12} {'Ops':>8} {'Min':>15} {'Median':>15} {'Max':>15} {'Avg':>15}")
+    print("-" * 100)
+
+    for counter_type in counter_types:
+        counter_data = perf_counter_df[perf_counter_df["counter type"] == counter_type].copy()
+        counter_data["util"] = (counter_data["value"] / counter_data["ref cnt"] * 100).replace(
+            [float("inf"), -float("inf")], nan
+        )
+        counter_grouped = counter_data.groupby(["run_host_id", "trace_id_count"])
+
+        # Calculate utilization statistics
+        min_utils = counter_grouped["util"].min()
+        median_utils = counter_grouped["util"].median()
+        max_utils = counter_grouped["util"].max()
+        avg_utils = counter_grouped["util"].mean()
+
+        ops_with_data = len(counter_grouped)
+
+        # Print utilization statistics
+        print(
+            f"{counter_type:<40} {'Utilization':<12} {ops_with_data:>8} "
+            f"{min_utils.min():>14.2f}% {median_utils.median():>14.2f}% "
+            f"{max_utils.max():>14.2f}% {avg_utils.mean():>14.2f}%"
+        )
+
+    print("\n" + "=" * 100 + "\n")
+
+
+def print_efficiency_metrics_summary(metrics_df: pd.DataFrame, device_id: int) -> None:
+    """Print a summary of calculated efficiency metrics grouped by metric type."""
+    if metrics_df is None or metrics_df.empty:
+        return
+
+    print("\n" + "=" * 100)
+    print(f"EFFICIENCY METRICS SUMMARY - DEVICE {device_id}")
+    print("=" * 100)
+
+    print(f"\nTotal operations with metrics: {len(metrics_df)}")
+
+    # Define metric names (without the Min/Median/Max/Avg suffix)
+    base_metrics = [
+        "SFPU Util",
+        "FPU Util",
+        "MATH Util",
+        "Unpacker0 Write Efficiency",
+        "Unpacker1 Write Efficiency",
+        "Unpacker Write Efficiency",
+        "Packer Efficiency",
+        "FPU Execution Efficiency",
+        "Math Pipeline Utilization",
+        "Math-to-Pack Handoff Efficiency",
+        "Unpacker-to-Math Data Flow",
+    ]
+
+    # For each base metric, display a table with Min/Median/Max/Avg rows
+    for base_metric in base_metrics:
+        print("\n" + "=" * 80)
+        print(f"{base_metric.upper()}")
+        print("=" * 80)
+
+        # Create table header
+        print(f"{'Statistic':<12} {'Ops with Data':>15} {'Range':>30} {'Mean':>12}")
+        print("-" * 80)
+
+        # Check each statistic
+        total_ops = len(metrics_df)
+        for stat in ["Min", "Median", "Max", "Avg"]:
+            col_name = f"{base_metric} {stat} (%)"
+            if col_name in metrics_df.columns:
+                non_nan = metrics_df[col_name].dropna()
+                if len(non_nan) > 0:
+                    ops_with_data = f"{len(non_nan)}/{total_ops}"
+                    range_str = f"{non_nan.min():.2f}% - {non_nan.max():.2f}%"
+                    mean_str = f"{non_nan.mean():.2f}%"
+                else:
+                    ops_with_data = f"0/{total_ops}"
+                    range_str = "N/A"
+                    mean_str = "N/A"
+
+                print(f"{stat:<12} {ops_with_data:>15} {range_str:>30} {mean_str:>12}")
+
+    print("\n" + "=" * 100 + "\n")
 
 
 # Generate a map of OP reference list per device.
@@ -727,51 +1029,196 @@ def _enrich_ops_from_device_logs(
         if "events" in risc_data and "perf_counter_data" in risc_data["events"]:
             perf_counter_df = extract_perf_counters(risc_data["events"]["perf_counter_data"])
 
+            # Print statistics for captured counter data
+            if perf_counter_df is not None and not perf_counter_df.empty:
+                print_counter_statistics_summary(perf_counter_df, device)
+
         agg_sfpu_util_min = {}
         agg_sfpu_util_median = {}
         agg_sfpu_util_max = {}
         avg_sfpu_count = {}
+
         agg_fpu_util_min = {}
         agg_fpu_util_median = {}
         agg_fpu_util_max = {}
         avg_fpu_count = {}
+
         agg_math_util_min = {}
         agg_math_util_median = {}
         agg_math_util_max = {}
         avg_math_count = {}
 
+        agg_unpack0_eff_min = {}
+        agg_unpack0_eff_median = {}
+        agg_unpack0_eff_max = {}
+        avg_unpack0_eff = {}
+
+        agg_unpack1_eff_min = {}
+        agg_unpack1_eff_median = {}
+        agg_unpack1_eff_max = {}
+        avg_unpack1_eff = {}
+
+        agg_unpack_eff_min = {}
+        agg_unpack_eff_median = {}
+        agg_unpack_eff_max = {}
+        avg_unpack_eff = {}
+
+        agg_pack_eff_min = {}
+        agg_pack_eff_median = {}
+        agg_pack_eff_max = {}
+        avg_pack_eff = {}
+
+        agg_fpu_exec_eff_min = {}
+        agg_fpu_exec_eff_median = {}
+        agg_fpu_exec_eff_max = {}
+        avg_fpu_exec_eff = {}
+
+        agg_math_pipe_util_min = {}
+        agg_math_pipe_util_median = {}
+        agg_math_pipe_util_max = {}
+        avg_math_pipe_util = {}
+
+        agg_math_pack_eff_min = {}
+        agg_math_pack_eff_median = {}
+        agg_math_pack_eff_max = {}
+        avg_math_pack_eff = {}
+
+        agg_unpack_math_flow_min = {}
+        agg_unpack_math_flow_median = {}
+        agg_unpack_math_flow_max = {}
+        avg_unpack_math_flow = {}
+
         if perf_counter_df is not None and not perf_counter_df.empty:
             total_compute_cores = device_data["deviceInfo"]["max_compute_cores"]
 
-            # For each counter type, divide counter value by ref cnt to get util metrics per core
-            perf_counter_df["Util"] = perf_counter_df["value"] / perf_counter_df["ref cnt"] * 100
+            # Helper to get counter values and ref counts by type
+            def get_counter_series(counter_name):
+                mask = perf_counter_df["counter type"] == counter_name
+                return perf_counter_df[mask].set_index(["run_host_id", "trace_id_count", "core_x", "core_y"])["value"]
+
+            def get_counter_ref_cnt(counter_name):
+                mask = perf_counter_df["counter type"] == counter_name
+                return perf_counter_df[mask].set_index(["run_host_id", "trace_id_count", "core_x", "core_y"])["ref cnt"]
+
+            # Get all counter series needed for metrics
+            sfpu_counter = get_counter_series("SFPU_COUNTER")
+            sfpu_ref_cnt = get_counter_ref_cnt("SFPU_COUNTER")
+            fpu_counter = get_counter_series("FPU_COUNTER")
+            fpu_ref_cnt = get_counter_ref_cnt("FPU_COUNTER")
+            math_counter = get_counter_series("MATH_COUNTER")
+            math_ref_cnt = get_counter_ref_cnt("MATH_COUNTER")
+            srca_write = get_counter_series("SRCA_WRITE")
+            srcb_write = get_counter_series("SRCB_WRITE")
+            unpack0_busy = get_counter_series("UNPACK0_BUSY_THREAD0")
+            unpack1_busy = get_counter_series("UNPACK1_BUSY_THREAD0")
+            srca_write_avail = get_counter_series("SRCA_WRITE_AVAILABLE")
+            srcb_write_avail = get_counter_series("SRCB_WRITE_AVAILABLE")
+            packer_dest_read = get_counter_series("PACKER_DEST_READ_AVAILABLE")
+            packer_busy = get_counter_series("PACKER_BUSY")
+            math_instrn_started = get_counter_series("MATH_INSTRN_STARTED")
+            math_instrn_available = get_counter_series("MATH_INSTRN_AVAILABLE")
+            available_math = get_counter_series("AVAILABLE_MATH")
+
+            # Calculate utilization metrics (value / ref_cnt * 100)
+            sfpu_util = (sfpu_counter / sfpu_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
+            fpu_util = (fpu_counter / fpu_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
+            math_util = (math_counter / math_ref_cnt * 100).replace([float("inf"), -float("inf")], nan)
 
             # SFPU Counter aggregations
-            sfpu_counters_grouped = perf_counter_df[perf_counter_df["counter type"] == "SFPU_COUNTER"].groupby(
-                ["run_host_id", "trace_id_count"], group_keys=True
-            )
-            agg_sfpu_util_min = sfpu_counters_grouped["Util"].min().to_dict()
-            agg_sfpu_util_median = sfpu_counters_grouped["Util"].median().to_dict()
-            agg_sfpu_util_max = sfpu_counters_grouped["Util"].max().to_dict()
-            avg_sfpu_count = (sfpu_counters_grouped["value"].sum() / total_compute_cores).to_dict()
+            grouped_sfpu = sfpu_util.groupby(level=["run_host_id", "trace_id_count"])
+            agg_sfpu_util_min = grouped_sfpu.min().to_dict()
+            agg_sfpu_util_median = grouped_sfpu.median().to_dict()
+            agg_sfpu_util_max = grouped_sfpu.max().to_dict()
+            avg_sfpu_count = (
+                sfpu_counter.groupby(level=["run_host_id", "trace_id_count"]).sum() / total_compute_cores
+            ).to_dict()
 
             # FPU Counter aggregations
-            fpu_counters_grouped = perf_counter_df[perf_counter_df["counter type"] == "FPU_COUNTER"].groupby(
-                ["run_host_id", "trace_id_count"], group_keys=True
-            )
-            agg_fpu_util_min = fpu_counters_grouped["Util"].min().to_dict()
-            agg_fpu_util_median = fpu_counters_grouped["Util"].median().to_dict()
-            agg_fpu_util_max = fpu_counters_grouped["Util"].max().to_dict()
-            avg_fpu_count = (fpu_counters_grouped["value"].sum() / total_compute_cores).to_dict()
+            grouped_fpu = fpu_util.groupby(level=["run_host_id", "trace_id_count"])
+            agg_fpu_util_min = grouped_fpu.min().to_dict()
+            agg_fpu_util_median = grouped_fpu.median().to_dict()
+            agg_fpu_util_max = grouped_fpu.max().to_dict()
+            avg_fpu_count = (
+                fpu_counter.groupby(level=["run_host_id", "trace_id_count"]).sum() / total_compute_cores
+            ).to_dict()
 
             # MATH Counter aggregations
-            math_counters_grouped = perf_counter_df[perf_counter_df["counter type"] == "MATH_COUNTER"].groupby(
-                ["run_host_id", "trace_id_count"], group_keys=True
+            grouped_math = math_util.groupby(level=["run_host_id", "trace_id_count"])
+            agg_math_util_min = grouped_math.min().to_dict()
+            agg_math_util_median = grouped_math.median().to_dict()
+            agg_math_util_max = grouped_math.max().to_dict()
+            avg_math_count = (
+                math_counter.groupby(level=["run_host_id", "trace_id_count"]).sum() / total_compute_cores
+            ).to_dict()
+
+            # Calculate per-core efficiency metrics
+            unpack0_eff = (srca_write / unpack0_busy * 100).replace([float("inf"), -float("inf")], nan)
+            unpack1_eff = (srcb_write / unpack1_busy * 100).replace([float("inf"), -float("inf")], nan)
+            pack_eff = (packer_dest_read / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
+            math_pipe_util = (math_instrn_started / math_instrn_available * 100).replace(
+                [float("inf"), -float("inf")], nan
             )
-            agg_math_util_min = math_counters_grouped["Util"].min().to_dict()
-            agg_math_util_median = math_counters_grouped["Util"].median().to_dict()
-            agg_math_util_max = math_counters_grouped["Util"].max().to_dict()
-            avg_math_count = (math_counters_grouped["value"].sum() / total_compute_cores).to_dict()
+            math_pack_eff = (available_math / packer_busy * 100).replace([float("inf"), -float("inf")], nan)
+            unpack_math_flow = (
+                ((srca_write_avail + srcb_write_avail) / 2) / ((unpack0_busy + unpack1_busy) / 2) * 100
+            ).replace([float("inf"), -float("inf")], nan)
+
+            # Aggregate per operation (min, median, max, avg) - following same pattern as SFPU/FPU/MATH
+            # Unpacker0 Write Efficiency
+            grouped_unpack0 = unpack0_eff.groupby(level=["run_host_id", "trace_id_count"])
+            agg_unpack0_eff_min = grouped_unpack0.min().to_dict()
+            agg_unpack0_eff_median = grouped_unpack0.median().to_dict()
+            agg_unpack0_eff_max = grouped_unpack0.max().to_dict()
+            avg_unpack0_eff = grouped_unpack0.mean().to_dict()
+
+            # Unpacker1 Write Efficiency
+            grouped_unpack1 = unpack1_eff.groupby(level=["run_host_id", "trace_id_count"])
+            agg_unpack1_eff_min = grouped_unpack1.min().to_dict()
+            agg_unpack1_eff_median = grouped_unpack1.median().to_dict()
+            agg_unpack1_eff_max = grouped_unpack1.max().to_dict()
+            avg_unpack1_eff = grouped_unpack1.mean().to_dict()
+
+            # Combined Unpacker Write Efficiency (average per core, then aggregate)
+            unpack_combined = pd.concat([unpack0_eff, unpack1_eff], axis=1).mean(axis=1, skipna=True)
+            grouped_unpack = unpack_combined.groupby(level=["run_host_id", "trace_id_count"])
+            agg_unpack_eff_min = grouped_unpack.min().to_dict()
+            agg_unpack_eff_median = grouped_unpack.median().to_dict()
+            agg_unpack_eff_max = grouped_unpack.max().to_dict()
+            avg_unpack_eff = grouped_unpack.mean().to_dict()
+
+            # Packer Efficiency
+            grouped_pack = pack_eff.groupby(level=["run_host_id", "trace_id_count"])
+            agg_pack_eff_min = grouped_pack.min().to_dict()
+            agg_pack_eff_median = grouped_pack.median().to_dict()
+            agg_pack_eff_max = grouped_pack.max().to_dict()
+            avg_pack_eff = grouped_pack.mean().to_dict()
+
+            # FPU Execution Efficiency (same as FPU Util)
+            agg_fpu_exec_eff_min = agg_fpu_util_min
+            agg_fpu_exec_eff_median = agg_fpu_util_median
+            agg_fpu_exec_eff_max = agg_fpu_util_max
+            avg_fpu_exec_eff = grouped_fpu.mean().to_dict()
+
+            # Math Pipeline Utilization
+            grouped_math_pipe = math_pipe_util.groupby(level=["run_host_id", "trace_id_count"])
+            agg_math_pipe_util_min = grouped_math_pipe.min().to_dict()
+            agg_math_pipe_util_median = grouped_math_pipe.median().to_dict()
+            agg_math_pipe_util_max = grouped_math_pipe.max().to_dict()
+            avg_math_pipe_util = grouped_math_pipe.mean().to_dict()
+
+            # Math-to-Pack Handoff Efficiency
+            grouped_math_pack = math_pack_eff.groupby(level=["run_host_id", "trace_id_count"])
+            agg_math_pack_eff_min = grouped_math_pack.min().to_dict()
+            agg_math_pack_eff_median = grouped_math_pack.median().to_dict()
+            agg_math_pack_eff_max = grouped_math_pack.max().to_dict()
+            avg_math_pack_eff = grouped_math_pack.mean().to_dict()
+
+            # Unpacker-to-Math Data Flow
+            grouped_unpack_math = unpack_math_flow.groupby(level=["run_host_id", "trace_id_count"])
+            agg_unpack_math_flow_min = grouped_unpack_math.min().to_dict()
+            agg_unpack_math_flow_median = grouped_unpack_math.median().to_dict()
+            agg_unpack_math_flow_max = grouped_unpack_math.max().to_dict()
+            avg_unpack_math_flow = grouped_unpack_math.mean().to_dict()
 
         # Enrich ops with device data and perf counters
         for device_op, device_op_time in zip(host_ops_by_device[device], device_ops_time):
@@ -819,6 +1266,57 @@ def _enrich_ops_from_device_logs(
                 device_op["avg_sfpu_count"] = avg_sfpu_count.get(lookup_key, nan)
                 device_op["avg_fpu_count"] = avg_fpu_count.get(lookup_key, nan)
                 device_op["avg_math_count"] = avg_math_count.get(lookup_key, nan)
+
+                # Unpacker0 Write Efficiency
+                device_op["Unpacker0 Write Efficiency Min (%)"] = agg_unpack0_eff_min.get(lookup_key, nan)
+                device_op["Unpacker0 Write Efficiency Median (%)"] = agg_unpack0_eff_median.get(lookup_key, nan)
+                device_op["Unpacker0 Write Efficiency Max (%)"] = agg_unpack0_eff_max.get(lookup_key, nan)
+                device_op["Unpacker0 Write Efficiency Avg (%)"] = avg_unpack0_eff.get(lookup_key, nan)
+
+                # Unpacker1 Write Efficiency
+                device_op["Unpacker1 Write Efficiency Min (%)"] = agg_unpack1_eff_min.get(lookup_key, nan)
+                device_op["Unpacker1 Write Efficiency Median (%)"] = agg_unpack1_eff_median.get(lookup_key, nan)
+                device_op["Unpacker1 Write Efficiency Max (%)"] = agg_unpack1_eff_max.get(lookup_key, nan)
+                device_op["Unpacker1 Write Efficiency Avg (%)"] = avg_unpack1_eff.get(lookup_key, nan)
+
+                # Combined Unpacker Write Efficiency
+                device_op["Unpacker Write Efficiency Min (%)"] = agg_unpack_eff_min.get(lookup_key, nan)
+                device_op["Unpacker Write Efficiency Median (%)"] = agg_unpack_eff_median.get(lookup_key, nan)
+                device_op["Unpacker Write Efficiency Max (%)"] = agg_unpack_eff_max.get(lookup_key, nan)
+                device_op["Unpacker Write Efficiency Avg (%)"] = avg_unpack_eff.get(lookup_key, nan)
+
+                # Packer Efficiency
+                device_op["Packer Efficiency Min (%)"] = agg_pack_eff_min.get(lookup_key, nan)
+                device_op["Packer Efficiency Median (%)"] = agg_pack_eff_median.get(lookup_key, nan)
+                device_op["Packer Efficiency Max (%)"] = agg_pack_eff_max.get(lookup_key, nan)
+                device_op["Packer Efficiency Avg (%)"] = avg_pack_eff.get(lookup_key, nan)
+
+                # FPU Execution Efficiency
+                device_op["FPU Execution Efficiency Min (%)"] = agg_fpu_exec_eff_min.get(lookup_key, nan)
+                device_op["FPU Execution Efficiency Median (%)"] = agg_fpu_exec_eff_median.get(lookup_key, nan)
+                device_op["FPU Execution Efficiency Max (%)"] = agg_fpu_exec_eff_max.get(lookup_key, nan)
+                device_op["FPU Execution Efficiency Avg (%)"] = avg_fpu_exec_eff.get(lookup_key, nan)
+
+                # Math Pipeline Utilization
+                device_op["Math Pipeline Utilization Min (%)"] = agg_math_pipe_util_min.get(lookup_key, nan)
+                device_op["Math Pipeline Utilization Median (%)"] = agg_math_pipe_util_median.get(lookup_key, nan)
+                device_op["Math Pipeline Utilization Max (%)"] = agg_math_pipe_util_max.get(lookup_key, nan)
+                device_op["Math Pipeline Utilization Avg (%)"] = avg_math_pipe_util.get(lookup_key, nan)
+
+                # Math-to-Pack Handoff Efficiency
+                device_op["Math-to-Pack Handoff Efficiency Min (%)"] = agg_math_pack_eff_min.get(lookup_key, nan)
+                device_op["Math-to-Pack Handoff Efficiency Median (%)"] = agg_math_pack_eff_median.get(lookup_key, nan)
+                device_op["Math-to-Pack Handoff Efficiency Max (%)"] = agg_math_pack_eff_max.get(lookup_key, nan)
+                device_op["Math-to-Pack Handoff Efficiency Avg (%)"] = avg_math_pack_eff.get(lookup_key, nan)
+
+                # Unpacker-to-Math Data Flow
+                device_op["Unpacker-to-Math Data Flow Min (%)"] = agg_unpack_math_flow_min.get(lookup_key, nan)
+                device_op["Unpacker-to-Math Data Flow Median (%)"] = agg_unpack_math_flow_median.get(lookup_key, nan)
+                device_op["Unpacker-to-Math Data Flow Max (%)"] = agg_unpack_math_flow_max.get(lookup_key, nan)
+                device_op["Unpacker-to-Math Data Flow Avg (%)"] = avg_unpack_math_flow.get(lookup_key, nan)
+
+        if perf_counter_df is not None and not perf_counter_df.empty:
+            print_efficiency_metrics_summary(pd.DataFrame(host_ops_by_device[device]), device)
 
     return host_ops_by_device
 
@@ -963,6 +1461,277 @@ def get_device_data_generate_report(
         deviceData = import_log_run_stats(setup)
         logger.info(f"Generating device op report ...")
         freq = deviceData["deviceInfo"]["freq"]
+
+        # Calculate efficiency metrics for all devices (device-only mode)
+        device_efficiency_metrics = {}
+        for device in deviceData["devices"]:
+            risc_data = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]
+            if "events" in risc_data and "perf_counter_data" in risc_data["events"]:
+                perf_counter_df = extract_perf_counters(risc_data["events"]["perf_counter_data"])
+
+                if perf_counter_df is not None and not perf_counter_df.empty:
+                    # Print statistics for captured counter data
+                    print_counter_statistics_summary(perf_counter_df, device)
+
+                    # Calculate efficiency metrics for this device
+                    import pandas as pd
+                    from math import nan
+
+                    # Create efficiency dataframe
+                    efficiency_records = []
+                    for _, row in perf_counter_df.iterrows():
+                        efficiency_records.append(
+                            {
+                                "run_host_id": row["run_host_id"],
+                                "trace_id_count": row["trace_id_count"],
+                                "core_x": row["core_x"],
+                                "core_y": row["core_y"],
+                                "counter_type": row["counter type"],
+                                "value": row["value"],
+                                "ref_cnt": row["ref cnt"],
+                            }
+                        )
+
+                    eff_df = pd.DataFrame(efficiency_records)
+
+                    # Pivot to get all counter types per (op, core)
+                    eff_pivot = eff_df.pivot_table(
+                        index=["run_host_id", "trace_id_count", "core_x", "core_y"],
+                        columns="counter_type",
+                        values=["value", "ref_cnt"],
+                        aggfunc="first",
+                    ).reset_index()
+
+                    # Flatten column names
+                    eff_pivot.columns = [
+                        "_".join(col).strip("_") if col[1] else col[0] for col in eff_pivot.columns.values
+                    ]
+
+                    # Helper function for safe division
+                    def safe_div(num, denom):
+                        return (num / denom * 100) if denom > 0 else nan
+
+                    # Calculate per-core efficiency metrics
+                    eff_pivot["SFPU Util"] = eff_pivot.apply(
+                        lambda x: (x.get("value_SFPU_COUNTER", 0) / x.get("ref_cnt_SFPU_COUNTER", 1) * 100)
+                        if x.get("ref_cnt_SFPU_COUNTER", 0) > 0
+                        else nan,
+                        axis=1,
+                    )
+                    eff_pivot["FPU Util"] = eff_pivot.apply(
+                        lambda x: (x.get("value_FPU_COUNTER", 0) / x.get("ref_cnt_FPU_COUNTER", 1) * 100)
+                        if x.get("ref_cnt_FPU_COUNTER", 0) > 0
+                        else nan,
+                        axis=1,
+                    )
+                    eff_pivot["MATH Util"] = eff_pivot.apply(
+                        lambda x: (x.get("value_MATH_COUNTER", 0) / x.get("ref_cnt_MATH_COUNTER", 1) * 100)
+                        if x.get("ref_cnt_MATH_COUNTER", 0) > 0
+                        else nan,
+                        axis=1,
+                    )
+                    eff_pivot["Unpacker0 Write Efficiency"] = eff_pivot.apply(
+                        lambda x: safe_div(x.get("value_SRCA_WRITE", 0), x.get("value_UNPACK0_BUSY_THREAD0", 0)), axis=1
+                    )
+                    eff_pivot["Unpacker1 Write Efficiency"] = eff_pivot.apply(
+                        lambda x: safe_div(x.get("value_SRCB_WRITE", 0), x.get("value_UNPACK1_BUSY_THREAD0", 0)), axis=1
+                    )
+                    eff_pivot["Packer Efficiency"] = eff_pivot.apply(
+                        lambda x: safe_div(x.get("value_PACKER_DEST_READ_AVAILABLE", 0), x.get("value_PACKER_BUSY", 0)),
+                        axis=1,
+                    )
+                    eff_pivot["Math Pipeline Utilization"] = eff_pivot.apply(
+                        lambda x: safe_div(
+                            x.get("value_MATH_INSTRN_STARTED", 0), x.get("value_MATH_INSTRN_AVAILABLE", 0)
+                        ),
+                        axis=1,
+                    )
+                    eff_pivot["Math-to-Pack Handoff Efficiency"] = eff_pivot.apply(
+                        lambda x: safe_div(x.get("value_AVAILABLE_MATH", 0), x.get("value_PACKER_BUSY", 0)), axis=1
+                    )
+                    eff_pivot["Unpacker-to-Math Data Flow"] = eff_pivot.apply(
+                        lambda x: safe_div(
+                            (x.get("value_SRCA_WRITE_AVAILABLE", 0) + x.get("value_SRCB_WRITE_AVAILABLE", 0)) / 2,
+                            (x.get("value_UNPACK0_BUSY_THREAD0", 0) + x.get("value_UNPACK1_BUSY_THREAD0", 0)) / 2,
+                        ),
+                        axis=1,
+                    )
+                    eff_pivot["Unpacker Write Efficiency"] = eff_pivot[
+                        ["Unpacker0 Write Efficiency", "Unpacker1 Write Efficiency"]
+                    ].mean(axis=1, skipna=True)
+                    eff_pivot["FPU Execution Efficiency"] = eff_pivot.apply(
+                        lambda x: (x.get("value_FPU_COUNTER", 0) / x.get("ref_cnt_FPU_COUNTER", 1) * 100)
+                        if x.get("ref_cnt_FPU_COUNTER", 0) > 0
+                        else nan,
+                        axis=1,
+                    )
+
+                    # Aggregate metrics per operation (min, median, max, avg)
+                    grouped_eff = eff_pivot.groupby(["run_host_id", "trace_id_count"])
+
+                    # Store all aggregated metrics for this device
+                    device_efficiency_metrics[device] = {
+                        "sfpu_min": grouped_eff["SFPU Util"].min().to_dict(),
+                        "sfpu_median": grouped_eff["SFPU Util"].median().to_dict(),
+                        "sfpu_max": grouped_eff["SFPU Util"].max().to_dict(),
+                        "sfpu_avg": grouped_eff["SFPU Util"].mean().to_dict(),
+                        "fpu_min": grouped_eff["FPU Util"].min().to_dict(),
+                        "fpu_median": grouped_eff["FPU Util"].median().to_dict(),
+                        "fpu_max": grouped_eff["FPU Util"].max().to_dict(),
+                        "fpu_avg": grouped_eff["FPU Util"].mean().to_dict(),
+                        "math_min": grouped_eff["MATH Util"].min().to_dict(),
+                        "math_median": grouped_eff["MATH Util"].median().to_dict(),
+                        "math_max": grouped_eff["MATH Util"].max().to_dict(),
+                        "math_avg": grouped_eff["MATH Util"].mean().to_dict(),
+                        "unpack0_min": grouped_eff["Unpacker0 Write Efficiency"].min().to_dict(),
+                        "unpack0_median": grouped_eff["Unpacker0 Write Efficiency"].median().to_dict(),
+                        "unpack0_max": grouped_eff["Unpacker0 Write Efficiency"].max().to_dict(),
+                        "unpack0_avg": grouped_eff["Unpacker0 Write Efficiency"].mean().to_dict(),
+                        "unpack1_min": grouped_eff["Unpacker1 Write Efficiency"].min().to_dict(),
+                        "unpack1_median": grouped_eff["Unpacker1 Write Efficiency"].median().to_dict(),
+                        "unpack1_max": grouped_eff["Unpacker1 Write Efficiency"].max().to_dict(),
+                        "unpack1_avg": grouped_eff["Unpacker1 Write Efficiency"].mean().to_dict(),
+                        "unpack_min": grouped_eff["Unpacker Write Efficiency"].min().to_dict(),
+                        "unpack_median": grouped_eff["Unpacker Write Efficiency"].median().to_dict(),
+                        "unpack_max": grouped_eff["Unpacker Write Efficiency"].max().to_dict(),
+                        "unpack_avg": grouped_eff["Unpacker Write Efficiency"].mean().to_dict(),
+                        "pack_min": grouped_eff["Packer Efficiency"].min().to_dict(),
+                        "pack_median": grouped_eff["Packer Efficiency"].median().to_dict(),
+                        "pack_max": grouped_eff["Packer Efficiency"].max().to_dict(),
+                        "pack_avg": grouped_eff["Packer Efficiency"].mean().to_dict(),
+                        "fpu_exec_min": grouped_eff["FPU Execution Efficiency"].min().to_dict(),
+                        "fpu_exec_median": grouped_eff["FPU Execution Efficiency"].median().to_dict(),
+                        "fpu_exec_max": grouped_eff["FPU Execution Efficiency"].max().to_dict(),
+                        "fpu_exec_avg": grouped_eff["FPU Execution Efficiency"].mean().to_dict(),
+                        "math_pipe_min": grouped_eff["Math Pipeline Utilization"].min().to_dict(),
+                        "math_pipe_median": grouped_eff["Math Pipeline Utilization"].median().to_dict(),
+                        "math_pipe_max": grouped_eff["Math Pipeline Utilization"].max().to_dict(),
+                        "math_pipe_avg": grouped_eff["Math Pipeline Utilization"].mean().to_dict(),
+                        "math_pack_min": grouped_eff["Math-to-Pack Handoff Efficiency"].min().to_dict(),
+                        "math_pack_median": grouped_eff["Math-to-Pack Handoff Efficiency"].median().to_dict(),
+                        "math_pack_max": grouped_eff["Math-to-Pack Handoff Efficiency"].max().to_dict(),
+                        "math_pack_avg": grouped_eff["Math-to-Pack Handoff Efficiency"].mean().to_dict(),
+                        "unpack_math_min": grouped_eff["Unpacker-to-Math Data Flow"].min().to_dict(),
+                        "unpack_math_median": grouped_eff["Unpacker-to-Math Data Flow"].median().to_dict(),
+                        "unpack_math_max": grouped_eff["Unpacker-to-Math Data Flow"].max().to_dict(),
+                        "unpack_math_avg": grouped_eff["Unpacker-to-Math Data Flow"].mean().to_dict(),
+                    }
+
+                    # Print efficiency summary directly
+                    eff_summary_df = []
+                    for key in device_efficiency_metrics[device]["sfpu_min"].keys():
+                        eff_summary_df.append(
+                            {
+                                "SFPU Util Min (%)": device_efficiency_metrics[device]["sfpu_min"].get(key, nan),
+                                "SFPU Util Median (%)": device_efficiency_metrics[device]["sfpu_median"].get(key, nan),
+                                "SFPU Util Max (%)": device_efficiency_metrics[device]["sfpu_max"].get(key, nan),
+                                "FPU Util Min (%)": device_efficiency_metrics[device]["fpu_min"].get(key, nan),
+                                "FPU Util Median (%)": device_efficiency_metrics[device]["fpu_median"].get(key, nan),
+                                "FPU Util Max (%)": device_efficiency_metrics[device]["fpu_max"].get(key, nan),
+                                "MATH Util Min (%)": device_efficiency_metrics[device]["math_min"].get(key, nan),
+                                "MATH Util Median (%)": device_efficiency_metrics[device]["math_median"].get(key, nan),
+                                "MATH Util Max (%)": device_efficiency_metrics[device]["math_max"].get(key, nan),
+                                "Unpacker0 Write Efficiency Min (%)": device_efficiency_metrics[device][
+                                    "unpack0_min"
+                                ].get(key, nan),
+                                "Unpacker0 Write Efficiency Median (%)": device_efficiency_metrics[device][
+                                    "unpack0_median"
+                                ].get(key, nan),
+                                "Unpacker0 Write Efficiency Max (%)": device_efficiency_metrics[device][
+                                    "unpack0_max"
+                                ].get(key, nan),
+                                "Unpacker0 Write Efficiency Avg (%)": device_efficiency_metrics[device][
+                                    "unpack0_avg"
+                                ].get(key, nan),
+                                "Unpacker1 Write Efficiency Min (%)": device_efficiency_metrics[device][
+                                    "unpack1_min"
+                                ].get(key, nan),
+                                "Unpacker1 Write Efficiency Median (%)": device_efficiency_metrics[device][
+                                    "unpack1_median"
+                                ].get(key, nan),
+                                "Unpacker1 Write Efficiency Max (%)": device_efficiency_metrics[device][
+                                    "unpack1_max"
+                                ].get(key, nan),
+                                "Unpacker1 Write Efficiency Avg (%)": device_efficiency_metrics[device][
+                                    "unpack1_avg"
+                                ].get(key, nan),
+                                "Unpacker Write Efficiency Min (%)": device_efficiency_metrics[device][
+                                    "unpack_min"
+                                ].get(key, nan),
+                                "Unpacker Write Efficiency Median (%)": device_efficiency_metrics[device][
+                                    "unpack_median"
+                                ].get(key, nan),
+                                "Unpacker Write Efficiency Max (%)": device_efficiency_metrics[device][
+                                    "unpack_max"
+                                ].get(key, nan),
+                                "Unpacker Write Efficiency Avg (%)": device_efficiency_metrics[device][
+                                    "unpack_avg"
+                                ].get(key, nan),
+                                "Packer Efficiency Min (%)": device_efficiency_metrics[device]["pack_min"].get(
+                                    key, nan
+                                ),
+                                "Packer Efficiency Median (%)": device_efficiency_metrics[device]["pack_median"].get(
+                                    key, nan
+                                ),
+                                "Packer Efficiency Max (%)": device_efficiency_metrics[device]["pack_max"].get(
+                                    key, nan
+                                ),
+                                "Packer Efficiency Avg (%)": device_efficiency_metrics[device]["pack_avg"].get(
+                                    key, nan
+                                ),
+                                "FPU Execution Efficiency Min (%)": device_efficiency_metrics[device]["fpu_min"].get(
+                                    key, nan
+                                ),
+                                "FPU Execution Efficiency Median (%)": device_efficiency_metrics[device][
+                                    "fpu_median"
+                                ].get(key, nan),
+                                "FPU Execution Efficiency Max (%)": device_efficiency_metrics[device]["fpu_max"].get(
+                                    key, nan
+                                ),
+                                "FPU Execution Efficiency Avg (%)": device_efficiency_metrics[device]["fpu_avg"].get(
+                                    key, nan
+                                ),
+                                "Math Pipeline Utilization Min (%)": device_efficiency_metrics[device][
+                                    "math_pipe_min"
+                                ].get(key, nan),
+                                "Math Pipeline Utilization Median (%)": device_efficiency_metrics[device][
+                                    "math_pipe_median"
+                                ].get(key, nan),
+                                "Math Pipeline Utilization Max (%)": device_efficiency_metrics[device][
+                                    "math_pipe_max"
+                                ].get(key, nan),
+                                "Math Pipeline Utilization Avg (%)": device_efficiency_metrics[device][
+                                    "math_pipe_avg"
+                                ].get(key, nan),
+                                "Math-to-Pack Handoff Efficiency Min (%)": device_efficiency_metrics[device][
+                                    "math_pack_min"
+                                ].get(key, nan),
+                                "Math-to-Pack Handoff Efficiency Median (%)": device_efficiency_metrics[device][
+                                    "math_pack_median"
+                                ].get(key, nan),
+                                "Math-to-Pack Handoff Efficiency Max (%)": device_efficiency_metrics[device][
+                                    "math_pack_max"
+                                ].get(key, nan),
+                                "Math-to-Pack Handoff Efficiency Avg (%)": device_efficiency_metrics[device][
+                                    "math_pack_avg"
+                                ].get(key, nan),
+                                "Unpacker-to-Math Data Flow Min (%)": device_efficiency_metrics[device][
+                                    "unpack_math_min"
+                                ].get(key, nan),
+                                "Unpacker-to-Math Data Flow Median (%)": device_efficiency_metrics[device][
+                                    "unpack_math_median"
+                                ].get(key, nan),
+                                "Unpacker-to-Math Data Flow Max (%)": device_efficiency_metrics[device][
+                                    "unpack_math_max"
+                                ].get(key, nan),
+                                "Unpacker-to-Math Data Flow Avg (%)": device_efficiency_metrics[device][
+                                    "unpack_math_avg"
+                                ].get(key, nan),
+                            }
+                        )
+                    if eff_summary_df:
+                        print_efficiency_metrics_summary(pd.DataFrame(eff_summary_df), device)
+
         for device in deviceData["devices"]:
             deviceOps[device] = []
             deviceOpsTime = deviceData["devices"][device]["cores"]["DEVICE"]["riscs"]["TENSIX"]["ops"]
@@ -1024,6 +1793,86 @@ def get_device_data_generate_report(
                         else:
                             rowDict["OP TO OP LATENCY BR/NRISC START [ns]"] = 0
                         devicePreOpDMStartTime[device] = analysisData[0]["end_cycle"]
+
+                # Add efficiency metrics if available for this device and operation
+                if device in device_efficiency_metrics:
+                    from math import nan
+
+                    global_call_count = deviceOp["global_call_count"]
+                    trace_id_counter = -1  # Device-only mode doesn't have trace replays
+                    lookup_key = (global_call_count, trace_id_counter)
+                    metrics = device_efficiency_metrics[device]
+
+                    # SFPU Util
+                    rowDict["SFPU Util Min (%)"] = metrics["sfpu_min"].get(lookup_key, nan)
+                    rowDict["SFPU Util Median (%)"] = metrics["sfpu_median"].get(lookup_key, nan)
+                    rowDict["SFPU Util Max (%)"] = metrics["sfpu_max"].get(lookup_key, nan)
+                    rowDict["Avg SFPU util on full grid (%)"] = metrics["sfpu_avg"].get(lookup_key, nan)
+
+                    # FPU Util
+                    rowDict["FPU Util Min (%)"] = metrics["fpu_min"].get(lookup_key, nan)
+                    rowDict["FPU Util Median (%)"] = metrics["fpu_median"].get(lookup_key, nan)
+                    rowDict["FPU Util Max (%)"] = metrics["fpu_max"].get(lookup_key, nan)
+                    rowDict["Avg FPU util on full grid (%)"] = metrics["fpu_avg"].get(lookup_key, nan)
+
+                    # MATH Util
+                    rowDict["MATH Util Min (%)"] = metrics["math_min"].get(lookup_key, nan)
+                    rowDict["MATH Util Median (%)"] = metrics["math_median"].get(lookup_key, nan)
+                    rowDict["MATH Util Max (%)"] = metrics["math_max"].get(lookup_key, nan)
+                    rowDict["Avg Math util on full grid (%)"] = metrics["math_avg"].get(lookup_key, nan)
+
+                    # Unpacker0 Write Efficiency
+                    rowDict["Unpacker0 Write Efficiency Min (%)"] = metrics["unpack0_min"].get(lookup_key, nan)
+                    rowDict["Unpacker0 Write Efficiency Median (%)"] = metrics["unpack0_median"].get(lookup_key, nan)
+                    rowDict["Unpacker0 Write Efficiency Max (%)"] = metrics["unpack0_max"].get(lookup_key, nan)
+                    rowDict["Unpacker0 Write Efficiency Avg (%)"] = metrics["unpack0_avg"].get(lookup_key, nan)
+
+                    # Unpacker1 Write Efficiency
+                    rowDict["Unpacker1 Write Efficiency Min (%)"] = metrics["unpack1_min"].get(lookup_key, nan)
+                    rowDict["Unpacker1 Write Efficiency Median (%)"] = metrics["unpack1_median"].get(lookup_key, nan)
+                    rowDict["Unpacker1 Write Efficiency Max (%)"] = metrics["unpack1_max"].get(lookup_key, nan)
+                    rowDict["Unpacker1 Write Efficiency Avg (%)"] = metrics["unpack1_avg"].get(lookup_key, nan)
+
+                    # Combined Unpacker Write Efficiency
+                    rowDict["Unpacker Write Efficiency Min (%)"] = metrics["unpack_min"].get(lookup_key, nan)
+                    rowDict["Unpacker Write Efficiency Median (%)"] = metrics["unpack_median"].get(lookup_key, nan)
+                    rowDict["Unpacker Write Efficiency Max (%)"] = metrics["unpack_max"].get(lookup_key, nan)
+                    rowDict["Unpacker Write Efficiency Avg (%)"] = metrics["unpack_avg"].get(lookup_key, nan)
+
+                    # Packer Efficiency
+                    rowDict["Packer Efficiency Min (%)"] = metrics["pack_min"].get(lookup_key, nan)
+                    rowDict["Packer Efficiency Median (%)"] = metrics["pack_median"].get(lookup_key, nan)
+                    rowDict["Packer Efficiency Max (%)"] = metrics["pack_max"].get(lookup_key, nan)
+                    rowDict["Packer Efficiency Avg (%)"] = metrics["pack_avg"].get(lookup_key, nan)
+
+                    # FPU Execution Efficiency
+                    rowDict["FPU Execution Efficiency Min (%)"] = metrics["fpu_min"].get(lookup_key, nan)
+                    rowDict["FPU Execution Efficiency Median (%)"] = metrics["fpu_median"].get(lookup_key, nan)
+                    rowDict["FPU Execution Efficiency Max (%)"] = metrics["fpu_max"].get(lookup_key, nan)
+                    rowDict["FPU Execution Efficiency Avg (%)"] = metrics["fpu_avg"].get(lookup_key, nan)
+
+                    # Math Pipeline Utilization
+                    rowDict["Math Pipeline Utilization Min (%)"] = metrics["math_pipe_min"].get(lookup_key, nan)
+                    rowDict["Math Pipeline Utilization Median (%)"] = metrics["math_pipe_median"].get(lookup_key, nan)
+                    rowDict["Math Pipeline Utilization Max (%)"] = metrics["math_pipe_max"].get(lookup_key, nan)
+                    rowDict["Math Pipeline Utilization Avg (%)"] = metrics["math_pipe_avg"].get(lookup_key, nan)
+
+                    # Math-to-Pack Handoff Efficiency
+                    rowDict["Math-to-Pack Handoff Efficiency Min (%)"] = metrics["math_pack_min"].get(lookup_key, nan)
+                    rowDict["Math-to-Pack Handoff Efficiency Median (%)"] = metrics["math_pack_median"].get(
+                        lookup_key, nan
+                    )
+                    rowDict["Math-to-Pack Handoff Efficiency Max (%)"] = metrics["math_pack_max"].get(lookup_key, nan)
+                    rowDict["Math-to-Pack Handoff Efficiency Avg (%)"] = metrics["math_pack_avg"].get(lookup_key, nan)
+
+                    # Unpacker-to-Math Data Flow
+                    rowDict["Unpacker-to-Math Data Flow Min (%)"] = metrics["unpack_math_min"].get(lookup_key, nan)
+                    rowDict["Unpacker-to-Math Data Flow Median (%)"] = metrics["unpack_math_median"].get(
+                        lookup_key, nan
+                    )
+                    rowDict["Unpacker-to-Math Data Flow Max (%)"] = metrics["unpack_math_max"].get(lookup_key, nan)
+                    rowDict["Unpacker-to-Math Data Flow Avg (%)"] = metrics["unpack_math_avg"].get(lookup_key, nan)
+
                 rowDicts.append(rowDict)
 
             def get_core_str_format(core):

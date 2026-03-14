@@ -190,7 +190,7 @@ class TestCppPostProc:
 matmul_test_perf_counters = {
     "name": "Matmul_perf_counters",
     "command": "pytest tests/ttnn/unit_tests/operations/matmul/test_matmul.py::test_padded_2d_matmul[tile_count=1375-side=width]",
-    "capture_perf_counters_groups": ["fpu"],
+    "capture_perf_counters_groups": ["all"],
 }
 
 

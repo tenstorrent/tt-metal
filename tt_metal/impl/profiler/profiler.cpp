@@ -2041,7 +2041,8 @@ void DeviceProfiler::processDeviceMarkerData(std::set<tracy::TTDeviceMarker>& de
 
                 // If this is a performance counter, extract fields from data and store in marker meta_data
                 if (marker.marker_id == PERF_COUNTER_PROFILER_ID) {
-                    marker.meta_data["counter type"] = enchantum::to_string(PerfCounter(marker.data).counter_type);
+                    marker.meta_data["counter type"] =
+                        enchantum::to_string(static_cast<PerfCounterType>(PerfCounter(marker.data).counter_type));
                     marker.meta_data["ref cnt"] = PerfCounter(marker.data).ref_cnt;
                     marker.meta_data["value"] = PerfCounter(marker.data).counter_value;
 
