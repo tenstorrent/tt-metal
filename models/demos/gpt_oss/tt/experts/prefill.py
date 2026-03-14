@@ -134,7 +134,6 @@ def _process_prefill_chunk(
     up = ttnn.reshape(up, (batch_size, config.num_experts, seq_len, weights.intermediate_size_per_device))
     bias_transposed = ttnn.transpose(weights.up_proj_bias, 1, 0)
     up = ttnn.add(up, bias_transposed, output_tensor=up)
-    bias_transposed.deallocate(True)
 
     # Apply SwiGLU (consumes gate and up internally)
 
@@ -199,7 +198,6 @@ def _process_prefill_chunk(
         bias_transposed = ttnn.transpose(weights.down_proj_bias, 1, 0)
         next_states = ttnn.add(next_states, bias_transposed, output_tensor=next_states)
         next_states = apply_routing_weights(next_states, routing_weights_list[i])
-        bias_transposed.deallocate(True)
 
         # Reduce across experts
         next_states_reduced = reduce_experts(next_states)
