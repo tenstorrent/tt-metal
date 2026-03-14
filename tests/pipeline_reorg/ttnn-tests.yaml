@@ -7,6 +7,15 @@
 #
 # Each entry: name, cmd, skus: { <sku>: { timeout: N } }, team, owner_id.
 # Optional: merge_gate (filter in workflow), ttsim (for TTSim), fast_runtime_mode_off.
+#
+# ops_filter: Maps this test group to TTNN operation families for change-aware
+#   test routing. When the merge gate detects changes in specific operation
+#   families (via find-changed-files.sh), only test groups whose ops_filter
+#   matches are run. Special values:
+#     - "all": always run when any TTNN code changes
+#     - comma-separated families: run when any listed family changes
+#   Supported families: eltwise, conv, pool, matmul, fused, transformers,
+#                       sdpa, reduce, core, example
 # =============================================================================
 
 - name: "ttnn example tests"
@@ -22,6 +31,7 @@
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
   merge_gate: true
   ttsim: false
+  ops_filter: "example,all"
 
 - name: "ttnn eltwise group 1"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 1 -m "not disable_fast_runtime_mode"'
@@ -34,8 +44,9 @@
       timeout: 40
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
-  merge_gate: false
+  merge_gate: true
   ttsim: true
+  ops_filter: "eltwise"
 
 - name: "ttnn eltwise group 2"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 2 -m "not disable_fast_runtime_mode"'
@@ -48,8 +59,9 @@
       timeout: 40
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
-  merge_gate: false
+  merge_gate: true
   ttsim: true
+  ops_filter: "eltwise"
 
 - name: "ttnn eltwise group 3"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 3 -m "not disable_fast_runtime_mode"'
@@ -62,8 +74,9 @@
       timeout: 40
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
-  merge_gate: false
+  merge_gate: true
   ttsim: true
+  ops_filter: "eltwise"
 
 - name: "ttnn eltwise group 4"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 4 -m "not disable_fast_runtime_mode"'
@@ -76,8 +89,9 @@
       timeout: 40
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
-  merge_gate: false
+  merge_gate: true
   ttsim: true
+  ops_filter: "eltwise"
 
 - name: "ttnn eltwise group 5"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/eltwise -xv --splits 5 --group 5 -m "not disable_fast_runtime_mode"'
@@ -90,8 +104,9 @@
       timeout: 40
   team: ttnn
   owner_id: U09BX3N0N95 # Mateusz Nowak
-  merge_gate: false
+  merge_gate: true
   ttsim: true
+  ops_filter: "eltwise"
 
 - name: "ttnn conv group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/conv -xv -m "not disable_fast_runtime_mode"'
@@ -104,8 +119,9 @@
       timeout: 40
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
-  merge_gate: false
+  merge_gate: true
   ttsim: true
+  ops_filter: "conv"
 
 - name: "ttnn pool group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"'
@@ -118,8 +134,9 @@
       timeout: 40
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
-  merge_gate: false
+  merge_gate: true
   ttsim: true
+  ops_filter: "pool"
 
 - name: "ttnn matmul group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"'
@@ -132,8 +149,9 @@
       timeout: 40
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
-  merge_gate: false
+  merge_gate: true
   ttsim: true
+  ops_filter: "matmul"
 
 - name: "ttnn fused group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/fused -xv -m "not disable_fast_runtime_mode"'
@@ -146,8 +164,9 @@
       timeout: 40
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
-  merge_gate: false
+  merge_gate: true
   ttsim: true
+  ops_filter: "fused"
 
 - name: "ttnn transformers group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/transformers -xv -m "not disable_fast_runtime_mode"'
@@ -160,8 +179,9 @@
       timeout: 40
   team: ttnn
   owner_id: U08JFM3CFA4 # Gongyu Wang
-  merge_gate: false
+  merge_gate: true
   ttsim: true
+  ops_filter: "transformers"
 
 - name: "ttnn sdpa group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/sdpa -xv -m "not disable_fast_runtime_mode"'
@@ -174,8 +194,9 @@
       timeout: 15
   team: ttnn
   owner_id: U085GDCAZTN # Pavle Josipovic
-  merge_gate: false
+  merge_gate: true
   ttsim: false  # SDPA tests require device
+  ops_filter: "sdpa"
 
 - name: "ttnn reduce and misc ops group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce tests/ttnn/unit_tests/operations/debug -xv -m "not disable_fast_runtime_mode"'
@@ -188,8 +209,9 @@
       timeout: 40
   team: ttnn
   owner_id: U084B1CES7M # Borys Bradel
-  merge_gate: false
+  merge_gate: true
   ttsim: true
+  ops_filter: "reduce"
 
 - name: "core ttnn unit test group"
   cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/base_functionality tests/ttnn/unit_tests/benchmarks tests/ttnn/unit_tests/tensor -xv -m "not disable_fast_runtime_mode"'
@@ -202,5 +224,6 @@
       timeout: 40
   team: ttnn
   owner_id: U076Z1JJUQZ # Artem Yerofieiev
-  merge_gate: false
+  merge_gate: true
   ttsim: true
+  ops_filter: "core,all"
