@@ -96,6 +96,20 @@ constexpr std::array<size_t, MAX_NUM_VCS> MAX_NUM_SENDER_CHANNELS_PER_VC = {
 constexpr std::array<size_t, MAX_NUM_VCS> vc_sender_channel_start_per_vc = {
     VC0_SENDER_CHANNEL_START_CONST, VC1_SENDER_CHANNEL_START};
 
+// Compile-time helper: extract a contiguous VC slice from a flat sender channel array.
+// VC selects which virtual channel (0 or 1); N is the number of channels for that VC;
+// SRC_N is the total size of the flat source array.
+// Requires: vc_sender_channel_start_per_vc[VC] + N <= SRC_N.
+template <typename T, size_t VC, size_t N, size_t SRC_N>
+constexpr std::array<T, N> extract_vc_sender_channels(const std::array<T, SRC_N>& flat) {
+    std::array<T, N> result{};
+    const size_t start = vc_sender_channel_start_per_vc[VC];
+    for (size_t i = 0; i < N; i++) {
+        result[i] = flat[start + i];
+    }
+    return result;
+}
+
 // ============================================================================
 // Downstream tensix connections
 // ============================================================================
@@ -272,6 +286,25 @@ constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_servic
     static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_1_SERVICED")),
 };
 
+// Per-VC sender channel serviced flags — sliced from the flat array above.
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS_VC0> is_sender_channel_serviced_vc0 =
+    extract_vc_sender_channels<bool, 0, MAX_NUM_SENDER_CHANNELS_VC0, MAX_NUM_SENDER_CHANNELS>(
+        is_sender_channel_serviced);
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS_VC1> is_sender_channel_serviced_vc1 =
+    extract_vc_sender_channels<bool, 1, MAX_NUM_SENDER_CHANNELS_VC1, MAX_NUM_SENDER_CHANNELS>(
+        is_sender_channel_serviced);
+
+// Function template accessor: resolves both VC and channel to a compile-time constant.
+// Enables dead code elimination per-channel when inlined into templated per-VC functions.
+template <size_t VC, size_t CH>
+constexpr bool is_sender_channel_serviced_vc() {
+    if constexpr (VC == 0) {
+        return is_sender_channel_serviced_vc0[CH];
+    } else {
+        return is_sender_channel_serviced_vc1[CH];
+    }
+}
+
 // ============================================================================
 // RISC configuration
 // ============================================================================
@@ -340,6 +373,14 @@ static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_ch_live_check_
 constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_ch_live_check_skip =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, bool>(sender_ch_live_check_skip_all_);
 
+// Per-VC versions of sender_ch_live_check_skip, sliced from the MAX-sized all_ array.
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS_VC0> sender_ch_live_check_skip_vc0 =
+    extract_vc_sender_channels<bool, 0, MAX_NUM_SENDER_CHANNELS_VC0, MAX_NUM_SENDER_CHANNELS>(
+        sender_ch_live_check_skip_all_);
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS_VC1> sender_ch_live_check_skip_vc1 =
+    extract_vc_sender_channels<bool, 1, MAX_NUM_SENDER_CHANNELS_VC1, MAX_NUM_SENDER_CHANNELS>(
+        sender_ch_live_check_skip_all_);
+
 // A channel is a "traffic injection channel" if it is a sender channel that is adding *new*
 // traffic to this dimension/ring. Examples include channels service worker traffic and
 // sender channels that receive traffic from a "turn" (e.g. an EAST channel receiving traffic from NORTH)
@@ -358,6 +399,15 @@ static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channel_is_tra
 constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_channel_is_traffic_injection_channel =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, bool>(
         sender_channel_is_traffic_injection_channel_all_);
+
+// Per-VC versions of sender_channel_is_traffic_injection_channel.
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS_VC0> sender_channel_is_traffic_injection_channel_vc0 =
+    extract_vc_sender_channels<bool, 0, MAX_NUM_SENDER_CHANNELS_VC0, MAX_NUM_SENDER_CHANNELS>(
+        sender_channel_is_traffic_injection_channel_all_);
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS_VC1> sender_channel_is_traffic_injection_channel_vc1 =
+    extract_vc_sender_channels<bool, 1, MAX_NUM_SENDER_CHANNELS_VC1, MAX_NUM_SENDER_CHANNELS>(
+        sender_channel_is_traffic_injection_channel_all_);
+
 constexpr size_t BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS = 2;
 
 static constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_noc_ids_all_ = {
@@ -374,6 +424,14 @@ static constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> sender_channel_ack_noc_ids =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(sender_channel_ack_noc_ids_all_);
 
+// Per-VC versions of sender_channel_ack_noc_ids.
+constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS_VC0> sender_channel_ack_noc_ids_vc0 =
+    extract_vc_sender_channels<size_t, 0, MAX_NUM_SENDER_CHANNELS_VC0, MAX_NUM_SENDER_CHANNELS>(
+        sender_channel_ack_noc_ids_all_);
+constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS_VC1> sender_channel_ack_noc_ids_vc1 =
+    extract_vc_sender_channels<size_t, 1, MAX_NUM_SENDER_CHANNELS_VC1, MAX_NUM_SENDER_CHANNELS>(
+        sender_channel_ack_noc_ids_all_);
+
 static constexpr std::array<uint8_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_cmd_buf_ids_all_ = {
     static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_0_ACK_CMD_BUF_ID")),
     static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_1_ACK_CMD_BUF_ID")),
@@ -387,6 +445,14 @@ static constexpr std::array<uint8_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack
 };
 constexpr std::array<uint8_t, NUM_SENDER_CHANNELS> sender_channel_ack_cmd_buf_ids =
     take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint8_t>(sender_channel_ack_cmd_buf_ids_all_);
+
+// Per-VC versions of sender_channel_ack_cmd_buf_ids.
+constexpr std::array<uint8_t, MAX_NUM_SENDER_CHANNELS_VC0> sender_channel_ack_cmd_buf_ids_vc0 =
+    extract_vc_sender_channels<uint8_t, 0, MAX_NUM_SENDER_CHANNELS_VC0, MAX_NUM_SENDER_CHANNELS>(
+        sender_channel_ack_cmd_buf_ids_all_);
+constexpr std::array<uint8_t, MAX_NUM_SENDER_CHANNELS_VC1> sender_channel_ack_cmd_buf_ids_vc1 =
+    extract_vc_sender_channels<uint8_t, 1, MAX_NUM_SENDER_CHANNELS_VC1, MAX_NUM_SENDER_CHANNELS>(
+        sender_channel_ack_cmd_buf_ids_all_);
 
 // ============================================================================
 // Receiver channel per-channel arrays
@@ -642,6 +708,14 @@ constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> REMOTE_RECEIVER_NUM_BUFFERS_
     eth_remote_channel_allocs,
     eth_remote_channel_allocs::receiver_channel_to_entry_index,
     NUM_RECEIVER_CHANNELS>();
+
+// Per-VC SENDER_NUM_BUFFERS arrays — sliced from the flat SENDER_NUM_BUFFERS_ARRAY.
+// Sized to MAX_NUM_SENDER_CHANNELS_VC0/VC1 (max capacity) so they can be indexed by
+// per-VC channel index without requiring ACTUAL_VCn_SENDER_CHANNELS as a template arg.
+constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS_VC0> SENDER_NUM_BUFFERS_ARRAY_VC0 =
+    extract_vc_sender_channels<size_t, 0, MAX_NUM_SENDER_CHANNELS_VC0, NUM_SENDER_CHANNELS>(SENDER_NUM_BUFFERS_ARRAY);
+constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS_VC1> SENDER_NUM_BUFFERS_ARRAY_VC1 =
+    extract_vc_sender_channels<size_t, 1, MAX_NUM_SENDER_CHANNELS_VC1, NUM_SENDER_CHANNELS>(SENDER_NUM_BUFFERS_ARRAY);
 
 }  // namespace tt::tt_fabric
 
