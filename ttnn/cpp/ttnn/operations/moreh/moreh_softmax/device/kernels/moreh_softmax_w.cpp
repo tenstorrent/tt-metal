@@ -10,7 +10,8 @@
 void kernel_main() {
     constexpr auto cb_in0 = tt::CBIndex::c_0;
     constexpr auto cb_mask = tt::CBIndex::c_1;
-    constexpr auto cb_bcast_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_max_scaler = tt::CBIndex::c_2;
+    constexpr auto cb_sum_scaler = tt::CBIndex::c_3;
     constexpr auto cb_out0 = tt::CBIndex::c_16;
     constexpr auto cb_exps = tt::CBIndex::c_24;
     constexpr auto cb_recipsumexps = tt::CBIndex::c_25;
@@ -18,7 +19,7 @@ void kernel_main() {
     constexpr auto cb_x_m_max = tt::CBIndex::c_27;
     constexpr auto cb_tmp = tt::CBIndex::c_28;
 
-    binary_op_init_common(cb_in0, cb_bcast_scaler, cb_out0);
+    binary_op_init_common(cb_in0, cb_max_scaler, cb_out0);
 
     constexpr int dst0 = 0;
     constexpr int dst1 = 1;
@@ -28,7 +29,8 @@ void kernel_main() {
     uint32_t Wt = get_compile_time_arg_val(1);
 
     cb_wait_front(cb_mask, onetile);
-    cb_wait_front(cb_bcast_scaler, onetile);
+    cb_wait_front(cb_max_scaler, onetile);
+    cb_wait_front(cb_sum_scaler, onetile);
 
     for (uint32_t n = 0; n < N; ++n) {
         // find max value
@@ -36,17 +38,17 @@ void kernel_main() {
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, 0, 0, /*pop0=*/0, /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>(
-                cb_tmp, cb_bcast_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::single());
+                cb_tmp, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::single());
         } else {
             compute_kernel_lib::
                 reduce<PoolType::MAX, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
-                    cb_in0, cb_bcast_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
+                    cb_in0, cb_max_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(Wt - 1));
 
             mask_tile_to_cb(cb_in0, cb_mask, cb_tmp, Wt - 1, 0, /*pop0=*/0, /*popm=*/0);
 
             compute_kernel_lib::reduce<PoolType::MAX, ReduceDim::REDUCE_ROW>(
                 cb_tmp,
-                cb_bcast_scaler,
+                cb_max_scaler,
                 cb_max,
                 compute_kernel_lib::ReduceInputBlockShape::single(),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
@@ -108,7 +110,7 @@ void kernel_main() {
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::BulkWaitBulkPop>(
                 cb_exps,
-                cb_bcast_scaler,
+                cb_sum_scaler,
                 cb_recipsumexps,
                 compute_kernel_lib::ReduceInputBlockShape::row(Wt),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
@@ -122,7 +124,7 @@ void kernel_main() {
         compute_kernel_lib::
             reduce<PoolType::SUM, ReduceDim::REDUCE_ROW, compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop>(
                 cb_exps,
-                cb_bcast_scaler,
+                cb_sum_scaler,
                 cb_recipsumexps,
                 compute_kernel_lib::ReduceInputBlockShape::row(Wt),
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),

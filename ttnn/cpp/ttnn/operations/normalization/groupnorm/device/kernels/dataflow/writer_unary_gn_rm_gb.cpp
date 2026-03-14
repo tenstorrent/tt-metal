@@ -138,7 +138,6 @@ void kernel_main() {
                         cb_in_2,
                         ckernel::PoolType::AVG,
                         ckernel::ReduceDim::REDUCE_SCALAR,
-                        tt::constants::TILE_WIDTH,
                         reduce_factor_w>();
                 }
 
@@ -149,7 +148,6 @@ void kernel_main() {
                         cb_in_4,
                         ckernel::PoolType::AVG,
                         ckernel::ReduceDim::REDUCE_SCALAR,
-                        tt::constants::TILE_WIDTH,
                         reduce_factor_c>();
                 }
 
