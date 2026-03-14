@@ -150,11 +150,23 @@ void wait_for_save_cbs(
     cb_wait_front(cb_sum_out, Sq_chunk_t);
 }
 
+// Three transaction IDs for fine-grained write barrier tracking.
+// Q[0] → TRID_FIRST, Q[1..N-2] → TRID_INNER, Q[N-1] → TRID_LAST.
+// Each barrier waits for a save that completed at least one full K-loop ago:
+//   - barrier(TRID_FIRST) at Q[N-1]: Q[0]'s save has had Q[1]..Q[N-1]'s K-loops
+//   - barrier(TRID_INNER) at Q[0] next iter: Q[N-2]'s save has had Q[N-1]'s K-loop
+//   - barrier(TRID_LAST) at Q[N-2] next iter: Q[N-1]'s save has had ring sync + Q[0]..Q[N-3]'s K-loops
+// The 2-trid scheme (TRID_Q0 + TRID_REST) had tail latency because TRID_REST included
+// Q[N-1], whose save had only ring sync time before the barrier. Separating Q[N-1] into
+// TRID_LAST ensures every barrier has at least one K-loop of margin.
+constexpr uint32_t TRID_FIRST = 0;
+constexpr uint32_t TRID_INNER = 1;
+constexpr uint32_t TRID_LAST = 2;
+
 // Drain save CBs to DRAM after wait_for_save_cbs + any prefetch reads have been issued.
 // Uses writes_flushed (not write_barrier) — sufficient because restore of Q[q+1] reads a
 // different DRAM address than save of Q[q], so no RAW hazard within a ring iteration.
-// The write_barrier at the end of each ring iteration ensures all saves land before the next
-// iteration reads them back.
+// Per-trid write barriers ensure each save has landed before its data is read back.
 template <typename ReaderType, typename TensorAccessorType>
 void drain_save_cbs(
     const PaddedAddrGenerator<ReaderType>& cat_out_generator,
@@ -172,7 +184,11 @@ void drain_save_cbs(
     const uint32_t cb_max_out,
     const uint32_t cb_sum_out,
     const uint32_t tile_bytes,
-    const uint32_t stats_tile_bytes) {
+    const uint32_t stats_tile_bytes,
+    const uint32_t save_trid = 0) {
+    // Tag all writes from this drain with the caller's trid for fine-grained barrier tracking.
+    noc_async_write_set_trid(save_trid);
+
     // Write output to DRAM
     const uint32_t out_rows = out_slice.get_d2_size();
     const uint32_t out_cols = out_slice.get_d3_size();
@@ -202,7 +218,7 @@ void drain_save_cbs(
     }
 
     // Flush: DMA has finished reading L1 source data — safe to free all save CBs.
-    noc_async_writes_flushed();
+    noc_async_write_flushed_with_trid(save_trid);
     cb_pop_front(cb_out, out_num_tiles);
     cb_pop_front(cb_max_out, Sq_chunk_t);
     cb_pop_front(cb_sum_out, Sq_chunk_t);
@@ -462,7 +478,22 @@ void kernel_main() {
             constexpr uint32_t sum_offset = local_padded_Nt + Lt;
             constexpr uint32_t out_num_tiles = Sq_chunk_t * DHt;
 
+            const uint32_t q_per_core = global_q_end - global_q_start;
+            const uint32_t last_q_index = q_per_core - 1;
+
+            // Map q_index (0..q_per_core-1) to one of 3 trids.
+            auto q_trid = [last_q_index](uint32_t q_idx) -> uint32_t {
+                if (q_idx == 0) {
+                    return TRID_FIRST;
+                }
+                if (q_idx == last_q_index) {
+                    return TRID_LAST;
+                }
+                return TRID_INNER;
+            };
+
             for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
+                const uint32_t q_index = global_q_chunk - global_q_start;  // 0..q_per_core-1
                 const uint32_t nb = global_q_chunk / (NH * num_q_chunks);
                 const uint32_t nq = (global_q_chunk % (NH * num_q_chunks)) / num_q_chunks;
                 const uint32_t q_chunk = global_q_chunk % num_q_chunks;
@@ -476,9 +507,11 @@ void kernel_main() {
                     complete_restore(cb_prev_out, out_num_tiles, cb_max_in, cb_sum_in, Sq_chunk_t);
 
                     // Intra-ring prefetch: Q[q] → Q[q+1]. Only on ring_iter > 0.
+                    // Barrier on Q[q+1]'s trid — its save completed at least one K-loop ago.
                     const uint32_t next_q = global_q_chunk + 1;
                     if (next_q < global_q_end) {
-                        // DeviceZoneScopedN("WR-PREFETCH-NEXT-Q");
+                        const uint32_t next_q_index = next_q - global_q_start;
+                        noc_async_write_barrier_with_trid(q_trid(next_q_index));
                         const uint32_t nb_next = next_q / (NH * num_q_chunks);
                         const uint32_t nq_next = (next_q % (NH * num_q_chunks)) / num_q_chunks;
                         const uint32_t qc_next = next_q % num_q_chunks;
@@ -513,8 +546,8 @@ void kernel_main() {
 
                 // 2. Cross-ring prefetch: Q[N-1] → Q[0] of next ring iter.
                 if (!single_q_chunk && !is_last_ring_iter && (global_q_chunk + 1 >= global_q_end)) {
-                    // DeviceZoneScopedN("WR-XRING-PREFETCH-Q0");
-                    noc_async_write_barrier();
+                    // Barrier on Q[0]'s trid — its save completed many K-loops ago.
+                    noc_async_write_barrier_with_trid(TRID_FIRST);
                     const uint32_t gq0 = global_q_start;
                     const uint32_t nb0 = gq0 / (NH * num_q_chunks);
                     const uint32_t nq0 = (gq0 % (NH * num_q_chunks)) / num_q_chunks;
@@ -568,12 +601,13 @@ void kernel_main() {
                         cb_max_out,
                         cb_sum_out,
                         tile_bytes,
-                        stats_tile_bytes);
+                        stats_tile_bytes,
+                        q_trid(q_index));
                 }
             }
 
-            // Cross-ring prefetch for Q[0] is now issued inside the Q loop at Q[N-1].
-            noc_async_write_barrier();
+            // No blanket write_barrier needed — per-trid barriers in the Q loop
+            // ensure each save has landed before its data is read back.
         } else {
             for (uint32_t global_q_chunk = global_q_start; global_q_chunk < global_q_end; ++global_q_chunk) {
                 // global_q_chunk is index into `B * NH * num_q_chunks`. Need to get nb, nq, q_chunk from this.

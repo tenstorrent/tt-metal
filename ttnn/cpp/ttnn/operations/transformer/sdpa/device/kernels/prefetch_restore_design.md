@@ -483,11 +483,11 @@ Measured via `test_ring_joint_attention_create_perf_table` (Tracy subprocess pro
 
 **s=8544/q288/k512** (q_per_core=3, 100 SDPA cores, 17 K chunks × 4 ring iters):
 
-| Variant | Duration | Math Util |
+| Variant | Math Util | Barrier p100 |
 |---|---|---|
-| No prefetch (main baseline) | 8.574 ms | 63.1% |
-| In-loop cross-ring prefetch (v2) | 8.508 ms | 63.6% |
-| Delta | **-0.066 ms (-0.8%)** | **+0.5pp** |
+| No prefetch (main baseline) | 63.1% | N/A |
+| V2 prefetch (naive) | 63.6% | 7.94 μs |
+| **V2 + 3-trid** | **63.7%** | **0.09 μs** |
 
 ### Tracy-Measured K CHUNK Gaps (TRISC_0, core (1,2), device 0)
 
@@ -539,75 +539,65 @@ This would provide latency hiding even when the K-loop is short, at the cost of 
 
 Currently all transfers are chunk-granular (full Sq_chunk_t at once). Restructuring to work at subblock_h granularity would enable finer-grained overlap.
 
-### Stage 4: Transaction ID (trid) Based Write Barriers
+### Stage 4: Transaction ID (trid) Based Write Barriers (DONE)
 
 #### Problem: Blanket Write Barriers Wait for Unrelated Saves
 
-The current code has two blanket `noc_async_write_barrier()` calls per ring iteration:
+The naive prefetch used blanket `noc_async_write_barrier()` which waits for *all* pending DRAM writes — including unrelated Q chunks whose saves just departed L1, causing up to ~8μs stalls at ring iteration boundaries. Two barrier sites were affected:
 
-1. **Cross-ring prefetch barrier** (line 517): Fires at Q[N-1] before issuing cross-ring prefetch reads for Q[0]. Only *needs* Q[0]'s save to have arrived at DRAM, but waits for ALL pending writes — including Q[N-2]'s save, which departed L1 just ~100ns ago via `writes_flushed` in `drain_save_cbs`.
+1. **Cross-ring prefetch barrier** at Q[N-1]: Only needed Q[0]'s save (landed many K-loops ago), but also waited for Q[N-2]'s save which departed L1 ~100ns earlier.
+2. **End-of-ring barrier**: Only needed Q[N-1]'s save, but waited for everything.
 
-2. **End-of-ring barrier** (line 576): Fires after all Q chunks. Only *needs* Q[N-1]'s save to have arrived, but waits for everything.
+#### Rejected Approaches
 
-The cross-ring barrier (1) is potentially the worse offender: Q[N-2]'s save (~108KB of accumulator data) has had almost no time to traverse the NOC and arrive at DRAM. Q[0]'s save (the one actually needed) landed hundreds of μs ago during Q[1]'s K-loop.
+**Move barrier without trids**: Relocating the end-of-ring barrier to before the first intra-ring prefetch in the next ring iteration gives Q[N-1]'s save more time. However, this only helps the end-of-ring barrier — it cannot fix the cross-ring barrier (1), which is the worse offender. Trids are required.
 
-#### Measurement: End-of-Ring Barrier (line 576)
+**Two-trid scheme** (TRID_Q0 + TRID_REST): Separates Q[0]'s save from Q[1]..Q[N-1], eliminating the cross-ring stall. But TRID_REST still lumps Q[N-1] with inner Q chunks, so the barrier before the first intra-ring prefetch waits for Q[N-1]'s save — which had only ring sync time (no K-loop) to land. This left a tail (p99=1.58μs, p100=5.22μs).
 
-Measured with `DeviceZoneScopedN("WR-END-BARRIER")` on s=8544/q288/k512 (q_per_core=3, 4 devices, 1600 samples across all cores):
+#### Solution: Three-Trid Scheme (TRID_FIRST / TRID_INNER / TRID_LAST)
 
-| Stat | Duration |
-|---|---|
-| p0 (min) | 0.03 μs |
-| p25 | 0.10 μs |
-| p50 | 0.26 μs |
-| p75 | 0.50 μs |
-| p90 | 0.88 μs |
-| p99 | 2.50 μs |
-| p100 (max) | 7.94 μs |
+Each Q chunk's save is tagged with one of three transaction IDs:
+- **TRID_FIRST** (Q[0]): Barriered at cross-ring prefetch — save has had Q[1]..Q[N-1]'s K-loops to land.
+- **TRID_INNER** (Q[1]..Q[N-2]): Barriered before intra-ring prefetch at Q[0] of next iter — worst case is Q[N-2], which has had Q[N-1]'s full K-loop to land.
+- **TRID_LAST** (Q[N-1]): Barriered before intra-ring prefetch at Q[N-2] of next iter — has had ring sync + Q[0]..Q[N-3]'s K-loops to land.
 
-The barrier is nearly free in this config — Q[N-1]'s save has had Q[N-1]'s entire K-loop to land. However, with only 3 barriers per core (4 ring iters, last takes a different path), statistics are thin. The 7.94μs max could represent a real stall under NOC congestion.
-
-**TODO**: Measure the cross-ring prefetch barrier (line 517) similarly. This one is more likely to show real stalls since Q[N-2]'s save is so recent.
-
-#### Proposed Solution: Per-Save Transaction IDs
-
-The NOC API provides per-trid write barriers:
-- `noc_async_write_set_trid(trid)` — tag subsequent writes
-- `noc_async_write_barrier_with_trid(trid)` — block until trid's writes arrive at DRAM
-- `noc_async_write_flushed_with_trid(trid)` — block until trid's writes depart L1
-
-**Two-trid scheme** (TRID_Q0=0, TRID_REST=1):
+Every barrier waits for a save that completed at least one full K-loop (~500-700μs) ago, making all barriers uniformly ~60ns. Uses only 3 of 16 available trids regardless of `q_per_core`.
 
 ```
 drain_save_cbs(Q[q]):
-    noc_async_write_set_trid(q == 0 ? TRID_Q0 : TRID_REST);
+    trid = (q == 0) ? TRID_FIRST : (q == N-1) ? TRID_LAST : TRID_INNER
+    noc_async_write_set_trid(trid)
     // ... issue writes ...
-    noc_async_write_flushed_with_trid(...);   // L1 safe
+    noc_async_write_flushed_with_trid(trid)    // L1 safe
 
 Cross-ring prefetch at Q[N-1]:
-    noc_async_write_barrier_with_trid(TRID_Q0);   // only Q[0]'s save — instant
-    issue_restore_reads(Q[0]);
+    noc_async_write_barrier_with_trid(TRID_FIRST)    // Q[0]'s save — many K-loops old
+    issue_restore_reads(Q[0])
 
 End of ring:
     (no barrier — drain_save_cbs already did writes_flushed)
 
-Next ring iter, Q[0]:
-    complete_restore(Q[0]);
-    noc_async_write_barrier_with_trid(TRID_REST);  // Q[1]..Q[N-1] saves — instant
-    issue_restore_reads(Q[1]);
+Next ring iter, intra-ring prefetch Q[q] → Q[q+1]:
+    noc_async_write_barrier_with_trid(trid of Q[q+1])    // at least one K-loop old
+    issue_restore_reads(Q[q+1])
 ```
 
-#### Rejected: Move Barrier Without Trids
+#### Measurement: 3-Trid Barriers
 
-Moving the end-of-ring blanket `write_barrier()` to right before the first intra-ring `issue_restore_reads` in the next ring iteration would give Q[N-1]'s save more time to land. However, this only helps the end-of-ring barrier — it cannot fix the cross-ring barrier (line 517), which is the more problematic one (Q[N-2]'s save departed ~100ns ago). Trids are required to solve both.
+Measured on s=8544/q288/k512 (q_per_core=3, 4 devices):
+
+| Barrier | Samples | p50 | p99 | p100 | avg |
+|---|---|---|---|---|---|
+| Cross-ring (TRID_FIRST) | 1200 | 0.06 μs | 0.07 μs | 0.08 μs | 0.06 μs |
+| Intra-ring (TRID_INNER/LAST) | 2400 | 0.07 μs | 0.09 μs | 0.09 μs | 0.07 μs |
+
+All barriers uniformly ~60-70ns. Compare with the naive blanket barrier: p50=0.26μs, p100=7.94μs.
 
 #### Implementation Notes
 
-- `noc_async_write_set_trid` is stateful — once set, all subsequent writes use that trid until changed. Must restore default trid (0) or set explicitly before each drain.
-- The cross-ring prefetch's existing `noc_async_write_barrier()` should change to `noc_async_write_barrier_with_trid(TRID_Q0)`. This is the higher-value change (avoids waiting for Q[N-2]'s recent save).
-- `write_block` (used for final output on last ring iter) uses its own internal `noc_async_write_barrier()`. This is fine — it's not in the prefetch path.
+- `noc_async_write_set_trid` is stateful — `drain_save_cbs` sets the trid explicitly at the start of each call.
+- `write_block` (final output on last ring iter) uses its own internal `noc_async_write_barrier()` with the default trid — not in the prefetch path.
 - Ring iter 0 has no restores, so trid barriers are skipped (same guards as current prefetch logic).
-- PCC must be re-validated after changes — trid misuse could cause RAW hazards.
 
 ## Key Files
 
