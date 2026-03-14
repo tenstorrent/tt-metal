@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <device.hpp>
 #include <host_api.hpp>
 #include <fstream>
