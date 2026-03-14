@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2024 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,51 +6,45 @@
 
 #include "ckernel.h"
 #include "ckernel_defs.h"
+#include "sfpu/ckernel_sfpu_converter.h"
 
-using namespace sfpi;
+// Parity: odd num / even den → x²-Horner (~2x speedup)
+#define RATIONAL_NUM_PARITY_ODD
+#define RATIONAL_DEN_PARITY_EVEN
 
-namespace ckernel {
+#include "ckernel_sfpu_piecewise_rational.h"
 
-namespace sfpu {
 
-#define POLYVAL10_I1(coef10, coef9, coef8, coef7, coef6, coef5, coef4, coef3, coef2, coef1, coef0, t2)            \
-    ((coef0 +                                                                                                     \
-      (coef1 +                                                                                                    \
-       (coef2 +                                                                                                   \
-        (coef3 +                                                                                                  \
-         (coef4 + (coef5 + (coef6 + (coef7 + (coef8 + (coef9 + coef10 * t2) * t2) * t2) * t2) * t2) * t2) * t2) * \
-            t2) *                                                                                                 \
-           t2) *                                                                                                  \
-          t2) *                                                                                                   \
-     t2)
+namespace ckernel::sfpu {
+
+// ======================================================================
+// LUT-based i1 via piecewise rational P(x)/Q(x)
+//
+// BF16: n5/d4, 1 segment(s), range [-10.0, 10.0]
+// ======================================================================
+
+constexpr uint32_t I1_NUM_DEGREE = 5;
+constexpr uint32_t I1_DEN_DEGREE = 4;
+constexpr uint32_t I1_NUM_SEGMENTS = 1;
+constexpr uint32_t I1_LUT_SIZE = 13;
+constexpr std::array<float, 13> I1_LUT = {{
+    -1.0000000000e+01f, 1.0000000000e+01f, 0.0000000000e+00f, 5.0793987513e-01f, 0.0000000000e+00f,
+    4.6934813261e-02f, 0.0000000000e+00f, 2.4524198379e-03f, 1.0000000000e+00f, 0.0000000000e+00f,
+    -1.5700012445e-02f, 0.0000000000e+00f, 6.8308552727e-05f
+}};
 
 template <bool APPROXIMATION_MODE, int ITERATIONS = 8>
 inline void calculate_i1() {
-#pragma GCC unroll 0
-
     for (int d = 0; d < ITERATIONS; d++) {
-        vFloat result = 0.0f;
-        vFloat input = dst_reg[0];
-        vFloat x = input * input;
-
-        vFloat derivative = input * POLYVAL10_I1(
-                                        1.24695e-23f,
-                                        6.58387e-21f,
-                                        2.8969e-18f,
-                                        1.04289e-15f,
-                                        3.00351e-13f,
-                                        6.72786e-11f,
-                                        1.13028e-08f,
-                                        1.35634e-06f,
-                                        0.000108507f,
-                                        0.00520833f,
-                                        0.125f,
-                                        x);
-        result = input * 0.5f + derivative;
-        dst_reg[0] = result;
-        dst_reg++;
+        sfpi::vFloat x = sfpi::dst_reg[0];
+        sfpi::dst_reg[0] = piecewise_rational_eval<I1_NUM_DEGREE, I1_DEN_DEGREE, I1_NUM_SEGMENTS, I1_LUT_SIZE>(I1_LUT, x);
+        sfpi::dst_reg++;
     }
 }
 
-}  // namespace sfpu
-}  // namespace ckernel
+template <bool APPROXIMATION_MODE>
+void i1_init() {
+    sfpu_reciprocal_init();
+}
+
+}  // namespace ckernel::sfpu
