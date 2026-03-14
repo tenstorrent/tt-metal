@@ -68,6 +68,20 @@ LEAD_MODEL_SHARD_SPECS = [
 ]
 
 
+def _parse_mesh_shape(mesh_device_shape):
+    """Parse mesh_device_shape which may be a list, tuple, or string like '[4, 8]'.
+
+    Returns a tuple of ints, or None if unparseable.
+    """
+    if isinstance(mesh_device_shape, (list, tuple)):
+        return tuple(int(x) for x in mesh_device_shape)
+    if isinstance(mesh_device_shape, str):
+        nums = re.findall(r"\d+", mesh_device_shape)
+        if len(nums) >= 2:
+            return tuple(int(x) for x in nums[:2])
+    return None
+
+
 def _parse_shard_dims_from_placement(tensor_placement):
     """Extract (dim0, dim1) for ShardTensor2dMesh from a traced tensor_placement dict.
 
@@ -156,13 +170,18 @@ def invalidate_vector(test_vector) -> Tuple[bool, Optional[str]]:
     is_model_traced = "input_a_memory_config" in test_vector
 
     if is_model_traced:
-        # For model_traced vectors, we don't have mesh_shape, dim, cluster_axis, etc.
-        # These are hardcoded in the run function, so we can skip validation
-        # Just check basic shape validity
         input_shape = test_vector.get("input_shape")
         if input_shape and isinstance(input_shape, (list, tuple)):
             if len(input_shape) == 0:
                 return True, "Empty input shape"
+
+        # Check mesh_device_shape: skip configs that need more devices than available
+        tp = test_vector.get("input_a_tensor_placement")
+        if isinstance(tp, dict):
+            mesh = _parse_mesh_shape(tp.get("mesh_device_shape"))
+            if mesh and prod(mesh) > NUM_DEVICES:
+                return True, f"Mesh {mesh} requires {prod(mesh)} devices, only {NUM_DEVICES} available"
+
         return False, None
 
     # Original validation for generality/lead_model suites
@@ -310,10 +329,8 @@ def run(
             topology = ttnn.Topology.Linear
 
         if input_a_tensor_placement:
-            mesh_device_shape = input_a_tensor_placement.get("mesh_device_shape")
-            if mesh_device_shape and isinstance(mesh_device_shape, (list, tuple)):
-                mesh_shape = tuple(mesh_device_shape)
-            else:
+            mesh_shape = _parse_mesh_shape(input_a_tensor_placement.get("mesh_device_shape"))
+            if mesh_shape is None:
                 mesh_shape = (1, 2)
         else:
             mesh_shape = (1, 2)

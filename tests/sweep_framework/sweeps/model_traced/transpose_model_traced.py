@@ -16,7 +16,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 )
 
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, parse_dict_value
 
 TIMEOUT = 300
 
@@ -86,6 +86,14 @@ def run(
     dim1 = dim1 or kwargs.get("arg2", 1)
     if output_memory_config is None and memory_config is not None:
         output_memory_config = memory_config
+
+    # Pass output memory_config to ttnn.transpose — without it, transpose inherits
+    # the input's sharded memory_config which may become non-tile-aligned after
+    # transposing dimensions.
+    if output_memory_config is not None and "memory_config" not in op_kwargs:
+        parsed_mc = parse_dict_value("memory_config", output_memory_config)
+        if parsed_mc is not None:
+            op_kwargs["memory_config"] = parsed_mc
 
     shape = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
 
