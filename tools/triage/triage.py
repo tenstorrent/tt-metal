@@ -862,6 +862,19 @@ class TTTriageError(Exception):
     pass
 
 
+TRIAGE_SUMMARY_PATH = "generated/triage_summary.txt"
+
+
+def _build_triage_summary(script_queue: list[TriageScript]) -> str:
+    summary_lines = []
+    for script in script_queue:
+        if script.failed:
+            summary_lines.append(f"{script.name}: FAIL - {script.failure_message or 'unknown error'}")
+        elif not script.config.data_provider:
+            summary_lines.append(f"{script.name}: pass")
+    return "\n".join(summary_lines) if summary_lines else "No triage scripts executed."
+
+
 def main():
     triage_start = time()
 
@@ -968,6 +981,14 @@ def main():
                 utils.INFO(f"Total serialization time: {serialization_time:.2f}s")
                 utils.INFO(f"Total execution time: {total_time:.2f}s")
         progress.remove_task(scripts_task)
+
+    try:
+        os.makedirs(os.path.dirname(TRIAGE_SUMMARY_PATH), exist_ok=True)
+        with open(TRIAGE_SUMMARY_PATH, "w") as f:
+            f.write(_build_triage_summary(script_queue))
+        utils.INFO(f"Triage summary written to {TRIAGE_SUMMARY_PATH}")
+    except Exception as e:
+        utils.WARN(f"Failed to write triage summary: {e}")
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)
