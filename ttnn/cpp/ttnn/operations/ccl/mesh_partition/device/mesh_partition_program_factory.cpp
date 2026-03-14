@@ -82,32 +82,21 @@ auto compute_slice_parameters(
         ends,
         strides);
 
-    auto slice_arg_func =
-        [](auto input, auto slice_start, auto slice_end, auto step, auto output_mem_config, auto use_tensor_args) {
-            return std::make_tuple(
-                SliceOp::operation_attributes_t{
-                    .slice_start = std::move(slice_start),
-                    .slice_end = std::move(slice_end),
-                    .step = std::move(step),
-                    .output_mem_config = std::move(output_mem_config),
-                    .use_tensor_args = use_tensor_args,
-                    .slice_dim = std::nullopt,
-                    .num_devices = std::nullopt,
-                    .sub_core_grids = std::nullopt},
-                SliceOp::tensor_args_t{
-                    .input = std::move(input),
-                    .start_tensor = std::nullopt,
-                    .end_tensor = std::nullopt,
-                    .preallocated_output = std::nullopt});
-        };
-    return slice_arg_func(
-        tensor_args.input_tensor,
-        begins,
-        ends,
-        strides,
-        operation_attributes.output_mem_config,
-        false  // use_tensor_args
-    );
+    return std::make_tuple(
+        SliceOp::operation_attributes_t{
+            .slice_start = std::move(begins),
+            .slice_end = std::move(ends),
+            .step = std::move(strides),
+            .output_mem_config = operation_attributes.output_mem_config,
+            .use_tensor_args = false,
+            .slice_dim = std::nullopt,
+            .num_devices = std::nullopt,
+            .sub_core_grids = std::nullopt},
+        SliceOp::tensor_args_t{
+            .input = tensor_args.input_tensor,
+            .start_tensor = std::nullopt,
+            .end_tensor = std::nullopt,
+            .preallocated_output = std::nullopt});
 }
 
 }  // anonymous namespace
