@@ -6,13 +6,16 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "llk_defs.h"
-#include "ttnn/cpp/ttnn/kernel_lib/l1_helpers.hpp"
 #include <tt-metalium/constants.hpp>
 
 namespace dataflow_kernel_lib {
 
 using ckernel::PoolType;
 using ckernel::ReduceDim;
+
+// Default reduce factor for SUM and MAX pool types (scaler is always 1.0).
+// Named constant to use when you need to pass reduce_factor explicitly to reach compute_uses_reduce_tile.
+constexpr uint32_t SUM_AND_MAX_REDUCE_FACTOR = 1;
 
 // =============================================================================
 // Reduce scaler helpers API
@@ -38,16 +41,30 @@ using ckernel::ReduceDim;
  * @brief Prepares a CB tile for reduce using a caller-provided float scaler
  *
  * Converts the float scaler to the appropriate bit representation based on
- * the circular buffer's data format, then fills row 0 of each face.
+ * the circular buffer's data format, then fills the tile with the scaler in
+ * the layout required by the reduction:
+ *   - Row-0 fill (reduce LLK path): used for REDUCE_COL, REDUCE_SCALAR, and MAX
+ *   - Col-0 fill (matmul path): used for REDUCE_ROW with SUM or AVG
+ *
  * Data format and tile shape (half/full) are deduced from the circular buffer.
  *
  * @tparam cb_id Circular buffer ID to write the tile to (must be constexpr)
- * @tparam tile_columns_to_fill Number of tile columns to fill (1-32, default 32 = full tile).
- *         Used when the last input tile in the reduce dimension is not full, so unused columns are left as zeros.
+ * @tparam pool_type Type of pooling operation (SUM, AVG, MAX). Default MAX selects row-0 fill.
+ * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR).
+ *         Default REDUCE_COL selects row-0 fill.
+ * @tparam compute_uses_reduce_tile When true, forces row-0 fill (reduce LLK layout) even for
+ *         SUM/AVG + REDUCE_ROW combinations that would normally use col-0 fill (matmul layout).
+ *         Set to true when the compute kernel uses reduce_tile LLK directly instead of
+ *         compute_kernel_lib::reduce (which auto-switches to matmul for REDUCE_ROW SUM/AVG).
  * @param scaler_f Float scaler value to fill the tile with
+ * @param valid_reduce_dim_elements_in_tile Number of valid elements along the reduce dimension
+ *        in the tile (1-32, default 32 = full tile). When the last tile along the reduce
+ *        dimension is partially filled, this specifies how many row or column elements contain
+ *        valid data; the remaining positions are zeroed out so they do not affect the result.
  */
-template <uint32_t cb_id, uint32_t tile_columns_to_fill = tt::constants::TILE_WIDTH>
-FORCE_INLINE void prepare_reduce_scaler(float scaler_f);
+template <uint32_t cb_id, PoolType pool_type, ReduceDim reduce_dim, bool compute_uses_reduce_tile = false>
+FORCE_INLINE void prepare_reduce_scaler(
+    float scaler_f, uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
 /**
  * @brief Generate a reduce scaler tile with format and tile shape deduced from cb_id
@@ -63,17 +80,25 @@ FORCE_INLINE void prepare_reduce_scaler(float scaler_f);
  * @tparam cb_id Circular buffer ID to write the tile to (must be constexpr)
  * @tparam pool_type Type of pooling operation (SUM, AVG, MAX)
  * @tparam reduce_dim Reduction dimension (REDUCE_ROW, REDUCE_COL, REDUCE_SCALAR)
- * @tparam tile_columns_to_fill Number of tile columns to fill (1-32, default 32 = full tile).
- *         Used when the last input tile in the reduce dimension is not full, so unused columns are left as zeros.
- * @tparam reduce_factor Number of elements being reduced (N). Must be set for AVG; not used for MAX and SUM.
+ * @tparam reduce_factor Number of elements being reduced (N). Must be set for AVG;
+ *         use SUM_AND_MAX_REDUCE_FACTOR (default) for SUM and MAX.
+ * @tparam compute_uses_reduce_tile When true, forces row-0 fill (reduce LLK layout) even for
+ *         SUM/AVG + REDUCE_ROW combinations that would normally use col-0 fill (matmul layout).
+ *         Set to true when the compute kernel uses reduce_tile LLK directly instead of
+ *         compute_kernel_lib::reduce (which auto-switches to matmul for REDUCE_ROW SUM/AVG).
+ * @param valid_reduce_dim_elements_in_tile Number of valid elements along the reduce dimension
+ *        in the tile (1-32, default 32 = full tile). When the last tile along the reduce
+ *        dimension is partially filled, this specifies how many row or column elements contain
+ *        valid data; the remaining positions are zeroed out so they do not affect the result.
  */
 template <
     uint32_t cb_id,
     PoolType pool_type,
     ReduceDim reduce_dim,
-    uint32_t tile_columns_to_fill = tt::constants::TILE_WIDTH,
-    uint32_t reduce_factor = 1>
-FORCE_INLINE void calculate_and_prepare_reduce_scaler();
+    uint32_t reduce_factor = SUM_AND_MAX_REDUCE_FACTOR,
+    bool compute_uses_reduce_tile = false>
+FORCE_INLINE void calculate_and_prepare_reduce_scaler(
+    uint32_t valid_reduce_dim_elements_in_tile = tt::constants::TILE_WIDTH);
 
 }  // namespace dataflow_kernel_lib
 
