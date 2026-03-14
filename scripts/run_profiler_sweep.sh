@@ -232,16 +232,18 @@ set_input_file() {
     local input_file="$1"
     local full_path="${SAMPLE_PROMPTS_DIR}/${input_file}"
 
-    # Use Python to precisely modify only the prefill-profile test case
+    # Use Python to precisely modify only the prefill-profile test case (batch 1)
+    # Pattern matches "# prefill-profile [" to avoid matching "# prefill-profile-8k-b32"
     python3 << EOF
 import re
 
 with open("$TEST_FILE", "r") as f:
     content = f.read()
 
-# Pattern to find the prefill-profile test block and replace its input file
-# Matches: (  # prefill-profile ... followed by the input_prompts line
-pattern = r'(\(\s*#\s*prefill-profile[^\n]*\n\s*)"[^"]+",(\s*#\s*input_prompts)'
+# Pattern to find the prefill-profile test block (batch 1 only) and replace its input file
+# Matches: (  # prefill-profile [default...] - ... followed by the input_prompts line
+# Does NOT match: # prefill-profile-8k-b32 (which is a separate test case)
+pattern = r'(\(\s*#\s*prefill-profile\s+\[[^\]]+\][^\n]*\n\s*)"[^"]+",(\s*#\s*input_prompts)'
 replacement = r'\1"${full_path}",\2'
 
 new_content = re.sub(pattern, replacement, content)

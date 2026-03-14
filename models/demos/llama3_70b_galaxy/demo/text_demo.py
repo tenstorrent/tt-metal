@@ -495,7 +495,7 @@ def create_tt_model(
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
         ),
-        (  # prefill-profile-8k-b32 - Runs 1L prefill-only with 8k ISL and batch 32
+        (  # profile-8k-b32-prefill - Runs 1L prefill-only with 8k ISL and batch 32
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
             True,  # instruct mode
             1,  # repeat_batches
@@ -569,7 +569,7 @@ def create_tt_model(
         "long-64k-b1",  # 64k context for 1 user
         "long-128k-b1",  # 128k context for 1 user
         "prefill-profile",  # prefill-only profile run
-        "prefill-profile-8k-b32",  # 8k ISL batch 32 prefill-only profile
+        "profile-8k-b32-prefill",  # 8k ISL batch 32 prefill-only profile
         "apc-test",  # apc check for 80L + teacher forced for prefill + pcc check on prefill and 1st decode token
         "pcc-80L",  # pcc check for 80L + teacher forced
     ],
