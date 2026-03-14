@@ -76,25 +76,13 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         this->max_l1_loading_size = std::max(this->max_l1_loading_size, region.get_end_address());
     }
 
-    // Per-VC buffer slot arrays
-    std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>
-        num_sender_buffer_slots_per_vc = {};
-    std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>
-        num_remote_sender_buffer_slots_per_vc = {};
-    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
-        num_receiver_buffer_slots_per_vc = {};
-    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
-        num_remote_receiver_buffer_slots_per_vc = {};
-
     bool has_tensix_extension = options.fabric_tensix_config != tt::tt_fabric::FabricTensixConfig::DISABLED;
 
-    configure_buffer_slots_helper(
-        topology,
-        options,
-        num_sender_buffer_slots_per_vc,
-        num_remote_sender_buffer_slots_per_vc,
-        num_receiver_buffer_slots_per_vc,
-        num_remote_receiver_buffer_slots_per_vc);
+    auto slot_alloc = configure_buffer_slots_helper(topology, options);
+    auto& num_sender_buffer_slots_per_vc = slot_alloc.num_sender_buffer_slots;
+    auto& num_remote_sender_buffer_slots_per_vc = slot_alloc.num_remote_sender_buffer_slots;
+    auto& num_receiver_buffer_slots_per_vc = slot_alloc.num_receiver_buffer_slots;
+    auto& num_remote_receiver_buffer_slots_per_vc = slot_alloc.num_remote_receiver_buffer_slots;
 
     // Calculate total slots across all VCs
     size_t total_slot_count = 0;
@@ -253,17 +241,13 @@ FabricStaticSizedChannelsAllocator::FabricStaticSizedChannelsAllocator(
         "Internal error - channel buffers spilled past the end of usable L1 region.");
 }
 
-void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
-    Topology topology,
-    const FabricEriscDatamoverOptions& options,
-    std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>&
-        num_sender_buffer_slots_per_vc,
-    std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>&
-        num_remote_sender_buffer_slots_per_vc,
-    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>&
-        num_receiver_buffer_slots_per_vc,
-    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>&
-        num_remote_receiver_buffer_slots_per_vc) {
+BufferSlotAllocation FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
+    Topology topology, const FabricEriscDatamoverOptions& options) {
+    BufferSlotAllocation result;
+    auto& num_sender_buffer_slots_per_vc = result.num_sender_buffer_slots;
+    auto& num_remote_sender_buffer_slots_per_vc = result.num_remote_sender_buffer_slots;
+    auto& num_receiver_buffer_slots_per_vc = result.num_receiver_buffer_slots;
+    auto& num_remote_receiver_buffer_slots_per_vc = result.num_remote_receiver_buffer_slots;
     // Per-VC buffer slot configuration using array-of-struct indexed by VC.
     // Each entry is std::array<VcSlotConfig, MAX_NUM_VCS> where VcSlotConfig has {sender_slots, receiver_slots}.
 
@@ -462,7 +446,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
             num_remote_receiver_buffer_slots_per_vc[0].fill(slot_config[0].receiver_slots);
             num_receiver_buffer_slots_per_vc[1].fill(slot_config[1].receiver_slots);
             num_remote_receiver_buffer_slots_per_vc[1].fill(slot_config[1].receiver_slots);
-            return;
+            return result;
         }
         default: break;
     }
@@ -485,6 +469,7 @@ void FabricStaticSizedChannelsAllocator::configure_buffer_slots_helper(
         num_receiver_buffer_slots_per_vc[vc].fill(slot_config[vc].receiver_slots);
         num_remote_receiver_buffer_slots_per_vc[vc].fill(slot_config[vc].receiver_slots);
     }
+    return result;
 }
 
 void FabricStaticSizedChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_args) const {

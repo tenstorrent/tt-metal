@@ -24,6 +24,20 @@ struct VcSlotConfig {
 };
 
 /**
+ * Aggregated buffer slot allocation result: per-VC arrays for sender and receiver slot counts.
+ */
+struct BufferSlotAllocation {
+    std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>
+        num_sender_buffer_slots = {};
+    std::array<std::array<size_t, builder_config::num_max_sender_channels>, builder_config::MAX_NUM_VCS>
+        num_remote_sender_buffer_slots = {};
+    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
+        num_receiver_buffer_slots = {};
+    std::array<std::array<size_t, builder_config::num_max_receiver_channels>, builder_config::MAX_NUM_VCS>
+        num_remote_receiver_buffer_slots = {};
+};
+
+/**
  * Static-sized channels allocator implementation.
  * The `FabricStaticSizedChannelsAllocator` allocates memory for statically sized sender(outbound)
  * and receiver (inbound) fabric router channels. The entire set of channels do not need to be
@@ -126,22 +140,10 @@ private:
     friend class FabricRemoteChannelsAllocator;
     /*
      * Helper function that decides the number of buffer slots for each channel per VC.
+     * Returns a BufferSlotAllocation with all per-VC slot counts populated.
      */
-    void configure_buffer_slots_helper(
-        tt::tt_fabric::Topology topology,
-        const tt::tt_fabric::FabricEriscDatamoverOptions& options,
-        std::array<
-            std::array<size_t, tt::tt_fabric::builder_config::num_max_sender_channels>,
-            builder_config::MAX_NUM_VCS>& num_sender_buffer_slots_per_vc,
-        std::array<
-            std::array<size_t, tt::tt_fabric::builder_config::num_max_sender_channels>,
-            builder_config::MAX_NUM_VCS>& num_remote_sender_buffer_slots_per_vc,
-        std::array<
-            std::array<size_t, tt::tt_fabric::builder_config::num_max_receiver_channels>,
-            builder_config::MAX_NUM_VCS>& num_receiver_buffer_slots_per_vc,
-        std::array<
-            std::array<size_t, tt::tt_fabric::builder_config::num_max_receiver_channels>,
-            builder_config::MAX_NUM_VCS>& num_remote_receiver_buffer_slots_per_vc);
+    BufferSlotAllocation configure_buffer_slots_helper(
+        tt::tt_fabric::Topology topology, const tt::tt_fabric::FabricEriscDatamoverOptions& options);
 
     // Configuration parameters
     std::array<size_t, builder_config::MAX_NUM_VCS> num_used_sender_channels_per_vc = {0, 0};
