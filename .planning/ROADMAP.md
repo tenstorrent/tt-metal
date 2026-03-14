@@ -146,19 +146,11 @@ Plans:
 **Goal:** Merge all remaining _vc0/_vc1 named constants and split functions into _per_vc arrays and unified functions across host builder code.
 **Requirements**: Phase 8 goal (additive beyond original 18 requirements)
 **Depends on:** Phase 7
-
-**Files:**
-- `fabric_builder_config.hpp` — Merge `num_sender_channels_z_router_vc0`/`_vc1` → `_per_vc` array; merge `num_downstream_edms_2d_vc0`/`_vc1` → `_per_vc`; merge two function decls → `get_downstream_edm_count_for_vc(vc, is_2D)`
-- `fabric_builder_config.cpp` — Implement unified `get_downstream_edm_count_for_vc` with switch on vc
-- `erisc_datamover_builder.cpp` — Locals `num_vc0_downstream_edms` etc → `_per_vc[]`; loop-based `named_args` assignment
-- `fabric_router_channel_mapping.hpp/.cpp` — `initialize_vc0_mappings`/`_vc1_mappings` → `initialize_vc_mappings(vc)`
-- `fabric_tensix_builder.cpp` — Call-site updates
-- `router_connection_mapping.cpp` — Call-site updates
-
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 8 to break down)
+- [ ] 08-01-PLAN.md — Merge constants to _per_vc arrays in fabric_builder_config; merge channel mapping init functions; build + test
+- [ ] 08-02-PLAN.md — Convert erisc_datamover_builder locals/named_args to per-VC; update fabric_tensix_builder and router_connection_mapping call sites; build + test
 
 **Success criteria:**
 1. No `_vc0`/`_vc1` suffixed constants or functions remain in `fabric_builder_config`
