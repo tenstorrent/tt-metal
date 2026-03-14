@@ -21,6 +21,9 @@
 
 namespace tt::tt_metal {
 
+// Max align to DRAM
+constexpr uint32_t COMMON_ALIGNMENT = 32;
+
 BankManager::AllocatorDependencies::AllocatorDependencies() = default;
 
 BankManager::AllocatorDependencies::AllocatorDependencies(
@@ -154,7 +157,7 @@ BankManager::BankManager(
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
 
     // Initialize all allocators; sets up allocator-dependent members
-    this->init_allocators(size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset);
+    this->init_allocators(size_bytes, COMMON_ALIGNMENT, alloc_offset);
 }
 
 BankManager::BankManager(
@@ -174,7 +177,7 @@ BankManager::BankManager(
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
 
     // Initialize all allocators; sets up allocator-dependent members
-    this->init_allocators(size_bytes, MetalContext::instance().hal().get_alignment(HalMemType::DRAM), alloc_offset);
+    this->init_allocators(size_bytes, COMMON_ALIGNMENT, alloc_offset);
 }
 
 uint32_t BankManager::num_banks() const { return bank_id_to_bank_offset_.size(); }
@@ -403,7 +406,8 @@ uint64_t BankManager::allocate_buffer(
             num_compute_banks);
         num_banks = num_shards.value();
     }
-    DeviceAddr size_per_bank = tt::tt_metal::detail::calculate_bank_size_spread(size, page_size, num_banks, alignment_bytes_);
+    DeviceAddr size_per_bank =
+        tt::tt_metal::detail::calculate_bank_size_spread(size, page_size, num_banks, alignment_bytes_);
     DeviceAddr address_limit = 0;
     if (!is_sharded and buffer_type_ == BufferType::L1) {
         address_limit = interleaved_address_limit_;

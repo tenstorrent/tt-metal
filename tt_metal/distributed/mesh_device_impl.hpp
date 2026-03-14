@@ -22,6 +22,7 @@
 #include <vector>
 
 #include <hostdevcommon/common_values.hpp>
+#include "context/context_types.hpp"
 #include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/device.hpp>
 #include <tt-metalium/dispatch_core_common.hpp>
@@ -38,6 +39,7 @@
 namespace tt::tt_metal {
 class Allocator;
 class HWCommandQueue;
+class MetalEnv;
 class SubDevice;
 class SystemMemoryManager;
 
@@ -81,6 +83,7 @@ private:
     private:
         std::vector<MaybeRemote<IDevice*>> devices_;
         std::map<ChipId, IDevice*> opened_local_devices_;
+        ContextId context_id_ = DEFAULT_CONTEXT_ID;
 
     public:
         // Constructor acquires physical resources
@@ -90,7 +93,8 @@ private:
             size_t num_command_queues,
             size_t worker_l1_size,
             const DispatchCoreConfig& dispatch_core_config,
-            const MeshDeviceConfig& config);
+            const MeshDeviceConfig& config,
+            ContextId context_id = DEFAULT_CONTEXT_ID);
         ScopedDevices(
             const std::vector<MaybeRemote<int>>& all_device_ids,
             const std::vector<MaybeRemote<int>>& active_device_ids,
@@ -98,7 +102,8 @@ private:
             size_t trace_region_size,
             size_t num_command_queues,
             size_t worker_l1_size,
-            const DispatchCoreConfig& dispatch_core_config);
+            const DispatchCoreConfig& dispatch_core_config,
+            ContextId context_id = DEFAULT_CONTEXT_ID);
 
         // Destructor releases physical resources
         ~ScopedDevices();
@@ -119,6 +124,14 @@ private:
     // on the device may not be thread safe.
     std::mutex api_mutex_;
     bool is_internal_state_initialized = false;
+    // Which MetalContext instance this MeshDevice uses
+    // To be removed in favor of directly passing around the MetalContext reference.
+    ContextId context_id_ = DEFAULT_CONTEXT_ID;
+    // Legacy path (MeshDevice::create): the MetalContext instance is managed externally and is
+    // not destroyed when the MeshDevice closes.
+    // New path (MetalEnv::create_mesh_device): a MetalContext instance is created for the
+    // MeshDevice, and when the MeshDevice closes it also destroys the associated MetalContext.
+    bool destroy_metal_context_instance_on_close_ = false;
     std::shared_ptr<ScopedDevices> scoped_devices_;
     int mesh_id_;
     std::unique_ptr<MeshDeviceView> view_;
@@ -166,7 +179,8 @@ public:
     MeshDeviceImpl(
         std::shared_ptr<ScopedDevices> mesh_handle,
         std::unique_ptr<MeshDeviceView> mesh_device_view,
-        std::shared_ptr<MeshDevice> parent_mesh = {});
+        std::shared_ptr<MeshDevice> parent_mesh = {},
+        ContextId context_id = DEFAULT_CONTEXT_ID);
     ~MeshDeviceImpl() override;
 
     MeshDeviceImpl(const MeshDeviceImpl&) = delete;
@@ -174,6 +188,11 @@ public:
 
     MeshDeviceImpl(MeshDeviceImpl&&) = delete;
     MeshDeviceImpl& operator=(MeshDeviceImpl&&) = delete;
+
+    ContextId get_context_id() const { return context_id_; }
+    void set_destroy_metal_context_instance_on_close(bool destroy) {
+        destroy_metal_context_instance_on_close_ = destroy;
+    }
 
     // IDevice interface implementation
     tt::ARCH arch() const override;
@@ -387,6 +406,37 @@ public:
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+
+    // Create Mesh Devices which refer to a specific MetalContext instance.
+    // When owns_context is true, the MeshDevice will destroy the MetalContext on close.
+    // TODO: This will be updated in favor of directly passing around the MetalContext and/or MetalEnv reference.
+    static std::shared_ptr<MeshDevice> create(
+        ContextId context_id,
+        const MeshDeviceConfig& config,
+        size_t l1_small_size,
+        size_t trace_region_size,
+        size_t num_command_queues,
+        const DispatchCoreConfig& dispatch_core_config,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap,
+        size_t worker_l1_size);
+    static std::shared_ptr<MeshDevice> create_unit_mesh(
+        ContextId context_id,
+        int device_id,
+        size_t l1_small_size,
+        size_t trace_region_size,
+        size_t num_command_queues,
+        const DispatchCoreConfig& dispatch_core_config,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap,
+        size_t worker_l1_size);
+    static std::map<int, std::shared_ptr<MeshDevice>> create_unit_meshes(
+        ContextId context_id,
+        const std::vector<int>& device_ids,
+        size_t l1_small_size,
+        size_t trace_region_size,
+        size_t num_command_queues,
+        const DispatchCoreConfig& dispatch_core_config,
+        tt::stl::Span<const std::uint32_t> l1_bank_remap,
+        size_t worker_l1_size);
 };
 
 std::ostream& operator<<(std::ostream& os, const MeshDeviceImpl& mesh_device);

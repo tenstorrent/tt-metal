@@ -7,7 +7,9 @@
 #include <cstdint>
 
 #include <tt-metalium/dispatch_core_common.hpp>
+#include <umd/device/types/arch.hpp>
 #include <umd/device/types/core_coordinates.hpp>  // CoreType
+#include <tt-metalium/experimental/fabric/fabric_types.hpp>
 
 namespace tt::tt_metal {
 
@@ -27,6 +29,13 @@ enum DispatchWorkerType : uint32_t {
 };
 
 CoreType get_core_type_from_config(const DispatchCoreConfig& config);
+
+// Resolve the dispatch core axis for a given architecture and fabric config.
+// BLACKHOLE without fabric tensix uses COL; everything else uses ROW.
+// Prefer this over DispatchCoreConfig::get_dispatch_core_axis() when the config's
+// axis_ may not be set, since the fallback get_default_axis() only checks the
+// DEFAULT context and fails for non-default contexts (e.g. mock devices).
+DispatchCoreAxis resolve_dispatch_core_axis(tt::ARCH arch, tt_fabric::FabricTensixConfig fabric_tensix_config);
 
 // Helper functions to get the dispatch core config/type
 DispatchCoreConfig get_dispatch_core_config();

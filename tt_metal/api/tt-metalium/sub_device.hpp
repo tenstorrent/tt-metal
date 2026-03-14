@@ -16,12 +16,15 @@ namespace tt::tt_metal {
 
 // Forward declaration
 class SubDeviceImpl;
+class MetalEnv;
 
 // TODO(river): Revisit this class and either remove it or bring sub-device APIs over
 
 class SubDevice {
 public:
     explicit SubDevice(tt::stl::Span<const CoreRangeSet> cores);
+    // [[Experimental]] Creates a SubDevice which will use the given MetalEnv
+    explicit SubDevice(tt::tt_metal::MetalEnv& env, tt::stl::Span<const CoreRangeSet> cores);
     // Internal constructor (internal use only)
     SubDevice(SubDeviceImpl&& impl);
 
