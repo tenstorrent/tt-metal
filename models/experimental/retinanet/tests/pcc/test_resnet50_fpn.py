@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
@@ -12,6 +12,7 @@ from ttnn.model_preprocessing import preprocess_model_parameters
 from tests.ttnn.utils_for_testing import check_with_pcc
 from models.experimental.retinanet.tt.tt_fpn import resnet50Fpn, fpn_optimisations
 from ttnn.model_preprocessing import fold_batch_norm2d_into_conv2d
+from models.experimental.retinanet.tt.utils import infer_ttnn_module_args
 
 
 def conv_bn_to_params(conv, bn, mesh_mapper):
@@ -135,6 +136,29 @@ class Resnet50FpnTestInfra:
         self.torch_input_tensor = backbone(backbone_input)  # input dictionary for fpn layer
         self.torch_output_tensor = torch_model(self.torch_input_tensor)
 
+        ################# MODEL ARGS ##################
+        conv_args = {}
+        conv_args = infer_ttnn_module_args(
+            model=torch_model, run_model=lambda model: torch_model(self.torch_input_tensor), device=device
+        )
+
+        model_args = {}
+        model_args["fpn"] = {}
+        model_args["fpn"]["inner_blocks"] = {}
+        model_args["fpn"]["inner_blocks"][0] = conv_args["inner_blocks"][0]["inner_blocks"][0][0]
+        model_args["fpn"]["inner_blocks"][1] = conv_args["inner_blocks"][1]["inner_blocks"][1][0]
+        model_args["fpn"]["inner_blocks"][2] = conv_args["inner_blocks"][2]["inner_blocks"][2][0]
+
+        model_args["fpn"]["layer_blocks"] = {}
+        model_args["fpn"]["layer_blocks"][0] = conv_args["layer_blocks"][0]["layer_blocks"][0][0]
+        model_args["fpn"]["layer_blocks"][1] = conv_args["layer_blocks"][1]["layer_blocks"][1][0]
+        model_args["fpn"]["layer_blocks"][2] = conv_args["layer_blocks"][2]["layer_blocks"][2][0]
+
+        model_args["fpn"]["extra_blocks"] = {}
+        model_args["fpn"]["extra_blocks"]["p6"] = conv_args["extra_blocks"]["extra_blocks"]["p6"]
+        model_args["fpn"]["extra_blocks"]["p7"] = conv_args["extra_blocks"]["extra_blocks"]["p7"]
+        ################# MODEL ARGS ##################
+
         # Convert input to TTNN format
         tt_host_tensor = {}
         self.input_tensor = {}
@@ -150,6 +174,8 @@ class Resnet50FpnTestInfra:
         self.ttnn_model = resnet50Fpn(
             parameters=parameters,
             model_config=model_config,
+            model_args=model_args["fpn"],
+            device=device,
             layer_optimisations=fpn_optimisations,
         )
 
@@ -209,7 +235,7 @@ class Resnet50FpnTestInfra:
 
         assert all(self.pcc_passed_all), logger.error(f"PCC check failed: {self.pcc_message_all}")
         logger.info(
-            f"\nResNet50 fpn - batch_size={self.batch_size}, "
+            f"\nResNet52 fpn - batch_size={self.batch_size}, "
             f"\nact_dtype={model_config['ACTIVATIONS_DTYPE']}, "
             f"\nweight_dtype={model_config['WEIGHTS_DTYPE']}, "
             f"\nmath_fidelity={model_config['MATH_FIDELITY']}, "
