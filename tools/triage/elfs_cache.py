@@ -108,10 +108,10 @@ class ElfsCache:
 
         Returns:
             ParsedElfFile object for the given path
-        """
-        if not os.path.exists(elf_path):
-            raise TTTriageError(f"ELF file {elf_path} does not exist.")
 
+        Raises:
+            TTTriageError: If the ELF file does not exist or cannot be parsed.
+        """
         with self._lock:
             if elf_path in self._cache:
                 return self._cache[elf_path]
@@ -119,6 +119,8 @@ class ElfsCache:
         # Parse outside the lock so ESTALE retries (up to ~10s) don't block other threads.
         try:
             parsed_elf = self._parse_elf_with_estale_retry(elf_path)
+        except FileNotFoundError as exc:
+            raise TTTriageError(f"ELF file {elf_path} does not exist.") from exc
         except Exception as exc:
             if self._is_estale_error(exc):
                 raise TTTriageError(

@@ -27,7 +27,9 @@ from parse_inspector_logs import get_data as get_logs_data, get_log_directory
 import asyncio
 import capnp
 import os
+import sys
 import threading
+import time
 import inspector_capnp
 
 script_config = ScriptConfig(
@@ -62,6 +64,7 @@ class InspectorRpcController(InspectorData):
                 exception = self.task.exception()
                 assert exception is not None
                 raise exception
+            time.sleep(0.01)  # Small sleep to avoid busy-waiting
 
     def __del__(self):
         if self.running:
@@ -198,7 +201,19 @@ def run(args, context) -> InspectorData:
     if rpc_port == str(_DEFAULT_INSPECTOR_RPC_PORT):
         rank = _get_rank_from_env()
         if rank >= 0:
-            rpc_port_int = min(_DEFAULT_INSPECTOR_RPC_PORT + rank, 65535)
+            effective_port = _DEFAULT_INSPECTOR_RPC_PORT + rank
+            if effective_port > 65535:
+                # Calculate how many ranks will collide on port 65535
+                colliding_ranks = rank - (65535 - _DEFAULT_INSPECTOR_RPC_PORT) + 1
+                print(
+                    f"WARNING: Inspector RPC port overflow: base_port={_DEFAULT_INSPECTOR_RPC_PORT} + rank={rank} "
+                    f"exceeds 65535, clamping to 65535. Approximately {colliding_ranks} rank(s) will share port 65535, "
+                    f"causing connection conflicts. Consider reducing --inspector-rpc-port or rank count.",
+                    file=sys.stderr,
+                )
+                rpc_port_int = 65535
+            else:
+                rpc_port_int = effective_port
 
     # First try to connect to Inspector RPC
     rpc_error: Exception | None = None

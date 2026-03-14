@@ -312,6 +312,11 @@ RunTimeOptions::RunTimeOptions() : system_kernel_dir("/usr/share/tenstorrent/ker
 
     InitializeFromEnvVars();
 
+    // Cache MPI rank for Inspector RPC port selection.
+    // This must be done after InitializeFromEnvVars so all env vars are parsed,
+    // and the value is deterministic for the lifetime of the process.
+    this->cached_mpi_rank_ = get_rank_from_env();
+
     if (this->runtime_target_device_ != tt::TargetDevice::Silicon) {
         log_info(tt::LogMetal, "Disabling multi-erisc mode with simulator/mock target device");
         this->enable_2_erisc_mode = false;
@@ -405,17 +410,21 @@ int get_rank_from_env() {
 }  // namespace
 
 uint16_t RunTimeOptions::get_effective_inspector_rpc_server_port() const {
-    int rank = get_rank_from_env();
+    int rank = this->cached_mpi_rank_;
     uint32_t base = inspector_settings.rpc_server_port;
     if (rank >= 0) {
         uint32_t port = base + static_cast<uint32_t>(rank);
         if (port > 65535) {
+            // Calculate how many ranks will collide on port 65535
+            uint32_t colliding_ranks = (base > 65535) ? 1 : (rank - (65535 - base) + 1);
             log_warning(
                 tt::LogMetal,
                 "Inspector RPC port overflow: base_port={} + rank={} exceeds 65535, clamping to 65535. "
-                "Consider reducing base port or rank count to avoid port conflicts.",
+                "Approximately {} rank(s) will share port 65535, causing connection conflicts. "
+                "Consider reducing TT_METAL_INSPECTOR_RPC_SERVER_PORT or rank count.",
                 base,
-                rank);
+                rank,
+                colliding_ranks);
             port = 65535;
         }
         return static_cast<uint16_t>(port);

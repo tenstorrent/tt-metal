@@ -170,6 +170,11 @@ class RunTimeOptions {
 
     InspectorSettings inspector_settings;
 
+    // Cached MPI rank for Inspector RPC port selection.
+    // Computed once during construction and never modified.
+    // -1 means no MPI rank detected, >= 0 is the actual rank.
+    int cached_mpi_rank_ = -1;
+
     bool lightweight_kernel_asserts = false;
 
     bool enable_llk_asserts = false;

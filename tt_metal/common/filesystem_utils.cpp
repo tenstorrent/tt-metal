@@ -58,17 +58,29 @@ void sync_filesystem(const std::filesystem::path& path) {
             log_debug(tt::LogMetal, "close failed after syncfs for {}: {}", path_str, ::strerror(errno));
         }
         return;
+    } else {
+        log_debug(tt::LogMetal, "Failed to open path for syncfs: {}: {}", path_str, ::strerror(errno));
     }
-#endif
+    return;
+#else
     ::sync();
+#endif
 }
 
 bool safe_remove(const std::filesystem::path& path) {
     std::error_code ec;
-    if (std::filesystem::is_directory(path, ec) && !ec) {
-        return false;
-    }
     for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
+        // Check if path is a directory (with ESTALE retry)
+        bool is_dir = std::filesystem::is_directory(path, ec);
+        if (!ec && is_dir) {
+            return false;
+        }
+        // If we got an ESTALE on is_directory check, retry below
+        if (ec && !is_estale_error(ec)) {
+            // Non-ESTALE error during is_directory check
+            log_warning(tt::LogMetal, "Failed to check if {} is directory: {}", path.string(), ec.message());
+            return false;
+        }
         std::filesystem::remove(path, ec);
         if (!ec) {
             return true;
@@ -157,16 +169,12 @@ bool safe_hard_link_or_copy(const std::filesystem::path& target, const std::file
             return true;
         }
         if (ec == std::errc::file_exists) {
-            std::error_code remove_ec;
-            std::filesystem::remove(link, remove_ec);
-            if (!remove_ec) {
+            // Use safe_remove for ESTALE retry handling
+            if (safe_remove(link)) {
                 continue;
             }
-            if (!is_estale_error(remove_ec)) {
-                log_warning(
-                    tt::LogMetal, "Failed to remove existing {} for hard link: {}", link.string(), remove_ec.message());
-                return false;
-            }
+            // safe_remove failed (already logged warning)
+            return false;
         }
         // Only fall back to copy for specific errors where hard link is expected to fail:
         // - EXDEV: Cross-device link (target and link on different filesystems)

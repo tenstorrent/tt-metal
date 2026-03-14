@@ -128,20 +128,33 @@ void merge_scratch_to_cache(const std::string& scratch_dir, const std::string& c
 
 // Copy generated header/source files from the scratch kernel directory to the
 // NFS cache so future cache-hit checks and non-scratch builds can find them.
-// Only regular files are copied (not subdirectories like trisc0/, erisc/).
+// Recursively copies all regular files, preserving subdirectory structure.
 void copy_genfiles_to_cache(const std::string& scratch_dir, const std::string& nfs_dir) {
     tt::filesystem::safe_create_directories(nfs_dir);
     std::error_code ec;
-    for (const auto& entry : fs::directory_iterator(scratch_dir, ec)) {
-        if (ec || !entry.is_regular_file(ec) || ec) {
+    for (const auto& entry : fs::recursive_directory_iterator(scratch_dir, ec)) {
+        if (ec) {
             continue;
         }
-        auto tmp_path = jit_build::utils::FileRenamer::generate_temp_path(fs::path(nfs_dir) / entry.path().filename());
+        if (!entry.is_regular_file(ec)) {
+            continue;
+        }
+        // Compute relative path from scratch_dir to preserve subdirectory structure
+        fs::path relative_path = fs::relative(entry.path(), scratch_dir, ec);
+        if (ec) {
+            log_warning(
+                tt::LogBuildKernels, "Failed to compute relative path for {}: {}", entry.path().string(), ec.message());
+            continue;
+        }
+        fs::path nfs_dest_path = fs::path(nfs_dir) / relative_path;
+        // Create parent directories in NFS cache if needed
+        tt::filesystem::safe_create_directories(nfs_dest_path.parent_path());
+        auto tmp_path = jit_build::utils::FileRenamer::generate_temp_path(nfs_dest_path);
         if (!tt::filesystem::safe_hard_link_or_copy(entry.path(), tmp_path)) {
             log_warning(tt::LogBuildKernels, "Failed to copy generated file {} to {}", entry.path().string(), tmp_path);
             continue;
         }
-        tt::filesystem::safe_rename(tmp_path, fs::path(nfs_dir) / entry.path().filename(), false);
+        tt::filesystem::safe_rename(tmp_path, nfs_dest_path, false);
     }
 }
 
@@ -768,6 +781,14 @@ void JitBuildState::link(const string& out_dir, const JitBuildSettings* settings
 // weakens symbols in A so that it can be used as a "library" for B. B imports A's weakened symbols, B's symbols of the
 // same name don't result in duplicate symbols but B can reference A's symbols. Force the fw_export symbols to remain
 // strong so to propagate link addresses
+//
+// NOTE: This function writes directly to the NFS cache directory (out_dir), not to scratch.
+// This is intentional because:
+//   - Weaken is called as part of the link stage, which already uses atomic temp+rename
+//     via FileRenamer for the output file
+//   - The input file (pathname_in) is already the final ELF in the cache directory
+//   - Unlike compilation which generates new objects, this is a transform of an existing file
+//   - The operation is idempotent - re-weakening the same ELF produces the same result
 void JitBuildState::weaken(const string& out_dir) const {
     // ZoneScoped;
 
