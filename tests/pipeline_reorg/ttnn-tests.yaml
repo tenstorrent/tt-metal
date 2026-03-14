@@ -107,8 +107,8 @@
   merge_gate: false
   ttsim: true
 
-- name: "ttnn pool group"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool -xv -m "not disable_fast_runtime_mode"'
+- name: "ttnn pool test_adaptive_pool2d"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool/test_adaptive_pool2d.py -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
       timeout: 40
@@ -121,8 +121,190 @@
   merge_gate: false
   ttsim: true
 
-- name: "ttnn matmul group"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul -xv -m "not disable_fast_runtime_mode"'
+- name: "ttnn pool test_avgpool2d"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool/test_avgpool2d.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn pool test_global_avg_pool2d"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool/test_global_avg_pool2d.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn pool test_grid_sample"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool/test_grid_sample.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn pool test_maxpool2d"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool/test_maxpool2d.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn pool test_mpwi"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool/test_mpwi.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn pool test_rotate"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool/test_rotate.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn pool test_upsample"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/pool/test_upsample.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U085GDCAZTN # Pavle Josipovic
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn matmul test_addmm"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul/test_addmm.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn matmul test_experimental"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul/test_experimental.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn matmul test_linear"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul/test_linear.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn matmul test_matmul"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul/test_matmul.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn matmul test_matmul_deepseek"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul/test_matmul_deepseek.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn matmul test_ring_matmul"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul/test_ring_matmul.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn matmul test_sparse_matmul"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/matmul/test_sparse_matmul.py -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
       timeout: 40
@@ -177,8 +359,274 @@
   merge_gate: false
   ttsim: false  # SDPA tests require device
 
-- name: "ttnn reduce and misc ops group"
-  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce tests/ttnn/unit_tests/operations/debug -xv -m "not disable_fast_runtime_mode"'
+- name: "ttnn reduce test_argmax"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_argmax.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn reduce test_cumprod"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_cumprod.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn reduce test_cumsum"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_cumsum.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn reduce test_ema"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_ema.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn reduce test_fast_reduce_nc"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_fast_reduce_nc.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn reduce test_intimg"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_intimg.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn reduce test_manual_seed"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_manual_seed.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn reduce test_max"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_max.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn reduce test_moe"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_moe.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn reduce test_reduction"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_reduction.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn reduce test_reduction_h_interleaved"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_reduction_h_interleaved.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn reduce test_reduction_mean"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_reduction_mean.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn reduce test_reduction_min"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_reduction_min.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn reduce test_reduction_on_batch"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_reduction_on_batch.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn reduce test_reduction_program_cache"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_reduction_program_cache.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn reduce test_row_major_reduce"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_row_major_reduce.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn reduce test_sum"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_sum.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn reduce test_topk"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/reduce/test_topk.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn debug test_examples"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/debug/test_examples.py -xv -m "not disable_fast_runtime_mode"'
+  skus:
+    wh_n300_civ2:
+      timeout: 40
+    bh_p100:
+      timeout: 40
+    bh_p150b_civ2:
+      timeout: 40
+  team: ttnn
+  owner_id: U084B1CES7M # Borys Bradel
+  merge_gate: false
+  ttsim: true
+
+- name: "ttnn debug test_generic_op"
+  cmd: 'pytest --timeout 300 tests/ttnn/unit_tests/operations/debug/test_generic_op.py -xv -m "not disable_fast_runtime_mode"'
   skus:
     wh_n300_civ2:
       timeout: 40
