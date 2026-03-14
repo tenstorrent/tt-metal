@@ -63,36 +63,30 @@ inline bool lookup_devices_or_fail(
     return true;
 }
 
-// Map AddrgenApiVariant to kernel OperationType for linear multicast
-inline OperationType get_linear_multicast_operation_type(AddrgenApiVariant variant) {
-    switch (variant) {
-        case AddrgenApiVariant::LinearMulticastWrite:
-        case AddrgenApiVariant::LinearMulticastWriteWithState:
-        case AddrgenApiVariant::LinearMulticastWriteSetState: return OperationType::BasicWrite;
-        case AddrgenApiVariant::LinearMulticastScatterWrite:
-        case AddrgenApiVariant::LinearMulticastScatterWriteWithState:
-        case AddrgenApiVariant::LinearMulticastScatterWriteSetState: return OperationType::Scatter;
-        case AddrgenApiVariant::LinearMulticastFusedAtomicIncWrite:
-        case AddrgenApiVariant::LinearMulticastFusedAtomicIncWriteWithState:
-        case AddrgenApiVariant::LinearMulticastFusedAtomicIncWriteSetState: return OperationType::FusedAtomicInc;
+// Convert FabricTestVariant fields to kernel-level enums
+inline OperationType to_kernel_operation_type(WriteOp op) {
+    switch (op) {
+        case WriteOp::Write: return OperationType::BasicWrite;
+        case WriteOp::Scatter: return OperationType::Scatter;
+        case WriteOp::FusedAtomicInc: return OperationType::FusedAtomicInc;
         default: return OperationType::BasicWrite;
     }
 }
 
-// Map AddrgenApiVariant to kernel ApiVariant for linear multicast
-inline ApiVariant get_linear_multicast_api_variant(AddrgenApiVariant variant) {
-    switch (variant) {
-        case AddrgenApiVariant::LinearMulticastWrite:
-        case AddrgenApiVariant::LinearMulticastScatterWrite:
-        case AddrgenApiVariant::LinearMulticastFusedAtomicIncWrite: return ApiVariant::Basic;
-        case AddrgenApiVariant::LinearMulticastWriteWithState:
-        case AddrgenApiVariant::LinearMulticastScatterWriteWithState:
-        case AddrgenApiVariant::LinearMulticastFusedAtomicIncWriteWithState: return ApiVariant::WithState;
-        case AddrgenApiVariant::LinearMulticastWriteSetState:
-        case AddrgenApiVariant::LinearMulticastScatterWriteSetState:
-        case AddrgenApiVariant::LinearMulticastFusedAtomicIncWriteSetState: return ApiVariant::SetState;
-        default: return ApiVariant::Basic;
+inline ApiVariant to_kernel_api_variant(StateMode state, ConnectionMode conn) {
+    if (conn == ConnectionMode::ConnMgr) {
+        switch (state) {
+            case StateMode::Stateless: return ApiVariant::ConnMgrBasic;
+            case StateMode::WithState: return ApiVariant::ConnMgrWithState;
+            case StateMode::SetState: return ApiVariant::ConnMgrSetState;
+        }
     }
+    switch (state) {
+        case StateMode::Stateless: return ApiVariant::Basic;
+        case StateMode::WithState: return ApiVariant::WithState;
+        case StateMode::SetState: return ApiVariant::SetState;
+    }
+    return ApiVariant::Basic;
 }
 
 }  // anonymous namespace
@@ -144,30 +138,25 @@ void run_unicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, const 
     Dist::MeshCoordinate dst_coord = coord_of_phys(dst_phys);
 
     // Check if this is a connection manager variant (needed for second destination setup)
-    // This checks the test params enum before conversion to kernel enum
-    const bool is_conn_mgr_variant_from_params =
-        (p.api_variant == AddrgenApiVariant::UnicastWriteConnMgr ||
-         p.api_variant == AddrgenApiVariant::UnicastWriteWithStateConnMgr ||
-         p.api_variant == AddrgenApiVariant::UnicastWriteSetStateConnMgr ||
-         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteConnMgr ||
-         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithStateConnMgr ||
-         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetStateConnMgr ||
-         p.api_variant == AddrgenApiVariant::ScatterWriteConnMgr ||
-         p.api_variant == AddrgenApiVariant::ScatterWriteWithStateConnMgr ||
-         p.api_variant == AddrgenApiVariant::ScatterWriteSetStateConnMgr);
+    const bool is_conn_mgr_variant_from_params = p.variant.is_conn_mgr();
 
-    // For connection manager variants: set up second destination chip
-    tt::tt_fabric::FabricNodeId dst2{tt::tt_fabric::MeshId{p.mesh_id}, p.dst2_chip};
+    // For connection manager variants: pick a second destination from the mesh
+    // (any device that isn't src or dst)
     ChipId dst2_phys = 0;
     tt::tt_metal::IDevice* dst2_dev = nullptr;
     Dist::MeshCoordinate dst2_coord{0, 0};
     tt::tt_metal::CoreCoord rx2_xy = rx_xy;
     if (is_conn_mgr_variant_from_params) {
-        dst2_phys = cp.get_physical_chip_id_from_fabric_node_id(dst2);
-        dst2_dev = tt::tt_metal::detail::GetActiveDevice(dst2_phys);
-        if (dst2_dev) {
-            dst2_coord = coord_of_phys(dst2_phys);
-            rx2_xy = dst2_dev->worker_core_from_logical_core(p.receiver_core);
+        for (const auto& c : Dist::MeshCoordinateRange(view.shape())) {
+            auto* dev = view.impl().get_device(c);
+            if (!dev || dev->id() == src_phys || dev->id() == dst_phys) {
+                continue;
+            }
+            dst2_phys = dev->id();
+            dst2_dev = dev;
+            dst2_coord = c;
+            rx2_xy = dev->worker_core_from_logical_core(p.receiver_core);
+            break;
         }
     }
 
@@ -239,53 +228,12 @@ Notes:
     const tt::tt_metal::CoreCoord receiver_core = p.receiver_core;
 
     // Determine if this is a fused atomic inc variant
-    const bool is_fused_atomic_inc =
-        (p.api_variant == AddrgenApiVariant::FusedAtomicIncWrite ||
-         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithState ||
-         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetState ||
-         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteConnMgr ||
-         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteWithStateConnMgr ||
-         p.api_variant == AddrgenApiVariant::FusedAtomicIncWriteSetStateConnMgr);
+    const bool is_fused_atomic_inc = p.variant.is_fused();
 
     const std::string KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/";
 
-    // Helper to map API variant to OPERATION_TYPE and API_VARIANT compile-time parameters
-    auto get_operation_and_api_variant = [](AddrgenApiVariant variant) -> std::pair<OperationType, ApiVariant> {
-        // Returns OperationType and ApiVariant enums
-        switch (variant) {
-            case AddrgenApiVariant::UnicastWrite: return {OperationType::BasicWrite, ApiVariant::Basic};
-            case AddrgenApiVariant::UnicastWriteWithState: return {OperationType::BasicWrite, ApiVariant::WithState};
-            case AddrgenApiVariant::UnicastWriteSetState: return {OperationType::BasicWrite, ApiVariant::SetState};
-            case AddrgenApiVariant::FusedAtomicIncWrite: return {OperationType::FusedAtomicInc, ApiVariant::Basic};
-            case AddrgenApiVariant::FusedAtomicIncWriteWithState:
-                return {OperationType::FusedAtomicInc, ApiVariant::WithState};
-            case AddrgenApiVariant::FusedAtomicIncWriteSetState:
-                return {OperationType::FusedAtomicInc, ApiVariant::SetState};
-            case AddrgenApiVariant::ScatterWrite: return {OperationType::Scatter, ApiVariant::Basic};
-            case AddrgenApiVariant::ScatterWriteWithState: return {OperationType::Scatter, ApiVariant::WithState};
-            case AddrgenApiVariant::ScatterWriteSetState: return {OperationType::Scatter, ApiVariant::SetState};
-            // Connection manager variants
-            case AddrgenApiVariant::UnicastWriteConnMgr: return {OperationType::BasicWrite, ApiVariant::ConnMgrBasic};
-            case AddrgenApiVariant::UnicastWriteWithStateConnMgr:
-                return {OperationType::BasicWrite, ApiVariant::ConnMgrWithState};
-            case AddrgenApiVariant::UnicastWriteSetStateConnMgr:
-                return {OperationType::BasicWrite, ApiVariant::ConnMgrSetState};
-            case AddrgenApiVariant::FusedAtomicIncWriteConnMgr:
-                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrBasic};
-            case AddrgenApiVariant::FusedAtomicIncWriteWithStateConnMgr:
-                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrWithState};
-            case AddrgenApiVariant::FusedAtomicIncWriteSetStateConnMgr:
-                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrSetState};
-            case AddrgenApiVariant::ScatterWriteConnMgr: return {OperationType::Scatter, ApiVariant::ConnMgrBasic};
-            case AddrgenApiVariant::ScatterWriteWithStateConnMgr:
-                return {OperationType::Scatter, ApiVariant::ConnMgrWithState};
-            case AddrgenApiVariant::ScatterWriteSetStateConnMgr:
-                return {OperationType::Scatter, ApiVariant::ConnMgrSetState};
-            default: TT_FATAL(false, "Unknown API variant"); return {OperationType::BasicWrite, ApiVariant::Basic};
-        }
-    };
-
-    auto [operation_type, api_variant] = get_operation_and_api_variant(p.api_variant);
+    auto operation_type = to_kernel_operation_type(p.variant.op);
+    auto api_variant = to_kernel_api_variant(p.variant.state, p.variant.conn);
 
     // All receivers use the unified kernel now
     const std::string receiver_kernel_name = "rx_addrgen.cpp";
@@ -369,14 +317,9 @@ Notes:
     writer_cta.push_back(dst_aligned_page_size);  // Aligned page size (dest buffer addressing)
     writer_cta.push_back(src_aligned_page_size);  // Source aligned page size (CB stride for scatter)
 
-    // Check if this is a connection manager variant to select the appropriate kernel
-    const bool is_conn_mgr_variant =
-        (api_variant == ApiVariant::ConnMgrBasic || api_variant == ApiVariant::ConnMgrWithState ||
-         api_variant == ApiVariant::ConnMgrSetState);
-
     // Select kernel based on connection manager variant
     const std::string writer_kernel_name =
-        is_conn_mgr_variant ? "unicast_tx_writer_addrgen_conn_mgr.cpp" : "unicast_tx_writer_addrgen.cpp";
+        p.variant.is_conn_mgr() ? "unicast_tx_writer_addrgen_conn_mgr.cpp" : "unicast_tx_writer_addrgen.cpp";
 
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
@@ -397,15 +340,16 @@ Notes:
         (uint32_t)gsem->address()      // 5: receiver L1 semaphore addr
     };
 
-    if (is_conn_mgr_variant) {
+    if (p.variant.is_conn_mgr()) {
         // Connection manager variant: use routing plane connection manager
         // Add num_connections (2 for dual destination test, fallback to 1 if dst2_dev is null)
         uint32_t num_connections = (dst2_dev != nullptr) ? 2u : 1u;
         writer_rt.push_back(num_connections);
 
         // Use append_routing_plane_connection_manager_rt_args for route setup
+        auto dst2_fn = cp.get_fabric_node_id_from_physical_chip_id(dst2_phys);
         std::vector<tt::tt_fabric::FabricNodeId> dst_nodes = (dst2_dev != nullptr)
-                                                                 ? std::vector<tt::tt_fabric::FabricNodeId>{dst, dst2}
+                                                                 ? std::vector<tt::tt_fabric::FabricNodeId>{dst, dst2_fn}
                                                                  : std::vector<tt::tt_fabric::FabricNodeId>{dst};
         std::vector<uint32_t> connection_link_indices = {};  // Empty means auto-select
         tt::tt_fabric::append_routing_plane_connection_manager_rt_args(
@@ -568,51 +512,11 @@ void run_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture, cons
 
     constexpr const char* KDIR = "tests/tt_metal/tt_fabric/fabric_data_movement/addrgen_write/kernels/";
 
-    // Helper to map API variant to OPERATION_TYPE and API_VARIANT compile-time parameters
-    auto get_operation_and_api_variant = [](AddrgenApiVariant variant) -> std::pair<OperationType, ApiVariant> {
-        // Returns OperationType and ApiVariant enums
-        switch (variant) {
-            case AddrgenApiVariant::MulticastWrite: return {OperationType::BasicWrite, ApiVariant::Basic};
-            case AddrgenApiVariant::MulticastWriteWithState: return {OperationType::BasicWrite, ApiVariant::WithState};
-            case AddrgenApiVariant::MulticastWriteSetState: return {OperationType::BasicWrite, ApiVariant::SetState};
-            case AddrgenApiVariant::MulticastFusedAtomicIncWrite:
-                return {OperationType::FusedAtomicInc, ApiVariant::Basic};
-            case AddrgenApiVariant::MulticastFusedAtomicIncWriteWithState:
-                return {OperationType::FusedAtomicInc, ApiVariant::WithState};
-            case AddrgenApiVariant::MulticastFusedAtomicIncWriteSetState:
-                return {OperationType::FusedAtomicInc, ApiVariant::SetState};
-            case AddrgenApiVariant::MulticastScatterWrite: return {OperationType::Scatter, ApiVariant::Basic};
-            case AddrgenApiVariant::MulticastScatterWriteWithState:
-                return {OperationType::Scatter, ApiVariant::WithState};
-            case AddrgenApiVariant::MulticastScatterWriteSetState:
-                return {OperationType::Scatter, ApiVariant::SetState};
-            case AddrgenApiVariant::MulticastWriteConnMgr: return {OperationType::BasicWrite, ApiVariant::ConnMgrBasic};
-            case AddrgenApiVariant::MulticastWriteWithStateConnMgr:
-                return {OperationType::BasicWrite, ApiVariant::ConnMgrWithState};
-            case AddrgenApiVariant::MulticastWriteSetStateConnMgr:
-                return {OperationType::BasicWrite, ApiVariant::ConnMgrSetState};
-            case AddrgenApiVariant::MulticastScatterWriteConnMgr:
-                return {OperationType::Scatter, ApiVariant::ConnMgrBasic};
-            case AddrgenApiVariant::MulticastScatterWriteWithStateConnMgr:
-                return {OperationType::Scatter, ApiVariant::ConnMgrWithState};
-            case AddrgenApiVariant::MulticastScatterWriteSetStateConnMgr:
-                return {OperationType::Scatter, ApiVariant::ConnMgrSetState};
-            case AddrgenApiVariant::MulticastFusedAtomicIncWriteConnMgr:
-                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrBasic};
-            case AddrgenApiVariant::MulticastFusedAtomicIncWriteWithStateConnMgr:
-                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrWithState};
-            case AddrgenApiVariant::MulticastFusedAtomicIncWriteSetStateConnMgr:
-                return {OperationType::FusedAtomicInc, ApiVariant::ConnMgrSetState};
-            default: TT_FATAL(false, "Unknown API variant"); return {OperationType::BasicWrite, ApiVariant::Basic};
-        }
-    };
+    auto operation_type = to_kernel_operation_type(p.variant.op);
+    auto api_variant = to_kernel_api_variant(p.variant.state, p.variant.conn);
 
-    auto [operation_type, api_variant] = get_operation_and_api_variant(p.api_variant);
-
-    const bool is_fused_atomic_inc = (operation_type == OperationType::FusedAtomicInc);
-    const bool is_conn_mgr_variant =
-        (api_variant == ApiVariant::ConnMgrBasic || api_variant == ApiVariant::ConnMgrWithState ||
-         api_variant == ApiVariant::ConnMgrSetState);
+    const bool is_fused_atomic_inc = p.variant.is_fused();
+    const bool is_conn_mgr_variant = p.variant.is_conn_mgr();
 
     // Move NUM_PAGES calculation before receiver setup
     const uint32_t NUM_PAGES = (p.tensor_bytes + p.page_size - 1) / p.page_size;
@@ -933,10 +837,7 @@ void run_linear_unicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture,
     uint32_t dst_aligned_page_size = ((p.page_size + dst_alignment - 1) / dst_alignment) * dst_alignment;
 
     // Determine if this is a fused atomic inc variant
-    const bool is_fused_atomic_inc =
-        (p.api_variant == AddrgenApiVariant::LinearFusedAtomicIncWrite ||
-         p.api_variant == AddrgenApiVariant::LinearFusedAtomicIncWriteWithState ||
-         p.api_variant == AddrgenApiVariant::LinearFusedAtomicIncWriteSetState);
+    const bool is_fused_atomic_inc = p.variant.is_fused();
 
     // For fused atomic inc, each write increments the semaphore, so receiver waits for NUM_PAGES
     // For regular unicast, a single atomic inc is sent after all writes, so receiver waits for 1
@@ -950,32 +851,8 @@ void run_linear_unicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture,
                       .set_page_size(CB_ID, src_aligned_page_size);
     (void)tt::tt_metal::CreateCircularBuffer(sender_prog, p.sender_core, cb_cfg);
 
-    // Helper to map linear API variant to OPERATION_TYPE and API_VARIANT compile-time parameters
-    auto get_linear_operation_and_api_variant = [](AddrgenApiVariant variant) -> std::pair<OperationType, ApiVariant> {
-        switch (variant) {
-            case AddrgenApiVariant::LinearUnicastWrite: return {OperationType::BasicWrite, ApiVariant::Basic};
-            case AddrgenApiVariant::LinearUnicastWriteWithState:
-                return {OperationType::BasicWrite, ApiVariant::WithState};
-            case AddrgenApiVariant::LinearUnicastWriteSetState:
-                return {OperationType::BasicWrite, ApiVariant::SetState};
-            case AddrgenApiVariant::LinearScatterWrite: return {OperationType::Scatter, ApiVariant::Basic};
-            case AddrgenApiVariant::LinearScatterWriteWithState: return {OperationType::Scatter, ApiVariant::WithState};
-            case AddrgenApiVariant::LinearScatterWriteSetState: return {OperationType::Scatter, ApiVariant::SetState};
-            case AddrgenApiVariant::LinearFusedAtomicIncWrite:
-                return {OperationType::FusedAtomicInc, ApiVariant::Basic};
-            case AddrgenApiVariant::LinearFusedAtomicIncWriteWithState:
-                return {OperationType::FusedAtomicInc, ApiVariant::WithState};
-            case AddrgenApiVariant::LinearFusedAtomicIncWriteSetState:
-                return {OperationType::FusedAtomicInc, ApiVariant::SetState};
-            case AddrgenApiVariant::LinearUnicastWriteConnMgr:
-                return {OperationType::BasicWrite, ApiVariant::ConnMgrBasic};
-            default:
-                TT_FATAL(false, "Unknown linear API variant");
-                return {OperationType::BasicWrite, ApiVariant::Basic};
-        }
-    };
-
-    auto [operation_type, api_variant] = get_linear_operation_and_api_variant(p.api_variant);
+    auto operation_type = to_kernel_operation_type(p.variant.op);
+    auto api_variant = to_kernel_api_variant(p.variant.state, p.variant.conn);
 
     // Reader kernel (DRAM->CB) - uses unified kernel with OPERATION_TYPE compile-time arg
     std::vector<uint32_t> reader_cta;
@@ -1008,7 +885,7 @@ void run_linear_unicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixture,
     writer_cta.push_back(src_aligned_page_size);                  // Source aligned page size (CB stride for scatter)
 
     // Check if this is a connection manager variant
-    const bool is_linear_conn_mgr = (p.api_variant == AddrgenApiVariant::LinearUnicastWriteConnMgr);
+    const bool is_linear_conn_mgr = p.variant.is_conn_mgr();
 
     // Select kernel based on connection manager variant
     const std::string writer_kernel_name =
@@ -1117,9 +994,9 @@ void run_linear_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixtur
     tt::tt_metal::CoreCoord rx_xy = dst_dev->worker_core_from_logical_core(p.receiver_core);
 
     // Determine operation type
-    OperationType operation_type = get_linear_multicast_operation_type(p.api_variant);
-    bool is_scatter = (operation_type == OperationType::Scatter);
-    bool is_fused = (operation_type == OperationType::FusedAtomicInc);
+    auto operation_type = to_kernel_operation_type(p.variant.op);
+    bool is_scatter = p.variant.is_scatter();
+    bool is_fused = p.variant.is_fused();
 
     // --- IO buffers & initialization ---
     namespace Dist = tt::tt_metal::distributed;
@@ -1275,7 +1152,7 @@ void run_linear_multicast_write_test(tt::tt_metal::MeshDeviceFixtureBase* fixtur
     tt::tt_metal::SetRuntimeArgs(sender_prog, reader_k, p.sender_core, {(uint32_t)src_buf->address()});
 
     // Map API variant for linear multicast
-    auto api_variant = get_linear_multicast_api_variant(p.api_variant);
+    auto api_variant = to_kernel_api_variant(p.variant.state, p.variant.conn);
 
     // Writer kernel (linear multicast addrgen)
     std::vector<uint32_t> writer_cta;

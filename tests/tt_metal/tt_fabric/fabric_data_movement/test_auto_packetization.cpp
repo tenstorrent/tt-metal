@@ -92,14 +92,14 @@ using RunnerFn = void (*)(BaseFabricFixture*, const tt::tt_fabric::test::RawTest
 
 static void run_silicon_family_test(
     BaseFabricFixture* fixture,
-    tt::tt_fabric::test::AutoPacketFamily family,
+    tt::tt_fabric::test::FabricTestVariant variant,
     RunnerFn runner_fn) {
     auto [mesh_id, src_chip, dst_chip] = pick_chip_pair(fixture);
     const uint32_t max_payload =
         static_cast<uint32_t>(tt::tt_fabric::get_tt_fabric_max_payload_size_bytes());
 
     std::vector<uint32_t> sizes;
-    if (tt::tt_fabric::test::family_is_scatter(family)) {
+    if (variant.is_scatter()) {
         // Scatter payloads must fit in a single packet
         sizes = {256u, 1024u, max_payload & ~3u};
     } else {
@@ -107,7 +107,7 @@ static void run_silicon_family_test(
     }
 
     for (uint32_t sz : sizes) {
-        if (tt::tt_fabric::test::family_is_scatter(family)) {
+        if (variant.is_scatter()) {
             sz = (sz / 8) * 8;
             if (sz == 0) sz = 8;
         } else {
@@ -120,7 +120,7 @@ static void run_silicon_family_test(
             .tensor_bytes = sz,
             .sender_core = CoreCoord{0, 0},
             .receiver_core = CoreCoord{1, 0},
-            .family = family,
+            .variant = variant,
         };
         runner_fn(fixture, p);
     }
@@ -130,25 +130,25 @@ static void run_silicon_family_test(
 
 // --- Unicast basic write: 3 payload sizes ---
 TEST_F(Fabric2DFixture, AutoPacketizationUnicastWriteSilicon) {
-    run_silicon_family_test(this, tt::tt_fabric::test::AutoPacketFamily::UnicastWrite,
+    run_silicon_family_test(this, tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::Unicast, tt::tt_fabric::test::WriteOp::Write},
                             tt::tt_fabric::test::run_raw_unicast_write_test);
 }
 
 // --- Unicast scatter write: small payload only ---
 TEST_F(Fabric2DFixture, AutoPacketizationUnicastScatterSilicon) {
-    run_silicon_family_test(this, tt::tt_fabric::test::AutoPacketFamily::UnicastScatter,
+    run_silicon_family_test(this, tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::Unicast, tt::tt_fabric::test::WriteOp::Scatter},
                             tt::tt_fabric::test::run_raw_unicast_write_test);
 }
 
 // --- Unicast fused atomic inc: 3 payload sizes ---
 TEST_F(Fabric2DFixture, AutoPacketizationUnicastFusedAtomicIncSilicon) {
-    run_silicon_family_test(this, tt::tt_fabric::test::AutoPacketFamily::UnicastFusedAtomicInc,
+    run_silicon_family_test(this, tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::Unicast, tt::tt_fabric::test::WriteOp::FusedAtomicInc},
                             tt::tt_fabric::test::run_raw_unicast_write_test);
 }
 
 // --- Unicast fused scatter + atomic inc: small payload only ---
 TEST_F(Fabric2DFixture, AutoPacketizationUnicastFusedScatterAtomicIncSilicon) {
-    run_silicon_family_test(this, tt::tt_fabric::test::AutoPacketFamily::UnicastFusedScatterAtomicInc,
+    run_silicon_family_test(this, tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::Unicast, tt::tt_fabric::test::WriteOp::FusedScatterAtomicInc},
                             tt::tt_fabric::test::run_raw_unicast_write_test);
 }
 
@@ -160,25 +160,25 @@ TEST_F(Fabric2DFixture, AutoPacketizationUnicastFusedScatterAtomicIncSilicon) {
 
 // --- Multicast basic write: 3 payload sizes ---
 TEST_F(Fabric2DFixture, AutoPacketizationMulticastWriteSilicon) {
-    run_silicon_family_test(this, tt::tt_fabric::test::AutoPacketFamily::MulticastWrite,
+    run_silicon_family_test(this, tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::Multicast, tt::tt_fabric::test::WriteOp::Write},
                             tt::tt_fabric::test::run_raw_multicast_write_test);
 }
 
 // --- Multicast scatter write: small payload only ---
 TEST_F(Fabric2DFixture, AutoPacketizationMulticastScatterSilicon) {
-    run_silicon_family_test(this, tt::tt_fabric::test::AutoPacketFamily::MulticastScatter,
+    run_silicon_family_test(this, tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::Multicast, tt::tt_fabric::test::WriteOp::Scatter},
                             tt::tt_fabric::test::run_raw_multicast_write_test);
 }
 
 // --- Multicast fused atomic inc: 3 payload sizes ---
 TEST_F(Fabric2DFixture, AutoPacketizationMulticastFusedAtomicIncSilicon) {
-    run_silicon_family_test(this, tt::tt_fabric::test::AutoPacketFamily::MulticastFusedAtomicInc,
+    run_silicon_family_test(this, tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::Multicast, tt::tt_fabric::test::WriteOp::FusedAtomicInc},
                             tt::tt_fabric::test::run_raw_multicast_write_test);
 }
 
 // --- Multicast fused scatter + atomic inc: small payload only ---
 TEST_F(Fabric2DFixture, AutoPacketizationMulticastFusedScatterAtomicIncSilicon) {
-    run_silicon_family_test(this, tt::tt_fabric::test::AutoPacketFamily::MulticastFusedScatterAtomicInc,
+    run_silicon_family_test(this, tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::Multicast, tt::tt_fabric::test::WriteOp::FusedScatterAtomicInc},
                             tt::tt_fabric::test::run_raw_multicast_write_test);
 }
 
@@ -192,7 +192,7 @@ TEST_F(Fabric2DFixture, AutoPacketizationMulticastFusedScatterAtomicIncSilicon) 
 // The unicast_runner detects 1D vs 2D via is_2D_routing_enabled() and selects
 // the appropriate kernel. For 1D, uses unicast_tx_writer_raw.cpp with no FABRIC_2D define.
 TEST_F(Fabric1DFixture, AutoPacketizationLinearUnicastWriteSilicon) {
-    run_silicon_family_test(this, tt::tt_fabric::test::AutoPacketFamily::UnicastWrite,
+    run_silicon_family_test(this, tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::Unicast, tt::tt_fabric::test::WriteOp::Write},
                             tt::tt_fabric::test::run_raw_unicast_write_test);
 }
 
@@ -200,7 +200,7 @@ TEST_F(Fabric1DFixture, AutoPacketizationLinearUnicastWriteSilicon) {
 // Linear multicast uses start_distance and range parameters instead of MeshMcastRange.
 // The linear multicast kernel handles per-direction fanout in a 1D linear chain.
 TEST_F(Fabric1DFixture, AutoPacketizationLinearMulticastWriteSilicon) {
-    run_silicon_family_test(this, tt::tt_fabric::test::AutoPacketFamily::MulticastWrite,
+    run_silicon_family_test(this, tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::Multicast, tt::tt_fabric::test::WriteOp::Write},
                             tt::tt_fabric::test::run_raw_multicast_write_test);
 }
 
@@ -250,7 +250,7 @@ TEST_F(Fabric1DFixture, AutoPacketizationSparseMulticastSilicon) {
             .tensor_bytes = sz,
             .sender_core = CoreCoord{0, 0},
             .receiver_core = CoreCoord{1, 0},
-            .family = tt::tt_fabric::test::AutoPacketFamily::SparseMulticast,
+            .variant = tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::SparseMulticast, tt::tt_fabric::test::WriteOp::Write},
         };
 
         // Sparse multicast needs custom dispatch since it uses a different kernel contract.
@@ -312,7 +312,7 @@ TEST_F(Fabric1DFixture, AutoPacketizationSparseMulticastSilicon) {
         tt::tt_metal::Program tx_prog = tt::tt_metal::CreateProgram();
         auto tx_k = tt::tt_metal::CreateKernel(
             tx_prog,
-            tt::tt_fabric::test::family_kernel_path(tt::tt_fabric::test::AutoPacketFamily::SparseMulticast),
+            tt::tt_fabric::test::family_kernel_path(tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::SparseMulticast, tt::tt_fabric::test::WriteOp::Write}),
             p.sender_core,
             tt::tt_metal::DataMovementConfig{
                 .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
@@ -382,37 +382,37 @@ TEST_F(Fabric1DFixture, AutoPacketizationSparseMulticastSilicon) {
 
 // --- Linear unicast scatter write ---
 TEST_F(Fabric1DFixture, AutoPacketizationLinearUnicastScatterSilicon) {
-    run_silicon_family_test(this, tt::tt_fabric::test::AutoPacketFamily::UnicastScatter,
+    run_silicon_family_test(this, tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::Unicast, tt::tt_fabric::test::WriteOp::Scatter},
                             tt::tt_fabric::test::run_raw_unicast_write_test);
 }
 
 // --- Linear unicast fused atomic inc ---
 TEST_F(Fabric1DFixture, AutoPacketizationLinearUnicastFusedAtomicIncSilicon) {
-    run_silicon_family_test(this, tt::tt_fabric::test::AutoPacketFamily::UnicastFusedAtomicInc,
+    run_silicon_family_test(this, tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::Unicast, tt::tt_fabric::test::WriteOp::FusedAtomicInc},
                             tt::tt_fabric::test::run_raw_unicast_write_test);
 }
 
 // --- Linear unicast fused scatter + atomic inc ---
 TEST_F(Fabric1DFixture, AutoPacketizationLinearUnicastFusedScatterAtomicIncSilicon) {
-    run_silicon_family_test(this, tt::tt_fabric::test::AutoPacketFamily::UnicastFusedScatterAtomicInc,
+    run_silicon_family_test(this, tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::Unicast, tt::tt_fabric::test::WriteOp::FusedScatterAtomicInc},
                             tt::tt_fabric::test::run_raw_unicast_write_test);
 }
 
 // --- Linear multicast scatter write ---
 TEST_F(Fabric1DFixture, AutoPacketizationLinearMulticastScatterSilicon) {
-    run_silicon_family_test(this, tt::tt_fabric::test::AutoPacketFamily::MulticastScatter,
+    run_silicon_family_test(this, tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::Multicast, tt::tt_fabric::test::WriteOp::Scatter},
                             tt::tt_fabric::test::run_raw_multicast_write_test);
 }
 
 // --- Linear multicast fused atomic inc ---
 TEST_F(Fabric1DFixture, AutoPacketizationLinearMulticastFusedAtomicIncSilicon) {
-    run_silicon_family_test(this, tt::tt_fabric::test::AutoPacketFamily::MulticastFusedAtomicInc,
+    run_silicon_family_test(this, tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::Multicast, tt::tt_fabric::test::WriteOp::FusedAtomicInc},
                             tt::tt_fabric::test::run_raw_multicast_write_test);
 }
 
 // --- Linear multicast fused scatter + atomic inc ---
 TEST_F(Fabric1DFixture, AutoPacketizationLinearMulticastFusedScatterAtomicIncSilicon) {
-    run_silicon_family_test(this, tt::tt_fabric::test::AutoPacketFamily::MulticastFusedScatterAtomicInc,
+    run_silicon_family_test(this, tt::tt_fabric::test::FabricTestVariant{tt::tt_fabric::test::CastMode::Multicast, tt::tt_fabric::test::WriteOp::FusedScatterAtomicInc},
                             tt::tt_fabric::test::run_raw_multicast_write_test);
 }
 

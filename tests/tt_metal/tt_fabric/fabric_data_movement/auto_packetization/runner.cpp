@@ -4,7 +4,7 @@
 
 // Host-side test runners for raw-size auto-packetization silicon tests (unicast + multicast).
 // Uses BaseFabricFixture (per-chip MeshDevice) pattern -- NOT MeshDeviceFixtureBase.
-// Dispatches the appropriate device kernel based on AutoPacketFamily,
+// Dispatches the appropriate device kernel based on FabricTestVariant,
 // writes test data directly to L1, and validates byte-for-byte correctness.
 
 #include <gtest/gtest.h>
@@ -75,7 +75,7 @@ void run_raw_unicast_write_test(BaseFabricFixture* fixture, const RawTestParams&
     }
 
     const size_t n_words = p.tensor_bytes / 4;
-    const bool is_scatter = family_is_scatter(p.family);
+    const bool is_scatter = p.variant.is_scatter();
 
     // For scatter: payload goes to two addresses, each getting half
     uint32_t scatter_half_bytes = 0;
@@ -130,7 +130,7 @@ void run_raw_unicast_write_test(BaseFabricFixture* fixture, const RawTestParams&
     // --- Sender program: single writer kernel on RISCV_1 ---
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
 
-    std::string kernel_path = family_kernel_path(p.family);
+    std::string kernel_path = family_kernel_path(p.variant);
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
         kernel_path,
@@ -140,7 +140,7 @@ void run_raw_unicast_write_test(BaseFabricFixture* fixture, const RawTestParams&
             .noc = tt::tt_metal::NOC::RISCV_1_default,
             .defines = defines});
 
-    // Build runtime args -- layout depends on family and fabric mode (2D vs 1D)
+    // Build runtime args -- layout depends on variant and fabric mode (2D vs 1D)
     std::vector<uint32_t> writer_rt;
 
     // Common prefix: src_l1_addr, total_size, dst_base_addr
@@ -165,7 +165,7 @@ void run_raw_unicast_write_test(BaseFabricFixture* fixture, const RawTestParams&
 
     // scatter_offset and send_op always present (scatter_offset=0 for non-scatter ops)
     writer_rt.push_back(scatter_offset);
-    writer_rt.push_back(family_tx_op(p.family));
+    writer_rt.push_back(to_tx_op(p.variant.op));
 
     // Append fabric connection runtime args
     auto forwarding_links = tt::tt_fabric::get_forwarding_link_indices(src, dst);
@@ -289,7 +289,7 @@ void run_raw_multicast_write_test(BaseFabricFixture* fixture, const RawTestParam
     }
 
     const size_t n_words = p.tensor_bytes / 4;
-    const bool is_scatter = family_is_scatter(p.family);
+    const bool is_scatter = p.variant.is_scatter();
     uint32_t scatter_half_bytes = 0;
     uint32_t scatter_offset = 0;
     if (is_scatter) {
@@ -350,7 +350,7 @@ void run_raw_multicast_write_test(BaseFabricFixture* fixture, const RawTestParam
     // --- Sender program ---
     tt::tt_metal::Program sender_prog = tt::tt_metal::CreateProgram();
 
-    std::string kernel_path = family_kernel_path(p.family);
+    std::string kernel_path = family_kernel_path(p.variant);
     auto writer_k = tt::tt_metal::CreateKernel(
         sender_prog,
         kernel_path,
@@ -397,7 +397,7 @@ void run_raw_multicast_write_test(BaseFabricFixture* fixture, const RawTestParam
         // Common prefix: scatter_offset and send_op always present before dir_mask
         writer_rt = {
             src_l1_addr, p.tensor_bytes, dst_l1_addr, rx_xy.x, rx_xy.y, sem_l1_addr,
-            scatter_offset, family_tx_op(p.family),
+            scatter_offset, to_tx_op(p.variant.op),
             dir_mask};
 
         // Per-direction fabric connections (W, E, N, S)
@@ -448,7 +448,7 @@ void run_raw_multicast_write_test(BaseFabricFixture* fixture, const RawTestParam
         // scatter_offset and send_op always present before start_distance/range
         writer_rt = {
             src_l1_addr, p.tensor_bytes, dst_l1_addr, rx_xy.x, rx_xy.y, sem_l1_addr,
-            scatter_offset, family_tx_op(p.family),
+            scatter_offset, to_tx_op(p.variant.op),
             static_cast<uint32_t>(start_distance), static_cast<uint32_t>(range)};
 
         // Find a direct neighbor of src to use as the fabric connection target.
