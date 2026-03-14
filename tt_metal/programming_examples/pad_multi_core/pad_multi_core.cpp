@@ -2,6 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <bit>
 #include <tt-metalium/host_api.hpp>
 #include <tt-metalium/bfloat16.hpp>
 #include <tt-metalium/tt_metal.hpp>
@@ -130,7 +131,7 @@ int main() {
     // create kernels (borrowed from TTNN production code)
     KernelHandle reader_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/pad_multi_core/kernels/pad_reader_dims_rm_interleaved.cpp",
+        OVERRIDE_KERNEL_PREFIX "pad_multi_core/kernels/pad_reader_dims_rm_interleaved.cpp",
         cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_0,
@@ -138,7 +139,7 @@ int main() {
             .compile_args = reader_compile_time_args});
     KernelHandle writer_id = CreateKernel(
         program,
-        "tt_metal/programming_examples/pad_multi_core/kernels/pad_writer_dims_rm_interleaved.cpp",
+        OVERRIDE_KERNEL_PREFIX "pad_multi_core/kernels/pad_writer_dims_rm_interleaved.cpp",
         cores,
         tt_metal::DataMovementConfig{
             .processor = DataMovementProcessor::RISCV_1,
@@ -175,17 +176,20 @@ int main() {
     }
 
     printf(
-        "Padding tensor of shape (%d, %d) to shape (%d, %d) with pad value: %d\n",
+        "Padding tensor of shape (%d, %d) to shape (%d, %d) with pad value: %.1f\n",
         src_M,
         src_N,
         dst_M,
         dst_N,
-        std::bit_cast<uint16_t>(pad_value));
+        static_cast<float>(pad_value));
     printf("Original tensor with shape (%d, %d):\n", src_M, src_N);
     for (uint32_t m = 0; m < src_M; m++) {
         for (uint32_t n = 0; n < num_packed_row_src; n++) {
-            printf("%d ", (uint16_t)src_vec[(m * num_packed_row_src) + n]);
-            printf("%d ", (uint16_t)(src_vec[(m * num_packed_row_src) + n] >> 16));
+            uint32_t packed_val = src_vec[(m * num_packed_row_src) + n];
+            bfloat16 val1 = std::bit_cast<bfloat16>(static_cast<uint16_t>(packed_val & 0xffff));
+            bfloat16 val2 = std::bit_cast<bfloat16>(static_cast<uint16_t>(packed_val >> 16));
+            printf("%.1f ", static_cast<float>(val1));
+            printf("%.1f ", static_cast<float>(val2));
         }
         printf("\n");
     }
@@ -202,8 +206,11 @@ int main() {
     printf("Padded tensor with shape (%d, %d):\n", dst_M, dst_N);
     for (uint32_t m = 0; m < dst_M; m++) {
         for (uint32_t n = 0; n < num_packed_row_dst; n++) {
-            printf("%d ", (uint16_t)dst_vec[(m * num_packed_row_dst) + n]);
-            printf("%d ", (uint16_t)(dst_vec[(m * num_packed_row_dst) + n] >> 16));
+            uint32_t packed_val = dst_vec[(m * num_packed_row_dst) + n];
+            bfloat16 val1 = std::bit_cast<bfloat16>(static_cast<uint16_t>(packed_val & 0xffff));
+            bfloat16 val2 = std::bit_cast<bfloat16>(static_cast<uint16_t>(packed_val >> 16));
+            printf("%.1f ", static_cast<float>(val1));
+            printf("%.1f ", static_cast<float>(val2));
         }
         printf("\n");
     }
