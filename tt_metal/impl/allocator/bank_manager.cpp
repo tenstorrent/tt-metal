@@ -435,6 +435,10 @@ uint64_t BankManager::allocate_buffer(
         }
         allocated_buffers_[allocator_id.get()].insert(address.value());
 
+        // Track peak allocated bytes
+        current_allocated_bytes_ += size_per_bank;
+        peak_allocated_bytes_ = std::max(peak_allocated_bytes_, current_allocated_bytes_);
+
         // Track allocation high water mark
         if (tracking_high_water_mark_) {
             // Calculate end address in interleaved space: address + size_per_bank
@@ -500,6 +504,10 @@ uint64_t BankManager::allocate_buffer(
     TT_FATAL(address.has_value(), "Allocator failed to place at chosen address {}", chosen.value());
     allocated_buffers_[allocator_id.get()].insert(address.value());
 
+    // Track peak allocated bytes
+    current_allocated_bytes_ += size_per_bank;
+    peak_allocated_bytes_ = std::max(peak_allocated_bytes_, current_allocated_bytes_);
+
     // Track allocation high water mark
     if (tracking_high_water_mark_) {
         // Calculate end address in interleaved space: address + size_per_bank
@@ -518,11 +526,11 @@ void BankManager::deallocate_buffer(DeviceAddr address, BankManager::AllocatorDe
     auto* alloc = this->get_allocator_from_id(allocator_id);
     TT_FATAL(alloc, "Allocator not initialized!");
 
-    // Track deletion high water mark - remember the extent of buffers being freed
-    if (tracking_high_water_mark_) {
-        auto size_opt = alloc->get_allocation_size(address);
-        if (size_opt.has_value()) {
-            // Update deletion high water mark with the end address of the buffer being deallocated
+    // Track peak allocated bytes and deletion high water mark before deallocation
+    auto size_opt = alloc->get_allocation_size(address);
+    if (size_opt.has_value()) {
+        current_allocated_bytes_ -= std::min(current_allocated_bytes_, static_cast<size_t>(size_opt.value()));
+        if (tracking_high_water_mark_) {
             DeviceAddr end_address = address + size_opt.value();
             deletion_high_water_mark_ = std::max(deletion_high_water_mark_, end_address);
         }
@@ -544,6 +552,7 @@ void BankManager::deallocate_all() {
         allocated_buffers_[allocator_id.get()].clear();
         allocated_ranges_cache_[allocator_id.get()].reset();
     }
+    current_allocated_bytes_ = 0;
 }
 
 void BankManager::clear() {
@@ -554,6 +563,8 @@ void BankManager::clear() {
         }
         allocated_ranges_cache_[allocator_id.get()].reset();
     }
+    current_allocated_bytes_ = 0;
+    peak_allocated_bytes_ = 0;
 }
 
 BankManager& BankManager::operator=(BankManager&& that) noexcept {
@@ -565,6 +576,8 @@ BankManager& BankManager::operator=(BankManager&& that) noexcept {
     alignment_bytes_ = that.alignment_bytes_;
     allocator_dependencies_ = std::move(that.allocator_dependencies_);
     allocated_ranges_cache_ = std::move(that.allocated_ranges_cache_);
+    current_allocated_bytes_ = that.current_allocated_bytes_;
+    peak_allocated_bytes_ = that.peak_allocated_bytes_;
     return *this;
 }
 
@@ -584,7 +597,9 @@ std::optional<DeviceAddr> BankManager::lowest_occupied_address(
 
 Statistics BankManager::get_statistics(BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
     const auto* alloc = this->get_allocator_from_id(allocator_id);
-    return alloc ? alloc->get_statistics() : Statistics();
+    auto stats = alloc ? alloc->get_statistics() : Statistics();
+    stats.peak_allocated_bytes = peak_allocated_bytes_;
+    return stats;
 }
 
 void BankManager::begin_high_water_mark_tracking() {
@@ -605,6 +620,8 @@ DeviceAddr BankManager::get_high_water_mark() const {
 DeviceAddr BankManager::get_allocation_high_water_mark() const { return allocation_high_water_mark_; }
 
 DeviceAddr BankManager::get_deletion_high_water_mark() const { return deletion_high_water_mark_; }
+
+void BankManager::reset_peak_allocated_bytes() { peak_allocated_bytes_ = current_allocated_bytes_; }
 
 void BankManager::dump_blocks(std::ostream& out, BankManager::AllocatorDependencies::AllocatorID allocator_id) const {
     const auto* alloc = this->get_allocator_from_id(allocator_id);

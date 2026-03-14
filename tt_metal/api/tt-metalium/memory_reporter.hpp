@@ -88,12 +88,19 @@ void DumpDeviceMemoryState(const IDevice* device, const std::string& prefix = ""
  * */
 MemoryView GetMemoryView(const IDevice* device, const BufferType& buffer_type);
 
+/**
+ * Reset the peak memory allocation watermark for the given buffer type.
+ * After reset, peak tracking restarts from the current allocation level.
+ */
+void ResetPeakMemoryAllocated(IDevice* device, const BufferType& buffer_type);
+
 struct MemoryView {
     std::uint64_t num_banks = 0;
     size_t total_bytes_per_bank = 0;
     size_t total_bytes_allocated_per_bank = 0;
     size_t total_bytes_free_per_bank = 0;
     size_t largest_contiguous_bytes_free_per_bank = 0;
+    size_t peak_bytes_allocated_per_bank = 0;
     MemoryBlockTable block_table;
 };
 
