@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -35,6 +35,7 @@
 #include "ttnn/distributed/distributed_tensor.hpp"
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
 #include "distribution_mode.hpp"
 
@@ -249,6 +250,8 @@ void py_module(nb::module_& mod) {
         .def("is_local", &SystemMeshDescriptor::is_local)
         .def("all_local", &SystemMeshDescriptor::all_local);
 
+    auto nb_current_sub_device_guard = nb::class_<ttnn::CurrentSubDeviceGuard>(mod, "CurrentSubDeviceGuard");
+
     auto nb_mesh_device = static_cast<nb::class_<MeshDevice>>(mod.attr("MeshDevice"));
     nb_mesh_device.def("get_num_devices", &MeshDevice::num_devices)
         .def("id", &MeshDevice::id)
@@ -283,23 +286,43 @@ void py_module(nb::module_& mod) {
         )doc")
         .def(
             "compute_with_storage_grid_size",
-            &MeshDevice::compute_with_storage_grid_size,
+            [](MeshDevice& self) { return ttnn::DeviceContext(&self).get_compute_with_storage_grid_size(); },
             R"doc(
-           Get the compute grid size (x, y) of the first device in the device mesh denoting region that can be targeted by ops.
-
+           Get the compute grid size (x, y) for the current sub-device (from execution context).
+           Denotes the region that can be targeted by ops on the current sub-device.
 
            Returns:
-               CoreCoord: The compute grid size of the first device in the device mesh.
+               CoreCoord: The compute grid size of the current sub-device.
+       )doc")
+        .def(
+            "set_current_sub_device",
+            [](MeshDevice& self, SubDeviceId sub_device_id) {
+                return ttnn::DeviceContext(&self).set_current_sub_device(sub_device_id);
+            },
+            nb::arg("sub_device_id"),
+            R"doc(
+           Set the current sub device for TTNN execution context. Operations will use this sub device when they do not
+           receive an explicit sub_device_id. Returns an RAII guard that restores the previous current sub device when
+           destroyed.
+
+           Prefer the context manager: ``with ttnn.sub_device(device, sub_device_id): ...``. Use this method only when
+           you need to manage the guard's lifetime explicitly (e.g. custom control flow).
+
+           Args:
+               sub_device_id (SubDeviceId or int): The sub device ID to set as current.
+
+           Returns:
+               CurrentSubDeviceGuard: Restores the previous current sub device when destroyed.
        )doc")
         .def(
             "dram_grid_size",
-            &MeshDevice::dram_grid_size,
+            [](MeshDevice& self) { return ttnn::DeviceContext(&self).get_dram_grid_size(); },
             R"doc(
-           Get the dram grid size (x, y) of the first device in the device mesh.
-
+           Get the DRAM grid size (x, y). Uses the reference (first) physical device in the mesh;
+           context-independent (not sub-device-specific).
 
            Returns:
-               CoreCoord: The dram grid size of the first device in the device mesh.
+               CoreCoord: The DRAM grid size of the reference device.
        )doc")
         .def(
             "arch",

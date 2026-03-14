@@ -4,24 +4,31 @@
 
 #include "ttnn/reports.hpp"
 
-#include <algorithm>
-#include <cstdint>
-#include <map>
 #include <vector>
 
 #include <tt-metalium/allocator.hpp>
 #include <tt-metalium/buffer.hpp>
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt_stl/assert.hpp>
+
+#include "ttnn/device_context.hpp"
 
 namespace ttnn::reports {
 
 DeviceInfo get_device_info(tt::tt_metal::distributed::MeshDevice* device) {
     DeviceInfo info{};
     const auto& device_allocator = device->allocator();
-    info.num_y_cores = device->logical_grid_size().y;
-    info.num_x_cores = device->logical_grid_size().x;
-    info.num_y_compute_cores = device->compute_with_storage_grid_size().y;
-    info.num_x_compute_cores = device->compute_with_storage_grid_size().x;
+    // Use reference (first) device's full grid so device capabilities are context-independent.
+    // DeviceContext::get_compute_with_storage_grid_size() returns the current sub-device's grid; for reports
+    // we need the full reference device's compute grid, so use get_reference_device().
+    const ttnn::DeviceContext ctx(device);
+    const auto logical_grid = ctx.get_logical_grid_size();
+    const auto compute_grid = ctx.get_reference_device()->compute_with_storage_grid_size();
+    info.num_y_cores = logical_grid.y;
+    info.num_x_cores = logical_grid.x;
+    info.num_y_compute_cores = compute_grid.y;
+    info.num_x_compute_cores = compute_grid.x;
     info.worker_l1_size = device_allocator->get_worker_l1_size();
     info.l1_num_banks = device_allocator->get_num_banks(tt::tt_metal::BufferType::L1);
     info.l1_bank_size = device_allocator->get_bank_size(tt::tt_metal::BufferType::L1);
