@@ -286,13 +286,13 @@ class TtLlamaMLP(LightweightModule):
             dtype=ttnn.bfloat8_b,
             memory_config=w1_out.memory_config(),
         )
-        w2_in_gathered = self.tt_ccl.line_all_gather(
-            w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
-        )
-        ttnn.deallocate(w2_in)
-
-        # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
+        # For shorter sequence lengths use separate AllGather + MatMul
+        # For longer sequences (>= 4096), use fused AllGather+MatMul for ~17% FF2 speedup
         if seq_len < 4096 or batch_size > 1:
+            w2_in_gathered = self.tt_ccl.line_all_gather(
+                w2_in, cluster_axis=1, num_links=3, memory_config=w3_out.memory_config(), buffer_key="FF3", dim=3
+            )
+            ttnn.deallocate(w2_in)
             w2_out = ttnn.linear(
                 w2_in_gathered,
                 self.w2_interleaved,
@@ -302,13 +302,18 @@ class TtLlamaMLP(LightweightModule):
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
             )
         else:
-            w2_out = ttnn.experimental.minimal_matmul(
-                input_tensor=w2_in_gathered,
-                weight_tensor=self.w2_interleaved,
-                config=minimal_pc_2,
-                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+            # Fused AllGather + MatMul: uses 6×8/6×9 grid with 3 links for better AG bandwidth
+            w2_out = self.tt_ccl.line_all_gather_matmul(
+                w2_in,
+                self.w2_interleaved,
+                dim=3,
+                cluster_axis=1,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                matmul_config=minimal_pc_2,
+                compute_kernel_config=self.args.compute_kernel_config_hifi2_fp16,
+                dtype=ttnn.bfloat8_b,
             )
+            ttnn.deallocate(w2_in)
 
         w2_out_reduced = self.tt_ccl.line_all_reduce(
             w2_out,

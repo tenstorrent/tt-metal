@@ -98,10 +98,10 @@ class ParallelFeedForward(Module):
             ccl_manager=ccl_manager,
         )
 
-    def forward(self, x: ttnn.Tensor, compute_kernel_config=None) -> ttnn.Tensor:
+    def forward(self, x: ttnn.Tensor, compute_kernel_config=None, parallel_config=None) -> ttnn.Tensor:
         """
         Expects x to be replicated.
         Return output fractured on columns.
         """
-        ff1_out = self.ff1(x, compute_kernel_config=compute_kernel_config)
+        ff1_out = self.ff1(x, compute_kernel_config=compute_kernel_config, parallel_config=parallel_config)
         return self.ff2(ff1_out, compute_kernel_config=compute_kernel_config)
