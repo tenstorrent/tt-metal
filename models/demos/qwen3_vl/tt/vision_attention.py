@@ -24,6 +24,8 @@ class VisionAttention(LightweightModule):
         page_table=None,
         chunk_page_table=None,
         chunk_start_idx=None,
+        batch_size=1,
+        user_id_tensor=None,
     ):
         return self.forward_prefill(
             x,
@@ -33,6 +35,8 @@ class VisionAttention(LightweightModule):
             chunk_page_table=chunk_page_table,
             chunk_start_idx=chunk_start_idx,
             kv_cache=None,
+            batch_size=batch_size,
+            user_id_tensor=None,
         )
 
     def __init(
@@ -45,9 +49,7 @@ class VisionAttention(LightweightModule):
         transformation_mats,
         configuration,
         paged_attention_config=None,
-        # use_paged_kv_cache=False,
         causal_mask=True,
-        # use_kv_cache=True,
     ):
         super().__init__()
 
@@ -61,13 +63,12 @@ class VisionAttention(LightweightModule):
         self.n_kv_heads = configuration.n_kv_heads
         self.paged_attention_config = paged_attention_config
         self.causal_mask = causal_mask
-        # self.use_kv_cache = use_kv_cache
         self.min_kv_prefill_shard_seqlen = configuration.min_kv_prefill_shard_seqlen
         self.ccl_dtype = configuration.ccl_dtype
         self.MAX_QKV_MM_SEQ_LEN = configuration.MAX_QKV_MM_SEQ_LEN
         self.tile_size = configuration.tile_size
 
-        self.num_devices_per_group = 1  # [INFO] each device runs a copy of the vision model
+        self.num_devices_per_group = 1
 
         self.n_local_heads = self.n_heads // self.num_devices_per_group
         self.n_local_kv_heads = self.n_kv_heads // self.num_devices_per_group
@@ -224,7 +225,6 @@ class VisionAttention(LightweightModule):
             qkv_list.append(qkv)
 
         qkv_cat = torch.cat(qkv_list, dim=-1).unsqueeze(0).unsqueeze(0)
-        # qkv_cat.shape = [1, 1, 1280, 4608])
 
         self.wqkv = ttnn.as_tensor(
             qkv_cat,
@@ -254,7 +254,7 @@ class VisionAttention(LightweightModule):
                 state_dict=self.state_dict,
                 state_dict_prefix=None,  # we already prefix q_norm_str
                 weight_cache_path=None if configuration.dummy_weights else weight_cache_path,
-                weight_dtype=ttnn.bfloat16,
+                weight_dtype=RMSNormttnn.bfloat16,
                 weight_key=q_norm_str,
                 is_distributed=False,
                 sharded_program_config=None,  # FIXME: add height-sharded support. self.model_config["SHARDED_NORM_ATTN_PRGM_CFG"],
@@ -359,7 +359,13 @@ class VisionAttention(LightweightModule):
         chunk_page_table=None,
         chunk_start_idx=None,
         kv_cache=None,
+        batch_size=1,
+        user_id_tensor=None,
     ):
+        # For batched prefill, x_11SH has shape [B, 1, S, H]
+        if batch_size > 1:
+            x_11SH = ttnn.reshape(x_11SH, [1, 1, x_11SH.shape[-2] * x_11SH.shape[-3] * x_11SH.shape[-4], -1])
+
         seq_len = x_11SH.shape[-2]
         assert seq_len % 128 == 0 and seq_len > 0, "Seqlen must be divisible by 128"
         ###
@@ -382,11 +388,18 @@ class VisionAttention(LightweightModule):
         )
 
         # FIXME: surely ttnn.linear bias should work?
+        # Use in-place add to avoid OOM from allocating a new tensor
         if self.wqkv_bias_prefill is not None:
-            xqkv_fused = xqkv_fused + self.wqkv_bias_prefill
+            xqkv_fused = ttnn.add(
+                xqkv_fused, self.wqkv_bias_prefill, output_tensor=xqkv_fused, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
 
         if seq_len > self.MAX_QKV_MM_SEQ_LEN:
             xqkv_fused = ttnn.reshape(xqkv_fused, [1, 1, seq_len, -1])
+
+        # For batched prefill, reshape back to [batch_size, 1, seq_len_per_user, dim]
+        if batch_size > 1:
+            xqkv_fused = ttnn.reshape(xqkv_fused, [batch_size, 1, seq_len // batch_size, -1])
 
         ttnn.deallocate(x_11SH)
 
@@ -405,8 +418,6 @@ class VisionAttention(LightweightModule):
 
         q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode=Mode.PREFILL)
         k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode=Mode.PREFILL)
-
-        # last_five_unpadded = lambda x, mesh_device: first_five(x, mesh_device, start=-(96 - 80) - 5, end=-(96 - 80))
 
         ttnn.deallocate(xqkv_fused)
 
@@ -472,6 +483,9 @@ class VisionAttention(LightweightModule):
                 ),
             )
         else:
+            # For batched prefill, the actual per-user seq_len is seq_len // batch_size
+            # since the tensors have shape [batch_size, n_heads, seq_len_per_user, head_dim]
+            sdpa_seq_len = seq_len // batch_size if batch_size > 1 else seq_len
             attn_output_84SD = ttnn.transformer.scaled_dot_product_attention(
                 q_heads_1QSD_8b,
                 k_heads_1KSD_8b,
@@ -479,7 +493,7 @@ class VisionAttention(LightweightModule):
                 is_causal=False,
                 scale=self.scale,
                 compute_kernel_config=self.sdpa_prefill_compute_kernel_cfg,
-                program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, seq_len, None, None),
+                program_config=self.configuration.get_attn_sdpa_program_config(Mode.PREFILL, sdpa_seq_len, None, None),
             )
 
         # deallocate keys and values
@@ -487,7 +501,11 @@ class VisionAttention(LightweightModule):
         ttnn.deallocate(k_heads_1KSD_8b)
         ttnn.deallocate(v_heads_1VSD_8b)
 
-        attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.padded_head_dim])
+        # For single-user prefill, reshape to expected format for nlp_concat_heads
+        if batch_size == 1:
+            attn_output_1QSD = ttnn.reshape(attn_output_84SD, [1, self.n_local_heads, -1, self.padded_head_dim])
+        else:
+            attn_output_1QSD = attn_output_84SD
 
         ###
         # Output matmul
@@ -496,8 +514,12 @@ class VisionAttention(LightweightModule):
             attn_output_1QSD,
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
-
         ttnn.deallocate(attn_output_1QSD)
+
+        # For batched prefill, reshape to concatenate batch dimension into sequence
+        if batch_size > 1:
+            attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, 1, seq_len, -1])
+
         # reshaping long sequence to matmul fit on device
         if seq_len > 1024:
             attn_output_11SH = ttnn.reshape(attn_output_11SH, [1, seq_len // 1024, 1024, -1])
@@ -511,8 +533,11 @@ class VisionAttention(LightweightModule):
             program_config=self.model_config["VISION_WO_PREFILL_PROGCFG"](seq_len),
         )
         # FIXME: surely ttnn.linear bias should work?
+        # Use in-place add to avoid OOM from allocating a new tensor
         if self.wo_bias_prefill is not None:
-            output_11SH = output_11SH + self.wo_bias_prefill
+            output_11SH = ttnn.add(
+                output_11SH, self.wo_bias_prefill, output_tensor=output_11SH, memory_config=ttnn.DRAM_MEMORY_CONFIG
+            )
 
         if seq_len > 1024:
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])

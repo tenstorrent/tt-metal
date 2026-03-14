@@ -77,7 +77,10 @@ class VisionBlock(LightweightModule):
         self,
         x: ttnn.Tensor,
         rot_mats,
+        batch_size=1,
+        user_id_tensor=None,
     ) -> ttnn.Tensor:
+        residual = x
         # x is fractured across devices and interleaved in DRAM (for prefill) and sharded in L1 (for decode)
         skip_mem_cfg = ttnn.DRAM_MEMORY_CONFIG
         assert (
@@ -88,12 +91,12 @@ class VisionBlock(LightweightModule):
         attn_in = self.attention_norm(x)
         # Attention takes replicated inputs and produces fractured outputs
         attn_out = self.attention.forward(
-            attn_in,
-            rot_mats=rot_mats,
+            attn_in, rot_mats=rot_mats, batch_size=batch_size, user_id_tensor=user_id_tensor
         )
+        residual = ttnn.reshape(residual, [1, 1, residual.shape[-2] * residual.shape[-3] * residual.shape[0], -1])
 
         # Here x and attn_out are both fractured across devices
-        h = ttnn.add(x, attn_out, memory_config=skip_mem_cfg, dtype=None)
+        h = ttnn.add(residual, attn_out, memory_config=skip_mem_cfg, dtype=None)
         ttnn.deallocate(attn_out)
         ttnn.deallocate(x)
 
