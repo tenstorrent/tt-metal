@@ -297,17 +297,12 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
 
 node_id GraphProcessor::add_tensor(const Tensor& t) {
     tt::tt_metal::Buffer* buffer = nullptr;
-    if (is_device_tensor(t)) {
-        const auto& storage = t.device_storage();
-        if (storage.mesh_buffer) {
-            // `t.buffers()` returns a reference buffer allocated on first device in a mesh.
-            // It has an ID different from the "backing" buffer that was used to perform the allocation.
-            // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
-            // buffer.
-            buffer = storage.mesh_buffer->get_backing_buffer();
-        } else {
-            buffer = t.buffer();
-        }
+    if (is_device_tensor(t) && t.is_allocated()) {
+        // `t.buffers()` returns a reference buffer allocated on first device in a mesh.
+        // It has an ID different from the "backing" buffer that was used to perform the allocation.
+        // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
+        // buffer.
+        buffer = t.mesh_buffer()->get_backing_buffer();
     }
 
     // TODO #32045: Remove the check for INVALID_TENSOR_ID since IDs are assigned in the constructor.
