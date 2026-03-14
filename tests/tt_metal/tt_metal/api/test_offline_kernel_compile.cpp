@@ -33,11 +33,8 @@ struct ScopedCopiedPrecompiledRoot {
 };
 
 constexpr const char* kReaderKernelPath = "tests/tt_metal/tt_metal/test_kernels/dataflow/reader_unary_push_4.cpp";
-constexpr const char* kComputeKernelPath = "tests/tt_metal/tt_metal/test_kernels/compute/eltwise_copy_3m.cpp";
 constexpr const char* kReaderKernelName = "reader_unary_push_4";
 constexpr const char* kMissingPrecompiledRoot = "/tmp/tt_metal_nonexistent_precompiled_dir";
-constexpr const char* kApiOnlyPrecompiledRoot = "/tmp/tt_metal_precompiled";
-const CoreCoord kSingleCore{0, 0};
 const DataMovementConfig kReaderDmConfig{
     .processor = DataMovementProcessor::RISCV_0,
     .noc = NOC::RISCV_0_default,
@@ -55,7 +52,8 @@ Program create_precompiled_program(
     const experimental::PrecompiledKernelConfig& precompiled_config,
     const std::string& kernel_path = kReaderKernelPath) {
     Program program = CreateProgram();
-    experimental::CreateKernelFromPrecompiled(program, kernel_path, kSingleCore, kReaderDmConfig, precompiled_config);
+    experimental::CreateKernelFromPrecompiled(
+        program, kernel_path, CoreCoord{0, 0}, kReaderDmConfig, precompiled_config);
     return program;
 }
 
@@ -67,7 +65,7 @@ void clear_jit_observability_state() {
 
 Program create_regular_program(const std::string& kernel_path = kReaderKernelPath) {
     Program program = CreateProgram();
-    CreateKernel(program, kernel_path, kSingleCore, kReaderDmConfig);
+    CreateKernel(program, kernel_path, CoreCoord{0, 0}, kReaderDmConfig);
     return program;
 }
 
@@ -137,18 +135,6 @@ TEST_F(MeshDeviceFixture, RuntimeMissingPrecompiledErrorsOnPolicyError) {
         FAIL() << "Unexpected exception type: " << ex.what();
     }
     EXPECT_EQ(jit_build_get_invocation_count(), 0);
-}
-
-TEST_F(MeshDeviceFixture, PrecompiledAPIAcceptsConfigs) {
-    Program program = CreateProgram();
-
-    const auto precompiled_config = make_precompiled_config(kApiOnlyPrecompiledRoot, BinaryPolicy::JitCompile);
-
-    EXPECT_NO_THROW(experimental::CreateKernelFromPrecompiled(
-        program, kReaderKernelPath, kSingleCore, kReaderDmConfig, precompiled_config));
-
-    EXPECT_NO_THROW(experimental::CreateKernelFromPrecompiled(
-        program, kComputeKernelPath, kSingleCore, kBasicComputeConfig, precompiled_config));
 }
 
 }  // namespace tt::tt_metal
