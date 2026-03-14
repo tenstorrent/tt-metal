@@ -156,9 +156,11 @@ def train(
             else:
                 # Non-final stages only propagate gradients backward
                 logits.backward(False)
-
             # Reset computation graph after each micro-batch
             autograd_ctx.reset_graph()
+
+            # Limit runahead to one gradient accumulation step
+            distributed_ctx.barrier()
 
         # Synchronize gradients across data parallel dimension (if enabled)
         if use_ddp:

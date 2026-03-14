@@ -222,6 +222,7 @@ autograd::TensorPtr PipelineParallelLlama::operator()(const autograd::TensorPtr&
             out = (*block)(out, mask);
         }
     }
+    fmt::println("Rank: {} completed all blocks", rank);
 
     if (is_last_rank()) {
         out = (*ln_fc)(out);
