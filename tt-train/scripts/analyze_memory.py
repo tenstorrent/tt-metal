@@ -402,7 +402,7 @@ def analyze_memory_summary(
     return peak_breakdown
 
 
-def main():
+def main(raw_args=None):
     parser = argparse.ArgumentParser(
         description="Analyze memory usage from tt-train logs",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -462,7 +462,7 @@ def main():
         help="Output filename for visualization (default: memory_peak_visualization.png)",
     )
 
-    args = parser.parse_args()
+    args = parser.parse_args(raw_args)
 
     # Read log file
     with open(args.logs, "r") as f:
@@ -539,6 +539,8 @@ def main():
             create_peak_memory_visualization(
                 visualization_data, title=args.title, output_file=args.output
             )
+
+    return breakdown if breakdown else None
 
 
 if __name__ == "__main__":
