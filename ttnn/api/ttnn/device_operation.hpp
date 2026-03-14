@@ -396,10 +396,6 @@ void launch_operation_with_adapter(
     }
 }
 
-// get_output_placements_and_shape has been factored into the non-template function
-// compute_output_placements_and_shape() in device_operation_detail.hpp/cpp.
-// This eliminates ~100 lines of template code that was instantiated per operation type.
-
 template <DeviceOperationConcept device_operation_t>
 ttnn::MeshDevice* get_mesh_device(
     const typename device_operation_t::operation_attributes_t& operation_attributes,
@@ -440,11 +436,8 @@ typename device_operation_t::tensor_return_value_t launch(
     tt::tt_metal::GraphTracker::instance().track_function_start(
         detail::get_operation_name<device_operation_t>(operation_attributes), operation_attributes, input_tensors);
 
-    auto first_tensor = tt::stl::reflection::get_first_object_of_type<Tensor>(tensor_args);
-    if (first_tensor.has_value()) [[likely]] {
-        TT_FATAL(
-            tt::tt_metal::is_device_tensor(first_tensor.value()),
-            "Device Operations expect tensor with Device storage in inputs");
+    if (!input_tensors.empty()) {
+        TT_FATAL(is_device_tensor(input_tensors.front().get()), "Device Operations expect tensor with Device storage in inputs");
     }
 
     auto tensor_return_value = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
@@ -464,8 +457,7 @@ typename device_operation_t::tensor_return_value_t launch(
             mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device), tensor_return_value);
     }
 
-    if (first_tensor.has_value()) [[likely]] {
-        // Check if op provides custom output topologies
+    if (!input_tensors.empty()) [[likely]] {
         std::vector<tt::tt_metal::TensorTopology> custom_topologies;
         if constexpr (requires {
                           {
@@ -475,32 +467,8 @@ typename device_operation_t::tensor_return_value_t launch(
             custom_topologies = device_operation_t::compute_output_topologies(operation_attributes, tensor_args);
         }
 
-        if (!custom_topologies.empty()) {
-            // Use custom topologies provided by the op
-            tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
-                [&custom_topologies, topology_idx = size_t{0}](const Tensor& output_tensor) mutable {
-                    TT_FATAL(
-                        topology_idx < custom_topologies.size(),
-                        "Not enough custom topologies provided for output tensors");
-                    return output_tensor.with_tensor_topology(custom_topologies[topology_idx++]);
-                },
-                tensor_return_value);
-        } else {
-            // Fall back to default topology imputation.
-            // Uses the pre-extracted input_tensors to avoid re-visiting the templated tensor_args struct.
-            auto output_topology_result =
-                detail::compute_output_placements_and_shape(input_tensors, first_tensor.value());
-
-            tensor_return_value = tt::stl::reflection::transform_object_of_type<Tensor>(
-                [&output_topology_result](const Tensor& output_tensor) {
-                    auto topology = tt::tt_metal::TensorTopology(
-                        output_topology_result.second,
-                        output_topology_result.first,
-                        output_tensor.tensor_topology().mesh_coords());
-                    return output_tensor.with_tensor_topology(topology);
-                },
-                tensor_return_value);
-        }
+        mesh_device_operation_utils::update_output_tensor_topologies(
+            tensor_return_value, input_tensors, std::move(custom_topologies));
     }
 
     detail::launch_operation_with_adapter<MeshDeviceOperationAdapter<device_operation_t>>(
