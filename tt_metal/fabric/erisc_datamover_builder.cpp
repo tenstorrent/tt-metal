@@ -1023,41 +1023,71 @@ FabricEriscDatamoverBuilder::CompileTimeArgs FabricEriscDatamoverBuilder::get_co
     // ===== Build named compile-time args (all non-pool/channel-mapping args) =====
     std::unordered_map<std::string, uint32_t> named_args;
 
-    // --- Stream IDs ---
-    const auto& stream_ids = StreamRegAssignments::get_all_stream_ids();
-    named_args["TO_RECEIVER_0_PKTS_SENT_ID"] = stream_ids[0];
-    named_args["TO_RECEIVER_1_PKTS_SENT_ID"] = stream_ids[1];
-    named_args["TO_SENDER_0_PKTS_ACKED_ID"] = stream_ids[2];
-    named_args["TO_SENDER_1_PKTS_ACKED_ID"] = stream_ids[3];
-    named_args["TO_SENDER_2_PKTS_ACKED_ID"] = stream_ids[4];
-    named_args["TO_SENDER_3_PKTS_ACKED_ID"] = stream_ids[5];
-    named_args["TO_SENDER_0_PKTS_COMPLETED_ID"] = stream_ids[6];
-    named_args["TO_SENDER_1_PKTS_COMPLETED_ID"] = stream_ids[7];
-    named_args["TO_SENDER_2_PKTS_COMPLETED_ID"] = stream_ids[8];
-    named_args["TO_SENDER_3_PKTS_COMPLETED_ID"] = stream_ids[9];
-    named_args["TO_SENDER_4_PKTS_COMPLETED_ID"] = stream_ids[10];
-    named_args["TO_SENDER_5_PKTS_COMPLETED_ID"] = stream_ids[11];
-    named_args["TO_SENDER_6_PKTS_COMPLETED_ID"] = stream_ids[12];
-    named_args["TO_SENDER_7_PKTS_COMPLETED_ID"] = stream_ids[13];
-    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID"] = stream_ids[14];
-    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_2_STREAM_ID"] = stream_ids[15];
-    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID"] = stream_ids[16];
-    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID"] = stream_ids[17];
-    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID"] = stream_ids[18];
-    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_2_STREAM_ID"] = stream_ids[19];
-    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID"] = stream_ids[20];
-    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID"] = stream_ids[21];
-    named_args["SENDER_CHANNEL_0_FREE_SLOTS_STREAM_ID"] = stream_ids[22];
-    named_args["SENDER_CHANNEL_1_FREE_SLOTS_STREAM_ID"] = stream_ids[23];
-    named_args["SENDER_CHANNEL_2_FREE_SLOTS_STREAM_ID"] = stream_ids[24];
-    named_args["SENDER_CHANNEL_3_FREE_SLOTS_STREAM_ID"] = stream_ids[25];
-    named_args["SENDER_CHANNEL_4_FREE_SLOTS_STREAM_ID"] = stream_ids[26];
-    named_args["SENDER_CHANNEL_5_FREE_SLOTS_STREAM_ID"] = stream_ids[27];
-    named_args["SENDER_CHANNEL_6_FREE_SLOTS_STREAM_ID"] = stream_ids[28];
-    named_args["SENDER_CHANNEL_7_FREE_SLOTS_STREAM_ID"] = stream_ids[29];
-    named_args["TENSIX_RELAY_LOCAL_FREE_SLOTS_STREAM_ID"] = stream_ids[30];
-    named_args["MULTI_RISC_TEARDOWN_SYNC_STREAM_ID"] = stream_ids[31];
-    named_args["ETH_RETRAIN_LINK_SYNC_STREAM_ID"] = stream_ids[32];
+    // --- Stream IDs (per-VC accessors — wire format preserved) ---
+    // Receiver pkts-sent: one per VC
+    named_args["TO_RECEIVER_0_PKTS_SENT_ID"] = StreamRegAssignments::to_receiver_pkts_sent_ids_per_vc[0];
+    named_args["TO_RECEIVER_1_PKTS_SENT_ID"] = StreamRegAssignments::to_receiver_pkts_sent_ids_per_vc[1];
+
+    // Sender pkts-acked: VC0 channels 0-3 (VC1 has no first-level acks, omitted from CT args)
+    named_args["TO_SENDER_0_PKTS_ACKED_ID"] = StreamRegAssignments::to_sender_pkts_acked_ids_per_vc[0][0];
+    named_args["TO_SENDER_1_PKTS_ACKED_ID"] = StreamRegAssignments::to_sender_pkts_acked_ids_per_vc[0][1];
+    named_args["TO_SENDER_2_PKTS_ACKED_ID"] = StreamRegAssignments::to_sender_pkts_acked_ids_per_vc[0][2];
+    named_args["TO_SENDER_3_PKTS_ACKED_ID"] = StreamRegAssignments::to_sender_pkts_acked_ids_per_vc[0][3];
+
+    // Sender pkts-completed: VC0 channels 0-3, then VC1 channels 0-3
+    // CT arg names use flat sender channel index (0-7), not VC-relative index
+    named_args["TO_SENDER_0_PKTS_COMPLETED_ID"] = StreamRegAssignments::to_sender_pkts_completed_ids_per_vc[0][0];
+    named_args["TO_SENDER_1_PKTS_COMPLETED_ID"] = StreamRegAssignments::to_sender_pkts_completed_ids_per_vc[0][1];
+    named_args["TO_SENDER_2_PKTS_COMPLETED_ID"] = StreamRegAssignments::to_sender_pkts_completed_ids_per_vc[0][2];
+    named_args["TO_SENDER_3_PKTS_COMPLETED_ID"] = StreamRegAssignments::to_sender_pkts_completed_ids_per_vc[0][3];
+    named_args["TO_SENDER_4_PKTS_COMPLETED_ID"] = StreamRegAssignments::to_sender_pkts_completed_ids_per_vc[1][0];
+    named_args["TO_SENDER_5_PKTS_COMPLETED_ID"] = StreamRegAssignments::to_sender_pkts_completed_ids_per_vc[1][1];
+    named_args["TO_SENDER_6_PKTS_COMPLETED_ID"] = StreamRegAssignments::to_sender_pkts_completed_ids_per_vc[1][2];
+    named_args["TO_SENDER_7_PKTS_COMPLETED_ID"] = StreamRegAssignments::to_sender_pkts_completed_ids_per_vc[1][3];
+
+    // Receiver free-slots: VC0 edges 1-4, then VC1 edges 1-4
+    // CT arg names use VC prefix + 1-based edge number; array is 0-indexed
+    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID"] =
+        StreamRegAssignments::vc_free_slots_from_downstream_edge_ids[0][0];
+    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_2_STREAM_ID"] =
+        StreamRegAssignments::vc_free_slots_from_downstream_edge_ids[0][1];
+    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID"] =
+        StreamRegAssignments::vc_free_slots_from_downstream_edge_ids[0][2];
+    named_args["VC0_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID"] =
+        StreamRegAssignments::vc_free_slots_from_downstream_edge_ids[0][3];
+    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_1_STREAM_ID"] =
+        StreamRegAssignments::vc_free_slots_from_downstream_edge_ids[1][0];
+    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_2_STREAM_ID"] =
+        StreamRegAssignments::vc_free_slots_from_downstream_edge_ids[1][1];
+    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_3_STREAM_ID"] =
+        StreamRegAssignments::vc_free_slots_from_downstream_edge_ids[1][2];
+    named_args["VC1_FREE_SLOTS_FROM_DOWNSTREAM_EDGE_4_STREAM_ID"] =
+        StreamRegAssignments::vc_free_slots_from_downstream_edge_ids[1][3];
+
+    // Sender free-slots: VC0 channels 0-3, then VC1 channels 0-3
+    // CT arg names use flat sender channel index (0-7); array is indexed by [vc][vc_relative_ch]
+    named_args["SENDER_CHANNEL_0_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::sender_channel_free_slots_stream_ids_per_vc[0][0];
+    named_args["SENDER_CHANNEL_1_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::sender_channel_free_slots_stream_ids_per_vc[0][1];
+    named_args["SENDER_CHANNEL_2_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::sender_channel_free_slots_stream_ids_per_vc[0][2];
+    named_args["SENDER_CHANNEL_3_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::sender_channel_free_slots_stream_ids_per_vc[0][3];
+    named_args["SENDER_CHANNEL_4_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::sender_channel_free_slots_stream_ids_per_vc[1][0];
+    named_args["SENDER_CHANNEL_5_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::sender_channel_free_slots_stream_ids_per_vc[1][1];
+    named_args["SENDER_CHANNEL_6_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::sender_channel_free_slots_stream_ids_per_vc[1][2];
+    named_args["SENDER_CHANNEL_7_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::sender_channel_free_slots_stream_ids_per_vc[1][3];
+
+    // Non-VC stream IDs: reference named constants directly (not grouped by VC)
+    named_args["TENSIX_RELAY_LOCAL_FREE_SLOTS_STREAM_ID"] =
+        StreamRegAssignments::tensix_relay_local_free_slots_stream_id;
+    named_args["MULTI_RISC_TEARDOWN_SYNC_STREAM_ID"] = StreamRegAssignments::multi_risc_teardown_sync_stream_id;
+    named_args["ETH_RETRAIN_LINK_SYNC_STREAM_ID"] = StreamRegAssignments::eth_retrain_link_sync_stream_id;
 
     // --- Max channel counts ---
     named_args["MAX_NUM_SENDER_CHANNELS"] = builder_config::num_max_sender_channels;
