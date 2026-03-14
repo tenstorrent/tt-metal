@@ -8,7 +8,7 @@
 | 2 | Device Receiver Per-VC | Migrate device-side receiver channel indexing to per-VC | DR-01 to DR-04 | Pending |
 | 3 | 1/2 | Complete    | 2026-03-13 | Pending |
 | 4 | Device Sender Per-VC | Complete    | 2026-03-13 | Complete (2026-03-13) |
-| 5 | 1/1 | Complete   | 2026-03-14 | Pending |
+| 5 | 1/1 | Complete    | 2026-03-14 | Pending |
 | 6 | Stream Reg Assignment | Update host stream reg assignment table/map for per-VC | SR-01 to SR-02 | Pending |
 
 ---

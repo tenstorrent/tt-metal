@@ -3,7 +3,8 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-last_updated: "2026-03-14T00:05:06.505Z"
+stopped_at: Completed 05-channel-allocator-01-PLAN.md
+last_updated: "2026-03-14T00:07:53.488Z"
 progress:
   total_phases: 6
   completed_phases: 3
