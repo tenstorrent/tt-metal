@@ -353,7 +353,8 @@
 - name: qwen2.5-vl-32b-instruct performance batch-32
   cmd: |
     uv pip install -r models/demos/qwen25_vl/requirements.txt
-    CI=true HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b MESH_DEVICE=T3K pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
+    python -c "import nltk; nltk.download('punkt'); nltk.download('wordnet')"
+    CI=true HF_MODEL=$qwen25_vl_32b TT_CACHE_PATH=$tt_cache_32b MESH_DEVICE=T3K pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
   skus:
     bh_llmbox:
       timeout: 10
@@ -367,8 +368,9 @@
 
 - name: qwen2.5-vl-72b performance batch-32
   cmd: |
-    uv pip install -r models/demos/qwen25_vl/requirements.txt
-    CI=true HF_MODEL=models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct TT_CACHE_PATH=models/tt_transformers/model_params/Qwen2.5-VL-72B-Instruct MESH_DEVICE=T3K pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
+    uv pip install --system -r models/demos/qwen25_vl/requirements.txt
+    python -c "import nltk; nltk.download('punkt'); nltk.download('wordnet')"
+    CI=true HF_MODEL=$qwen25_vl_72b TT_CACHE_PATH=$tt_cache_72b MESH_DEVICE=T3K pytest --timeout 600 models/demos/qwen25_vl/demo/demo.py
   skus:
     bh_llmbox:
       timeout: 10
