@@ -9,6 +9,7 @@
 #include "ttnn/distributed/api.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
+#include "ttnn/tensor/tensor_attributes.hpp"
 
 #include <tt-metalium/hal.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -150,6 +151,8 @@ static inline Tensor move_sharded(const Tensor& input_tensor, const std::optiona
 }
 
 ttnn::Tensor MoveOperation::invoke(const Tensor& input_tensor, const std::optional<MemoryConfig>& output_mem_config) {
+    // Move deallocates input_tensor at entry.
+    GhostSpecAccessGuard guard("ttnn::move");
     if (input_tensor.memory_config().is_sharded()) {
         return move_sharded(input_tensor, output_mem_config);
     }

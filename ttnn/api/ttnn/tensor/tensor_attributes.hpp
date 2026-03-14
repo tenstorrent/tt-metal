@@ -5,12 +5,28 @@
 #pragma once
 
 #include <memory>
+#include <string_view>
 
 #include "ttnn/tensor/storage.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 #include "ttnn/distributed/tensor_topology.hpp"
 
 namespace tt::tt_metal {
+
+struct GhostSpecAccessGuard {
+private:
+    static bool check_ghost_spec_;
+    static std::string_view current_white_listed_function;
+
+public:
+    GhostSpecAccessGuard(std::string_view current_function) {
+        check_ghost_spec_ = false;
+        current_white_listed_function = current_function;
+    }
+    ~GhostSpecAccessGuard() { check_ghost_spec_ = true; }
+
+    static void fault();
+};
 
 class TensorAttributes : public std::enable_shared_from_this<TensorAttributes> {
 public:
