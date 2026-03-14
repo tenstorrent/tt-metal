@@ -51,6 +51,27 @@ class VisionModelArgs(ModelArgs):
         num_rows = lambda seq_len: min(seq_len, 1024 if self.is_galaxy else 2048)
         k_dim = self.vision_dim // self.cluster_shape[0] if self.is_galaxy else self.vision_dim
         n_dim = self.vision_dim // self.cluster_shape[1] if self.is_galaxy else self.vision_dim
+
+        # SDPA program config: f(seq_len) or f(seq_len, chunk_start_idx) for chunked prefill
+        def _sdpa_prog_cfg(seq_len, chunk_start_idx=None):
+            q_chunk = (
+                256
+                if seq_len >= 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else 64
+                if seq_len < 2048 and (chunk_start_idx is None or chunk_start_idx == 0)
+                else min(256, chunk_start_idx & -chunk_start_idx)
+                if seq_len >= 2048
+                else min(64, chunk_start_idx & -chunk_start_idx)
+            )
+            k_chunk = q_chunk  # Same as tt_transformers workaround
+            return ttnn.SDPAProgramConfig(
+                compute_with_storage_grid_size=(8, 8),
+                exp_approx_mode=False,
+                q_chunk_size=q_chunk,
+                k_chunk_size=k_chunk,
+            )
+
+        self.model_config["SDPA_PROGCFG"] = _sdpa_prog_cfg
         self.model_config["VISION_WO_PREFILL_PROGCFG"] = lambda seq_len: self.matmul_config(
             m=num_rows(seq_len),
             k=k_dim,
