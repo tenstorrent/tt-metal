@@ -7,26 +7,13 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn {
-namespace operations::experimental::reduction {
+namespace ttnn::experimental::reduction {
 
-struct FastReduceNCOperation {
-    static ttnn::Tensor invoke(
-        const ttnn::Tensor& input,
-        tt::stl::Span<const int32_t> dims,
-        const std::optional<const Tensor>& output,
-        const ttnn::MemoryConfig& memory_config,
-        std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
-};
+ttnn::Tensor fast_reduce_nc(
+    const ttnn::Tensor& input,
+    const ttnn::SmallVector<int32_t>& dims,
+    const std::optional<const Tensor>& output,
+    const ttnn::MemoryConfig& memory_config,
+    std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
 
-}  // namespace operations::experimental::reduction
-
-namespace experimental::reduction {
-
-constexpr auto fast_reduce_nc = ttnn::register_operation<
-    "ttnn::experimental::fast_reduce_nc",
-    ttnn::operations::experimental::reduction::FastReduceNCOperation>();
-
-}  // namespace experimental::reduction
-
-}  // namespace ttnn
+}  // namespace ttnn::experimental::reduction
