@@ -495,6 +495,25 @@ def create_tt_model(
             False,  # is_cur_pos_sharded
             False,  # is_page_table_sharded
         ),
+        (  # prefill-profile-8k-b32 - Runs 1L prefill-only with 8k ISL and batch 32
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_long_8k.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            10,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 8192},  # page_params (8192 blocks for 8k tokens per user)
+            {"temperature": 0, "top_p": 0.08},  # sampling_params (argmax)
+            False,  # stop_at_eos
+            False,  # apc_test
+            False,  # pcc_check
+            True,  # prefill-only profile
+            1,  # num layers
+            False,  # print_outputs
+            False,  # is_cur_pos_sharded
+            False,  # is_page_table_sharded
+        ),
         (  # apc-test Run for PCC check, perf and functionality check: Batch-32 run (Throughput) - 32 users, prompt is "This is a test"
             "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_reference.json",  # input_prompts
             True,  # instruct mode
@@ -550,6 +569,7 @@ def create_tt_model(
         "long-64k-b1",  # 64k context for 1 user
         "long-128k-b1",  # 128k context for 1 user
         "prefill-profile",  # prefill-only profile run
+        "prefill-profile-8k-b32",  # 8k ISL batch 32 prefill-only profile
         "apc-test",  # apc check for 80L + teacher forced for prefill + pcc check on prefill and 1st decode token
         "pcc-80L",  # pcc check for 80L + teacher forced
     ],
@@ -646,17 +666,12 @@ def test_demo_text(
     print_outputs = request.config.getoption("--print_outputs") or print_outputs
 
     enable_trace = True  # Use tracing for better perf
-    prefill_enable_trace = True
+    # Disable trace for large batch profiling (trace capture doesn't work with ReadDeviceProfiler)
+    prefill_enable_trace = os.environ.get("DISABLE_PREFILL_TRACE", "0") != "1"
     print_to_file = False  # Enable this flag to print the output of all users to a file
     instruct = num_layers == 80 and instruct  # if using instruct weights it must be full model
     input_lengths = (
-        [
-            534,
-            1008,
-            1111 * 4,
-            3333 * 4,
-        ]
-        * 8
+        [32000] * 32  # All 32 users with ~8k tokens (32000 chars -> ~8k tokens after tokenization)
         if batch_size == 32
         else [15384 * 8]
     )

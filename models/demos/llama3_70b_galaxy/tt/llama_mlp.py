@@ -201,6 +201,9 @@ class TtLlamaMLP(LightweightModule):
         w3 -> up_proj
         HF reference: self.down_proj(self.act_fn(self.gate_proj(x)) * self.up_proj(x))
         """
+        import os
+
+        flush_profiler = os.environ.get("FLUSH_PROFILER_IN_MLP", "0") == "1"
         seq_len = x.shape[-2]
         use_w1_w3_interleaved = (seq_len >= 4096 or seq_len == 128) if not self.args.is_qwen else True
         short_lens_pc_1_3 = self.model_config["PREFILL_MLP_W1_W3_PRG_CONFIG"](seq_len, use_w1_w3_interleaved)
@@ -246,6 +249,11 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(w1_out)
 
+        # Flush profiler after FF1 to avoid buffer overflow for large batch profiling
+        if flush_profiler:
+            ttnn.synchronize_device(self.mesh_device)
+            ttnn.ReadDeviceProfiler(self.mesh_device)
+
         # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
         if seq_len < 4096 or batch_size > 1:
             w3_out = ttnn.linear(
@@ -279,6 +287,12 @@ class TtLlamaMLP(LightweightModule):
             batch_size=batch_size,
         )
         ttnn.deallocate(w3_out)
+
+        # Flush profiler after FF3 to avoid buffer overflow for large batch profiling
+        if flush_profiler:
+            ttnn.synchronize_device(self.mesh_device)
+            ttnn.ReadDeviceProfiler(self.mesh_device)
+
         w2_in = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
@@ -288,7 +302,7 @@ class TtLlamaMLP(LightweightModule):
         )
 
         # Fused AllGather+MatMul path (same config as unit test: grid, num_links from divisibility, num_workers_per_link, etc.)
-        if self.model_config.get("USE_FUSED_AG_MM", False) and seq_len >= 4096 and batch_size == 1:
+        if self.model_config.get("USE_FUSED_AG_MM", False) and seq_len >= 4096:
             w2_out = self.tt_ccl.line_all_gather_matmul(
                 w2_in,
                 self.w2_interleaved,

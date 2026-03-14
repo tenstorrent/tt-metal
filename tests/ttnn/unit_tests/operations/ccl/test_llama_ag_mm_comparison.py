@@ -125,6 +125,7 @@ def run_ag_mm_test(
     K_per_device = K // ring_size
 
     # Fused op expects full K (a_logical[-1]*ring_size); use full (M,K) input sharded, full (K,N) weight, golden = full@full.
+    # Use BFP8 for better performance (matches Llama model dtype)
     torch.manual_seed(42)
     torch_input_f32 = torch.randn((1, 1, M, K), dtype=torch.float32)
     torch_weight_f32 = torch.randn((K, N), dtype=torch.float32)
@@ -134,7 +135,7 @@ def run_ag_mm_test(
 
     tt_input = ttnn.from_torch(
         torch_input,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -143,7 +144,7 @@ def run_ag_mm_test(
 
     tt_weight = ttnn.from_torch(
         torch_weight,
-        dtype=ttnn.bfloat16,
+        dtype=ttnn.bfloat8_b,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
@@ -159,7 +160,7 @@ def run_ag_mm_test(
                 torch.zeros(ag_output_shape, dtype=torch.bfloat16),
                 device=mesh_device,
                 layout=ttnn.TILE_LAYOUT,
-                dtype=ttnn.bfloat16,
+                dtype=ttnn.bfloat8_b,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
             )
