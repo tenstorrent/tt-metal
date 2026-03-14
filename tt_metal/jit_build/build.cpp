@@ -515,6 +515,56 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
                 defines += ss.str() + " ";
             });
 
+        // Generate header with named arg namespaces (rt_args:: for runtime, ct_args:: for compile-time).
+        // RT args: rt_args::get<rt_args::ns::field>() — tagged constexpr Arg with dispatch type
+        // CT args: ct_args::ns::field — plain constexpr uint32_t values
+        std::ostringstream header_rt, header_ct;
+        settings->process_named_runtime_args([&header_rt](const NamedRuntimeArgNamespaces& namespaces) {
+            for (const auto& [ns, entries] : namespaces) {
+                if (!ns.empty()) {
+                    header_rt << "namespace " << ns << " {\n";
+                }
+                for (const auto& entry : entries) {
+                    const char* dispatch_str =
+                        entry.dispatch == RuntimeArgDispatch::COMMON ? "Dispatch::COMMON" : "Dispatch::PER_CORE";
+                    header_rt << "    constexpr Arg " << entry.field << " = {" << entry.index << ", " << dispatch_str
+                              << "};\n";
+                }
+                if (!ns.empty()) {
+                    header_rt << "}\n";
+                }
+            }
+        });
+        settings->process_named_ct_arg_namespaces([&header_ct](const NamedCTArgNamespaces& namespaces) {
+            for (const auto& [ns, entries] : namespaces) {
+                if (!ns.empty()) {
+                    header_ct << "struct " << ns << " {\n";
+                }
+                for (const auto& [field, value] : entries) {
+                    header_ct << "    static constexpr uint32_t " << field << " = " << value << ";\n";
+                }
+                if (!ns.empty()) {
+                    header_ct << "};\n";
+                }
+            }
+        });
+        auto rt_str = header_rt.str();
+        auto ct_str = header_ct.str();
+        if (!rt_str.empty() || !ct_str.empty()) {
+            std::string header_path = out_dir + "named_args_generated.h";
+            std::ostringstream content;
+            content << "#pragma once\n#include \"api/rt_arg.h\"\n\n";
+            if (!rt_str.empty()) {
+                content << "namespace rt_args {\n" << rt_str << "}\n\n";
+            }
+            if (!ct_str.empty()) {
+                content << "namespace ct_args {\n" << ct_str << "}\n";
+            }
+            std::ofstream f(header_path);
+            f << content.str();
+            defines += fmt::format("-include {} ", header_path);
+        }
+
         cmd += fmt::format("-{} ", settings->get_compiler_opt_level());
     } else {
         cmd += fmt::format("-{} ", this->default_compile_opt_level_);
