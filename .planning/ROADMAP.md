@@ -12,7 +12,7 @@
 | 6 | 1/1 | Complete    | 2026-03-14 | Pending |
 | 7 | Reorganize buffer slot configs by VC | Replace PerVcBufferSlots with VcSlotConfig array pattern | Phase 7 goal | Complete (2026-03-14) |
 | 8 | 2/2 | Complete   | 2026-03-14 | Pending |
-| 9 | Device-side kernel per-VC templates | Add per-VC template helpers to device kernel headers and router | Phase 9 goal | Pending |
+| 9 | 1/3 | In Progress|  | Pending |
 | 10 | Split channel_allocs into per-VC in device CT args | Separate channel_allocs into per-VC channel allocations in device CT args | Phase 10 goal | Pending |
 
 ---
@@ -165,7 +165,7 @@ Plans:
 **Goal:** Add per-VC template helpers to device kernel headers and refactor router kernel to use templated per-VC functions.
 **Requirements**: Phase 9 goal (additive beyond original 18 requirements)
 **Depends on:** Phase 8
-**Plans:** 3 plans
+**Plans:** 1/3 plans executed
 
 Plans:
 - [ ] 09-01-PLAN.md — Add per-VC constexpr foundation constants and per-VC sender channel arrays to ct_args header

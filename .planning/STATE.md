@@ -3,13 +3,13 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: unknown
-stopped_at: Phase 9 context gathered
-last_updated: "2026-03-14T21:24:22.188Z"
+stopped_at: Completed 09-01-PLAN.md
+last_updated: "2026-03-14T22:07:52.866Z"
 progress:
   total_phases: 10
   completed_phases: 6
-  total_plans: 8
-  completed_plans: 8
+  total_plans: 11
+  completed_plans: 9
 ---
 
 # Project State
@@ -19,7 +19,7 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-12)
 
 **Core value:** Each PR is self-contained, correct, and independently reviewable
-**Current focus:** Phase 8 — Host-side per-VC consolidation
+**Current focus:** Phase 9 — Device-side kernel per-VC templates
 
 ## Phase Validation Procedure
 
@@ -46,6 +46,22 @@ Note: Neither the build nor the sanity test should hang. Any hang is a regressio
 ---
 
 ## Current Phase
+
+**Phase 9: Device-Side Kernel Per-VC Templates — Plan 01 Complete (2026-03-14)**
+
+Plan 01 completed:
+- Added `MAX_NUM_VCS = 2` device-side constexpr and four per-VC foundation arrays to `fabric_erisc_router_ct_args.hpp`
+- Added `extract_vc_sender_channels<T,VC,N,SRC_N>()` compile-time VC-slice helper template
+- Added ten per-VC sender channel config arrays (_vc0/_vc1 variants for all five flat sender arrays)
+- Added `is_sender_channel_serviced_vc<VC,CH>()` function template accessor for dead-code-eliminating per-channel access
+- Added `SENDER_NUM_BUFFERS_ARRAY_VC0/VC1` inside `tt::tt_fabric` namespace
+- Build: PASSED (zero new errors)
+
+Key decisions:
+- MAX_NUM_VCS defined locally on device side (no host header access from kernel)
+- Per-VC arrays sized to MAX (not ACTUAL) for uniform per-VC channel indexing
+- extract_vc_sender_channels placed at file scope (usable both inside and outside tt::tt_fabric)
+- Flat arrays fully preserved (additive only); removal deferred to Plan 03
 
 **Phase 8: Host-Side Per-VC Consolidation — Complete (2026-03-14)**
 
@@ -113,10 +129,10 @@ Key decisions:
 
 ## Session
 
-**Last session:** 2026-03-14T21:24:22.184Z
-**Stopped at:** Phase 9 context gathered
+**Last session:** 2026-03-14T22:07:52.862Z
+**Stopped at:** Completed 09-01-PLAN.md
 
 ## Next Plan
 
-**Phase 8 complete — all host builder code migrated to per-VC API**
-No _vc0/_vc1 split patterns remain in host builder code. Ready for Phase 9.
+**Phase 9 Plan 01 complete — per-VC CT-arg infrastructure ready**
+Per-VC constexpr arrays and template accessor in `fabric_erisc_router_ct_args.hpp`. Ready for Phase 9 Plan 02 (runtime array splitting and loop templating in `fabric_erisc_router.cpp`).
