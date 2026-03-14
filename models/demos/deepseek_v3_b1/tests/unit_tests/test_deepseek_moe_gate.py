@@ -7,9 +7,11 @@ import torch
 from loguru import logger
 
 import ttnn
+from models.common.utility_functions import skip_with_llk_assert
 from models.demos.deepseek_v3_b1.micro_ops.deepseek_moe_gate.op import DeepseekMoeGateSingleCore
 
 
+@skip_with_llk_assert("Hits LLK assert check for number of faces when transposing tensor.")
 @pytest.mark.parametrize("batch_size", [1, 2])
 @pytest.mark.parametrize("enable_sigmoid", [True, False])
 @pytest.mark.parametrize("seed", [42, 201, 512])

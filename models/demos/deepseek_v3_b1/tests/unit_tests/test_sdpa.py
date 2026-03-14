@@ -16,10 +16,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, skip_with_llk_assert
 from models.demos.deepseek_v3_b1.micro_ops.sdpa.op import SdpaSingleCore
 
 
+@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "num_tiles_k, num_tiles_v, chunk_size, num_chunks, scale",
     [
