@@ -11,10 +11,12 @@
 namespace tt::tt_metal {
 
 bool GhostSpecAccessGuard::check_ghost_spec_ = true;
+std::string_view GhostSpecAccessGuard::current_white_listed_function = "";
 
 void GhostSpecAccessGuard::fault() {
     if (!check_ghost_spec_) {
-        log_error(tt::LogAlways, "Ghost spec access detected in whitelisted function");
+        log_error(
+            tt::LogAlways, "Ghost spec access detected in whitelisted function: {}", current_white_listed_function);
         return;
     }
 
