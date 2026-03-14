@@ -12,6 +12,7 @@ from pathlib import Path
 from loguru import logger
 
 import ttnn
+from models.common.sampling.sampling_params import SamplingParams
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
 from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
@@ -120,6 +121,9 @@ def create_parser() -> argparse.ArgumentParser:
         help="Path to local HF DeepSeek-V3 model (safetensors)",
     )
     p.add_argument("--max-new-tokens", type=int, default=32, help="Number of tokens to generate")
+    p.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature.")
+    p.add_argument("--top-k", type=int, default=1, help="Top-k value for sampling.")
+    p.add_argument("--top-p", type=float, default=1.0, help="Top-p value for sampling.")
     p.add_argument("--cache-dir", type=str, required=True)
     # Random-weights mode options (reuse Model1D pipeline; single dense layer only)
     p.add_argument(
@@ -350,6 +354,9 @@ def run_demo(
     stop_at_eos: bool = True,
     checkpoint_jsonl: str | Path | None = None,
     enable_mtp: bool = False,
+    temperature: float = 1.0,
+    top_k: int = 1,
+    top_p: float = 0.0,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -364,6 +371,21 @@ def run_demo(
     if cache_dir is None:
         raise SystemExit("Missing cache directory. Provide --cache-dir.")
     cache_dir = Path(cache_dir)
+
+    if temperature <= 0:
+        raise SystemExit("--sampling-temperature must be > 0 when --sampling is enabled.")
+    if not (0.0 < top_p <= 1.0):
+        raise SystemExit("--sampling-top-p must be in the interval (0, 1].")
+    if top_k < 0:
+        raise SystemExit("--sampling-top-k must be >= 0.")
+
+    sampling_params = SamplingParams(
+        temperature=temperature,
+        top_p=top_p,
+        top_k=top_k,
+    )
+
+    logger.info(f"Sampling parameters: {sampling_params.temperature}, {sampling_params.top_p}, {sampling_params.top_k}")
 
     # Validate model directory per mode
     validate_model_path(
@@ -454,6 +476,7 @@ def run_demo(
                 profile_decode=profile_decode,
                 sample_on_device=sample_on_device,
                 enable_mtp=enable_mtp,
+                sampling_params=sampling_params,
             )
         else:
             raise ValueError(f"Unsupported generator: {generator}")
@@ -676,6 +699,9 @@ def main() -> None:
         profile_decode=args.profile_decode,
         sample_on_device=args.sample_on_device,
         force_recalculate=bool(args.force_recalculate),
+        temperature=args.temperature,
+        top_k=args.top_k,
+        top_p=args.top_p,
         stop_at_eos=bool(args.stop_at_eos),
         checkpoint_jsonl=args.checkpoint_jsonl,
         enable_mtp=(args.mtp == "on"),
