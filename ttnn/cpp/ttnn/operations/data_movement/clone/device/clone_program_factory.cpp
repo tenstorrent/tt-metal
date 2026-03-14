@@ -56,6 +56,13 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
         uint32_t shard_height = shard_shape[0];
         uint32_t shard_width = shard_shape[1];
 
+        // For row-major sharded, the unit (stick) size must be the shard width, not the
+        // full tensor width. Using tensor width causes OOB reads past the shard boundary.
+        if (!tilized) {
+            input_unit_size = shard_width * input.element_size();
+            output_unit_size = shard_width * output.element_size();
+        }
+
         if (tilized) {
             num_units_per_core_group_1 = (shard_height * shard_width) / TILE_HW;
         } else {
@@ -91,56 +98,18 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
     auto alignment = input.buffer()->alignment();
 
     uint32_t src_cb_id = CBIndex::c_4;
-
-    // For row-major sharded, we need to use actual shard dimensions, not tensor dimensions
-    uint32_t rm_sharded_input_stick_size = input_unit_size;
-    uint32_t rm_sharded_output_stick_size = output_unit_size;
-
-    if (is_sharded && !tilized) {
-        // Row-major sharded: configure CB with stick-based pages
-        auto shard_spec = input.buffer()->shard_spec();
-        uint32_t shard_width = shard_spec.shape()[1];  // Width of each shard
-        // For row-major sharded, use actual shard width, not full tensor width
-        rm_sharded_input_stick_size = shard_width * input.element_size();
-
-        // Use standard CB config without globally allocated address
-        uint32_t aligned_stick_size = tt::align(rm_sharded_input_stick_size, alignment);
-        auto src_cb_config = CircularBufferConfig(2 * aligned_stick_size, {{src_cb_id, input_data_format}})
-                                 .set_page_size(src_cb_id, aligned_stick_size);
-        CreateCircularBuffer(program, all_cores, src_cb_config);
-    } else {
-        // Tilized or interleaved: existing configuration
-        uint32_t aligned_input_unit_size = tt::align(input_unit_size, alignment);
-        auto src_cb_config = CircularBufferConfig(2 * aligned_input_unit_size, {{src_cb_id, input_data_format}})
-                                 .set_page_size(src_cb_id, aligned_input_unit_size);
-        CreateCircularBuffer(program, all_cores, src_cb_config);
-    }
+    uint32_t aligned_input_unit_size = tt::align(input_unit_size, alignment);
+    auto src_cb_config = CircularBufferConfig(2 * aligned_input_unit_size, {{src_cb_id, input_data_format}})
+                             .set_page_size(src_cb_id, aligned_input_unit_size);
+    CreateCircularBuffer(program, all_cores, src_cb_config);
 
     uint32_t dst_cb_id = src_cb_id;
     if (convert_dtype) {
         dst_cb_id = CBIndex::c_20;
-        if (is_sharded && !tilized) {
-            // Row-major sharded output CB with dtype conversion
-            auto shard_spec = output.buffer()->shard_spec();
-            uint32_t shard_width = shard_spec.shape()[1];
-            rm_sharded_output_stick_size = shard_width * output.element_size();
-
-            uint32_t aligned_stick_size = tt::align(rm_sharded_output_stick_size, alignment);
-            auto dst_cb_config = CircularBufferConfig(2 * aligned_stick_size, {{dst_cb_id, output_data_format}})
-                                     .set_page_size(dst_cb_id, aligned_stick_size);
-            CreateCircularBuffer(program, all_cores, dst_cb_config);
-        } else {
-            // Existing tilized/interleaved configuration
-            uint32_t aligned_output_unit_size = tt::align(output_unit_size, alignment);
-            auto dst_cb_config = CircularBufferConfig(2 * aligned_output_unit_size, {{dst_cb_id, output_data_format}})
-                                     .set_page_size(dst_cb_id, aligned_output_unit_size);
-            CreateCircularBuffer(program, all_cores, dst_cb_config);
-        }
-    } else if (is_sharded && !tilized) {
-        // For row-major sharded without dtype conversion, fix output stick size
-        auto shard_spec = output.buffer()->shard_spec();
-        uint32_t shard_width = shard_spec.shape()[1];
-        rm_sharded_output_stick_size = shard_width * output.element_size();
+        uint32_t aligned_output_unit_size = tt::align(output_unit_size, alignment);
+        auto dst_cb_config = CircularBufferConfig(2 * aligned_output_unit_size, {{dst_cb_id, output_data_format}})
+                                 .set_page_size(dst_cb_id, aligned_output_unit_size);
+        CreateCircularBuffer(program, all_cores, dst_cb_config);
     }
 
     auto* input_buffer = input.buffer();
@@ -242,7 +211,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
                     core,
                     {
                         (uint32_t)input_buffer->address(),
-                        (uint32_t)rm_sharded_input_stick_size,
+                        (uint32_t)input_unit_size,
                         (uint32_t)num_units_per_core,
                     });
                 SetRuntimeArgs(
@@ -251,7 +220,7 @@ CloneOperation::ProgramFactory::cached_program_t CloneOperation::ProgramFactory:
                     core,
                     {
                         (uint32_t)output_buffer->address(),
-                        (uint32_t)rm_sharded_output_stick_size,
+                        (uint32_t)output_unit_size,
                         (uint32_t)num_units_per_core,
                     });
             }
