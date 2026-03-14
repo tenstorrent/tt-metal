@@ -66,24 +66,41 @@ void override_program_runtime_arguments(
             if (!runtime_arg.empty()) {
                 auto& cached_runtime_args = GetRuntimeArgs(program, kernel_handle, core_coord);
                 TT_FATAL(
-                    cached_runtime_args.size() == runtime_arg.size(),
-                    "Runtime args size mismatch: cached {} vs new {}",
+                    cached_runtime_args.size() >= runtime_arg.size(),
+                    "Runtime args size mismatch: cached {} vs positional {}",
                     cached_runtime_args.size(),
                     runtime_arg.size());
                 std::copy(runtime_arg.begin(), runtime_arg.end(), cached_runtime_args.data());
             }
         }
-        if (!kernel_desc.common_runtime_args.empty()) {
+        // Update named per-core runtime arg values in the cached runtime args.
+        // These sit at offset per_core_base (after positional args) in each core's vector.
+        if (!kernel_desc.named_per_core_runtime_args.empty()) {
+            uint32_t per_core_base = 0;
+            if (!kernel_desc.runtime_args.empty()) {
+                per_core_base = static_cast<uint32_t>(kernel_desc.runtime_args[0].second.size());
+            }
+            for (uint32_t i = 0; i < kernel_desc.named_per_core_runtime_args.size(); ++i) {
+                for (const auto& [core, value] : kernel_desc.named_per_core_runtime_args[i].core_values) {
+                    auto& cached = GetRuntimeArgs(program, kernel_handle, core);
+                    cached[per_core_base + i] = value;
+                }
+            }
+        }
+        // Build the effective common runtime args: positional + named values
+        auto effective_common_args = kernel_desc.common_runtime_args;
+        effective_common_args.reserve(effective_common_args.size() + kernel_desc.named_common_runtime_args.size());
+        for (const auto& arg : kernel_desc.named_common_runtime_args) {
+            effective_common_args.push_back(arg.value);
+        }
+        if (!effective_common_args.empty()) {
             auto& cached_common_runtime_args = GetCommonRuntimeArgs(program, kernel_handle);
             TT_FATAL(
-                cached_common_runtime_args.size() == kernel_desc.common_runtime_args.size(),
+                cached_common_runtime_args.size() == effective_common_args.size(),
                 "Common runtime args size mismatch: cached {} vs new {}",
                 cached_common_runtime_args.size(),
-                kernel_desc.common_runtime_args.size());
-            std::copy(
-                kernel_desc.common_runtime_args.begin(),
-                kernel_desc.common_runtime_args.end(),
-                cached_common_runtime_args.data());
+                effective_common_args.size());
+            std::copy(effective_common_args.begin(), effective_common_args.end(), cached_common_runtime_args.data());
         }
     }
 
