@@ -31,6 +31,9 @@ import ml_dtypes
 
 import ttnn
 import ttml
+import ttml.common.muon_optimizer
+
+ttml.common.muon_optimizer.register()
 from ttml.models.nanogpt import (
     NanoGPT,
     NanoGPTConfig,

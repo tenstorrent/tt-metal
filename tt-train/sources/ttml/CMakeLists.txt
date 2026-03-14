@@ -61,6 +61,9 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/newton_schulz_op.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/newton_schulz_op.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rope_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/softmax_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
@@ -68,6 +71,11 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/sampling_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw_composite.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ops/sampling_op.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/adamw.hpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/muon.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/muon.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/optimizer_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/remote_optimizer.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/optimizers/sgd_composite.cpp
