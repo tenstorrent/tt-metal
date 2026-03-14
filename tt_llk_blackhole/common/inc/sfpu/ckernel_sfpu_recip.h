@@ -60,6 +60,15 @@ sfpi_inline sfpi::vFloat _sfpu_reciprocal_(const sfpi::vFloat x)
 // Approximate reciprocal, with throughput of 1c/32.
 inline void _calculate_reciprocal_fast_7b_(const int iterations)
 {
+#ifdef DISABLE_SFPLOADMACRO
+#pragma GCC unroll 8
+    for (int d = 0; d < iterations; d++)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPARECIP_MOD1_RECIP);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+    }
+#else
 #pragma GCC unroll 8
     for (int d = 0; d < iterations; d++)
     {
@@ -67,11 +76,28 @@ inline void _calculate_reciprocal_fast_7b_(const int iterations)
     }
     TTI_SFPNOP;
     TTI_SFPNOP;
+#endif
 }
 
 // BF16 reciprocal, with throughput of 3c/32.
 inline void _calculate_reciprocal_fast_8b_3c_(const int iterations)
 {
+#ifdef DISABLE_SFPLOADMACRO
+    TTI_SFPLOADI(p_sfpu::LREG2, sfpi::SFPLOADI_MOD0_USHORT, 0x8000);
+
+#pragma GCC unroll 8
+    for (int d = 0; d < iterations; d++)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TTI_SFPMAD(p_sfpu::LCONST_0, p_sfpu::LCONST_0, p_sfpu::LREG0, p_sfpu::LREG1, 0);
+        TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG0, sfpi::SFPARECIP_MOD1_RECIP);
+        TTI_SFPOR(0, p_sfpu::LREG2, p_sfpu::LREG0, 0);
+        TTI_SFPMAD(p_sfpu::LREG1, p_sfpu::LREG0, p_sfpu::LCONST_neg1, p_sfpu::LREG1, 0);
+        TTI_SFPSHFT((-16) & 0xFFF, p_sfpu::LREG1, p_sfpu::LREG1, 5);
+        TTI_SFPIADD(0, p_sfpu::LREG1, p_sfpu::LREG0, sfpi::SFPIADD_MOD1_CC_NONE);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+    }
+#else
     // We use SFPMAD_MOD1_INDIRECT_VD to schedule SFPMAD and write to L[L7],
     // with L7=x throughout.
     //
@@ -83,15 +109,15 @@ inline void _calculate_reciprocal_fast_8b_3c_(const int iterations)
     // StoreMod0=MOD0_FMT_SRCB.
     //
     // In pseudocode, the following steps allow the LSB of the BF16 result to
-    // be corrected:
+    // be corrected using the sign bit of the error term:
     //
     // y = load()
     // x = 0*0 + y
     // y = arecip(y)
     // y = y | (1<<15) # via load of 0x8000 with MOD0_LO16_ONLY
-    // y = x * y - 1
-    // t = y >> 16     # via load of y with MOD0_LO16
-    // y += t
+    // z = x * y - 1   # compute Newton-Raphson error term
+    // t = z >> 16     # via load with MOD0_LO16
+    // y += t          # integer add, not FP32 add
     // store(y)
     //
     // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
@@ -158,11 +184,26 @@ inline void _calculate_reciprocal_fast_8b_3c_(const int iterations)
     }
 
     TTI_SFPNOP;
+#endif
 }
 
 // FP32 reciprocal, with throughput of 5c/32.
 inline void _calculate_reciprocal_fast_24b_5c_(const int iterations)
 {
+#ifdef DISABLE_SFPLOADMACRO
+#pragma GCC unroll 8
+    for (int d = 0; d < iterations; d++)
+    {
+        TTI_SFPLOAD(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_7, 0);
+        TTI_SFPARECIP(0, p_sfpu::LREG0, p_sfpu::LREG1, sfpi::SFPARECIP_MOD1_RECIP);
+        TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG1, p_sfpu::LCONST_1, p_sfpu::LREG2, 1); // SFPMAD_MOD1_NEGATE_VA
+        TTI_SFPMAD(p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG3, 0);
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG2, p_sfpu::LREG2, p_sfpu::LREG3, 0);
+        TTI_SFPSWAP(0, p_sfpu::LCONST_1, p_sfpu::LREG3, sfpi::SFPSWAP_MOD1_VEC_MIN_MAX);
+        TTI_SFPMAD(p_sfpu::LREG3, p_sfpu::LREG1, p_sfpu::LREG1, p_sfpu::LREG0, 0);
+        TTI_SFPSTORE(p_sfpu::LREG0, InstrModLoadStore::DEFAULT, ADDR_MOD_6, 0);
+    }
+#else
     // Pseudocode:
     //
     // y = arecip(x)
@@ -210,6 +251,7 @@ inline void _calculate_reciprocal_fast_24b_5c_(const int iterations)
     TTI_SFPNOP;
     TTI_SFPNOP;
     TTI_SFPNOP;
+#endif
 }
 
 template <bool APPROXIMATION_MODE, int ITERATIONS, bool is_fp32_dest_acc_en>
@@ -245,6 +287,7 @@ inline void _calculate_reciprocal_(const int iterations)
 // ~7b precision; 1c/element
 inline void _init_reciprocal_fast_7b_()
 {
+#ifndef DISABLE_SFPLOADMACRO
     // Notation: [x] means scheduled by SFPLOADMACRO with VD=x.
     //
     // t | Load | Simple                | Store   |
@@ -253,7 +296,7 @@ inline void _init_reciprocal_fast_7b_()
     // 1 |      | [x] L16 = arecip([x]) |         |
     // 2 |      |                       | [x] L16 |
 
-    TTI_SFPARECIP(0, 0, 12, 0);
+    TTI_SFPARECIP(0, 0, 12, sfpi::SFPARECIP_MOD1_RECIP);
 
     constexpr std::uint32_t simple_bits = 0x00 | 0x40 | (0 << 3) | (4 + 0);
     constexpr std::uint32_t mad_bits    = 0;
@@ -267,15 +310,17 @@ inline void _init_reciprocal_fast_7b_()
 
     // Misc: {UsesLoadMod0ForStore=1, WaitForElapsedInstructions=1} for macro 0.
     TTI_SFPCONFIG(0x110, 8, 1);
+#endif
 }
 
 inline void _init_reciprocal_fast_8b_3c_()
 {
+#ifndef DISABLE_SFPLOADMACRO
     constexpr int x = p_sfpu::LREG1;
     constexpr int t = p_sfpu::LREG1;
 
     // InstructionTemplate[0]
-    TTI_SFPARECIP(0, 0, 12, 0);
+    TTI_SFPARECIP(0, 0, 12, sfpi::SFPARECIP_MOD1_RECIP);
 
     // InstructionTemplate[1]
     TTI_SFPMAD(p_sfpu::LCONST_0, p_sfpu::LCONST_0, 0, 13, 8); // SFPMAD_MOD1_INDIRECT_VD
@@ -323,17 +368,19 @@ inline void _init_reciprocal_fast_8b_3c_()
     //   UnitDelayKind: {1,1,1}, (WaitForElapsedInstructions=1)
     // }
     TTI_SFPCONFIG(0x700, 8, 1);
+#endif
 }
 
 inline void _init_reciprocal_fast_24b_5c_()
 {
+#ifndef DISABLE_SFPLOADMACRO
     constexpr int e  = p_sfpu::LREG0;
     constexpr int t2 = p_sfpu::LREG1;
     constexpr int z  = p_sfpu::LREG2;
     constexpr int y  = p_sfpu::LREG3;
 
     // InstructionTemplate[0]
-    TTI_SFPARECIP(0, 0, 12, 0);
+    TTI_SFPARECIP(0, 0, 12, sfpi::SFPARECIP_MOD1_RECIP);
 
     // InstructionTemplate[1]
     TTI_SFPMAD(p_sfpu::LREG0, p_sfpu::LREG0, 0, 13, 0);
@@ -407,6 +454,7 @@ inline void _init_reciprocal_fast_24b_5c_()
             TTI_SFPLOADMACRO((3 << 2) | (z & 3), 0, ADDR_MOD_6, prev_offset | (z >> 2));
             TTI_SFPLOADMACRO((3 << 2) | (z & 3), 0, ADDR_MOD_7, prev_offset | (z >> 2));
         });
+#endif
 }
 
 template <bool APPROXIMATION_MODE>
