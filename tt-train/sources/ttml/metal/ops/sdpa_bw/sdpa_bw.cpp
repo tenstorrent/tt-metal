@@ -19,13 +19,22 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> sdpa_bw(
     AttentionMaskType mask_type,
     const std::optional<ttnn::Tensor>& attn_mask,
     const float dropout_probability) {
-    // Call KV kernel to compute grad_K and grad_V
-    auto [grad_K, grad_V] = ttnn::prim::ttml_sdpa_kv_bw(
+    // Call Q kernel first to compute grad_Q and u_scaler = rowsum(dO * O)
+    auto [grad_Q, u_scaler] = ttnn::prim::ttml_sdpa_q_bw(
         grad_output, attn_output, query, key, value, mask_type, attn_mask, intermediates, dropout_probability);
 
-    // Call Q kernel to compute grad_Q
-    auto grad_Q = ttnn::prim::ttml_sdpa_q_bw(
-        grad_output, attn_output, query, key, value, mask_type, attn_mask, intermediates, dropout_probability);
+    // Call KV kernel with precomputed u_scaler (no longer needs attn_output)
+    auto [grad_K, grad_V] = ttnn::prim::ttml_sdpa_kv_bw(
+        grad_output,
+        query,
+        key,
+        value,
+        mask_type,
+        attn_mask,
+        intermediates,
+        u_scaler,
+        std::nullopt,  // attn_output not needed when u_scaler is provided
+        dropout_probability);
 
     return {grad_Q, grad_K, grad_V};
 }
