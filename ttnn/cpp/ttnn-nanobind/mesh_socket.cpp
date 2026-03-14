@@ -74,11 +74,17 @@ void py_module_types(nb::module_& mod) {
                 tt::tt_metal::BufferType,
                 uint32_t,
                 std::optional<tt::tt_metal::SubDeviceId>,
-                std::optional<tt::tt_metal::SubDeviceId>>(),
+                std::optional<tt::tt_metal::SubDeviceId>,
+                std::optional<tt::tt_metal::DeviceAddr>,
+                std::optional<tt::tt_metal::DeviceAddr>,
+                std::optional<tt::tt_metal::DeviceAddr>>(),
             nb::arg("socket_storage_type"),
             nb::arg("fifo_size"),
             nb::arg("sender_sub_device") = nb::none(),
             nb::arg("receiver_sub_device") = nb::none(),
+            nb::arg("data_buffer_address") = nb::none(),
+            nb::arg("sender_config_buffer_address") = nb::none(),
+            nb::arg("receiver_config_buffer_address") = nb::none(),
             R"doc(
                 Initialize a SocketMemoryConfig with socket storage type, fifo size, sender sub device and receiver sub device.
 
@@ -87,6 +93,9 @@ void py_module_types(nb::module_& mod) {
                     fifo_size (int): The size of the fifo
                     sender_sub_device (SubDeviceId, optional): The sub device of the sender
                     receiver_sub_device (SubDeviceId, optional): The sub device of the receiver
+                    data_buffer_address (DeviceAddr, optional): The address of the data buffer on the receiver cores
+                    sender_config_buffer_address (DeviceAddr, optional): The address of the sender config buffer on the sender cores
+                    receiver_config_buffer_address (DeviceAddr, optional): The address of the receiver config buffer on the receiver cores
             )doc");
     nb::class_<tt::tt_metal::distributed::SocketConfig>(mod, "SocketConfig")
         .def(

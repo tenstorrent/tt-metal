@@ -42,6 +42,9 @@ class PipelineBlock:
         entry_node_downstream=None,
         exit_node_upstream=None,
         embedding_tensor=None,
+        sender_config_buffer_address=None,
+        receiver_config_buffer_address=None,
+        data_buffer_address=None,
     ):
         assert (
             upstream_d2d_socket_fifo_size >= upstream_d2d_socket_page_size
@@ -92,11 +95,15 @@ class PipelineBlock:
                 ttnn.BufferType.L1,
                 h2d_socket_fifo_size,
                 ttnn.H2DMode.HOST_PUSH,  # Host Push is faster than Device Pull for small page sizes
+                config_buffer_address=receiver_config_buffer_address,
+                data_buffer_address=data_buffer_address,
             )
             self.d2h_socket = ttnn.D2HSocket(
-                mesh_device, ttnn.MeshCoreCoord(d2h_device_coord, pipeline_core_coord), d2h_socket_fifo_size
+                mesh_device,
+                ttnn.MeshCoreCoord(d2h_device_coord, pipeline_core_coord),
+                d2h_socket_fifo_size,
+                config_buffer_address=sender_config_buffer_address,
             )
-
             self.host_io = HostInterface(
                 self.h2d_socket,
                 self.d2h_socket,
@@ -108,8 +115,10 @@ class PipelineBlock:
                 ),
                 d2h_upstream_core=ttnn.MeshCoreCoord(pipeline_config[num_procs].entry_node_coord, pipeline_core_coord),
                 embedding_tensor=embedding_tensor,
+                sender_config_buffer_address=sender_config_buffer_address,
+                receiver_config_buffer_address=receiver_config_buffer_address,
+                data_buffer_address=data_buffer_address,
             )
-
             self.exit_socket_interface = SocketInterface(
                 downstream_d2d_socket_page_size,
                 downstream_d2d_socket_fifo_size,
@@ -119,6 +128,9 @@ class PipelineBlock:
                 upstream_socket=self.host_io.get_downstream_socket(),
                 sender_mesh=MeshWrapper(mesh_device),
                 receiver_mesh=MeshWrapper(mesh_id=self.my_mesh_id + 1),
+                sender_config_buffer_address=sender_config_buffer_address,
+                receiver_config_buffer_address=receiver_config_buffer_address,
+                data_buffer_address=data_buffer_address,
             )
 
             self.entry_socket_interface = SocketInterface(
@@ -130,6 +142,9 @@ class PipelineBlock:
                 downstream_socket=self.host_io.get_upstream_socket(),
                 sender_mesh=MeshWrapper(mesh_id=num_procs - 1),
                 receiver_mesh=MeshWrapper(mesh_device),
+                sender_config_buffer_address=sender_config_buffer_address,
+                receiver_config_buffer_address=receiver_config_buffer_address,
+                data_buffer_address=data_buffer_address,
             )
 
         else:
@@ -144,6 +159,9 @@ class PipelineBlock:
                 else ttnn.MeshCoreCoord(pipeline_config[self.my_mesh_id].exit_node_coord, pipeline_core_coord),
                 sender_mesh=MeshWrapper(mesh_id=self.my_mesh_id - 1),
                 receiver_mesh=MeshWrapper(mesh_device),
+                sender_config_buffer_address=sender_config_buffer_address,
+                receiver_config_buffer_address=receiver_config_buffer_address,
+                data_buffer_address=data_buffer_address,
             )
             self.exit_socket_interface = SocketInterface(
                 downstream_d2d_socket_page_size,
@@ -155,6 +173,9 @@ class PipelineBlock:
                 upstream_socket=self.entry_socket_interface.get_downstream_socket() if not exit_node_upstream else None,
                 sender_mesh=MeshWrapper(mesh_device),
                 receiver_mesh=MeshWrapper(mesh_id=self.my_mesh_id + 1 if self.my_mesh_id < num_procs - 1 else 0),
+                sender_config_buffer_address=sender_config_buffer_address,
+                receiver_config_buffer_address=receiver_config_buffer_address,
+                data_buffer_address=data_buffer_address,
             )
 
     def run(self):

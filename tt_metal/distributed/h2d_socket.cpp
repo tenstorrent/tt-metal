@@ -84,7 +84,8 @@ H2DSocket::PinnedBufferInfo H2DSocket::init_host_data_buffer(
         .addr_hi = static_cast<uint32_t>(noc_addr.value().addr >> 32)};
 }
 
-void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_device) {
+void H2DSocket::init_config_buffer(
+    const std::shared_ptr<MeshDevice>& mesh_device, std::optional<DeviceAddr> config_buffer_address) {
     uint32_t config_buffer_size = sizeof(receiver_socket_md);
     auto num_cores = 1;
     auto shard_params = ShardSpecBuffer(
@@ -105,10 +106,22 @@ void H2DSocket::init_config_buffer(const std::shared_ptr<MeshDevice>& mesh_devic
     MeshBufferConfig config_mesh_buffer_specs = ReplicatedBufferConfig{
         .size = config_buffer_size,
     };
-    config_buffer_ = MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get());
+    if (config_buffer_address.has_value()) {
+        auto l1_size = mesh_device->allocator()->get_bank_size(BufferType::L1);
+        TT_FATAL(
+            config_buffer_address.value() + config_buffer_size <= l1_size,
+            "Config buffer address {} is out of bounds for L1 size {}",
+            config_buffer_address.value(),
+            l1_size);
+    }
+    config_buffer_ =
+        MeshBuffer::create(config_mesh_buffer_specs, config_buffer_specs, mesh_device.get(), config_buffer_address);
 }
 
-void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device, uint32_t pcie_alignment) {
+void H2DSocket::init_data_buffer(
+    const std::shared_ptr<MeshDevice>& mesh_device,
+    uint32_t pcie_alignment,
+    std::optional<DeviceAddr> data_buffer_address) {
     auto num_data_cores = mesh_device->num_worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
     auto shard_grid = mesh_device->worker_cores(HalProgrammableCoreType::TENSIX, SubDeviceId{0});
 
@@ -127,7 +140,16 @@ void H2DSocket::init_data_buffer(const std::shared_ptr<MeshDevice>& mesh_device,
     MeshBufferConfig data_mesh_buffer_specs = ReplicatedBufferConfig{
         .size = total_data_buffer_size,
     };
-    data_buffer_ = MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get());
+    if (data_buffer_address.has_value()) {
+        auto l1_size = mesh_device->allocator()->get_bank_size(BufferType::L1);
+        TT_FATAL(
+            data_buffer_address.value() + fifo_size_ + pcie_alignment <= l1_size,
+            "Data buffer address {} is out of bounds for L1 size {}",
+            data_buffer_address.value(),
+            l1_size);
+    }
+    data_buffer_ =
+        MeshBuffer::create(data_mesh_buffer_specs, data_buffer_specs, mesh_device.get(), data_buffer_address);
     aligned_data_buf_start_ = tt::align(data_buffer_->address(), pcie_alignment);
     write_ptr_ = 0;
 }
@@ -136,7 +158,7 @@ void H2DSocket::write_socket_metadata(
     const std::shared_ptr<MeshDevice>& mesh_device,
     const PinnedBufferInfo& bytes_acked_info,
     const PinnedBufferInfo& data_info) {
-    const auto& core_to_core_id = config_buffer_->get_backing_buffer()->get_buffer_page_mapping()->core_to_core_id;
+    auto core_to_core_id = get_device_local_buffer_view(config_buffer_)->get_buffer_page_mapping()->core_to_core_id;
 
     std::vector<receiver_socket_md> config_data(
         config_buffer_->size() / sizeof(receiver_socket_md), receiver_socket_md());
@@ -190,7 +212,9 @@ H2DSocket::H2DSocket(
     const MeshCoreCoord& recv_core,
     BufferType buffer_type,
     uint32_t fifo_size,
-    H2DMode h2d_mode) :
+    H2DMode h2d_mode,
+    std::optional<DeviceAddr> config_buffer_address,
+    std::optional<DeviceAddr> data_buffer_address) :
     recv_core_(recv_core),
     buffer_type_(buffer_type),
     fifo_size_(fifo_size),
@@ -223,8 +247,8 @@ H2DSocket::H2DSocket(
         bytes_acked_ptr_ = host_buffer_.get();
     }
 
-    init_config_buffer(mesh_device);
-    init_data_buffer(mesh_device, pcie_alignment);
+    init_config_buffer(mesh_device, config_buffer_address);
+    init_data_buffer(mesh_device, pcie_alignment, data_buffer_address);
     write_socket_metadata(mesh_device, bytes_acked_info, data_info);
     init_receiver_tlb(mesh_device);
 }
