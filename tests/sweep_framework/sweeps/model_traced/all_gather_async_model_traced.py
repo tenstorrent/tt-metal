@@ -529,6 +529,10 @@ def run(
                         op_kwargs["barrier_semaphore"] = barrier_semaphore_handles[i]
                     if persistent_output_buffers:
                         op_kwargs["persistent_output_buffer"] = persistent_output_buffers[i]
+                        # The overload that accepts persistent_output_buffer
+                        # infers the mesh device from the tensor; passing both
+                        # causes an argument mismatch.
+                        op_kwargs.pop("mesh_device", None)
                     if chunks_per_sync is not None:
                         op_kwargs["chunks_per_sync"] = chunks_per_sync
                     if num_workers_per_link is not None:
