@@ -570,10 +570,16 @@ bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
 template <typename TargetNode, typename GlobalNode>
 bool MappingConstraints<TargetNode, GlobalNode>::add_forbidden_constraint(
     const std::set<TargetNode>& target_nodes, GlobalNode global_node) {
+    std::map<TargetNode, std::set<GlobalNode>> saved_state;
     for (const auto& target_node : target_nodes) {
         forbidden_pairs_.insert({target_node, global_node});
+        auto it = valid_mappings_.find(target_node);
+        if (it != valid_mappings_.end()) {
+            saved_state[target_node] = it->second;
+            it->second.erase(global_node);
+        }
     }
-    return true;
+    return saved_state.empty() ? true : validate(&saved_state);
 }
 
 template <typename TargetNode, typename GlobalNode>

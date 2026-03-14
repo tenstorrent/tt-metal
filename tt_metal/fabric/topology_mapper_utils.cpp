@@ -913,6 +913,8 @@ void add_pinning_constraints(
         fabric_node_to_positions[fabric_node].push_back(position);
     }
 
+    bool success = true;
+
     // Apply pinning constraints
     for (const auto& [fabric_node, positions] : fabric_node_to_positions) {
         std::set<tt::tt_metal::AsicID> asic_ids;
@@ -921,6 +923,15 @@ void add_pinning_constraints(
         for (const auto& position : positions) {
             auto it = asic_positions_to_asic_ids.find(position);
             if (it == asic_positions_to_asic_ids.end()) {
+                log_critical(
+                    tt::LogFabric,
+                    "Pinned ASIC position (tray_id: {}, asic_location: {}) to fabric node id (mesh_id: {}, chip_id: "
+                    "{}) from MGD not found in physical topology",
+                    position.first.get(),
+                    position.second.get(),
+                    fabric_node.mesh_id.get(),
+                    fabric_node.chip_id);
+                success = false;
                 continue;
             }
             asic_ids.insert(it->second.begin(), it->second.end());
@@ -935,6 +946,7 @@ void add_pinning_constraints(
             }
         }
     }
+    TT_FATAL(success, "Failed to add pinning constraints");
 }
 
 // Helper function to add exit node constraints
