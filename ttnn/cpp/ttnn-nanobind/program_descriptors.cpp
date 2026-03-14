@@ -580,17 +580,51 @@ void py_module_types(nb::module_& mod) {
             Default constructor for KernelDescriptor.
         )pbdoc")
         .def(
-            nb::init<
-                const std::string&,
-                tt::tt_metal::KernelDescriptor::SourceType,
-                CoreRangeSet,
-                tt::tt_metal::KernelDescriptor::CompileTimeArgs,
-                tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs,
-                tt::tt_metal::KernelDescriptor::Defines,
-                tt::tt_metal::KernelDescriptor::RuntimeArgs,
-                tt::tt_metal::KernelDescriptor::CommonRuntimeArgs,
-                std::optional<tt::tt_metal::KernelBuildOptLevel>,
-                tt::tt_metal::KernelDescriptor::ConfigDescriptor>(),
+            "__init__",
+            [](tt::tt_metal::KernelDescriptor* self,
+               const std::string& kernel_source,
+               tt::tt_metal::KernelDescriptor::SourceType source_type,
+               CoreRangeSet core_ranges,
+               tt::tt_metal::KernelDescriptor::CompileTimeArgs compile_time_args,
+               tt::tt_metal::KernelDescriptor::NamedCompileTimeArgs named_compile_time_args,
+               tt::tt_metal::KernelDescriptor::Defines defines,
+               tt::tt_metal::KernelDescriptor::RuntimeArgs runtime_args,
+               tt::tt_metal::KernelDescriptor::CommonRuntimeArgs common_runtime_args,
+               const nb::list& named_common_runtime_args,
+               const nb::list& named_per_core_runtime_args,
+               std::optional<tt::tt_metal::KernelBuildOptLevel> opt_level,
+               tt::tt_metal::KernelDescriptor::ConfigDescriptor config) {
+                tt::tt_metal::KernelDescriptor::NamedCommonRuntimeArgs ncra;
+                for (auto item : named_common_runtime_args) {
+                    auto tup = nb::cast<nb::tuple>(item);
+                    ncra.push_back({nb::cast<std::string>(tup[0]), nb::cast<uint32_t>(tup[1])});
+                }
+                tt::tt_metal::KernelDescriptor::NamedPerCoreRuntimeArgs npcra;
+                for (auto item : named_per_core_runtime_args) {
+                    auto tup = nb::cast<nb::tuple>(item);
+                    auto name = nb::cast<std::string>(tup[0]);
+                    auto dict = nb::cast<nb::dict>(tup[1]);
+                    std::vector<std::pair<CoreCoord, uint32_t>> core_values;
+                    for (const auto& [k, v] : dict) {
+                        core_values.emplace_back(nb::cast<CoreCoord>(k), nb::cast<uint32_t>(v));
+                    }
+                    npcra.push_back({std::move(name), std::move(core_values)});
+                }
+                new (self) tt::tt_metal::KernelDescriptor{
+                    kernel_source,
+                    source_type,
+                    std::move(core_ranges),
+                    std::move(compile_time_args),
+                    std::move(named_compile_time_args),
+                    std::move(defines),
+                    std::move(runtime_args),
+                    std::move(common_runtime_args),
+                    std::move(ncra),
+                    std::move(npcra),
+                    opt_level,
+                    std::move(config),
+                };
+            },
             nb::arg("kernel_source"),
             nb::arg("source_type") = nb::cast(tt::tt_metal::KernelDescriptor::SourceType::FILE_PATH),
             nb::arg("core_ranges"),
@@ -599,6 +633,8 @@ void py_module_types(nb::module_& mod) {
             nb::arg("defines") = nb::cast(tt::tt_metal::KernelDescriptor::Defines()),
             nb::arg("runtime_args") = nb::cast(tt::tt_metal::KernelDescriptor::RuntimeArgs()),
             nb::arg("common_runtime_args") = tt::tt_metal::KernelDescriptor::CommonRuntimeArgs(),
+            nb::arg("named_common_runtime_args") = nb::list(),
+            nb::arg("named_per_core_runtime_args") = nb::list(),
             nb::arg("opt_level") = nb::none(),
             nb::arg("config"),
             R"pbdoc(
@@ -672,6 +708,51 @@ void py_module_types(nb::module_& mod) {
             "common_runtime_args",
             &tt::tt_metal::KernelDescriptor::common_runtime_args,
             "Common runtime arguments shared across all cores")
+        .def_prop_rw(
+            "named_common_runtime_args",
+            [](const tt::tt_metal::KernelDescriptor& self) {
+                nb::list result;
+                for (const auto& arg : self.named_common_runtime_args) {
+                    result.append(nb::make_tuple(arg.name, arg.value));
+                }
+                return result;
+            },
+            [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
+                self.named_common_runtime_args.clear();
+                for (auto item : args) {
+                    auto tup = nb::cast<nb::tuple>(item);
+                    self.named_common_runtime_args.push_back(
+                        {nb::cast<std::string>(tup[0]), nb::cast<uint32_t>(tup[1])});
+                }
+            },
+            "Named common runtime arguments: ordered (name, value) pairs for generated header")
+        .def_prop_rw(
+            "named_per_core_runtime_args",
+            [](const tt::tt_metal::KernelDescriptor& self) {
+                nb::list result;
+                for (const auto& arg : self.named_per_core_runtime_args) {
+                    nb::dict core_values;
+                    for (const auto& [core, value] : arg.core_values) {
+                        core_values[nb::cast(core)] = nb::cast(value);
+                    }
+                    result.append(nb::make_tuple(arg.name, core_values));
+                }
+                return result;
+            },
+            [](tt::tt_metal::KernelDescriptor& self, const nb::list& args) {
+                self.named_per_core_runtime_args.clear();
+                for (auto item : args) {
+                    auto tup = nb::cast<nb::tuple>(item);
+                    auto name = nb::cast<std::string>(tup[0]);
+                    auto dict = nb::cast<nb::dict>(tup[1]);
+                    std::vector<std::pair<CoreCoord, uint32_t>> core_values;
+                    for (const auto& [k, v] : dict) {
+                        core_values.emplace_back(nb::cast<CoreCoord>(k), nb::cast<uint32_t>(v));
+                    }
+                    self.named_per_core_runtime_args.push_back({std::move(name), std::move(core_values)});
+                }
+            },
+            "Named per-core runtime args: list of (name, {CoreCoord: value}) pairs")
         .def_rw("config", &tt::tt_metal::KernelDescriptor::config, "Configuration descriptor for the kernel");
 
     // Bind SemaphoreDescriptor
