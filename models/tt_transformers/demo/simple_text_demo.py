@@ -34,6 +34,23 @@ from models.tt_transformers.tt.prefetcher import is_prefetcher_supported
 models_not_supported_for_device_sampling = ["Mistral-7B"]
 
 
+def get_test_mesh_shape():
+    mesh_shape_map = {
+        "N150": (1, 1),
+        "N300": (1, 2),
+        "N150x4": (1, 4),
+        "T3K": (1, 8),
+        "TG": (8, 4),
+        "P150": (1, 1),
+        "P300": (1, 2),
+        "P150x4": (1, 4),
+        "P150x8": (1, 8),
+        "BHGLX": (8, 4),
+    }
+    mesh_device = os.environ.get("MESH_DEVICE")
+    return mesh_shape_map[mesh_device] if mesh_device in mesh_shape_map else len(ttnn.get_device_ids())
+
+
 class TokenAccuracy:
     def __init__(self, model_name):
         self.gt_pos = -1
@@ -765,20 +782,7 @@ def prepare_generator_args(
 )
 @pytest.mark.parametrize(
     "mesh_device",
-    [
-        {
-            "N150": (1, 1),
-            "N300": (1, 2),
-            "N150x4": (1, 4),
-            "T3K": (1, 8),
-            "TG": (8, 4),
-            "P150": (1, 1),
-            "P300": (1, 2),
-            "P150x4": (1, 4),
-            "P150x8": (1, 8),
-            "BHGLX": (8, 4),
-        }.get(os.environ.get("MESH_DEVICE"), len(ttnn.get_device_ids()))
-    ],
+    [get_test_mesh_shape()],
     indirect=True,
 )
 def test_demo_text(
@@ -838,19 +842,23 @@ def test_demo_text(
     batch_size = request.config.getoption("--batch_size") or batch_size
     max_generated_tokens = request.config.getoption("--max_generated_tokens") or max_generated_tokens
     data_parallel = request.config.getoption("--data_parallel") or data_parallel
-    paged_attention = request.config.getoption("--paged_attention") or paged_attention
+    if request.config.getoption("--paged_attention") in [0, 1]:
+        paged_attention = request.config.getoption("--paged_attention")
     page_params = request.config.getoption("--page_params") or page_params
     if isinstance(page_params, str):  # Required for proper load of a dictionary from the override command
         page_params = json.loads(page_params)
     sampling_params = request.config.getoption("--sampling_params") or sampling_params
     json_config_file = request.config.getoption("--decoder_config_file")
-    token_accuracy = request.config.getoption("--token_accuracy") or token_accuracy
-    stress_test = request.config.getoption("--stress_test") or stress_test
+    if request.config.getoption("--token_accuracy") in [0, 1]:
+        token_accuracy = request.config.getoption("--token_accuracy")
+    if request.config.getoption("--stress_test") in [0, 1]:
+        stress_test = request.config.getoption("--stress_test")
     arg_enable_trace = request.config.getoption("--enable_trace")
     enable_trace = arg_enable_trace if arg_enable_trace is not None else enable_trace
     num_layers = request.config.getoption("--num_layers") or num_layers
     mode = request.config.getoption("--mode") or mode
-    use_prefetcher = request.config.getoption("--use_prefetcher") or use_prefetcher
+    if request.config.getoption("--use_prefetcher") in [0, 1]:
+        use_prefetcher = request.config.getoption("--use_prefetcher")
     use_prefetcher = (
         use_prefetcher and is_prefetcher_supported(hf_dir, num_devices) and "Llama" in hf_dir and "8B" in hf_dir
     )
