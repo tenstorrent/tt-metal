@@ -165,18 +165,12 @@ Plans:
 **Goal:** Add per-VC template helpers to device kernel headers and refactor router kernel to use templated per-VC functions.
 **Requirements**: Phase 9 goal (additive beyond original 18 requirements)
 **Depends on:** Phase 8
-
-**Files:**
-- `fabric_erisc_router_ct_args.hpp` — Per-VC helper templates (`get_sender_ch_live_check_skip<vc>`, `is_vc_sender_channel_serviced<vc,ch>`, etc.)
-- `fabric_erisc_datamover_channels.hpp` — Per-VC changes
-- `compile_time_arg_tmp.hpp` — Per-VC changes
-- `edm_fabric_flow_control_helpers.hpp` — Per-VC changes
-- `fabric_erisc_router.cpp` — `any_sender_channels_active` → templated per-VC version; `update_telemetry` templated
-
-**Plans:** 0 plans
+**Plans:** 3 plans
 
 Plans:
-- [ ] TBD (run /gsd:plan-phase 9 to break down)
+- [ ] 09-01-PLAN.md — Add per-VC constexpr foundation constants and per-VC sender channel arrays to ct_args header
+- [ ] 09-02-PLAN.md — Template any_sender_channels_active/update_telemetry on VC; split runtime arrays into per-VC tuples
+- [ ] 09-03-PLAN.md — Migrate all remaining flat sender loops to per-VC; build + sanity test; clean up unused flat arrays
 
 **Success criteria:**
 1. Per-VC template helpers exist for sender channel queries
