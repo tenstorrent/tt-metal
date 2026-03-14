@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 # SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
+
 """Validate C++ deprecation policy: items must age 30+ days before removal.
 
 Example: [[deprecated]] void oldFunc(); must exist 30+ days before deletion.
