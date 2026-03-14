@@ -65,6 +65,9 @@ void sync_filesystem(const std::filesystem::path& path) {
 
 bool safe_remove(const std::filesystem::path& path) {
     std::error_code ec;
+    if (std::filesystem::is_directory(path, ec) && !ec) {
+        return false;
+    }
     for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
         std::filesystem::remove(path, ec);
         if (!ec) {
@@ -152,6 +155,18 @@ bool safe_hard_link_or_copy(const std::filesystem::path& target, const std::file
         std::filesystem::create_hard_link(target, link, ec);
         if (!ec) {
             return true;
+        }
+        if (ec == std::errc::file_exists) {
+            std::error_code remove_ec;
+            std::filesystem::remove(link, remove_ec);
+            if (!remove_ec) {
+                continue;
+            }
+            if (!is_estale_error(remove_ec)) {
+                log_warning(
+                    tt::LogMetal, "Failed to remove existing {} for hard link: {}", link.string(), remove_ec.message());
+                return false;
+            }
         }
         // Only fall back to copy for specific errors where hard link is expected to fail:
         // - EXDEV: Cross-device link (target and link on different filesystems)
@@ -255,6 +270,9 @@ std::optional<bool> safe_is_directory(const std::filesystem::path& path) {
         if (!ec) {
             return result;
         }
+        if (is_not_found_error(ec)) {
+            return false;
+        }
         if (!is_estale_error(ec)) {
             log_warning(tt::LogMetal, "Failed to check if {} is directory: {}", path.string(), ec.message());
             return std::nullopt;
@@ -278,6 +296,9 @@ std::optional<bool> safe_is_regular_file(const std::filesystem::path& path) {
         bool result = std::filesystem::is_regular_file(path, ec);
         if (!ec) {
             return result;
+        }
+        if (is_not_found_error(ec)) {
+            return false;
         }
         if (!is_estale_error(ec)) {
             log_warning(tt::LogMetal, "Failed to check if {} is regular file: {}", path.string(), ec.message());

@@ -423,7 +423,7 @@ TEST(FilesystemUtilsConstants, TotalMaxDelayIsReasonable) {
 // ============================================================================
 
 TEST(FilesystemUtilsErrors, IsEstaleError_DetectsEstale) {
-    std::error_code ec(ESTALE, std::generic_category());
+    std::error_code ec(ESTALE, std::system_category());
     EXPECT_TRUE(is_estale_error(ec));
 }
 
@@ -441,7 +441,7 @@ TEST(FilesystemUtilsErrors, IsNotFoundError_DetectsNoSuchFile) {
 }
 
 TEST(FilesystemUtilsErrors, IsNotFoundError_ReturnsFalseForOtherErrors) {
-    std::error_code ecESTALE(ESTALE, std::generic_category());
+    std::error_code ecESTALE(ESTALE, std::system_category());
     EXPECT_FALSE(is_not_found_error(ecESTALE));
 
     std::error_code ecACCES = std::make_error_code(std::errc::permission_denied);
@@ -464,9 +464,8 @@ TEST_F(FilesystemUtilsTest, SafeFileSize_WorksOnDirectory) {
     std::filesystem::path dir = create_test_directory("dir_for_size");
 
     auto result = safe_file_size(dir);
-    // file_size works on directories (returns implementation-defined size, typically non-zero)
-    // This verifies the function doesn't crash and returns a valid result
-    EXPECT_TRUE(result.has_value());
+    // file_size is only defined for regular files; directories return nullopt
+    EXPECT_FALSE(result.has_value());
 }
 
 TEST_F(FilesystemUtilsTest, SafeLastWriteTime_WorksOnDirectory) {
