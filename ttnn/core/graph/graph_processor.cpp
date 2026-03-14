@@ -297,17 +297,12 @@ void GraphProcessor::track_function_end(const std::any& output_tensors) {
 
 node_id GraphProcessor::add_tensor(const Tensor& t) {
     tt::tt_metal::Buffer* buffer = nullptr;
-    if (is_device_tensor(t)) {
-        const auto& storage = t.device_storage();
-        if (storage.mesh_buffer) {
-            // `t.buffers()` returns a reference buffer allocated on first device in a mesh.
-            // It has an ID different from the "backing" buffer that was used to perform the allocation.
-            // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
-            // buffer.
-            buffer = storage.mesh_buffer->get_backing_buffer();
-        } else {
-            buffer = t.buffer();
-        }
+    if (is_device_tensor(t) && t.is_allocated()) {
+        // `t.buffers()` returns a reference buffer allocated on first device in a mesh.
+        // It has an ID different from the "backing" buffer that was used to perform the allocation.
+        // To deduplicate an entry for this buffer, captured during its allocation, use the "backing"
+        // buffer.
+        buffer = t.mesh_buffer().get_backing_buffer();
     }
 
     // TODO #32045: Remove the check for INVALID_TENSOR_ID since IDs are assigned in the constructor.
@@ -341,7 +336,12 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
     }
 
     if (buffer == nullptr) {
-        log_debug(tt::LogAlways, "Tensor doesn't have buffer, but storage is {}", t.storage_type());
+        switch (t.storage_type()) {
+            case StorageType::DEVICE:
+                log_debug(tt::LogAlways, "Tensor does not have buffer (on device but deallocated)");
+                break;
+            case StorageType::HOST: log_debug(tt::LogAlways, "Tensor does not have buffer (on host)"); break;
+        }
     } else {
         node_id buffer_node_id = add_buffer(buffer);
         graph[buffer_node_id].connections.push_back(tensor_counter);
