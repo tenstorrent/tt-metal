@@ -138,6 +138,7 @@ BankManager::BankManager(
     const std::vector<int64_t>& bank_offsets,
     DeviceAddr size_bytes,
     uint32_t alignment_bytes,
+    uint32_t dram_alignment_bytes,
     DeviceAddr alloc_offset,
     bool disable_interleaved,
     const AllocatorDependencies& dependencies) :
@@ -154,7 +155,9 @@ BankManager::BankManager(
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
 
     // Initialize all allocators; sets up allocator-dependent members
-    this->init_allocators(size_bytes, alignment_bytes, alloc_offset);
+    // Expect the alignment provided to by compatible with the DRAM alignment
+    TT_ASSERT(dram_alignment_bytes % alignment_bytes == 0);
+    this->init_allocators(size_bytes, dram_alignment_bytes, alloc_offset);
 }
 
 BankManager::BankManager(
@@ -163,6 +166,7 @@ BankManager::BankManager(
     DeviceAddr size_bytes,
     DeviceAddr interleaved_address_limit,
     uint32_t alignment_bytes,
+    uint32_t dram_alignment_bytes,
     DeviceAddr alloc_offset,
     bool disable_interleaved,
     const AllocatorDependencies& dependencies) :
@@ -174,7 +178,9 @@ BankManager::BankManager(
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
 
     // Initialize all allocators; sets up allocator-dependent members
-    this->init_allocators(size_bytes, alignment_bytes, alloc_offset);
+    // Expect the alignment provided to by compatible with the DRAM alignment
+    TT_ASSERT(dram_alignment_bytes % alignment_bytes == 0);
+    this->init_allocators(size_bytes, dram_alignment_bytes, alloc_offset);
 }
 
 uint32_t BankManager::num_banks() const { return bank_id_to_bank_offset_.size(); }
@@ -403,7 +409,8 @@ uint64_t BankManager::allocate_buffer(
             num_compute_banks);
         num_banks = num_shards.value();
     }
-    DeviceAddr size_per_bank = tt::tt_metal::detail::calculate_bank_size_spread(size, page_size, num_banks, alignment_bytes_);
+    DeviceAddr size_per_bank =
+        tt::tt_metal::detail::calculate_bank_size_spread(size, page_size, num_banks, alignment_bytes_);
     DeviceAddr address_limit = 0;
     if (!is_sharded and buffer_type_ == BufferType::L1) {
         address_limit = interleaved_address_limit_;
