@@ -118,6 +118,7 @@ class BroadcastConfig:
 
         self._resolve_chunk_size(chunk_size_bytes)
         self._setup_fabric_rt_arg_count = None
+        self._writer_tensor_address0_override = None
         self._torus_x_enabled = fabric_config_enables_torus_x(self.fabric_config)
         self._torus_y_enabled = fabric_config_enables_torus_y(self.fabric_config)
         self._children_map = self._build_children_map()
@@ -342,14 +343,22 @@ class BroadcastConfig:
         d = self._per_device[coord]
         sem_addrs = [int(ttnn.get_global_semaphore_address(s)) for s in self.semaphores]
         sem_addrs += [0] * (MAX_NUM_LINKS - len(sem_addrs))
+        tensor_address0 = (
+            int(self._writer_tensor_address0_override)
+            if self._writer_tensor_address0_override is not None
+            else int(d["tensor_address0"])
+        )
         schema = _writer_common_rt_schema(
-            tensor_address0=d["tensor_address0"],
+            tensor_address0=tensor_address0,
             my_noc_x=d["my_noc_x"],
             my_noc_y=d["my_noc_y"],
             sem_bank_addr_0=sem_addrs[0],
             sem_bank_addr_1=sem_addrs[1],
         )
         return _schema_to_rt_list(schema, WRITER_COMMON_RT_KEYS)
+
+    def set_writer_tensor_address_override(self, address):
+        self._writer_tensor_address0_override = int(address)
 
     def get_reader_common_rt_args(self, coord):
         if self.uses_socket(coord):
@@ -577,6 +586,7 @@ class BypassBroadcastConfig:
         self._socket_config_addr = 0
         self._socket_page_size = 0
         self._socket_num_pages = 0
+        self._writer_tensor_address0_override = None
         # Bypass path intentionally avoids any broadcast topology/fabric setup.
         # It only retains minimal metadata needed for helper args and placement.
         self._per_device = {}
@@ -694,13 +704,19 @@ class BypassBroadcastConfig:
         return _schema_to_rt_list(schema, READER_COMMON_RT_KEYS)
 
     def get_writer_common_rt_args(self, coord):
-        return _schema_to_rt_list(_writer_common_rt_schema(), WRITER_COMMON_RT_KEYS)
+        tensor_address0 = 0
+        if self._writer_tensor_address0_override is not None:
+            tensor_address0 = int(self._writer_tensor_address0_override)
+        return _schema_to_rt_list(_writer_common_rt_schema(tensor_address0=tensor_address0), WRITER_COMMON_RT_KEYS)
 
     def get_reader_common_rt_args(self, coord):
         return self.get_socket_reader_rt_args(coord)
 
     def get_writer_per_core_rt_args(self, coord, program, core):
         return []
+
+    def set_writer_tensor_address_override(self, address):
+        self._writer_tensor_address0_override = int(address)
 
     def get_cb_descriptor(self, coord):
         return None

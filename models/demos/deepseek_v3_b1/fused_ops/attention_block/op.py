@@ -179,13 +179,16 @@ class AttentionBlock:
         return full_q, new_kv, output
 
     @staticmethod
-    def get_num_semaphores():
-        # 1 from NE broadcast, 14 from pre-SDPA/post-SDPA pipeline internals
-        return 15
+    def get_num_semaphores(num_links=1):
+        # 14 from pre-SDPA/post-SDPA pipeline internals,
+        # plus broadcast semaphores.
+        non_bcast_num_semaphores = 14
+        bcast_num_semaphores = DeepseekMinimalBroadcast.get_num_semaphores(num_links=num_links)
+        return non_bcast_num_semaphores + bcast_num_semaphores
 
     @staticmethod
-    def create_semaphores(mesh_device):
-        num_semaphores = AttentionBlock.get_num_semaphores()
+    def create_semaphores(mesh_device, num_links=1):
+        num_semaphores = AttentionBlock.get_num_semaphores(num_links=num_links)
         device_grid_size = mesh_device.compute_with_storage_grid_size()
         available_cores = ttnn.CoreRangeSet(
             [ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(device_grid_size.x - 1, device_grid_size.y - 1))]
@@ -308,10 +311,9 @@ class AttentionBlock:
         # output_tensors_per_device = ttnn.get_device_tensors(output_tensor)
         attention_block_output_tensors_per_device = ttnn.get_device_tensors(attention_block_output_tensor)
 
-        assert (
-            attention_block_semaphores is not None
-            and len(attention_block_semaphores) == AttentionBlock.get_num_semaphores()
-        )
+        assert attention_block_semaphores is not None and len(
+            attention_block_semaphores
+        ) == AttentionBlock.get_num_semaphores(num_links=num_links)
 
         semaphore_index = 0
         bcast_semaphores = []
@@ -783,6 +785,7 @@ class AttentionBlock:
         ccl_semaphore = attention_block_semaphores[semaphore_index]
         semaphore_index += 1
         ccl_semaphore_addr = ttnn.get_global_semaphore_address(ccl_semaphore)
+        assert semaphore_index == len(attention_block_semaphores), "Unexpected attention_block semaphore consumption"
 
         # Calculate mcast data size in bytes (RMSNorm output = num_tiles * tile_size)
         mcast_data_size_bytes = num_tiles * tile_size
@@ -1934,6 +1937,9 @@ class AttentionBlock:
                 )
             ]
             sdpa_kv_cache_running_offset_mcast_core += in_cb_descriptor.total_size
+
+        # Keep broadcast writer backing address explicit for this fused path.
+        bcast_config.set_writer_tensor_address_override(ttnn.get_cb_address(in_cb_descriptor))
 
         # CB: Gamma (backed by fused overlapped tensor)
         gamma_cb_descriptor = cb_descriptor_from_overlapped_tensor(gamma_cb, gamma_tensor, ref_gamma_fused_tensor)

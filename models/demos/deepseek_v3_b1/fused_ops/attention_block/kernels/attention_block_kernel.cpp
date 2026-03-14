@@ -1237,21 +1237,21 @@ void kernel_main() {
 
         using FlashMLAOp = deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core>;
 
+        // ====================================================================
+        // Input core: RMSNorm + Mcast send
+        // ====================================================================
+        {
+            DeviceZoneScopedN("RMSNORM");
+            deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
+            rmsnorm(rmsnorm_args);
+        }
+
+        {
+            DeviceZoneScopedN("MCAST");
+            mcast(mcast_args);
+        }
+
         if (!skip_attention) {
-            // ====================================================================
-            // Input core: RMSNorm + Mcast send
-            // ====================================================================
-            {
-                DeviceZoneScopedN("RMSNORM");
-                deepseek_b1_ops::RMSNorm::Op<RMSNormCTArgs, Core::is_input_core, true> rmsnorm;
-                rmsnorm(rmsnorm_args);
-            }
-
-            {
-                DeviceZoneScopedN("MCAST");
-                mcast(mcast_args);
-            }
-
             // ====================================================================
             // Matmul operation
             // ====================================================================
