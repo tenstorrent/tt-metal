@@ -119,9 +119,72 @@ ProgramDescriptor merge_program_descriptors(const std::vector<ProgramDescriptor>
     return result;
 }
 
+static inline ttsl::hash::hash_t hash_kernel_descriptor(const KernelDescriptor& kernel) {
+    return ttsl::hash::hash_objects_with_default_seed(
+        kernel.kernel_source,
+        kernel.source_type,
+        kernel.core_ranges,
+        kernel.compile_time_args,
+        kernel.defines,
+        kernel.common_runtime_args.size(),
+        kernel.runtime_args.size(),
+        kernel.config.index(),
+        kernel.config);
+}
+
+static inline ttsl::hash::hash_t hash_cb_format_descriptor(const CBFormatDescriptor& format_descriptor) {
+    return ttsl::hash::hash_objects_with_default_seed(
+        format_descriptor.buffer_index,
+        format_descriptor.data_format,
+        format_descriptor.page_size,
+        format_descriptor.tile);
+}
+
+static inline ttsl::hash::hash_t hash_cb_descriptor(const CBDescriptor& cb) {
+    ttsl::hash::hash_t hash = cb.core_ranges.size();
+    for (const auto& core_range : cb.core_ranges.ranges()) {
+        ttsl::hash::hash_combine(hash, core_range);
+    }
+    ttsl::hash::hash_combine(hash, cb.format_descriptors.size());
+    for (const auto& format_descriptor : cb.format_descriptors) {
+        ttsl::hash::hash_combine(hash, hash_cb_format_descriptor(format_descriptor));
+    }
+    ttsl::hash::hash_combine(hash, cb.remote_format_descriptors.size());
+    for (const auto& format_descriptor : cb.remote_format_descriptors) {
+        ttsl::hash::hash_combine(hash, hash_cb_format_descriptor(format_descriptor));
+    }
+    ttsl::hash::hash_combine(hash, cb.buffer != nullptr);
+    ttsl::hash::hash_combine(hash, cb.global_circular_buffer != nullptr);
+    return hash;
+}
+
+static inline ttsl::hash::hash_t hash_semaphore_descriptor(const SemaphoreDescriptor& semaphore) {
+    return ttsl::hash::hash_objects_with_default_seed(
+        semaphore.core_ranges, semaphore.core_type, semaphore.initial_value);
+}
+
 }  // namespace tt::tt_metal
 
 std::size_t std::hash<tt::tt_metal::TileDescriptor>::operator()(
     const tt::tt_metal::TileDescriptor& tile_desc) const noexcept {
     return tt::stl::hash::hash_objects_with_default_seed(tile_desc.height, tile_desc.width, tile_desc.transpose);
+}
+
+std::size_t std::hash<tt::tt_metal::ProgramDescriptor>::operator()(
+    const tt::tt_metal::ProgramDescriptor& descriptor) const noexcept {
+    if (descriptor.custom_program_hash) {
+        return *descriptor.custom_program_hash;
+    }
+
+    ttsl::hash::hash_t hash = 0;
+    for (const auto& kernel : descriptor.kernels) {
+        ttsl::hash::hash_combine(hash, tt::tt_metal::hash_kernel_descriptor(kernel));
+    }
+    for (const auto& cb : descriptor.cbs) {
+        ttsl::hash::hash_combine(hash, tt::tt_metal::hash_cb_descriptor(cb));
+    }
+    for (const auto& semaphore : descriptor.semaphores) {
+        ttsl::hash::hash_combine(hash, tt::tt_metal::hash_semaphore_descriptor(semaphore));
+    }
+    return hash;
 }

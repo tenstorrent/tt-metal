@@ -12,6 +12,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::examples {
 
@@ -63,43 +64,28 @@ struct ExampleDeviceOperation {
     // i.e. if spec_return_value_t is a std::vector<std::optional<ttnn::TensorSpec>> then tensor_return_value_t should
     // be std::vector<std::optional<Tensor>>
 
+    // =========================================================================
+    // ProgramDescriptor-based factories (RECOMMENDED for all new operations)
+    //
+    // These use `create_descriptor()` which returns a declarative ProgramDescriptor.
+    // The framework handles program construction, caching, buffer address
+    // patching, and seed patching automatically. No shared_variables_t or
+    // cached_program_t needed.
+    //
+    // Seed handling is automatic: if operation_attributes_t has a uint32_t seed
+    // field, the framework excludes it from hashing and patches compute kernel
+    // runtime_args[0] with (seed + core_index) on every cache hit.
+    // =========================================================================
+
     struct SingleCore {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);
     };
 
     struct MultiCore {
-        // Shared variables are the variables that are shared between the create and override_runtime_arguments methods
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle unary_reader_kernel_id;
-            tt::tt_metal::KernelHandle unary_writer_kernel_id;
-            std::size_t num_cores;
-            std::size_t num_cores_y;
-        };
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& tensor_return_value);

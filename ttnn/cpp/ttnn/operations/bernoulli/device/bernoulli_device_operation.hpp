@@ -6,6 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
+#include <tt-metalium/program_descriptors.hpp>
 
 namespace ttnn::operations::bernoulli {
 
@@ -26,22 +27,7 @@ struct BernoulliDeviceOperation {
     using tensor_return_value_t = Tensor;
 
     struct ProgramFactory {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id{};
-            tt::tt_metal::KernelHandle compute_kernel_id{};
-            tt::tt_metal::KernelHandle writer_kernel_id{};
-            std::vector<CoreCoord> cores;
-        };
-
-        using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
-
-        static cached_program_t create(
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& output);
-
-        static void override_runtime_arguments(
-            cached_program_t& cached_program,
+        static tt::tt_metal::ProgramDescriptor create_descriptor(
             const operation_attributes_t& operation_attributes,
             const tensor_args_t& tensor_args,
             tensor_return_value_t& output);
@@ -52,8 +38,6 @@ struct BernoulliDeviceOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::bernoulli

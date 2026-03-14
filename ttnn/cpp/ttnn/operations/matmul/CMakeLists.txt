@@ -33,14 +33,16 @@ target_sources(
         device/config/matmul_program_config.cpp
         device/matmul_device_operation.cpp
         device/utilities/matmul_utilities.cpp
-        #factories
-        device/factory/matmul_multicore_program_factory.cpp
-        device/factory/matmul_multicore_reuse_program_factory.cpp
+        #factories (descriptor-based, new architecture)
+        device/factory/multicore_descriptor.cpp
+        device/factory/reuse_optimized_descriptor.cpp
+        device/factory/reuse_mcast_1d_descriptor.cpp
+        device/factory/reuse_mcast_2d_descriptor.cpp
+        device/factory/dram_sharded_descriptor.cpp
+        device/factory/batched_hs_dram_sharded_descriptor.cpp
+        #legacy factories (kept for external consumers: CCL, sparse matmul)
         device/factory/matmul_multicore_reuse_mcast_1d_program_factory.cpp
         device/factory/matmul_multicore_reuse_mcast_2d_program_factory.cpp
-        device/factory/matmul_multicore_reuse_mcast_dram_sharded_program_factory.cpp
-        device/factory/matmul_multicore_reuse_batched_hs_dram_sharded_program_factory.cpp
-        device/factory/matmul_multicore_reuse_optimized_program_factory.cpp
         # sparse
         device/sparse/factory/sparse_matmul_multicore_reuse_mcast_1d_optimized.cpp
         device/sparse/sparse_matmul_device_operation.cpp

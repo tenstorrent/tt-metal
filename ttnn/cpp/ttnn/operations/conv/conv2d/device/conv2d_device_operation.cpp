@@ -3,8 +3,6 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ttnn/operations/conv/conv2d/device/conv2d_device_operation.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op_sharded_program_factory.hpp"
-#include "ttnn/operations/conv/conv2d/device/conv2d_op_width_sharded_program_factory.hpp"
 
 #include <array>
 #include <cstdint>
@@ -34,9 +32,10 @@ Conv2dDeviceOperation::program_factory_t Conv2dDeviceOperation::select_program_f
     const operation_attributes_t& /*args*/, const tensor_args_t& tensor_args) {
     if (tensor_args.a.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED) {
         // Use width sharded implementation
-        return Conv2dWidthShardedProgramFactory{};
-    }  // Use regular sharded implementation
-    return Conv2dShardedProgramFactory{};
+        return conv2d_detail::Conv2dWidthShardedDescriptorFactory{};
+    }
+    // Use regular sharded implementation
+    return conv2d_detail::Conv2dShardedDescriptorFactory{};
 }
 
 TensorSpec Conv2dDeviceOperation::compute_output_specs(
@@ -156,7 +155,8 @@ tt::stl::hash::hash_t Conv2dDeviceOperation::compute_program_hash(
         .config_tensors_in_dram = args.config_tensors_in_dram,
         .force_split_reader = args.force_split_reader,
     };
-    return tt::stl::hash::hash_objects_with_default_seed(hashable_args, tensor_args);
+    return tt::stl::hash::hash_objects_with_default_seed(
+        tt::stl::hash::type_hash<Conv2dDeviceOperation>, hashable_args, tensor_args);
 }
 
 tt::tt_metal::operation::OpPerformanceModelGeneral<Tensor> Conv2dDeviceOperation::create_op_performance_model(

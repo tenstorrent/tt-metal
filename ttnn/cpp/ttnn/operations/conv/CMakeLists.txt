@@ -22,8 +22,8 @@ target_sources(
             conv2d/conv2d.hpp
             conv2d/device/conv2d_device_operation_types.hpp
             conv2d/device/conv2d_device_operation.hpp
-            conv2d/device/conv2d_op_sharded_program_factory.hpp
-            conv2d/device/conv2d_op_width_sharded_program_factory.hpp
+            conv2d/device/factory/conv2d_sharded_descriptor.hpp
+            conv2d/device/factory/conv2d_width_sharded_descriptor.hpp
         FILE_SET kernels
         TYPE HEADERS
         BASE_DIRS ${CMAKE_CURRENT_SOURCE_DIR}
@@ -33,8 +33,8 @@ target_sources(
         conv2d/conv2d_utils.cpp
         conv2d/conv2d_op_program_factory_common.cpp
         conv2d/device/conv2d_device_operation.cpp
-        conv2d/device/conv2d_op_sharded_program_factory.cpp
-        conv2d/device/conv2d_op_width_sharded_program_factory.cpp
+        conv2d/device/factory/conv2d_sharded_descriptor.cpp
+        conv2d/device/factory/conv2d_width_sharded_descriptor.cpp
         conv_transpose2d/conv_transpose2d.cpp
         conv_transpose2d/prepare_conv_transpose2d_weights.cpp
         conv2d/prepare_conv2d_weights.cpp
