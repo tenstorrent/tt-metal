@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -266,7 +266,8 @@ from ttnn.types import (
     MeshProgramDescriptor,
     merge_program_descriptors,
     cb_descriptor_from_sharded_tensor,
-    get_cb_address,
+    UnpackToDestMode,
+    compute_program_descriptor_hash,
     TensorAccessorArgs,
 )
 
@@ -404,6 +405,11 @@ from ttnn.operations.matmul import (
     MatmulMultiCoreReuseMultiCast1DProgramConfig,
     MatmulMultiCoreReuseMultiCastDRAMShardedProgramConfig,
     MatmulMultiCoreReuseMultiCastBatchedDRAMShardedProgramConfig,
+    MatmulParams,
+    MatmulInputs,
+    MatmulDeviceOperation,
+    MatmulMultiCoreReuseOptimizedProgramFactory,
+    create_matmul_attributes,
 )
 
 from ttnn.operations.normalization import (
@@ -491,6 +497,12 @@ def get_arch_name():
 
 
 from ttnn._ttnn.operations.data_movement import TileReshapeMapMode
+from ttnn._ttnn.operations.data_movement import (
+    SliceParams,
+    SliceInputs,
+    SliceDeviceOperation,
+    SliceTileProgramFactory,
+)
 
 import pathlib
 import importlib.util

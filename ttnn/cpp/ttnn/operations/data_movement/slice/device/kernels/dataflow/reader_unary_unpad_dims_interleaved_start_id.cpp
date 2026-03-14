@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+// SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -6,9 +6,9 @@
 #include "api/dataflow/dataflow_api.h"
 
 void kernel_main() {
-    constexpr uint32_t cb_id_in0 = get_compile_time_arg_val(0);
-    constexpr uint32_t num_dims = get_compile_time_arg_val(1);
-    constexpr auto src_args = TensorAccessorArgs<2>();
+    constexpr uint32_t cb_id_in0 = get_named_compile_time_arg_val("cb_in");
+    constexpr uint32_t num_dims = get_compile_time_arg_val(0);
+    constexpr auto src_args = TensorAccessorArgs<1>();
     const uint32_t src_addr = get_common_arg_val<uint32_t>(0);
 
     volatile tt_l1_ptr uint32_t* num_unpadded_tiles = (volatile tt_l1_ptr uint32_t*)(get_common_arg_addr(1));

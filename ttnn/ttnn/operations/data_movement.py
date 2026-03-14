@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent Inc.
 
 # SPDX-License-Identifier: Apache-2.0
 
@@ -158,5 +158,10 @@ ttnn.attach_golden_function(
     ttnn.upsample,
     golden_function=_golden_function,
 )
+
+SliceParams = ttnn._ttnn.operations.data_movement.SliceParams
+SliceInputs = ttnn._ttnn.operations.data_movement.SliceInputs
+SliceDeviceOperation = ttnn._ttnn.operations.data_movement.SliceDeviceOperation
+SliceTileProgramFactory = ttnn._ttnn.operations.data_movement.SliceTileProgramFactory
 
 __all__ = []

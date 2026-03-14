@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -16,7 +16,7 @@
 namespace ttnn::global_circular_buffer {
 
 void py_module_types(nb::module_& mod) {
-    nb::class_<GlobalCircularBuffer>(mod, "global_circular_buffer");
+    nb::class_<GlobalCircularBuffer>(mod, "global_circular_buffer").def("size", &GlobalCircularBuffer::size);
 }
 
 void py_module(nb::module_& mod) {

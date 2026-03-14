@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -38,11 +38,11 @@ void kernel_main() {
     tt_l1_ptr uint32_t* segment_args = (tt_l1_ptr uint32_t*)(get_arg_addr(9));
 #endif
 
-    constexpr uint32_t cb_gamma = tt::CBIndex::c_5;
-    constexpr uint32_t cb_beta = tt::CBIndex::c_6;
+    constexpr uint32_t cb_gamma = get_named_compile_time_arg_val("cb_gamma");
+    constexpr uint32_t cb_beta = get_named_compile_time_arg_val("cb_beta");
 
-    constexpr uint32_t cb_out = tt::CBIndex::c_16;
-    constexpr uint32_t cb_out_resharded = tt::CBIndex::c_17;
+    constexpr uint32_t cb_out = get_named_compile_time_arg_val("cb_out");
+    constexpr uint32_t cb_out_resharded = get_named_compile_time_arg_val("cb_out_resharded");
 
     experimental::Noc noc;
     experimental::CircularBuffer cb_gamma_obj(cb_gamma);
@@ -53,16 +53,16 @@ void kernel_main() {
     const uint32_t out_single_tile_size_bytes = get_tile_size(cb_out);
 
     if constexpr (!use_welford) {
-        constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
+        constexpr uint32_t cb_in_2 = get_named_compile_time_arg_val("cb_in_2");
         const uint32_t scalar_w = get_arg_val<uint32_t>(1);
         generate_reduce_scaler(cb_in_2, scalar_w);
 
-        constexpr uint32_t eps_cb_id = tt::CBIndex::c_3;
+        constexpr uint32_t eps_cb_id = get_named_compile_time_arg_val("cb_eps");
         const uint32_t eps = get_arg_val<uint32_t>(2);
         generate_bcast_col_scalar(eps_cb_id, eps);
 
         if constexpr (is_all_to_all_worker) {
-            constexpr uint32_t cb_in_4 = tt::CBIndex::c_4;
+            constexpr uint32_t cb_in_4 = get_named_compile_time_arg_val("cb_in_4");
             const uint32_t scalar_c = get_arg_val<uint32_t>(0);
             generate_reduce_scaler(cb_in_4, scalar_c);
         }

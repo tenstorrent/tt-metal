@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 #
 # SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,7 @@ import ttnn
 
 class OpDescriptor(NamedTuple):
     """
-    Simple descriptor for an op and its IO tensors
+    Simple descriptor for an op and its IO tensors.
 
     Contains:
     - descriptor: The ProgramDescriptor for the operation
@@ -20,6 +20,17 @@ class OpDescriptor(NamedTuple):
     descriptor: "ttnn.ProgramDescriptor"
     input_tensors: List["ttnn.Tensor"]
     output_tensors: List["ttnn.Tensor"]
+    name: str = ""
+
+    def launch(self):
+        """Dispatch this op via generic_op.
+
+        Returns:
+            self.output_tensors
+        """
+        io_tensors = list(self.input_tensors) + list(self.output_tensors)
+        ttnn.generic_op(io_tensors, self.descriptor)
+        return self.output_tensors
 
 
 __all__ = ["OpDescriptor"]

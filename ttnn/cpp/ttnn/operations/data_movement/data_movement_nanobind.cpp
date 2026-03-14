@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -63,6 +63,7 @@ void py_module(nb::module_& mod) {
     detail::bind_permute(mod);
     detail::bind_repeat_interleave(mod);
     detail::bind_slice(mod);
+    detail::bind_slice_descriptor(mod);
     detail::bind_split(mod);
     detail::bind_tilize(mod);
     detail::bind_tilize_with_val_padding(mod);
