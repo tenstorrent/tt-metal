@@ -201,10 +201,7 @@ public:
     }
 
     void TearDown() override {
-        if (device_open) {
-            mesh_device_->close();
-            device_open = false;
-        }
+        DoCleanup();
     }
 
     MeshFabric1DFixture() { this->SetupDevices(); }
@@ -214,8 +211,14 @@ public:
     }
 
     ~MeshFabric1DFixture() override {
+        DoCleanup();
+    }
+
+private:
+    void DoCleanup() {
         if (device_open) {
-            TearDown();
+            mesh_device_->close();
+            device_open = false;
         }
     }
 };
