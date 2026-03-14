@@ -10,9 +10,9 @@
 #include "moreh_nll_loss_step2/device/moreh_nll_loss_step2_device_operation.hpp"
 #include "ttnn/operations/moreh/moreh_sum/moreh_sum.hpp"
 
-namespace ttnn::operations::moreh::moreh_nll_loss {
+namespace ttnn {
 
-Tensor MorehNllLoss::invoke(
+Tensor moreh_nll_loss(
     const Tensor& input_tensor,
     const Tensor& target_tensor,
     const std::string& reduction,
@@ -22,6 +22,8 @@ Tensor MorehNllLoss::invoke(
     const int32_t ignore_index,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
+    using namespace operations::moreh;
+
     const auto compute_kernel_config_val =
         init_device_compute_kernel_config(target_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4);
     if (reduction == MEAN) {
@@ -37,8 +39,7 @@ Tensor MorehNllLoss::invoke(
             memory_config,
             compute_kernel_config_val);
 
-        ttnn::moreh_sum(
-            step1_result, std::nullopt, false, divisor_tensor.value(), memory_config, compute_kernel_config_val);
+        moreh_sum(step1_result, std::nullopt, false, divisor_tensor.value(), memory_config, compute_kernel_config_val);
 
         const Tensor& step2_result = prim::moreh_nll_loss_step2(
             input_tensor,
@@ -50,8 +51,7 @@ Tensor MorehNllLoss::invoke(
             ignore_index,
             memory_config,
             compute_kernel_config_val);
-        return ttnn::moreh_sum(
-            step2_result, std::nullopt, false, output_tensor, memory_config, compute_kernel_config_val);
+        return moreh_sum(step2_result, std::nullopt, false, output_tensor, memory_config, compute_kernel_config_val);
     }
     if (reduction == SUM) {
         const Tensor& step2_result = prim::moreh_nll_loss_step2(
@@ -64,8 +64,7 @@ Tensor MorehNllLoss::invoke(
             ignore_index,
             memory_config,
             compute_kernel_config_val);
-        return ttnn::moreh_sum(
-            step2_result, std::nullopt, false, output_tensor, memory_config, compute_kernel_config_val);
+        return moreh_sum(step2_result, std::nullopt, false, output_tensor, memory_config, compute_kernel_config_val);
     }
 
     return prim::moreh_nll_loss_step2(
@@ -80,4 +79,4 @@ Tensor MorehNllLoss::invoke(
         compute_kernel_config_val);
 }
 
-}  // namespace ttnn::operations::moreh::moreh_nll_loss
+}  // namespace ttnn

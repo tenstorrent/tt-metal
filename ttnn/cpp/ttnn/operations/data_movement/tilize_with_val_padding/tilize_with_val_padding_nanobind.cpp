@@ -10,7 +10,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "tilize_with_val_padding.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -38,28 +38,26 @@ void bind_tilize_with_val_padding(nb::module_& mod) {
 
         )doc";
 
-    using OperationType = decltype(ttnn::tilize_with_val_padding);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"tilize_with_val_padding">(
         mod,
-        ttnn::tilize_with_val_padding,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Shape& output_padded_shape,
-               const tt::tt_metal::PadValue value,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<DataType> output_dtype,
-               bool use_multicore) {
-                return self(input_tensor, output_padded_shape, value, memory_config, output_dtype, use_multicore);
-            },
+        ttnn::overload_t(
+            nb::overload_cast<
+                const ttnn::Tensor&,
+                const ttnn::Shape&,
+                tt::tt_metal::PadValue,
+                const std::optional<MemoryConfig>&,
+                std::optional<DataType>,
+                bool,
+                const std::optional<CoreRangeSet>&>(&ttnn::tilize_with_val_padding),
             nb::arg("input_tensor"),
             nb::arg("output_tensor_shape"),
             nb::arg("pad_value"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("dtype") = nb::none(),
-            nb::arg("use_multicore") = true}
+            nb::arg("use_multicore") = true,
+            nb::arg("sub_core_grids") = nb::none())
 
     );
 }
@@ -82,26 +80,17 @@ void bind_tilize_with_zero_padding(nb::module_& mod) {
                 * :attr:`use_multicore`: Whether to use multicore.
         )doc";
 
-    using OperationType = decltype(ttnn::tilize_with_zero_padding);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"tilize_with_zero_padding">(
         mod,
-        ttnn::tilize_with_zero_padding,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               std::optional<DataType> output_dtype,
-               bool use_multicore,
-               const std::optional<CoreRangeSet>& sub_core_grids) {
-                return self(input_tensor, memory_config, output_dtype, use_multicore, sub_core_grids);
-            },
+        ttnn::overload_t(
+            &ttnn::tilize_with_zero_padding,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_dtype") = nb::none(),
             nb::arg("use_multicore") = true,
-            nb::arg("sub_core_grids") = nb::none()});
+            nb::arg("sub_core_grids") = nb::none()));
 }
 
 }  // namespace ttnn::operations::data_movement::detail

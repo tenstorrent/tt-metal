@@ -10,7 +10,7 @@
 #include <nanobind/stl/optional.h>
 
 #include "untilize.hpp"
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 
 namespace ttnn::operations::data_movement::detail {
 
@@ -37,25 +37,16 @@ void bind_untilize(nb::module_& mod) {
                 List of ttnn.Tensor: the output tensor.
         )doc";
 
-    using OperationType = decltype(ttnn::untilize);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"untilize">(
         mod,
-        ttnn::untilize,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const std::optional<MemoryConfig>& memory_config,
-               bool use_multicore,
-               bool use_pack_untilize,
-               const std::optional<CoreRangeSet>&& sub_core_grids) {
-                return self(input_tensor, memory_config, use_multicore, use_pack_untilize, sub_core_grids);
-            },
+        ttnn::overload_t(
+            &ttnn::untilize,
             nb::arg("input_tensor"),
             nb::kw_only(),
             nb::arg("memory_config") = nb::none(),
             nb::arg("use_multicore") = true,
             nb::arg("use_pack_untilize") = true,
-            nb::arg("sub_core_grids") = nb::none()});
+            nb::arg("sub_core_grids") = nb::none()));
 }
 }  // namespace ttnn::operations::data_movement::detail

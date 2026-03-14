@@ -72,7 +72,6 @@ void bind_batch_norm_operation(nb::module_& mod) {
             - All input tensors must be tilized, interleaved, rank 4, and on-device.
         )doc";
 
-    // Bind the free function directly - no struct!
     ttnn::bind_function<"batch_norm">(
         mod,
         doc,
