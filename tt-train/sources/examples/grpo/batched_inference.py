@@ -227,23 +227,26 @@ def get_gsm8k(split="train") -> Tuple[List[Prompt], List[Answer]]:
     return prompts, answers
 
 
-def create_causal_mask(
-    prompt_len: int, query_len: int, padded_len: int
-) -> ttml.autograd.Tensor:
-    mask = np.zeros((padded_len, padded_len), dtype=np.float32)
-    mask[:query_len, :padded_len] = np.tri(
-        query_len, padded_len, k=prompt_len, dtype=np.float32
+def create_causal_mask(prompt_len: int, query_len: int) -> ttml.autograd.Tensor:
+    whole_len = prompt_len + query_len
+    padded_q = round_up(query_len)
+    padded_w = round_up(whole_len)
+
+    mask = np.zeros((padded_q, padded_w), dtype=np.float32)
+    mask[:query_len, :padded_w] = np.tri(
+        query_len, padded_w, k=prompt_len, dtype=np.float32
     )
 
     return ttml.autograd.Tensor.from_numpy(
-        mask.reshape(1, 1, padded_len, padded_len),
+        mask.reshape(1, 1, padded_q, padded_w),
         ttnn.Layout.TILE,
         ttnn.DataType.BFLOAT16,
     )
 
 
-def tokens_to_tensor(tokens_np, B, padded_len) -> ttml.autograd.Tensor:
+def tokens_to_tensor(tokens_np, B) -> ttml.autograd.Tensor:
     # tokens_np is of shape (B, N) or (B, 1)
+    padded_len = round_up(tokens_np.shape[1])
 
     padded = np.full((B, padded_len), pad_token, dtype=np.uint32)
     padded[:, : tokens_np.shape[1]] = tokens_np
@@ -260,6 +263,22 @@ def build_logits_mask(vocab_size: int, padded_vocab_size: int) -> ttml.autograd.
     return ttml.autograd.Tensor.from_numpy(
         logits_mask, ttnn.Layout.TILE, ttnn.DataType.BFLOAT16
     )
+
+
+def get_stop_ids():
+    stop_ids = set()
+    # Core stops
+    if tokenizer.eos_token_id is not None:
+        stop_ids.add(int(tokenizer.eos_token_id))
+    if tokenizer.pad_token_id is not None:
+        stop_ids.add(int(tokenizer.pad_token_id))
+    # Common Llama/chat terminators
+    for tok in ["<|eot_id|>", "<|end_of_text|>", "<|eom_id|>"]:
+        tid = tokenizer.convert_tokens_to_ids(tok)
+        if tid is not None and tid >= 0 and tid != tokenizer.unk_token_id:
+            stop_ids.add(int(tid))
+
+    return stop_ids
 
 
 def completion_batched(
@@ -294,54 +313,65 @@ def completion_batched(
         max_tokens_to_complete,
         transformer_config.max_sequence_length - len(prompt_tokens),
     )
-    padded_len = round_up(
-        min(
-            len(prompt_tokens) + tokens_to_complete,
-            transformer_config.max_sequence_length,
-        )
-    )
 
     generated = []
 
     for token in range(tokens_to_complete):
         if kv_cache.get_cache_position() == 0:
-            input_tokens_np = prompt_tokens_np
             processed = 0
             new_tokens = prompt_tokens_np.shape[1]
+            token_tensor = tokens_to_tensor(prompt_tokens_np, B)
         else:
-            input_tokens_np = last_token_column
             processed = N - 1
             new_tokens = 1
+            # last_token_column has shape [B, 1, 1, 1]
+            token_tensor = ttnn.pad(
+                last_token_column,
+                [(0, 0), (0, 0), (0, 0), (0, tile_size - 1)],
+                pad_token,
+            )
+            token_tensor = ttml.autograd.Tensor(token_tensor, False)
 
-        token_tensor = tokens_to_tensor(input_tokens_np, B, padded_len)
-        mask = create_causal_mask(processed, new_tokens, padded_len)
+        mask = create_causal_mask(processed, new_tokens)
         logits = tt_model(token_tensor, mask, kv_cache=kv_cache, new_tokens=new_tokens)
 
         next_token_tensor = ttml.ops.sample.sample_op(
             logits, temperature, np.random.randint(low=1e7), logits_mask_tensor
         )
 
-        next_token_slice = ttnn.slice(
+        last_token_column = ttnn.slice(
             next_token_tensor.get_value(),
             [0, 0, new_tokens - 1, 0],
             [B, 1, new_tokens, 1],
-        )
-        last_token_column = next_token_slice.to_numpy().reshape(B, 1)
+        )  # B 1 1 1
 
         generated.append(last_token_column)
 
         N += 1
 
+        deallocate_tensors([token_tensor, mask, logits, next_token_tensor])
+
         print(f"{token=}")
 
-        deallocate_tensors(
-            [token_tensor, mask, logits, next_token_tensor, next_token_slice]
+    completions_np = np.empty((B, tokens_to_complete), dtype=np.int32)
+    for j, column in enumerate(generated):
+        completions_np[:, j] = column.to_numpy().reshape(
+            B,
         )
 
-    completions_np = np.hstack(generated)
-    completions = (
-        completions_np.tolist()
-    )  # list[list[int]], where each inner list[int] is a row
+    stop_ids = get_stop_ids()
+
+    print("completions start:")
+
+    completions = []
+    for i in range(B):
+        to = max_tokens_to_complete
+        for j, token in enumerate(completions_np[i]):
+            if token in stop_ids:
+                to = j
+                break
+
+        completions.append(completions_np[i, :to])
 
     return completions
 
@@ -353,13 +383,13 @@ def generate_answers(prompt_str: str) -> List[Answer]:
 
     start_time = time.time()
 
-    completions = completion_batched(prompt, transformer_config, batch_size=8)
+    completions = completion_batched(prompt, transformer_config, batch_size=4)
 
     elapsed_time = time.time() - start_time
 
     print(f"Tokens generated in {elapsed_time} s")
 
-    for i in range(8):
+    for i in range(4):
         output = tokenizer.decode(completions[i], skip_special_tokens=False)
         print(f"{i=}, {output=}")
 
