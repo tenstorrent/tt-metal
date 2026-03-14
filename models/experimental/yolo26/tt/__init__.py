@@ -1,0 +1,4 @@
+# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+# SPDX-License-Identifier: Apache-2.0
+
+from models.experimental.yolo26.tt.ttnn_yolo26 import TtYOLO26, create_yolo26_model
