@@ -55,7 +55,9 @@ Result conv2d_L1(
     const std::optional<const DeviceComputeKernelConfig>& compute_config_,
     const std::optional<const MemoryConfig>& memory_config) {
     Conv2dConfig conv_config = conv_config_.value_or(Conv2dConfig());
-    const DataType output_dtype = dtype.value_or(input_tensor_.dtype());
+    // Save input tensor dtype before fold_input_tensor_if_required which may deallocate input_tensor_
+    const DataType input_dtype = input_tensor_.dtype();
+    const DataType output_dtype = dtype.value_or(input_dtype);
     std::array<uint32_t, 4> padding_n4 = sliding_window::get_pair_n4_padding(padding);
     const auto& weight_tensor = weight_tensor_;
     std::optional<ttnn::Tensor> bias_tensor = bias_tensor_;
@@ -100,7 +102,7 @@ Result conv2d_L1(
     // Use weights_dtype from config if set, otherwise use weight tensor's dtype
     DataType weight_dtype = conv_config.weights_dtype.value_or(weight_tensor_.dtype());
     DeviceComputeKernelConfig compute_config =
-        compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_tensor_.dtype(), weight_dtype));
+        compute_config_.value_or(get_conv_default_compute_kernel_config(device, input_dtype, weight_dtype));
 
     const auto compute_grid_size = device->compute_with_storage_grid_size();
 

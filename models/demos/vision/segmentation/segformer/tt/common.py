@@ -61,12 +61,20 @@ class Conv:
         if self.act_block_h is not None:
             conv_config.act_block_h_override = self.act_block_h
 
+        # Save tensor attributes before any operation that could deallocate the tensor
+        in_channels = input_tensor.shape[3]
+        batch_size = input_tensor.shape[0]
+        input_height = input_tensor.shape[1]
+        input_width = input_tensor.shape[2]
+        input_memory_config = input_tensor.memory_config()
+        input_layout = input_tensor.get_layout()
+
         conv_kwargs = {
-            "in_channels": input_tensor.shape[3],
+            "in_channels": in_channels,
             "out_channels": self.out_channels,
-            "batch_size": input_tensor.shape[0],
-            "input_height": input_tensor.shape[1],
-            "input_width": input_tensor.shape[2],
+            "batch_size": batch_size,
+            "input_height": input_height,
+            "input_width": input_width,
             "kernel_size": self.kernel_size,
             "stride": (self.conv_params[0], self.conv_params[1]),
             "padding": (self.conv_params[2], self.conv_params[3]),
@@ -81,16 +89,16 @@ class Conv:
             self.weights = ttnn.prepare_conv_weights(
                 weight_tensor=self.weights,
                 weights_format="OIHW",
-                input_memory_config=input_tensor.memory_config(),
-                input_layout=input_tensor.get_layout(),
+                input_memory_config=input_memory_config,
+                input_layout=input_layout,
                 has_bias=True,
                 **conv_kwargs,
                 input_dtype=self.dtype,
             )
             self.bias = ttnn.prepare_conv_bias(
                 bias_tensor=self.bias,
-                input_memory_config=input_tensor.memory_config(),
-                input_layout=input_tensor.get_layout(),
+                input_memory_config=input_memory_config,
+                input_layout=input_layout,
                 **conv_kwargs,
                 input_dtype=self.dtype,
             )
