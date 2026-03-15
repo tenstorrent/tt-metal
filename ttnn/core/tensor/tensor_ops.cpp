@@ -300,8 +300,7 @@ Tensor view_device(const Tensor& input_tensor, const Shape& new_logical_shape, c
         new_device_config,
         input_tensor.device(),
         input_tensor.mesh_buffer().address());
-    tt::tt_metal::DeviceStorage view_storage(
-        view_mesh_buffer, input_tensor.device_storage().coords, input_tensor.device_storage().get_root_mesh_buffer());
+    tt::tt_metal::DeviceStorage view_storage(input_tensor.device_storage(), view_mesh_buffer);
 
     return Tensor(view_storage, new_spec, input_tensor.tensor_topology());
 }
