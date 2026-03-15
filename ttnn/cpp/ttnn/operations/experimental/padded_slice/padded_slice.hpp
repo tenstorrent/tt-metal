@@ -12,9 +12,9 @@ struct PaddedSliceOperation {
     template <typename T>
     static ttnn::Tensor invoke(
         const ttnn::Tensor& input_tensor,
-        tt::stl::Span<const T> begins,
-        tt::stl::Span<const T> ends,
-        tt::stl::Span<const T> step,
+        ttsl::Span<const T> begins,
+        ttsl::Span<const T> ends,
+        ttsl::Span<const T> step,
         const MemoryConfig& memory_config_arg,
         const std::optional<Tensor>& optional_output_tensor = std::nullopt,
         const std::optional<float>& pad_value = std::nullopt);
@@ -30,9 +30,9 @@ struct PaddedSliceOperation {
         const std::optional<float>& pad_value = std::nullopt) {
         return invoke(
             input_tensor,
-            tt::stl::Span<const T>(begins),
-            tt::stl::Span<const T>(ends),
-            tt::stl::Span<const T>(step),
+            ttsl::Span<const T>(begins),
+            ttsl::Span<const T>(ends),
+            ttsl::Span<const T>(step),
             memory_config_arg,
             optional_output_tensor,
             pad_value);
