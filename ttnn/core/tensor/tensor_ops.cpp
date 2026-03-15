@@ -26,19 +26,14 @@ tt::tt_metal::Tensor allocate_tensor_on_device(
     const tt::tt_metal::TensorSpec& tensor_spec, tt::tt_metal::distributed::MeshDevice* device) {
     using namespace tt::tt_metal;
     auto mesh_buffer = tensor_impl::allocate_device_buffer(device, tensor_spec);
-    std::vector<distributed::MeshCoordinate> coords;
-    coords.reserve(device->shape().mesh_size());
-    for (const auto& coord : distributed::MeshCoordinateRange(device->shape())) {
-        coords.push_back(coord);
-    }
-    DeviceStorage device_storage(std::move(mesh_buffer), coords);
+    DeviceStorage device_storage(std::move(mesh_buffer));
     // TODO (#25340): Implement correct logic and add test for this
     ttsl::SmallVector<distributed::MeshMapperConfig::Placement> placements(device->shape().dims());
     for (size_t i = 0; i < device->shape().dims(); i++) {
         placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
     }
 
-    auto tensor_topology = TensorTopology{device->shape(), placements, coords};
+    auto tensor_topology = TensorTopology{device->shape(), placements, device_storage.coords};
     return Tensor(std::move(device_storage), tensor_spec, tensor_topology);
 }
 }  // namespace
