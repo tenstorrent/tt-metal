@@ -163,6 +163,10 @@ def test_recurrent_deltanet(device):
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
     )
+    # TTNN linear expects weights in [in_features, out_features] format
+    # o_proj_weight is created as [num_v_heads * head_v_dim, hidden_size] = [512, 256]
+    # This is [out_features, in_features] for PyTorch, but [in_features, out_features] for TTNN
+    # So we use it directly without transpose
     ttnn_model.o_proj_weight = ttnn.from_torch(
         o_proj_weight.to(torch.bfloat16),
         device=device,
