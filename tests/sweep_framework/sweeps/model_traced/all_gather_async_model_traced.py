@@ -488,24 +488,13 @@ def run(
                 ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(num_iters)
             ]
 
-        # Create persistent output buffers when use_broadcast is enabled
-        # (matches reference test pattern in test_minimal_all_gather_async.py).
-        # The C++ op requires the persistent buffer's memory layout to match
-        # the input tensor's memory layout.
+        # Persistent output buffers are not created for model_traced configs.
+        # They are a performance optimization (for tracing) but not required
+        # for correctness.  Creating them here is problematic because the
+        # traced input memory_config (often sharded) may not fit the gathered
+        # output shape, and the C++ op requires the persistent buffer's memory
+        # layout to match the input's.
         persistent_output_buffers = []
-        if use_broadcast and is_model_traced:
-            output_shape = list(torch_reference.shape)
-            persistent_output_buffers = [
-                ttnn.from_torch(
-                    torch.zeros(output_shape),
-                    device=device,
-                    layout=layout,
-                    dtype=input_dtype,
-                    memory_config=input_memory_config,
-                    mesh_mapper=ttnn.ReplicateTensorToMesh(device),
-                )
-                for _ in range(num_iters)
-            ]
 
         for i in range(num_iters):
             try:
