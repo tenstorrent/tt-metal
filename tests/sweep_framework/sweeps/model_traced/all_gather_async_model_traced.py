@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import os
 import re
 from math import prod
 from typing import Optional, Tuple
@@ -427,160 +428,174 @@ def run(
             buffer_type, shard_specs, layout, torch_reference.shape
         )
 
-    with device_context(mesh_shape, fabric_config) as (device, device_err):
-        assert tuple(device.shape) == mesh_shape
+    # CI sets TT_METAL_OPERATION_TIMEOUT_SECONDS=5 for hang detection.
+    # Multi-device all_gather on 4x8 Galaxy with sharded inputs needs more
+    # time (DRAM→sharded reshard + the gather itself).  Raise the timeout
+    # for this op so it doesn't false-positive as a hang.
+    _prev_op_timeout = os.environ.get("TT_METAL_OPERATION_TIMEOUT_SECONDS")
+    os.environ["TT_METAL_OPERATION_TIMEOUT_SECONDS"] = "30"
 
-        if device_err is not None:
-            return False, device_err, None, None
+    try:
+        with device_context(mesh_shape, fabric_config) as (device, device_err):
+            assert tuple(device.shape) == mesh_shape
 
-        if is_model_traced:
-            if is_2d_mesh:
-                if shard_dims is not None:
-                    mapper_dims = shard_dims
-                elif cluster_axis == 1:
-                    mapper_dims = (None, effective_dim)
+            if device_err is not None:
+                return False, device_err, None, None
+
+            if is_model_traced:
+                if is_2d_mesh:
+                    if shard_dims is not None:
+                        mapper_dims = shard_dims
+                    elif cluster_axis == 1:
+                        mapper_dims = (None, effective_dim)
+                    else:
+                        mapper_dims = (effective_dim, None)
+                    tt_input = ttnn.from_torch(
+                        torch_input,
+                        layout=layout,
+                        dtype=input_dtype,
+                        memory_config=input_memory_config,
+                        mesh_mapper=ShardTensor2dMesh(device, dims=mapper_dims, mesh_shape=mesh_shape),
+                        device=device,
+                    )
                 else:
-                    mapper_dims = (effective_dim, None)
-                tt_input = ttnn.from_torch(
-                    torch_input,
-                    layout=layout,
-                    dtype=input_dtype,
-                    memory_config=input_memory_config,
-                    mesh_mapper=ShardTensor2dMesh(device, dims=mapper_dims, mesh_shape=mesh_shape),
-                    device=device,
-                )
-            else:
-                tt_input = ttnn.from_torch(
-                    torch_input,
-                    layout=layout,
-                    dtype=input_dtype,
-                    memory_config=input_memory_config,
-                    mesh_mapper=ttnn.ShardTensorToMesh(device, dim=effective_dim),
-                    device=device,
-                )
-
-            # Move from DRAM to the traced sharded layout if applicable
-            if target_sharded_config is not None:
-                tt_input = ttnn.to_memory_config(tt_input, target_sharded_config)
-
-        else:
-            # Use _get_tensors helper for generality format
-            tt_input, torch_reference, output_memory_config = _get_tensors(
-                input_shape,
-                mesh_shape,
-                dim,
-                cluster_axis,
-                input_dtype,
-                buffer_type,
-                shard_specs,
-                layout,
-                device,
-            )
-
-        # Setup SubDevice and semaphores (match test_minimal_all_gather_async.py pattern)
-        compute_grid_size = device.compute_with_storage_grid_size()
-        ccl_sub_device_crs = ttnn.CoreRangeSet(
-            {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
-        )
-        worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
-        worker_sub_device_id = ttnn.SubDeviceId(0)
-        sub_device_stall_group = [worker_sub_device_id]
-
-        # Set sub-device stall group
-        device.set_sub_device_stall_group(sub_device_stall_group)
-
-        # Create semaphores for CCL operations - one set per iteration
-        ccl_semaphore_handles = [
-            [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(2)] for _ in range(num_iters)
-        ]
-
-        # Create barrier semaphore if needed
-        barrier_semaphore_handles = []
-        if barrier_semaphore is not None:
-            barrier_semaphore_handles = [
-                ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(num_iters)
-            ]
-
-        # Persistent output buffers are not created for model_traced configs.
-        # They are a performance optimization (for tracing) but not required
-        # for correctness.  Creating them here is problematic because the
-        # traced input memory_config (often sharded) may not fit the gathered
-        # output shape, and the C++ op requires the persistent buffer's memory
-        # layout to match the input's.
-        persistent_output_buffers = []
-
-        for i in range(num_iters):
-            try:
-                start_time = start_measuring_time()
-
-                if is_model_traced:
-                    # Build kwargs matching the reference test pattern
-                    # (test_minimal_all_gather_async.py::run_all_gather_impl).
-                    # subdevice_id is always passed; persistent_output_buffer
-                    # is created locally (not from traced JSON).
-                    op_kwargs = {
-                        "dim": dim,
-                        "multi_device_global_semaphore": ccl_semaphore_handles[i],
-                        "num_links": num_links,
-                        "topology": topology,
-                        "cluster_axis": cluster_axis,
-                        "mesh_device": device,
-                        "subdevice_id": worker_sub_device_id,
-                    }
-                    if output_memory_config is not None:
-                        op_kwargs["memory_config"] = output_memory_config
-                    if barrier_semaphore_handles:
-                        op_kwargs["barrier_semaphore"] = barrier_semaphore_handles[i]
-                    if persistent_output_buffers:
-                        op_kwargs["persistent_output_buffer"] = persistent_output_buffers[i]
-                        # The overload that accepts persistent_output_buffer
-                        # infers the mesh device from the tensor; passing both
-                        # causes an argument mismatch.
-                        op_kwargs.pop("mesh_device", None)
-                    if chunks_per_sync is not None:
-                        op_kwargs["chunks_per_sync"] = chunks_per_sync
-                    if num_workers_per_link is not None:
-                        op_kwargs["num_workers_per_link"] = num_workers_per_link
-                    if num_buffers_per_channel is not None:
-                        op_kwargs["num_buffers_per_channel"] = num_buffers_per_channel
-                    if use_broadcast is not None:
-                        op_kwargs["use_broadcast"] = use_broadcast
-                    tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, **op_kwargs)
-                else:
-                    tt_out_tensor = ttnn.experimental.all_gather_async(
-                        tt_input,
-                        persistent_output_buffer=persistent_output_buffer if persistent_output_buffer else None,
-                        dim=dim,
-                        multi_device_global_semaphore=ccl_semaphore_handles[i],
-                        num_links=num_links,
-                        memory_config=output_memory_config,
-                        topology=topology,
-                        subdevice_id=worker_sub_device_id,
-                        barrier_semaphore=barrier_semaphore_handles[i] if barrier_semaphore_handles else None,
-                        cluster_axis=cluster_axis,
-                        chunks_per_sync=chunks_per_sync,
-                        num_workers_per_link=num_workers_per_link,
-                        num_buffers_per_channel=num_buffers_per_channel,
+                    tt_input = ttnn.from_torch(
+                        torch_input,
+                        layout=layout,
+                        dtype=input_dtype,
+                        memory_config=input_memory_config,
+                        mesh_mapper=ttnn.ShardTensorToMesh(device, dim=effective_dim),
+                        device=device,
                     )
 
-                ttnn.synchronize_device(device, sub_device_ids=sub_device_stall_group)
-                e2e_perf = stop_measuring_time(start_time)
-            except Exception as e:
-                raise RuntimeError(f"Execution failed: {e}")
+                # Move from DRAM to the traced sharded layout if applicable
+                if target_sharded_config is not None:
+                    tt_input = ttnn.to_memory_config(tt_input, target_sharded_config)
 
-        device.reset_sub_device_stall_group()
+            else:
+                # Use _get_tensors helper for generality format
+                tt_input, torch_reference, output_memory_config = _get_tensors(
+                    input_shape,
+                    mesh_shape,
+                    dim,
+                    cluster_axis,
+                    input_dtype,
+                    buffer_type,
+                    shard_specs,
+                    layout,
+                    device,
+                )
 
-        # After all_gather, every device in the gather group has the full tensor.
-        # Read a single device's output for comparison.
-        device_tensors = ttnn.get_device_tensors(tt_out_tensor)
-        tt_output_tensor = ttnn.to_torch(device_tensors[0])
+            # Setup SubDevice and semaphores (match test_minimal_all_gather_async.py pattern)
+            compute_grid_size = device.compute_with_storage_grid_size()
+            ccl_sub_device_crs = ttnn.CoreRangeSet(
+                {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(compute_grid_size.x - 1, compute_grid_size.y - 1))}
+            )
+            worker_sub_device = ttnn.SubDevice([ccl_sub_device_crs])
+            worker_sub_device_id = ttnn.SubDeviceId(0)
+            sub_device_stall_group = [worker_sub_device_id]
 
-        # Trim tile padding to match expected shape
-        tt_output_tensor = tt_output_tensor[tuple(slice(0, s) for s in torch_reference.shape)]
+            # Set sub-device stall group
+            device.set_sub_device_stall_group(sub_device_stall_group)
 
-        if input_dtype == ttnn.bfloat16:
-            eq, output = comp_equal(tt_output_tensor, torch_reference)
+            # Create semaphores for CCL operations - one set per iteration
+            ccl_semaphore_handles = [
+                [ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(2)]
+                for _ in range(num_iters)
+            ]
+
+            # Create barrier semaphore if needed
+            barrier_semaphore_handles = []
+            if barrier_semaphore is not None:
+                barrier_semaphore_handles = [
+                    ttnn.create_global_semaphore(device, ccl_sub_device_crs, 0) for _ in range(num_iters)
+                ]
+
+            # Persistent output buffers are not created for model_traced configs.
+            # They are a performance optimization (for tracing) but not required
+            # for correctness.  Creating them here is problematic because the
+            # traced input memory_config (often sharded) may not fit the gathered
+            # output shape, and the C++ op requires the persistent buffer's memory
+            # layout to match the input's.
+            persistent_output_buffers = []
+
+            for i in range(num_iters):
+                try:
+                    start_time = start_measuring_time()
+
+                    if is_model_traced:
+                        # Build kwargs matching the reference test pattern
+                        # (test_minimal_all_gather_async.py::run_all_gather_impl).
+                        # subdevice_id is always passed; persistent_output_buffer
+                        # is created locally (not from traced JSON).
+                        op_kwargs = {
+                            "dim": dim,
+                            "multi_device_global_semaphore": ccl_semaphore_handles[i],
+                            "num_links": num_links,
+                            "topology": topology,
+                            "cluster_axis": cluster_axis,
+                            "mesh_device": device,
+                            "subdevice_id": worker_sub_device_id,
+                        }
+                        if output_memory_config is not None:
+                            op_kwargs["memory_config"] = output_memory_config
+                        if barrier_semaphore_handles:
+                            op_kwargs["barrier_semaphore"] = barrier_semaphore_handles[i]
+                        if persistent_output_buffers:
+                            op_kwargs["persistent_output_buffer"] = persistent_output_buffers[i]
+                            # The overload that accepts persistent_output_buffer
+                            # infers the mesh device from the tensor; passing both
+                            # causes an argument mismatch.
+                            op_kwargs.pop("mesh_device", None)
+                        if chunks_per_sync is not None:
+                            op_kwargs["chunks_per_sync"] = chunks_per_sync
+                        if num_workers_per_link is not None:
+                            op_kwargs["num_workers_per_link"] = num_workers_per_link
+                        if num_buffers_per_channel is not None:
+                            op_kwargs["num_buffers_per_channel"] = num_buffers_per_channel
+                        if use_broadcast is not None:
+                            op_kwargs["use_broadcast"] = use_broadcast
+                        tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, **op_kwargs)
+                    else:
+                        tt_out_tensor = ttnn.experimental.all_gather_async(
+                            tt_input,
+                            persistent_output_buffer=persistent_output_buffer if persistent_output_buffer else None,
+                            dim=dim,
+                            multi_device_global_semaphore=ccl_semaphore_handles[i],
+                            num_links=num_links,
+                            memory_config=output_memory_config,
+                            topology=topology,
+                            subdevice_id=worker_sub_device_id,
+                            barrier_semaphore=barrier_semaphore_handles[i] if barrier_semaphore_handles else None,
+                            cluster_axis=cluster_axis,
+                            chunks_per_sync=chunks_per_sync,
+                            num_workers_per_link=num_workers_per_link,
+                            num_buffers_per_channel=num_buffers_per_channel,
+                        )
+
+                    ttnn.synchronize_device(device, sub_device_ids=sub_device_stall_group)
+                    e2e_perf = stop_measuring_time(start_time)
+                except Exception as e:
+                    raise RuntimeError(f"Execution failed: {e}")
+
+            device.reset_sub_device_stall_group()
+
+            # After all_gather, every device in the gather group has the full tensor.
+            # Read a single device's output for comparison.
+            device_tensors = ttnn.get_device_tensors(tt_out_tensor)
+            tt_output_tensor = ttnn.to_torch(device_tensors[0])
+
+            # Trim tile padding to match expected shape
+            tt_output_tensor = tt_output_tensor[tuple(slice(0, s) for s in torch_reference.shape)]
+
+            if input_dtype == ttnn.bfloat16:
+                eq, output = comp_equal(tt_output_tensor, torch_reference)
+            else:
+                eq, output = comp_pcc(tt_output_tensor, torch_reference)
+
+            return [(eq, output), e2e_perf]
+    finally:
+        if _prev_op_timeout is not None:
+            os.environ["TT_METAL_OPERATION_TIMEOUT_SECONDS"] = _prev_op_timeout
         else:
-            eq, output = comp_pcc(tt_output_tensor, torch_reference)
-
-        return [(eq, output), e2e_perf]
+            os.environ.pop("TT_METAL_OPERATION_TIMEOUT_SECONDS", None)
