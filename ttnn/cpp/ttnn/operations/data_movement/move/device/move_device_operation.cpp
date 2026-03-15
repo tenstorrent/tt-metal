@@ -6,6 +6,7 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
+#include "ttnn/tensor/tensor_attributes.hpp"
 
 namespace ttnn::prim {
 
@@ -116,6 +117,8 @@ ttnn::prim::MoveDeviceOperation::tensor_return_value_t move(
     const Tensor& output_tensor,
     const tt::tt_metal::MemoryConfig& output_mem_config,
     const ttnn::prim::MoveOpParallelizationStrategy& move_op_parallelization_strategy) {
+    // I don't think this is needed, but just in case.
+    tt::tt_metal::GhostSpecAccessGuard guard("ttnn::prim::move");
     using OperationType = ttnn::prim::MoveDeviceOperation;
     bool backwards = false;
     if (move_op_parallelization_strategy == ttnn::prim::MoveOpParallelizationStrategy::MULTI_CORE) {

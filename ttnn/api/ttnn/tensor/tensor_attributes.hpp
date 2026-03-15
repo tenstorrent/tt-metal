@@ -17,13 +17,12 @@ struct GhostSpecAccessGuard {
 private:
     static bool check_ghost_spec_;
     static std::string_view current_white_listed_function;
+    bool prev_check_ghost_spec_;
+    std::string_view prev_white_listed_function;
 
 public:
-    GhostSpecAccessGuard(std::string_view current_function) {
-        check_ghost_spec_ = false;
-        current_white_listed_function = current_function;
-    }
-    ~GhostSpecAccessGuard() { check_ghost_spec_ = true; }
+    GhostSpecAccessGuard(std::string_view current_function);
+    ~GhostSpecAccessGuard();
 
     static void fault();
 };
