@@ -66,7 +66,6 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     std::optional<DataType> output_dtype,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    std::cout << "C" << std::endl;
     if (input_tensor.layout() == Layout::TILE) {
         return input_tensor;
     }
@@ -121,8 +120,6 @@ ttnn::Tensor ExecuteTilizeWithValPadding::invoke(
     std::optional<DataType> output_dtype,
     bool use_multicore,
     const std::optional<CoreRangeSet>& sub_core_grids) {
-    std::cout << "B" << std::endl;
-
     // Handle empty tensors - no tiling needed for tensors with no data
     if (input_tensor.physical_volume() == 0) {
         // Create output tensor with same properties
@@ -153,8 +150,6 @@ ttnn::Tensor ExecuteTilizeWithZeroPadding::invoke(
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using namespace tt::constants;
     auto padded_shape = input_tensor.padded_shape();
-
-    std::cout << "A" << std::endl;
 
     uint32_t input_tile_width = input_tensor.tensor_spec().tile().get_width();
     uint32_t input_tile_height = input_tensor.tensor_spec().tile().get_height();

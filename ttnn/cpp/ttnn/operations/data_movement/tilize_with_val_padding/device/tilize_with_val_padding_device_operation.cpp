@@ -46,11 +46,9 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
         return TilizeWithValPaddingMultiCoreDefaultFactory{};
     }
     if (!operation_attributes.enough_space_height) {
-        std::cout << "X" << std::endl;
         return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
     }
     if (!operation_attributes.use_multicore) {
-        std::cout << "Y" << std::endl;
         return TilizeWithValPaddingSingleCoreFactory{};
     }
     auto* device = input_tensor.device();
@@ -74,11 +72,9 @@ TilizeWithValPaddingDeviceOperation::program_factory_t TilizeWithValPaddingDevic
                                     (tt::constants::TILE_HEIGHT * tt::constants::TILE_WIDTH);
         auto ncores_wh = compute_ncores_wh(grid_area, num_blocks_block, num_tiles_per_row, num_tiles_per_col);
         if (ncores < ncores_wh.ncores) {
-            std::cout << "Z" << std::endl;
             return TilizeWithValPaddingMultiCoreBlockInterleavedFactory{};
         }
     }
-    std::cout << "R" << std::endl;
     return TilizeWithValPaddingMultiCoreDefaultFactory{};
 }
 
