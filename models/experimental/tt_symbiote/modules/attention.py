@@ -1164,6 +1164,7 @@ class TTNNQwen3NextGatedAttention(TTNNModule):
         new_attn.num_attention_heads = torch_attn.config.num_attention_heads
         new_attn.num_key_value_heads = torch_attn.config.num_key_value_heads
         new_attn.head_dim = torch_attn.head_dim
+        new_attn.hidden_size = torch_attn.config.hidden_size
         new_attn.norm_eps = torch_attn.config.rms_norm_eps
         return new_attn
 
@@ -1208,7 +1209,16 @@ class TTNNQwen3NextGatedAttention(TTNNModule):
         self.tt_q_norm = ttnn.to_device(self.tt_q_norm, self.device)
         self.tt_k_norm = ttnn.to_device(self.tt_k_norm, self.device)
 
-    def forward(self, hidden_states, position_embeddings):
+    def forward(
+        self,
+        hidden_states,
+        position_embeddings,
+        attention_mask=None,
+        position_ids=None,
+        past_key_values=None,
+        cache_position=None,
+        **kwargs,
+    ):
         cos, sin = position_embeddings
         if isinstance(hidden_states, TorchTTNNTensor):
             hidden_states = hidden_states.to_ttnn
@@ -1218,7 +1228,22 @@ class TTNNQwen3NextGatedAttention(TTNNModule):
             sin = ttnn.from_torch(sin.to(torch.bfloat16), device=self.device, layout=ttnn.TILE_LAYOUT)
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        return gated_attention_forward_ttnn(
+        # All-gather hidden_states when tensor parallel (sharded hidden dim)
+        need_reduce_scatter = (
+            self.device_state is not None
+            and self.device.get_num_devices() > 1
+            and hidden_states.shape[-1] != self.hidden_size
+        )
+        if need_reduce_scatter:
+            hidden_states = ttnn.experimental.all_gather_async(
+                hidden_states,
+                dim=-1,
+                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+                num_links=1,
+                topology=ttnn.Topology.Linear,
+            )
+        out = gated_attention_forward_ttnn(
             hidden_states,
             self.tt_q_proj,
             self.tt_k_proj,
@@ -1234,3 +1259,16 @@ class TTNNQwen3NextGatedAttention(TTNNModule):
             self.device,
             norm_eps=self.norm_eps,
         )
+        if need_reduce_scatter:
+            # Reduce-scatter output to match sharded residual for residual add
+            out = ttnn.reshape(out, (out.shape[0], 1, out.shape[1], out.shape[2]))
+            out = ttnn.experimental.reduce_scatter_minimal_async(
+                out,
+                persistent_output_buffers=None,
+                dim=3,
+                multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
+                barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            )
+            out = ttnn.div(out, float(self.device.get_num_devices()))
+            out = ttnn.squeeze(out, 1)
+        return out, None
