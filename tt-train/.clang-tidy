@@ -54,4 +54,8 @@ Checks: >
   -performance-unnecessary-copy-initialization,
   -clang-diagnostic-deprecated-declarations,
   -misc-confusable-identifiers,
-  -readability-static-definition-in-anonymous-namespace
+  -readability-static-definition-in-anonymous-namespace,
+  -readability-inconsistent-declaration-parameter-name,
+  -performance-inefficient-vector-operation,
+  -bugprone-argument-comment,
+  -modernize-use-equals-default
