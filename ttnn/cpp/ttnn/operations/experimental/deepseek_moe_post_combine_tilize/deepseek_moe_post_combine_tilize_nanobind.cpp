@@ -18,36 +18,23 @@ namespace ttnn::operations::experimental::deepseek_moe_post_combine_tilize::deta
 namespace nb = nanobind;
 
 void bind_deepseek_moe_post_combine_tilize(nb::module_& mod) {
-    // TODO: (GR)
     const auto* doc =
         R"doc(
-            Writes the input tensor to a slice of the output tensor.
+        Changes data layout of input tensor to TILE.
 
-            Constraints:
-                Input & Output must have rank == 4.
-                DType must be bfloat16.
-                Supports only Row Major Tensors.
-                Output Tensor must be interleaved.
-                Input Tensor can be interleaved, height sharded or block sharded.
-                Steps must be all ones.
-                Slicing along the last dimension is not supported.
+        Input tensor must be on TT accelerator device, in ROW_MAJOR layout, and have BFLOAT16 data type.
 
-            Args:
-                input_tensor: Input Tensor.
-                output_tensor: Output Tensor.
-                slice_start: Start indices of input tensor. Values along each dim must be < input_tensor_shape[i].
-                slice_end: End indices of input tensor. Values along each dim must be < input_tensor_shape[i].
-                slice_step: (Optional[List[int[tensor rank]]) Step size for each dim. Default is None, which works out be 1 for each dimension.
+        Output tensor will be on TT accelerator device, in TILE layout, and have BFLOAT16 data type.
 
-            Keyword Args:
-                memory_config Memory Config of the output tensor
+        Args:
+            input_tensor (ttnn.Tensor): the input tensor.
 
-            Returns:
-                ttnn.Tensor: the output tensor after writing the input tensor to it.
+        Keyword Args:
+            output_memory_config (ttnn.MemoryConfig): Memory configuration for the operation.
 
-            Example:
-                >>> ttnn.experimental.slice_write(ttnn_input_tensor, ttnn_output_tensor, output_start_indices, output_end_indices, strides)
-                )doc";
+        Returns:
+            ttnn.Tensor: the output tensor.
+    )doc";
 
     ttnn::bind_function<"deepseek_moe_post_combine_tilize", "ttnn.experimental.">(
         mod,
