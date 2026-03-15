@@ -220,6 +220,27 @@ jobs:
       prereq-targets: 'tt_metal'
       scan-targets: 'ttnn'
 
+  clang-tidy-incremental-tt-train:
+    name: 🤖 Clang Tidy (tt-train)
+    needs: [ build-docker-image, determine-scan-type ]
+    if: >-
+      ${{ always() && !failure() && !cancelled() &&
+          needs.determine-scan-type.outputs.do-scan == 'true' &&
+          needs.determine-scan-type.outputs.do-full-scan != 'true' }}
+    uses: ./.github/workflows/clang-tidy-reusable.yaml
+    secrets: inherit
+    with:
+      platform: ${{ inputs.platform || 'Ubuntu 24.04' }}
+      architecture: ${{ inputs.architecture || 'amd64' }}
+      ci-build-docker-image: >-
+        ${{ inputs.ci-build-docker-image ||
+            needs.build-docker-image.outputs.ci-build-tag ||
+            'docker-image-unresolved!' }}
+      do-full-scan: 'false'
+      merge-base: ${{ needs.determine-scan-type.outputs.merge-base }}
+      prereq-targets: 'tt_metal ttnn'
+      scan-targets: 'tt-train'
+
   clang-tidy-incremental-catchall:
     name: 🤖 Clang Tidy (catchall)
     needs: [ build-docker-image, determine-scan-type ]
