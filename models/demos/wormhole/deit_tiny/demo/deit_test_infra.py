@@ -3,19 +3,14 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import torch
+import transformers
+from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeacher
+from ttnn.model_preprocessing import preprocess_model_parameters
 
 import ttnn
-from ttnn.model_preprocessing import (
-    preprocess_model_parameters,
-)
-from models.utility_functions import (
-    divup,
-)
-
+from models.common.utility_functions import divup
 from models.demos.deit_tiny.tt import ttnn_optimized_sharded_deit_wh
-from models.demos.wormhole.deit_tiny.demo.deit_helper_funcs import get_data_loader, get_batch
-import transformers
-from transformers import AutoImageProcessor
+from models.demos.wormhole.deit_tiny.demo.deit_helper_funcs import get_batch, get_synthetic_data_loader
 
 
 class DeitTestInfra:
@@ -37,12 +32,12 @@ class DeitTestInfra:
         self.weights_mesh_mapper = weights_mesh_mapper
         self.output_mesh_composer = output_mesh_composer
 
-        model_name = "facebook/deit-tiny-distilled-patch16-224"
+        model_name = "/data/hf_cache/Deit/deit-tiny/deit-tiny"
         sequence_size = 224
 
         config = transformers.DeiTConfig.from_pretrained(model_name)
         config.num_hidden_layers = 12
-        model = transformers.DeiTForImageClassification.from_pretrained(model_name, config=config)
+        model = DeiTForImageClassificationWithTeacher.from_pretrained(model_name, config=config)
         self.config = ttnn_optimized_sharded_deit_wh.update_model_config(config, batch_size)
         image_processor = AutoImageProcessor.from_pretrained(model_name)
 
@@ -91,9 +86,8 @@ class DeitTestInfra:
         else:
             self.head_masks = [None for _ in range(self.config.num_hidden_layers)]
 
-        ## IMAGENET INFERENCE
-        data_loader = get_data_loader("ImageNet_data", batch_size, 2)
-        self.torch_pixel_values, labels = get_batch(data_loader, image_processor)
+        data_loader = get_synthetic_data_loader(batch_size, 2, image_size=sequence_size, seed=0)
+        self.torch_pixel_values, _ = get_batch(data_loader, image_processor)
 
     def setup_l1_sharded_input(self, device, torch_pixel_values, mesh_mapper=None, mesh_composer=None):
         torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
@@ -152,6 +146,8 @@ class DeitTestInfra:
             self.position_embeddings,
             parameters=self.parameters,
         )
+        if isinstance(self.output_tensor, tuple):
+            self.logits, self.cls_logits, self.distillation_logits = self.output_tensor
         return self.output_tensor
 
 

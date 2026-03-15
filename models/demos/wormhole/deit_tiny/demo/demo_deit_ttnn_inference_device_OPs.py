@@ -2,20 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
-
-import torch
-import transformers
-from transformers import AutoImageProcessor
-from loguru import logger
 import time
 
-import ttnn
+import pytest
+import torch
+import transformers
+from loguru import logger
+from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeacher
 from ttnn.model_preprocessing import preprocess_model_parameters
 
+import ttnn
+from models.common.utility_functions import is_blackhole, torch2tt_tensor
 from models.demos.deit_tiny.tt import ttnn_optimized_sharded_deit_wh
-from models.utility_functions import torch2tt_tensor, is_blackhole
-from models.demos.wormhole.deit_tiny.demo.deit_helper_funcs import get_data_loader, get_batch
+from models.demos.wormhole.deit_tiny.demo.deit_helper_funcs import get_batch, get_synthetic_data_loader
 
 
 def get_expected_times(functional_deit):
@@ -32,16 +31,16 @@ os.environ["TTNN_CONFIG_OVERRIDES"] = '{"enable_fast_runtime_mode": true}'
 @pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
 @pytest.mark.models_performance_bare_metal
 @pytest.mark.models_performance_virtual_machine
-def test_deit(device, use_program_cache):
+def test_deit(device):
     torch.manual_seed(0)
 
-    model_name = "facebook/deit-tiny-distilled-patch16-224"
+    model_name = "/data/hf_cache/Deit/deit-tiny/deit-tiny"
     batch_size = 1
     sequence_size = 224
 
     config = transformers.DeiTConfig.from_pretrained(model_name)
     config.num_hidden_layers = 12
-    model = transformers.DeiTForImageClassification.from_pretrained(model_name, config=config)
+    model = DeiTForImageClassificationWithTeacher.from_pretrained(model_name, config=config)
     config = ttnn_optimized_sharded_deit_wh.update_model_config(config, batch_size)
     image_processor = AutoImageProcessor.from_pretrained(model_name)
 
@@ -88,13 +87,11 @@ def test_deit(device, use_program_cache):
     else:
         head_masks = [None for _ in range(config.num_hidden_layers)]
 
-    # IMAGENET INFERENCE
-    #####################
-    data_loader = get_data_loader("ImageNet_data", batch_size, 2)
+    data_loader = get_synthetic_data_loader(batch_size, 2, image_size=sequence_size, seed=0)
 
     durations = []
     for iter in range(1):
-        torch_pixel_values, labels = get_batch(data_loader, image_processor)
+        torch_pixel_values, _ = get_batch(data_loader, image_processor)
         start = time.time()
         torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
         torch_pixel_values = torch.nn.functional.pad(torch_pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
@@ -135,7 +132,17 @@ def test_deit(device, use_program_cache):
             position_embeddings,
             parameters=parameters,
         )
-        output = ttnn.from_device(output)
+        if isinstance(output, tuple):
+            logits, cls_logits, distillation_logits = output
+            logits = ttnn.to_torch(logits)
+            cls_logits = ttnn.to_torch(cls_logits)
+            distillation_logits = ttnn.to_torch(distillation_logits)
+            assert logits.shape[1] == 1
+            assert cls_logits.shape[1] == 1
+            assert distillation_logits.shape[1] == 1
+            output = logits
+        else:
+            output = ttnn.to_torch(output)
 
         end = time.time()
         durations.append(end - start)

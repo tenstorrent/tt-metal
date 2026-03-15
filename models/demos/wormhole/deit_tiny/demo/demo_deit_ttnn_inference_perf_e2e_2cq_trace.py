@@ -3,22 +3,13 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import pytest
-
 import torch
 from loguru import logger
 
 import ttnn
-
+from models.common.utility_functions import is_blackhole, profiler
 from models.demos.deit_tiny.tt import ttnn_optimized_sharded_deit_wh
-from models.utility_functions import is_blackhole
-
-from models.utility_functions import (
-    disable_persistent_kernel_cache,
-    profiler,
-)
-
 from models.demos.wormhole.deit_tiny.demo.deit_test_infra import create_test_infra
-
 from models.perf.perf_utils import prep_perf_report
 
 try:
@@ -41,6 +32,24 @@ def get_expected_times(functional_deit):
     }[functional_deit]
 
 
+def get_logits(output):
+    return output[0] if isinstance(output, tuple) else output
+
+
+def deallocate_output(output):
+    if isinstance(output, tuple):
+        for tensor in output:
+            tensor.deallocate(force=True)
+    elif output is not None:
+        output.deallocate(force=True)
+
+
+def dump_device_profiler(device):
+    dump_profiler = getattr(ttnn, "DumpDeviceProfiler", None)
+    if dump_profiler is not None:
+        dump_profiler(device)
+
+
 ####
 
 
@@ -60,9 +69,10 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     spec = test_infra.input_tensor.spec
     op_event = ttnn.record_event(device, 0)
-    _ = ttnn.from_device(test_infra.run(), blocking=True)
+    compile_output = test_infra.run()
+    _ = ttnn.from_device(get_logits(compile_output), blocking=True)
     profiler.end("compile")
-    ttnn.DumpDeviceProfiler(device)
+    dump_device_profiler(device)
 
     profiler.start("cache")
     ttnn.wait_for_event(1, op_event)
@@ -73,10 +83,11 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
     op_event = ttnn.record_event(device, 0)
     # Deallocate the previous output tensor here to make allocation match capture setup
     # This allows us to allocate the input tensor after at the same address
-    test_infra.output_tensor.deallocate(force=True)
-    _ = ttnn.from_device(test_infra.run(), blocking=True)
+    deallocate_output(test_infra.output_tensor)
+    cache_output = test_infra.run()
+    _ = ttnn.from_device(get_logits(cache_output), blocking=True)
     profiler.end("cache")
-    ttnn.DumpDeviceProfiler(device)
+    dump_device_profiler(device)
 
     # Capture
     ttnn.wait_for_event(1, op_event)
@@ -86,14 +97,15 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
     ttnn.wait_for_event(0, write_event)
     test_infra.input_tensor = ttnn.to_memory_config(tt_image_res, input_mem_config)
     op_event = ttnn.record_event(device, 0)
-    test_infra.output_tensor.deallocate(force=True)
+    deallocate_output(test_infra.output_tensor)
     trace_input_addr = test_infra.input_tensor.buffer_address()
     tid = ttnn.begin_trace_capture(device, cq_id=0)
     tt_output_res = test_infra.run()
+    tt_output_logits = get_logits(tt_output_res)
     reshard_out = ttnn.allocate_tensor_on_device(spec, device)
     ttnn.end_trace_capture(device, tid, cq_id=0)
     assert trace_input_addr == reshard_out.buffer_address()
-    ttnn.DumpDeviceProfiler(device)
+    dump_device_profiler(device)
 
     for iter in range(0, num_warmup_iterations):
         ttnn.wait_for_event(1, op_event)
@@ -103,7 +115,7 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
         reshard_out = ttnn.reshard(tt_image_res, input_mem_config, reshard_out)
         op_event = ttnn.record_event(device, 0)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=True)
-        ttnn.DumpDeviceProfiler(device)
+        dump_device_profiler(device)
 
     ttnn.synchronize_device(device)
     if use_signpost:
@@ -119,12 +131,12 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
         reshard_out = ttnn.reshard(tt_image_res, input_mem_config, reshard_out)
         op_event = ttnn.record_event(device, 0)
         ttnn.execute_trace(device, tid, cq_id=0, blocking=False)
-        outputs.append(tt_output_res.cpu(blocking=False))
+        outputs.append(tt_output_logits.cpu(blocking=False))
     ttnn.synchronize_device(device)
     profiler.end(f"run")
     if use_signpost:
         signpost(header="stop")
-    ttnn.DumpDeviceProfiler(device)
+    dump_device_profiler(device)
 
     ttnn.release_trace(device, tid)
 
@@ -135,11 +147,10 @@ def run_trace_2cq_model(device, test_infra, num_warmup_iterations, num_measureme
 @pytest.mark.parametrize(
     "device_params", [{"l1_small_size": 32768, "num_command_queues": 2, "trace_region_size": 1700000}], indirect=True
 )
-def test_deit(device, use_program_cache):
+def test_deit(device):
     torch.manual_seed(0)
 
     profiler.clear()
-    disable_persistent_kernel_cache()
 
     batch_size = 1
 

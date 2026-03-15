@@ -2,15 +2,12 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import transformers
 import torch
-from ttnn.model_preprocessing import (
-    preprocess_linear_weight,
-    preprocess_linear_bias,
-)
+import transformers
+from ttnn.dot_access import DotAccessDict
+from ttnn.model_preprocessing import preprocess_linear_bias, preprocess_linear_weight
 
 import ttnn
-from ttnn.dot_access import DotAccessDict
 
 
 def update_model_config(config, batch_size):
@@ -465,7 +462,44 @@ def deit(
         program_config=config.program_configs["layernorm_program_config"],
     )
 
-    # Classifier
+    if hasattr(parameters, "cls_classifier") and hasattr(parameters, "distillation_classifier"):
+        cls_token_output = ttnn.slice(
+            output,
+            [0, 0, 0],
+            [output.shape[0], 1, output.shape[-1]],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        distillation_token_output = ttnn.slice(
+            output,
+            [0, 1, 0],
+            [output.shape[0], 2, output.shape[-1]],
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        ttnn.deallocate(output)
+
+        cls_logits = ttnn.linear(
+            cls_token_output,
+            parameters.cls_classifier.weight,
+            bias=parameters.cls_classifier.bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+            core_grid=config.core_grid,
+        )
+        ttnn.deallocate(cls_token_output)
+
+        distillation_logits = ttnn.linear(
+            distillation_token_output,
+            parameters.distillation_classifier.weight,
+            bias=parameters.distillation_classifier.bias,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+            dtype=ttnn.bfloat8_b,
+            core_grid=config.core_grid,
+        )
+        ttnn.deallocate(distillation_token_output)
+
+        logits = ttnn.multiply(ttnn.add(cls_logits, distillation_logits), 0.5)
+        return logits, cls_logits, distillation_logits
+
     classifier_output = ttnn.linear(
         output,
         parameters.classifier.weight,

@@ -2,12 +2,15 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-from PIL import Image
-import torch
-import os
 import glob
-from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES
+import os
+
+import numpy as np
+import torch
 from datasets import load_dataset
+from PIL import Image
+
+from models.sample_data.huggingface_imagenet_classes import IMAGENET2012_CLASSES
 
 
 class InputExample(object):
@@ -91,6 +94,23 @@ def get_batch(data_loader, image_processor):
         else:
             images = torch.cat((images, img), dim=0)
     return images, labels
+
+
+def get_synthetic_data_loader(batch_size, iterations, image_size=224, seed=0):
+    rng = np.random.default_rng(seed)
+    total_samples = batch_size * iterations
+
+    examples = []
+    for _ in range(total_samples):
+        image_array = rng.integers(0, 256, size=(image_size, image_size, 3), dtype=np.uint8)
+        image = Image.fromarray(image_array, mode="RGB")
+        examples.append(InputExample(image=image, label=0))
+
+    def loader():
+        for index in range(0, len(examples), batch_size):
+            yield examples[index : index + batch_size]
+
+    return loader()
 
 
 def get_data(input_loc):

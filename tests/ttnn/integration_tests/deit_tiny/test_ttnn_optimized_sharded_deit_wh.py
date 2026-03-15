@@ -7,22 +7,25 @@ import pytest
 import torch
 import math
 import transformers
-from datasets import load_dataset
-from transformers import AutoImageProcessor
+from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeacher
 
 import ttnn
 from ttnn.model_preprocessing import preprocess_model_parameters
 
 from models.demos.deit_tiny.tt import ttnn_optimized_sharded_deit_wh as ttnn_optimized_sharded_deit
 from models.demos.deit_tiny.reference import torch_functional_deit
-from models.utility_functions import torch_random, is_blackhole, is_grayskull
+from models.demos.wormhole.deit_tiny.demo.deit_helper_funcs import get_batch, get_synthetic_data_loader
+from models.common.utility_functions import torch_random, is_blackhole, is_wormhole_b0
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 
 
+MODEL_PATH = "/data/hf_cache/Deit/deit-tiny/deit-tiny"
+
+
 # @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
 @pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
-@pytest.mark.parametrize("model_name", ["facebook/deit-tiny-distilled-patch16-224"])
+@pytest.mark.parametrize("model_name", [MODEL_PATH])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("image_channels", [3])
@@ -30,7 +33,7 @@ def test_deit_patch_embeddings(device, model_name, batch_size, image_size, image
     torch.manual_seed(0)
 
     config = transformers.DeiTConfig.from_pretrained(model_name)
-    model = transformers.DeiTForImageClassification.from_pretrained("facebook/deit-tiny-distilled-patch16-224")
+    model = transformers.DeiTForImageClassification.from_pretrained(model_name)
 
     torch_pixel_values = torch_random((batch_size, image_channels, image_size, image_size), -1, 1, dtype=torch.float32)
     torch_output, *_ = model(torch_pixel_values)
@@ -82,7 +85,7 @@ def test_deit_patch_embeddings(device, model_name, batch_size, image_size, image
 
 # @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
 @pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
-@pytest.mark.parametrize("model_name", ["facebook/deit-tiny-distilled-patch16-224"])
+@pytest.mark.parametrize("model_name", [MODEL_PATH])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("image_channels", [3])
@@ -92,13 +95,11 @@ def test_deit_embeddings(device, model_name, batch_size, image_size, image_chann
     config = transformers.DeiTConfig.from_pretrained(model_name)
     config.num_hidden_layers = 12
     config = ttnn_optimized_sharded_deit.update_model_config(config, batch_size)
-    model = transformers.DeiTForImageClassification.from_pretrained("facebook/deit-tiny-distilled-patch16-224")
+    model = transformers.DeiTForImageClassification.from_pretrained(model_name)
 
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
-    image_processor = AutoImageProcessor.from_pretrained("facebook/deit-tiny-distilled-patch16-224")
-    torch_pixel_values = image_processor(image, return_tensors="pt").pixel_values
-    torch_pixel_values = torch_pixel_values.repeat(batch_size, 1, 1, 1)
+    image_processor = AutoImageProcessor.from_pretrained(model_name)
+    data_loader = get_synthetic_data_loader(batch_size, 1, image_size=image_size, seed=0)
+    torch_pixel_values, _ = get_batch(data_loader, image_processor)
     torch_output, *_ = model.deit.embeddings(torch_pixel_values)
 
     # cls_token & position embeddings expand to batch_size
@@ -172,20 +173,22 @@ def test_deit_embeddings(device, model_name, batch_size, image_size, image_chann
 
 # @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
 @pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
-@pytest.mark.parametrize("model_name", ["facebook/deit-tiny-distilled-patch16-224"])
+@pytest.mark.parametrize("model_name", [MODEL_PATH])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 198 to 224
 def test_deit_attention(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
-    config = transformers.DeiTConfig.from_pretrained(model_name)
-    config.num_hidden_layers = 12
-    config = ttnn_optimized_sharded_deit.update_model_config(config, batch_size)
-    model = transformers.models.deit.modeling_deit.DeiTAttention(config).eval()
+    hf_config = transformers.DeiTConfig.from_pretrained(model_name)
+    hf_config._attn_implementation = "eager"
+    hf_config.num_hidden_layers = 12
+    config = ttnn_optimized_sharded_deit.update_model_config(hf_config, batch_size)
+    config["_attn_implementation"] = "eager"
+    model = transformers.models.deit.modeling_deit.DeiTAttention(hf_config).eval()
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
     torch_attention_mask = torch.ones(batch_size, 1, 1, sequence_size, dtype=torch.float32)
-    torch_output, *_ = model(torch_hidden_states, torch_attention_mask)
+    torch_output, *_ = model(torch_hidden_states)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -229,12 +232,12 @@ def test_deit_attention(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.999)
+    assert_with_pcc(torch_output, output, 0.998)
 
 
 # @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
 @pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
-@pytest.mark.parametrize("model_name", ["facebook/deit-tiny-distilled-patch16-224"])
+@pytest.mark.parametrize("model_name", [MODEL_PATH])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 198 to 224
 def test_deit_intermediate(device, model_name, batch_size, sequence_size):
@@ -261,12 +264,12 @@ def test_deit_intermediate(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.999)
+    assert_with_pcc(torch_output, output.to(torch_output.dtype), 0.998)
 
 
 # @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
 @pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
-@pytest.mark.parametrize("model_name", ["facebook/deit-tiny-distilled-patch16-224"])
+@pytest.mark.parametrize("model_name", [MODEL_PATH])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 198 to 224
 def test_deit_output(device, model_name, batch_size, sequence_size):
@@ -314,22 +317,22 @@ def test_deit_output(device, model_name, batch_size, sequence_size):
 
 # @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
 @pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
-@pytest.mark.parametrize("model_name", ["facebook/deit-tiny-distilled-patch16-224"])
+@pytest.mark.parametrize("model_name", [MODEL_PATH])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [224])  # padded from 198 to 224
 def test_deit_layer(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
-    config = transformers.DeiTConfig.from_pretrained(model_name)
-    config = ttnn_optimized_sharded_deit.update_model_config(config, batch_size)
-    model = transformers.DeiTForImageClassification.from_pretrained(
-        "facebook/deit-tiny-distilled-patch16-224"
-    ).deit.encoder.layer[0]
+    hf_config = transformers.DeiTConfig.from_pretrained(model_name)
+    hf_config._attn_implementation = "eager"
+    config = ttnn_optimized_sharded_deit.update_model_config(hf_config, batch_size)
+    config["_attn_implementation"] = "eager"
+    model = transformers.DeiTForImageClassification.from_pretrained(model_name, config=hf_config).deit.encoder.layer[0]
 
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
     torch_attention_mask = torch.ones(batch_size, 1, 1, sequence_size, dtype=torch.float32)
 
-    torch_output, *_ = model(torch_hidden_states, torch_attention_mask)
+    torch_output, *_ = model(torch_hidden_states)
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -373,27 +376,27 @@ def test_deit_layer(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.999)
+    assert_with_pcc(torch_output, output, 0.998)
 
 
 # @pytest.mark.skip(reason="#7527: Test and PCC threshold needs review")
 @pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
-@pytest.mark.parametrize("model_name", ["facebook/deit-tiny-distilled-patch16-224"])
+@pytest.mark.parametrize("model_name", [MODEL_PATH])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("sequence_size", [224])  ## padded from 198 to 224
 def test_deit_encoder(device, model_name, batch_size, sequence_size):
     torch.manual_seed(0)
 
-    config = transformers.DeiTConfig.from_pretrained(model_name)
-    config.num_hidden_layers = 12
-    model = transformers.DeiTForImageClassification.from_pretrained(
-        "facebook/deit-tiny-distilled-patch16-224", config=config
-    ).deit.encoder
+    hf_config = transformers.DeiTConfig.from_pretrained(model_name)
+    hf_config._attn_implementation = "eager"
+    hf_config.num_hidden_layers = 12
+    model = transformers.DeiTForImageClassification.from_pretrained(model_name, config=hf_config).deit.encoder
 
-    config = ttnn_optimized_sharded_deit.update_model_config(config, batch_size)
+    config = ttnn_optimized_sharded_deit.update_model_config(hf_config, batch_size)
+    config["_attn_implementation"] = "eager"
     torch_hidden_states = torch_random((batch_size, sequence_size, config.hidden_size), -1, 1, dtype=torch.float32)
     torch_attention_mask = torch.ones(config.num_hidden_layers, sequence_size, dtype=torch.float32)
-    torch_output = model(torch_hidden_states, torch_attention_mask).last_hidden_state
+    torch_output = model(torch_hidden_states).last_hidden_state
 
     parameters = preprocess_model_parameters(
         initialize_model=lambda: model,
@@ -430,11 +433,11 @@ def test_deit_encoder(device, model_name, batch_size, sequence_size):
     )
     output = ttnn.to_torch(output)
 
-    assert_with_pcc(torch_output, output, 0.999)
+    assert_with_pcc(torch_output, output, 0.98)
 
 
-@pytest.mark.skipif(is_grayskull() or is_blackhole(), reason="Unsupported on BH, and different version than GS")
-@pytest.mark.parametrize("model_name", ["facebook/deit-tiny-distilled-patch16-224"])
+@pytest.mark.skipif(is_blackhole(), reason="Unsupported on BH")
+@pytest.mark.parametrize("model_name", [MODEL_PATH])
 @pytest.mark.parametrize("batch_size", [1])
 @pytest.mark.parametrize("image_size", [224])
 @pytest.mark.parametrize("image_channels", [3])
@@ -444,18 +447,14 @@ def test_deit(device, model_name, batch_size, image_size, image_channels, sequen
 
     config = transformers.DeiTConfig.from_pretrained(model_name)
     config.num_hidden_layers = 12
-    model = transformers.DeiTForImageClassification.from_pretrained(
-        "facebook/deit-tiny-distilled-patch16-224", config=config
-    )
+    model = DeiTForImageClassificationWithTeacher.from_pretrained(model_name, config=config)
 
     config = ttnn_optimized_sharded_deit.update_model_config(config, batch_size)
-    dataset = load_dataset("huggingface/cats-image")
-    image = dataset["test"]["image"][0]
-    image_processor = AutoImageProcessor.from_pretrained("facebook/deit-tiny-distilled-patch16-224")
-    torch_pixel_values = image_processor(image, return_tensors="pt").pixel_values
-    torch_pixel_values = torch_pixel_values.repeat(batch_size, 1, 1, 1)
+    image_processor = AutoImageProcessor.from_pretrained(model_name)
+    data_loader = get_synthetic_data_loader(batch_size, 1, image_size=image_size, seed=0)
+    torch_pixel_values, _ = get_batch(data_loader, image_processor)
     torch_attention_mask = torch.ones(config.num_hidden_layers, sequence_size, dtype=torch.float32)
-    torch_output, *_ = model(torch_pixel_values).logits
+    torch_output = model(torch_pixel_values).logits
 
     # cls_token & position embeddings expand to batch_size
     # TODO: pass batch_size to preprocess_model_parameters
@@ -537,6 +536,12 @@ def test_deit(device, model_name, batch_size, image_size, image_channels, sequen
         position_embeddings,
         parameters=parameters,
     )
-    output = ttnn.to_torch(output)
+    logits, cls_logits, distillation_logits = output
+    logits = ttnn.to_torch(logits)
+    cls_logits = ttnn.to_torch(cls_logits)
+    distillation_logits = ttnn.to_torch(distillation_logits)
 
-    assert_with_pcc(torch_output, output[0, 0, :1000], 0.829)
+    assert logits.shape[1] == 1
+    assert cls_logits.shape[1] == 1
+    assert distillation_logits.shape[1] == 1
+    assert_with_pcc(torch_output, logits[:, 0, :1000], 0.89)

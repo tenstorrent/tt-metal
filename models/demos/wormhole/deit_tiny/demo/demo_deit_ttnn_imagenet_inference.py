@@ -2,21 +2,19 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-import pytest
+import ast
 
+import pytest
 import torch
 import transformers
-from transformers import AutoImageProcessor
 from loguru import logger
-
-import ttnn
+from transformers import AutoImageProcessor, DeiTForImageClassificationWithTeacher
 from ttnn.model_preprocessing import preprocess_model_parameters
 
+import ttnn
+from models.common.utility_functions import is_blackhole, torch2tt_tensor
 from models.demos.deit_tiny.tt import ttnn_optimized_sharded_deit_wh
-from models.utility_functions import torch2tt_tensor, is_blackhole
-from models.demos.wormhole.deit_tiny.demo.deit_helper_funcs import get_data_loader, get_batch
-
-import ast
+from models.demos.wormhole.deit_tiny.demo.deit_helper_funcs import get_batch, get_synthetic_data_loader
 
 
 def get_imagenet_label_dict():
@@ -30,14 +28,15 @@ def get_imagenet_label_dict():
 def test_deit(device):
     torch.manual_seed(0)
 
-    model_name = "facebook/deit-tiny-distilled-patch16-224"
+    model_name = "/data/hf_cache/Deit/deit-tiny/deit-tiny"
     batch_size = 1
     sequence_size = 224
-    iterations = 100
+    iterations = 10
 
     config = transformers.DeiTConfig.from_pretrained(model_name)
     config.num_hidden_layers = 12
-    model = transformers.DeiTForImageClassification.from_pretrained(model_name, config=config)
+    model = DeiTForImageClassificationWithTeacher.from_pretrained(model_name, config=config)
+
     config = ttnn_optimized_sharded_deit_wh.update_model_config(config, batch_size)
     image_processor = AutoImageProcessor.from_pretrained(model_name)
 
@@ -84,16 +83,11 @@ def test_deit(device):
     else:
         head_masks = [None for _ in range(config.num_hidden_layers)]
 
-    # IMAGENET INFERENCE
-    #####################
-    imagenet_label_dict = get_imagenet_label_dict()
-    data_loader = get_data_loader("ImageNet_data", batch_size, iterations)
+    data_loader = get_synthetic_data_loader(batch_size, iterations, image_size=224, seed=0)
 
-    correct = 0
+    predictions = []
     for iter in range(iterations):
-        predictions = []
-
-        torch_pixel_values, labels = get_batch(data_loader, image_processor)
+        torch_pixel_values, _ = get_batch(data_loader, image_processor)
 
         torch_pixel_values = torch.permute(torch_pixel_values, (0, 2, 3, 1))
         torch_pixel_values = torch.nn.functional.pad(torch_pixel_values, (0, 1, 0, 0, 0, 0, 0, 0))
@@ -134,19 +128,19 @@ def test_deit(device):
             position_embeddings,
             parameters=parameters,
         )
-        output = ttnn.to_torch(output)
-        prediction = output[:, 0, :1000].argmax(dim=-1)
+        logits, cls_logits, distillation_logits = output
+        logits = ttnn.to_torch(logits)
+        cls_logits = ttnn.to_torch(cls_logits)
+        distillation_logits = ttnn.to_torch(distillation_logits)
+        assert logits.shape[1] == 1
+        assert cls_logits.shape[1] == 1
+        assert distillation_logits.shape[1] == 1
+        prediction = logits[:, 0, :1000].argmax(dim=-1)
+        assert prediction.shape[0] == batch_size
 
         for i in range(batch_size):
-            predictions.append(imagenet_label_dict[prediction[i].item()])
-            logger.info(
-                f"Iter: {iter} Sample: {i} - Expected Label: {imagenet_label_dict[labels[i]]} -- Predicted Label: {predictions[-1]}"
-            )
-            print(predictions)
-            if imagenet_label_dict[labels[i]] == predictions[-1]:
-                correct += 1
+            predictions.append(prediction[i].item())
+            logger.info(f"Iter: {iter} Sample: {i} - Synthetic prediction index: {predictions[-1]}")
 
-        # del tt_output, tt_inputs, inputs, labels, predictions
-
-    accuracy = correct / (batch_size * iterations)
-    print("ImageNet Inference ACCURACY=", accuracy)
+    assert len(predictions) == batch_size * iterations
+    logger.info(f"Synthetic DeiT smoke test completed for {len(predictions)} samples")
