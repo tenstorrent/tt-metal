@@ -31,7 +31,7 @@ from collections import defaultdict
 from pathlib import Path
 
 # Import mesh utilities from shared constants module
-from constants import get_mesh_shape_string, strip_mesh_suffix
+from constants import get_mesh_shape_string, strip_mesh_suffix, parse_hardware_suffix, get_runner_config_for_hardware
 
 
 def chunk_modules(items, size):
@@ -45,80 +45,62 @@ def get_mesh_shape(module_name):
     return get_mesh_shape_string(module_name)
 
 
-def get_lead_models_mesh_runner_config():
+def build_mesh_runner_config_from_modules(modules):
+    """Dynamically build runner config from vector filenames.
+
+    Reads the mesh shape AND hardware name directly from the
+    ``__mesh_<R>x<C>__hw_<name>`` filename suffix that the vector
+    generator wrote.  No auto-mapping — hardware comes from the
+    traced JSON's machine_info, embedded in the filename by the
+    vector generator.
+
+    Args:
+        modules: List of module filenames (stems) including mesh/hw suffixes.
+
+    Returns:
+        List of runner config dicts — one per unique (mesh_shape, hardware) pair
+        that has actual vectors.
     """
-    Configuration: Map mesh shapes to runner configurations.
+    # Discover unique (mesh_shape, hardware) pairs from filenames
+    seen = set()
+    for module in modules:
+        mesh_str = get_mesh_shape_string(module)
+        hw_name = parse_hardware_suffix(module)
+        if mesh_str:
+            seen.add((mesh_str, hw_name))
 
-    Each entry specifies which runner handles which mesh shapes.
-    Multiple mesh shapes can be handled by the same runner.
-
-    To add new mesh configurations or runners, add entries to this list.
-
-    Note: 'runs_on' can be either:
-      - A string: Single runner label (e.g., "tt-ubuntu-2204-n150-stable")
-      - A list: Multiple runner labels for GitHub Actions matrix
-                (e.g., ["topology-6u", "arch-wormhole_b0", "in-service", "pipeline-functional"])
-    """
-    # Hardware templates — shared config for each hardware type.
-    _n150 = {
-        "arch": "wormhole_b0",
-        "runs_on": "tt-ubuntu-2204-n150-stable",
-        "runner_label": "N150",
-        "tt_smi_cmd": "tt-smi -r",
-        "suite_name": "model_traced",
-    }
-    _n300 = {
-        "arch": "wormhole_b0",
-        "runs_on": "tt-ubuntu-2204-n300-stable",
-        "runner_label": "N300",
-        "tt_smi_cmd": "tt-smi -r",
-        "suite_name": "model_traced",
-    }
-    _t3k = {
-        "arch": "wormhole_b0",
-        "runs_on": [
-            "topology-t3k",
-            "arch-wormhole_b0",
-            "in-service",
-            "pipeline-functional",
-        ],
-        "runner_label": "topology-t3k",
-        "tt_smi_cmd": "tt-smi -r",
-        "suite_name": "model_traced",
-    }
-    _galaxy = {
-        "arch": "wormhole_b0",
-        "runs_on": [
-            "topology-6u",
-            "arch-wormhole_b0",
-            "in-service",
-            "pipeline-functional",
-        ],
-        "runner_label": "topology-6u",
-        "tt_smi_cmd": "tt-smi -r",
-        "suite_name": "model_traced",
-    }
-
-    # Each entry maps ONE mesh shape to ONE hardware runner.
-    # This ensures each sub-job sets MESH_DEVICE_SHAPE exactly and
-    # vectors run on the hardware they were traced on.
-    return [
-        # --- Single-chip ---
-        {"mesh_shapes": ["1x1"], "test_group_name": "lead-models-n150-1x1", **_n150},
-        # --- N300 (2 devices) ---
-        {"mesh_shapes": ["1x2"], "test_group_name": "lead-models-n300-1x2", **_n300},
-        {"mesh_shapes": ["2x1"], "test_group_name": "lead-models-n300-2x1", **_n300},
-        # --- T3K (8 devices) ---
-        {"mesh_shapes": ["1x8"], "test_group_name": "lead-models-t3k-1x8", **_t3k},
-        # --- Galaxy (32 devices) ---
-        {"mesh_shapes": ["1x4"], "test_group_name": "lead-models-galaxy-1x4", **_galaxy},
-        {"mesh_shapes": ["2x4"], "test_group_name": "lead-models-galaxy-2x4", **_galaxy},
-        {"mesh_shapes": ["4x2"], "test_group_name": "lead-models-galaxy-4x2", **_galaxy},
-        {"mesh_shapes": ["4x8"], "test_group_name": "lead-models-galaxy-4x8", **_galaxy},
-        {"mesh_shapes": ["8x4"], "test_group_name": "lead-models-galaxy-8x4", **_galaxy},
-        {"mesh_shapes": ["2x16"], "test_group_name": "lead-models-galaxy-2x16", **_galaxy},
-        {"mesh_shapes": ["16x2"], "test_group_name": "lead-models-galaxy-16x2", **_galaxy},
-    ]
+    configs = []
+    for mesh_str, hw_name in sorted(seen):
+        if hw_name:
+            runner = get_runner_config_for_hardware(hw_name)
+            if runner is None:
+                print(
+                    f"Warning: Unknown hardware '{hw_name}' for mesh {mesh_str}, skipping",
+                    file=sys.stderr,
+                )
+                continue
+            configs.append(
+                {
+                    "mesh_shapes": [mesh_str],
+                    "test_group_name": f"model-traced-{hw_name}-{mesh_str}",
+                    "suite_name": "model_traced",
+                    **runner,
+                }
+            )
+        else:
+            # Legacy suffix without __hw_ — fall back to default N150 runner
+            configs.append(
+                {
+                    "mesh_shapes": [mesh_str],
+                    "test_group_name": f"model-traced-{mesh_str}",
+                    "suite_name": "model_traced",
+                    "arch": "wormhole_b0",
+                    "runs_on": "tt-ubuntu-2204-n150-stable",
+                    "runner_label": "N150",
+                    "tt_smi_cmd": "tt-smi -r",
+                }
+            )
+    return configs
 
 
 def compute_lead_models_matrix(modules, batch_size):
@@ -132,9 +114,7 @@ def compute_lead_models_matrix(modules, batch_size):
     Returns:
         Tuple of (include_entries, batches, ccl_batches)
     """
-    config = get_lead_models_mesh_runner_config()
-
-    # Group modules by mesh shape
+    # Group modules by mesh shape first to discover what shapes exist
     mesh_shape_modules = defaultdict(list)
     unmatched_modules = []
 
@@ -145,17 +125,10 @@ def compute_lead_models_matrix(modules, batch_size):
         else:
             unmatched_modules.append(module)
 
-    # Build set of all configured mesh shapes for validation
-    configured_shapes = set()
-    for runner_config in config:
-        configured_shapes.update(runner_config["mesh_shapes"])
-
-    # Warn about mesh shapes without runner config
-    for mesh_shape in mesh_shape_modules.keys():
-        if mesh_shape not in configured_shapes:
-            print(
-                f"Warning: Mesh shape '{mesh_shape}' has no runner config, " f"modules will be skipped", file=sys.stderr
-            )
+    # Dynamically build runner config from filenames.
+    # Hardware is read from the __hw_ suffix (written by vector generator
+    # from traced_machine_info), NOT auto-mapped from device count.
+    config = build_mesh_runner_config_from_modules(modules)
 
     # Create matrix entries based on runner config
     include_entries = []
