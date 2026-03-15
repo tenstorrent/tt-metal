@@ -1450,9 +1450,7 @@ class TTNNMoE(TTNNModule):
         router_logits = ttnn.reshape(router_logits, ttnn.Shape((T, self.n_routed_experts)))
 
         # Call router forward
-        self.route_tokens_to_experts.preprocess_weights()
-        self.route_tokens_to_experts.move_weights_to_device()
-        topk_experts_indices, topk_experts_weights = self.route_tokens_to_experts.forward(router_logits)
+        topk_experts_indices, topk_experts_weights = self.route_tokens_to_experts(router_logits)
 
         x = ttnn.unsqueeze(x, 1)  # Add experts dimension for compatibility with experts module
 
