@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
-"""Test for Qwen3-Coder-Next-FP8 with TTNN backend."""
+"""Test for Qwen3-Coder-Next with TTNN backend (MoE + Gated Attention)."""
 
 import os
 
@@ -12,9 +12,45 @@ from tqdm import tqdm
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
 import ttnn
+from transformers.models.qwen3_next.modeling_qwen3_next import Qwen3NextAttention, Qwen3NextSparseMoeBlock
+
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
+from models.experimental.tt_symbiote.modules.attention import TTNNQwen3NextGatedAttention
+from models.experimental.tt_symbiote.modules.moe import TTNNQwen3MoE
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
+
+# Prefer FP8 model when triton is available; otherwise use BF16
+QWEN3_MODEL_ID = "Qwen/Qwen3-Coder-Next-FP8"
+QWEN3_FALLBACK_MODEL_ID = "Qwen/Qwen3-Coder-Next"
+
+
+def _load_qwen3_model():
+    """Load tokenizer and model, with fallbacks for triton/network/deps."""
+    for model_id in (QWEN3_MODEL_ID, QWEN3_FALLBACK_MODEL_ID):
+        try:
+            tokenizer = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+            model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True).to(torch.bfloat16)
+            return tokenizer, model
+        except ModuleNotFoundError as e:
+            if "triton" in str(e).lower():
+                continue
+            raise
+        except Exception as e:
+            msg = str(e).lower()
+            if any(
+                kw in msg
+                for kw in (
+                    "network is unreachable",
+                    "name resolution",
+                    "connection",
+                    "protobuf",
+                    "does not appear to have",
+                )
+            ):
+                pytest.skip(f"Model unavailable: {e}")
+            raise
+    pytest.skip("Could not load Qwen3 model (triton required for FP8)")
 
 
 @pytest.mark.parametrize(
@@ -41,13 +77,12 @@ from models.experimental.tt_symbiote.utils.module_replacement import register_mo
     indirect=True,
 )
 def test_qwen3_coder_next(mesh_device):
-    """Test Qwen3-Coder-Next-FP8 model with TTNN acceleration."""
-
-    tokenizer = AutoTokenizer.from_pretrained("Qwen/Qwen3-Coder-Next-FP8", trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained("Qwen/Qwen3-Coder-Next-FP8", trust_remote_code=True).to(torch.bfloat16)
+    """Test Qwen3-Coder-Next model with TTNN acceleration (MoE + Gated Attention)."""
+    tokenizer, model = _load_qwen3_model()
 
     nn_to_ttnn = {
-        # model.model.layers[1].mlp.__class__: TTNNQwen3MoE,  # Add TTNNQwen3MoE module for Qwen3NextSparseMoeBlock
+        Qwen3NextSparseMoeBlock: TTNNQwen3MoE,
+        Qwen3NextAttention: TTNNQwen3NextGatedAttention,
     }
     nn_to_ttnn2 = {
         # nn.Linear: TTNNLinearIColShardedWRowSharded,
@@ -91,5 +126,5 @@ def test_qwen3_coder_next(mesh_device):
 
     content = tokenizer.decode(output_ids, skip_special_tokens=True)
 
-    print(f"Qwen3-Coder-Next OUTPUT: {content}")
+    print(f"Qwen3-Coder-Next output: {content}")
     DispatchManager.save_stats_to_file("qwen3_coder_next_timing_stats.csv")
