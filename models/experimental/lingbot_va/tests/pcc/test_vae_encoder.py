@@ -1,5 +1,5 @@
 # test_encode_one_video_pcc.py
-# Compares torch AutoencoderKLWan encoder vs TTNN VaeWanEncoder with PCC
+# Compares torch AutoencoderKLWan encoder vs TTNN WanVAEEncoder with PCC
 
 import time
 import pytest
@@ -7,7 +7,7 @@ import torch
 import ttnn
 
 from diffusers import AutoencoderKLWan
-from models.experimental.lingbot_va.tt.vae_encoder import VaeWanEncoder
+from models.experimental.lingbot_va.tt.vae_encoder import WanVAEEncoder
 from models.common.metrics import compute_pcc
 from models.tt_dit.parallel.manager import CCLManager
 from models.tt_dit.parallel.config import VaeHWParallelConfig, ParallelFactor
@@ -88,7 +88,7 @@ def encode_ttnn(vae, video, mesh_device):
 
     ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
 
-    tt_encoder = VaeWanEncoder(
+    tt_encoder = WanVAEEncoder(
         in_channels=video.shape[1],
         dim=vae.config.base_dim,
         z_dim=vae.config.z_dim * 2,
