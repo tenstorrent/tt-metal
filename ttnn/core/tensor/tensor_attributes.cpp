@@ -32,7 +32,7 @@ void GhostSpecAccessGuard::fault() {
         return;
     }
 
-    TT_THROW("Ghost spec access");
+    TT_THROW("Ghost spec access. Access to tensor spec on a deallocated tensor.");
 }
 
 TensorAttributes::TensorAttributes(Storage storage, TensorSpec tensor_spec, TensorTopology tensor_topology) :
