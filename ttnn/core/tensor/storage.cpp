@@ -24,6 +24,17 @@ HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuff
         distributed_buffer_.transform(callable, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL));
 }
 
+DeviceStorage::DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffer_) :
+    mesh_buffer(std::move(mesh_buffer_)) {
+    if (mesh_buffer != nullptr) {
+        const auto& device_shape = mesh_buffer->device()->shape();
+        coords.reserve(device_shape.mesh_size());
+        for (const auto& coord : distributed::MeshCoordinateRange(device_shape)) {
+            coords.push_back(coord);
+        }
+    }
+}
+
 DeviceStorage::DeviceStorage(
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
     std::vector<distributed::MeshCoordinate> coords_,

@@ -46,6 +46,10 @@ private:
 
 public:
     DeviceStorage() = default;
+
+    // Constructs DeviceStorage with coords covering the full mesh device shape.
+    explicit DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffer_);
+
     DeviceStorage(
         std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
         std::vector<distributed::MeshCoordinate> coords_,
