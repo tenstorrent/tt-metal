@@ -61,7 +61,7 @@ Tensor PrefixScanDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.a.device());
 }
 
-tt::stl::hash::hash_t PrefixScanDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t PrefixScanDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     const auto& a = tensor_args.a;
     const auto& a_shape = a.padded_shape();

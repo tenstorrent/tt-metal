@@ -611,7 +611,7 @@ void py_module(nb::module_& mod) {
     py_mesh_mapper_config.def(
         "__init__",
         [](MeshMapperConfig* t,
-           tt::stl::SmallVector<MeshMapperConfig::Placement> placements,
+           ttsl::SmallVector<MeshMapperConfig::Placement> placements,
            const std::optional<MeshShape>& mesh_shape_override) {
             new (t) MeshMapperConfig{.placements = std::move(placements), .mesh_shape_override = mesh_shape_override};
         },
@@ -666,7 +666,7 @@ void py_module(nb::module_& mod) {
     auto py_mesh_composer_config = static_cast<nb::class_<MeshComposerConfig>>(mod.attr("MeshComposerConfig"));
     py_mesh_composer_config
         .def(
-            nb::init<tt::stl::SmallVector<int>, const std::optional<MeshShape>&>(),
+            nb::init<ttsl::SmallVector<int>, const std::optional<MeshShape>&>(),
             nb::arg("dims"),
             nb::arg("mesh_shape_override") = nb::none(),
             R"doc(

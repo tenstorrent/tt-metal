@@ -145,7 +145,7 @@ RingAttentionAllGatherAsyncDeviceOperation::create_output_tensors(
     return output_tensors;
 }
 
-tt::stl::hash::hash_t RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "RingAttentionAllGatherAsyncDeviceOperation::compute_program_hash is called");
 

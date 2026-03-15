@@ -103,7 +103,7 @@ AttnMatmulDeviceOperation::tensor_return_value_t AttnMatmulDeviceOperation::crea
     return create_device_tensor(output_spec, tensor_args.input_tensor_a.device());
 }
 
-tt::stl::hash::hash_t AttnMatmulDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t AttnMatmulDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     TT_FATAL(
         is_device_tensor(tensor_args.input_tensor_a),

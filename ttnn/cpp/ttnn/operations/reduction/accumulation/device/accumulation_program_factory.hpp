@@ -21,7 +21,7 @@
 namespace ttnn::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::stl;
+using namespace ttsl;
 
 struct AccumulationProgramFactory {
     enum class AccumulationCB : std::underlying_type_t<tt::CBIndex> {

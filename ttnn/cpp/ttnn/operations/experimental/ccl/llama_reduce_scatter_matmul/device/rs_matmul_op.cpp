@@ -83,7 +83,7 @@ Matmul_RS::tensor_return_value_t Matmul_RS::create_output_tensors(
     return {matmul_output_tensor, rs_output_tensor};
 }
 
-tt::stl::hash::hash_t Matmul_RS::compute_program_hash(
+ttsl::hash::hash_t Matmul_RS::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return tt::tt_metal::operation::hash_operation<Matmul_RS>(
         operation_attributes.rs_op.dim,

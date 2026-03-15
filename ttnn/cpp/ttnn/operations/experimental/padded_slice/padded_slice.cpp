@@ -19,9 +19,9 @@ namespace ttnn::operations::experimental {
 template <typename T>
 ttnn::Tensor PaddedSliceOperation::invoke(
     const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const T> begins,
-    tt::stl::Span<const T> ends,
-    tt::stl::Span<const T> step,
+    ttsl::Span<const T> begins,
+    ttsl::Span<const T> ends,
+    ttsl::Span<const T> step,
     const MemoryConfig& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& /*pad_value*/) {
@@ -152,18 +152,18 @@ ttnn::Tensor PaddedSliceOperation::invoke(
 
 template ttnn::Tensor PaddedSliceOperation::invoke<int>(
     const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const int> begins,
-    tt::stl::Span<const int> ends,
-    tt::stl::Span<const int> step,
+    ttsl::Span<const int> begins,
+    ttsl::Span<const int> ends,
+    ttsl::Span<const int> step,
     const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
 template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t>(
     const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const uint32_t> begins,
-    tt::stl::Span<const uint32_t> ends,
-    tt::stl::Span<const uint32_t> step,
+    ttsl::Span<const uint32_t> begins,
+    ttsl::Span<const uint32_t> ends,
+    ttsl::Span<const uint32_t> step,
     const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);

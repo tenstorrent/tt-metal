@@ -253,7 +253,7 @@ RingJointSDPAResult RingJointSDPADeviceOperation::create_output_tensors(
     };
 }
 
-tt::stl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RingJointSDPADeviceOperation::compute_program_hash(
     const RingJointSDPAParams& args, const RingJointSDPAInputs& tensor_args) {
     const std::vector<Tensor> input_tensors = {
         tensor_args.input_q,

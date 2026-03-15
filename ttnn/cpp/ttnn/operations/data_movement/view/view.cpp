@@ -44,7 +44,7 @@ ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, const ttnn::Shape
     return PerformView(tensor, shape, shape, tile_first_dim, tile_second_dim);
 }
 
-ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, tt::stl::Span<const int32_t> shape_vector) {
+ttnn::Tensor ViewOperation::invoke(const ttnn::Tensor& tensor, ttsl::Span<const int32_t> shape_vector) {
     return invoke(tensor, detail::infer_dims_for_reshape(tensor, shape_vector));
 }
 

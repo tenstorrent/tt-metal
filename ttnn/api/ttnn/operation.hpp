@@ -18,11 +18,11 @@
 
 namespace tt::tt_metal::operation {
 
-using Hash = tt::stl::hash::hash_t;
+using Hash = ttsl::hash::hash_t;
 
 template <typename OperationType, typename... Types>
 static Hash hash_operation(const Types&... objects) {
-    return stl::hash::hash_objects_with_default_seed(tt::stl::hash::type_hash<OperationType>, objects...);
+    return ttsl::hash::hash_objects_with_default_seed(ttsl::hash::type_hash<OperationType>, objects...);
 }
 
 using Tensors = std::vector<Tensor>;
@@ -165,10 +165,10 @@ public:
 struct ExternalOperation {
     using OutputTensors = Tensors;
     const std::string function_name_;
-    const tt::stl::reflection::Attributes attributes_;
+    const ttsl::reflection::Attributes attributes_;
 
     std::string get_type_name() const { return this->function_name_; }
-    tt::stl::reflection::Attributes attributes() const { return this->attributes_; }
+    ttsl::reflection::Attributes attributes() const { return this->attributes_; }
 };
 
 }  // namespace tt::tt_metal::operation

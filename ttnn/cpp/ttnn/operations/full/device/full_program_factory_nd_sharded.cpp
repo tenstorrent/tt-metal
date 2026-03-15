@@ -53,7 +53,7 @@ FullNDShardedProgramFactory::cached_program_t FullNDShardedProgramFactory::creat
     } else {
         ordered_cores_with_data = distribution_spec.cores_with_data();
     }
-    const auto& compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
+    const auto& compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
     const auto& aligned_page_size = output.buffer()->aligned_page_size();
     const auto& page_size = output.buffer()->page_size();
 
