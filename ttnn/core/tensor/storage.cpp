@@ -40,12 +40,6 @@ DeviceStorage::DeviceStorage(
     coords(std::move(coords_)), mesh_buffer(std::move(mesh_buffer_)) {}
 
 DeviceStorage::DeviceStorage(
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
-    std::vector<distributed::MeshCoordinate> coords_,
-    std::shared_ptr<distributed::MeshBuffer> root_buffer_) :
-    coords(std::move(coords_)), mesh_buffer(std::move(mesh_buffer_)), root_mesh_buffer(std::move(root_buffer_)) {}
-
-DeviceStorage::DeviceStorage(
     const DeviceStorage& owning_storage, std::shared_ptr<distributed::MeshBuffer> surface_buffer) :
     coords(owning_storage.coords),
     mesh_buffer(std::move(surface_buffer)),
@@ -81,6 +75,15 @@ void DeviceStorage::reset_root_mesh_buffer() {
     } else {
         mesh_buffer.reset();
     }
+}
+
+void DeviceStorage::deallocate(bool force) {
+    const auto& root_buffer = get_root_mesh_buffer();
+    bool can_deallocate = root_buffer.use_count() == 1 || (root_buffer.use_count() > 1 && force);
+    if (can_deallocate) {
+        deallocate_root_mesh_buffer();
+    }
+    reset_root_mesh_buffer();
 }
 
 bool DeviceStorage::is_allocated() const { return this->mesh_buffer != nullptr && this->mesh_buffer->is_allocated(); }

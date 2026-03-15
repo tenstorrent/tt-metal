@@ -155,20 +155,15 @@ void Tensor::deallocate_impl(bool force) {
     bool tracking = GraphTracker::instance().is_enabled();
     if (can_deallocate(tensor_attributes, force)) {
         std::visit(
-            ttsl::overloaded{
-                [](HostStorage&) {},
-                [this, force, tracking, &can_deallocate](DeviceStorage& storage) {
-                    if (can_deallocate(storage.get_root_mesh_buffer(), force)) {
-                        if (tracking) {
+            ttsl::overloaded{[](HostStorage&) {}, [force, tracking](DeviceStorage& storage) {
+                if (tracking) {
                             GraphTracker::instance().track_function_start(std::string_view("Tensor::deallocate"));
-                        }
-                        storage.deallocate_root_mesh_buffer();
-                        if (tracking) {
-                            GraphTracker::instance().track_function_end();
-                        }
-                    }
-                    storage.reset_root_mesh_buffer();
-                }},
+                }
+                storage.deallocate(force);
+                if (tracking) {
+                    GraphTracker::instance().track_function_end();
+                }
+            }},
             this->tensor_attributes->get_storage());
     }
 }
