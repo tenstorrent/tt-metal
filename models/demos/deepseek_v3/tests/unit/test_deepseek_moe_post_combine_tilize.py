@@ -9,14 +9,14 @@ import ttnn
 from models.common.utility_functions import comp_pcc
 
 
-@pytest.mark.requires_device(["T3K", "TG", "DUAL", "QUAD"])
+@pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
 @pytest.mark.parametrize("iterations", [10])
 @pytest.mark.parametrize(
     "device_params",
     [
         {
             "fabric_config": ttnn.FabricConfig.FABRIC_1D,
-            "trace_region_size": 90112,
+            "trace_region_size": 135168,
             "dispatch_core_axis": ttnn.DispatchCoreAxis.COL,
         }
     ],
@@ -28,11 +28,10 @@ def test_deepseek_moe_post_combine_tilize(mesh_device, iterations):
     deepseek_moe_post_combine_tilize_output_memory_config = ttnn.MemoryConfig(
         buffer_type=ttnn.BufferType.L1,
         nd_shard_spec=ttnn.NdShardSpec(
-            shard_shape=[32, 896],
+            shard_shape=[32, 1024],
             grid=ttnn.CoreRangeSet(
                 {
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 8)),
-                    ttnn.CoreRange(ttnn.CoreCoord(0, 9), ttnn.CoreCoord(0, 9)),
+                    ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(6, 7)),
                 }
             ),
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
