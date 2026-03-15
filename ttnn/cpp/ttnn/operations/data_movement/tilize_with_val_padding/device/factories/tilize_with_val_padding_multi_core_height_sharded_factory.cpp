@@ -298,7 +298,7 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
         // Height-only factory: each shard spans full row width, so no column offset.
         const uint32_t start_col_bytes = 0;
 
-        // Height-only flattened handling: reader kernel can treat whole tensor as one flattened batch.
+        // reader kernel treats whole tensor as one flattened batch.
         const uint32_t flattened_num_batches = 1;
 
         std::vector<uint32_t> reader_rt_args = {
