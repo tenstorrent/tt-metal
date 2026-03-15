@@ -33,7 +33,11 @@ tt::tt_metal::Tensor allocate_tensor_on_device(
         placements[i] = tt::tt_metal::distributed::MeshMapperConfig::Replicate{};
     }
 
-    auto tensor_topology = TensorTopology{device->shape(), placements, device_storage.coords};
+    auto tensor_topology = TensorTopology{
+        device->shape(),
+        placements,
+        std::vector<distributed::MeshCoordinate>(
+            device_storage.get_coords().begin(), device_storage.get_coords().end())};
     return Tensor(std::move(device_storage), tensor_spec, tensor_topology);
 }
 }  // namespace

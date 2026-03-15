@@ -555,7 +555,7 @@ node_id GraphProcessor::add_tensor(const Tensor& t) {
         buffer = mesh_buffer.get_backing_buffer();
 
         // For multi-device tensors, capture per-device addresses and mesh device IDs
-        for (const auto& coord : t.device_storage().coords) {
+        for (const auto& coord : t.device_storage().get_coords()) {
             auto* device_buffer = mesh_buffer.get_device_buffer(coord);
             if (device_buffer != nullptr) {
                 device_tensors_json.push_back(
