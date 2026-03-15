@@ -19,7 +19,7 @@
 namespace {
 
 template <typename OutputDataType, typename InputDataType>
-std::vector<OutputDataType> cast_vec(tt::stl::Span<const InputDataType> data_to_convert) {
+std::vector<OutputDataType> cast_vec(ttsl::Span<const InputDataType> data_to_convert) {
     std::vector<OutputDataType> converted_data;
     for (auto datum : data_to_convert) {
         if constexpr (std::is_same_v<OutputDataType, float> and std::is_same_v<InputDataType, bfloat16>) {

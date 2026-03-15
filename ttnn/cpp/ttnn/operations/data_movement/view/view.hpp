@@ -11,7 +11,7 @@ namespace operations::data_movement {
 
 struct ViewOperation {
     static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, const ttnn::Shape& logical_shape);
-    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, tt::stl::Span<const int32_t> shape_vector);
+    static ttnn::Tensor invoke(const ttnn::Tensor& input_tensor, ttsl::Span<const int32_t> shape_vector);
 };
 
 }  // namespace operations::data_movement

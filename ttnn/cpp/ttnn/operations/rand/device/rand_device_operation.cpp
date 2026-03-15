@@ -41,7 +41,7 @@ RandDeviceOperation::tensor_return_value_t RandDeviceOperation::create_output_te
         operation_attributes.device);
 }
 
-tt::stl::hash::hash_t RandDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RandDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& /*tensor_args*/) {
     return tt::tt_metal::operation::hash_operation<RandDeviceOperation>(
         operation_attributes.shape,

@@ -61,7 +61,7 @@ UntilizeWithUnpaddingMultiCoreNDShardedProgramFactory::create(
     const auto& groups = distribution_spec.core_groups();
     const auto& ordered_cores_with_data = distribution_spec.cores_with_data();
     uint32_t num_compute_cores = ordered_cores_with_data.size();
-    const auto& compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
+    const auto& compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
 
     uint32_t num_tiles_per_input_block = input_shard_width / tile_width;
     uint32_t num_blocks_per_shard_plane =

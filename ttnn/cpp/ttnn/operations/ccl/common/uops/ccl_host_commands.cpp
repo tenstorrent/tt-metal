@@ -74,7 +74,7 @@ CclHostLowLevelWorkerCommand fabric_write_cb_to_tensor_slice(
     size_t cb_id,
     std::variant<ttnn::ccl::cmd::UnicastCommandDestArgs, ttnn::ccl::cmd::MulticastCommandDestArgs> const& dest_args) {
     auto const dest_type = std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [](ttnn::ccl::cmd::UnicastCommandDestArgs const&) { return CclCommandDestType::CHIP_UNICAST; },
             [](ttnn::ccl::cmd::MulticastCommandDestArgs const&) { return CclCommandDestType::CHIP_MULTICAST; },
             [](auto&&) -> void {
@@ -85,7 +85,7 @@ CclHostLowLevelWorkerCommand fabric_write_cb_to_tensor_slice(
             }},
         dest_args);
     auto dest_args_variant = std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [](ttnn::ccl::cmd::UnicastCommandDestArgs const& arg) -> ttnn::ccl::cmd::CclCommandDestArgs {
                 return ttnn::ccl::cmd::UnicastCommandDestArgs(arg);
             },
@@ -120,7 +120,7 @@ CclHostLowLevelWorkerCommand fabric_write_cb_to_tensor_slice(
 
 static ttnn::ccl::cmd::CclCommandAddrType get_semaphore_addr_type(semaphore_id_t const& semaphore_id) {
     return std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [](uint32_t) { return ttnn::ccl::cmd::CclCommandAddrType::SEMAPHORE_ID; },
             [](tt::tt_metal::GlobalSemaphore const*) { return ttnn::ccl::cmd::CclCommandAddrType::ABSOLUTE_ADDRESS; },
             [](auto&&) -> void {
@@ -133,7 +133,7 @@ static ttnn::ccl::cmd::CclCommandAddrType get_semaphore_addr_type(semaphore_id_t
 static ttnn::ccl::cmd::CclCommandAddrArgs get_semaphore_addr_val(semaphore_id_t const& semaphore_id) {
     using ttnn::ccl::cmd::CclCommandAddrArgs;
     return std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [](uint32_t id) -> CclCommandAddrArgs { return ttnn::ccl::cmd::CclCommandAddrSemaphoreId{id}; },
             [](tt::tt_metal::GlobalSemaphore const* semaphore) -> CclCommandAddrArgs {
                 TT_FATAL(semaphore != nullptr, "Internal error: GlobalSemaphore pointer is null in call to get_semaphore_addr_val");
@@ -378,7 +378,7 @@ CclHostLowLevelWorkerCommand fabric_unicast_absolute_address_semaphore_inc(
 
 // Noc Read/Write commands
 // Densely packs as many transfers as possible into a single packet
-static std::vector<HostNocTransferBurstGrouping> densely_pack_noc_transfers(tt::stl::Span<noc_transfer_info> const& transfer_infos, size_t cb_size_bytes) {
+static std::vector<HostNocTransferBurstGrouping> densely_pack_noc_transfers(ttsl::Span<noc_transfer_info> const& transfer_infos, size_t cb_size_bytes) {
     std::vector<HostNocTransferBurstGrouping> transfer_burst_groupings;
 
     size_t group_size_bytes = 0;
@@ -406,7 +406,7 @@ static std::vector<HostNocTransferBurstGrouping> densely_pack_noc_transfers(tt::
 
 CclHostLowLevelWorkerCommand local_noc_read_burst_to_cb(
     CclCommandAddrAbsoluteAddress const& bank_base_address,
-    tt::stl::Span<noc_transfer_info> const& transfer_infos,
+    ttsl::Span<noc_transfer_info> const& transfer_infos,
     size_t cb_size_bytes,
     size_t cb_id
 ) {
@@ -424,7 +424,7 @@ CclHostLowLevelWorkerCommand local_noc_read_burst_to_cb(
 
 CclHostLowLevelWorkerCommand local_noc_write_burst_from_cb(
     CclCommandAddrAbsoluteAddress const& bank_base_address,
-    tt::stl::Span<noc_transfer_info> const& transfer_infos,
+    ttsl::Span<noc_transfer_info> const& transfer_infos,
     size_t cb_size_bytes,
     size_t cb_id
 ) {
@@ -442,7 +442,7 @@ CclHostLowLevelWorkerCommand local_noc_write_burst_from_cb(
 
 [[nodiscard]] CclHostLowLevelWorkerCommand fabric_unicast_noc_write_burst_from_cb(
     CclCommandAddrAbsoluteAddress const& bank_base_address,
-    tt::stl::Span<noc_transfer_info> const& transfer_infos,
+    ttsl::Span<noc_transfer_info> const& transfer_infos,
     size_t cb_size_bytes,
     size_t cb_id,
     UnicastCommandDestArgs const& unicast_args
@@ -465,7 +465,7 @@ CclHostLowLevelWorkerCommand local_noc_write_burst_from_cb(
 
 CclHostLowLevelWorkerCommand fabric_multicast_noc_write_burst_from_cb(
     CclCommandAddrAbsoluteAddress const& bank_base_address,
-    tt::stl::Span<noc_transfer_info> const& transfer_infos,
+    ttsl::Span<noc_transfer_info> const& transfer_infos,
     size_t cb_size_bytes,
     size_t cb_id,
     MulticastCommandDestArgs const& multicast_args

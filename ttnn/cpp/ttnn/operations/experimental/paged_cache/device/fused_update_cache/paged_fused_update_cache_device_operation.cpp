@@ -243,7 +243,7 @@ PagedFusedUpdateCacheDeviceOperation::tensor_return_value_t PagedFusedUpdateCach
     return std::make_tuple(tensor_args.cache_tensor1, tensor_args.cache_tensor2);
 }
 
-tt::stl::hash::hash_t PagedFusedUpdateCacheDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t PagedFusedUpdateCacheDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     auto program_factory = select_program_factory(operation_attributes, tensor_args);
 

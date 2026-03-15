@@ -20,7 +20,7 @@ namespace ttnn {
 // Only inline file storage (data stored in same file) is currently supported.
 Tensor from_flatbuffer(
     const ttnn::flatbuffer::Tensor* fb_tensor,
-    tt::stl::Span<std::byte> tensor_data,
+    ttsl::Span<std::byte> tensor_data,
     const tt::tt_metal::MemoryPin& memory_pin);
 
 // Converts Tensor object to FlatBuffer representation, writing the serialized flatbuffer object to `builder` and

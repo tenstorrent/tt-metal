@@ -107,7 +107,7 @@ AllGatherMatmulAsyncDeviceOperation::tensor_return_value_t AllGatherMatmulAsyncD
     return {all_gather_output_tensor, matmul_output_tensor};
 }
 
-tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllGatherMatmulAsyncDeviceOperation::compute_program_hash is called");
 
