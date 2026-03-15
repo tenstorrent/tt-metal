@@ -36,10 +36,20 @@ DeviceStorage::DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffe
 }
 
 DeviceStorage::DeviceStorage(
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords_) :
+    coords(std::move(coords_)), mesh_buffer(std::move(mesh_buffer_)) {}
+
+DeviceStorage::DeviceStorage(
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
     std::vector<distributed::MeshCoordinate> coords_,
     std::shared_ptr<distributed::MeshBuffer> root_buffer_) :
     coords(std::move(coords_)), mesh_buffer(std::move(mesh_buffer_)), root_mesh_buffer(std::move(root_buffer_)) {}
+
+DeviceStorage::DeviceStorage(
+    const DeviceStorage& owning_storage, std::shared_ptr<distributed::MeshBuffer> surface_buffer) :
+    coords(owning_storage.coords),
+    mesh_buffer(std::move(surface_buffer)),
+    root_mesh_buffer(owning_storage.get_root_mesh_buffer()) {}
 
 Buffer* DeviceStorage::get_buffer() const {
     if (this->mesh_buffer != nullptr) {

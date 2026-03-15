@@ -50,10 +50,9 @@ public:
     // Constructs DeviceStorage with coords covering the full mesh device shape.
     explicit DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffer_);
 
+    // Constructs DeviceStorage that is a view of the mesh_buffer_ at the given coords_
     DeviceStorage(
-        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
-        std::vector<distributed::MeshCoordinate> coords_,
-        std::shared_ptr<distributed::MeshBuffer> root_buffer_ = nullptr);
+        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords_);
 
     Buffer* get_buffer() const;
     const std::shared_ptr<distributed::MeshBuffer>& get_mesh_buffer() const;
@@ -63,6 +62,8 @@ public:
     // These functions allows the use of the get_mesh_buffer as a view.
     // These are considered internal functions and are not part of the public API.
     // They will be replaced with a new initiative as described in: #38093
+    DeviceStorage(const DeviceStorage& owning_storage, std::shared_ptr<distributed::MeshBuffer> surface_buffer);
+
     const std::shared_ptr<distributed::MeshBuffer>& get_root_mesh_buffer() const;
     void deallocate_root_mesh_buffer();
     void reset_root_mesh_buffer();

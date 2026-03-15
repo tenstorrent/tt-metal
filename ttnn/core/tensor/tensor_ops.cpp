@@ -334,8 +334,7 @@ Tensor view(const Tensor& input_tensor, const Shape& new_logical_shape, const Sh
                     new_device_config,
                     device_storage.get_mesh_buffer()->device(),
                     device_storage.get_mesh_buffer()->address());
-                tt::tt_metal::DeviceStorage view_storage(
-                    view_mesh_buffer, device_storage.coords, device_storage.get_root_mesh_buffer());
+                tt::tt_metal::DeviceStorage view_storage(device_storage, view_mesh_buffer);
 
                 return Tensor(view_storage, new_spec, tensor.tensor_topology());
             }
