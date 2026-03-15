@@ -31,7 +31,7 @@ class WanRotaryPosEmbed(Module):
         # Precompute frequency bases and store as device tensors
         self.f_freqs_base, self.h_freqs_base, self.w_freqs_base = self._precompute_freqs_base()
 
-        # Precompute transformation matrix
+        # Precompute transformation matrix (BFLOAT16 required by wan_fused_rmsnorm_post_allgather)
         self.transformation_mat = ttnn.from_torch(
             get_rot_transformation_mat(), device=mesh_device, layout=ttnn.TILE_LAYOUT, dtype=ttnn.bfloat16
         )

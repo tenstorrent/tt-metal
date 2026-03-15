@@ -153,9 +153,9 @@ class WanAttention(Module):
 
         self.sdpa_compute_kernel_config = ttnn.init_device_compute_kernel_config(
             self.mesh_device.arch(),
-            math_fidelity=ttnn.MathFidelity.HiFi2,
+            math_fidelity=ttnn.MathFidelity.HiFi4,
             math_approx_mode=False,
-            fp32_dest_acc_en=False,  # NOTE: Set to True if there's a correctness issue
+            fp32_dest_acc_en=True,  # Reduces RMSE vs PyTorch (attention accumulation in fp32)
         )
 
         self.rope_compute_kernel_config = ttnn.init_device_compute_kernel_config(
