@@ -48,41 +48,40 @@ def get_mesh_shape(module_name):
 def build_mesh_runner_config_from_modules(modules):
     """Dynamically build runner config from vector filenames.
 
-    Reads the mesh shape AND hardware name directly from the
-    ``__mesh_<R>x<C>__hw_<name>`` filename suffix that the vector
-    generator wrote.  No auto-mapping — hardware comes from the
-    traced JSON's machine_info, embedded in the filename by the
-    vector generator.
+    Reads hardware from the ``__hw_<name>`` filename suffix (written by
+    the vector generator from traced_machine_info).  Groups all mesh
+    shapes for the same hardware into ONE runner config, producing one
+    CI job per hardware type (e.g., one N300 job, one Galaxy job).
 
     Args:
         modules: List of module filenames (stems) including mesh/hw suffixes.
 
     Returns:
-        List of runner config dicts — one per unique (mesh_shape, hardware) pair
-        that has actual vectors.
+        List of runner config dicts — one per unique hardware that has vectors.
     """
-    # Discover unique (mesh_shape, hardware) pairs from filenames
-    seen = set()
+    # Group mesh shapes by hardware
+    hw_to_meshes = defaultdict(set)
     for module in modules:
         mesh_str = get_mesh_shape_string(module)
         hw_name = parse_hardware_suffix(module)
         if mesh_str:
-            seen.add((mesh_str, hw_name))
+            hw_to_meshes[hw_name or ""].add(mesh_str)
 
     configs = []
-    for mesh_str, hw_name in sorted(seen):
+    for hw_name in sorted(hw_to_meshes.keys()):
+        mesh_shapes = sorted(hw_to_meshes[hw_name])
         if hw_name:
             runner = get_runner_config_for_hardware(hw_name)
             if runner is None:
                 print(
-                    f"Warning: Unknown hardware '{hw_name}' for mesh {mesh_str}, skipping",
+                    f"Warning: Unknown hardware '{hw_name}', skipping {mesh_shapes}",
                     file=sys.stderr,
                 )
                 continue
             configs.append(
                 {
-                    "mesh_shapes": [mesh_str],
-                    "test_group_name": f"model-traced-{hw_name}-{mesh_str}",
+                    "mesh_shapes": mesh_shapes,
+                    "test_group_name": f"model-traced-{hw_name}",
                     "suite_name": "model_traced",
                     **runner,
                 }
@@ -91,8 +90,8 @@ def build_mesh_runner_config_from_modules(modules):
             # Legacy suffix without __hw_ — fall back to default N150 runner
             configs.append(
                 {
-                    "mesh_shapes": [mesh_str],
-                    "test_group_name": f"model-traced-{mesh_str}",
+                    "mesh_shapes": mesh_shapes,
+                    "test_group_name": "model-traced-default",
                     "suite_name": "model_traced",
                     "arch": "wormhole_b0",
                     "runs_on": "tt-ubuntu-2204-n150-stable",
@@ -169,7 +168,6 @@ def compute_lead_models_matrix(modules, batch_size):
         # Create matrix entries with mesh_shapes_filter so the workflow
         # sets MESH_DEVICE_SHAPE and vectors run on exact traced hardware.
         mesh_label = "+".join(runner_config["mesh_shapes"])
-        mesh_filter = runner_config["mesh_shapes"][0] if len(runner_config["mesh_shapes"]) == 1 else ""
         for batch in runner_batches:
             include_entries.append(
                 {
@@ -181,7 +179,7 @@ def compute_lead_models_matrix(modules, batch_size):
                     "module_selector": batch,
                     "batch_display": f"{mesh_label}:{batch}",
                     "suite_name": runner_config["suite_name"],
-                    "mesh_shapes_filter": mesh_filter,
+                    "mesh_shapes_filter": "",
                 }
             )
 
