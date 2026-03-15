@@ -98,22 +98,6 @@ CPMAddPackage(
         "XTENSOR_ENABLE_TESTS OFF"
 )
 
-# Mark xtensor stack headers as SYSTEM so clang-tidy (and the compiler) suppress
-# warnings from vendored headers when included in tt-train translation units.
-# Mirrors the protobuf SYSTEM workaround in third_party/CMakeLists.txt.
-foreach(_xtensor_target xtl xtensor xtensor-blas)
-    if(TARGET ${_xtensor_target})
-        get_target_property(_incs ${_xtensor_target} INTERFACE_INCLUDE_DIRECTORIES)
-        if(_incs)
-            set_target_properties(
-                ${_xtensor_target}
-                PROPERTIES
-                    INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_incs}"
-            )
-        endif()
-    endif()
-endforeach()
-
 include(${PROJECT_SOURCE_DIR}/cmake/fetch_cli11.cmake)
 
 ####################################################################################################################

@@ -262,6 +262,21 @@ CPMAddPackage(
     CUSTOM_CACHE_KEY "0_22_0_patched"
 )
 
+# Mark xtensor stack headers as SYSTEM so clang-tidy and the compiler suppress
+# warnings from vendored headers when they are included in project TUs.
+foreach(_xtensor_target xtl xtensor xtensor-blas)
+    if(TARGET ${_xtensor_target})
+        get_target_property(_incs ${_xtensor_target} INTERFACE_INCLUDE_DIRECTORIES)
+        if(_incs)
+            set_target_properties(
+                ${_xtensor_target}
+                PROPERTIES
+                    INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_incs}"
+            )
+        endif()
+    endif()
+endforeach()
+
 ############################################################################################################################
 # benchmark : https://github.com/google/benchmark
 ############################################################################################################################
