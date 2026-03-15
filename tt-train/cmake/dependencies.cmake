@@ -3,6 +3,13 @@
 ############################################################################################################################
 include(${PROJECT_SOURCE_DIR}/cmake/CPM.cmake)
 
+# Shadow clang-tidy for all CPM-fetched targets — mirrors third_party/CMakeLists.txt.
+# Placing a no-op .clang-tidy in the CPM cache root is insufficient (some packages
+# ship their own .clang-tidy). Blanking the cache variable disables it for every
+# target defined in this file's scope.
+set(CMAKE_C_CLANG_TIDY "")
+set(CMAKE_CXX_CLANG_TIDY "")
+
 ############################################################################################################################
 # Boost
 ############################################################################################################################

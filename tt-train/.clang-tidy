@@ -9,8 +9,12 @@ InheritParentConfig: true
 # These checks fire in tt-train sources but not yet fixed.
 # Tracked for incremental remediation — do not add new entries here.
 #
-# misc-confusable-identifiers fires in xtensor (CPM cache / third-party),
-# not tt-train code; disabled here since HeaderFilterRegex doesn't cover cpmcache.
+# Exclude CPM cache (third-party headers) from clang-tidy reporting.
+# The main config uses HeaderFilterRegex: '.*' which would otherwise flag
+# vendored headers (e.g. xtensor). cmake/dependencies.cmake also blanks
+# CMAKE_CXX_CLANG_TIDY for CPM targets — belt-and-suspenders.
+HeaderFilterRegex: '^(?!.*\.cpmcache).*'
+
 Checks: >
   -modernize-use-using,
   -modernize-type-traits,
@@ -46,7 +50,6 @@ Checks: >
   -bugprone-return-const-ref-from-parameter,
   -misc-redundant-expression,
   -misc-unused-parameters,
-  -misc-confusable-identifiers,
   -misc-header-include-cycle,
   -performance-unnecessary-value-param,
   -performance-unnecessary-copy-initialization
