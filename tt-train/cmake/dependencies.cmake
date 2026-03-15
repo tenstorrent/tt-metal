@@ -121,10 +121,6 @@ foreach(_xtensor_target xtl xtensor xtensor-blas)
     endif()
 endforeach()
 
-# Restore clang-tidy so tt-train source targets defined after this include() are scanned.
-set(CMAKE_C_CLANG_TIDY "${_tt_train_saved_c_clang_tidy}")
-set(CMAKE_CXX_CLANG_TIDY "${_tt_train_saved_cxx_clang_tidy}")
-
 include(${PROJECT_SOURCE_DIR}/cmake/fetch_cli11.cmake)
 
 ####################################################################################################################
@@ -216,3 +212,7 @@ if(flatbuffers_ADDED)
             -Wno-deprecated-declarations
     )
 endif()
+
+# Restore clang-tidy so tt-train source targets defined after this include() are scanned.
+set(CMAKE_C_CLANG_TIDY "${_tt_train_saved_c_clang_tidy}")
+set(CMAKE_CXX_CLANG_TIDY "${_tt_train_saved_cxx_clang_tidy}")
