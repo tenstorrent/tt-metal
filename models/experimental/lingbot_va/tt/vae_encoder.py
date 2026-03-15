@@ -43,7 +43,7 @@ def _cap_conv3d_blocking(module):
             _cap_conv3d_blocking(child)
 
 
-class VaeWanEncoder(Module):
+class WanVAEEncoder(Module):
     def __init__(
         self,
         in_channels: int = 3,

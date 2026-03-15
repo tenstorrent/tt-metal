@@ -19,7 +19,8 @@ import torch
 import ttnn
 from models.tt_dit.parallel.config import VaeHWParallelConfig, ParallelFactor
 from models.tt_dit.parallel.manager import CCLManager
-from models.experimental.lingbot_va.tt.vae_encoder import VaeWanEncoder
+from models.experimental.lingbot_va.tt.vae_encoder import WanVAEEncoder
+from models.experimental.lingbot_va.tt.vae_decoder import WanVAEDecoder
 from models.tt_dit.models.vae.vae_wan2_1 import WanCausalConv3d
 from models.tt_dit.utils.conv3d import conv_pad_in_channels, conv_pad_height, conv_unpad_height
 
@@ -263,7 +264,7 @@ def load_vae_encoder(
     if ccl_manager is None:
         ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
 
-    vae_encoder = VaeWanEncoder(
+    vae_encoder = WanVAEEncoder(
         in_channels=cfg.in_channels,
         dim=cfg.base_dim,
         z_dim=cfg.z_dim * 2,
@@ -365,12 +366,99 @@ class WanVAEStreamingWrapper:
         return enc
 
 
+def load_vae_decoder(
+    vae_model,
+    mesh_device: "ttnn.MeshDevice",
+    ccl_manager: "CCLManager | None" = None,
+    parallel_config: "VaeHWParallelConfig | None" = None,
+):
+    """Build TTNN WanVAEDecoder and load weights from the PyTorch VAE decoder."""
+    state = {k: v.cpu() for k, v in vae_model.state_dict().items()}
+    cfg = vae_model.config
+    if parallel_config is None:
+        parallel_config = VaeHWParallelConfig(
+            height_parallel=ParallelFactor(factor=1, mesh_axis=0),
+            width_parallel=ParallelFactor(factor=1, mesh_axis=1),
+        )
+    if ccl_manager is None:
+        ccl_manager = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+
+    tt_decoder = WanVAEDecoder(
+        base_dim=cfg.base_dim,
+        decoder_base_dim=getattr(cfg, "decoder_base_dim", None),
+        z_dim=cfg.z_dim,
+        dim_mult=list(cfg.dim_mult),
+        num_res_blocks=cfg.num_res_blocks,
+        attn_scales=list(cfg.attn_scales),
+        temperal_downsample=list(cfg.temperal_downsample),
+        out_channels=cfg.out_channels,
+        patch_size=getattr(cfg, "patch_size", 1) or 1,
+        latents_mean=list(cfg.latents_mean),
+        latents_std=list(cfg.latents_std),
+        mesh_device=mesh_device,
+        parallel_config=parallel_config,
+        ccl_manager=ccl_manager,
+    )
+    tt_decoder.load_torch_state_dict(state)
+    return tt_decoder
+
+
+class WanVAEDecoderWrapper:
+    """Wrapper around TTNN WanVAEDecoder that exposes decode(latents) -> video tensor for inference."""
+
+    def __init__(
+        self,
+        vae_model,
+        mesh_device: "ttnn.MeshDevice",
+        ccl_manager: "CCLManager | None" = None,
+        parallel_config: "VaeHWParallelConfig | None" = None,
+    ):
+        self.vae = vae_model
+        self.parallel_config = parallel_config or VaeHWParallelConfig(
+            height_parallel=ParallelFactor(factor=1, mesh_axis=0),
+            width_parallel=ParallelFactor(factor=1, mesh_axis=1),
+        )
+        self.mesh_device = mesh_device
+        self.ccl_manager = ccl_manager or CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
+        self.decoder = load_vae_decoder(
+            vae_model, mesh_device, ccl_manager=self.ccl_manager, parallel_config=self.parallel_config
+        )
+
+    def decode(self, latents: torch.Tensor) -> torch.Tensor:
+        """Decode latents (B, C, T, H, W) to video (B, C, T, H, W). Latents are normalized with mean/std before calling."""
+        latents = latents.to(self.vae.dtype)
+        tt_latents_BTHWC = latents.permute(0, 2, 3, 4, 1)
+        tt_latents_BTHWC = conv_pad_in_channels(tt_latents_BTHWC)
+        tt_latents_BTHWC, logical_h = conv_pad_height(tt_latents_BTHWC, self.parallel_config.height_parallel.factor)
+        tt_latents_BTHWC = ttnn.from_torch(
+            tt_latents_BTHWC,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+            dtype=ttnn.bfloat16,
+            device=self.mesh_device,
+        )
+        tt_video_BCTHW, new_logical_h = self.decoder(tt_latents_BTHWC, logical_h)
+        ttnn.synchronize_device(self.mesh_device)
+        video_torch = ttnn.to_torch(tt_video_BCTHW)
+        video_torch = video_torch[:, :, :, :new_logical_h, :]
+        ps = getattr(self.vae.config, "patch_size", None)
+        if ps and ps > 1:
+            B, Cp, T_out, H_out, W_out = video_torch.shape
+            channels = Cp // (ps * ps)
+            video_torch = video_torch.view(B, channels, ps, ps, T_out, H_out, W_out)
+            video_torch = video_torch.permute(0, 1, 4, 5, 3, 6, 2).contiguous()
+            video_torch = video_torch.view(B, channels, T_out, H_out * ps, W_out * ps)
+        video_torch = video_torch.clamp(-1.0, 1.0)
+        return video_torch
+
+
 __all__ = [
     "load_transformer",
     "load_transformer_from_state_dict",
     "load_text_encoder",
     "load_vae_encoder",
+    "load_vae_decoder",
     "_local_path",
     "patchify",
     "WanVAEStreamingWrapper",
+    "WanVAEDecoderWrapper",
 ]

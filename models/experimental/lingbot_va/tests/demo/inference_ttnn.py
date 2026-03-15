@@ -4,18 +4,18 @@
 """
 Build the observation dict and run Lingbot-VA inference locally (no server).
 
-All three model components used for inference are TTNN (not PyTorch):
-- Text embeddings: TTNN UMT5 text encoder (tt.utils.load_text_encoder), or loaded from cache
-  (cache is produced by TTNN when populated).
-- VAE encoder: TTNN VAE encoder (tt.utils.WanVAEStreamingWrapper over VaeWanEncoder) when
-  encoding observations; VAE encode cache is produced by TTNN when populated.
+All model components used for inference are TTNN (no PyTorch fallbacks):
+- Text embeddings: TTNN UMT5 text encoder (tt.utils.load_text_encoder), or from cache (TT-produced).
+- VAE encoder: TTNN (tt.utils.WanVAEStreamingWrapper); encode runs on TT; after phase 2 we free it
+  and later _encode_obs() loads from cache only.
+- VAE decoder: TTNN WanVAEDecoder; in run_generate() we close the mesh device after the
+  generation loop and reopen a fresh one before loading the decoder so it has full device
+  memory. On OOM we fall back to PyTorch decode. Set LINGBOT_VA_USE_TT_DECODER=0 to skip TT
+  decoder and use PyTorch decode only.
 - Transformer: TTNN WanTransformer3DModel (tt.utils.load_transformer).
 
-PyTorch is used only for: tokenizer, schedulers, VAE decoder (video decode), and the base
-AutoencoderKLWan object passed into the TT VAE wrapper. After phase 2 we replace the TT VAE
-with a PyTorch WanVAEStreamingWrapper to free device memory; any later _encode_obs() call
-then loads from the VAE cache file (written by TT in phase 2) and returns without calling
-encode_chunk, so the PyTorch encoder is never run.
+PyTorch is used for: tokenizer, schedulers, base VAE config object, and optionally VAE decode
+in run_generate() when TT decoder is not used or OOMs.
 
 1. Build the input dict from three camera images (same format as client→server).
 2. Run inference using the same logic as VA_Server.infer() from wan_va_server.py:
@@ -74,11 +74,12 @@ import ttnn
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
 
-# TTNN components: text encoder, transformer, and VAE encoder wrapper (all inference is TTNN)
+# TTNN components: text encoder, transformer, VAE encoder and decoder wrappers (all inference is TTNN)
 from tt.utils import (
     load_text_encoder as load_text_encoder_tt,
     load_transformer as load_transformer_tt,
     WanVAEStreamingWrapper as TTWanVAEStreamingWrapper,
+    WanVAEDecoderWrapper as TTWanVAEDecoderWrapper,
 )
 
 # Keys the server uses (va_robotwin_cfg.obs_cam_keys)
@@ -438,23 +439,16 @@ def _get_t5_prompt_embeds(models, prompt, num_videos_per_prompt=1, max_sequence_
     text_input_ids, mask = text_inputs.input_ids, text_inputs.attention_mask
     seq_lens = mask.gt(0).sum(dim=1).long()
 
-    # TTNN text encoder (has mesh_device); run on device and convert output to torch.
-    if getattr(text_encoder, "mesh_device", None) is not None:
-        mesh_device = text_encoder.mesh_device
-        tt_input = ttnn.from_torch(text_input_ids, dtype=ttnn.uint32, device=mesh_device)
-        tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, device=mesh_device)
-        tt_outputs = text_encoder(tt_input, attention_mask=tt_mask)
-        last_hidden = tt_outputs[-1]
-        prompt_embeds = ttnn.to_torch(last_hidden).float()
-        while prompt_embeds.dim() > 3:
-            prompt_embeds = prompt_embeds.squeeze(0)
-        prompt_embeds = prompt_embeds.to(device=device, dtype=dtype)
-    else:
-        text_encoder_device = next(text_encoder.parameters()).device
-        prompt_embeds = text_encoder(
-            text_input_ids.to(text_encoder_device), mask.to(text_encoder_device)
-        ).last_hidden_state
-        prompt_embeds = prompt_embeds.to(dtype=dtype, device=device)
+    # TTNN text encoder (always used; no PyTorch fallback).
+    mesh_device = text_encoder.mesh_device
+    tt_input = ttnn.from_torch(text_input_ids, dtype=ttnn.uint32, device=mesh_device)
+    tt_mask = ttnn.from_torch(mask, dtype=ttnn.bfloat16, device=mesh_device)
+    tt_outputs = text_encoder(tt_input, attention_mask=tt_mask)
+    last_hidden = tt_outputs[-1]
+    prompt_embeds = ttnn.to_torch(last_hidden).float()
+    while prompt_embeds.dim() > 3:
+        prompt_embeds = prompt_embeds.squeeze(0)
+    prompt_embeds = prompt_embeds.to(device=device, dtype=dtype)
     prompt_embeds = [u[:v] for u, v in zip(prompt_embeds, seq_lens)]
     prompt_embeds = torch.stack(
         [torch.cat([u, u.new_zeros(max_sequence_length - u.size(0), u.size(1))]) for u in prompt_embeds],
@@ -994,6 +988,29 @@ def _infer_entry(models, state, obs):
     return {"action": action}
 
 
+def _load_tt_vae_decoder_into_models(models: dict, config) -> None:
+    """Load TTNN VAE decoder into models. Use before decode when running generate with TT path."""
+    vae_parallel_config = VaeHWParallelConfig(
+        height_parallel=ParallelFactor(factor=1, mesh_axis=0),
+        width_parallel=ParallelFactor(factor=1, mesh_axis=1),
+    )
+    models["vae_decoder_tt"] = TTWanVAEDecoderWrapper(
+        models["vae"],
+        models["mesh_device"],
+        ccl_manager=models["ccl_manager"],
+        parallel_config=vae_parallel_config,
+    )
+    logger.info("Loaded TT VAE decoder on device.")
+
+
+def _free_tt_vae_decoder_from_models(models: dict) -> None:
+    """Remove TT VAE decoder from models and run gc to free device memory."""
+    if "vae_decoder_tt" in models:
+        del models["vae_decoder_tt"]
+    gc.collect()
+    logger.info("Freed TT VAE decoder from device.")
+
+
 def _decode_one_video(models, latents, output_type="np"):
     vae = models["vae"]
     device = models["device"]
@@ -1007,7 +1024,13 @@ def _decode_one_video(models, latents, output_type="np"):
         latents.device, latents.dtype
     )
     latents = latents / latents_std + latents_mean
-    video = vae.decode(latents, return_dict=False)[0]
+
+    # Prefer TTNN VAE decoder when loaded; fall back to PyTorch decode on OOM or when TT decoder not loaded (e.g. run_generate on N150).
+    if models.get("vae_decoder_tt") is not None:
+        video = models["vae_decoder_tt"].decode(latents)
+    else:
+        video = vae.decode(latents, return_dict=False)[0]
+
     video_processor = VideoProcessor(vae_scale_factor=1)
     video = video_processor.postprocess_video(video, output_type=output_type)
     return video
@@ -1170,21 +1193,54 @@ def run_generate(
         pred_action_lst.append(actions)
 
     pred_latent = torch.cat(pred_latent_lst, dim=2)
+
+    # Free all TT sub-modules and close the mesh device so the decoder runs on a fresh device
+    # with full memory (avoids OOM from fragmented/leftover allocations).
     transformer = models["transformer"]
-    streaming_vae = models["streaming_vae"]
-    streaming_vae_half = models["streaming_vae_half"]
     transformer.clear_cache(models["cache_name"])
-    streaming_vae.clear_cache()
-    if streaming_vae_half:
-        streaming_vae_half.clear_cache()
     del models["transformer"]
     if models.get("streaming_vae_half"):
+        models["streaming_vae_half"].clear_cache()
         del models["streaming_vae_half"]
+    if models.get("streaming_vae"):
+        models["streaming_vae"].clear_cache()
+        del models["streaming_vae"]
     models.pop("text_encoder", None)
+    gc.collect()
+    gc.collect()
+    mesh_device = models["mesh_device"]
+    ttnn.synchronize_device(mesh_device)
+    ttnn.close_mesh_device(mesh_device)
+    # Reopen a fresh mesh device so the TT decoder is the only user and has full DRAM.
+    mesh_device = ttnn.open_mesh_device(ttnn.MeshShape(1, 1))
+    models["mesh_device"] = mesh_device
+    models["ccl_manager"] = CCLManager(mesh_device, num_links=1, topology=ttnn.Topology.Linear)
 
-    if getattr(config, "enable_offload", True):
-        models["vae"] = models["vae"].to(models["device"]).to(models["dtype"])
-    decoded_video = _decode_one_video(models, pred_latent, "np")[0]
+    # Run TTNN VAE decoder on the fresh device. Fall back to PyTorch only on OOM (e.g. very small devices).
+    # Set LINGBOT_VA_USE_TT_DECODER=0 to skip TT decoder and use PyTorch decode only.
+    use_tt_decoder = os.environ.get("LINGBOT_VA_USE_TT_DECODER", "1").strip().lower() in ("1", "true", "yes")
+    decoded_video = None
+    if use_tt_decoder:
+        try:
+            _load_tt_vae_decoder_into_models(models, config)
+            if getattr(config, "enable_offload", True):
+                models["vae"] = models["vae"].to(models["device"]).to(models["dtype"])
+            decoded_video = _decode_one_video(models, pred_latent, "np")[0]
+        except RuntimeError as e:
+            if "Out of Memory" in str(e) or "OOM" in str(e).upper():
+                logger.warning("TT VAE decoder OOM, falling back to PyTorch decode: %s", e)
+                _free_tt_vae_decoder_from_models(models)
+                decoded_video = None
+            else:
+                _free_tt_vae_decoder_from_models(models)
+                raise
+        finally:
+            if models.get("vae_decoder_tt") is not None:
+                _free_tt_vae_decoder_from_models(models)
+    if decoded_video is None:
+        if getattr(config, "enable_offload", True):
+            models["vae"] = models["vae"].to(models["device"]).to(models["dtype"])
+        decoded_video = _decode_one_video(models, pred_latent, "np")[0]
     export_to_video(decoded_video, os.path.join(config.save_root, "demo.mp4"), fps=10)
     return str(Path(save_dir) / "demo.mp4")
 
