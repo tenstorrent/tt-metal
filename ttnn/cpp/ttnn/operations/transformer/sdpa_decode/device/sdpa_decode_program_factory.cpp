@@ -76,6 +76,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
     uint32_t DH = k_shape[3];
     uint32_t vDH = use_mla ? head_dim_v : v_shape[3];
     uint32_t Bkv = k_shape[0];
+    uint32_t Bmask = attn_mask.has_value() ? attn_mask->padded_shape()[0] : Bkv;
     uint32_t num_kv_heads = k_shape[1];
     uint32_t num_q_heads = q_shape_unpadded[2];
     uint32_t page_block_size_t = 0;
@@ -604,6 +605,7 @@ SdpaDecodeProgramFactory::cached_program_t SdpaDecodeProgramFactory::create(
         num_kv_heads,
         page_block_size_t,
         Bkv,
+        Bmask,
         q_heads_parallel_factor,
         num_cores_per_head,
         num_heads_per_core,
