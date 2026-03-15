@@ -4,6 +4,19 @@
 """
 Build the observation dict and run Lingbot-VA inference locally (no server).
 
+All three model components used for inference are TTNN (not PyTorch):
+- Text embeddings: TTNN UMT5 text encoder (tt.utils.load_text_encoder), or loaded from cache
+  (cache is produced by TTNN when populated).
+- VAE encoder: TTNN VAE encoder (tt.utils.WanVAEStreamingWrapper over VaeWanEncoder) when
+  encoding observations; VAE encode cache is produced by TTNN when populated.
+- Transformer: TTNN WanTransformer3DModel (tt.utils.load_transformer).
+
+PyTorch is used only for: tokenizer, schedulers, VAE decoder (video decode), and the base
+AutoencoderKLWan object passed into the TT VAE wrapper. After phase 2 we replace the TT VAE
+with a PyTorch WanVAEStreamingWrapper to free device memory; any later _encode_obs() call
+then loads from the VAE cache file (written by TT in phase 2) and returns without calling
+encode_chunk, so the PyTorch encoder is never run.
+
 1. Build the input dict from three camera images (same format as client→server).
 2. Run inference using the same logic as VA_Server.infer() from wan_va_server.py:
    reset with prompt, then infer one chunk on the observation dict.
@@ -41,6 +54,7 @@ from einops import rearrange
 from PIL import Image
 from tqdm import tqdm
 
+# Reference (PyTorch) utils: config, schedulers, tokenizer, VAE for decode + wrapper when TT VAE is freed
 from reference.utils import (
     VA_CONFIGS,
     FlowMatchScheduler,
@@ -59,6 +73,8 @@ import gc
 import ttnn
 from models.tt_dit.parallel.config import DiTParallelConfig, ParallelFactor, VaeHWParallelConfig
 from models.tt_dit.parallel.manager import CCLManager
+
+# TTNN components: text encoder, transformer, and VAE encoder wrapper (all inference is TTNN)
 from tt.utils import (
     load_text_encoder as load_text_encoder_tt,
     load_transformer as load_transformer_tt,
@@ -227,13 +243,12 @@ def load_message_from_files(
 # -----------------------------------------------------------------------------
 
 
-def _load_models_phase1(config):
+def _load_models_phase1(config, load_text_encoder=True):
     """
-    Load VAE (PyTorch), tokenizer, TTNN text encoder, and open mesh device. No transformer, no TT VAE.
-    Only one TT model is on device at a time: phase1 = text encoder; phase2 = TT VAE (optional, if cache miss);
-    phase3 = TT transformer. After encoding the prompt, call _free_tt_model(models, "text_encoder"), then
-    optionally run TT VAE encode via _load_tt_vae_into_models / _encode_obs / _free_tt_vae_from_models,
-    then _load_transformer_into_models().
+    Load VAE (PyTorch, once; reused for streaming_vae_half when robotwin_tshape), tokenizer, and open mesh device.
+    Optionally load TTNN text encoder (load_text_encoder=True). No transformer, no TT VAE.
+    Only one TT model on device at a time: phase1 = text encoder (if loaded); phase2 = TT VAE (optional);
+    phase3 = TT transformer.
     """
     init_logger()
     device = torch.device("cpu")
@@ -249,22 +264,25 @@ def _load_models_phase1(config):
         cfg_parallel=None,
     )
 
-    # Load TTNN text encoder only (no transformer, no TT VAE) to avoid OOM.
-    text_encoder = load_text_encoder_tt(
-        os.path.join(ckpt, "text_encoder"),
-        mesh_device,
-        ccl_manager=ccl_manager,
-        torch_dtype=dtype,
-        max_prompt_length=512,
-    )
+    text_encoder = None
+    if load_text_encoder:
+        text_encoder = load_text_encoder_tt(
+            os.path.join(ckpt, "text_encoder"),
+            mesh_device,
+            ccl_manager=ccl_manager,
+            torch_dtype=dtype,
+            max_prompt_length=512,
+        )
 
+    # VAE: load once; for robotwin_tshape reuse same instance for streaming_vae and streaming_vae_half.
     vae = load_vae(
         os.path.join(ckpt, "vae"),
         torch_dtype=dtype,
         torch_device="cpu" if enable_offload else device,
     )
-    # PyTorch VAE wrapper (CPU); do not load TT VAE so only one TT sub-network is on device.
     streaming_vae = WanVAEStreamingWrapper(vae)
+    vae_half = vae if config.env_type == "robotwin_tshape" else None
+    streaming_vae_half = WanVAEStreamingWrapper(vae) if config.env_type == "robotwin_tshape" else None
 
     tokenizer = load_tokenizer(os.path.join(ckpt, "tokenizer"))
 
@@ -273,15 +291,6 @@ def _load_models_phase1(config):
     scheduler.set_timesteps(1000, training=True)
     action_scheduler.set_timesteps(1000, training=True)
 
-    streaming_vae_half = None
-    vae_half = None
-    if config.env_type == "robotwin_tshape":
-        vae_half = load_vae(
-            os.path.join(ckpt, "vae"),
-            torch_dtype=dtype,
-            torch_device="cpu" if enable_offload else device,
-        )
-        streaming_vae_half = WanVAEStreamingWrapper(vae_half)
     return {
         "vae": vae,
         "vae_half": vae_half,
@@ -308,6 +317,43 @@ def _free_tt_model(models: dict, key: str) -> None:
     if key in models:
         del models[key]
     gc.collect()
+
+
+def _try_load_text_emb_cache(config, prompt, device, dtype):
+    """
+    Load text embeddings from cache if present and prompt matches. Returns (prompt_embeds, negative_prompt_embeds)
+    or (None, None) on cache miss or error. Avoids loading the TT text encoder when cache hits.
+    """
+    cache_path = getattr(config, "text_emb_cache_path", None)
+    if not cache_path or not os.path.isfile(cache_path):
+        return None, None
+    prompt_list = [prompt] if isinstance(prompt, str) else prompt
+    try:
+        cached = torch.load(cache_path, map_location="cpu", weights_only=False)
+        if cached.get("prompt") != prompt_list or "prompt_embeds" not in cached:
+            return None, None
+        logger.info("Loading text embeddings from cache: %s", cache_path)
+        prompt_embeds = cached["prompt_embeds"].to(device=device, dtype=dtype)
+        neg = cached.get("negative_prompt_embeds")
+        negative_prompt_embeds = neg.to(device=device, dtype=dtype) if neg is not None else None
+        return prompt_embeds, negative_prompt_embeds
+    except Exception as e:
+        logger.warning("Failed to load text emb cache: %s", e)
+        return None, None
+
+
+def _load_text_encoder_into_models(models: dict, config) -> None:
+    """Load TTNN text encoder into models. Call only when text cache missed."""
+    ckpt = config.wan22_pretrained_model_name_or_path
+    dtype = models["dtype"]
+    models["text_encoder"] = load_text_encoder_tt(
+        os.path.join(ckpt, "text_encoder"),
+        models["mesh_device"],
+        ccl_manager=models["ccl_manager"],
+        torch_dtype=dtype,
+        max_prompt_length=512,
+    )
+    logger.info("Loaded TT text encoder (cache miss).")
 
 
 def _prepare_state_for_vae_encode(state: dict, config) -> None:
@@ -599,6 +645,8 @@ def _encode_obs(models, state, obs):
     device = models["device"]
     dtype = models["dtype"]
 
+    # If cache exists, we never call streaming_vae.encode_chunk() (so after phase 2 we use
+    # PyTorch wrapper only for clear_cache; the actual encode was done by TT in phase 2).
     cache_path = getattr(config, "vae_enc_cache_path", None)
     if cache_path and os.path.isfile(cache_path):
         logger.info("Loading VAE encode output from cache: %s", cache_path)
@@ -717,16 +765,23 @@ def _reset_state(models, state, prompt):
     if prompt is None:
         state["prompt_embeds"] = None
         state["negative_prompt_embeds"] = None
+        state["_prompt_embeds_prompt"] = None
     else:
-        prompt_embeds, negative_prompt_embeds = _encode_prompt(
-            models,
-            state,
-            prompt,
-            do_classifier_free_guidance=(config.guidance_scale > 1),
-            max_sequence_length=512,
-        )
-        state["prompt_embeds"] = prompt_embeds
-        state["negative_prompt_embeds"] = negative_prompt_embeds
+        prompt_list = [prompt] if isinstance(prompt, str) else prompt
+        if state.get("_prompt_embeds_prompt") == prompt_list and "prompt_embeds" in state:
+            # Reuse embeddings from initial encode (no second _encode_prompt / cache read).
+            pass
+        else:
+            prompt_embeds, negative_prompt_embeds = _encode_prompt(
+                models,
+                state,
+                prompt,
+                do_classifier_free_guidance=(config.guidance_scale > 1),
+                max_sequence_length=512,
+            )
+            state["prompt_embeds"] = prompt_embeds
+            state["negative_prompt_embeds"] = negative_prompt_embeds
+            state["_prompt_embeds_prompt"] = prompt_list
 
     state["exp_name"] = f"{prompt}_{time.strftime('%Y%m%d_%H%M%S')}" if prompt else "default"
     state["exp_save_root"] = os.path.join(save_root, "real", state["exp_name"])
@@ -992,18 +1047,29 @@ def run_inference(
     config.vae_enc_cache_path = os.path.join(config.save_root, VAE_ENC_CACHE_FILENAME)
     config.text_emb_cache_path = os.path.join(config.save_root, TEXT_EMB_CACHE_FILENAME)
 
-    # Phase 1: load only TT text encoder (no transformer, no TT VAE) to avoid OOM.
-    models = _load_models_phase1(config)
+    # Phase 1: load shared assets (VAE once, tokenizer, mesh); load TT text encoder only on cache miss.
+    models = _load_models_phase1(config, load_text_encoder=False)
     state = {}
     prompt = message.get("prompt", "")
-    _encode_prompt(
-        models,
-        state,
-        prompt,
-        do_classifier_free_guidance=(config.guidance_scale > 1),
-        max_sequence_length=512,
-    )
-    _free_tt_model(models, "text_encoder")
+    prompt_list = [prompt] if isinstance(prompt, str) else prompt
+    prompt_embeds, neg_embeds = _try_load_text_emb_cache(config, prompt, models["device"], models["dtype"])
+    if prompt_embeds is not None:
+        state["prompt_embeds"] = prompt_embeds
+        state["negative_prompt_embeds"] = neg_embeds
+        state["_prompt_embeds_prompt"] = prompt_list
+    else:
+        _load_text_encoder_into_models(models, config)
+        prompt_embeds, neg_embeds = _encode_prompt(
+            models,
+            state,
+            prompt,
+            do_classifier_free_guidance=(config.guidance_scale > 1),
+            max_sequence_length=512,
+        )
+        state["prompt_embeds"] = prompt_embeds
+        state["negative_prompt_embeds"] = neg_embeds
+        state["_prompt_embeds_prompt"] = prompt_list
+        _free_tt_model(models, "text_encoder")
 
     # Phase 2: load only TT VAE encoder; run _encode_obs if cache miss, then free.
     _prepare_state_for_vae_encode(state, config)
@@ -1058,17 +1124,28 @@ def run_generate(
     config.prompt = prompt
     config.num_chunks_to_infer = num_chunks
 
-    # Phase 1: load only TT text encoder (no transformer, no TT VAE) to avoid OOM.
-    models = _load_models_phase1(config)
+    # Phase 1: load shared assets (VAE once, tokenizer, mesh); load TT text encoder only on cache miss.
+    models = _load_models_phase1(config, load_text_encoder=False)
     state = {}
-    _encode_prompt(
-        models,
-        state,
-        prompt,
-        do_classifier_free_guidance=(config.guidance_scale > 1),
-        max_sequence_length=512,
-    )
-    _free_tt_model(models, "text_encoder")
+    prompt_list = [prompt] if isinstance(prompt, str) else prompt
+    prompt_embeds, neg_embeds = _try_load_text_emb_cache(config, prompt, models["device"], models["dtype"])
+    if prompt_embeds is not None:
+        state["prompt_embeds"] = prompt_embeds
+        state["negative_prompt_embeds"] = neg_embeds
+        state["_prompt_embeds_prompt"] = prompt_list
+    else:
+        _load_text_encoder_into_models(models, config)
+        prompt_embeds, neg_embeds = _encode_prompt(
+            models,
+            state,
+            prompt,
+            do_classifier_free_guidance=(config.guidance_scale > 1),
+            max_sequence_length=512,
+        )
+        state["prompt_embeds"] = prompt_embeds
+        state["negative_prompt_embeds"] = neg_embeds
+        state["_prompt_embeds_prompt"] = prompt_list
+        _free_tt_model(models, "text_encoder")
 
     # Phase 2: load only TT VAE encoder; run _encode_obs if cache miss, then free.
     _prepare_state_for_vae_encode(state, config)
