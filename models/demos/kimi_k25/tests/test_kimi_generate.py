@@ -317,6 +317,7 @@ def _run_kimi_forward_pass_random_weights(
     from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
     from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
     from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW
+    from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
     from models.demos.deepseek_v3.utils.run_config import create_run_config
     from models.demos.deepseek_v3.utils.test_utils import (
         get_model_config,
@@ -396,11 +397,19 @@ def _run_kimi_forward_pass_random_weights(
         for tpt in torch_page_tables
     )
 
+    # Build random-weight state dict from DSV3 reference model instantiated with Kimi config.
+    # RowBatchedModel.convert_weights() does: (state_dict,) = state_dicts — requires exactly
+    # one dict.  state_dicts=() (empty tuple) would raise ValueError; state_dicts=None triggers
+    # prepare_model_state_dict internally but get_test_weight_config does not forward
+    # random_weights=True to get_weight_config.  Prepare explicitly here, mirroring DSV3
+    # test_moe.py's generate_reference_io pattern.
+    random_state_dict = prepare_model_state_dict(cfg, random_weights=True)
+
     # Random-weight model config
     weight_config = get_test_weight_config(
         RowBatchedModel,
         cfg,
-        (),  # empty state_dicts → random weights
+        (random_state_dict,),  # single state_dict required by RowBatchedModel.convert_weights
         cache_path,
         mesh_device,
         force_recalculate,
