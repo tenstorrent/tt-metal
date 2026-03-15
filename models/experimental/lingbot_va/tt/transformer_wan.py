@@ -177,7 +177,10 @@ class WanTransformerBlock(Module):
         rope_cos: ttnn.Tensor,
         rope_sin: ttnn.Tensor,
         trans_mat: ttnn.Tensor,
-    ) -> ttnn.Tensor:
+        cached_k: ttnn.Tensor | None = None,
+        cached_v: ttnn.Tensor | None = None,
+        return_kv: bool = False,
+    ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """
         spatial_1BND: fractured N on SP, fractured D on TP
         prompt_1BLP: replicated on SP, replicated D on TP
@@ -206,7 +209,7 @@ class WanTransformerBlock(Module):
         )
 
         # Self attention on spatial with fused residual addcmul
-        spatial_1BND = self.attn1(
+        attn1_out = self.attn1(
             spatial_1BND=spatial_normed_1BND,
             N=N,
             rope_cos=rope_cos,
@@ -214,7 +217,14 @@ class WanTransformerBlock(Module):
             trans_mat=trans_mat,
             addcmul_residual=spatial_1BND,
             addcmul_gate=gate_msa_1B1D,
+            cached_k=cached_k,
+            cached_v=cached_v,
+            return_kv=return_kv,
         )
+        if return_kv:
+            spatial_1BND, k_cur, v_cur = attn1_out
+        else:
+            spatial_1BND = attn1_out
 
         # Cross attention on prompt
         spatial_normed_1BND = self.norm2(spatial_1BND)
@@ -240,6 +250,8 @@ class WanTransformerBlock(Module):
 
         spatial_1BND = ttnn.addcmul(spatial_1BND, spatial_ff_1BND, c_gate_msa_1B1D)
 
+        if return_kv:
+            return (spatial_1BND, k_cur, v_cur)
         return spatial_1BND
 
 
@@ -386,6 +398,79 @@ class WanTransformer3DModel(Module):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+        self._attn_caches: dict[str, list[dict | None]] = {}
+
+    def clear_cache(self, cache_name: str) -> None:
+        if cache_name in self._attn_caches:
+            self._attn_caches[cache_name] = [None] * len(self.blocks)
+
+    def clear_pred_cache(self, cache_name: str) -> None:
+        if cache_name not in self._attn_caches:
+            return
+        for cache in self._attn_caches[cache_name]:
+            if cache is not None and cache["is_pred"].any():
+                cache["mask"][cache["is_pred"]] = False
+
+    def create_empty_cache(
+        self,
+        cache_name: str,
+        attn_window: int,
+        latent_token_per_chunk: int,
+        action_token_per_chunk: int,
+        device: torch.device,
+        dtype: torch.dtype,
+        batch_size: int = 1,
+    ) -> None:
+        total_tolen = (attn_window // 2) * latent_token_per_chunk + (attn_window // 2) * action_token_per_chunk
+        num_heads = self.num_heads
+        head_dim = self.dim // num_heads
+        cache_device = device if device.type == "cpu" else torch.device("cpu")
+        self._attn_caches[cache_name] = []
+        for _ in range(len(self.blocks)):
+            self._attn_caches[cache_name].append(
+                {
+                    "k": torch.empty([batch_size, total_tolen, num_heads, head_dim], device=cache_device, dtype=dtype),
+                    "v": torch.empty([batch_size, total_tolen, num_heads, head_dim], device=cache_device, dtype=dtype),
+                    "id": torch.full((total_tolen,), -1, device=cache_device),
+                    "mask": torch.zeros((total_tolen,), dtype=torch.bool, device=cache_device),
+                    "is_pred": torch.zeros((total_tolen,), dtype=torch.bool, device=cache_device),
+                }
+            )
+
+    def _cache_allocate_slots(self, cache: dict, key_size: int) -> torch.Tensor:
+        mask = cache["mask"]
+        ids = cache["id"]
+        free = (~mask).nonzero(as_tuple=False).squeeze(-1)
+        if free.numel() < key_size:
+            used = mask.nonzero(as_tuple=False).squeeze(-1)
+            order = torch.argsort(ids[used])
+            need = key_size - free.numel()
+            to_free = used[order[:need]]
+            mask[to_free] = False
+            ids[to_free] = -1
+            free = (~mask).nonzero(as_tuple=False).squeeze(-1)
+        assert free.numel() >= key_size
+        return free[:key_size]
+
+    def _cache_next_id(self, cache: dict) -> int:
+        ids, mask = cache["id"], cache["mask"]
+        if mask.any():
+            return int(ids[mask].max().item()) + 1
+        return 0
+
+    def _cache_update(self, cache: dict, key: torch.Tensor, value: torch.Tensor, is_pred: bool):
+        key_size = key.shape[1]
+        slots = self._cache_allocate_slots(cache, key_size)
+        new_id = self._cache_next_id(cache)
+        cache["k"][:, slots] = key
+        cache["v"][:, slots] = value
+        cache["mask"][slots] = True
+        cache["id"][slots] = new_id
+        cache["is_pred"][slots] = is_pred
+        return slots
+
+    def _cache_restore(self, cache: dict, slots: torch.Tensor) -> None:
+        cache["mask"][slots] = False
 
     def _prepare_torch_state(self, state: dict[str, torch.Tensor]) -> None:
         pop_substate(state, "rope")
@@ -566,6 +651,8 @@ class WanTransformer3DModel(Module):
         timestep: torch.Tensor,
         grid_id: torch.Tensor,
         action_mode: bool = False,
+        update_cache: int = 0,
+        cache_name: str = "pos",
     ) -> torch.Tensor:
         """
         Forward pass.
@@ -600,16 +687,73 @@ class WanTransformer3DModel(Module):
             spatial_1BNI, N = self.preprocess_spatial_input(spatial)
             spatial_1BND = self.patch_embedding(spatial_1BNI)
 
-        for block in self.blocks:
-            spatial_1BND = block(
-                spatial_1BND=spatial_1BND,
-                prompt_1BLP=prompt_1BLP,
-                temb_1BTD=timestep_proj_1BTD,
-                N=N,
-                rope_cos=rope_cos_1HND,
-                rope_sin=rope_sin_1HND,
-                trans_mat=trans_mat,
+        use_cache = (
+            cache_name in self._attn_caches
+            and self._attn_caches[cache_name] is not None
+            and self.parallel_config.sequence_parallel.factor == 1
+            and self.parallel_config.tensor_parallel.factor == 1
+        )
+        caches = self._attn_caches.get(cache_name) if use_cache else None
+
+        for block_idx, block in enumerate(self.blocks):
+            cached_k_tt = None
+            cached_v_tt = None
+            block_has_cache = (
+                use_cache and caches is not None and block_idx < len(caches) and caches[block_idx] is not None
             )
+            return_kv = block_has_cache
+
+            if return_kv and caches[block_idx]["mask"].any():
+                cache = caches[block_idx]
+                valid = cache["mask"].nonzero(as_tuple=False).squeeze(-1)
+                if valid.dim() == 0:
+                    valid = valid.unsqueeze(0)
+                ext_k = cache["k"][:, valid].contiguous()
+                ext_v = cache["v"][:, valid].contiguous()
+                cache_dtype = cache["k"].dtype
+                ext_k = ext_k.permute(0, 2, 1, 3).contiguous().to(dtype=cache_dtype)
+                ext_v = ext_v.permute(0, 2, 1, 3).contiguous().to(dtype=cache_dtype)
+                cached_k_tt = bf16_tensor(ext_k.to(torch.bfloat16), device=self.mesh_device)
+                cached_v_tt = bf16_tensor(ext_v.to(torch.bfloat16), device=self.mesh_device)
+
+            if return_kv:
+                attn1_out = block(
+                    spatial_1BND=spatial_1BND,
+                    prompt_1BLP=prompt_1BLP,
+                    temb_1BTD=timestep_proj_1BTD,
+                    N=N,
+                    rope_cos=rope_cos_1HND,
+                    rope_sin=rope_sin_1HND,
+                    trans_mat=trans_mat,
+                    cached_k=cached_k_tt,
+                    cached_v=cached_v_tt,
+                    return_kv=True,
+                )
+                spatial_1BND, k_cur, v_cur = attn1_out
+                k_t = ttnn.to_torch(ttnn.get_device_tensors(k_cur)[0])
+                v_t = ttnn.to_torch(ttnn.get_device_tensors(v_cur)[0])
+                while k_t.dim() > 4:
+                    k_t = k_t.squeeze(0)
+                    v_t = v_t.squeeze(0)
+                k_t = k_t.permute(0, 2, 1, 3).contiguous()
+                v_t = v_t.permute(0, 2, 1, 3).contiguous()
+                cache = caches[block_idx]
+                cache_dtype = cache["k"].dtype
+                k_t = k_t.cpu().to(dtype=cache_dtype)
+                v_t = v_t.cpu().to(dtype=cache_dtype)
+                slots = self._cache_update(cache, k_t, v_t, is_pred=(update_cache == 1))
+                if update_cache == 0:
+                    self._cache_restore(cache, slots)
+            else:
+                spatial_1BND = block(
+                    spatial_1BND=spatial_1BND,
+                    prompt_1BLP=prompt_1BLP,
+                    temb_1BTD=timestep_proj_1BTD,
+                    N=N,
+                    rope_cos=rope_cos_1HND,
+                    rope_sin=rope_sin_1HND,
+                    trans_mat=trans_mat,
+                )
 
         scale_shift_1BSD = self.scale_shift_table.data + temb_11BD
         shift_11BD, scale_11BD = ttnn.chunk(scale_shift_1BSD, 2, -2)

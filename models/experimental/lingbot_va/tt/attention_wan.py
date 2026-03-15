@@ -270,7 +270,10 @@ class WanAttention(Module):
         trans_mat: ttnn.Tensor | None = None,
         addcmul_residual: ttnn.Tensor | None = None,
         addcmul_gate: ttnn.Tensor | None = None,
-    ) -> ttnn.Tensor:
+        cached_k: ttnn.Tensor | None = None,
+        cached_v: ttnn.Tensor | None = None,
+        return_kv: bool = False,
+    ) -> ttnn.Tensor | tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         """
         spatial_1BND: fractured N on SP, fracturd D on TP
         prompt_1BLP: replicated on SP, replicated D on TP (optional)
@@ -279,6 +282,8 @@ class WanAttention(Module):
         trans_mat: replicated
         addcmul_residual: (optional) residual tensor for fused matmul+addcmul (self-attn only)
         addcmul_gate: (optional) gate tensor for fused matmul+addcmul (self-attn only)
+        cached_k, cached_v: (optional) extended KV context for self-attn; concat with current k,v on dim=2.
+        return_kv: if True (self-attn only), return (spatial_1BND, k_cur, v_cur) for cache update.
 
         If prompt_1BLP is not provided, run self-attention.
         Otherwise, run cross-attention on prompt.
@@ -289,6 +294,7 @@ class WanAttention(Module):
 
         Outputs:
         spatial_1BND: fractured N on SP, fractured D on TP
+        Or (spatial_1BND, k_cur, v_cur) when return_kv=True (self-attn).
         """
 
         if rope_cos is not None:
@@ -334,11 +340,20 @@ class WanAttention(Module):
 
         v_BHNE = create_heads(v_1BNF)
 
+        if self.is_self and return_kv:
+            k_cur, v_cur = k_BHNE, v_BHNE
+        if self.is_self and cached_k is not None and cached_v is not None:
+            # ttnn.concat expects TILE_LAYOUT
+            cached_k = ttnn.to_layout(cached_k, ttnn.TILE_LAYOUT)
+            cached_v = ttnn.to_layout(cached_v, ttnn.TILE_LAYOUT)
+            k_BHNE = ttnn.concat([cached_k, k_BHNE], dim=2)
+            v_BHNE = ttnn.concat([cached_v, v_BHNE], dim=2)
+
         # Rope
 
         if prompt_1BLP is None:
-            # Self attention
-            if self.parallel_config.sequence_parallel.factor > 1:
+            # Self attention (use standard SDPA when KV cache is used; ring does not support it)
+            if self.parallel_config.sequence_parallel.factor > 1 and cached_k is None and not return_kv:
                 # HACK: pass null joint inputs to take advantage of ring attention, even though this is self-attention.
                 spatial_BHNE, prompt_BHLE, _lse = ttnn.transformer.ring_joint_scaled_dot_product_attention(
                     q_BHNE,
@@ -405,4 +420,6 @@ class WanAttention(Module):
         else:
             spatial_1BND = self.to_out(spatial_1BND, compute_kernel_config=self.mm_compute_kernel_config)
 
+        if self.is_self and return_kv:
+            return (spatial_1BND, k_cur, v_cur)
         return spatial_1BND
