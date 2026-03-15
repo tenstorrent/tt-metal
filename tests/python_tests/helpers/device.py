@@ -252,15 +252,12 @@ def handle_if_assert_hit(elfs: list[str], core_loc="0,0", device_id=0):
         raise LLKAssertException(temp_stack_traces)
 
 
-def wait_for_tensix_operations_finished(
-    elfs, core_loc="0,0", timeout=2, max_backoff=0.1
-):
+def wait_for_tensix_operations_finished(elfs, core_loc="0,0", timeout=2):
     """
     Args:
         elfs: List of ELF file paths (used for assert diagnostics).
         location: The location of the core to poll.
         timeout: Maximum time to wait (in seconds) before timing out.
-        max_backoff: Maximum backoff time (in seconds) between polls.
     """
 
     mailboxes = {Mailbox.Unpacker, Mailbox.Math, Mailbox.Packer}
@@ -271,11 +268,8 @@ def wait_for_tensix_operations_finished(
 
     tensix_dumps = []
 
-    start_time = time.time()
-    backoff = 0.005  # Initial backoff time in seconds
-
     completed = set()
-    end_time = start_time + timeout
+    end_time = time.time() + timeout
     while time.time() < end_time:
         for mailbox in mailboxes - completed:
             if read_word_from_device(core_loc, mailbox.value) == KERNEL_COMPLETE:
@@ -286,12 +280,6 @@ def wait_for_tensix_operations_finished(
         if completed == mailboxes:
             set_tensix_soft_reset(1, location=core_loc)
             return tensix_dumps
-
-        # Disable any waiting if running on simulator
-        # this makes simulator tests run ever so slightly faster
-        if not test_target.run_simulator:
-            time.sleep(backoff)
-            backoff = min(backoff * 2, max_backoff)  # Exponential backoff with a cap
 
     handle_if_assert_hit(
         elfs,

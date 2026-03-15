@@ -95,6 +95,14 @@ class DataFormat(Enum):
         """Checks if the data format is a 32-bit type."""
         return self in {DataFormat.Float32, DataFormat.Int32, DataFormat.UInt32}
 
+    def is_exponent_A(self) -> bool:
+        """Checks if the data format is an exponent A format."""
+
+        return self in {
+            DataFormat.Float16,
+            DataFormat.Bfp8,
+        }
+
     def is_exponent_B(self) -> bool:
         """Checks if the data format is an exponent B format."""
         return self in {
