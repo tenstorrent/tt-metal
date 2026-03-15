@@ -292,32 +292,35 @@ def run(
         layout = input_a_layout
         input_memory_config = input_a_memory_config
 
+        # Sharded inputs: create in DRAM first, then move to target layout.
+        target_sharded_config = None
+        is_sharded_input = False
+        if input_memory_config is not None and hasattr(input_memory_config, "memory_layout"):
+            if "SHARDED" in str(input_memory_config.memory_layout):
+                target_sharded_config = input_memory_config
+                input_memory_config = ttnn.DRAM_MEMORY_CONFIG
+                is_sharded_input = True
+
+        # use_broadcast with num_workers_per_link=1 produces incorrect results on
+        # sharded inputs (op-level issue). Drop these performance-hint kwargs so the
+        # vector still exercises the sharded all_gather path.
+        if is_sharded_input and use_broadcast is True and num_workers_per_link == 1:
+            use_broadcast = None
+            num_workers_per_link = None
+
+        # Parse output memory config
         if isinstance(memory_config, dict):
             mem_layout_str = memory_config.get("memory_layout", "")
             buffer_type_str = memory_config.get("buffer_type", "")
-
-            if buffer_type_str == "BufferType.DRAM" or buffer_type_str == "DRAM":
-                buffer_type_enum = ttnn.BufferType.DRAM
-            elif buffer_type_str == "BufferType.L1" or buffer_type_str == "L1":
-                buffer_type_enum = ttnn.BufferType.L1
-            else:
-                buffer_type_enum = ttnn.BufferType.DRAM
-
-            if "SHARDED" in str(mem_layout_str):
-                output_memory_config = ttnn.DRAM_MEMORY_CONFIG
-            elif "INTERLEAVED" in str(mem_layout_str):
+            buffer_type_enum = ttnn.BufferType.L1 if "L1" in str(buffer_type_str) else ttnn.BufferType.DRAM
+            if "INTERLEAVED" in str(mem_layout_str):
                 output_memory_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.INTERLEAVED, buffer_type_enum)
             else:
                 output_memory_config = ttnn.DRAM_MEMORY_CONFIG
         else:
             output_memory_config = memory_config
 
-        # All op kwargs (memory_config, topology, etc.) are passed explicitly to
-        # all_gather_async below. Don't use build_op_kwargs to avoid leaking extra
-        # traced keys (use_broadcast, subdevice_id) that conflict or are invalid.
-
-        # Coerce numeric params to correct types — the master JSON / sweep
-        # framework may deliver them as floats (e.g., dim=3.0).
+        # Coerce numeric params to correct types
         if dim is not None:
             dim = int(dim)
         if cluster_axis is not None:
@@ -336,12 +339,17 @@ def run(
         if topology is None:
             topology = ttnn.Topology.Linear
 
+        # Determine mesh shape: prefer tensor_placement, then mesh_device param
+        mesh_shape = None
         if input_a_tensor_placement:
             mesh_shape = _parse_mesh_shape(input_a_tensor_placement.get("mesh_device_shape"))
-            if mesh_shape is None:
-                mesh_shape = (1, 2)
-        else:
-            mesh_shape = (1, 2)
+        if mesh_shape is None and mesh_device is not None:
+            if isinstance(mesh_device, dict):
+                mesh_shape = _parse_mesh_shape(mesh_device.get("shape") or mesh_device.get("repr", ""))
+            else:
+                mesh_shape = _parse_mesh_shape(str(mesh_device))
+        if mesh_shape is None:
+            mesh_shape = (4, 8) if NUM_DEVICES >= 32 else (1, min(NUM_DEVICES, 2))
 
         if dim is None:
             raise ValueError("dim is required for all_gather_async")
@@ -450,6 +458,11 @@ def run(
                     mesh_mapper=ttnn.ShardTensorToMesh(device, dim=effective_dim),
                     device=device,
                 )
+
+            # Move from DRAM to the traced sharded layout if applicable
+            if target_sharded_config is not None:
+                tt_input = ttnn.to_memory_config(tt_input, target_sharded_config)
+
         else:
             # Use _get_tensors helper for generality format
             tt_input, torch_reference, output_memory_config = _get_tensors(
