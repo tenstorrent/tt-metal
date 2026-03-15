@@ -142,46 +142,41 @@ def compute_lead_models_matrix(modules, batch_size):
         # Route modules without a mesh suffix to the first (default) runner config,
         # which is conventionally the single-chip N150 runner.
         is_default_runner = runner_config == config[0]
-        if is_default_runner:
-            runner_modules.extend(unmatched_modules)
+        if is_default_runner and unmatched_modules:
+            # Treat unmatched as a pseudo mesh shape ""
+            mesh_shape_modules[""].extend(unmatched_modules)
+            if "" not in runner_config["mesh_shapes"]:
+                runner_config["mesh_shapes"].append("")
 
-        if not runner_modules:
-            continue
+        # Create sub-jobs: one per mesh shape within this hardware group.
+        # Each sub-job sets MESH_DEVICE_SHAPE so only matching vectors run.
+        # This appears in the CI UI as:
+        #   Run sweeps (model-traced-tt-galaxy-wh, 4x8: add,linear,...)
+        #   Run sweeps (model-traced-tt-galaxy-wh, 2x4: scatter,...)
+        #   Run sweeps (model-traced-n300, 1x2: add,sigmoid,...)
+        for mesh_shape in runner_config["mesh_shapes"]:
+            shape_modules = mesh_shape_modules.get(mesh_shape, [])
+            if not shape_modules:
+                continue
 
-        # Strip mesh suffixes to get base module names that sweeps_runner can find
-        # The VectorExportSource will automatically load mesh-variant JSONs
-        base_modules = sorted(set(strip_mesh_suffix(m) for m in runner_modules))
+            base_modules = sorted(set(strip_mesh_suffix(m) for m in shape_modules))
+            shape_batches = chunk_modules(base_modules, batch_size)
+            batches.extend(shape_batches)
 
-        # For Galaxy runners (multi-chip), split into 3 parallel jobs
-        # For single-chip runners, use the standard batch size
-        is_galaxy = runner_config["test_group_name"] == "lead-models-galaxy"
-        if is_galaxy:
-            galaxy_jobs = 3
-            galaxy_batch_size = max(1, -(-len(base_modules) // galaxy_jobs))
-            runner_batches = chunk_modules(base_modules, galaxy_batch_size)
-        else:
-            # Standard batching for single-chip
-            runner_batches = chunk_modules(base_modules, batch_size)
-
-        batches.extend(runner_batches)
-
-        # Create matrix entries with mesh_shapes_filter so the workflow
-        # sets MESH_DEVICE_SHAPE and vectors run on exact traced hardware.
-        mesh_label = "+".join(runner_config["mesh_shapes"])
-        for batch in runner_batches:
-            include_entries.append(
-                {
-                    "test_group_name": runner_config["test_group_name"],
-                    "arch": runner_config["arch"],
-                    "runs_on": runner_config["runs_on"],
-                    "runner_label": runner_config["runner_label"],
-                    "tt_smi_cmd": runner_config["tt_smi_cmd"],
-                    "module_selector": batch,
-                    "batch_display": f"{mesh_label}:{batch}",
-                    "suite_name": runner_config["suite_name"],
-                    "mesh_shapes_filter": "",
-                }
-            )
+            for batch in shape_batches:
+                include_entries.append(
+                    {
+                        "test_group_name": runner_config["test_group_name"],
+                        "arch": runner_config["arch"],
+                        "runs_on": runner_config["runs_on"],
+                        "runner_label": runner_config["runner_label"],
+                        "tt_smi_cmd": runner_config["tt_smi_cmd"],
+                        "module_selector": batch,
+                        "batch_display": f"{mesh_shape}:{batch}" if mesh_shape else batch,
+                        "suite_name": runner_config["suite_name"],
+                        "mesh_shapes_filter": mesh_shape,
+                    }
+                )
 
     # Log summary
     total_base_modules = len(set(strip_mesh_suffix(m) for m in modules))
