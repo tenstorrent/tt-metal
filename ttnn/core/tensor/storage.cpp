@@ -107,6 +107,15 @@ void DeviceStorage::reset_root_mesh_buffer() {
     }
 }
 
+void DeviceStorage::deallocate(bool force) {
+    const auto& root_buffer = get_root_mesh_buffer();
+    bool can_deallocate = root_buffer.use_count() == 1 || (root_buffer.use_count() > 1 && force);
+    if (can_deallocate) {
+        deallocate_root_mesh_buffer();
+    }
+    reset_root_mesh_buffer();
+}
+
 bool DeviceStorage::is_allocated() const { return this->mesh_buffer != nullptr && this->mesh_buffer->is_allocated(); }
 
 distributed::MeshDevice* DeviceStorage::get_device_bypass_deallocate_check() const {

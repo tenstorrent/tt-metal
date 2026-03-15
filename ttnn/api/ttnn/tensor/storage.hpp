@@ -80,6 +80,8 @@ public:
     // Returns true if no other DeviceStorage or third party has a shared reference to the device memory (MeshBuffer).
     bool is_sole_owner_of_device_memory() const;
 
+    void deallocate(bool force);
+
     // Begin internal functions:
     std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer_leak_ownership() const;
     //
@@ -87,10 +89,6 @@ public:
     // These are considered internal functions and are not part of the public API.
     // They will be replaced with a new initiative as described in: #38093
     DeviceStorage(const DeviceStorage& owning_storage, std::shared_ptr<distributed::MeshBuffer> surface_buffer);
-
-    const std::shared_ptr<distributed::MeshBuffer>& get_root_mesh_buffer() const;
-    void deallocate_root_mesh_buffer();
-    void reset_root_mesh_buffer();
     // End internal functions.
 
     static constexpr auto attribute_names = std::forward_as_tuple();
@@ -115,6 +113,12 @@ public:
 
     // Returns true if the tensor spans across all devices in a mesh.
     bool is_uniform_storage() const;
+
+private:
+    // Experimental features
+    const std::shared_ptr<distributed::MeshBuffer>& get_root_mesh_buffer() const;
+    void deallocate_root_mesh_buffer();
+    void reset_root_mesh_buffer();
 };
 
 using Storage = std::variant<HostStorage, DeviceStorage>;
