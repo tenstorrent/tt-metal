@@ -639,7 +639,7 @@ def _infer_impl(models, state, obs, frame_st_id=0):
             )
             video_noise_pred = transformer(
                 _repeat_input_for_cfg(models, state, input_dict["latent_res_lst"]),
-                update_cache=0,
+                update_cache=1 if last_step else 0,
                 cache_name=cache_name,
                 action_mode=False,
             )
@@ -684,10 +684,9 @@ def _infer_impl(models, state, obs, frame_st_id=0):
                 frame_st_id=frame_st_id,
                 patch_size=patch_size,
             )
-            # update_cache=0 so ref matches TT (TT adapter has no KV cache); avoids action PCC gap.
             action_noise_pred = transformer(
                 _repeat_input_for_cfg(models, state, input_dict["action_res_lst"]),
-                update_cache=0,
+                update_cache=1 if last_step else 0,
                 cache_name=cache_name,
                 action_mode=True,
             )

@@ -96,7 +96,7 @@ class _TTTransformerAdapter:
         self._tt_model = tt_model
 
     def clear_cache(self, cache_name):
-        pass
+        self._tt_model.clear_cache(cache_name)
 
     def create_empty_cache(
         self,
@@ -108,10 +108,18 @@ class _TTTransformerAdapter:
         device=None,
         batch_size=1,
     ):
-        pass
+        self._tt_model.create_empty_cache(
+            cache_name,
+            attn_window,
+            latent_token_per_chunk,
+            action_token_per_chunk,
+            device=device,
+            dtype=dtype,
+            batch_size=batch_size,
+        )
 
     def clear_pred_cache(self, cache_name):
-        pass
+        self._tt_model.clear_pred_cache(cache_name)
 
     def __call__(self, input_dict, update_cache=0, cache_name="pos", action_mode=False):
         spatial = input_dict["noisy_latents"]
@@ -130,6 +138,8 @@ class _TTTransformerAdapter:
             timestep=timestep,
             grid_id=grid_id,
             action_mode=action_mode,
+            update_cache=update_cache,
+            cache_name=cache_name,
         )
 
 
