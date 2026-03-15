@@ -17,6 +17,7 @@ struct DeepseekMoEPostCombineTilizeProgramFactory {
         uint32_t reader_kernel_id;
         uint32_t compute_kernel_id;
         uint32_t writer_kernel_id;
+        tt::tt_metal::CBHandle sharded_output_cb_handle;
         std::vector<tt::tt_metal::CoreCoord> cores;
     };
 

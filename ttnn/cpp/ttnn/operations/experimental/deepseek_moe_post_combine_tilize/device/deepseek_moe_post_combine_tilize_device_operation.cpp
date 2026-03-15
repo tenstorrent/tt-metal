@@ -28,25 +28,8 @@ void DeepseekMoEPostCombineTilizeDeviceOperation::validate_on_program_cache_miss
 
     const tt::tt_metal::MemoryConfig& output_memory_config = operation_attributes.output_memory_config;
 
-    // TODO: (GR) per core row bytes must be L1 aligned
-
     // rank 2+
     TT_FATAL(input_rank >= 2, "DeepseekMoEPostCombineTilize requires rank >= 2, but has {}", input_rank);
-
-    // enough cores for even split among tile height
-    uint32_t upper_dims = 1;
-    for (uint32_t dim = 0; dim < input_rank - 1; ++dim) {
-        upper_dims *= input_shape[dim];
-    }
-    uint32_t total_tile_height = upper_dims / tt::constants::TILE_HEIGHT;
-
-    auto grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    uint32_t total_cores = grid_size.x * grid_size.y;
-    TT_FATAL(
-        total_tile_height <= total_cores,
-        "DeepseekMoEPostCombineTilize requires total tile height to be less than or equal to the total number of "
-        "cores, but has {}",
-        total_tile_height);
 
     // input must be interleaved
     TT_FATAL(
@@ -59,19 +42,28 @@ void DeepseekMoEPostCombineTilizeDeviceOperation::validate_on_program_cache_miss
         input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
         "DeepseekMoEPostCombineTilize requires input to be interleaved");
 
-    // if output is sharded, shard shape must be even multiple of tiles
-    if (output_memory_config.is_sharded()) {
-        auto shard_spec = input_tensor.memory_config().shard_spec().value();
-        uint32_t shard_width = shard_spec.shape[-1];
-        uint32_t shard_height = shard_spec.shape[-2];
+    // output must be L1 sharded
+    TT_FATAL(output_memory_config.is_sharded(), "DeepseekMoEPostCombineTilize requires sharded output");
+    TT_FATAL(output_memory_config.buffer_type() == BufferType::L1, "DeepseekMoEPostCombineTilize requires L1 output");
 
-        TT_FATAL(
-            shard_width % tt::constants::TILE_WIDTH == 0,
-            "DeepseekMoEPostCombineTilize requires output shard shape to be even multiple of tiles");
-        TT_FATAL(
-            shard_height % tt::constants::TILE_HEIGHT == 0,
-            "DeepseekMoEPostCombineTilize requires output shard shape to be even multiple of tiles");
-    }
+    auto output_nd_shard_spec = output_memory_config.nd_shard_spec().value();
+    uint32_t output_shard_width = output_nd_shard_spec.shard_shape[-1];
+    uint32_t output_shard_height = output_nd_shard_spec.shard_shape[-2];
+
+    // must be a 2d shard shape
+    TT_FATAL(
+        output_nd_shard_spec.shard_shape.rank() == 2,
+        "DeepseekMoEPostCombineTilize requires dimension 2 output shard shape");
+
+    // output shard width must be even multiple of tiles
+    TT_FATAL(
+        output_shard_width % tt::constants::TILE_WIDTH == 0,
+        "DeepseekMoEPostCombineTilize requires output shard width to be even multiple of tiles");
+
+    // output shard height must be single tile high
+    TT_FATAL(
+        output_shard_height == tt::constants::TILE_HEIGHT,
+        "DeepseekMoEPostCombineTilize requires output shard height to be a single tile high");
 }
 
 ttnn::TensorSpec DeepseekMoEPostCombineTilizeDeviceOperation::compute_output_specs(
@@ -98,12 +90,11 @@ ttnn::Tensor DeepseekMoEPostCombineTilizeDeviceOperation::create_output_tensors(
 namespace ttnn::prim {
 
 ttnn::Tensor deepseek_moe_post_combine_tilize(
-    const ttnn::Tensor& input_tensor, const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config) {
+    const ttnn::Tensor& input_tensor, const tt::tt_metal::MemoryConfig& output_memory_config) {
     using OperationType = ttnn::experimental::prim::DeepseekMoEPostCombineTilizeDeviceOperation;
 
     return ttnn::device_operation::launch<OperationType>(
-        OperationType::operation_attributes_t{output_memory_config.value_or(input_tensor.memory_config())},
-        OperationType::tensor_args_t{input_tensor});
+        OperationType::operation_attributes_t{output_memory_config}, OperationType::tensor_args_t{input_tensor});
 }
 
 }  // namespace ttnn::prim

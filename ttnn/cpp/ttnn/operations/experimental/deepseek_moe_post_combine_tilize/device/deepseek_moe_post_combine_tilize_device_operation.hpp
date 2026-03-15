@@ -34,7 +34,6 @@ struct DeepseekMoEPostCombineTilizeDeviceOperation {
 namespace ttnn::prim {
 
 ttnn::Tensor deepseek_moe_post_combine_tilize(
-    const ttnn::Tensor& input_tensor,
-    const std::optional<tt::tt_metal::MemoryConfig>& output_memory_config = std::nullopt);
+    const ttnn::Tensor& input_tensor, const tt::tt_metal::MemoryConfig& output_memory_config);
 
 }  // namespace ttnn::prim

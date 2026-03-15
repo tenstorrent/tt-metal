@@ -30,7 +30,6 @@ DeepseekMoEPostCombineTilizeProgramFactory::cached_program_t DeepseekMoEPostComb
     /*
      * Tensors
      */
-
     const ttnn::Tensor& input_tensor = tensor_args.input_tensor;
     uint32_t input_row_page_size = input_tensor.buffer()->page_size();
     const auto& input_shape = input_tensor.padded_shape();
@@ -38,47 +37,48 @@ DeepseekMoEPostCombineTilizeProgramFactory::cached_program_t DeepseekMoEPostComb
 
     const ttnn::Tensor& output_tensor = tensor_return_value;
     const uint32_t output_tile_page_size = output_tensor.buffer()->page_size();
+    const auto& output_shape = output_tensor.padded_shape();
 
     /*
-     * Number of cores to use
+     * Shard spec
      */
+    const auto output_nd_shard_spec = output_tensor.memory_config().nd_shard_spec().value();
+    const uint32_t output_shard_width = output_nd_shard_spec.shard_shape[-1];
+    const uint32_t output_shard_width_tiles = output_shard_width / tt::constants::TILE_WIDTH;
+    const uint32_t output_shard_width_bytes = output_shard_width * output_tensor.element_size();
+
+    const CoreRangeSet op_cores = output_nd_shard_spec.grid;
+
     uint32_t upper_dims = 1;
     for (uint32_t dim = 0; dim < input_rank - 1; ++dim) {
         upper_dims *= input_shape[dim];
     }
-    uint32_t total_tile_height = upper_dims / tt::constants::TILE_HEIGHT;
 
-    auto grid_size = input_tensor.device()->compute_with_storage_grid_size();
-    uint32_t total_cores = grid_size.x * grid_size.y;
-
-    uint32_t cores_per_tile_height = total_cores / total_tile_height;
-
-    uint32_t num_op_cores = total_tile_height * cores_per_tile_height;
-    CoreRangeSet op_cores = tt::tt_metal::num_cores_to_corerangeset(num_op_cores, grid_size, true);
+    const uint32_t output_num_shards_wide = output_shape[-1] / output_shard_width;
+    const uint32_t output_num_shards_high = upper_dims / output_nd_shard_spec.shard_shape[-2];
 
     /*
      * CBs
      */
-    uint32_t bytes_to_read_per_row = 28 * 2;  // TODO: (GR)
-    uint32_t num_tiles = 28;                  // TODO: (GR)
-
     uint32_t tilize_input_cb_id = tt::CBIndex::c_0;
     tt::tt_metal::create_cb(
         tilize_input_cb_id,
         program,
         op_cores,
-        bytes_to_read_per_row,
+        output_shard_width_bytes,
         tt::constants::TILE_HEIGHT,
         tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()));
 
-    uint32_t tilize_output_cb_id = tt::CBIndex::c_0;
-    tt::tt_metal::create_cb(
+    uint32_t tilize_output_cb_id = tt::CBIndex::c_1;
+    auto output_cb = tt::tt_metal::create_cb(
         tilize_output_cb_id,
         program,
         op_cores,
         output_tile_page_size,
-        num_tiles,
-        tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()));
+        output_shard_width_tiles,
+        tt::tt_metal::datatype_to_dataformat_converter(input_tensor.dtype()),
+        output_tensor.buffer());
+    tt::tt_metal::CBHandle sharded_output_cb_handle = std::get<1>(output_cb);
 
     /*
      * Kernels
@@ -88,7 +88,7 @@ DeepseekMoEPostCombineTilizeProgramFactory::cached_program_t DeepseekMoEPostComb
     std::unordered_map<std::string, uint32_t> reader_named_ct_args = {
         {"tilize_input_cb_id", tilize_input_cb_id},
         {"input_row_page_size", input_row_page_size},
-        {"bytes_to_read_per_row", bytes_to_read_per_row},
+        {"bytes_to_read_per_row", output_shard_width_bytes},
     };
 
     std::vector<uint32_t> reader_ct_args = {};
@@ -102,7 +102,7 @@ DeepseekMoEPostCombineTilizeProgramFactory::cached_program_t DeepseekMoEPostComb
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_1,
             .noc = tt::tt_metal::NOC::NOC_0,
-            .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,  // tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
+            .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
             .compile_args = reader_ct_args,
             .defines = {},
             .named_compile_args = reader_named_ct_args,
@@ -112,7 +112,7 @@ DeepseekMoEPostCombineTilizeProgramFactory::cached_program_t DeepseekMoEPostComb
     std::unordered_map<std::string, uint32_t> compute_named_ct_args = {
         {"tilize_input_cb_id", tilize_input_cb_id},
         {"tilize_output_cb_id", tilize_output_cb_id},
-        {"num_tiles", num_tiles},
+        {"num_tiles", output_shard_width_tiles},
     };
     tt::tt_metal::KernelHandle compute_kernel_id = tt::tt_metal::CreateKernel(
         program,
@@ -124,13 +124,8 @@ DeepseekMoEPostCombineTilizeProgramFactory::cached_program_t DeepseekMoEPostComb
     // writer
     std::unordered_map<std::string, uint32_t> writer_named_ct_args = {
         {"tilize_output_cb_id", tilize_output_cb_id},
-        {"output_tile_page_size", output_tile_page_size},
-        {"num_tiles", num_tiles},
+        {"num_tiles", output_shard_width_tiles},
     };
-
-    std::vector<uint32_t> writer_ct_args = {};
-    tt::tt_metal::TensorAccessorArgs(output_tensor.buffer()).append_to(writer_ct_args);
-
     tt::tt_metal::KernelHandle writer_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/deepseek_moe_post_combine_tilize/device/kernels/"
@@ -139,27 +134,31 @@ DeepseekMoEPostCombineTilizeProgramFactory::cached_program_t DeepseekMoEPostComb
         tt::tt_metal::DataMovementConfig{
             .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
             .noc = tt::tt_metal::NOC::NOC_1,
-            .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,  // tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
-            .compile_args = writer_ct_args,
+            .noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC,
+            .compile_args = {},
             .defines = {},
             .named_compile_args = writer_named_ct_args,
             .opt_level = tt::tt_metal::KernelBuildOptLevel::O2});
 
-    std::vector<tt::tt_metal::CoreCoord> cores = corerange_to_cores(op_cores, std::nullopt, true);
-    for (uint32_t i = 0; i < num_op_cores; ++i) {
+    bool is_row_major_shard_orientation = output_nd_shard_spec.orientation == ShardOrientation::ROW_MAJOR;
+    std::vector<tt::tt_metal::CoreCoord> cores =
+        corerange_to_cores(op_cores, std::nullopt, is_row_major_shard_orientation);
+    for (uint32_t i = 0; i < cores.size(); ++i) {
         const auto& core = cores[i];
 
         // reader
-        uint32_t intra_row_byte_offset = 0;  // TODO: (GR)
-        uint32_t row_page_offset = 0;        // TODO: (GR)
+        uint32_t intra_row_byte_offset;
+        uint32_t row_page_offset;
+        if (is_row_major_shard_orientation) {
+            intra_row_byte_offset = (i % output_num_shards_wide) * output_shard_width_bytes;
+            row_page_offset = (i / output_num_shards_wide) * tt::constants::TILE_HEIGHT;
+        } else {
+            intra_row_byte_offset = (i / output_num_shards_high) * output_shard_width_bytes;
+            row_page_offset = (i % output_num_shards_high) * tt::constants::TILE_HEIGHT;
+        }
         std::vector<uint32_t> reader_rt_args = {
             intra_row_byte_offset, row_page_offset, input_tensor.buffer()->address()};
         SetRuntimeArgs(program, reader_kernel_id, core, reader_rt_args);
-
-        // writer
-        uint32_t output_tile_page_offset = 0;  // TODO: (GR)
-        std::vector<uint32_t> writer_rt_args = {output_tile_page_offset, output_tensor.buffer()->address()};
-        SetRuntimeArgs(program, writer_kernel_id, core, writer_rt_args);
     }
 
     return cached_program_t{
@@ -167,6 +166,7 @@ DeepseekMoEPostCombineTilizeProgramFactory::cached_program_t DeepseekMoEPostComb
         {.reader_kernel_id = reader_kernel_id,
          .compute_kernel_id = compute_kernel_id,
          .writer_kernel_id = writer_kernel_id,
+         .sharded_output_cb_handle = sharded_output_cb_handle,
          .cores = cores}};
 }
 
@@ -180,15 +180,14 @@ void DeepseekMoEPostCombineTilizeProgramFactory::override_runtime_arguments(
 
     auto& program = cached_program.program;
     const tt::tt_metal::KernelHandle& reader_kernel_id = cached_program.shared_variables.reader_kernel_id;
-    const tt::tt_metal::KernelHandle& writer_kernel_id = cached_program.shared_variables.writer_kernel_id;
     const std::vector<tt::tt_metal::CoreCoord>& cores = cached_program.shared_variables.cores;
+
+    tt::tt_metal::UpdateDynamicCircularBufferAddress(
+        program, cached_program.shared_variables.sharded_output_cb_handle, *output_tensor.buffer());
 
     for (uint32_t i = 0; i < cores.size(); ++i) {
         auto& reader_args = GetRuntimeArgs(program, reader_kernel_id, cores[i]);
         reader_args[2] = input_tensor.buffer()->address();
-
-        auto& writer_args = GetRuntimeArgs(program, writer_kernel_id, cores[i]);
-        writer_args[1] = output_tensor.buffer()->address();
     }
 }
 
