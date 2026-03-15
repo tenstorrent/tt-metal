@@ -9,12 +9,6 @@ InheritParentConfig: true
 # These checks fire in tt-train sources but not yet fixed.
 # Tracked for incremental remediation — do not add new entries here.
 #
-# Exclude CPM cache (third-party headers) from clang-tidy reporting.
-# The main config uses HeaderFilterRegex: '.*' which would otherwise flag
-# vendored headers (e.g. xtensor). cmake/dependencies.cmake also blanks
-# CMAKE_CXX_CLANG_TIDY for CPM targets — belt-and-suspenders.
-HeaderFilterRegex: '^(?!.*\.cpmcache).*'
-
 Checks: >
   -modernize-use-using,
   -modernize-type-traits,
