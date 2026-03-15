@@ -436,12 +436,24 @@ def main():
         )
         sys.exit(1)
 
+    # Split include entries by test_group_name for per-hardware job definitions.
+    # Each hardware group becomes a separate matrix output so the workflow
+    # can create distinct parent jobs with sub-jobs underneath.
+    hw_groups = defaultdict(list)
+    for entry in include_entries:
+        hw_groups[entry["test_group_name"]].append(entry)
+
     # Output matrix JSON
     result = {
         "module": modules,
         "batches": batches,
         "ccl_batches": ccl_batches,
         "include": include_entries,
+        # Per-hardware sub-matrices — each is a list of matrix entries
+        # that share the same runner. The workflow creates a separate
+        # job definition per hardware group, each with its own matrix.
+        "hw_groups": {name: entries for name, entries in sorted(hw_groups.items())},
+        "hw_group_names": sorted(hw_groups.keys()),
     }
 
     print(json.dumps(result))
