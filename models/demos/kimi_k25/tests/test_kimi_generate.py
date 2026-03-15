@@ -278,6 +278,32 @@ class TestKimiGeneratorWeightLoaderIntegration:
         """KimiLazyStateDict must be importable from utils.weight_loader."""
         from models.demos.kimi_k25.utils.weight_loader import KimiLazyStateDict  # noqa: F401
 
+    def test_random_weights_uses_prepare_model_state_dict(self):
+        """_run_kimi_forward_pass_random_weights must NOT pass empty state_dicts=().
+
+        Regression guard for the bug where state_dicts=() was passed to
+        get_test_weight_config, which then called RowBatchedModel.convert_weights
+        with an empty tuple — raising ``ValueError: not enough values to unpack``
+        because convert_weights does ``(state_dict,) = state_dicts``.
+
+        The correct fix: call prepare_model_state_dict(cfg, random_weights=True)
+        and pass (random_state_dict,) as state_dicts.
+        """
+        import inspect
+        import models.demos.kimi_k25.tests.test_kimi_generate as _mod
+
+        src = inspect.getsource(_mod._run_kimi_forward_pass_random_weights)
+        assert "prepare_model_state_dict" in src, (
+            "_run_kimi_forward_pass_random_weights must import and call "
+            "prepare_model_state_dict to build a random state dict — "
+            "state_dicts=() causes ValueError in convert_weights"
+        )
+        # Ensure we're not passing the empty tuple anymore
+        assert "state_dicts=()" not in src and "()" not in src.split("get_test_weight_config")[1].split(")")[0], (
+            "_run_kimi_forward_pass_random_weights must not pass empty state_dicts=() "
+            "to get_test_weight_config"
+        )
+
 
 # ============================================================================
 # Hardware: full-model random-weights smoke test
