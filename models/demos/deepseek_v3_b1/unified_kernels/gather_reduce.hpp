@@ -135,7 +135,7 @@ struct GatherReduce {
                     args.gather_reduce_half_num_cores);
                 uint32_t dst_base_addr = get_write_ptr(args.dst_cb_id);
                 uint32_t dst_offset =
-                    half_info.is_half0 ? 0 : args.half_size_bytes + half_info.half_local_idx * args.data_size_bytes;
+                    (half_info.is_half0 ? 0 : args.half_size_bytes) + half_info.half_local_idx * args.data_size_bytes;
 
                 const uint64_t dst_noc_coord = get_noc_addr(args.dest_noc_x, args.dest_noc_y, 0);
                 uint64_t dst_data_noc_addr = dst_noc_coord | (uint64_t)(dst_base_addr + dst_offset);

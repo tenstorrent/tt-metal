@@ -91,6 +91,9 @@ FORCE_INLINE void semaphore_dec(volatile tt_l1_ptr uint32_t* sem_addr) {
 // Phase 1: BR/TR0/TR2 signal done → NC waits for all 3
 FORCE_INLINE void sync_riscs_enter(volatile uint32_t tt_l1_ptr* sem_addr) {
 #if defined(COMPILE_FOR_BRISC) || defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+#if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
+    tensix_sync();
+#endif
     __atomic_fetch_add(&sem_addr[0], 1, __ATOMIC_RELAXED);
 #elif defined(COMPILE_FOR_NCRISC)
     while (__atomic_load_n(&sem_addr[0], __ATOMIC_RELAXED) < 3) {

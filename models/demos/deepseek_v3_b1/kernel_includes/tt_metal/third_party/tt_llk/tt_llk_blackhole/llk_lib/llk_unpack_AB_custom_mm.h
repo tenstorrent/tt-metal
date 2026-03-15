@@ -211,6 +211,7 @@ inline void _llk_unpack_AB_custom_mm_run_(
     const std::uint32_t ct_dim) {
     // Program SrcB address once, its updated using counters for up to 256 kt_dim
     cfg[THCON_SEC1_REG3_Base_address_ADDR32] = address_b;
+    TTI_STALLWAIT(p_stall::STALL_UNPACK, p_stall::TRISC_CFG);
 
     // We can issue mop only once for up to 256 kt_dim
     TT_MOP(0, (kt_dim / 2) - 1, 0);
