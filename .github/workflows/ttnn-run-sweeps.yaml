@@ -1187,6 +1187,7 @@ jobs:
           echo "│ Batch:                ${{ matrix.batch_display }}"
           echo "│ Module Selector:      ${{ matrix.module_selector }}"
           echo "│ Suite Override:       ${{ matrix.suite_name || 'none' }}"
+          echo "│ Mesh Shape Filter:    ${{ matrix.mesh_shapes_filter || 'none' }}"
           echo "│ Architecture:         ${{ matrix.arch }}"
           echo "│ Runner:               ${{ toJSON(matrix.runs_on) }}"
           echo "│ Skip on Timeout:      ${{ github.event_name == 'schedule' && 'true' || (github.event.inputs.skip_on_timeout == 'true' && 'true' || 'false') }}"
@@ -1205,6 +1206,11 @@ jobs:
           path: /work/tests/sweep_framework/vectors_export
           merge-multiple: true
       - name: Run ttnn sweeps (batch)
+        env:
+          # Filter vectors to only run those matching this mesh shape.
+          # Set by compute_sweep_matrix for lead models runs so each
+          # sub-job executes on the exact hardware the config was traced on.
+          MESH_DEVICE_SHAPE: ${{ matrix.mesh_shapes_filter }}
         run: |
           MODULE_SELECTOR="${{ matrix.module_selector }}"
           SUITE_NAME="${{ matrix.suite_name }}"

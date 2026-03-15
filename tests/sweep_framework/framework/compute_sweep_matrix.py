@@ -59,33 +59,65 @@ def get_lead_models_mesh_runner_config():
       - A list: Multiple runner labels for GitHub Actions matrix
                 (e.g., ["topology-6u", "arch-wormhole_b0", "in-service", "pipeline-functional"])
     """
+    # Hardware templates — shared config for each hardware type.
+    _n150 = {
+        "arch": "wormhole_b0",
+        "runs_on": "tt-ubuntu-2204-n150-stable",
+        "runner_label": "N150",
+        "tt_smi_cmd": "tt-smi -r",
+        "suite_name": "model_traced",
+    }
+    _n300 = {
+        "arch": "wormhole_b0",
+        "runs_on": "tt-ubuntu-2204-n300-stable",
+        "runner_label": "N300",
+        "tt_smi_cmd": "tt-smi -r",
+        "suite_name": "model_traced",
+    }
+    _t3k = {
+        "arch": "wormhole_b0",
+        "runs_on": [
+            "topology-t3k",
+            "arch-wormhole_b0",
+            "in-service",
+            "pipeline-functional",
+        ],
+        "runner_label": "topology-t3k",
+        "tt_smi_cmd": "tt-smi -r",
+        "suite_name": "model_traced",
+    }
+    _galaxy = {
+        "arch": "wormhole_b0",
+        "runs_on": [
+            "topology-6u",
+            "arch-wormhole_b0",
+            "in-service",
+            "pipeline-functional",
+        ],
+        "runner_label": "topology-6u",
+        "tt_smi_cmd": "tt-smi -r",
+        "suite_name": "model_traced",
+    }
+
+    # Each entry maps ONE mesh shape to ONE hardware runner.
+    # This ensures each sub-job sets MESH_DEVICE_SHAPE exactly and
+    # vectors run on the hardware they were traced on.
     return [
-        {
-            # Single-chip operations (1x1 mesh) - runs on N150
-            "mesh_shapes": ["1x1"],
-            "test_group_name": "lead-models-single-chip",
-            "arch": "wormhole_b0",
-            "runs_on": "tt-ubuntu-2204-n150-stable",
-            "runner_label": "N150",
-            "tt_smi_cmd": "tt-smi -r",
-            "suite_name": "model_traced",
-        },
-        {
-            # Multi-chip operations - runs on Galaxy (32-chip topology)
-            # Handles all mesh shapes larger than 1x1
-            "mesh_shapes": ["1x2", "1x4", "1x8", "2x4", "4x8", "8x4", "2x16", "16x2"],
-            "test_group_name": "lead-models-galaxy",
-            "arch": "wormhole_b0",
-            "runs_on": [
-                "topology-6u",  # 32-chip galaxy topology
-                "arch-wormhole_b0",  # Wormhole B0 architecture
-                "in-service",  # Available for use
-                "pipeline-functional",  # Functional pipeline
-            ],
-            "runner_label": "topology-6u",
-            "tt_smi_cmd": "tt-smi -r",
-            "suite_name": "model_traced",
-        },
+        # --- Single-chip ---
+        {"mesh_shapes": ["1x1"], "test_group_name": "lead-models-n150-1x1", **_n150},
+        # --- N300 (2 devices) ---
+        {"mesh_shapes": ["1x2"], "test_group_name": "lead-models-n300-1x2", **_n300},
+        {"mesh_shapes": ["2x1"], "test_group_name": "lead-models-n300-2x1", **_n300},
+        # --- T3K (8 devices) ---
+        {"mesh_shapes": ["1x8"], "test_group_name": "lead-models-t3k-1x8", **_t3k},
+        # --- Galaxy (32 devices) ---
+        {"mesh_shapes": ["1x4"], "test_group_name": "lead-models-galaxy-1x4", **_galaxy},
+        {"mesh_shapes": ["2x4"], "test_group_name": "lead-models-galaxy-2x4", **_galaxy},
+        {"mesh_shapes": ["4x2"], "test_group_name": "lead-models-galaxy-4x2", **_galaxy},
+        {"mesh_shapes": ["4x8"], "test_group_name": "lead-models-galaxy-4x8", **_galaxy},
+        {"mesh_shapes": ["8x4"], "test_group_name": "lead-models-galaxy-8x4", **_galaxy},
+        {"mesh_shapes": ["2x16"], "test_group_name": "lead-models-galaxy-2x16", **_galaxy},
+        {"mesh_shapes": ["16x2"], "test_group_name": "lead-models-galaxy-16x2", **_galaxy},
     ]
 
 
@@ -161,8 +193,10 @@ def compute_lead_models_matrix(modules, batch_size):
 
         batches.extend(runner_batches)
 
-        # Create matrix entries
+        # Create matrix entries with mesh_shapes_filter so the workflow
+        # sets MESH_DEVICE_SHAPE and vectors run on exact traced hardware.
         mesh_label = "+".join(runner_config["mesh_shapes"])
+        mesh_filter = runner_config["mesh_shapes"][0] if len(runner_config["mesh_shapes"]) == 1 else ""
         for batch in runner_batches:
             include_entries.append(
                 {
@@ -174,6 +208,7 @@ def compute_lead_models_matrix(modules, batch_size):
                     "module_selector": batch,
                     "batch_display": f"{mesh_label}:{batch}",
                     "suite_name": runner_config["suite_name"],
+                    "mesh_shapes_filter": mesh_filter,
                 }
             )
 
@@ -240,6 +275,7 @@ def compute_standard_matrix(modules, batch_size, suite_name):
                 "module_selector": batch,
                 "batch_display": batch,
                 "suite_name": suite_name,
+                "mesh_shapes_filter": "",
             }
         )
 
@@ -259,6 +295,7 @@ def compute_standard_matrix(modules, batch_size, suite_name):
                     "module_selector": batch,
                     "batch_display": f"ccl:{batch}",
                     "suite_name": "generality_suite_fabric_1d",
+                    "mesh_shapes_filter": "",
                 }
             )
 
@@ -322,13 +359,13 @@ def main():
         batch_size = 10
 
     # Compute matrix based on run type
-    if is_lead_models:
+    if is_lead_models or is_model_traced:
+        # Both lead models and model traced runs use mesh-aware routing
+        # so vectors execute on the exact hardware they were traced on.
         include_entries, batches, ccl_batches = compute_lead_models_matrix(modules, batch_size)
     else:
         # Determine suite name for standard runs
-        if is_model_traced:
-            suite_name = "model_traced"
-        elif is_comprehensive:
+        if is_comprehensive:
             suite_name = None
         else:
             suite_name = "nightly"
