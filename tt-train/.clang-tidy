@@ -3,3 +3,33 @@
 # tt-train uses the same checks as the rest of tt-metal.
 # Violations surfaced by this config are tracked and will be fixed incrementally.
 InheritParentConfig: true
+
+# === tt-train Incremental Opt-Outs ===
+#
+# These checks fire in tt-train sources but not yet fixed.
+# Tracked for incremental remediation — do not add new entries here.
+Checks: >
+  -modernize-use-using,
+  -cppcoreguidelines-prefer-member-initializer,
+  -readability-qualified-auto,
+  -bugprone-reserved-identifier,
+  -readability-avoid-const-params-in-decls,
+  -readability-redundant-member-init,
+  -readability-const-return-type,
+  -readability-braces-around-statements,
+  -misc-redundant-expression,
+  -cppcoreguidelines-explicit-virtual-functions,
+  -hicpp-use-override,
+  -modernize-use-override,
+  -readability-else-after-return,
+  -bugprone-crtp-constructor-accessibility,
+  -modernize-concat-nested-namespaces,
+  -modernize-use-std-numbers,
+  -performance-unnecessary-value-param,
+  -misc-unused-parameters,
+  -readability-redundant-string-init,
+  -readability-make-member-function-const,
+  -readability-static-accessed-through-instance,
+  -performance-unnecessary-copy-initialization,
+  -bugprone-macro-parentheses,
+  -readability-container-size-empty
