@@ -113,9 +113,16 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
 
     const uint32_t flattened_input_logical_rows = get_flattened_row_major_height(input.logical_shape());
     const uint32_t flattened_output_padded_rows = get_flattened_row_major_height(output.padded_shape());
+    const uint32_t input_batch_height = input.padded_shape()[-2];
+    const uint32_t output_batch_height = output.padded_shape()[-2];
 
     const uint32_t output_shard_count = shard_builder::get_sharding_core_count(output);
     const uint32_t input_shard_count = shard_builder::get_sharding_core_count(input);
+
+    const bool shard_is_batch_partition =
+        (input.logical_shape().rank() > 2) && (input.logical_shape()[0] > 1) &&
+        (input_shard_count == input.logical_shape()[0]) && (output_shard_count == input.logical_shape()[0]) &&
+        (input_shard_height == input_batch_height) && (output_shard_height == output_batch_height);
 
     TT_FATAL(
         input_shard_count == output_shard_count,
@@ -143,6 +150,14 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
         "padded_width={}",
         output_shard_width,
         output.padded_shape()[-1]);
+
+    TT_FATAL(
+        shard_is_batch_partition || (input_shard_height * input_shard_count == flattened_input_logical_rows),
+        "For non-batch-partitioned height-sharded input, shard_height * shard_count must equal flattened logical rows "
+        "(shard_height={}, shard_count={}, flattened_input_logical_rows={})",
+        input_shard_height,
+        input_shard_count,
+        flattened_input_logical_rows);
 
     const uint32_t tiles_per_row = output_shard_width / TILE_WIDTH;
     const uint32_t tile_rows_per_core = output_shard_height / TILE_HEIGHT;
@@ -268,12 +283,15 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
         const uint32_t output_core_index =
             get_core_index_from_shard_map(output_shard_map, physical_core, output_shard_count);
 
-        const uint32_t shard_start_row = output_core_index * output_shard_height;
+        const uint32_t shard_start_row = shard_is_batch_partition ? (output_core_index * input_shard_height)
+                                                                  : (output_core_index * output_shard_height);
 
         const uint32_t logical_height_core =
-            (shard_start_row < flattened_input_logical_rows)
-                ? std::min(output_shard_height, flattened_input_logical_rows - shard_start_row)
-                : 0;
+            shard_is_batch_partition
+                ? input_shard_height
+                : ((shard_start_row < flattened_input_logical_rows)
+                       ? std::min(output_shard_height, flattened_input_logical_rows - shard_start_row)
+                       : 0);
 
         const uint32_t padded_height_core = output_shard_height;
 
