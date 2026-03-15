@@ -489,7 +489,9 @@ def run(
             ]
 
         # Create persistent output buffers when use_broadcast is enabled
-        # (matches reference test pattern in test_minimal_all_gather_async.py)
+        # (matches reference test pattern in test_minimal_all_gather_async.py).
+        # The C++ op requires the persistent buffer's memory layout to match
+        # the input tensor's memory layout.
         persistent_output_buffers = []
         if use_broadcast and is_model_traced:
             output_shape = list(torch_reference.shape)
@@ -499,7 +501,7 @@ def run(
                     device=device,
                     layout=layout,
                     dtype=input_dtype,
-                    memory_config=output_memory_config if output_memory_config else ttnn.DRAM_MEMORY_CONFIG,
+                    memory_config=input_memory_config,
                     mesh_mapper=ttnn.ReplicateTensorToMesh(device),
                 )
                 for _ in range(num_iters)
