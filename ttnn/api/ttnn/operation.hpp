@@ -22,7 +22,7 @@ using Hash = ttsl::hash::hash_t;
 
 template <typename OperationType, typename... Types>
 static Hash hash_operation(const Types&... objects) {
-    return stl::hash::hash_objects_with_default_seed(ttsl::hash::type_hash<OperationType>, objects...);
+    return ttsl::hash::hash_objects_with_default_seed(ttsl::hash::type_hash<OperationType>, objects...);
 }
 
 using Tensors = std::vector<Tensor>;

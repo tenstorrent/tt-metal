@@ -159,7 +159,7 @@ struct MeshDeviceOperationAdapter {
         // Hash the program hash and the tensor coordinates the workload is targeting.
         auto hash = compute_program_hash(attrs, tensor_args);
         for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
-            ttsl::hash::hash_combine(hash, coord);
+            hash = ttsl::hash::hash_objects(hash, coord);
         }
         return hash;
     }
