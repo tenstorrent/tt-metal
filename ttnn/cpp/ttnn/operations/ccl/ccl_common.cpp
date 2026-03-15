@@ -37,7 +37,7 @@ tt::tt_fabric::Topology convert_2d_to_1d_topology(tt::tt_fabric::Topology topolo
 tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
     const Tensor& tensor, tt::tt_fabric::Topology topology, std::optional<uint32_t> cluster_axis) {
     auto mesh_shape = tensor.device()->shape();
-    auto device_coords = tensor.device_storage().coords;
+    auto device_coords = tensor.device_storage().get_coords();
     TT_FATAL(!device_coords.empty(), "device_coords is empty");
     if (topology == tt::tt_fabric::Topology::Linear || topology == tt::tt_fabric::Topology::Mesh) {
         return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
@@ -48,9 +48,9 @@ tt::tt_metal::distributed::MeshCoordinate::BoundaryMode get_boundary_mode(
         if (mesh_shape[cluster_axis.value()] == 2) {
             return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::NONE;
         }
-        bool first_index_is_0 = device_coords.at(0)[cluster_axis.value()] == 0;
+        bool first_index_is_0 = device_coords[0][cluster_axis.value()] == 0;
         bool last_index_is_mesh_shape_minus_1 =
-            device_coords.at(device_coords.size() - 1)[cluster_axis.value()] == mesh_shape[cluster_axis.value()] - 1;
+            device_coords[device_coords.size() - 1][cluster_axis.value()] == mesh_shape[cluster_axis.value()] - 1;
         if (first_index_is_0 && last_index_is_mesh_shape_minus_1) {
             return tt::tt_metal::distributed::MeshCoordinate::BoundaryMode::WRAP;
         }
@@ -93,16 +93,16 @@ tt::tt_fabric::Topology get_usable_topology(
 }
 
 uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uint32_t>& cluster_axis) {
-    const auto& device_coords = tensor.device_storage().coords;
+    const auto device_coords = tensor.device_storage().get_coords();
     TT_FATAL(!device_coords.empty(), "device_coords is empty");
     if (cluster_axis.has_value()) {
         log_debug(tt::LogOp, "Cluster axis has value {}", cluster_axis.value());
         TT_FATAL(!device_coords.empty(), "device_coords is empty");
         TT_FATAL(
-            device_coords.at(0).dims() > cluster_axis.value(),
+            device_coords[0].dims() > cluster_axis.value(),
             "cluster axis {} is out of range for device coords rank {} ",
             cluster_axis.value(),
-            device_coords.at(0).dims());
+            device_coords[0].dims());
         uint32_t ring_size = 0;
         for (const auto& device_coord : device_coords) {
             ring_size = std::max(ring_size, device_coord[cluster_axis.value()] + 1);
@@ -117,7 +117,7 @@ uint32_t get_topological_dimension(const Tensor& tensor, const std::optional<uin
 
 uint32_t get_linearized_index_from_physical_coord(
     const Tensor& tensor, const MeshCoordinate& physical_coord, const std::optional<uint32_t>& cluster_axis) {
-    const auto& device_coords = tensor.device_storage().coords;
+    const auto device_coords = tensor.device_storage().get_coords();
     TT_FATAL(!device_coords.empty(), "device_coords is empty");
     if (cluster_axis.has_value()) {
         log_debug(tt::LogOp, "Cluster axis has value {}", cluster_axis.value());
@@ -160,16 +160,16 @@ std::optional<MeshCoordinate> get_physical_neighbor_from_physical_coord(
     int offset,
     ttnn::ccl::Topology topology,
     const std::optional<uint32_t>& cluster_axis) {
-    const auto& device_coords = tensor.device_storage().coords;
+    const auto device_coords = tensor.device_storage().get_coords();
     TT_FATAL(!device_coords.empty(), "device_coords is empty");
     auto boundary_mode = get_boundary_mode(tensor, topology, cluster_axis);
     if (cluster_axis.has_value()) {
         TT_FATAL(
-            device_coords.at(0)[cluster_axis.value()] == 0,
+            device_coords[0][cluster_axis.value()] == 0,
             "Currently, we only support CCLs with physical coordinates starting from 0 along the cluster axis {}, we "
             "got {}",
             cluster_axis.value(),
-            device_coords.at(0)[cluster_axis.value()]);
+            device_coords[0][cluster_axis.value()]);
         TT_FATAL(
             physical_coord.dims() > cluster_axis.value(),
             "cluster axis {} is out of range for physical coord rank {} ",
@@ -207,7 +207,7 @@ std::optional<MeshCoordinate> get_physical_neighbor_from_physical_coord(
         return std::nullopt;
     }
     log_debug(tt::LogOp, "Potential neighbor idx {} is found in device_coords", potential_neighbor_idx);
-    return device_coords.at(potential_neighbor_idx);
+    return device_coords[potential_neighbor_idx];
 }
 
 void SyncModeSpec::add_signal(uint32_t sem_id, uint32_t wait_count) {
@@ -310,8 +310,8 @@ SenderReceiverConfig get_device_sender_receiver_config_in_ring(
 std::vector<IDevice*> get_active_physical_devices(const Tensor& tensor) {
     auto* mesh_device = tensor.device();
     std::vector<IDevice*> devices = {};
-    devices.reserve(tensor.device_storage().coords.size());
-    for (const auto& coord : tensor.device_storage().coords) {
+    devices.reserve(tensor.device_storage().get_coords().size());
+    for (const auto& coord : tensor.device_storage().get_coords()) {
         devices.push_back(mesh_device->get_device(coord));
     }
     return devices;

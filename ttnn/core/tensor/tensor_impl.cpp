@@ -484,7 +484,7 @@ std::string to_string_impl(const Tensor& tensor) {
 
     const Tensor row_major_tensor = get_row_major_tensor(cpu_tensor);
     const auto strides = row_major_tensor.tensor_spec().compute_strides();
-    const auto& coords = storage.coords;
+    const auto coords = storage.get_coords();
     auto coords_it = coords.begin();
     const std::vector<HostBuffer> buffers = get_host_buffers(row_major_tensor.host_storage());
     std::stringstream ss;
@@ -548,7 +548,7 @@ Tensor to_host(const Tensor& tensor, bool blocking, std::optional<tt::tt_metal::
     auto distributed_host_buffer = DistributedHostBuffer::create(device->get_view());
 
     distributed_host_buffer.emplace_shards(
-        storage.coords,
+        std::vector<distributed::MeshCoordinate>(storage.get_coords().begin(), storage.get_coords().end()),
         [&](const distributed::MeshCoordinate&) { return allocate_host_buffer(tensor.tensor_spec()); },
         DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
 
@@ -679,8 +679,8 @@ void copy_to_host(
     // However, it may have some extra shards. Drop them by "unwrapping" the distributed host buffer, and re-wrapping
     // only for those shards that are actually present on device.
     std::vector<std::pair<distributed::MeshCoordinate, std::optional<HostBuffer>>> shards;
-    shards.reserve(device_storage.coords.size());
-    for (const auto& device_coord : device_storage.coords) {
+    shards.reserve(device_storage.get_coords().size());
+    for (const auto& device_coord : device_storage.get_coords()) {
         shards.push_back({device_coord, distributed_host_buffer.get_shard(device_coord)});
     }
 

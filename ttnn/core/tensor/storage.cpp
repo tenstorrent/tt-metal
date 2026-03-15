@@ -28,20 +28,20 @@ DeviceStorage::DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffe
     mesh_buffer(std::move(mesh_buffer_)) {
     if (mesh_buffer != nullptr) {
         const auto& device_shape = mesh_buffer->device()->shape();
-        coords.reserve(device_shape.mesh_size());
+        coords_.reserve(device_shape.mesh_size());
         for (const auto& coord : distributed::MeshCoordinateRange(device_shape)) {
-            coords.push_back(coord);
+            coords_.push_back(coord);
         }
     }
 }
 
 DeviceStorage::DeviceStorage(
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords_) :
-    coords(std::move(coords_)), mesh_buffer(std::move(mesh_buffer_)) {}
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords) :
+    coords_(std::move(coords)), mesh_buffer(std::move(mesh_buffer_)) {}
 
 DeviceStorage::DeviceStorage(
     const DeviceStorage& owning_storage, std::shared_ptr<distributed::MeshBuffer> surface_buffer) :
-    coords(owning_storage.coords),
+    coords_(owning_storage.coords_.begin(), owning_storage.coords_.end()),
     mesh_buffer(std::move(surface_buffer)),
     root_mesh_buffer(owning_storage.get_root_mesh_buffer()) {}
 
@@ -99,7 +99,7 @@ bool DeviceStorage::is_uniform_storage() const {
     if (mesh_buffer == nullptr) {
         return true;
     }
-    return coords.size() == mesh_buffer->device()->num_devices();
+    return coords_.size() == mesh_buffer->device()->num_devices();
 }
 
 }  // namespace tt::tt_metal

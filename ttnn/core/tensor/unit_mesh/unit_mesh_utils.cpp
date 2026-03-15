@@ -86,8 +86,8 @@ Tensor aggregate(const std::vector<tt::tt_metal::Tensor>& tensors) {
 
     tt::tt_metal::DeviceStorage device_storage(std::move(mesh_buffer));
     TT_ASSERT(
-        device_storage.coords ==
-        std::vector<tt::tt_metal::distributed::MeshCoordinate>{tt::tt_metal::distributed::MeshCoordinate(0, 0)});
+        device_storage.get_coords().size() == 1 &&
+        device_storage.get_coords()[0] == tt::tt_metal::distributed::MeshCoordinate(0, 0));
 
     return Tensor(
         tt::tt_metal::DeviceStorage(std::move(mesh_buffer)),
@@ -135,8 +135,8 @@ std::vector<tt::tt_metal::Tensor> disaggregate(const tt::tt_metal::Tensor& tenso
 
         DeviceStorage device_storage(std::move(mesh_buffer));
         TT_ASSERT(
-            device_storage.coords ==
-            std::vector<tt::tt_metal::distributed::MeshCoordinate>{tt::tt_metal::distributed::MeshCoordinate(0, 0)});
+            device_storage.get_coords().size() == 1 &&
+            device_storage.get_coords()[0] == tt::tt_metal::distributed::MeshCoordinate(0, 0));
 
         result.push_back(Tensor(std::move(device_storage), reference_spec, TensorTopology{}));
     }

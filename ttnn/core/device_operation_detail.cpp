@@ -222,8 +222,8 @@ std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
     const Tensor& first_tensor = tensors.front().get();
     std::vector<ttnn::MeshCoordinate> tensor_coordinates;
     std::transform(
-        first_tensor.device_storage().coords.begin(),
-        first_tensor.device_storage().coords.end(),
+        first_tensor.device_storage().get_coords().begin(),
+        first_tensor.device_storage().get_coords().end(),
         std::back_inserter(tensor_coordinates),
         [](const auto& coord) { return coord; });
 
@@ -231,11 +231,11 @@ std::vector<MeshCoordinate> extract_tensor_coordinates_impl(
     // that do not overlap.
     for (const auto& tensor_ref : tensors) {
         const Tensor& tensor = tensor_ref.get();
-        if (tensor.device_storage().coords.size() != tensor_coordinates.size()) {
+        if (tensor.device_storage().get_coords().size() != tensor_coordinates.size()) {
             std::vector<ttnn::MeshCoordinate> tensor_mesh_coords;
             std::transform(
-                tensor.device_storage().coords.begin(),
-                tensor.device_storage().coords.end(),
+                tensor.device_storage().get_coords().begin(),
+                tensor.device_storage().get_coords().end(),
                 std::back_inserter(tensor_mesh_coords),
                 [](const auto& coord) { return coord; });
             if (tensor_mesh_coords.size() < tensor_coordinates.size()) {

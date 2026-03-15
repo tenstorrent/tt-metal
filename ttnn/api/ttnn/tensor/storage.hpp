@@ -5,6 +5,7 @@
 #pragma once
 
 #include <memory>
+#include <span>
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/host_buffer.hpp>
 #include <tuple>
@@ -37,14 +38,6 @@ private:
 };
 
 struct DeviceStorage {
-    std::vector<distributed::MeshCoordinate> coords;
-
-private:
-    std::shared_ptr<distributed::MeshBuffer> mesh_buffer;
-    // Workaround for managing view MeshBuffer; expected to be refactored in #38093
-    std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer;
-
-public:
     DeviceStorage() = default;
 
     // Constructs DeviceStorage with coords covering the full mesh device shape.
@@ -76,11 +69,20 @@ public:
     // Returns true if the tensor spans across all devices in a mesh.
     bool is_uniform_storage() const;
 
+    // Returns the coordinates the tensor spans across.
+    std::span<const distributed::MeshCoordinate> get_coords() const { return coords_; }
+
 private:
-    // Experimental features
+    std::vector<distributed::MeshCoordinate> coords_;
+    std::shared_ptr<distributed::MeshBuffer> mesh_buffer;
+
+    // Experimental features for viewing an existing DeviceStorage
     const std::shared_ptr<distributed::MeshBuffer>& get_root_mesh_buffer() const;
     void deallocate_root_mesh_buffer();
     void reset_root_mesh_buffer();
+
+    std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer;
+    // End experimental features
 };
 
 using Storage = std::variant<HostStorage, DeviceStorage>;

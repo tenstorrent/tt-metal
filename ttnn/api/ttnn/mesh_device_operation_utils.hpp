@@ -48,8 +48,8 @@ TensorReturnValue filter_tensor_shards(
             filtered_coords.reserve(tensor_coordinates.size());
 
             auto coord_it = tensor_coordinates.cbegin();
-            auto storage_it = old_storage.coords.cbegin();
-            while (coord_it != tensor_coordinates.end() && storage_it != old_storage.coords.end()) {
+            auto storage_it = old_storage.get_coords().begin();
+            while (coord_it != tensor_coordinates.end() && storage_it != old_storage.get_coords().end()) {
                 if (*storage_it == *coord_it) {
                     filtered_coords.push_back(*storage_it);
                     ++coord_it;

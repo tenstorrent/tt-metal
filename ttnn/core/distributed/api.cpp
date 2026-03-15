@@ -76,8 +76,8 @@ std::vector<Tensor> get_device_tensors(const Tensor& tensor) {
     if (is_device_tensor(tensor) && tensor.is_allocated()) {
         const auto& device_storage = tensor.device_storage();
         std::vector<ttnn::Tensor> tensors;
-        tensors.reserve(device_storage.coords.size());
-        for (const auto& coord : device_storage.coords) {
+        tensors.reserve(device_storage.get_coords().size());
+        for (const auto& coord : device_storage.get_coords()) {
             DeviceStorage shard_storage(device_storage.get_mesh_buffer(), {coord});
             tensors.push_back(Tensor(std::move(shard_storage), tensor.tensor_spec(), tensor.tensor_topology()));
         }
@@ -128,7 +128,7 @@ Tensor combine_device_tensors(const std::vector<Tensor>& tensor_shards, int shar
             shard.is_allocated(),
             "Error aggregating multichip tensors: tensor shards must be allocated on the same mesh buffer. "
             "Consider moving tensors to host, aggregating, and re-uploading on device storage.");
-        for (const auto& coord : shard_storage.coords) {
+        for (const auto& coord : shard_storage.get_coords()) {
             coords.push_back(coord);
         }
     }
