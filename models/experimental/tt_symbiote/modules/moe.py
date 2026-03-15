@@ -1036,6 +1036,10 @@ class TTNNExperts(TTNNModule):
     Each expert has gate_proj, up_proj, and down_proj.
     """
 
+    # Lazy weight loading: load expert weights on first forward, deallocate after.
+    # Reduces device memory for large MoE (e.g. 48 layers x 512 experts).
+    _LAZY_MOE_THRESHOLD = 128  # Use lazy loading when num_experts >= this
+
     def __init__(self, config: PretrainedConfig):
         super().__init__()
         self.config = config
@@ -1049,6 +1053,14 @@ class TTNNExperts(TTNNModule):
         self.tt_w2_proj = None
         self.expert_mapping_tensors = None
         self.remap_topk_mask = None
+
+        # Lazy loading: keep host tensors for reload each forward
+        self._tt_w1_host = None
+        self._tt_w3_host = None
+        self._tt_w2_host = None
+
+        # Control flags
+        self.use_sparsity = True
 
     @staticmethod
     def _get_num_experts_per_device(config: PretrainedConfig, mesh_device: ttnn.Device) -> int:
@@ -1101,9 +1113,17 @@ class TTNNExperts(TTNNModule):
             layout=ttnn.TILE_LAYOUT,
             mesh_mapper=ttnn.ShardTensorToMesh(self.device, dim=0),
         )
+
+        # tt_gate_up_proj omitted: forward uses sparse path (w1, w3, w2) only; saves ~25% device memory
+
+        # Clean up torch weights
         del self.torch_w1_proj
         del self.torch_w3_proj
         del self.torch_w2_proj
+
+    def _use_lazy_moe_weights(self) -> bool:
+        """Use lazy loading when num_experts is large to reduce device memory."""
+        return self.num_experts >= self._LAZY_MOE_THRESHOLD
 
     def move_weights_to_device_impl(self):
         """Move preprocessed weights to device and create mapping tensors."""
@@ -1112,9 +1132,19 @@ class TTNNExperts(TTNNModule):
         self.num_devices = self.device.get_num_devices()
         self.num_dispatch_devices = self.device.shape[1]
 
-        self.tt_w1_proj = ttnn.to_device(self.tt_w1_proj, self.device)
-        self.tt_w3_proj = ttnn.to_device(self.tt_w3_proj, self.device)
-        self.tt_w2_proj = ttnn.to_device(self.tt_w2_proj, self.device)
+        if self._use_lazy_moe_weights():
+            # Keep host tensors for load-on-forward; don't move expert weights yet
+            self._tt_w1_host = self.tt_w1_proj
+            self._tt_w3_host = self.tt_w3_proj
+            self._tt_w2_host = self.tt_w2_proj
+            self.tt_w1_proj = None
+            self.tt_w3_proj = None
+            self.tt_w2_proj = None
+        else:
+            self.tt_w1_proj = ttnn.to_device(self.tt_w1_proj, self.device)
+            self.tt_w3_proj = ttnn.to_device(self.tt_w3_proj, self.device)
+            self.tt_w2_proj = ttnn.to_device(self.tt_w2_proj, self.device)
+        # tt_gate_up_proj not moved: sparse path uses w1/w3/w2 only
 
         # Create expert mapping tensors for all-to-all ops
         self.expert_mapping_tensors = ttnn.from_torch(
@@ -1159,6 +1189,31 @@ class TTNNExperts(TTNNModule):
             fp32_dest_acc_en=True,
             packer_l1_acc=True,
         )
+    def deallocate_weights_impl(self):
+        """Deallocate expert weights from device (for lazy mode, clears device tensors)."""
+        if self.tt_w1_proj is not None:
+            ttnn.deallocate(self.tt_w1_proj)
+            self.tt_w1_proj = None
+        if self.tt_w3_proj is not None:
+            ttnn.deallocate(self.tt_w3_proj)
+            self.tt_w3_proj = None
+        if self.tt_w2_proj is not None:
+            ttnn.deallocate(self.tt_w2_proj)
+            self.tt_w2_proj = None
+
+    def _load_expert_weights_if_lazy(self):
+        """Load expert weights to device when using lazy mode."""
+        if not self._use_lazy_moe_weights() or self.tt_w1_proj is not None:
+            return
+        self.tt_w1_proj = ttnn.to_device(self._tt_w1_host, self.device)
+        self.tt_w3_proj = ttnn.to_device(self._tt_w3_host, self.device)
+        self.tt_w2_proj = ttnn.to_device(self._tt_w2_host, self.device)
+
+    def _deallocate_expert_weights_if_lazy(self):
+        """Deallocate expert weights after forward when using lazy mode."""
+        if not self._use_lazy_moe_weights():
+            return
+        self.deallocate_weights_impl()
 
     @run_on_devices(DeviceArch.T3K)
     def forward(
@@ -1175,6 +1230,7 @@ class TTNNExperts(TTNNModule):
         Returns:
             Output tensor of shape (1, 1, batch_size_per_device*seq_len, hidden_size)
         """
+        self._load_expert_weights_if_lazy()
 
         # Extract dimensions
         batch_size_per_device = x.shape[0]
@@ -1344,6 +1400,7 @@ class TTNNExperts(TTNNModule):
             # We need to slice the seq dimension from [0:original_num_tokens]
             final_output = ttnn.slice(final_output, (0, 0, 0, 0), (1, 1, original_num_tokens, self.hidden_size))
 
+        self._deallocate_expert_weights_if_lazy()
         return final_output
 
 
