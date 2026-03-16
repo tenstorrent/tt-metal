@@ -223,10 +223,10 @@ SubtileBroadcastType get_subtile_broadcast_type(uint32_t a_h, uint32_t a_w, uint
     TT_THROW("Invalid subtile broadcast type");
 }
 
-tt::stl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() const {
+ttsl::hash::hash_t BinaryNgDeviceOperation::operation_attributes_t::to_hash() const {
     // TODO: a more generalized way to skip the hashing of an EltwiseUnaryWithParam?
     // Don't hash the quantization scale, otherwise we build the kernel for each different scale
-    return tt::stl::hash::hash_objects_with_default_seed(
+    return ttsl::hash::hash_objects_with_default_seed(
         binary_op_type,
         lhs_activations,
         rhs_activations,
@@ -454,7 +454,7 @@ BinaryNgDeviceOperation::tensor_return_value_t BinaryNgDeviceOperation::create_o
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor_a.device());
 }
 
-tt::stl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t BinaryNgDeviceOperation::compute_program_hash(
     const operation_attributes_t& attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor_a = tensor_args.input_tensor_a;
     const auto& input_tensor_b = tensor_args.input_tensor_b;
@@ -499,9 +499,9 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
     const std::optional<bool>& fast_and_approximate_mode,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
     std::optional<ttnn::operations::unary::ScalarVariant> scalar_value,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::operations::binary_ng::BinaryNgDeviceOperation;
@@ -619,9 +619,9 @@ ttnn::operations::binary_ng::BinaryNgDeviceOperation::tensor_return_value_t bina
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<Tensor>& output_tensor,
     const std::optional<bool>& fast_and_approximate_mode,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
-    tt::stl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> lhs_activations,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> rhs_activations,
+    ttsl::Span<const ttnn::operations::unary::EltwiseUnaryWithParam> post_activations,
     std::optional<ttnn::operations::unary::ScalarVariant> /*scalar_value*/,
     const std::optional<CoreRangeSet>& sub_core_grids) {
     using OperationType = ttnn::operations::binary_ng::BinaryNgDeviceOperation;

@@ -5,9 +5,9 @@
 #include "neighbor_pad_async.hpp"
 #include "ttnn/operations/experimental/ccl/neighbor_pad_async/device/neighbor_pad_async_device_operation.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteNeighborPadAsync::invoke(
+ttnn::Tensor neighbor_pad_async(
     const ttnn::Tensor& input_tensor,
     std::vector<int32_t> dim,
     std::vector<uint32_t> padding_left,
@@ -87,4 +87,4 @@ ttnn::Tensor ExecuteNeighborPadAsync::invoke(
         persistent_output_buffer);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

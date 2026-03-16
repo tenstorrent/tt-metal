@@ -297,7 +297,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                const std::vector<int32_t>& dims,
                CoreRangeSet grid,
                ShardOrientation orientation) {
-                return self.sharded_across_dims(tt::stl::Span<const int32_t>(dims), std::move(grid), orientation);
+                return self.sharded_across_dims(ttsl::Span<const int32_t>(dims), std::move(grid), orientation);
             },
             nb::arg("dims"),
             nb::arg("grid"),
@@ -314,7 +314,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
                CoreRangeSet grid,
                ShardOrientation orientation) {
                 return self.sharded_across_dims_except(
-                    tt::stl::Span<const int32_t>(dims), std::move(grid), orientation);
+                    ttsl::Span<const int32_t>(dims), std::move(grid), orientation);
             },
             nb::arg("dims"),
             nb::arg("grid"),
@@ -447,8 +447,8 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
             )doc")
         .def(
             "__hash__",
-            [](const MemoryConfig& memory_config) -> tt::stl::hash::hash_t {
-                return tt::stl::hash::detail::hash_object(memory_config);
+            [](const MemoryConfig& memory_config) -> ttsl::hash::hash_t {
+                return ttsl::hash::detail::hash_object(memory_config);
             })
         .def("is_sharded", &MemoryConfig::is_sharded, "Whether tensor data is sharded across multiple cores in L1")
         .def(
@@ -501,7 +501,7 @@ void tensor_mem_config_module(nb::module_& m_tensor) {
         .def(
             "__init__",
             [](CoreRangeSet* t, const std::vector<CoreRange>& core_ranges) {
-                new (t) CoreRangeSet(tt::stl::Span<const CoreRange>(core_ranges));
+                new (t) CoreRangeSet(ttsl::Span<const CoreRange>(core_ranges));
             },
             nb::arg("core_ranges"))
         .def(

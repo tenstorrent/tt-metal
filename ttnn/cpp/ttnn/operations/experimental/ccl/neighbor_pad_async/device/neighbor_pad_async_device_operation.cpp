@@ -134,7 +134,7 @@ Tensor NeighborPadAsyncDeviceOperation::create_output_tensors(
         compute_output_specs(operation_attributes, tensor_args), tensor_args.input_tensor.device());
 }
 
-tt::stl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t NeighborPadAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "NeighborPadAsyncDeviceOperation::compute_program_hash is called");
     return operation::hash_operation<NeighborPadAsyncDeviceOperation>(
