@@ -159,7 +159,7 @@ ttnn::device_operation::CachedProgram<UnifiedSelectReduce::shared_variables_t> U
     tt::tt_metal::Program program{};
     const ttnn::CoreRangeSet worker_core_range_set(operation_attributes.worker_cores);
     const uint32_t metadata_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range_set, 1);
-    const uint32_t compute_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range_set, 1);
+    const uint32_t compute_sync_semaphore_id = tt::tt_metal::CreateSemaphore(program, worker_core_range_set, 0);
     auto artifacts = build_selective_reduce_combine_program_artifacts(
         program,
         operation_attributes,
@@ -212,7 +212,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore,
     const uint32_t metadata_sync_semaphore_id,
-    const uint32_t compute_sync_semaphore_id) {
+    const uint32_t compute_sync_semaphore_id,
+    const uint32_t compute_cores_per_combine_cores) {
     using namespace tt::tt_metal;
     using namespace tt::tt_fabric;
     using namespace ttnn::ccl;
@@ -357,11 +358,26 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto [mux_kernel_id, mux_kernel_config, mux_neigbor_core_maps] = detail::launch_mux_workers(
         *mesh_device, mux_core_range_set, fabric_node_id, neighbors, num_links, num_worker_cores, program);
 
+    const auto pstart_coord = needed_worker_core_range_set.bounding_box().start_coord;
+    const auto pend_coord = needed_worker_core_range_set.bounding_box().end_coord;
+
     const auto start_coord =
         mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().start_coord);
     const auto end_coord =
         mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().end_coord);
 
+    std::cout << "physical pstart_coord.x: " << pstart_coord.x << " pstart_coord.y " << pstart_coord.y
+              << " end_coord.x " << pend_coord.x << " end_coord.y " << pend_coord.y << std::endl;
+    std::cout << "virtual start_coord.x: " << start_coord.x << " start_coord.y " << start_coord.y << " end_coord.x "
+              << end_coord.x << " end_coord.y " << end_coord.y << std::endl;
+    std::cout << "num_token_parallel_cores: " << num_token_parallel_cores
+              << " num_data_parallel_cores: " << num_data_parallel_cores
+              << " num_cores: " << needed_worker_core_range_set.num_cores() << std::endl;
+
+    for (auto& c : sender_cores) {
+        std::cout << c.x << ", " << c.y << " ";
+    }
+    std::cout << std::endl;
     // launch reader kernel
     std::unordered_map<std::string, uint32_t> reader_named_ct_args = {
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
@@ -441,8 +457,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
         {"topology", static_cast<uint32_t>(topology)},
         {"num_mux_workers_per_link", neighbors.size()},
         {"compute_sync_semaphore_id", writer_compute_sync_semaphore_id},
-        {"compute_cores_per_combine_core", 3}};
-    // TODO (AM) ^ don't hardcode this here
+        {"compute_cores_per_combine_core", compute_cores_per_combine_cores}};
 
     std::vector<uint32_t> writer_compile_time_args;
     ttnn::ccl::fabric_mux_connection_ct_args(
