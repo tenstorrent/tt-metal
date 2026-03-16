@@ -60,8 +60,22 @@ def prefill_forward(
     if seq_len <= 1:
         raise ValueError(f"Prefill mode requires seq_len>1, got {seq_len}. Use decode mode for single tokens.")
 
-    # QKV projection
-    xqkv_fused = apply_qkv_projection(hidden_states, weights)
+    # QKV projection - use minimal_matmul with per-seq_len swept configs
+    # Use total_seq_len (actual matmul M dimension) for config selection
+    use_minimal = program_config.use_minimal_matmul(total_seq_len)
+    if use_minimal:
+        qkv_config = program_config.get_prefill_qkv_minimal_config(total_seq_len)
+        compute_cfg = program_config.get_compute_kernel_config()
+    else:
+        qkv_config = None
+        compute_cfg = None
+    xqkv_fused = apply_qkv_projection(
+        hidden_states,
+        weights,
+        use_minimal=use_minimal,
+        matmul_program_config=qkv_config,
+        compute_kernel_config=compute_cfg,
+    )
 
     # Reshape for batch: [1, 1, B*S, QKV] -> [B, 1, S, QKV]
     if batch_size > 1:
@@ -157,7 +171,22 @@ def prefill_forward(
     if batch_size > 1:
         tt_sdpa_out = ttnn.reshape(tt_sdpa_out, [1, 1, total_seq_len, -1])
 
-    tt_out = apply_output_projection(tt_sdpa_out, weights, activation_dtype)
+    # Output projection - select config based on actual matmul M dimension
+    out_m = tt_sdpa_out.shape[-2]
+    if use_minimal:
+        out_config = program_config.get_prefill_out_minimal_config(out_m)
+    else:
+        out_k = tt_sdpa_out.shape[-1]
+        out_n = weights.o_proj.shape[-1]
+        out_config = program_config.get_prefill_out_config(out_m, out_n, out_k)
+    tt_out = apply_output_projection(
+        tt_sdpa_out,
+        weights,
+        activation_dtype,
+        matmul_program_config=out_config,
+        use_minimal=use_minimal,
+        compute_kernel_config=compute_cfg,
+    )
     # Note: apply_output_projection already deallocates its input tensor internally
 
     # Tensor parallel allreduce
