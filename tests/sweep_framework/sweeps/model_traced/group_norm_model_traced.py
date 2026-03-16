@@ -103,7 +103,6 @@ def run(
     # Optional traced arguments
     input_mask_shape=None,
     input_mask_dtype=None,
-    input_mask_layout=None,
     input_mask_memory_config=None,
     weight_shape=None,
     weight_dtype=None,
@@ -130,7 +129,6 @@ def run(
 
     input_mask_shape = _clean(input_mask_shape)
     input_mask_dtype = _clean(input_mask_dtype)
-    input_mask_layout = _clean(input_mask_layout)
     input_mask_memory_config = _clean(input_mask_memory_config)
     weight_shape = _clean(weight_shape)
     weight_dtype = _clean(weight_dtype)
