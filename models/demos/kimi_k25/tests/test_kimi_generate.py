@@ -540,6 +540,60 @@ def test_forward_pass(
         num_layers=2,
     )
 
+# ============================================================================
+# Hardware: 61-layer full-model random-weights smoke test
+# ============================================================================
+
+
+_FULL_MODEL_TEST_CASES = [
+    pytest.param("decode", 1, 32, id="mode_decode_seq_1_batch_32"),
+    pytest.param("prefill", 128, 1, id="mode_prefill_seq_128_batch_1"),
+]
+
+_KIMI_NUM_LAYERS = 61  # Full Kimi K2.5 transformer depth
+
+
+@pytest.mark.slow
+@pytest.mark.timeout(3600)
+@pytest.mark.parametrize("mode, seq_len, batch_size_per_row", _FULL_MODEL_TEST_CASES)
+def test_full_model(
+    mode,
+    seq_len,
+    batch_size_per_row,
+    hf_config_short,
+    cache_path,
+    mesh_device,
+    ccl,
+    force_recalculate_weight_config,
+    set_deterministic_env,
+):
+    """M5+ stress test — Kimi K2.5 with all 61 transformer layers, random weights.
+
+    This is a longer-running validation that exercises the full model depth
+    (all 61 layers including the first dense MLA + 60 MoE layers).
+
+    Unlike ``test_forward_pass`` which uses 2 layers for fast iteration, this
+    test validates that the RowBatchedModel layer stack is stable at full
+    production depth with random weights.
+
+    Finite-output criterion only — no reference comparison (M6 correctness work).
+
+    Timeout: 3600s (weight conversion at 61 layers dominates compile time).
+    Hardware: MESH_DEVICE=TG required.
+    """
+    _run_kimi_forward_pass_random_weights(
+        mode=mode,
+        seq_len=seq_len,
+        batch_size_per_row=batch_size_per_row,
+        hf_config_short=hf_config_short,
+        cache_path=cache_path,
+        mesh_device=mesh_device,
+        ccl=ccl,
+        force_recalculate=force_recalculate_weight_config,
+        num_layers=_KIMI_NUM_LAYERS,
+    )
+
+
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
