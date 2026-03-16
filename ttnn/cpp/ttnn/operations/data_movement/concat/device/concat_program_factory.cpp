@@ -54,7 +54,6 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
             const uint32_t shard_width = output_nd_shard_spec.value().shard_shape[-1];
             num_pages_in_row = tt::div_up(output.logical_shape()[-1], shard_width);
             if (dim == num_dims - 1) {
-                // for the last dimention output tensor summs up input tensors
                 num_pages_in_row /= num_input_tensors;
             }
 
