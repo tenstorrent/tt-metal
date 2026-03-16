@@ -37,6 +37,22 @@ private:
     DistributedHostBuffer distributed_buffer_;
 };
 
+// DeviceStorage manages a piece of device memory and that is valid for a vector of MeshCoordinates.
+//
+// DeviceStorage owns the lifetime of the underlying device memory.
+// Copying the DeviceStorage will share the ownership of the underlying device memory.
+// DeviceStorage currently allow "leaking" of the underlying device memory ownership via get_mesh_buffer(),
+// this will be addressed in #39064.
+//
+// DeviceStorage has two possible states:
+// - Allocated: the underlying device memory is allocated.
+//   - Can query device memory state/ coordinates/ device.
+//   - The MeshCoordinates obtained from get_coords will be within the boundaries of the underlying device memory.
+//   - Can be switched to the deallocated state by calling deallocate.
+// - Deallocated: the underlying device memory is released.
+//   - Query of device memory state/ coordinates/ device will throw.
+//   - is_uniform_storage will return true.
+//   - Calls to deallocate will have no effect.
 struct DeviceStorage {
     // Construct a DeviceStorage that is deallocated
     DeviceStorage() = default;
@@ -47,7 +63,8 @@ struct DeviceStorage {
     // Constructs DeviceStorage with coords covering the full mesh device shape.
     explicit DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffer_);
 
-    // Constructs DeviceStorage that is a view of the mesh_buffer_ at the given coords_
+    // Constructs DeviceStorage that is a view of the mesh_buffer_ at the given coords_.
+    // Throws if the coords_ are out of bounds for the mesh_buffer_ device shape.
     DeviceStorage(
         std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords_);
 
@@ -62,28 +79,33 @@ struct DeviceStorage {
 
     // Creates a copy of the DeviceStorage that shares the underlying device memory,
     // but with a different set of coords.
+    // Throws if the coords_ are out of bounds for the mesh_buffer_ device shape.
     DeviceStorage(const DeviceStorage& other, std::vector<distributed::MeshCoordinate> coords);
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // Device Memory getters
 
     // Get legacy single device buffer
+    // Throws if the DeviceStorage is not allocated.
     Buffer* get_buffer() const;
 
     // Get mesh buffer that represents the device memory
-    // TODO(#39064): the ownership transfer will be removed
+    // Throws if the DeviceStorage is not allocated.
+    // TODO(#39064): the ownership sharing will be removed
     const std::shared_ptr<distributed::MeshBuffer>& get_mesh_buffer() const;
 
     // Get the device the device memory is allocated on
+    // Throws if the DeviceStorage is not allocated.
     distributed::MeshDevice* get_device() const;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
     // DeviceStorage as a view of the undelrying device memory at specific coordinates:
 
-    // Returns true if the tensor spans across all devices in a mesh.
+    // Returns true if the tensor spans across all devices in a mesh or if the DeviceStorage is not allocated.
     bool is_uniform_storage() const;
 
     // Returns the coordinates the tensor spans across.
+    // Throws if the DeviceStorage is not allocated.
     std::span<const distributed::MeshCoordinate> get_coords() const;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -116,6 +138,12 @@ struct DeviceStorage {
     auto attribute_values() const { return std::forward_as_tuple(); }
 
 private:
+    // Main internal constructor, performs all validation
+    DeviceStorage(
+        std::shared_ptr<distributed::MeshBuffer> mesh_buffer_,
+        std::vector<distributed::MeshCoordinate> coords_,
+        std::shared_ptr<distributed::MeshBuffer> root_mesh_buffer_);
+
     std::vector<distributed::MeshCoordinate> coords_;
     std::shared_ptr<distributed::MeshBuffer> mesh_buffer;
 
