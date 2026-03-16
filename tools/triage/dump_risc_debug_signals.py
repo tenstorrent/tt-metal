@@ -18,6 +18,8 @@ Owner:
 from collections import defaultdict
 import json
 import os
+import subprocess
+
 from triage import ScriptConfig, log_warning, run_script, log_check_location
 from triage_session import get_triage_session
 from ttexalens.umd_device import TimeoutDeviceRegisterError
@@ -32,6 +34,23 @@ script_config = ScriptConfig(
     depends=["run_checks", "check_broken_components", "dispatcher_data", "elfs_cache"],
     disabled=os.getenv("TT_RUN_DISABLED_TRIAGE_SCRIPTS_IN_CI") is None,
 )
+
+
+def _get_git_commit_hash() -> str:
+    """Return current git commit hash (full SHA) or 'unknown' if not in a repo or git unavailable."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        )
+        if out.returncode == 0 and out.stdout:
+            return out.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    return "unknown"
 
 
 def get_firmware_text_address(
@@ -107,14 +126,21 @@ def run(args, context: Context):
 
         device = location.device
         block_type = run_checks.get_block_type(location)
-        if block_type not in all_debug_bus_data[f"Device {device.id}"]:
-            all_debug_bus_data[f"Device {device.id}"][block_type] = defaultdict(dict)
-        all_debug_bus_data[f"Device {device.id}"][block_type][f"location: {location.to_user_str()}"] = result
+        if "arch" not in all_debug_bus_data[f"Device {device.id}"]:
+            all_debug_bus_data[f"Device {device.id}"]["arch"] = str(device._arch)
+        if "block_types" not in all_debug_bus_data[f"Device {device.id}"]:
+            all_debug_bus_data[f"Device {device.id}"]["block_types"] = defaultdict(dict)
+        if block_type not in all_debug_bus_data[f"Device {device.id}"]["block_types"]:
+            all_debug_bus_data[f"Device {device.id}"]["block_types"][block_type] = defaultdict(dict)
+        all_debug_bus_data[f"Device {device.id}"]["block_types"][block_type][
+            f"location: {location.to_user_str()}"
+        ] = result
         return None
 
     run_checks.run_per_block_check(check_block)
 
     if all_debug_bus_data:
+        all_debug_bus_data["git_commit"] = _get_git_commit_hash()
         output_path = args["--path"] if args["--path"] else "debug_bus_signal_groups.json"
         with open(output_path, "w") as f:
             json.dump(all_debug_bus_data, f, indent=2)
