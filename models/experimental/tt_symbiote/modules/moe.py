@@ -1711,6 +1711,25 @@ class TTNNBailingMoE(TTNNMoE):
         return adapted
 
 
+def _consolidate_talker_experts_from_module_list(experts_module_list, config):
+    """Build gate_up_proj and down_proj from HF ModuleList of Qwen3OmniMoeTalkerTextMLP."""
+    num_experts = len(experts_module_list)
+    interm = config.moe_intermediate_size
+    hidden = config.hidden_size
+    gate_up_proj = torch.empty(num_experts, 2 * interm, hidden, dtype=experts_module_list[0].gate_proj.weight.dtype)
+    down_proj = torch.empty(num_experts, hidden, interm, dtype=experts_module_list[0].down_proj.weight.dtype)
+    for i in range(num_experts):
+        gate_up_proj[i] = torch.cat(
+            [experts_module_list[i].gate_proj.weight, experts_module_list[i].up_proj.weight], dim=0
+        )
+        down_proj[i] = experts_module_list[i].down_proj.weight
+    consolidated = type("ConsolidatedExperts", (), {})()
+    consolidated.gate_up_proj = gate_up_proj
+    consolidated.down_proj = down_proj
+    consolidated.config = config
+    return consolidated
+
+
 class Qwen3OmniMoeTalkerTextExpertsTTNN(TTNNExperts):
     """
     TTNN experts for Qwen3-Omni talker MoE using sparse_matmul +
@@ -1719,12 +1738,17 @@ class Qwen3OmniMoeTalkerTextExpertsTTNN(TTNNExperts):
 
     @classmethod
     def from_torch(cls, torch_experts, config):
+        # Accept either consolidated (gate_up_proj, down_proj) or HF ModuleList of MLPs.
+        if hasattr(torch_experts, "gate_up_proj") and hasattr(torch_experts, "down_proj"):
+            consolidated = torch_experts
+        else:
+            consolidated = _consolidate_talker_experts_from_module_list(torch_experts, config)
         module = cls(config)
-        module._fallback_torch_layer = torch_experts
+        module._fallback_torch_layer = consolidated
         intermediate = config.moe_intermediate_size
-        module.torch_w1_proj = torch_experts.gate_up_proj.data[:, :intermediate, :].permute(0, 2, 1).contiguous()
-        module.torch_w3_proj = torch_experts.gate_up_proj.data[:, intermediate:, :].permute(0, 2, 1).contiguous()
-        module.torch_w2_proj = torch_experts.down_proj.data.permute(0, 2, 1).contiguous()
+        module.torch_w1_proj = consolidated.gate_up_proj.data[:, :intermediate, :].permute(0, 2, 1).contiguous()
+        module.torch_w3_proj = consolidated.gate_up_proj.data[:, intermediate:, :].permute(0, 2, 1).contiguous()
+        module.torch_w2_proj = consolidated.down_proj.data.permute(0, 2, 1).contiguous()
         return module
 
     def move_weights_to_device_impl(self):
