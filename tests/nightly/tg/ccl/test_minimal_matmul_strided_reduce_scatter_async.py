@@ -246,8 +246,9 @@ def _make_fabric_router_config(max_packet_payload_size_bytes):
     "enable_trace, num_iters",
     [
         (False, 1),
+        (True, 2),
     ],
-    ids=["check"],
+    ids=["check", "perf"],
 )
 @pytest.mark.parametrize(
     "rs_mode",
@@ -359,6 +360,23 @@ def test_minimal_matmul_strided_reduce_scatter_async(
     ids=["DRAM_memconfig"],
 )
 @pytest.mark.parametrize(
+    "rs_mode",
+    [
+        "fused",
+        "separate_strided",
+        "comparison",
+        "original",
+    ],
+)
+@pytest.mark.parametrize(
+    "enable_trace, num_iters",
+    [
+        (False, 1),
+        (True, 2),
+    ],
+    ids=["check", "perf"],
+)
+@pytest.mark.parametrize(
     "device_params, topology",
     [
         ({"fabric_config": ttnn.FabricConfig.FABRIC_1D_RING, "trace_region_size": 1531456}, ttnn.Topology.Ring),
@@ -383,6 +401,9 @@ def test_minimal_matmul_strided_reduce_scatter_async_bh_large_packet(
     mem_config_rs,
     topology,
     cluster_axis,
+    rs_mode,
+    enable_trace,
+    num_iters,
 ):
     if is_wormhole_b0():
         pytest.skip("Blackhole-only config: compute grid 12x8 exceeds wormhole_b0 limit (8x8)")
@@ -402,8 +423,8 @@ def test_minimal_matmul_strided_reduce_scatter_async_bh_large_packet(
         mem_config_mm=mem_config_mm,
         mem_config_rs=mem_config_rs,
         topology=topology,
-        enable_trace=False,
-        num_iters=1,
+        enable_trace=enable_trace,
+        num_iters=20,
         num_workers_per_link=5,
         num_buffers_per_channel=None,
         mm_block_m=256,
@@ -414,7 +435,7 @@ def test_minimal_matmul_strided_reduce_scatter_async_bh_large_packet(
         mm_core_grid=ttnn.CoreCoord(12, 8),
         chunk_width_in_mm_blocks=1,
         rs_core_grid_offset=ttnn.CoreCoord(0, 8),
-        rs_mode="fused",
+        rs_mode=rs_mode,
         cluster_axis=cluster_axis,
         math_fidelity=ttnn.MathFidelity.HiFi2,
         fp32_acc=True,
