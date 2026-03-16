@@ -262,7 +262,7 @@ def _run_text_block_test(device, layer_num: int):
         num_heads=num_heads,
         num_kv_heads=num_kv_heads,
         head_dim=head_dim,
-        dtype=ttnn.bfloat8_b,
+        dtype=ttnn.bfloat16,  # Use bfloat16 for weights to match test_pcc_all_layers.py
     )
 
     # Convert input to TTNN
@@ -290,8 +290,24 @@ def _run_text_block_test(device, layer_num: int):
         memory_config=ttnn.DRAM_MEMORY_CONFIG,
     )
 
+    # Create rotary setup for transformation matrices
+    from models.demos.molmo2.tt.text_rotary_setup import TextRotarySetup
+
+    rotary_setup = TextRotarySetup(
+        mesh_device=device,
+        head_dim=head_dim,
+        max_seq_len=8192,
+        rope_theta=1000000.0,
+        batch_size=1,
+        datatype=ttnn.bfloat16,
+    )
+    transformation_mats = rotary_setup.get_transformation_mats()
+
+    # Prepare rot_mats as a list [cos, sin]
+    rot_mats = [cos_ttnn, sin_ttnn]
+
     # TTNN forward
-    tt_output, _ = tt_block(x_ttnn, cos_ttnn, sin_ttnn)
+    tt_output, _ = tt_block(x_ttnn, rot_mats, transformation_mats, None, 0, None)
 
     # Convert back to torch
     tt_output_torch = ttnn.to_torch(tt_output).squeeze(0).squeeze(0)
