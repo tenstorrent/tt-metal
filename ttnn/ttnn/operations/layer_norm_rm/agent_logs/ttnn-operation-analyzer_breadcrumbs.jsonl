@@ -14,3 +14,6 @@
 {"event":"analysis_complete","details":"tilize_analysis.md written with full input_stage focus: reader pattern, CB sizing, stick-to-tile batching, work distribution, TensorAccessor usage","ts":"2026-03-16T09:04:13+00:00"}
 {"event":"analysis_written","details":"Wrote untilize_analysis.md (focused on output_stage patterns). Covers: writer kernel pattern, output CB sizing, TensorAccessor usage, stick extraction, barrier strategy, and simplifications for interleaved-only output.","ts":"2026-03-16T09:04:14+00:00"}
 {"event":"action","type":"file_write","details":"Wrote batch_norm_analysis.md with full compute-core reference analysis","ts":"2026-03-16T09:07:59+00:00"}
+{"event":"commit_verified","details":"tilize_analysis.md committed in 67d6d576a9, 316 lines, all sections complete","ts":"2026-03-16T09:09:40+00:00"}
+{"event":"commit_complete","details":"Committed analysis as 67d6d576a9. Analysis file at ttnn/ttnn/operations/layer_norm_rm/agent_logs/untilize_analysis.md. All tasks complete.","ts":"2026-03-16T09:09:54+00:00"}
+{"event":"complete","final_status":"SUCCESS","details":"batch_norm compute-core analysis complete, file already committed in 67d6d576a9","ts":"2026-03-16T09:09:55+00:00"}
