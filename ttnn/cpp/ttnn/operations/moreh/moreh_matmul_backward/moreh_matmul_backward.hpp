@@ -16,6 +16,6 @@ std::vector<std::optional<Tensor>> moreh_matmul_backward(
     const std::optional<const Tensor>& input_grad = std::nullopt,
     const std::optional<const Tensor>& other_grad = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
-    const std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
+    std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
 }  // namespace ttnn
