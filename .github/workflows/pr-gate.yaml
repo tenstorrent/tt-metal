@@ -436,7 +436,6 @@ jobs:
       - metalium-smoke-tests
       - ttnn-smoke-tests
       - build
-      - tt-train-tests
       - metalium-examples
       - ttsim-integration-tests
       - clang-tidy-light
@@ -450,7 +449,6 @@ jobs:
           required-jobs: "asan-build, build"
           optional-jobs: >-
             metalium-smoke-tests, ttnn-smoke-tests, metalium-examples,
-            ttsim-integration-tests, model-charts-sync, build-docs,
-            tt-train-tests
+            ttsim-integration-tests, model-charts-sync, build-docs
         env:
           NEEDS_CONTEXT: '${{ toJSON(needs) }}'
