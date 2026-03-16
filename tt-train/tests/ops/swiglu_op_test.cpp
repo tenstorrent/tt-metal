@@ -192,122 +192,6 @@ float relative_l2(const xt::xarray<float>& a, const xt::xarray<float>& b) {
     return diff_l2 / (ref_l2 + 1e-12f);
 }
 
-void CompareOptimizedVsBaseline(const std::vector<uint32_t>& input_shape, const uint32_t hidden_dim) {
-    using namespace ttml;
-
-    auto& rng = autograd::ctx().get_generator();
-    auto* device = &autograd::ctx().get_device();
-
-    const uint32_t input_dim = input_shape.back();
-    const float act_std = 1.0f;
-    const float w13_std = 1.0f / std::sqrt(static_cast<float>(input_dim));
-    const float w2_std = 1.0f / std::sqrt(static_cast<float>(hidden_dim));
-
-    // Generate weights in LinearLayer convention: w1,w3 [H,D], w2 [D,H]
-    xt::xarray<float> input_data = xt::empty<float>(input_shape);
-    core::parallel_generate<float>(
-        input_data, [act_std]() { return std::normal_distribution<float>(0.0f, act_std); }, rng());
-
-    std::vector<uint32_t> w13_lin_shape = {hidden_dim, input_dim};
-    std::vector<uint32_t> w2_lin_shape = {input_dim, hidden_dim};
-
-    xt::xarray<float> w1_lin = xt::empty<float>(w13_lin_shape);
-    core::parallel_generate<float>(
-        w1_lin, [w13_std]() { return std::normal_distribution<float>(0.0f, w13_std); }, rng());
-    xt::xarray<float> w2_lin = xt::empty<float>(w2_lin_shape);
-    core::parallel_generate<float>(w2_lin, [w2_std]() { return std::normal_distribution<float>(0.0f, w2_std); }, rng());
-    xt::xarray<float> w3_lin = xt::empty<float>(w13_lin_shape);
-    core::parallel_generate<float>(
-        w3_lin, [w13_std]() { return std::normal_distribution<float>(0.0f, w13_std); }, rng());
-
-    struct BackwardSnapshot {
-        xt::xarray<float> fwd;
-        xt::xarray<float> dx;
-        xt::xarray<float> dw1;
-        xt::xarray<float> dw2;
-        xt::xarray<float> dw3;
-    };
-
-    // Canonical path: swiglu uses LinearLayer [H,D]/[D,H] weights directly.
-    auto run_baseline = [&]() {
-        auto x = autograd::create_tensor(core::from_xtensor(input_data, device));
-        auto w1 = autograd::create_tensor(core::from_xtensor(w1_lin, device));
-        auto w2 = autograd::create_tensor(core::from_xtensor(w2_lin, device));
-        auto w3 = autograd::create_tensor(core::from_xtensor(w3_lin, device));
-        x->set_requires_grad(true);
-        w1->set_requires_grad(true);
-        w2->set_requires_grad(true);
-        w3->set_requires_grad(true);
-
-        auto out = ops::swiglu(x, w1, w2, w3, /*dropout_prob=*/0.0F);
-        auto fwd = core::to_xtensor(out->get_value());
-        out->set_grad(core::ones_like(out->get_value()));
-        out->backward();
-
-        auto dx = core::to_xtensor(x->get_grad());
-        auto dw1 = core::to_xtensor(w1->get_grad());
-        auto dw2 = core::to_xtensor(w2->get_grad());
-        auto dw3 = core::to_xtensor(w3->get_grad());
-        autograd::ctx().reset_graph();
-        return BackwardSnapshot{
-            .fwd = std::move(fwd),
-            .dx = std::move(dx),
-            .dw1 = std::move(dw1),
-            .dw2 = std::move(dw2),
-            .dw3 = std::move(dw3)};
-    };
-
-    // Alias path: swiglu_optimized currently forwards to canonical swiglu.
-    auto run_optimized = [&]() {
-        auto x = autograd::create_tensor(core::from_xtensor(input_data, device));
-        auto w1 = autograd::create_tensor(core::from_xtensor(w1_lin, device));
-        auto w2 = autograd::create_tensor(core::from_xtensor(w2_lin, device));
-        auto w3 = autograd::create_tensor(core::from_xtensor(w3_lin, device));
-        x->set_requires_grad(true);
-        w1->set_requires_grad(true);
-        w2->set_requires_grad(true);
-        w3->set_requires_grad(true);
-
-        auto out = ops::swiglu_optimized(x, w1, w2, w3, /*dropout_prob=*/0.0F);
-        auto fwd = core::to_xtensor(out->get_value());
-        out->set_grad(core::ones_like(out->get_value()));
-        out->backward();
-
-        auto dx = core::to_xtensor(x->get_grad());
-        auto dw1 = core::to_xtensor(w1->get_grad());
-        auto dw2 = core::to_xtensor(w2->get_grad());
-        auto dw3 = core::to_xtensor(w3->get_grad());
-        autograd::ctx().reset_graph();
-        return BackwardSnapshot{
-            .fwd = std::move(fwd),
-            .dx = std::move(dx),
-            .dw1 = std::move(dw1),
-            .dw2 = std::move(dw2),
-            .dw3 = std::move(dw3)};
-    };
-
-    auto base = run_baseline();
-    auto opt = run_optimized();
-
-    const float tol = 1e-2f;
-    EXPECT_EQ(base.fwd.shape(), opt.fwd.shape());
-
-    float fwd_err = relative_l2(opt.fwd, base.fwd);
-    EXPECT_LT(fwd_err, tol) << "Forward mismatch: rel L2 = " << fwd_err;
-
-    float dx_err = relative_l2(opt.dx, base.dx);
-    EXPECT_LT(dx_err, tol) << "dL/dx mismatch: rel L2 = " << dx_err;
-
-    float dw1_err = relative_l2(opt.dw1, base.dw1);
-    EXPECT_LT(dw1_err, tol) << "dL/dW1 mismatch: rel L2 = " << dw1_err;
-
-    float dw2_err = relative_l2(opt.dw2, base.dw2);
-    EXPECT_LT(dw2_err, tol) << "dL/dW2 mismatch: rel L2 = " << dw2_err;
-
-    float dw3_err = relative_l2(opt.dw3, base.dw3);
-    EXPECT_LT(dw3_err, tol) << "dL/dW3 mismatch: rel L2 = " << dw3_err;
-}
-
 std::pair<xt::xarray<float>, xt::xarray<float>> swiglu_elemwise_bw_reference(
     const xt::xarray<float>& linear1, const xt::xarray<float>& gate, const xt::xarray<float>& dL_dprod) {
     auto sigmoid = 1.0f / (1.0f + xt::exp(-linear1));
@@ -321,35 +205,128 @@ std::pair<xt::xarray<float>, xt::xarray<float>> swiglu_elemwise_bw_reference(
     return {dL_dlinear1, dL_dgate};
 }
 
-void CompareSwiGLUElemwiseBwKernel(const std::vector<uint32_t>& shape) {
+struct SwigluBackwardReference {
+    xt::xarray<float> out;
+    xt::xarray<float> linear1;
+    xt::xarray<float> gate;
+    xt::xarray<float> dL_dprod;
+    xt::xarray<float> dL_dlinear1;
+    xt::xarray<float> dL_dgate;
+    xt::xarray<float> dL_dx;
+    xt::xarray<float> dL_dw1;
+    xt::xarray<float> dL_dw2;
+    xt::xarray<float> dL_dw3;
+};
+
+xt::xarray<float> flatten_to_2d(const xt::xarray<float>& tensor) {
+    const size_t trailing = tensor.shape().back();
+    const size_t leading = tensor.size() / trailing;
+    return xt::xarray<float>(xt::reshape_view(tensor, {leading, trailing}));
+}
+
+SwigluBackwardReference build_swiglu_backward_reference(
+    const xt::xarray<float>& input,
+    const xt::xarray<float>& w1,
+    const xt::xarray<float>& w2,
+    const xt::xarray<float>& w3) {
+    // ops::swiglu uses matmul(x, w*, false, true), so linear projections use w*.T
+    auto linear1 = xt::xarray<float>(xt::linalg::tensordot(input, xt::transpose(w1), {3}, {0}));
+    auto gate = xt::xarray<float>(xt::linalg::tensordot(input, xt::transpose(w3), {3}, {0}));
+    auto sigmoid = 1.0f / (1.0f + xt::exp(-linear1));
+    auto swished = linear1 * sigmoid;
+    auto gated = swished * gate;
+    auto out = xt::xarray<float>(xt::linalg::tensordot(gated, xt::transpose(w2), {3}, {0}));
+
+    auto dL_dout = xt::ones_like(out);
+    auto dL_dprod = xt::xarray<float>(xt::linalg::tensordot(dL_dout, w2, {3}, {0}));
+    auto [dL_dlinear1, dL_dgate] = swiglu_elemwise_bw_reference(linear1, gate, dL_dprod);
+
+    auto dL_dx_from_w1 = xt::xarray<float>(xt::linalg::tensordot(dL_dlinear1, w1, {3}, {0}));
+    auto dL_dx_from_w3 = xt::xarray<float>(xt::linalg::tensordot(dL_dgate, w3, {3}, {0}));
+    auto dL_dx = dL_dx_from_w1 + dL_dx_from_w3;
+
+    auto dL_dw1 =
+        xt::xarray<float>(xt::linalg::dot(xt::transpose(flatten_to_2d(dL_dlinear1)), flatten_to_2d(input)));  // [H, D]
+    auto dL_dw2 =
+        xt::xarray<float>(xt::linalg::dot(xt::transpose(flatten_to_2d(dL_dout)), flatten_to_2d(gated)));  // [D, H]
+    auto dL_dw3 =
+        xt::xarray<float>(xt::linalg::dot(xt::transpose(flatten_to_2d(dL_dgate)), flatten_to_2d(input)));  // [H, D]
+
+    return SwigluBackwardReference{
+        .out = std::move(out),
+        .linear1 = std::move(linear1),
+        .gate = std::move(gate),
+        .dL_dprod = std::move(dL_dprod),
+        .dL_dlinear1 = std::move(dL_dlinear1),
+        .dL_dgate = std::move(dL_dgate),
+        .dL_dx = std::move(dL_dx),
+        .dL_dw1 = std::move(dL_dw1),
+        .dL_dw2 = std::move(dL_dw2),
+        .dL_dw3 = std::move(dL_dw3)};
+}
+
+void CompareSwiGLUBackwardAgainstReference(const std::vector<uint32_t>& input_shape, uint32_t hidden_dim) {
     using namespace ttml;
 
     auto& rng = autograd::ctx().get_generator();
     auto* device = &autograd::ctx().get_device();
 
-    xt::xarray<float> linear1_data = xt::empty<float>(shape);
-    core::parallel_generate<float>(linear1_data, []() { return std::normal_distribution<float>(0.0f, 1.0f); }, rng());
-    xt::xarray<float> gate_data = xt::empty<float>(shape);
-    core::parallel_generate<float>(gate_data, []() { return std::normal_distribution<float>(0.0f, 1.0f); }, rng());
-    xt::xarray<float> dL_dprod_data = xt::empty<float>(shape);
-    core::parallel_generate<float>(dL_dprod_data, []() { return std::normal_distribution<float>(0.0f, 0.1f); }, rng());
+    const uint32_t input_dim = input_shape.back();
+    const float act_std = 1.0f;
+    const float w13_std = 1.0f / std::sqrt(static_cast<float>(input_dim));
+    const float w2_std = 1.0f / std::sqrt(static_cast<float>(hidden_dim));
 
-    auto [ref_dL_dlinear1, ref_dL_dgate] = swiglu_elemwise_bw_reference(linear1_data, gate_data, dL_dprod_data);
+    xt::xarray<float> input_data = xt::empty<float>(input_shape);
+    core::parallel_generate<float>(
+        input_data, [act_std]() { return std::normal_distribution<float>(0.0f, act_std); }, rng());
 
-    auto linear1_tt = core::from_xtensor(linear1_data, device);
-    auto gate_tt = core::from_xtensor(gate_data, device);
-    auto dL_dprod_tt = core::from_xtensor(dL_dprod_data, device);
+    std::vector<uint32_t> w13_shape = {hidden_dim, input_dim};  // [H, D]
+    std::vector<uint32_t> w2_shape = {input_dim, hidden_dim};   // [D, H]
+    xt::xarray<float> w1_data = xt::empty<float>(w13_shape);
+    core::parallel_generate<float>(
+        w1_data, [w13_std]() { return std::normal_distribution<float>(0.0f, w13_std); }, rng());
+    xt::xarray<float> w2_data = xt::empty<float>(w2_shape);
+    core::parallel_generate<float>(
+        w2_data, [w2_std]() { return std::normal_distribution<float>(0.0f, w2_std); }, rng());
+    xt::xarray<float> w3_data = xt::empty<float>(w13_shape);
+    core::parallel_generate<float>(
+        w3_data, [w13_std]() { return std::normal_distribution<float>(0.0f, w13_std); }, rng());
 
-    auto result = metal::swiglu_elemwise_bw(linear1_tt, gate_tt, dL_dprod_tt);
-    auto kernel_dL_dlinear1 = core::to_xtensor(result.dL_dlinear1);
-    auto kernel_dL_dgate = core::to_xtensor(result.dL_dgate);
+    auto ref = build_swiglu_backward_reference(input_data, w1_data, w2_data, w3_data);
+
+    // Full op run (forward + full backward grads)
+    auto x = autograd::create_tensor(core::from_xtensor(input_data, device), /*requires_grad=*/true);
+    auto w1 = autograd::create_tensor(core::from_xtensor(w1_data, device), /*requires_grad=*/true);
+    auto w2 = autograd::create_tensor(core::from_xtensor(w2_data, device), /*requires_grad=*/true);
+    auto w3 = autograd::create_tensor(core::from_xtensor(w3_data, device), /*requires_grad=*/true);
+
+    auto out = ops::swiglu(x, w1, w2, w3, /*dropout_prob=*/0.0F);
+    auto out_kernel = core::to_xtensor(out->get_value());
+    out->set_grad(core::ones_like(out->get_value()));
+    out->backward();
+
+    auto dx_kernel = core::to_xtensor(x->get_grad());
+    auto dw1_kernel = core::to_xtensor(w1->get_grad());
+    auto dw2_kernel = core::to_xtensor(w2->get_grad());
+    auto dw3_kernel = core::to_xtensor(w3->get_grad());
+    autograd::ctx().reset_graph();
+
+    // Elemwise BW kernel run on the same reference intermediates.
+    auto linear1_tt = core::from_xtensor(ref.linear1, device);
+    auto gate_tt = core::from_xtensor(ref.gate, device);
+    auto dL_dprod_tt = core::from_xtensor(ref.dL_dprod, device);
+    auto elemwise_result = metal::swiglu_elemwise_bw(linear1_tt, gate_tt, dL_dprod_tt);
+    auto dL_dlinear1_kernel = core::to_xtensor(elemwise_result.dL_dlinear1);
+    auto dL_dgate_kernel = core::to_xtensor(elemwise_result.dL_dgate);
 
     const float tol = 1e-2f;
-    float dl1_err = relative_l2(kernel_dL_dlinear1, ref_dL_dlinear1);
-    EXPECT_LT(dl1_err, tol) << "swiglu_elemwise_bw dL_dlinear1 mismatch: rel L2 = " << dl1_err;
-
-    float dg_err = relative_l2(kernel_dL_dgate, ref_dL_dgate);
-    EXPECT_LT(dg_err, tol) << "swiglu_elemwise_bw dL_dgate mismatch: rel L2 = " << dg_err;
+    EXPECT_LT(relative_l2(out_kernel, ref.out), tol) << "forward mismatch";
+    EXPECT_LT(relative_l2(dL_dlinear1_kernel, ref.dL_dlinear1), tol) << "swiglu_elemwise_bw dL_dlinear1 mismatch";
+    EXPECT_LT(relative_l2(dL_dgate_kernel, ref.dL_dgate), tol) << "swiglu_elemwise_bw dL_dgate mismatch";
+    EXPECT_LT(relative_l2(dx_kernel, ref.dL_dx), tol) << "dL/dx mismatch";
+    EXPECT_LT(relative_l2(dw1_kernel, ref.dL_dw1), tol) << "dL/dW1 mismatch";
+    EXPECT_LT(relative_l2(dw2_kernel, ref.dL_dw2), tol) << "dL/dW2 mismatch";
+    EXPECT_LT(relative_l2(dw3_kernel, ref.dL_dw3), tol) << "dL/dW3 mismatch";
 }
 
 }  // namespace
@@ -475,69 +452,51 @@ TEST_F(SwiGLUForwardTest, ShapeMismatch_W2WrongDimensions) {
     testing::internal::GetCapturedStdout();
 }
 
-// Full backward equivalence (dx, dW1, dW2, dW3).
-TEST_F(SwiGLUForwardTest, BackwardAccuracy_1x1x32x32) {
-    CompareOptimizedVsBaseline({1, 1, 32, 32}, 32);
+// Full backward equivalence against xtensor reference.
+TEST_F(SwiGLUBackwardTest, BackwardAccuracy_1x1x32x32) {
+    CompareSwiGLUBackwardAgainstReference({1, 1, 32, 32}, 32);
 }
-TEST_F(SwiGLUForwardTest, BackwardAccuracy_1x1x32x64) {
-    CompareOptimizedVsBaseline({1, 1, 32, 64}, 64);
+TEST_F(SwiGLUBackwardTest, BackwardAccuracy_1x1x32x64) {
+    CompareSwiGLUBackwardAgainstReference({1, 1, 32, 64}, 64);
 }
-TEST_F(SwiGLUForwardTest, BackwardAccuracy_8x1x32x32) {
-    CompareOptimizedVsBaseline({8, 1, 32, 32}, 32);
+TEST_F(SwiGLUBackwardTest, BackwardAccuracy_8x1x32x32) {
+    CompareSwiGLUBackwardAgainstReference({8, 1, 32, 32}, 32);
 }
-TEST_F(SwiGLUForwardTest, BackwardAccuracy_2x1x32x128) {
-    CompareOptimizedVsBaseline({2, 1, 32, 128}, 128);
+TEST_F(SwiGLUBackwardTest, BackwardAccuracy_2x1x32x128) {
+    CompareSwiGLUBackwardAgainstReference({2, 1, 32, 128}, 128);
 }
-TEST_F(SwiGLUForwardTest, BackwardAccuracy_4x1x64x256) {
-    CompareOptimizedVsBaseline({4, 1, 64, 256}, 256);
+TEST_F(SwiGLUBackwardTest, BackwardAccuracy_4x1x64x256) {
+    CompareSwiGLUBackwardAgainstReference({4, 1, 64, 256}, 256);
 }
-TEST_F(SwiGLUForwardTest, NIGHTLY_BackwardAccuracy_2x1x128x512) {
-    CompareOptimizedVsBaseline({2, 1, 128, 512}, 512);
+TEST_F(SwiGLUBackwardTest, NIGHTLY_BackwardAccuracy_2x1x128x512) {
+    CompareSwiGLUBackwardAgainstReference({2, 1, 128, 512}, 512);
 }
-TEST_F(SwiGLUForwardTest, NIGHTLY_BackwardAccuracy_1x1x1024x1024) {
-    CompareOptimizedVsBaseline({1, 1, 1024, 1024}, 1024);
+TEST_F(SwiGLUBackwardTest, NIGHTLY_BackwardAccuracy_1x1x1024x1024) {
+    CompareSwiGLUBackwardAgainstReference({1, 1, 1024, 1024}, 1024);
 }
-TEST_F(SwiGLUForwardTest, NIGHTLY_BackwardAccuracy_32x1x256x384) {
-    CompareOptimizedVsBaseline({32, 1, 256, 384}, 1024);
+TEST_F(SwiGLUBackwardTest, NIGHTLY_BackwardAccuracy_32x1x256x384) {
+    CompareSwiGLUBackwardAgainstReference({32, 1, 256, 384}, 1024);
 }
 
 // ============================================================================
-// Section 3: SwiGLUBackward tests (fused elemwise BW kernel)
+// Section 3: extra elementwise-BW-focused shape coverage
 // ============================================================================
 
-TEST_F(SwiGLUBackwardTest, ElemwiseBw_Basic_1x1x32x32) {
-    CompareSwiGLUElemwiseBwKernel({1, 1, 32, 32});
+TEST_F(SwiGLUBackwardTest, NIGHTLY_ElemwiseBw_NonAligned_1x1x32x48) {
+    CompareSwiGLUBackwardAgainstReference({1, 1, 32, 48}, 48);
 }
-TEST_F(SwiGLUBackwardTest, ElemwiseBw_MultiTile_1x1x32x64) {
-    CompareSwiGLUElemwiseBwKernel({1, 1, 32, 64});
+TEST_F(SwiGLUBackwardTest, NIGHTLY_ElemwiseBw_NonAligned_2x1x32x96) {
+    CompareSwiGLUBackwardAgainstReference({2, 1, 32, 96}, 96);
 }
-TEST_F(SwiGLUBackwardTest, ElemwiseBw_MultiRow_1x1x64x32) {
-    CompareSwiGLUElemwiseBwKernel({1, 1, 64, 32});
+TEST_F(SwiGLUBackwardTest, NIGHTLY_ElemwiseBw_NonAligned_1x1x64x160) {
+    CompareSwiGLUBackwardAgainstReference({1, 1, 64, 160}, 160);
 }
-TEST_F(SwiGLUBackwardTest, ElemwiseBw_Batch_8x1x32x32) {
-    CompareSwiGLUElemwiseBwKernel({8, 1, 32, 32});
+TEST_F(SwiGLUBackwardTest, NIGHTLY_ElemwiseBw_NonAlignedH_1x1x48x64) {
+    CompareSwiGLUBackwardAgainstReference({1, 1, 48, 64}, 64);
 }
-TEST_F(SwiGLUBackwardTest, ElemwiseBw_Medium_2x1x32x128) {
-    CompareSwiGLUElemwiseBwKernel({2, 1, 32, 128});
-}
-TEST_F(SwiGLUBackwardTest, ElemwiseBw_Large_4x1x64x256) {
-    CompareSwiGLUElemwiseBwKernel({4, 1, 64, 256});
-}
-TEST_F(SwiGLUBackwardTest, ElemwiseBw_NonAligned_1x1x32x48) {
-    CompareSwiGLUElemwiseBwKernel({1, 1, 32, 48});
-}
-TEST_F(SwiGLUBackwardTest, ElemwiseBw_NonAligned_2x1x32x96) {
-    CompareSwiGLUElemwiseBwKernel({2, 1, 32, 96});
-}
-TEST_F(SwiGLUBackwardTest, ElemwiseBw_NonAligned_1x1x64x160) {
-    CompareSwiGLUElemwiseBwKernel({1, 1, 64, 160});
-}
-TEST_F(SwiGLUBackwardTest, ElemwiseBw_NonAlignedH_1x1x48x64) {
-    CompareSwiGLUElemwiseBwKernel({1, 1, 48, 64});
-}
-TEST_F(SwiGLUBackwardTest, ElemwiseBw_NonAlignedH_4x1x96x128) {
-    CompareSwiGLUElemwiseBwKernel({4, 1, 96, 128});
+TEST_F(SwiGLUBackwardTest, NIGHTLY_ElemwiseBw_NonAlignedH_4x1x96x128) {
+    CompareSwiGLUBackwardAgainstReference({4, 1, 96, 128}, 128);
 }
 TEST_F(SwiGLUBackwardTest, NIGHTLY_ElemwiseBw_VeryLarge_1x1x1024x1024) {
-    CompareSwiGLUElemwiseBwKernel({1, 1, 1024, 1024});
+    CompareSwiGLUBackwardAgainstReference({1, 1, 1024, 1024}, 1024);
 }
