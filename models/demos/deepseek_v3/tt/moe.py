@@ -128,6 +128,7 @@ class MoE(SharedStateAddOn, AbstractModule):
 
         # optimized ops (exclusive to quad with ring fabric) require preallocated tensors for all_to_all_dispatch_metadata
         if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING and num_dispatch_device_rows == 16:
+            # NOTE: these do not have to be double buffered, due to the synchronization between all_to_all_dispatch_metadata and selective_reduce_combine inside the MoE block
             batch = USERS_PER_ROW * mesh_device.shape[0]
             preallocated_all_to_all_dispatch_metadata_tensors = (
                 AllToAllDispatchMetadataConfig.create_preallocated_dispatch_output_tensors(
