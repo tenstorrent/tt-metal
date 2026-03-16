@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -9,7 +9,6 @@
 #ifdef ENV_LLK_INFRA
 
 #define UNLIKELY(condition) __builtin_expect(static_cast<bool>(condition), 0)
-#define UNREACHABLE()       __builtin_unreachable()
 
 #define LLK_ASSERT(condition, message) \
     do                                 \
@@ -17,7 +16,6 @@
         if (UNLIKELY(!(condition)))    \
         {                              \
             asm volatile("ebreak");    \
-            UNREACHABLE();             \
         }                              \
     } while (0)
 
