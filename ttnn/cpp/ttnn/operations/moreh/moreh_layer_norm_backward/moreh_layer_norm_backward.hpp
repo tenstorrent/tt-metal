@@ -7,9 +7,6 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::moreh::moreh_layer_norm_backward {
-}  // namespace ttnn::operations::moreh::moreh_layer_norm_backward
-
 namespace ttnn {
 
 std::vector<std::optional<Tensor>> moreh_layer_norm_backward(

@@ -12,8 +12,8 @@ Tensor moreh_softmax(
     const Tensor& input_tensor,
     uint32_t dim,
     const std::optional<Tensor>& output_tensor,
-    const MorehSoftmaxOp op,
-    const MorehSoftmaxOpParallelizationStrategy strategy,
+    const operations::moreh::moreh_softmax::MorehSoftmaxOp op,
+    const operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy strategy,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return ttnn::prim::moreh_softmax(
@@ -24,8 +24,8 @@ Tensor moreh_softmin(
     const Tensor& input_tensor,
     uint32_t dim,
     const std::optional<Tensor>& output_tensor,
-    const MorehSoftmaxOp op,
-    const MorehSoftmaxOpParallelizationStrategy strategy,
+    const operations::moreh::moreh_softmax::MorehSoftmaxOp op,
+    const operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy strategy,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return ttnn::prim::moreh_softmax(
@@ -36,8 +36,8 @@ Tensor moreh_logsoftmax(
     const Tensor& input_tensor,
     uint32_t dim,
     const std::optional<Tensor>& output_tensor,
-    const MorehSoftmaxOp op,
-    const MorehSoftmaxOpParallelizationStrategy strategy,
+    const operations::moreh::moreh_softmax::MorehSoftmaxOp op,
+    const operations::moreh::moreh_softmax::MorehSoftmaxOpParallelizationStrategy strategy,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<DeviceComputeKernelConfig>& compute_kernel_config) {
     return ttnn::prim::moreh_softmax(
