@@ -118,7 +118,7 @@ jobs:
             {"name": "P150 (1xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 1, "sku": "bh_p150"},
             {"name": "Quietbox (4xP150)", "weights-cache-mode": "local-disk", "num_devices": 4, "sku": "bh_llmbox"},
             {"name": "DeskBox (2xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 2, "sku": "bh_deskbox"},
-            {"name": "LoudBox (8xP150)", "weights-cache-mode": "lfc", "num_devices": 8, "sku": "bh_loudbox"},
+            {"name": "LoudBox (8xP150)", "weights-cache-mode": "cloud-mlperf", "num_devices": 8, "sku": "bh_loudbox"},
             {"name": "P300 (1xP300)", "weights-cache-mode": "lfc", "num_devices": 2, "sku": "bh_p300"},
             {"name": "QuietBox 2 (2xP300)", "weights-cache-mode": "local-disk", "num_devices": 4, "sku": "bh_quietbox_2"}
           ]'
