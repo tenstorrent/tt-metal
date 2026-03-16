@@ -42,7 +42,7 @@ struct AllToAllAsyncParams {
         sub_device_id(sub_device_id) {}
 
     auto attributes() const {
-        using tt::stl::reflection::Attribute;
+        using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.emplace_back("in_dim", in_dim);
         attrs.emplace_back("out_dim", out_dim);

@@ -13,9 +13,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 
-namespace ttnn::operations::experimental::reduction {
+namespace ttnn::experimental::reduction {
 
-std::vector<ttnn::Tensor> DeepseekMoEFastReduceNCOperation::invoke(
+std::vector<ttnn::Tensor> deepseek_moe_fast_reduce_nc(
     const ttnn::Tensor& input_tensor,
     int32_t dim,
     uint64_t split_size,
@@ -34,4 +34,4 @@ std::vector<ttnn::Tensor> DeepseekMoEFastReduceNCOperation::invoke(
         input_tensor, normalized_dim, split_size, output_memory_config, config);
 }
 
-}  // namespace ttnn::operations::experimental::reduction
+}  // namespace ttnn::experimental::reduction

@@ -80,6 +80,13 @@ COMPUTE_KERNEL_CONFIG_HIFI4 = ttnn.WormholeComputeKernelConfig(
     packer_l1_acc=True,
 )
 
+COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
+    packer_l1_acc=True,
+)
+
 COMPUTE_KERNEL_CONFIG_HIFI2_NA = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi2,
     math_approx_mode=False,
@@ -1092,19 +1099,15 @@ def _shard_device_impl(
     else:
         mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, mesh_shape=mesh_device.shape, dims=shard_dims)
 
-    if memory_config != ttnn.DRAM_MEMORY_CONFIG:
-        ttnn_tensor = ttnn.from_torch(
-            tensor, layout=layout, memory_config=memory_config, mesh_mapper=mesh_mapper, device=mesh_device, dtype=dtype
-        )
-    else:
-        ttnn_tensor = ttnn.from_torch(
-            tensor,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            mesh_mapper=mesh_mapper,
-        )
-        ttnn_tensor = ttnn.to_dtype(ttnn_tensor, dtype)
-        ttnn_tensor = ttnn_tensor.to(layout)
+    ttnn_tensor = ttnn.from_torch(
+        tensor,
+        layout=layout,
+        memory_config=memory_config,
+        mesh_mapper=mesh_mapper,
+        device=mesh_device,
+        dtype=dtype,
+        fast_approx=True,
+    )
 
     assert memory_config == ttnn_tensor.memory_config()
     assert dtype == ttnn_tensor.dtype
