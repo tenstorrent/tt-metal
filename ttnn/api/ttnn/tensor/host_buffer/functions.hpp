@@ -38,24 +38,24 @@ void validate_datatype(const Tensor& tensor) {
 HostBuffer get_host_buffer(const Tensor& tensor);
 
 template <typename T>
-tt::stl::Span<const T> get_as(const HostBuffer& buffer) {
+ttsl::Span<const T> get_as(const HostBuffer& buffer) {
     return buffer.view_as<T>();
 }
 
 template <typename T>
-tt::stl::Span<T> get_as(HostBuffer& buffer) {
+ttsl::Span<T> get_as(HostBuffer& buffer) {
     return buffer.view_as<T>();
 }
 
 template <typename T>
-tt::stl::Span<const T> get_as(const Tensor& tensor) {
+ttsl::Span<const T> get_as(const Tensor& tensor) {
     validate_datatype<T>(tensor);
     HostBuffer buffer = get_host_buffer(tensor);
     return buffer.template view_as<T>();
 }
 
 template <typename T>
-tt::stl::Span<T> get_as(Tensor& tensor) {
+ttsl::Span<T> get_as(Tensor& tensor) {
     validate_datatype<T>(tensor);
     HostBuffer buffer = get_host_buffer(tensor);
     return buffer.template view_as<T>();
