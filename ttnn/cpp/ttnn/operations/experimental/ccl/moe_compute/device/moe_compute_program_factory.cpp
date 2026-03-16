@@ -1129,9 +1129,8 @@ MoEComputeMeshWorkloadFactory::create_at(
         .dense_input_tensor = matmul_output_tensor,
         .dense_activations_tensor = tilize_expert_activation_output_tensor,
         .dense_token_maps_tensor = tilize_e_t_output_tensor,
-        .dense_token_counts_tensor = tilize_per_expert_total_tokens_output_tensor
-        //.optional_output_tensor = std::nullopt,
-    };
+        .dense_token_counts_tensor = tilize_per_expert_total_tokens_output_tensor,
+        .optional_output_tensor = tensor_args.optional_output_tensor};
 
     // 3 compute cores write output pages to each combine cores in a column of sharded output
     const uint32_t compute_cores_per_combine_core = matmul_core_range_set.num_cores() / output_width_shard_dim;
@@ -1259,8 +1258,7 @@ void MoEComputeMeshWorkloadFactory::override_runtime_arguments(
                 .dense_activations_tensor = tilize_expert_activation_output_tensor,
                 .dense_token_maps_tensor = tilize_e_t_output_tensor,
                 .dense_token_counts_tensor = tilize_per_expert_total_tokens_output_tensor,
-                .optional_output_tensor = std::nullopt,
-            };
+                .optional_output_tensor = tensor_args.optional_output_tensor};
             selective_reduce_combine_helper_override_runtime_arguments(
                 program,
                 reader_kernel_id,
