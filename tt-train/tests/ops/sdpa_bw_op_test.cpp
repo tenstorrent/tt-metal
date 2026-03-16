@@ -22,6 +22,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
+#include "core/system_utils.hpp"
 
 class SDPABackwardTest : public ::testing::Test {
 protected:
@@ -768,6 +769,7 @@ TEST_F(SDPABackwardTest, CausalMask_MHA) {
 }
 
 TEST_F(SDPABackwardTest, CausalMask_GQA) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Test causal mask with Grouped Query Attention
     // Both sdpa_bw_q and sdpa_bw_kv support on-the-fly causal mask generation
     SDPABackwardTestConfig config{

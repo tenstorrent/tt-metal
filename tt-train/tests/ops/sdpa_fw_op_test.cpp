@@ -29,6 +29,7 @@
 #include "ttnn_fixed/matmuls.hpp"
 #include "ttnn_fixed/trivial_ttnn_ops.hpp"
 #include "xtensor/generators/xbuilder.hpp"
+#include "core/system_utils.hpp"
 
 class SDPAForwardTest : public ::testing::Test {
 protected:
@@ -662,6 +663,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_SingleTile) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Multi-head attention with equal query and KV heads (standard MHA)
     // batch=4, seq=256 (8 tile rows), 6 heads with 128 dim per head
     SDPATestConfig config{
@@ -677,6 +679,7 @@ TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_MHA_Batch4_Seq256) {
 }
 
 TEST_F(SDPAForwardTest, SDPAForwardTest_CausalMask_GQA_Batch16_Seq512) {
+    SKIP_FOR_LLK_ASSERTS("Skip due to too large code size when assert is enabled.");
     // Grouped Query Attention with different query and KV heads
     // batch=16, seq=512 (16 tile rows), 8 query heads, 4 KV heads (2:1 ratio)
     SDPATestConfig config{
