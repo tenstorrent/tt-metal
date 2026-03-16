@@ -15,7 +15,7 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
     const Tensor& input_tensor,
     const CoreCoord& compute_with_storage_grid_size,
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
-    const uint32_t num_heads = 16,
+    uint32_t num_heads = 16,
     const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors = std::nullopt);
 
 }  // namespace ttnn::experimental
