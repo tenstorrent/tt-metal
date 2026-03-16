@@ -189,6 +189,9 @@ class SFTTrainer:
         self._loss_fn = ttml.ops.loss.cross_entropy_loss
         self._callbacks = callbacks or []
         self._compute_loss_override = compute_loss_func
+        # Composer for gathering distributed tensors to numpy
+        device = ttml.autograd.AutoContext.get_instance().get_device()
+        self._composer = ttml.core.distributed.concat_mesh_to_tensor_composer(device, 0)
 
     # ------------------------------------------------------------------
     # Public API
@@ -227,7 +230,9 @@ class SFTTrainer:
             for _ in range(cfg.gradient_accumulation_steps):
                 batch = _next_batch()
                 loss = self._compute_loss(batch)
-                micro_losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32).mean()))
+                micro_losses.append(
+                    float(loss.to_numpy(ttnn.DataType.FLOAT32, self._composer).mean())
+                )
 
                 scaled = ttml.ops.binary.mul(
                     loss, 1.0 / cfg.gradient_accumulation_steps
@@ -299,7 +304,9 @@ class SFTTrainer:
         # should sum to B*T (one entry per token position).  A large deviation
         # usually indicates a custom collate that forgot to normalise.
         if batch.loss_mask is not None:
-            mask_np = batch.loss_mask.to_numpy(ttnn.DataType.FLOAT32)
+            mask_np = batch.loss_mask.to_numpy(ttnn.DataType.FLOAT32, self._composer)[
+                :1
+            ]
             B, _, T, _ = mask_np.shape
             expected = float(B * T)
             actual = float(mask_np.sum())
@@ -315,7 +322,8 @@ class SFTTrainer:
         loss = self._loss_fn(
             logits, batch.labels, ttml.ops.ReduceType.NONE
         )  # [B, 1, T, 1]
-        loss = loss * batch.loss_mask  # zero out prompt + padding
+        if batch.loss_mask is not None:
+            loss = loss * batch.loss_mask  # zero out prompt + padding
         return ttml.ops.unary.mean(loss)
 
     def _eval(self) -> float:
@@ -325,7 +333,9 @@ class SFTTrainer:
         with no_grad():
             for batch in self.eval_dataloader:
                 loss = self._compute_loss(batch)
-                losses.append(float(loss.to_numpy(ttnn.DataType.FLOAT32).mean()))
+                losses.append(
+                    float(loss.to_numpy(ttnn.DataType.FLOAT32, self._composer).mean())
+                )
         self.model.train()
         return float(np.mean(losses))
 
@@ -349,7 +359,7 @@ class SFTTrainer:
         state = {}
         for name, param in self.model.parameters().items():
             tensor = param.tensor if hasattr(param, "tensor") else param
-            state[name] = tensor.to_numpy(ttnn.DataType.FLOAT32)
+            state[name] = tensor.to_numpy(ttnn.DataType.FLOAT32, self._composer)
 
         with open(path, "wb") as f:
             pickle.dump({"step": self.step, "model_state": state}, f)
