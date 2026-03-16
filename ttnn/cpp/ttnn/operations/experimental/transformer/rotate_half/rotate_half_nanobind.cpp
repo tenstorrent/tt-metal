@@ -9,15 +9,14 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "rotate_half.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
 void bind_rotate_half(nb::module_& mod) {
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"rotate_half", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::rotate_half,
         R"doc(
             Performs a rotate half operation used by RotaryEmbedding
 
@@ -27,7 +26,10 @@ void bind_rotate_half(nb::module_& mod) {
             Keyword Args:
                 * :attr:`memory_config`: Memory Config of the output tensor, if None then it gets set to input.memory_config()
         )doc",
-        ttnn::nanobind_arguments_t{nb::arg("input"), nb::kw_only(), nb::arg("memory_config") = nb::none()});
+        &ttnn::experimental::rotate_half,
+        nb::arg("input"),
+        nb::kw_only(),
+        nb::arg("memory_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::transformer

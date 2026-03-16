@@ -5,9 +5,9 @@
 #include "dit_minimal_matmul_addcmul_fused.hpp"
 #include "ttnn/operations/experimental/minimal_matmul/device/minimal_matmul_device_operation.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteDitMinimalMatmulAddcmulFused::invoke(
+ttnn::Tensor dit_minimal_matmul_addcmul_fused(
     const ttnn::Tensor& matmul_input_tensor,
     const ttnn::Tensor& matmul_weight_tensor,
     float scalar,
@@ -39,4 +39,4 @@ ttnn::Tensor ExecuteDitMinimalMatmulAddcmulFused::invoke(
     return outputs[0];
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental
