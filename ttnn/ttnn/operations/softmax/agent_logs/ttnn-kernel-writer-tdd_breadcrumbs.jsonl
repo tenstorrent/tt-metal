@@ -8,3 +8,8 @@
 {"event":"cb_sync_check","stage":"passthrough","balanced":true,"cb_summary":"c0:R_push/R_pop(1-at-a-time) c8:1_push/unused c16:1_push_per_tile/1_wait_per_tile","ts":"2026-03-16T09:31:33+00:00"}
 {"event":"test_run","status":"pass","stage":"passthrough","test_file":"test_stage_passthrough.py","shapes":["1x1x32x32","1x1x64x128","1x1x32x256","4x2x64x64"],"hard_attempts":0,"ts":"2026-03-16T09:32:22+00:00"}
 {"event":"stage_complete","stage":"passthrough","attempts":1,"upstream_fixes":["Fixed writer to wait/pop 1 tile at a time to match double-buffered cb_out"],"design_deviations":[],"ts":"2026-03-16T09:32:25+00:00"}
+{"event":"stage_start","stage":"exp_only","description":"Add exp post-op to copy_tiles in compute kernel. Reader and writer unchanged.","ts":"2026-03-16T09:33:14+00:00"}
+{"event":"kernel_implemented","stage":"exp_only","kernel":"compute","approach":"Added exp_post_op lambda to copy_tiles call. exp_tile_init() + exp_tile(dst_idx) applied per tile before packing.","ts":"2026-03-16T09:33:29+00:00"}
+{"event":"cb_sync_check","stage":"exp_only","balanced":true,"cb_summary":"c0:R_push/R_pop(1-at-a-time) c8:1_push/unused c16:1_push_per_tile/1_wait_per_tile. Same as passthrough, only SFPU exp added in DST.","ts":"2026-03-16T09:33:36+00:00"}
+{"event":"test_run","status":"pass","stage":"exp_only","test_file":"test_stage_exp_only.py","shapes":["1x1x32x32","1x1x64x128","1x1x32x256","4x2x64x64"],"hard_attempts":0,"ts":"2026-03-16T09:34:07+00:00"}
+{"event":"stage_complete","stage":"exp_only","attempts":1,"upstream_fixes":[],"design_deviations":[],"ts":"2026-03-16T09:34:08+00:00"}

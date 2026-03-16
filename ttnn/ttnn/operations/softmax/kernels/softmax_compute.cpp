@@ -23,13 +23,18 @@ void MAIN {
     constexpr uint32_t numeric_stable = get_compile_time_arg_val(7);
     constexpr uint32_t num_work_units = get_compile_time_arg_val(8);
 
-    // Stage 1: passthrough — just copy cb_input to cb_out
+    // Stage 2: exp_only — copy with exp post-op
     compute_kernel_hw_startup(cb_input, cb_scaler, cb_out);
+
+    auto exp_post_op = [](uint32_t dst_idx) {
+        exp_tile_init();
+        exp_tile(dst_idx);
+    };
 
     for (uint32_t wu = 0; wu < num_work_units; ++wu) {
         compute_kernel_lib::copy_tiles<
             compute_kernel_lib::CopyInputPolicy::WaitAndPop,
-            compute_kernel_lib::CopyDataFormatReconfig::NONE>(cb_input, cb_out, R);
+            compute_kernel_lib::CopyDataFormatReconfig::NONE>(cb_input, cb_out, R, exp_post_op);
     }
 }
 
