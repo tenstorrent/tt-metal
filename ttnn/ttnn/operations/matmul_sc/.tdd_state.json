@@ -3,8 +3,8 @@
   "op_path": "ttnn/ttnn/operations/matmul_sc",
   "spec_path": "ttnn/ttnn/operations/matmul_sc/op_design.md",
   "layout": "TILE_LAYOUT",
-  "current_stage_index": 1,
-  "last_passing_commit": "67bfe5cd9b6bbfe084909f4563e5b46a7948939a",
+  "current_stage_index": 2,
+  "last_passing_commit": "3d30b0fb6117fddccc2170ce4a2827035d2c2bd8",
   "stages": [
     {
       "name": "data_pipeline",
@@ -112,12 +112,54 @@
       "extra_ttnn_setup": "",
       "output_shape_expr": "list(input_b_tensor.shape)",
       "dtype_parametrize": "",
-      "status": "in_progress",
-      "commit": null,
+      "status": "passed",
+      "commit": "3d30b0fb6117fddccc2170ce4a2827035d2c2bd8",
       "attempts": 0,
-      "free_retries": 0,
+      "free_retries": 3,
       "max_attempts": 6,
-      "failure_history": []
+      "failure_history": [
+        {
+          "classification": "compilation_error",
+          "summary": "Compilation error: nel_lib::matmul_1d(uint32_t, uint32_t, uint32_t, uint32_t)':\n/proj_sw/user_dev/wransom/tt-metal/ttnn/cpp/ttnn/kernel_lib/matmul_1d_helpers.inl:37:17: error: there are no arguments to 'get_cb_num_pages",
+          "details": {
+            "error_snippet": "nel_lib::matmul_1d(uint32_t, uint32_t, uint32_t, uint32_t)':\n/proj_sw/user_dev/wransom/tt-metal/ttnn/cpp/ttnn/kernel_lib/matmul_1d_helpers.inl:37:17: error: there are no arguments to 'get_cb_num_pages' that depend on a template parameter, so a declaration of 'get_cb_num_pages' must be available [-Wt"
+          },
+          "suggested_action": "Check includes and template parameters. Verify kernel API signatures. Ensure compute_kernel_hw_startup() is called before helpers.",
+          "attempt": 0,
+          "free_retries": 1,
+          "cost": "FREE",
+          "stage": "matmul_compute",
+          "remaining_attempts": 6,
+          "remaining_free_retries": 9,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "shape_mismatch",
+          "summary": "Shape mismatch",
+          "details": {},
+          "suggested_action": "Verify output shape calculation in ProgramDescriptor. Check work distribution logic and per-core tile counts.",
+          "attempt": 0,
+          "free_retries": 2,
+          "cost": "FREE",
+          "stage": "matmul_compute",
+          "remaining_attempts": 6,
+          "remaining_free_retries": 8,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "shape_mismatch",
+          "summary": "Shape mismatch",
+          "details": {},
+          "suggested_action": "Verify output shape calculation in ProgramDescriptor. Check work distribution logic and per-core tile counts.",
+          "attempt": 0,
+          "free_retries": 3,
+          "cost": "FREE",
+          "stage": "matmul_compute",
+          "remaining_attempts": 6,
+          "remaining_free_retries": 7,
+          "budget_exhausted": false
+        }
+      ]
     }
   ]
 }
