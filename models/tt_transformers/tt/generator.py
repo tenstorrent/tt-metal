@@ -117,10 +117,12 @@ class Generator(WarmupForwardMixin):
 
         skip_sequence_lengths = False
 
-        logger.warning("Batched prefill in TTT is not supported")
-
         # Sweep all sampling parameters for prefill warmup just once since it is sequence length agnostic
         sampling_parameters_sweeped = False
+
+        # Warmup batch sizes: always warmup batch_size=1; also warmup small
+        # batched prefill sizes that may be used at runtime.
+        warmup_batch_sizes = [1, 2, 4]
 
         for model_id in range(self.data_parallel):
             for supported_length in sequence_lengths_to_warmup:
@@ -129,9 +131,12 @@ class Generator(WarmupForwardMixin):
                 ):
                     continue
 
-                for batch_size in [1, 32]:
-                    if batch_size == 32:
-                        # TODO: Remove continue when batched prefill is supported
+                for batch_size in warmup_batch_sizes:
+                    if batch_size > 1 and batch_size * supported_length >= MAX_BATCHED_PREFILL_SEQ_LEN:
+                        logger.info(
+                            f"Skipping batched prefill warmup for batch_size={batch_size}, "
+                            f"seq_len={supported_length}: exceeds token limit"
+                        )
                         continue
 
                     warmup_args = self._mock_tokens(batch_size, supported_length, kv_cache, model_id)
@@ -462,17 +467,31 @@ class Generator(WarmupForwardMixin):
             prompt_lens = prompt_lens.tolist()
 
         prefill_seq_lens = [get_padded_prefill_len(seq_len) for seq_len in prompt_lens]
-        # Use batched prefill when all prompts have the same padded length and total sequence fits in memory
+        # Use batched prefill when all prompts have the same padded length.
+        # padded_batch is sized to the actual number of users (rounded up to a
+        # supported batch size) instead of max_batch_size to avoid OOM from
+        # oversized all_gather buffers (see PR #35722 regression).
         use_batched_prefill = (
             batch_size > 1
             and len(set(prefill_seq_lens)) == 1
-            and prefill_seq_lens[0] * batch_size < MAX_BATCHED_PREFILL_SEQ_LEN
             and self.data_parallel == 1
             and not getattr(self.model_args[0], "disable_batched_prefill", False)
         )
 
+        if use_batched_prefill:
+            _supported = [b for b in (1, 2, 4, 8, 16, 32) if b >= batch_size]
+            padded_batch = _supported[0] if _supported else self.model_args[0].max_batch_size
+            if padded_batch * prefill_seq_lens[0] >= MAX_BATCHED_PREFILL_SEQ_LEN:
+                logger.info(
+                    f"Batched prefill disabled: {padded_batch} x {prefill_seq_lens[0]} = "
+                    f"{padded_batch * prefill_seq_lens[0]} tokens exceeds limit {MAX_BATCHED_PREFILL_SEQ_LEN}"
+                )
+                use_batched_prefill = False
+
+        if not use_batched_prefill:
+            padded_batch = self.model_args[0].max_batch_size
+
         all_users = [0] if use_batched_prefill else empty_slots
-        padded_batch = self.model_args[0].max_batch_size
 
         sampling_params_per_out: list[SamplingParams | None] = [None] * len(empty_slots)
         prompt_tokens_per_out: list[torch.Tensor | None] = [None] * len(empty_slots)
@@ -550,6 +569,7 @@ class Generator(WarmupForwardMixin):
                     prefill_seq_len=prefill_seq_len,
                     use_batched_prefill=use_batched_prefill,
                     user_id=batch_user_ids if use_batched_prefill else user_id,
+                    padded_batch_size=padded_batch if use_batched_prefill else None,
                 )
             else:
                 page_table_user = None
@@ -2181,20 +2201,19 @@ class Generator(WarmupForwardMixin):
         prefill_seq_len=None,
         use_batched_prefill=False,
         user_id=None,
+        padded_batch_size=None,
     ):
         block_size = get_block_size(kv_cache)
 
         if use_batched_prefill:
-            # For batched prefill, use prefill_seq_len (padded) for num_blocks
+            batch_dim = padded_batch_size if padded_batch_size is not None else self.model_args[0].max_batch_size
             num_blocks = num_blocks_in_seq(prefill_seq_len, block_size)
             page_table = page_table[:, :num_blocks]
             if trace_enabled:
                 if page_table.shape[1] < num_blocks:
                     padding = torch.ones(page_table.shape[0], num_blocks - page_table.shape[1], dtype=torch.int32) * -1
                     page_table = torch.cat([page_table, padding], dim=1)
-            padded_page_table = (
-                torch.ones(self.model_args[0].max_batch_size, page_table.shape[1], dtype=torch.int32) * -1
-            )
+            padded_page_table = torch.ones(batch_dim, page_table.shape[1], dtype=torch.int32) * -1
             assert user_id is not None
             for i, user in enumerate(user_id):
                 padded_page_table[user, :] = page_table[i, :]
