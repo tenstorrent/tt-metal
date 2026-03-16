@@ -267,6 +267,7 @@ def test_get_weight_config_cache_invalidation_wrong_suffix(tmp_path: Path) -> No
 
 def test_get_weight_config_multihost_peer_uses_rank0_hit_decision(tmp_path: Path, monkeypatch) -> None:
     """Peer ranks should follow rank 0's hit decision and skip local cache validation."""
+    import models.demos.deepseek_v3.utils.weight_config as weight_config_module
 
     class FakeModule:
         @staticmethod
@@ -277,7 +278,7 @@ def test_get_weight_config_multihost_peer_uses_rank0_hit_decision(tmp_path: Path
     monkeypatch.setattr(weight_config_module, "_is_multihost_distributed", lambda: True)
     monkeypatch.setattr(weight_config_module, "_get_distributed_rank", lambda: 1)
     monkeypatch.setattr(weight_config_module, "_distributed_barrier", lambda: None)
-    monkeypatch.setattr(weight_config_module, "_read_multihost_decision", lambda path: {"mode": "hit"})
+    monkeypatch.setattr(weight_config_module, "_read_multihost_decision", lambda path: "hit")
     monkeypatch.setattr(weight_config_module, "_load_cached_config_without_visibility_checks", lambda *_args: sentinel)
 
     mesh_device = _FakeMeshDevice(shape=(2, 2))
@@ -298,6 +299,7 @@ def test_get_weight_config_multihost_peer_uses_rank0_hit_decision(tmp_path: Path
 
 def test_get_weight_config_multihost_peer_miss_does_not_write_config(tmp_path: Path, monkeypatch) -> None:
     """Peer ranks should participate in generation on miss, but leave config.json publication to rank 0."""
+    import models.demos.deepseek_v3.utils.weight_config as weight_config_module
 
     class FakeModule:
         @staticmethod
@@ -310,7 +312,7 @@ def test_get_weight_config_multihost_peer_miss_does_not_write_config(tmp_path: P
     monkeypatch.setattr(weight_config_module, "_is_multihost_distributed", lambda: True)
     monkeypatch.setattr(weight_config_module, "_get_distributed_rank", lambda: 1)
     monkeypatch.setattr(weight_config_module, "_distributed_barrier", lambda: None)
-    monkeypatch.setattr(weight_config_module, "_read_multihost_decision", lambda path: {"mode": "miss"})
+    monkeypatch.setattr(weight_config_module, "_read_multihost_decision", lambda path: "miss")
 
     mesh_device = _FakeMeshDevice(shape=(2, 2))
     hf_config = _make_hf_config(num_hidden_layers=2)

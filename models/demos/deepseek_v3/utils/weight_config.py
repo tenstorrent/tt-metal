@@ -69,6 +69,10 @@ class WeightConfigEncoder(json.JSONEncoder):
         return obj
 
 
+class MissingWeightFileError(ValueError):
+    pass
+
+
 def try_decode_saved_weight(obj: dict[str, Any]) -> Any:
     path_str = obj.get("path", None)
     if not isinstance(path_str, str):
@@ -137,10 +141,6 @@ def _write_json_atomic(path: Path, payload: dict[str, Any], *, encoder: type[jso
     os.replace(tmp_path, path)
 
 
-def _write_weight_config_json(config_path: Path, weight_config: WeightConfig) -> None:
-    _write_json_atomic(config_path, weight_config, encoder=WeightConfigEncoder)
-
-
 def _is_multihost_distributed() -> bool:
     if not ttnn.distributed_context_is_initialized():
         return False
@@ -161,22 +161,6 @@ def _distributed_barrier() -> None:
         ttnn.distributed_context_barrier()
 
 
-def _get_multihost_coord_paths(weight_cache_path: Path) -> tuple[Path, Path]:
-    coord_dir = weight_cache_path / _MULTIHOST_CACHE_COORD_DIR
-    return coord_dir / _MULTIHOST_DECISION_FILE, coord_dir / _MULTIHOST_GENERATION_LOCK
-
-
-def _write_multihost_decision(decision_path: Path, *, mode: str) -> None:
-    _write_json_atomic(
-        decision_path,
-        {
-            "mode": mode,
-            "pid": os.getpid(),
-            "rank": _get_distributed_rank(),
-        },
-    )
-
-
 def _maybe_log_wait(last_log_time: float | None, message: str) -> float:
     now = time.monotonic()
     if last_log_time is None or now - last_log_time >= _MULTIHOST_WAIT_LOG_INTERVAL_SECONDS:
@@ -185,30 +169,7 @@ def _maybe_log_wait(last_log_time: float | None, message: str) -> float:
     return last_log_time
 
 
-def _find_first_missing_weight_file(root_path: Path, weight_config: WeightConfig) -> Path | None:
-    if isinstance(weight_config, dict):
-        entries = weight_config.values()
-    elif isinstance(weight_config, (list, tuple)):
-        entries = weight_config
-    else:
-        return None
-
-    for entry in entries:
-        if entry is None:
-            continue
-        if isinstance(entry, SavedWeight):
-            effective_path = entry.path if entry.path.is_absolute() else root_path / entry.path
-            if not effective_path.exists():
-                return effective_path
-        else:
-            missing_path = _find_first_missing_weight_file(root_path, entry)
-            if missing_path is not None:
-                return missing_path
-
-    return None
-
-
-def _read_multihost_decision(decision_path: Path) -> dict[str, Any]:
+def _read_multihost_decision(decision_path: Path) -> str:
     last_log_time = None
     while True:
         try:
@@ -217,7 +178,7 @@ def _read_multihost_decision(decision_path: Path) -> dict[str, Any]:
             mode = payload.get("mode")
             if mode not in {"hit", "miss"}:
                 raise RuntimeError(f"Invalid multihost cache decision payload in {decision_path}: {payload}")
-            return payload
+            return mode
         except FileNotFoundError as e:
             last_log_time = _maybe_log_wait(
                 last_log_time,
@@ -249,40 +210,13 @@ def _wait_for_weight_config_paths(root_path: Path, weight_config: WeightConfig, 
         try:
             validate_weight_config_paths(root_path, weight_config)
             return
-        except ValueError as e:
-            if "references missing file" not in str(e):
-                raise
-            missing_path = _find_first_missing_weight_file(root_path, weight_config)
-            wait_target = str(missing_path) if missing_path is not None else str(root_path)
-            wait_name = missing_path.name if missing_path is not None else "<unknown>"
+        except MissingWeightFileError as e:
             last_log_time = _maybe_log_wait(
                 last_log_time,
-                f"Still waiting for {wait_name} to become visible on host {_HOSTNAME}: {wait_target} during {context}",
+                f"Still waiting for cached weights to become visible on host {_HOSTNAME}: "
+                f"{root_path} during {context} ({e})",
             )
             time.sleep(_MULTIHOST_POLL_INTERVAL_SECONDS)
-
-
-def _prepare_state_dicts(
-    hf_config: PretrainedConfig,
-    state_dicts: tuple[dict[str, torch.Tensor] | None, ...] | None,
-    *,
-    random_weights: bool,
-    model_path: str | None,
-    single_layer: str | None,
-) -> tuple[dict[str, torch.Tensor] | None, ...]:
-    if state_dicts is not None:
-        return state_dicts
-
-    logger.info("State dict was not provided, preparing from random weights or model path")
-    from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
-
-    model_state = prepare_model_state_dict(
-        hf_config=hf_config,
-        random_weights=random_weights,
-        model_path=model_path,
-        single_layer=single_layer,
-    )
-    return (model_state,)
 
 
 def _convert_and_cache_weight_config(
@@ -301,27 +235,30 @@ def _convert_and_cache_weight_config(
     wait_for_visibility: bool,
 ) -> WeightConfig:
     logger.info(f"Caching weights at {weight_cache_path}")
-    state_dicts = _prepare_state_dicts(
-        hf_config,
-        state_dicts,
-        random_weights=random_weights,
-        model_path=model_path,
-        single_layer=single_layer,
-    )
+    if state_dicts is None:
+        logger.info("State dict was not provided, preparing from random weights or model path")
+        from models.demos.deepseek_v3.utils.hf_model_utils import prepare_model_state_dict
+
+        model_state = prepare_model_state_dict(
+            hf_config=hf_config,
+            random_weights=random_weights,
+            model_path=model_path,
+            single_layer=single_layer,
+        )
+        state_dicts = (model_state,)
 
     logger.info("Converting weights to TTNN SavedWeight format...")
     weight_config = ModuleClass.convert_weights(hf_config, state_dicts, weight_cache_path, mesh_device)
     validate_weight_config_paths(weight_cache_path, weight_config, require_files_exist=require_files_exist)
     if write_config:
-        _write_weight_config_json(config_path, weight_config)
+        _write_json_atomic(config_path, weight_config, encoder=WeightConfigEncoder)
     if wait_for_visibility:
         _wait_for_weight_config_paths(
             weight_cache_path, weight_config, context="first-time multihost cache publication"
         )
 
-    normalized_config = normalize_weight_config_paths(weight_cache_path, weight_config)
     logger.info("Done converting weights to TTNN SavedWeight format")
-    return normalized_config
+    return normalize_weight_config_paths(weight_cache_path, weight_config)
 
 
 def _get_weight_config_multihost(
@@ -337,14 +274,16 @@ def _get_weight_config_multihost(
     model_path: str | None,
     single_layer: str | None,
 ) -> WeightConfig:
-    decision_path, lock_path = _get_multihost_coord_paths(weight_cache_path)
+    coord_dir = weight_cache_path / _MULTIHOST_CACHE_COORD_DIR
+    decision_path = coord_dir / _MULTIHOST_DECISION_FILE
+    lock_path = coord_dir / _MULTIHOST_GENERATION_LOCK
     rank = _get_distributed_rank()
 
     if rank == 0:
         with locked_file(lock_path, "a+", exclusive=True):
             cached_config = _try_load_cached_config(config_path, weight_cache_path, force_recalculate)
             decision_mode = "hit" if cached_config is not None else "miss"
-            _write_multihost_decision(decision_path, mode=decision_mode)
+            _write_json_atomic(decision_path, {"mode": decision_mode})
             _distributed_barrier()
             try:
                 if decision_mode == "hit":
@@ -368,9 +307,9 @@ def _get_weight_config_multihost(
                 decision_path.unlink(missing_ok=True)
 
     _distributed_barrier()
-    decision = _read_multihost_decision(decision_path)
+    decision_mode = _read_multihost_decision(decision_path)
     try:
-        if decision["mode"] == "hit":
+        if decision_mode == "hit":
             return _load_cached_config_without_visibility_checks(config_path, weight_cache_path)
 
         return _convert_and_cache_weight_config(
@@ -518,7 +457,7 @@ def validate_weight_config_paths(
 
             # Validate file exists
             if require_files_exist and not effective_path.exists():
-                raise ValueError(
+                raise MissingWeightFileError(
                     f"SavedWeight at '{current_prefix}' references missing file. "
                     f"Resolved path: {effective_path} (original: {entry.path})"
                 )
