@@ -70,16 +70,124 @@ def _create_triu_ones_ttnn(size: int, device: ttnn.Device, dtype=ttnn.float32, m
     return ttnn.from_torch(triu, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)
 
 
-def _get_matmul_program_config(M, N, K, grid_size=None, fuse_batch=False):
-    """Get optimal program config for matrix multiplication.
+def _get_matmul_program_config(m, k, n, grid_size=None, fuse_batch=False, in0_block_w=None):
+    """Create optimized program config for matmul operations.
 
-    Returns None to let TTNN auto-select the config, as manually specifying
-    program configs requires careful calculation of per_core_M, per_core_N,
-    and other parameters based on actual tensor dimensions and grid size.
+    Args:
+        m: M dimension (rows of first matrix)
+        k: K dimension (shared dimension)
+        n: N dimension (cols of second matrix)
+        grid_size: Optional (cores_x, cores_y) tuple. If None, auto-selects based on shape.
+        fuse_batch: Whether to fuse batch dimension (not used in this implementation)
+        in0_block_w: Optional block width. If None, auto-selects.
+
+    Returns:
+        MatmulProgramConfig or None if auto-config is better
     """
-    # For now, return None to let TTNN handle program config selection automatically
-    # This avoids L1 memory allocation issues from incorrect config parameters
-    return None
+    TILE_SIZE = 32
+
+    if m < 32 or n < 32 or k < 32:
+        return None
+
+    m_tiles = math.ceil(m / TILE_SIZE)
+    n_tiles = math.ceil(n / TILE_SIZE)
+    k_tiles = math.ceil(k / TILE_SIZE)
+
+    if grid_size is None:
+        total_work = m * n * k
+
+        if total_work < 32768:
+            return None
+
+        if m_tiles == 2 and n_tiles == 2:
+            return None
+        elif m_tiles == 2 and n_tiles == 4:
+            return None
+        elif m_tiles == 2 and n_tiles == 8:
+            return None
+        elif m_tiles == 4 and n_tiles == 2:
+            return None
+        elif m_tiles == 4 and n_tiles == 8:
+            grid_size = (8, 4)
+        elif m_tiles <= 4 and n_tiles <= 4:
+            if n_tiles >= 4:
+                grid_size = (2, 1)
+            elif m_tiles >= 4:
+                grid_size = (1, 2)
+            else:
+                if total_work >= 262144:
+                    grid_size = (2, 2)
+                else:
+                    grid_size = (2, 1)
+        elif m_tiles >= 4 and n_tiles >= 8:
+            cores_y = min(4, m_tiles)
+            cores_x = min(8, n_tiles)
+            grid_size = (cores_x, cores_y)
+        else:
+            if n_tiles >= 4:
+                total_cores = min(8, max(2, n_tiles))
+                grid_size = (total_cores, 1)
+            elif m_tiles >= 4:
+                total_cores = min(8, max(2, m_tiles))
+                grid_size = (1, total_cores)
+            else:
+                return None
+
+    cores_x, cores_y = grid_size
+
+    per_core_M = math.ceil(m_tiles / cores_y)
+    per_core_N = math.ceil(n_tiles / cores_x)
+    per_core_M = max(1, per_core_M)
+    per_core_N = max(1, per_core_N)
+
+    if in0_block_w is None:
+        k_per_core = math.ceil(k_tiles / cores_x) if cores_x > 1 else k_tiles
+        in0_block_w = min(4, max(1, k_per_core))
+        while k_tiles % (in0_block_w * cores_x) != 0 and in0_block_w > 1:
+            in0_block_w -= 1
+        if in0_block_w < 1:
+            in0_block_w = 1
+
+    max_subblock_size = 4
+    out_subblock_h = min(per_core_M, max_subblock_size)
+    out_subblock_w = min(per_core_N, max_subblock_size)
+
+    if out_subblock_h * out_subblock_w > max_subblock_size:
+        if out_subblock_h > out_subblock_w:
+            out_subblock_h = max_subblock_size // out_subblock_w
+        else:
+            out_subblock_w = max_subblock_size // out_subblock_h
+
+    while per_core_M % out_subblock_h != 0 and out_subblock_h > 1:
+        out_subblock_h -= 1
+    while per_core_N % out_subblock_w != 0 and out_subblock_w > 1:
+        out_subblock_w -= 1
+
+    if out_subblock_h < 1 or out_subblock_w < 1 or out_subblock_h * out_subblock_w > max_subblock_size:
+        out_subblock_h = min(per_core_M, 2)
+        out_subblock_w = min(per_core_N, 2)
+        while per_core_M % out_subblock_h != 0 and out_subblock_h > 1:
+            out_subblock_h -= 1
+        while per_core_N % out_subblock_w != 0 and out_subblock_w > 1:
+            out_subblock_w -= 1
+
+    if out_subblock_h < 1 or out_subblock_w < 1:
+        return None
+
+    try:
+        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
+            compute_with_storage_grid_size=grid_size,
+            in0_block_w=in0_block_w,
+            out_subblock_h=out_subblock_h,
+            out_subblock_w=out_subblock_w,
+            per_core_M=per_core_M,
+            per_core_N=per_core_N,
+            transpose_mcast=False,
+            fused_activation=None,
+            fuse_batch=fuse_batch,
+        )
+    except Exception:
+        return None
 
 
 class TTNNFusedChunkedDeltaRule(TTNNModule):
