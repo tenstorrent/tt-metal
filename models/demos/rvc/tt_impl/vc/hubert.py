@@ -56,13 +56,9 @@ class MultiheadSelfAttention:
 
         src_len = query.shape[0]
 
-        query_btc = ttnn.permute(query, (1, 0, 2))
-        key_btc = ttnn.permute(query, (1, 0, 2))
-        value_btc = ttnn.permute(query, (1, 0, 2))
-
-        query_proj = self.q_proj(query_btc)
-        key_proj = self.k_proj(key_btc)
-        value_proj = self.v_proj(value_btc)
+        query_proj = self.q_proj(query)
+        key_proj = self.k_proj(query)
+        value_proj = self.v_proj(query)
 
         qkv_proj = ttnn.concat([query_proj, key_proj, value_proj], dim=-1)
         query_heads, key_heads, value_heads = ttnn.transformer.split_query_key_value_and_split_heads(
@@ -90,7 +86,7 @@ class MultiheadSelfAttention:
         attn_output = ttnn.transformer.concatenate_heads(attn_output)
         attn_output = self.out_proj(attn_output)
 
-        return ttnn.permute(attn_output, (1, 0, 2))
+        return attn_output
 
     def deallocate(self) -> None:
         self.k_proj.deallocate()
@@ -386,14 +382,10 @@ class TransformerEncoder:
 
         x, pad_length = pad_to_multiple(x, self.required_seq_len_multiple, value=0.0)
 
-        x = ttnn.permute(x, (1, 0, 2))
-
         for i, layer in enumerate(self.layers):
             x = layer(x)
             if i == tgt_layer:
                 break
-
-        x = ttnn.permute(x, (1, 0, 2))
 
         if pad_length > 0:
             x = ttnn.slice(x, (0, 0, 0), (x.shape[0], x.shape[1] - pad_length, x.shape[2]))
