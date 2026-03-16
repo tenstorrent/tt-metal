@@ -26,6 +26,7 @@
 #include "impl/context/metal_context.hpp"
 #include <umd/device/types/arch.hpp>
 #include "impl/kernels/kernel.hpp"
+#include <tt-metalium/experimental/host_api.hpp>
 
 //////////////////////////////////////////////////////////////////////////////////////////
 // A test for checking watcher waypoints.
@@ -36,6 +37,7 @@ using namespace tt::tt_metal;
 
 namespace {
 namespace CMAKE_UNIQUE_NAMESPACE {
+const std::string waypoint = "AAAA";
 void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::MeshDevice>& mesh_device) {
     // Set up program
     distributed::MeshWorkload workload;
@@ -45,28 +47,19 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     workload.add_program(device_range, std::move(program));
     auto& program_ = workload.get_programs().at(device_range);
     auto* device = mesh_device->get_devices()[0];
+    const auto& hal = MetalContext::instance().hal();
+    const bool is_quasar = hal.get_arch() == tt::ARCH::QUASAR;
+    const std::string kernel_path = "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp";
 
-    // Test runs on a 5x5 grid
     CoreCoord xy_start = {0, 0};
-    CoreCoord xy_end = {4, 4};
-
-    // Run a kernel that posts waypoints and waits on certain gating values to be written before
-    // posting the next waypoint.
-    auto brisc_kid = CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
-        CoreRange(xy_start, xy_end),
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
-    auto ncrisc_kid = CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
-        CoreRange(xy_start, xy_end),
-        DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
-    auto trisc_kid = CreateKernel(
-        program_,
-        "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
-        CoreRange(xy_start, xy_end),
-        ComputeConfig{});
+    CoreCoord xy_end;
+    if (is_quasar) {
+        // Quasar only supports single cluster currently
+        xy_end = {0, 0};
+    } else {
+        // BH/WH: 5x5 grid
+        xy_end = {4, 4};
+    }
 
     // The kernels need arguments to be passed in: the number of cycles to delay while syncing,
     // and an L1 buffer to use for the syncing.
@@ -80,15 +73,42 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     };
     auto l1_buffer = CreateBuffer(l1_config);
 
-    // Write runtime args
+    // Runtime args
     const std::vector<uint32_t> args = { delay_cycles, l1_buffer->address() };
-    for (uint32_t x = xy_start.x; x <= xy_end.x; x++) {
-        for (uint32_t y = xy_start.y; y <= xy_end.y; y++) {
-            SetRuntimeArgs(program_, brisc_kid, CoreCoord{x, y}, args);
-            SetRuntimeArgs(program_, ncrisc_kid, CoreCoord{x, y}, args);
-            SetRuntimeArgs(program_, trisc_kid, CoreCoord{x, y}, args);
-        }
+
+    // Run a kernel that posts waypoints and waits on certain gating values to be written before
+    // posting the next waypoint.
+    if (is_quasar) {
+        auto num_dms = hal.get_processor_types_count(HalProgrammableCoreType::TENSIX, 0);  // 8
+        auto dm_kid = tt::tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            kernel_path,
+            CoreRange(xy_start, xy_end),
+            tt::tt_metal::experimental::quasar::QuasarDataMovementConfig{.num_threads_per_cluster = num_dms});
+        auto compute_kid = tt::tt_metal::experimental::quasar::CreateKernel(
+            program_,
+            kernel_path,
+            CoreRange(xy_start, xy_end),
+            tt::tt_metal::experimental::quasar::QuasarComputeConfig{.num_threads_per_cluster = 4});
+        SetCommonRuntimeArgs(program_, dm_kid, args);
+        SetCommonRuntimeArgs(program_, compute_kid, args);
+    } else {
+        auto brisc_kid = CreateKernel(
+            program_,
+            kernel_path,
+            CoreRange(xy_start, xy_end),
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_0, .noc = NOC::RISCV_0_default});
+        auto ncrisc_kid = CreateKernel(
+            program_,
+            kernel_path,
+            CoreRange(xy_start, xy_end),
+            DataMovementConfig{.processor = DataMovementProcessor::RISCV_1, .noc = NOC::RISCV_1_default});
+        auto trisc_kid = CreateKernel(program_, kernel_path, CoreRange(xy_start, xy_end), ComputeConfig{});
+        SetCommonRuntimeArgs(program_, brisc_kid, args);
+        SetCommonRuntimeArgs(program_, ncrisc_kid, args);
+        SetCommonRuntimeArgs(program_, trisc_kid, args);
     }
+
     // Also run on ethernet cores if they're present
     bool has_eth_cores = !device->get_active_ethernet_cores(true).empty();
     bool has_idle_eth_cores = !device->get_inactive_ethernet_cores().empty();
@@ -99,51 +119,37 @@ void RunTest(MeshWatcherFixture* fixture, const std::shared_ptr<distributed::Mes
     }
 
     if (has_eth_cores) {
-        KernelHandle erisc_kid;
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_active_ethernet_cores(true)) {
             eth_core_ranges.insert(CoreRange(core, core));
         }
-        erisc_kid = CreateKernel(
-            program_,
-            "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
-            eth_core_ranges,
-            tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
-
-        for (const auto& core : device->get_active_ethernet_cores(true)) {
-            SetRuntimeArgs(program_, erisc_kid, core, args);
-        }
+        auto erisc_kid =
+            CreateKernel(program_, kernel_path, eth_core_ranges, tt_metal::EthernetConfig{.noc = tt_metal::NOC::NOC_0});
+        SetCommonRuntimeArgs(program_, erisc_kid, args);
     }
     if (has_idle_eth_cores) {
-        KernelHandle ierisc_kid0{}, ierisc_kid1{};
         std::set<CoreRange> eth_core_ranges;
         for (const auto& core : device->get_inactive_ethernet_cores()) {
             eth_core_ranges.insert(CoreRange(core, core));
         }
-        ierisc_kid0 = CreateKernel(
+        auto ierisc_kid0 = CreateKernel(
             program_,
-            "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
+            kernel_path,
             eth_core_ranges,
             tt_metal::EthernetConfig{
                 .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_0});
+        SetCommonRuntimeArgs(program_, ierisc_kid0, args);
 
         if (device->arch() == ARCH::BLACKHOLE) {
-            ierisc_kid1 = CreateKernel(
+            auto ierisc_kid1 = CreateKernel(
                 program_,
-                "tests/tt_metal/tt_metal/test_kernels/misc/watcher_waypoints.cpp",
+                kernel_path,
                 eth_core_ranges,
                 tt_metal::EthernetConfig{
                     .eth_mode = Eth::IDLE, .noc = tt_metal::NOC::NOC_0, .processor = DataMovementProcessor::RISCV_1});
-        }
-
-        for (const auto& core : device->get_inactive_ethernet_cores()) {
-            SetRuntimeArgs(program_, ierisc_kid0, core, args);
-            if (device->arch() == ARCH::BLACKHOLE) {
-                SetRuntimeArgs(program_, ierisc_kid1, core, args);
-            }
+            SetCommonRuntimeArgs(program_, ierisc_kid1, args);
         }
     }
-
 
     // Run the program in a new thread, we'll have to update gate values in this thread.
     fixture->RunProgram(mesh_device, workload);
