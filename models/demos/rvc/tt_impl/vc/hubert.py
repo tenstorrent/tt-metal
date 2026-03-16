@@ -460,14 +460,14 @@ class HubertModel:
         self.final_proj_linear.load_parameters(parameters=parameters, key="final_proj")
 
     def __call__(self, source: ttnn.Tensor, output_layer: int) -> ttnn.Tensor:
-        x1 = self.feature_extractor(source)
+        x = self.feature_extractor(source)
 
-        x2 = self.layer_norm(x1)
+        x = self.layer_norm(x)
 
         if self.post_extract_proj is not None:
-            x2 = self.post_extract_proj(x2)
-        x4 = self.encoder(x2, tgt_layer=output_layer - 1)
-        return x4
+            x = self.post_extract_proj(x)
+        out = self.encoder(x, tgt_layer=output_layer - 1)
+        return out
 
     def final_proj(self, x: ttnn.Tensor) -> ttnn.Tensor:
         return self.final_proj_linear(x)

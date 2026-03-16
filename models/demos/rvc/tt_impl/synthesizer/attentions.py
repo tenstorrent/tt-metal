@@ -213,7 +213,6 @@ class FFN:
         self.conv_2.load_parameters(parameters=parameters, key="conv_2", prefix=prefix)
 
     def __call__(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        x0 = x
-        x1 = self.conv_1(x0)
-        x2 = self.conv_2(x1)
-        return x2
+        x = self.conv_1(x)
+        x = self.conv_2(x)
+        return x

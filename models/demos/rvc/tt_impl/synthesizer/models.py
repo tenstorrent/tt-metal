@@ -193,13 +193,13 @@ class TextEncoder:
         self.proj_linear.load_parameters(parameters, key=proj_key, prefix=prefix)
 
     def __call__(self, phone: ttnn.Tensor, pitch: ttnn.Tensor | None) -> tuple[ttnn.Tensor, ttnn.Tensor]:
-        x0 = self.emb_phone(phone)
+        x = self.emb_phone(phone)
         if self.use_f0 and pitch is not None and self.emb_pitch is not None:
-            x0 = ttnn.add(x0, self.emb_pitch(pitch), output_tensor=x0)
-        x1 = ttnn.multiply(x0, math.sqrt(self.hidden_channels), output_tensor=x0)
-        x1 = ttnn.leaky_relu(x1, negative_slope=0.1, output_tensor=x1)
-        x = self.encoder(x1)
-        stats = self.proj_linear(x)
+            x = ttnn.add(x, self.emb_pitch(pitch), output_tensor=x)
+        x = ttnn.multiply(x, math.sqrt(self.hidden_channels), output_tensor=x)
+        x = ttnn.leaky_relu(x, negative_slope=0.1, output_tensor=x)
+        x_e = self.encoder(x)
+        stats = self.proj_linear(x_e)
         m = ttnn.slice(stats, (0, 0, 0), (stats.shape[0], stats.shape[1], self.out_channels))
         logs = ttnn.slice(
             stats,
@@ -240,9 +240,7 @@ class ResidualCouplingBlock:
 
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         for flow in self.flows:
-            x0 = x
-            x1 = _flip_last_dim_ttnn(x0)
-            x = flow(x1, g=g)
+            x = flow(_flip_last_dim_ttnn(x), g=g)
         return x
 
 
@@ -522,9 +520,8 @@ class GeneratorNSF:
         if g is not None:
             x = ttnn.add(x, self.cond_linear(g), output_tensor=x)
         for i, (ups, noise_convs) in enumerate(zip(self.ups, self.noise_convs, strict=True)):
-            x0 = x
-            x0 = ttnn.leaky_relu(x0, negative_slope=self.lrelu_slope, output_tensor=x0)
-            x = ups(x0)
+            x = ttnn.leaky_relu(x, negative_slope=self.lrelu_slope, output_tensor=x)
+            x = ups(x)
             # the layout conversion happens inside noise_convs because doign it here causes oom for some reason
             # TODO: investigate the reasoning behind this
             x_source = noise_convs(har_source_tt)
@@ -677,7 +674,7 @@ class SynthesizerTrnMsNSF_nono:
         m_p, logs_p = self.enc_p(phone, None)
         z_p = (
             m_p
-            + ttnn.exp(logs_p)
+            + ttnn.exp(logs_p, output_tensor=logs_p)
             * ttnn_randn_fallback(tuple(m_p.shape), dtype=ttnn.bfloat16, device=self.device)
             * 0.66666
         )

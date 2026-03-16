@@ -307,5 +307,5 @@ class ResidualCouplingLayer:
         h = self.enc(h, g=g)
         stats = self.post_linear(h)
         x1 = ttnn.subtract(x1, stats, output_tensor=x1)
-        x_out = ttnn.concat([x0, x1], dim=-1)
-        return x_out
+        out = ttnn.concat([x0, x1], dim=-1)
+        return out
