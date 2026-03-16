@@ -9,10 +9,8 @@ from utils.lora import (  # noqa: F401
     LoRARowParallelLinear,
     inject_adapter_in_model,
 )
-from utils.checkpoint import (  # noqa: F401
-    CheckpointFunction,
-    checkpoint,
-)
+from utils.checkpoint import checkpoint  # noqa: F401
+
 from utils.dataset import (  # noqa: F401
     TextDataset,
     load_text_datasets,
