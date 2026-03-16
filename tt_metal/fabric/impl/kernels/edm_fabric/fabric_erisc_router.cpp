@@ -688,6 +688,28 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
     uint32_t hop_cmd,
     std::array<DownstreamSenderT, DOWNSTREAM_EDM_SIZE>& downstream_edm_interfaces,
     LocalRelayInterfaceT& local_relay_interface) {
+#if defined(ARCH_WORMHOLE) && defined(FABRIC_2D_VC1_ACTIVE)
+    bool ret_val = true;
+    if (hop_cmd & MeshRoutingFields::FORWARD_EAST) {
+        ret_val = ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, EAST>(
+                                 downstream_edm_interfaces, local_relay_interface);
+    }
+    if (hop_cmd & MeshRoutingFields::FORWARD_WEST) {
+        ret_val = ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, WEST>(
+                                 downstream_edm_interfaces, local_relay_interface);
+    }
+    if (hop_cmd & MeshRoutingFields::FORWARD_SOUTH) {
+        ret_val =
+            ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, SOUTH>(
+                           downstream_edm_interfaces, local_relay_interface);
+    }
+    if (hop_cmd & MeshRoutingFields::FORWARD_NORTH) {
+        ret_val =
+            ret_val && downstreams_have_space<DownstreamSenderT, LocalRelayInterfaceT, DOWNSTREAM_EDM_SIZE, NORTH>(
+                           downstream_edm_interfaces, local_relay_interface);
+    }
+    return ret_val;
+#else
     bool ret_val = false;
 
     using eth_chan_directions::EAST;
@@ -804,6 +826,7 @@ FORCE_INLINE __attribute__((optimize("jump-tables"))) bool can_forward_packet_co
         default: __builtin_unreachable();
     }
     return ret_val;
+#endif
 }
 
 #else
