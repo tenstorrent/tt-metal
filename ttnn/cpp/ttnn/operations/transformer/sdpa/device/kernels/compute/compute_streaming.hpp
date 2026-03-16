@@ -24,7 +24,8 @@ struct SubblockDecomp {
 // BH has ample code size headroom; allow normal inlining and GCC IPA-CP cloning (no noinline/noclone).
 #define SDPA_NOINLINE
 #else
-// WH/T3000: Mochi leaves only ~12 KB headroom — prevent inlining and cloning.
+// WH/T3000: Mochi leaves little headroom as ARCH_BLACKHOLE vs non-ARCH_BLACKHOLE
+// code paths used below are different — for now, prevent inlining and cloning.
 #define SDPA_NOINLINE __attribute__((noinline, noclone))
 #endif
 #include "tools/profiler/kernel_profiler.hpp"
