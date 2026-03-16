@@ -63,6 +63,7 @@
 #define NOC_BRCST_LO (NOC_REGS_START_ADDR + 0x20)
 #define NOC_BRCST_HI (NOC_REGS_START_ADDR + 0x24)
 #define NOC_AT_LEN (NOC_REGS_START_ADDR + 0x28)
+#define NOC_AT_LEN_BE NOC_AT_LEN  // No separate byte-enable reg on Quasar; alias for WH/BH compat
 #define NOC_L1_ACC_AT_INSTRN (NOC_REGS_START_ADDR + 0x2C)
 #define NOC_SEC_CTRL (NOC_REGS_START_ADDR + 0x30)
 #define NOC_AT_DATA (NOC_REGS_START_ADDR + 0x34)
@@ -454,7 +455,17 @@
 #define NOC_XY_PCIE_ENCODING(x, y) \
     ((uint64_t(NOC_XY_ENCODING(x, y)) << (NOC_ADDR_LOCAL_BITS - NOC_COORD_REG_OFFSET)) | 0x1000000000000000)
 
-#define NOC_LOCAL_ADDR(addr) (addr)
+// Quasar firmware currently uses BH-style encoding (X,Y coords embedded at bits 36+).
+// NOC_LOCAL_ADDR extracts the local offset (bits 0-35) for memory bounds validation.
+//
+// Note: Unlike BH, Quasar doesn't need to preserve PCIe bit 60 here - PCIe TLBs
+// handle address translation before firmware sees the address.
+//
+// TODO: When software moves to ATT-based flat 64-bit addressing:
+//   1. Replace NOC_XY_ADDR() usage with global address construction
+//   2. Update sanitize.h to handle coordinate-less addresses
+//   3. Change this macro to identity: #define NOC_LOCAL_ADDR(addr) (addr)
+#define NOC_LOCAL_ADDR(addr) NOC_LOCAL_ADDR_OFFSET(addr)
 
 // TODO review these alignment restrictions
 // Alignment restrictions

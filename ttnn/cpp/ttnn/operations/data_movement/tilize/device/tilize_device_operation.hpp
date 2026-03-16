@@ -7,7 +7,7 @@
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/decorators.hpp"
-#include "tilize_multi_core_interleaved_program_factory.hpp"
+#include "tilize_multi_core_default_program_factory.hpp"
 #include "tilize_multi_core_block_program_factory.hpp"
 #include "tilize_single_core_program_factory.hpp"
 #include "tilize_multi_core_sharded_program_factory.hpp"
@@ -22,7 +22,7 @@ struct TilizeDeviceOperation {
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<
-        TilizeMultiCoreInterleavedProgramFactory,
+        TilizeMultiCoreDefaultProgramFactory,
         TilizeMultiCoreBlockProgramFactory,
         TilizeSingleCoreProgramFactory,
         TilizeMultiCoreShardedProgramFactory,
