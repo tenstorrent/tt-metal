@@ -159,6 +159,16 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
     constexpr uint32_t MAX_1_BYTE_TILES_PER_BATCH = 16;
     const uint32_t batch_size = MAX_1_BYTE_TILES_PER_BATCH / input_tensors[0].element_size();
 
+    // Calculate stride sizes to determine if we can use single-packet NOC reads
+    // For BF8, the kernel uses bf16_tile_size (2048 bytes) for stride calculation
+    const uint32_t stride_tile_size = is_bf8 ? cb_tile_size : tile_size;
+    const uint32_t input0_stride = stride_tile_size * num_tiles_for_each_input_shard[0].second / groups;
+    const uint32_t input1_stride = stride_tile_size * num_tiles_for_each_input_shard[1].second / groups;
+
+    // NOC_MAX_BURST_SIZE is 8KB (8192 bytes) - use single-packet reads only if both strides fit
+    constexpr uint32_t NOC_MAX_BURST_SIZE = 8192;
+    const bool use_single_packet_read = (input0_stride <= NOC_MAX_BURST_SIZE && input1_stride <= NOC_MAX_BURST_SIZE);
+
     std::vector<uint32_t> compile_time_args_0 = {
         0,
         1,
@@ -178,6 +188,9 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
     std::map<std::string, std::string> reader_defines;
     if (is_bf8) {
         reader_defines["BF8"] = "1";
+    }
+    if (use_single_packet_read) {
+        reader_defines["USE_SINGLE_PACKET_READ"] = "1";
     }
     CreateKernel(
         program,

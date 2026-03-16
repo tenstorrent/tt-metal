@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -36,6 +36,12 @@ void kernel_main() {
     const uint32_t base_l1_read_addr_1 = get_read_ptr(input1_transpose_cb);
     const uint32_t base_l1_write_addr = get_write_ptr(concat_cb);
 
+#ifdef USE_SINGLE_PACKET_READ
+    // Pre-compute NOC addresses for single-packet reads
+    const uint64_t noc_addr_0 = get_noc_addr(base_l1_read_addr_0);
+    const uint64_t noc_addr_1 = get_noc_addr(base_l1_read_addr_1);
+#endif
+
     cb_push_back(input0_cb, input0_num_tiles_height * input0_num_tiles_width);
     cb_push_back(input1_cb, input1_num_tiles_height * input1_num_tiles_width);
 
@@ -45,14 +51,24 @@ void kernel_main() {
         cb_wait_front(input0_transpose_cb, input0_num_tiles_width);
 
         uint32_t l1_read_addr = base_l1_read_addr_0;
-
         uint32_t l1_write_addr = base_l1_write_addr;
+
+#ifdef USE_SINGLE_PACKET_READ
+        // Use stateful single-packet API for better performance when stride <= NOC_MAX_BURST_SIZE
+        noc_async_read_one_packet_set_state(noc_addr_0, input0_stride);
         for (uint32_t j = 0; j < groups; j++) {
-            // Use noc_async_read which handles sizes > NOC_MAX_BURST_SIZE by chunking internally
+            noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
+            l1_read_addr += input0_stride;
+            l1_write_addr += group_stride;
+        }
+#else
+        // Use noc_async_read which handles sizes > NOC_MAX_BURST_SIZE by chunking internally
+        for (uint32_t j = 0; j < groups; j++) {
             noc_async_read(get_noc_addr(l1_read_addr), l1_write_addr, input0_stride);
             l1_read_addr += input0_stride;
             l1_write_addr += group_stride;
         }
+#endif
 
         noc_async_read_barrier();
         cb_pop_front(input0_transpose_cb, input0_num_tiles_width);
@@ -60,14 +76,24 @@ void kernel_main() {
         cb_wait_front(input1_transpose_cb, input1_num_tiles_width);
 
         l1_read_addr = base_l1_read_addr_1;
-
         l1_write_addr = base_l1_write_addr + input0_stride;
+
+#ifdef USE_SINGLE_PACKET_READ
+        // Use stateful single-packet API for better performance when stride <= NOC_MAX_BURST_SIZE
+        noc_async_read_one_packet_set_state(noc_addr_1, input1_stride);
         for (uint32_t j = 0; j < groups; j++) {
-            // Use noc_async_read which handles sizes > NOC_MAX_BURST_SIZE by chunking internally
+            noc_async_read_one_packet_with_state<true>(l1_read_addr, l1_write_addr);
+            l1_read_addr += input1_stride;
+            l1_write_addr += group_stride;
+        }
+#else
+        // Use noc_async_read which handles sizes > NOC_MAX_BURST_SIZE by chunking internally
+        for (uint32_t j = 0; j < groups; j++) {
             noc_async_read(get_noc_addr(l1_read_addr), l1_write_addr, input1_stride);
             l1_read_addr += input1_stride;
             l1_write_addr += group_stride;
         }
+#endif
 
         noc_async_read_barrier();
         cb_pop_front(input1_transpose_cb, input1_num_tiles_width);
