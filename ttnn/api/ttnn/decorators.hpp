@@ -9,13 +9,10 @@
 #include <type_traits>  // is_same_v, decay
 #include <utility>      // index_sequence, forward
 
-#include <fmt/format.h>
 #include <reflect>
 
 #include "ttnn/device_operation.hpp"
 #include "ttnn/operation.hpp"
-#include <tracy/Tracy.hpp>
-#include <tt-metalium/graph_tracking.hpp>
 
 namespace ttnn {
 namespace decorators {
