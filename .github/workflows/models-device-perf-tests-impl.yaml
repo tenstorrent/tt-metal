@@ -49,7 +49,7 @@ jobs:
           python3 .github/scripts/utils/verify_time_budget.py \
             ${{ env.TESTS_YAML_PATH }} \
             ./.github/time_budget.yaml \
-            "perf"
+            "device_perf"
       - name: Build unified test matrix based on enabled SKUs
         id: build-matrix
         run: |
