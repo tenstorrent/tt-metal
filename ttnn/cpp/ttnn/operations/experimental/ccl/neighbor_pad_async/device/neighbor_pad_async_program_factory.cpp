@@ -216,42 +216,14 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     uint32_t forward_device_offset = 0;
     uint32_t backward_device_offset = 0;
 
-    if (operation_attributes.secondary_cluster_axis.has_value()) {
-        // secondary_cluster_axis==1, devices on row
-        // secondary_mesh_shape(0) == number of rows, (1) is number of cols
-        uint32_t secondary_cluster_axis_val = operation_attributes.secondary_cluster_axis.value();
-        uint32_t row_index = device_index / operation_attributes.secondary_mesh_shape.value().at(1);
-        uint32_t col_index = device_index % operation_attributes.secondary_mesh_shape.value().at(1);
-        if (secondary_cluster_axis_val) {
-            // row
-            if (col_index != 0) {
-                is_first_device = false;
-                backward_device_offset = 1;
-            }
-            if (col_index != operation_attributes.secondary_mesh_shape.value().at(1) - 1) {
-                is_last_device = false;
-                forward_device_offset = 1;
-            }
-        } else {
-            // column
-            if (row_index != 0) {
-                is_first_device = false;
-                backward_device_offset = operation_attributes.secondary_mesh_shape.value().at(1);
-            }
-            if (row_index != (operation_attributes.secondary_mesh_shape.value().at(0) - 1)) {
-                is_last_device = false;
-                forward_device_offset = operation_attributes.secondary_mesh_shape.value().at(1);
-            }
-        }
-    } else {
-        is_first_device = !backward_coord.has_value();
-        is_last_device = !forward_coord.has_value();
-        if (!is_first_device) {
-            backward_device_offset = 1;
-        }
-        if (!is_last_device) {
-            forward_device_offset = 1;
-        }
+    // Determine first/last device from physical neighbor availability along the primary axis.
+    is_first_device = !backward_coord.has_value();
+    is_last_device = !forward_coord.has_value();
+    if (!is_first_device) {
+        backward_device_offset = 1;
+    }
+    if (!is_last_device) {
+        forward_device_offset = 1;
     }
 
     log_trace(
