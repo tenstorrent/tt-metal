@@ -762,7 +762,8 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
             std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
             const size_t recompiled = compiled.count();
             const size_t cache_hit = num_objs - recompiled;
-            log << buf << "  " << kernel_name << "  recompiled=" << recompiled << "  cache_hit=" << cache_hit << "\n";
+            log << buf << "  " << kernel_name << "/" << this->target_name_ << "  recompiled=" << recompiled
+                << "  cache_hit=" << cache_hit << "\n";
         }
     }
 
