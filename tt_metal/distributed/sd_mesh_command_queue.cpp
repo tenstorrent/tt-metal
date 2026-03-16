@@ -160,7 +160,7 @@ void SDMeshCommandQueue::enqueue_mesh_workload(MeshWorkload& mesh_workload, bool
                     }
                 }
             }
-
+            std::cout << "Launch Program on coordinate: " << coord << std::endl;
             tt_metal::detail::LaunchProgram(device, program, false);
         }
     }

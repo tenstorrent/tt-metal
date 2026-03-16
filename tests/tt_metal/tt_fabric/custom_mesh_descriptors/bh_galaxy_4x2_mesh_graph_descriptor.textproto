@@ -20,27 +20,6 @@ graph_descriptors {
   instances { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
   instances { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
-
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-    channels { count: 16 }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 1 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
-    channels { count: 4 }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 2 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
-    channels { count: 16 }
-  }
-  connections {
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 0 } }
-    nodes { mesh { mesh_descriptor: "M0" mesh_id: 3 } }
-    channels { count: 4 }
-  }
 }
 
 # --- Instantiation ----------------------------------------------------------
