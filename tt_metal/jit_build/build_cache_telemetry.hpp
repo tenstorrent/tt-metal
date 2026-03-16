@@ -16,23 +16,20 @@ namespace tt::tt_metal {
 
 // Opaque handle returned by BuildCacheTelemetry::register_metric().
 // Records a stream of double values into a deque.
-// NOT thread-safe for concurrent record() calls on the SAME token.
-// Different tokens may be used concurrently from different threads.
-// Typically each token is stored as a function-local static and only
-// accessed from a single call site, so no synchronization is needed.
+// record() and snapshot() are safe for concurrent use.
 class TelemetryToken {
 public:
     TelemetryToken() = default;
     explicit TelemetryToken(std::string name);
 
     void record(double value);
+    std::deque<double> snapshot() const;
 
     const std::string& name() const { return name_; }
-    const std::deque<double>& values() const { return values_; }
-    bool empty() const { return values_.empty(); }
 
 private:
     std::string name_;
+    mutable std::mutex values_mutex_;
     std::deque<double> values_;
 };
 

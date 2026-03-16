@@ -17,7 +17,15 @@ namespace tt::tt_metal {
 
 TelemetryToken::TelemetryToken(std::string name) : name_(std::move(name)) {}
 
-void TelemetryToken::record(double value) { values_.push_back(value); }
+void TelemetryToken::record(double value) {
+    std::lock_guard lk(values_mutex_);
+    values_.push_back(value);
+}
+
+std::deque<double> TelemetryToken::snapshot() const {
+    std::lock_guard lk(values_mutex_);
+    return values_;
+}
 
 // --- BuildCacheTelemetry ---
 
@@ -119,7 +127,7 @@ void BuildCacheTelemetry::dump_metrics() const {
     }
     std::lock_guard lk(impl_->token_registry_mutex);
     for (const auto* token : impl_->registered_tokens) {
-        const auto& vals = token->values();
+        auto vals = token->snapshot();
         if (vals.empty()) {
             continue;
         }

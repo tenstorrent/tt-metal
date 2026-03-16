@@ -500,12 +500,12 @@ def get_log_directory(log_directory: str | None = None) -> str:
     elif "TT_METAL_LOGS_PATH" in os.environ:
         logs_root = os.environ.get("TT_METAL_LOGS_PATH")
         default_directory = os.path.join(logs_root, "generated", "inspector")
-        if os.path.exists(default_directory):
-            return default_directory
-
         rank_scoped_directory = _find_rank_scoped_inspector_directory(logs_root)
         if rank_scoped_directory is not None:
             return rank_scoped_directory
+
+        if os.path.exists(default_directory):
+            return default_directory
 
         return default_directory
     elif "TT_METAL_HOME" in os.environ:

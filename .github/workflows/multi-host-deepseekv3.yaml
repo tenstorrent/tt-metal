@@ -91,7 +91,7 @@ jobs:
       build-wheel: true
 
   deepseekv3-tests:
-    if: ${{ github.event_name == 'schedule' || inputs.deepseekv3_unit_tests || inputs.deepseekv3_module_tests || inputs.teacher_forced || inputs.demo || inputs.demo_stress }}
+    if: ${{ github.event_name == 'schedule' || github.event_name == 'workflow_dispatch' || inputs.deepseekv3_unit_tests || inputs.deepseekv3_module_tests || inputs.teacher_forced || inputs.demo || inputs.demo_stress }}
     runs-on:
       - multi-host-glx-4x
       - arch-wormhole_b0

@@ -4,14 +4,18 @@
 
 from pathlib import Path
 import socket
+from types import SimpleNamespace
 
+from click.testing import CliRunner
 from ttnn.distributed.ttrun import (
     RankBinding,
     TTRunConfig,
     build_rank_environment_args,
     get_launcher_environment,
     get_rank_environment,
+    main,
 )
+import ttnn.distributed.ttrun as ttrun
 
 
 def _build_config(tmp_path: Path, binding: RankBinding, global_env: dict | None = None) -> TTRunConfig:
@@ -271,6 +275,31 @@ def test_rank_environment_preserves_explicit_rank_override_jit_scratch(monkeypat
     env = get_rank_environment(binding, config)
 
     assert env["TT_METAL_JIT_SCRATCH"] == "/rank-local/jit"
+
+
+def test_cli_wraps_popen_failures_in_click_exception(monkeypatch, tmp_path):
+    rank_binding = tmp_path / "rank_binding.yaml"
+    rank_binding.write_text("rank_bindings: []\n")
+
+    monkeypatch.setattr(
+        ttrun,
+        "parse_binding_config",
+        lambda *_args, **_kwargs: SimpleNamespace(rank_bindings=[], mesh_graph_desc_path=Path("/tmp/mesh")),
+    )
+    monkeypatch.setattr(ttrun, "get_launcher_environment", lambda: {})
+    monkeypatch.setattr(ttrun, "build_mpi_command", lambda *_args, **_kwargs: ["mpirun", "fake_program"])
+
+    def raise_oserror(*_args, **_kwargs):
+        raise OSError("launcher unavailable")
+
+    monkeypatch.setattr(ttrun.subprocess, "Popen", raise_oserror)
+
+    result = CliRunner().invoke(
+        main, ["--rank-binding", str(rank_binding), "--skip-executable-check", "--bare", "fake_program"]
+    )
+
+    assert result.exit_code != 0
+    assert "Error launching mpirun: launcher unavailable" in result.output
 
 
 # --- Additional passthrough prefix tests ---

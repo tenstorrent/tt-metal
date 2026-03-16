@@ -14,7 +14,20 @@ sys.path.insert(0, triage_home)
 from parse_inspector_logs import get_log_directory
 
 
-def test_get_log_directory_prefers_non_rank_scoped_path(monkeypatch, tmp_path: Path):
+def test_get_log_directory_prefers_rank_scoped_path_over_legacy_default(monkeypatch, tmp_path: Path):
+    logs_root = tmp_path / "logs"
+    default_dir = logs_root / "generated" / "inspector"
+    default_dir.mkdir(parents=True)
+    rank_dir = logs_root / "host-a_rank_3" / "generated" / "inspector"
+    rank_dir.mkdir(parents=True)
+
+    monkeypatch.setenv("TT_METAL_LOGS_PATH", str(logs_root))
+    monkeypatch.setenv("OMPI_COMM_WORLD_RANK", "3")
+
+    assert get_log_directory() == str(rank_dir)
+
+
+def test_get_log_directory_falls_back_to_legacy_default_when_no_rank_scoped_path(monkeypatch, tmp_path: Path):
     logs_root = tmp_path / "logs"
     default_dir = logs_root / "generated" / "inspector"
     default_dir.mkdir(parents=True)

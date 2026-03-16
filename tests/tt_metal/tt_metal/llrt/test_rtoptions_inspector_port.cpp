@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <cstdlib>
+#include <filesystem>
 #include <stdexcept>
 #include <string>
 
@@ -19,12 +20,14 @@ protected:
         saved_pmi_rank_ = safe_getenv("PMI_RANK");
         saved_mesh_rank_ = safe_getenv("TT_MESH_HOST_RANK");
         saved_inspector_addr_ = safe_getenv("TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS");
+        saved_logs_path_ = safe_getenv("TT_METAL_LOGS_PATH");
 
         // Clear all rank-related env vars for a clean slate
         unsetenv("OMPI_COMM_WORLD_RANK");
         unsetenv("PMI_RANK");
         unsetenv("TT_MESH_HOST_RANK");
         unsetenv("TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS");
+        unsetenv("TT_METAL_LOGS_PATH");
     }
 
     void TearDown() override {
@@ -33,6 +36,7 @@ protected:
         restore_env("PMI_RANK", saved_pmi_rank_);
         restore_env("TT_MESH_HOST_RANK", saved_mesh_rank_);
         restore_env("TT_METAL_INSPECTOR_RPC_SERVER_ADDRESS", saved_inspector_addr_);
+        restore_env("TT_METAL_LOGS_PATH", saved_logs_path_);
     }
 
     static std::string safe_getenv(const char* name) {
@@ -53,6 +57,7 @@ private:
     std::string saved_pmi_rank_;
     std::string saved_mesh_rank_;
     std::string saved_inspector_addr_;
+    std::string saved_logs_path_;
 };
 
 TEST_F(InspectorPortTest, DefaultPortWithNoRank) {
@@ -142,6 +147,28 @@ TEST_F(InspectorPortTest, ServerAddressIncludesRankAwarePort) {
     RunTimeOptions options;
     std::string expected = "localhost:50058";  // 50051 + 7
     EXPECT_EQ(options.get_inspector_rpc_server_address(), expected);
+}
+
+TEST_F(InspectorPortTest, InspectorLogPathUsesRankScopedDirectoryWhenLogsRootShared) {
+    setenv("OMPI_COMM_WORLD_RANK", "7", 1);
+    setenv("TT_METAL_LOGS_PATH", "/tmp/tt-metal-logs", 1);
+
+    RunTimeOptions options;
+    const auto log_path = options.get_inspector_log_path().lexically_normal().string();
+
+    EXPECT_NE(log_path.find("/tmp/tt-metal-logs/"), std::string::npos);
+    EXPECT_NE(log_path.find("_rank_7/generated/inspector"), std::string::npos);
+}
+
+TEST_F(InspectorPortTest, InspectorLogPathDoesNotDoubleAppendRankScope) {
+    setenv("OMPI_COMM_WORLD_RANK", "3", 1);
+    setenv("TT_METAL_LOGS_PATH", "/tmp/tt-metal-logs/host-a_rank_3", 1);
+
+    RunTimeOptions options;
+
+    EXPECT_EQ(
+        options.get_inspector_log_path().lexically_normal(),
+        std::filesystem::path("/tmp/tt-metal-logs/host-a_rank_3/generated/inspector").lexically_normal());
 }
 
 }  // namespace tt::llrt

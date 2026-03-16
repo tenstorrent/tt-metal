@@ -603,6 +603,30 @@ JitBuildState::JitBuildState(const JitBuildEnv& env, const JitBuiltStateConfig& 
 
 static constexpr std::string_view BUILD_STATE_HASH_FILE = ".build_state";
 
+void publish_build_state_hash(const std::filesystem::path& out_dir, uint64_t build_state_hash) {
+    fs::path hash_path = out_dir / BUILD_STATE_HASH_FILE;
+    fs::path tmp_path = jit_build::utils::FileRenamer::generate_temp_path(hash_path);
+
+    std::ofstream file(tmp_path, std::ios::trunc);
+    if (!file.is_open()) {
+        log_error(tt::LogBuildKernels, "Failed to open build state file for writing: {}", tmp_path);
+        return;
+    }
+    file << build_state_hash;
+    file.close();
+    if (file.fail()) {
+        log_error(tt::LogBuildKernels, "Failed to write build state hash to {}", tmp_path);
+        tt::filesystem::safe_remove(tmp_path);
+        return;
+    }
+    if (!tt::filesystem::safe_rename(tmp_path, hash_path, false)) {
+        log_error(tt::LogBuildKernels, "Failed to publish build state hash from {} to {}", tmp_path, hash_path);
+        tt::filesystem::safe_remove(tmp_path);
+        return;
+    }
+    log_info(tt::LogBuildKernels, "Published build state hash {} to {}", build_state_hash, hash_path);
+}
+
 bool JitBuildState::build_state_matches(const std::filesystem::path& out_dir) const {
     fs::path hash_path = out_dir / BUILD_STATE_HASH_FILE;
     uint64_t stored_hash{};
@@ -642,20 +666,8 @@ bool JitBuildState::build_state_matches(const std::filesystem::path& out_dir) co
     return true;
 }
 
-void JitBuildState::write_build_state_hash(const std::filesystem::path& out_dir) const {
-    fs::path hash_path = out_dir / BUILD_STATE_HASH_FILE;
-    std::ofstream file(hash_path, std::ios::trunc);
-    if (!file.is_open()) {
-        log_error(tt::LogBuildKernels, "Failed to open build state file for writing: {}", hash_path);
-        return;
-    }
-    file << build_state_hash_;
-    file.close();
-    if (file.fail()) {
-        log_error(tt::LogBuildKernels, "Failed to write build state hash to {}", hash_path);
-        return;
-    }
-    log_info(tt::LogBuildKernels, "Wrote build state hash {} to {}", build_state_hash_, hash_path);
+void JitBuildState::publish_build_state_hash(const std::filesystem::path& out_dir) const {
+    tt::tt_metal::publish_build_state_hash(out_dir, build_state_hash_);
 }
 
 void JitBuildState::compile_one(
@@ -970,6 +982,15 @@ bool JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
         }
     };
 
+    std::vector<fs::path> build_state_publish_dirs;
+    build_state_publish_dirs.reserve(link_targets.size());
+    auto enqueue_build_state_publish = [&build_state_publish_dirs](const fs::path& target_cache_dir) {
+        if (std::find(build_state_publish_dirs.begin(), build_state_publish_dirs.end(), target_cache_dir) ==
+            build_state_publish_dirs.end()) {
+            build_state_publish_dirs.push_back(target_cache_dir);
+        }
+    };
+
     for (const auto* target : link_targets) {
         fs::path target_cache_dir = target->out_path_ / kernel_name / target->target_name_;
         fs::path target_work_dir = target_cache_dir;
@@ -987,12 +1008,12 @@ bool JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
             if (target->is_fw_) {
                 target->weaken(target_work_dir);
             }
-            target->write_build_state_hash(target_work_dir);
             if (use_scratch) {
                 if (!merge_scratch_to_cache(target_work_dir, target_cache_dir)) {
                     TT_THROW("Failed to merge scratch artifacts from {} to {}", target_work_dir, target_cache_dir);
                 }
             }
+            enqueue_build_state_publish(target_cache_dir);
             did_link = true;
         }
     }
@@ -1031,6 +1052,9 @@ bool JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
             if (!merge_scratch_to_cache(work_dir, cache_dir)) {
                 TT_THROW("Failed to merge remaining scratch artifacts from {} to {}", work_dir, cache_dir);
             }
+            for (const auto& target_cache_dir : build_state_publish_dirs) {
+                publish_build_state_hash(target_cache_dir);
+            }
             // Single syncfs at end of all scratch merges (covers the entire NFS filesystem).
             // Use async so it can overlap with the next kernel's JIT build.
             tt::filesystem::async_sync_filesystem(cache_dir);
@@ -1057,6 +1081,13 @@ bool JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
                     tt::filesystem::safe_remove(src_path);
                 }
             }
+            for (const auto& target_cache_dir : build_state_publish_dirs) {
+                publish_build_state_hash(target_cache_dir);
+            }
+        }
+    } else {
+        for (const auto& target_cache_dir : build_state_publish_dirs) {
+            publish_build_state_hash(target_cache_dir);
         }
     }
 

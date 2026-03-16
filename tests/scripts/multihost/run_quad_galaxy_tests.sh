@@ -28,14 +28,14 @@ run_quad_galaxy_unit_tests() {
   # TODO: Currently failing
   #mpirun-ulfm $mpi_run_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/test/tt_metal/tt_fabric/test_physical_discovery ; fail+=$?
 
-  mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib ./build/tools/scaleout/run_cluster_validation --send-traffic --cabling-descriptor-path ${descriptor_path}/cabling_descriptor.textproto --deployment-descriptor-path ${descriptor_path}/deployment_descriptor.textproto ; fail+=$?
+  mpirun-ulfm $mpirun_args -x TT_METAL_HOME=$(pwd) -x LD_LIBRARY_PATH=$(pwd)/build/lib -x TT_MULTIHOST_CLEANUP_TAG ./build/tools/scaleout/run_cluster_validation --send-traffic --cabling-descriptor-path ${descriptor_path}/cabling_descriptor.textproto --deployment-descriptor-path ${descriptor_path}/deployment_descriptor.textproto ; fail+=$?
 
-  tt-run --tcp-interface $tcp_interface --rank-binding "$rank_binding" --mpi-args "$mpi_args" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace" ; fail+=$?
+  tt-run --tcp-interface "$TCP_INTERFACE" --rank-binding "$rank_binding" --mpi-args "$mpi_args" pytest -svv "tests/ttnn/unit_tests/base_functionality/test_multi_host_clusters.py::test_quad_galaxy_mesh_device_trace" ; fail+=$?
 
   # TODO: Currently failing on 1D/2D tests
   #tt-run --tcp-interface $tcp_interface --rank-binding "$rank_binding" --mpi-args "$mpi_args" bash -c "./build/test/tt_metal/tt_fabric/fabric_unit_tests --gtest_filter=\"MultiHost.TestQuadGalaxy*\"" ; fail+=$?
 
-  tt-run --tcp-interface $tcp_interface --rank-binding "$rank_binding" --mpi-args "$mpi_args" pytest -svv tests/nightly/tg/ccl/ -k "quad_host_mesh" ; fail+=$?
+  tt-run --tcp-interface "$TCP_INTERFACE" --rank-binding "$rank_binding" --mpi-args "$mpi_args" pytest -svv tests/nightly/tg/ccl/ -k "quad_host_mesh" ; fail+=$?
 
   if [[ $fail -ne 0 ]]; then
     exit 1
@@ -71,6 +71,7 @@ validate_quad_connectivity() {
   mpirun-ulfm $mpirun_args \
       -x TT_METAL_HOME=$(pwd) \
       -x LD_LIBRARY_PATH=$(pwd)/build/lib \
+      -x TT_MULTIHOST_CLEANUP_TAG \
       ./build/tools/scaleout/run_cluster_validation \
       --send-traffic \
       --cabling-descriptor-path "${descriptor_path}/cabling_descriptor.textproto" \
@@ -81,6 +82,7 @@ validate_quad_connectivity() {
       mpirun-ulfm $mpirun_args \
           -x TT_METAL_HOME=$(pwd) \
           -x LD_LIBRARY_PATH=$(pwd)/build/lib \
+          -x TT_MULTIHOST_CLEANUP_TAG \
           ./build/test/tt_metal/tt_fabric/test_system_health
   fi
 
@@ -100,6 +102,7 @@ validate_dual_connectivity() {
   mpirun-ulfm $mpirun_args \
       -x TT_METAL_HOME=$(pwd) \
       -x LD_LIBRARY_PATH=$(pwd)/build/lib \
+      -x TT_MULTIHOST_CLEANUP_TAG \
       ./build/tools/scaleout/run_cluster_validation \
       --send-traffic \
       --cabling-descriptor-path "${descriptor_path}/cabling_descriptor.textproto" \
@@ -110,6 +113,7 @@ validate_dual_connectivity() {
       mpirun-ulfm $mpirun_args \
           -x TT_METAL_HOME=$(pwd) \
           -x LD_LIBRARY_PATH=$(pwd)/build/lib \
+          -x TT_MULTIHOST_CLEANUP_TAG \
           ./build/test/tt_metal/tt_fabric/test_system_health
   fi
 
@@ -137,9 +141,9 @@ _resolve_deepseekv3_cache() {
     fi
 }
 
-# Kill stale processes holding Tenstorrent devices and remove leftover UMD lock
-# files on all Galaxy hosts.  This prevents zombie processes from a previous run
-# from blocking chip initialization via CHIP_IN_USE robust mutexes.
+# Kill stale processes from the current invocation plus safe orphaned leftovers
+# on all Galaxy hosts. This avoids clobbering unrelated jobs that happen to be
+# using Tenstorrent devices on the shared test systems.
 #
 # Usage: _cleanup_multihost <comma-separated-hosts> [true|false]
 #   $1 - hosts (required, comma-separated, e.g. "g05glx01,g05glx02")
@@ -156,7 +160,20 @@ _cleanup_multihost() {
     echo "=== Cleaning up stale processes on all hosts ===" >&2
     for host in ${hosts//,/ }; do
         echo "  Cleaning $host..." >&2
-        ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$host" bash -s <<-'CLEANUP_EOF' 2>/dev/null || true
+        ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$host" env TT_MULTIHOST_CLEANUP_TAG="${TT_MULTIHOST_CLEANUP_TAG:-}" bash -s <<-'CLEANUP_EOF' 2>/dev/null || true
+            kill_process_group() {
+                local pid="$1"
+                local pgid
+                pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ') || true
+                if [ -n "$pgid" ] && [ "$pgid" != "0" ] && [ "$pgid" != "1" ]; then
+                    kill -9 -- -"$pgid" 2>/dev/null || true
+                else
+                    kill -9 "$pid" 2>/dev/null || true
+                fi
+            }
+
+            current_tag="${TT_MULTIHOST_CLEANUP_TAG:-}"
+
             # Kill orphaned MPI daemons (prted/orted) whose parent mpirun is
             # already dead (reparented to init, PID 1).  This is safe because
             # a legitimately running MPI job keeps its prted children parented
@@ -167,28 +184,17 @@ _cleanup_multihost() {
             # children of dead prted/mpirun that still hold device files.
             pkill -9 --parent 1 -f 'pytest|python.*tt_metal|python.*ttnn|fabric_unit_tests|run_cluster_validation|test_system_health' 2>/dev/null || true
 
-            # Kill any remaining process groups holding Tenstorrent devices.
-            # Use fuser in read-only mode, then selectively kill only
-            # non-system processes to avoid nuking sshd.
-            for dev in /dev/tenstorrent/*; do
-                [ -e "$dev" ] || continue
-                pids=$(fuser "$dev" 2>/dev/null) || true
-                for pid in $pids; do
-                    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || continue
-                    case "$comm" in
-                        sshd|systemd*|udevd|agetty|login|bash|sh) continue ;;
-                    esac
-                    # Kill the entire process group so descendants are cleaned
-                    # up too.  Fall back to single-pid kill if pgid lookup fails.
-                    pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ') || true
-                    if [ -n "$pgid" ] && [ "$pgid" != "0" ] && [ "$pgid" != "1" ]; then
-                        kill -9 -- -"$pgid" 2>/dev/null || true
-                    else
-                        kill -9 "$pid" 2>/dev/null || true
+            # For non-orphan leftovers, only kill processes tagged by this same
+            # workflow invocation. That lets retries clean up their own stale
+            # ranks without touching unrelated jobs on the host.
+            if [[ -n "$current_tag" ]]; then
+                for pid in $(pgrep -u "$(id -u)" -f 'prted|orted|pytest|python.*tt_metal|python.*ttnn|fabric_unit_tests|run_cluster_validation|test_system_health' 2>/dev/null); do
+                    [ -r "/proc/$pid/environ" ] || continue
+                    if tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -Fxq "TT_MULTIHOST_CLEANUP_TAG=$current_tag"; then
+                        kill_process_group "$pid"
                     fi
                 done
-            done
-            rm -f /dev/shm/TT_UMD_LOCK.* 2>/dev/null || true
+            fi
 CLEANUP_EOF
         if [[ "$do_reset" == "true" ]]; then
             ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$host" \
@@ -201,6 +207,7 @@ CLEANUP_EOF
 setup_dual_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
     export HOSTS="g05glx01,g05glx02"
+    export TT_MULTIHOST_CLEANUP_TAG="${TT_MULTIHOST_CLEANUP_TAG:-${GITHUB_RUN_ID:-manual}-$(id -un)-$$}"
     _cleanup_multihost "$HOSTS"
     export RANKFILE=/etc/mpirun/rankfile_g05glx01_g05glx02
     export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
@@ -241,6 +248,7 @@ setup_dual_galaxy_env() {
 setup_quad_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
     export HOSTS="g05glx04,g05glx03,g05glx02,g05glx01"
+    export TT_MULTIHOST_CLEANUP_TAG="${TT_MULTIHOST_CLEANUP_TAG:-${GITHUB_RUN_ID:-manual}-$(id -un)-$$}"
     _cleanup_multihost "$HOSTS"
     export RANKFILE=/etc/mpirun/rankfile
     export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"

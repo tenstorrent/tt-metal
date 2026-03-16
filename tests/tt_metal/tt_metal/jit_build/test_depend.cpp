@@ -2,14 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#include <atomic>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
 #include <sstream>
+#include <thread>
 #include <unistd.h>
 
 #include <gtest/gtest.h>
 #include <tt-logger/tt-logger.hpp>
 
+#include "common/filesystem_utils.hpp"
+#include "jit_build/build.hpp"
+#include "jit_build/build_cache_telemetry.hpp"
 #include "jit_build/depend.hpp"
 
 TEST(JitBuildTests, ParseDependencyFile) {
@@ -291,4 +297,90 @@ TEST_F(JitBuildPathRewriteTests, CacheHitAfterScratchBuild) {
     // Verify cache-based dependency check succeeds (paths point to cache, not scratch)
     EXPECT_TRUE(tt::jit_build::dependencies_up_to_date(cache_dir_, obj_name))
         << "Dependencies should be up-to-date when checked against cache directory";
+}
+
+TEST(JitBuildTests, BuildStateHashPublishesAfterArtifactsAreVisible) {
+    auto temp_template = (std::filesystem::temp_directory_path() / "jit_build_state_test_XXXXXX").string();
+    auto* temp_dir = mkdtemp(temp_template.data());
+    ASSERT_NE(temp_dir, nullptr);
+    std::filesystem::path cache_dir(temp_dir);
+
+    constexpr uint64_t stale_hash = 111;
+    constexpr uint64_t fresh_hash = 222;
+    const std::filesystem::path obj_path = cache_dir / "kernel.o";
+    const std::filesystem::path dephash_path = cache_dir / "kernel.o.dephash";
+    const std::filesystem::path build_state_path = cache_dir / ".build_state";
+
+    auto write_file = [](const std::filesystem::path& path, std::string_view contents) {
+        std::ofstream file(path, std::ios::trunc);
+        ASSERT_TRUE(file.is_open());
+        file << contents;
+        file.close();
+        ASSERT_FALSE(file.fail());
+    };
+    auto read_file = [](const std::filesystem::path& path) {
+        std::ifstream file(path);
+        std::stringstream buffer;
+        buffer << file.rdbuf();
+        return buffer.str();
+    };
+
+    write_file(obj_path, "stale-object");
+    write_file(dephash_path, "stale-dephash");
+    tt::tt_metal::publish_build_state_hash(cache_dir, stale_hash);
+
+    std::atomic<bool> saw_fresh_hash{false};
+    std::atomic<bool> artifacts_were_fresh{false};
+    std::thread observer([&] {
+        for (int attempt = 0; attempt < 200; ++attempt) {
+            std::ifstream hash_file(build_state_path);
+            uint64_t observed_hash = 0;
+            if (hash_file >> observed_hash; observed_hash == fresh_hash) {
+                saw_fresh_hash.store(true, std::memory_order_relaxed);
+                artifacts_were_fresh.store(
+                    read_file(obj_path) == "fresh-object" && read_file(dephash_path) == "fresh-dephash",
+                    std::memory_order_relaxed);
+                return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    });
+
+    const auto obj_tmp = cache_dir / "kernel.o.tmp";
+    const auto dephash_tmp = cache_dir / "kernel.o.dephash.tmp";
+    write_file(obj_tmp, "fresh-object");
+    write_file(dephash_tmp, "fresh-dephash");
+    ASSERT_TRUE(tt::filesystem::safe_rename(obj_tmp, obj_path, false));
+    ASSERT_TRUE(tt::filesystem::safe_rename(dephash_tmp, dephash_path, false));
+
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    tt::tt_metal::publish_build_state_hash(cache_dir, fresh_hash);
+    observer.join();
+
+    EXPECT_TRUE(saw_fresh_hash.load(std::memory_order_relaxed));
+    EXPECT_TRUE(artifacts_were_fresh.load(std::memory_order_relaxed));
+
+    std::filesystem::remove_all(cache_dir);
+}
+
+TEST(JitBuildTests, TelemetryTokenSupportsConcurrentRecord) {
+    auto& token = tt::tt_metal::BuildCacheTelemetry::inst().register_metric("test_depend.concurrent_record");
+
+    constexpr int kThreadCount = 8;
+    constexpr int kRecordsPerThread = 64;
+    std::vector<std::thread> threads;
+    threads.reserve(kThreadCount);
+
+    for (int thread_id = 0; thread_id < kThreadCount; ++thread_id) {
+        threads.emplace_back([&token, thread_id] {
+            for (int sample = 0; sample < kRecordsPerThread; ++sample) {
+                token.record(static_cast<double>(thread_id * 1000 + sample));
+            }
+        });
+    }
+    for (auto& thread : threads) {
+        thread.join();
+    }
+
+    EXPECT_GE(token.snapshot().size(), static_cast<size_t>(kThreadCount * kRecordsPerThread));
 }

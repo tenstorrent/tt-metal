@@ -177,7 +177,7 @@ protected:
     static constexpr size_t kMaxBuildBitset = 64;
 
     bool build_state_matches(const std::filesystem::path& out_dir) const;
-    void write_build_state_hash(const std::filesystem::path& out_dir) const;
+    void publish_build_state_hash(const std::filesystem::path& out_dir) const;
 
     bool need_compile(const std::filesystem::path& out_dir, const std::filesystem::path& obj) const;
     // When check_dir is non-empty, cache-hit checks (need_compile) use check_dir
@@ -224,6 +224,7 @@ using JitBuildStateSubset = std::span<const JitBuildState>;
 
 void jit_build(const JitBuildState& build, const JitBuildSettings* settings);
 void jit_build_subset(JitBuildStateSubset build_subset, const JitBuildSettings* settings);
+void publish_build_state_hash(const std::filesystem::path& out_dir, uint64_t build_state_hash);
 
 // Build for multiple processors that share the same source: the first target compiles,
 // and all targets (including the first) are linked. Writes the success marker once after all succeed.

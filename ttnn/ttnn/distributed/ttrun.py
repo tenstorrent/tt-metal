@@ -1203,7 +1203,15 @@ def main(
         logger.info(f"{TT_RUN_PREFIX} (gdb) break main")
         logger.info(f"{TT_RUN_PREFIX} (gdb) continue")
 
-    proc = subprocess.Popen(mpi_cmd, env=launcher_env, start_new_session=True)
+    # Handle launcher startup errors separately: if Popen itself fails, there is
+    # no child process tree to clean up yet, so we convert the raw OSError into
+    # a ClickException immediately. Once proc exists, keep the wait() path
+    # wrapped as well so any later OS-level wait/cleanup failure still goes
+    # through the established process-group teardown logic.
+    try:
+        proc = subprocess.Popen(mpi_cmd, env=launcher_env, start_new_session=True)
+    except OSError as e:
+        raise click.ClickException(f"Error launching mpirun: {e}")
 
     def _kill_process_group():
         """Best-effort cleanup of the entire MPI process tree."""

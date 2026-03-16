@@ -5,15 +5,18 @@
 #include "rtoptions.hpp"
 
 #include <algorithm>
+#include <array>
 #include <cctype>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <filesystem>
+#include <fmt/format.h>
 #include <sstream>
 #include <stdexcept>
 #include <string>
 #include <unordered_set>
+#include <unistd.h>
 #include <enchantum/enchantum.hpp>
 #include <tt_stl/assert.hpp>
 #include <tt-logger/tt-logger.hpp>
@@ -243,6 +246,31 @@ std::string to_lower_copy(std::string value) {
 std::string to_upper_copy(std::string value) {
     std::transform(value.begin(), value.end(), value.begin(), [](unsigned char ch) { return std::toupper(ch); });
     return value;
+}
+
+bool has_rank_scoped_suffix(const std::filesystem::path& path) {
+    const auto leaf = path.lexically_normal().filename().string();
+    const auto pos = leaf.rfind("_rank_");
+    if (pos == std::string::npos || pos == 0 || pos + 6 >= leaf.size()) {
+        return false;
+    }
+    return std::all_of(leaf.begin() + static_cast<std::ptrdiff_t>(pos + 6), leaf.end(), [](unsigned char ch) {
+        return std::isdigit(ch) != 0;
+    });
+}
+
+std::filesystem::path get_rank_scoped_logs_root(const std::string& logs_dir, int rank) {
+    auto logs_root = std::filesystem::path(logs_dir).lexically_normal();
+    if (rank < 0 || logs_root.empty() || has_rank_scoped_suffix(logs_root)) {
+        return logs_root;
+    }
+
+    std::array<char, 256> hostname{};
+    if (gethostname(hostname.data(), hostname.size() - 1) != 0 || hostname.front() == '\0') {
+        return logs_root;
+    }
+    hostname.back() = '\0';
+    return logs_root / fmt::format("{}_rank_{}", hostname.data(), rank);
 }
 
 template <typename IntType>
@@ -1461,7 +1489,8 @@ void RunTimeOptions::InitializeFromEnvVars() {
     }
 
     // Set inspector log path
-    this->inspector_settings.log_path = std::filesystem::path(this->get_logs_dir()) / "generated/inspector";
+    this->inspector_settings.log_path =
+        get_rank_scoped_logs_root(this->get_logs_dir(), this->cached_mpi_rank_) / "generated/inspector";
 
     // TT_METAL_RISCV_DEBUG_INFO: Inherit from inspector if not explicitly set
     if (std::getenv("TT_METAL_RISCV_DEBUG_INFO") == nullptr) {
