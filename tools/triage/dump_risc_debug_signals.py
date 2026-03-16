@@ -130,7 +130,8 @@ def run(args, context: Context):
             all_debug_bus_data[f"Device {device.id}"]["arch"] = str(device._arch)
         if "block_types" not in all_debug_bus_data[f"Device {device.id}"]:
             all_debug_bus_data[f"Device {device.id}"]["block_types"] = defaultdict(dict)
-        all_debug_bus_data[f"Device {device.id}"]["block_types"][block_type] = defaultdict(dict)
+        if block_type not in all_debug_bus_data[f"Device {device.id}"]["block_types"]:
+            all_debug_bus_data[f"Device {device.id}"]["block_types"][block_type] = defaultdict(dict)
         all_debug_bus_data[f"Device {device.id}"]["block_types"][block_type][
             f"location: {location.to_user_str()}"
         ] = result
