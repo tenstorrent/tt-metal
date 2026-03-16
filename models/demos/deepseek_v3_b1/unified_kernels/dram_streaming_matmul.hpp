@@ -129,7 +129,8 @@ struct DRAMStreamingMatmul {
         bool ResetCBIn1 = false,
         uint32_t CBIn1ResetAddr = 0,
         bool PopIndex = false,
-        bool WaitForOutput = false>
+        bool WaitForOutput = false,
+        uint32_t NumBuffers = 3>
     class Op {
     public:
         void operator()() {
@@ -187,9 +188,9 @@ struct DRAMStreamingMatmul {
             // Set up NOC state for page reads
             noc_async_read_one_packet_set_state<true>(in1_base_addr, CTArgs::in1_page_size, vc);
 
-            // Triple-buffering with transaction IDs for pipelining
-            constexpr uint32_t num_buffers = 3;
-            constexpr uint32_t extra_blocks_in_flight = 1;
+            constexpr uint32_t num_buffers = NumBuffers;
+            static_assert(num_buffers >= 2, "Need at least double buffering");
+            constexpr uint32_t extra_blocks_in_flight = (num_buffers >= 3) ? 1 : 0;
             uint32_t num_free_blocks_in_buffer = num_buffers;
             uint32_t curr_block_trid = 1;
             uint32_t block_trid_to_wait = 1;

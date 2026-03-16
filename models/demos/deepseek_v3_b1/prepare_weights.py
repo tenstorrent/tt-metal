@@ -192,6 +192,16 @@ class DeepSeekV3LMHeadWeights:
     final_norm: ttnn.Tensor  # model.norm.weight, (1, 7168)
 
 
+@dataclass
+class DeepSeekV3MTPWeights:
+    """Weights for the MTP (Multi-Token Prediction) fusion path."""
+
+    embedding: ttnn.Tensor  # [vocab_size, embed_dim], DRAM, ROW_MAJOR
+    h_gamma: ttnn.Tensor  # [1, K], L1, TILE_LAYOUT, height-sharded on mcast core
+    e_gamma: ttnn.Tensor  # [1, embed_dim], L1, TILE_LAYOUT, height-sharded on mcast core
+    eh_projection: ttnn.Tensor  # [K+embed_dim, mtp_padded_dim], DRAM, TILE_LAYOUT, width-sharded
+
+
 # Constants for kv_b_proj split (HF stores one matrix; we split into kv_b1 and kv_b2).
 _NUM_HEADS = 64
 # MoE routed experts (DeepSeek V3 config: n_routed_experts=256).
