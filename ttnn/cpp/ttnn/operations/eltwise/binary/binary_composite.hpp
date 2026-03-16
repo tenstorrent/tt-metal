@@ -139,7 +139,7 @@ Tensor bias_gelu(
 
 Tensor bias_gelu(
     const ttnn::Tensor& input_tensor_a,
-    const float bias,
+    float bias,
     const std::optional<const DataType>& /*dtype*/ = std::nullopt,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,
@@ -508,7 +508,7 @@ Tensor isclose(
     const Tensor& input_tensor_b,
     float rtol,
     float atol,
-    const bool equal_nan,
+    bool equal_nan,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
 Tensor div_no_nan(

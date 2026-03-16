@@ -7,9 +7,12 @@
 #include <functional>
 #include <optional>
 #include "ttnn/tensor/tensor.hpp"
+#include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
 
 namespace ttnn::operations::complex_unary_backward {
+
+using tt::tt_metal::MemoryConfig;
 
 enum class ComplexUnaryBackwardOpType {
     POLAR_BW,

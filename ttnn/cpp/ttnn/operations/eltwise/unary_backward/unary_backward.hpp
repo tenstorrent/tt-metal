@@ -448,8 +448,8 @@ struct ExecuteUnaryBackwardClamp {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        std::optional<Tensor> min = std::nullopt,
-        std::optional<Tensor> max = std::nullopt,
+        const std::optional<Tensor>& min = std::nullopt,
+        const std::optional<Tensor>& max = std::nullopt,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 
@@ -464,8 +464,8 @@ struct ExecuteUnaryBackwardClip {
     static std::vector<Tensor> invoke(
         const Tensor& grad_tensor_arg,
         const Tensor& input_tensor_arg,
-        std::optional<Tensor> min = std::nullopt,
-        std::optional<Tensor> max = std::nullopt,
+        const std::optional<Tensor>& min = std::nullopt,
+        const std::optional<Tensor>& max = std::nullopt,
         const std::optional<MemoryConfig>& output_mem_config = std::nullopt);
 };
 

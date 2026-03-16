@@ -63,8 +63,8 @@ std::vector<Tensor> ExecuteUnaryBackwardClamp::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardClamp::invoke(
     const Tensor& grad,
     const Tensor& input,
-    std::optional<Tensor> min,
-    std::optional<Tensor> max,
+    const std::optional<Tensor>& min,
+    const std::optional<Tensor>& max,
     const std::optional<MemoryConfig>& output_mem_config) {
     std::vector<Tensor> grad_tensor;
     auto output_memory_config = output_mem_config.value_or(
@@ -102,10 +102,10 @@ std::vector<Tensor> ExecuteUnaryBackwardClip::invoke(
 std::vector<Tensor> ExecuteUnaryBackwardClip::invoke(
     const Tensor& grad,
     const Tensor& input,
-    std::optional<Tensor> min,
-    std::optional<Tensor> max,
+    const std::optional<Tensor>& min,
+    const std::optional<Tensor>& max,
     const std::optional<MemoryConfig>& output_mem_config) {
-    return ExecuteUnaryBackwardClamp::invoke(grad, input, std::move(min), std::move(max), output_mem_config);
+    return ExecuteUnaryBackwardClamp::invoke(grad, input, min, max, output_mem_config);
 }
 
 // Hardtanh

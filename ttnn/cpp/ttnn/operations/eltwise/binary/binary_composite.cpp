@@ -305,7 +305,7 @@ Tensor div(
         rounding_mode,
         output_dtype,
         output_mem_config,
-        output,
+        std::move(output),
         post_activations,
         lhs_activations,
         rhs_activations,
