@@ -74,7 +74,7 @@ struct RingAccumulatorState {
  * Blocked subblock matmul with absolute offset packing.
  * Always uses pack_tile<true> at row-major positions in out_cb.
  */
-template <bool TRANSPOSE, uint32_t IN1_STRIDE, uint32_t OUT_NUM_COLS, bool blocked_pack = false>
+template <bool transpose, uint32_t in1_stride, uint32_t out_num_cols, bool blocked_pack = false>
 SDPA_NOINLINE void blocked_matmul_and_pack(
     uint32_t in0_cb,
     uint32_t in1_cb,
@@ -83,27 +83,24 @@ SDPA_NOINLINE void blocked_matmul_and_pack(
     uint32_t in1_index_start,
     uint32_t q_subblock,
     uint32_t out_col_offset,
-    uint32_t SUBBLOCK_W,
-    uint32_t SUBBLOCK_H,
-    uint32_t INNER_DIM,
-    uint32_t KT_DIM_MATMUL = 0,
+    uint32_t subblock_w,
+    uint32_t subblock_h,
+    uint32_t inner_dim,
+    uint32_t kt_dim_matmul,
     bool trigger_reduce = false) {
-    if (KT_DIM_MATMUL == 0) {
-        KT_DIM_MATMUL = INNER_DIM;
-    }
     tile_regs_acquire();
     uint32_t dst_index = 0;
     uint32_t in0_index = in0_index_start;
     uint32_t in1_index = in1_index_start;
-    for (uint32_t inner = 0; inner < INNER_DIM; ++inner) {
+    for (uint32_t inner = 0; inner < inner_dim; ++inner) {
 #ifdef ARCH_BLACKHOLE
         matmul_block_no_mop(
-            in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, KT_DIM_MATMUL);
+            in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, kt_dim_matmul);
 #else
-        matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, TRANSPOSE, SUBBLOCK_W, SUBBLOCK_H, KT_DIM_MATMUL);
+        matmul_block(in0_cb, in1_cb, in0_index, in1_index, dst_index, transpose, subblock_w, subblock_h, kt_dim_matmul);
 #endif
         in0_index++;
-        in1_index += IN1_STRIDE;
+        in1_index += in1_stride;
     }
     tile_regs_commit();
 
@@ -111,17 +108,17 @@ SDPA_NOINLINE void blocked_matmul_and_pack(
     uint32_t dst_idx = 0;
 #ifdef ARCH_BLACKHOLE
     if constexpr (blocked_pack) {
-        for (uint32_t r = 0; r < SUBBLOCK_H; r++) {
-            uint32_t out_row_offset = (r + q_subblock * SUBBLOCK_H) * OUT_NUM_COLS;
+        for (uint32_t r = 0; r < subblock_h; r++) {
+            uint32_t out_row_offset = (r + q_subblock * subblock_h) * out_num_cols;
             pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset);
-            dst_idx += SUBBLOCK_W;
+            dst_idx += subblock_w;
         }
     } else
 #endif
     {
-        for (uint32_t r = 0; r < SUBBLOCK_H; r++) {
-            uint32_t out_row_offset = (r + q_subblock * SUBBLOCK_H) * OUT_NUM_COLS;
-            for (uint32_t c = 0; c < SUBBLOCK_W; c++) {
+        for (uint32_t r = 0; r < subblock_h; r++) {
+            uint32_t out_row_offset = (r + q_subblock * subblock_h) * out_num_cols;
+            for (uint32_t c = 0; c < subblock_w; c++) {
                 pack_tile<true>(dst_idx, out_cb, out_row_offset + out_col_offset + c);
                 dst_idx++;
             }
@@ -137,22 +134,21 @@ SDPA_NOINLINE void blocked_matmul_and_pack(
  * Per-row-group max reduction with optional eltwise_max against prev values.
  * Reads from in0_cb at row group offset, writes to out_cb sequentially.
  */
-template <PoolType pool_type, ReduceDim reduce_dim, uint32_t scale_cb, uint32_t cols, uint32_t ROW_STRIDE = cols>
+template <uint32_t in0_cb, uint32_t scale_cb, uint32_t row_stride>
 void reduce_c_row_group(
-    uint32_t in0_cb,
     uint32_t out_cb,
     uint32_t prev_cb,
     uint32_t row_group_index,
     bool do_eltwise_max,
-    uint32_t SBH,
-    uint32_t reduce_cols = cols,
+    uint32_t sbh,
+    uint32_t reduce_cols,
     bool respect_trigger = false) {
-    const uint32_t GROUP_SIZE = SBH;
-    const uint32_t row_start = row_group_index * GROUP_SIZE;
+    const uint32_t group_size = sbh;
+    const uint32_t row_start = row_group_index * group_size;
 
-    // ROW_STRIDE: physical row width in the CB (may exceed cols on the reduced path).
-    const uint32_t cumulative_input_tiles = (row_group_index + 1) * GROUP_SIZE * ROW_STRIDE;
-    const uint32_t cumulative_prev_tiles = (row_group_index + 1) * GROUP_SIZE;
+    // row_stride: physical row width in the CB (may exceed cols on the reduced path).
+    const uint32_t cumulative_input_tiles = (row_group_index + 1) * group_size * row_stride;
+    const uint32_t cumulative_prev_tiles = (row_group_index + 1) * group_size;
 
     // scale_cb assumed ready (waited once at kernel init)
     // cb_wait_front(scale_cb, 1);
@@ -162,7 +158,7 @@ void reduce_c_row_group(
     if (do_eltwise_max) {
         cb_wait_front(prev_cb, cumulative_prev_tiles);
         sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
-        for (uint32_t i = 0; i < GROUP_SIZE; i++) {
+        for (uint32_t i = 0; i < group_size; i++) {
             copy_tile(prev_cb, row_start + i, i);
         }
     }
@@ -177,8 +173,8 @@ void reduce_c_row_group(
     }
 
     reduce_block_max_row_init_runtime(reduce_cols, respect_trigger);
-    for (uint32_t i = 0; i < GROUP_SIZE; i++) {
-        const uint32_t input_tile_start = (row_start + i) * ROW_STRIDE;
+    for (uint32_t i = 0; i < group_size; i++) {
+        const uint32_t input_tile_start = (row_start + i) * row_stride;
         reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger);
     }
     reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger);
@@ -186,7 +182,7 @@ void reduce_c_row_group(
     tile_regs_commit();
     tile_regs_wait();
 
-    for (uint32_t i = 0; i < GROUP_SIZE; i++) {
+    for (uint32_t i = 0; i < group_size; i++) {
         pack_tile<false>(i, out_cb);
     }
 
@@ -197,12 +193,7 @@ void reduce_c_row_group(
  * In-place sub_exp on cb_qkt_im: subtracts max, applies exp with ReLU clamping,
  * writes back to same positions. Accumulates row sums into reduce_cb.
  */
-template <
-    bool PROFILING_ENABLED,
-    uint32_t scale_fp32,
-    bool do_reduce,
-    int vector_mode = (int)VectorMode::RC,
-    bool blocked_pack = false>
+template <bool profiling_enabled, uint32_t scale_fp32, bool blocked_pack = false>
 SDPA_NOINLINE void sub_exp_block_bcast_cols(
     uint32_t inout_cb,
     uint32_t max_cb,
@@ -210,14 +201,14 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
     uint32_t cols_in_row,
     uint32_t q_subblock,
     uint32_t global_col_base,
-    uint32_t SBH,
-    uint32_t SBW) {
-    const uint32_t tiles_per_row = SBH;
-    const uint32_t tiles_per_column = SBW;
+    uint32_t sbh,
+    uint32_t sbw) {
+    const uint32_t tiles_per_row = sbh;
+    const uint32_t tiles_per_column = sbw;
     const uint32_t max_row_base = q_subblock * tiles_per_row;
 
     {
-        MaybeDeviceZoneScopedN(PROFILING_ENABLED, "SUB_EXP_BLOCK_INIT");
+        MaybeDeviceZoneScopedN(profiling_enabled, "SUB_EXP_BLOCK_INIT");
 #ifdef ARCH_BLACKHOLE
         sub_bcast_cols_init_short_custom(inout_cb, max_cb, tiles_per_column);
 #else
@@ -232,7 +223,7 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
 
     tile_regs_acquire();
     {
-        MaybeDeviceZoneScopedN(PROFILING_ENABLED, "SUB");
+        MaybeDeviceZoneScopedN(profiling_enabled, "SUB");
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
 #ifdef ARCH_BLACKHOLE
@@ -252,10 +243,10 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
 
     tile_regs_wait();
     {
-        MaybeDeviceZoneScopedN(PROFILING_ENABLED, "EXP");
+        MaybeDeviceZoneScopedN(profiling_enabled, "EXP");
         uint32_t dst_index = 0;
-        constexpr int iterations = (vector_mode == (int)VectorMode::RC) ? 32 : 8;
-        constexpr int vector_mode_exp = (vector_mode == (int)VectorMode::RC) ? (int)VectorMode::None : vector_mode;
+        constexpr int iterations = 32;
+        constexpr int vector_mode_exp = (int)VectorMode::None;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
             for (uint32_t j = 0; j < tiles_per_column; j++) {
                 exp_packthread_tile<true, true, false, false, InputClamping::None, iterations>(
@@ -266,7 +257,7 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
     }
 
     {
-        MaybeDeviceZoneScopedN(PROFILING_ENABLED, "PACK SUB_EXP");
+        MaybeDeviceZoneScopedN(profiling_enabled, "PACK SUB_EXP");
         // Pack back to inout_cb at the same absolute positions
         uint32_t dst_index = 0;
 #ifdef ARCH_BLACKHOLE
@@ -290,26 +281,24 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
         }
 
         // Reduce to reduce_cb: first tile of first kt_subblock overwrites, rest accumulate
-        if constexpr (do_reduce) {
 #ifdef ARCH_BLACKHOLE
-            if constexpr (blocked_pack) {
-                PACK((llk_pack_mop_config<false, false, false>(reduce_cb, 1)));
-            }
+        if constexpr (blocked_pack) {
+            PACK((llk_pack_mop_config<false, false, false>(reduce_cb, 1)));
+        }
 #endif
-            dst_index = 0;
+        dst_index = 0;
 #pragma GCC unroll 1
-            for (uint32_t i = 0; i < tiles_per_row; i++) {
-                if (global_col_base > 0) {
+        for (uint32_t i = 0; i < tiles_per_row; i++) {
+            if (global_col_base > 0) {
+                PACK((llk_pack_reconfig_l1_acc(1)));
+            } else {
+                PACK((llk_pack_reconfig_l1_acc(0)));
+            }
+#pragma GCC unroll 1
+            for (uint32_t j = 0; j < tiles_per_column; ++j) {
+                pack_tile<true>(dst_index++, reduce_cb, max_row_base + i);
+                if (global_col_base == 0 && j == 0) {
                     PACK((llk_pack_reconfig_l1_acc(1)));
-                } else {
-                    PACK((llk_pack_reconfig_l1_acc(0)));
-                }
-#pragma GCC unroll 1
-                for (uint32_t j = 0; j < tiles_per_column; ++j) {
-                    pack_tile<true>(dst_index++, reduce_cb, max_row_base + i);
-                    if (global_col_base == 0 && j == 0) {
-                        PACK((llk_pack_reconfig_l1_acc(1)));
-                    }
                 }
             }
         }
@@ -319,24 +308,22 @@ SDPA_NOINLINE void sub_exp_block_bcast_cols(
 
     // Restore packer ReLU config after all exp operations complete
     PACK((llk_pack_relu_config(ReluType::NO_RELU)));
-    if constexpr (do_reduce) {
 #ifdef ARCH_BLACKHOLE
-        if constexpr (blocked_pack) {
-            PACK((llk_pack_mop_config<false, false, false>(reduce_cb, tiles_per_column)));
-        }
-#endif
-        PACK((llk_pack_reconfig_l1_acc(0)));
+    if constexpr (blocked_pack) {
+        PACK((llk_pack_mop_config<false, false, false>(reduce_cb, tiles_per_column)));
     }
+#endif
+    PACK((llk_pack_reconfig_l1_acc(0)));
 }
 
 /**
  * Column-only exp(prev_max - cur_max) for SALAD corrections.
  * Operates on first-column subset of tiles.
  */
-template <bool PROFILING_ENABLED, uint32_t scale_fp32>
+template <bool profiling_enabled, uint32_t scale_fp32>
 SDPA_NOINLINE void sub_exp_first_col_blocks(
-    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t SBH) {
-    const uint32_t tiles_per_row = SBH;
+    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t sbh) {
+    const uint32_t tiles_per_row = sbh;
     const uint32_t global_row_base = q_subblock * tiles_per_row;
     constexpr uint16_t scale_bf16 = scale_fp32 >> 16;
 
@@ -374,8 +361,8 @@ SDPA_NOINLINE void sub_exp_first_col_blocks(
  * with L1 accumulate at explicit offset.
  */
 inline void mul_bcast_cols_l1_acc(
-    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t write_q_subblock, uint32_t SBH) {
-    const uint32_t tiles_per_row = SBH;
+    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t write_q_subblock, uint32_t sbh) {
+    const uint32_t tiles_per_row = sbh;
     const uint32_t read_row_base = q_subblock * tiles_per_row;
     const uint32_t write_row_base = write_q_subblock * tiles_per_row;
 
@@ -400,13 +387,13 @@ inline void mul_bcast_cols_l1_acc(
 /**
  * SALAD output correction: block multiply with bcast_cols and L1 accumulate.
  */
-template <uint32_t SBW>
+template <uint32_t sbw_t, uint32_t dst_size, uint32_t sbh_t>
 void mul_block_bcast_cols_acc(
-    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t write_q_subblock, uint32_t SBH) {
-    const uint32_t tiles_per_row = SBH;
-    constexpr uint32_t tiles_per_column = SBW;
-    // Process columns in batches that fit SBH rows in DST (8 tiles max).
-    const uint32_t COL_BATCH = (8 / SBH < SBW) ? 8 / SBH : SBW;
+    uint32_t in0_cb, uint32_t in1_cb, uint32_t out_cb, uint32_t q_subblock, uint32_t write_q_subblock) {
+    constexpr uint32_t tiles_per_row = sbh_t;
+    constexpr uint32_t tiles_per_column = sbw_t;
+    // Process columns in batches that fit sbh_t rows in DST.
+    constexpr uint32_t col_batch = (dst_size / sbh_t < sbw_t) ? dst_size / sbh_t : sbw_t;
     const uint32_t read_row_base = q_subblock * tiles_per_row;
     const uint32_t write_row_base = write_q_subblock * tiles_per_row;
     mul_bcast_cols_init_short(in0_cb, in1_cb);
@@ -414,10 +401,10 @@ void mul_block_bcast_cols_acc(
     cb_wait_front(in0_cb, (q_subblock + 1) * tiles_per_row * tiles_per_column);
     cb_wait_front(in1_cb, (q_subblock + 1) * tiles_per_row);
 
-    for (uint32_t col_base = 0; col_base < tiles_per_column; col_base += COL_BATCH) {
-        const uint32_t last_batch = tiles_per_column % COL_BATCH;
+    for (uint32_t col_base = 0; col_base < tiles_per_column; col_base += col_batch) {
+        const uint32_t last_batch = tiles_per_column % col_batch;
         const uint32_t cur_cols =
-            (col_base + COL_BATCH <= tiles_per_column) ? COL_BATCH : (last_batch > 0 ? last_batch : COL_BATCH);
+            (col_base + col_batch <= tiles_per_column) ? col_batch : (last_batch > 0 ? last_batch : col_batch);
         tile_regs_acquire();
         uint32_t dst_index = 0;
         for (uint32_t i = 0; i < tiles_per_row; i++) {
@@ -454,18 +441,18 @@ void mul_block_bcast_cols_acc(
  * Consumes (pops) sum and output tiles, writes normalized output.
  * scratch_cb is a 1-tile CB reused for the reciprocal intermediate.
  */
-template <bool PROFILING_ENABLED, uint32_t head_dim_t_>
+template <bool profiling_enabled, uint32_t head_dim_t_, uint32_t dst_size>
 void normalize_row_streaming(
     uint32_t cur_sum_cb,
     uint32_t cur_out_cb,
     uint32_t col_identity_cb,
     uint32_t scratch_cb,
     uint32_t normalized_out_cb,
-    uint32_t SBH) {
-    for (uint32_t s = 0; s < SBH; s++) {
+    uint32_t sbh) {
+    for (uint32_t s = 0; s < sbh; s++) {
         // 1+2. Fused matmul_reduce + recip: sum × col_identity → recip → 1/sum in scratch
         {
-            MaybeDeviceZoneScopedN(PROFILING_ENABLED, "NORM_MATMUL_RECIP");
+            MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MATMUL_RECIP");
             constexpr uint32_t N = 1;
             mm_block_init_short(cur_sum_cb, col_identity_cb, 0, N, 1, N);
             reconfig_data_format(col_identity_cb, cur_sum_cb);
@@ -494,10 +481,10 @@ void normalize_row_streaming(
         }
 
         // 3. Normalize: multiply output tiles by bcast_cols(1/sum)
-        // Process in batches of up to 8 tiles (DST capacity for fp16b half-sync).
+        // Process in batches of up to dst_size tiles (DST capacity).
         {
-            MaybeDeviceZoneScopedN(PROFILING_ENABLED, "NORM_MUL_BCAST");
-            constexpr uint32_t BATCH = (head_dim_t_ < 8) ? head_dim_t_ : 8;
+            MaybeDeviceZoneScopedN(profiling_enabled, "NORM_MUL_BCAST");
+            constexpr uint32_t BATCH = (head_dim_t_ < dst_size) ? head_dim_t_ : dst_size;
             mul_bcast_cols_init_short(cur_out_cb, scratch_cb);
             cb_wait_front(cur_out_cb, head_dim_t_);
             cb_wait_front(scratch_cb, 1);
@@ -531,16 +518,15 @@ void normalize_row_streaming(
  * L1-accumulate ring mask tiles onto QKT for one row group (q_subblock).
  * Copies mask tiles from cb_mask_in and adds them in-place to cb_qkt_im using L1 accumulation.
  */
-template <uint32_t Sk_chunk_t, uint32_t cb_mask_in, uint32_t cb_qkt_im>
+template <uint32_t Sk_chunk_t, uint32_t cb_mask_in, uint32_t cb_qkt_im, uint32_t dst_size>
 static void apply_ring_mask_to_qkt(uint32_t q_subblock, uint32_t sbh) {
-    constexpr uint32_t DST_BATCH = 8;
     for (uint32_t row = 0; row < sbh; row++) {
         uint32_t out_row_offset = (q_subblock * sbh + row) * Sk_chunk_t;
         uint32_t mask_row_offset = (q_subblock * sbh + row) * Sk_chunk_t;
         copy_tile_to_dst_init_short(cb_mask_in);
         PACK((llk_pack_reconfig_l1_acc(1)));
-        for (uint32_t base = 0; base < Sk_chunk_t; base += DST_BATCH) {
-            uint32_t batch = (Sk_chunk_t - base < DST_BATCH) ? (Sk_chunk_t - base) : DST_BATCH;
+        for (uint32_t base = 0; base < Sk_chunk_t; base += dst_size) {
+            uint32_t batch = (Sk_chunk_t - base < dst_size) ? (Sk_chunk_t - base) : dst_size;
             tile_regs_acquire();
             for (uint32_t i = 0; i < batch; i++) {
                 copy_tile(cb_mask_in, mask_row_offset + base + i, i);
@@ -583,10 +569,10 @@ static SDPA_NOINLINE void apply_lightweight_mask_streaming(
     uint32_t num_padded,
     bool has_partial,
     uint32_t partial_tile_idx,
-    uint32_t SBH) {
+    uint32_t sbh) {
     uint32_t boundary_col = num_cols - num_padded - (has_partial ? 1 : 0);
-    for (uint32_t row = 0; row < SBH; row++) {
-        uint32_t row_offset = (q_subblock * SBH + row) * num_cols;
+    for (uint32_t row = 0; row < sbh; row++) {
+        uint32_t row_offset = (q_subblock * sbh + row) * num_cols;
 
         if (has_partial) {
             l1_acc_single_tile(mask_cb, partial_tile_idx, out_cb, row_offset + boundary_col);
@@ -619,7 +605,7 @@ constexpr uint32_t largest_factor_le(uint32_t n, uint32_t max_val) {
  * Phase 2: Drain + QKT@V with SALAD corrections, streaming normalization on last K iter.
  */
 template <
-    bool PROFILING_ENABLED,
+    bool profiling_enabled,
     uint32_t Sq_chunk_t,
     uint32_t Sk_chunk_t,
     uint32_t Skt,
@@ -631,7 +617,6 @@ template <
     bool use_padded_mask,
     bool ring_mode = false,
     bool use_ring_mask = false,
-
     bool uniform_dataformat = false,
     uint32_t cb_q_in = 0,
     uint32_t cb_kt_in = 0,
@@ -656,6 +641,8 @@ static void sdpa_inner_loop_step(
     const uint32_t actual_sbw = qkt_subblock_w) {
     // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
     const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
+    // ToDo: pick up the size of dest from dest_helper once it is merged to main.
+    constexpr uint32_t dst_size = 8;
     constexpr uint32_t in0_block_w = DHt;
     constexpr uint32_t q_num_subblocks = Sq_chunk_t / subblock_h;
     constexpr uint32_t q_subblock_num_tiles = subblock_h * in0_block_w;
@@ -693,14 +680,11 @@ static void sdpa_inner_loop_step(
 #ifdef ARCH_BLACKHOLE
     PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, actual_sbw)));
 #endif
+    cb_wait_front(cb_kt_in, DHt * KT_stride);
+
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
-        MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)");
+        MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)");
         cb_wait_front(cb_q_in, q_wait_tiles);
-        // Deferred KT wait: reader pushes Q before KT, so waiting for Q first
-        // allows reserves + MOP config + Q wait to overlap with KT DMA.
-        if (q_subblock == 0) {
-            cb_wait_front(cb_kt_in, DHt * KT_stride);
-        }
         kt_index_offset = 0;
 #ifdef ARCH_BLACKHOLE
         mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, subblock_h, in0_block_w);
@@ -713,7 +697,7 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
                 }
-                sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, true, VectorMode::RC, true /*blocked_pack*/>(
+                sub_exp_block_bcast_cols<profiling_enabled, scale_fp32, true /*blocked_pack*/>(
                     cb_qkt_im,
                     cur.max,
                     cur.sum,
@@ -729,7 +713,7 @@ static void sdpa_inner_loop_step(
 #endif
             }
             {
-                MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Q@KT MM+Pack");
+                MaybeDeviceZoneScopedN(profiling_enabled, "Q@KT MM+Pack");
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
                 }
@@ -746,7 +730,7 @@ static void sdpa_inner_loop_step(
                     actual_sbw,
                     subblock_h,
                     in0_block_w,
-                    0,
+                    in0_block_w,
                     kt_trigger_reduce);
                 kt_index_offset += actual_sbw;
             }
@@ -781,15 +765,14 @@ static void sdpa_inner_loop_step(
 
         // Max reduce: reads from cb_qkt_im at q_subblock position
         {
-            MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Reduce max");
+            MaybeDeviceZoneScopedN(profiling_enabled, "Reduce max");
             cb_reserve_back(cur.max, subblock_h);
 #ifdef ARCH_BLACKHOLE
             PACK((llk_pack_mop_config<false, false, false>(cur.max, 1)));
 #endif
             // Use reduce_trigger to enable early reduce start (before all matmul output is ready).
             // When reduce_trigger=true, the packer signals the unpacker via semaphore after partial output.
-            reduce_c_row_group<PoolType::MAX, ReduceDim::REDUCE_ROW, cb_identity_scale_in, Sk_chunk_t, KT_stride>(
-                cb_qkt_im,
+            reduce_c_row_group<cb_qkt_im, cb_identity_scale_in, KT_stride>(
                 cur.max,
                 prev.max,
                 q_subblock,
@@ -824,13 +807,13 @@ static void sdpa_inner_loop_step(
     // After Phase 1: all rows are pushed (via hold_wr_ptr) in cb_qkt_im.
     // Rows 0..N-2 are softmax'd in-place; row N-1 has raw matmul output.
     {
-        const uint32_t qktv_subblock_h = subblock_h;
-        constexpr uint32_t qktv_subblock_w = (vDHt < 4) ? vDHt : 4;
-        const uint32_t qktv_q_num_subblocks = Sq_chunk_t / qktv_subblock_h;
+        constexpr uint32_t qktv_subblock_h = subblock_h;
+        constexpr uint32_t qktv_subblock_w = (vDHt < dst_size / subblock_h) ? vDHt : dst_size / subblock_h;
+        constexpr uint32_t qktv_q_num_subblocks = Sq_chunk_t / qktv_subblock_h;
         constexpr uint32_t qktv_v_num_subblocks = vDHt / qktv_subblock_w;
         constexpr uint32_t qktv_output_num_tiles = Sq_chunk_t * vDHt;
         // cb_qkt_im row width is KT_stride (for pointer alignment), not Sk_chunk_t
-        const uint32_t qktv_in0_row_tiles = qktv_subblock_h * KT_stride;
+        constexpr uint32_t qktv_in0_row_tiles = qktv_subblock_h * KT_stride;
 
         uint32_t qktv_in0_index_offset = 0;
         uint32_t qktv_in0_wait_tiles = qktv_in0_row_tiles;
@@ -844,14 +827,14 @@ static void sdpa_inner_loop_step(
         PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, 1)));
 #endif
         {
-            MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)@V");
+            MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
             // subblock_h=1: split-drain (sub_exp interleaved with V matmul).
             // subblock_h>1: non-split drain (all sub_exp first, then full V matmul).
             // Note: constexpr on subblock_h eliminates the dead branch at compile time.
-            if (subblock_h == 1) {
+            if constexpr (subblock_h == 1) {
                 const uint32_t matmul_inner = actual_sbw;
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
-                    sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, true>(
+                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                         cb_qkt_im,
                         cur.max,
                         cur.sum,
@@ -870,7 +853,7 @@ static void sdpa_inner_loop_step(
                     }
 
                     {
-                        MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
+                        MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                         uint32_t v_index_offset = 0;
                         if constexpr (!uniform_unpack_format) {
                             reconfig_data_format(cur.out, cb_v_in, cur.out, cb_qkt_im);
@@ -907,7 +890,7 @@ static void sdpa_inner_loop_step(
             } else {
                 // Non-split drain: drain all sub_exp in-place, then full matmul.
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
-                    sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, true>(
+                    sub_exp_block_bcast_cols<profiling_enabled, scale_fp32>(
                         cb_qkt_im,
                         cur.max,
                         cur.sum,
@@ -921,7 +904,7 @@ static void sdpa_inner_loop_step(
                 cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
                 cb_wait_front(cb_v_in, Sk_chunk_t * vDHt);
                 {
-                    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
+                    MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                     uint32_t v_index_offset = 0;
                     if constexpr (!uniform_unpack_format) {
                         reconfig_data_format(cur.out, cb_v_in, cur.out, cb_qkt_im);
@@ -957,10 +940,10 @@ static void sdpa_inner_loop_step(
 
         // Per-row normalization lambda — fires on last K chunk (standard or deferred norm)
         [[maybe_unused]] auto normalize_row = [&](uint32_t w_salad, uint32_t& pushed) {
-            MaybeDeviceZoneScopedN(PROFILING_ENABLED, "ROW_NORM");
+            MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
             cb_push_back(cur.sum, subblock_h);
             cb_push_back(cur.out, subblock_h * vDHt);
-            normalize_row_streaming<PROFILING_ENABLED, vDHt>(
+            normalize_row_streaming<profiling_enabled, vDHt, dst_size>(
                 cur.sum, cur.out, cb_col_identity, cb_recip_scratch, cb_normalized_out, subblock_h);
             pushed++;
         };
@@ -969,12 +952,13 @@ static void sdpa_inner_loop_step(
         auto salad_correct_row = [&](uint32_t salad_row, uint32_t w_salad, bool last_iter, uint32_t& pushed) {
             PACK((llk_pack_reconfig_l1_acc(1)));
             {
-                MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_SUM_CORR");
+                MaybeDeviceZoneScopedN(profiling_enabled, "S_SUM_CORR");
                 mul_bcast_cols_l1_acc(prev.sum, cb_exp_max_diff, cur.sum, salad_row, w_salad, subblock_h);
             }
             {
-                MaybeDeviceZoneScopedN(PROFILING_ENABLED, "S_OUT_CORR");
-                mul_block_bcast_cols_acc<vDHt>(prev.out, cb_exp_max_diff, cur.out, salad_row, w_salad, subblock_h);
+                MaybeDeviceZoneScopedN(profiling_enabled, "S_OUT_CORR");
+                mul_block_bcast_cols_acc<vDHt, dst_size, subblock_h>(
+                    prev.out, cb_exp_max_diff, cur.out, salad_row, w_salad);
             }
             PACK((llk_pack_reconfig_l1_acc(0)));
             if (last_iter) {
@@ -985,14 +969,14 @@ static void sdpa_inner_loop_step(
         // q_subblock 1..N-1: SALAD(prev) overlapped with matmul(cur)
         exp_packthread_tile_init<EXP_APPROX_MODE, false>();
         for (uint32_t q_subblock = 1; q_subblock < qktv_q_num_subblocks; ++q_subblock) {
-            MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)@V");
+            MaybeDeviceZoneScopedN(profiling_enabled, "Softmax(Q@KT)@V");
             uint32_t salad_row = q_subblock - 1;
             uint32_t w_salad = salad_row - pushed_rows;
             uint32_t w_q = q_subblock - pushed_rows;
 
             if (!is_first_iter) {
                 cb_reserve_back(cb_exp_max_diff, subblock_h);
-                sub_exp_first_col_blocks<PROFILING_ENABLED, scale_fp32>(
+                sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
                     prev.max, cur.max, cb_exp_max_diff, salad_row, subblock_h);
                 cb_push_back(cb_exp_max_diff, subblock_h);
             }
@@ -1000,7 +984,7 @@ static void sdpa_inner_loop_step(
             cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
             // Full matmul for current row
             {
-                MaybeDeviceZoneScopedN(PROFILING_ENABLED, "QKT@V MM+Pack");
+                MaybeDeviceZoneScopedN(profiling_enabled, "QKT@V MM+Pack");
                 uint32_t v_index_offset = 0;
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(cur.out, cb_v_in, cur.out, cb_qkt_im);
@@ -1048,17 +1032,17 @@ static void sdpa_inner_loop_step(
 
             if (!is_first_iter) {
                 cb_reserve_back(cb_exp_max_diff, subblock_h);
-                sub_exp_first_col_blocks<PROFILING_ENABLED, scale_fp32>(
+                sub_exp_first_col_blocks<profiling_enabled, scale_fp32>(
                     prev.max, cur.max, cb_exp_max_diff, salad_row, subblock_h);
                 cb_push_back(cb_exp_max_diff, subblock_h);
 
                 salad_correct_row(salad_row, w_salad, is_last_iter, pushed_rows);
             } else {
                 if (is_last_iter) {
-                    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "ROW_NORM");
+                    MaybeDeviceZoneScopedN(profiling_enabled, "ROW_NORM");
                     cb_push_back(cur.sum, subblock_h);
                     cb_push_back(cur.out, subblock_h * vDHt);
-                    normalize_row_streaming<PROFILING_ENABLED, vDHt>(
+                    normalize_row_streaming<profiling_enabled, vDHt, dst_size>(
                         cur.sum, cur.out, cb_col_identity, cb_recip_scratch, cb_normalized_out, subblock_h);
                     pushed_rows++;
                 }
@@ -1410,7 +1394,7 @@ void sdpa_ring_v2(
             }
 
             sdpa_inner_loop_step<
-                false,  // PROFILING_ENABLED
+                false,  // profiling_enabled
                 Sq_chunk_t,
                 Sk_chunk_t,
                 Skt,
