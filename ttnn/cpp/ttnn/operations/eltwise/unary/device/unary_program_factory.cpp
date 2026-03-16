@@ -156,13 +156,13 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
 
     // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en produces incorrect results on Wormhole B0.
     // Use HiFi3 when fp32_dest_acc_en is True on Wormhole B0.
-    const auto math_fidelity_for_config =
+    const auto default_fp32_acc_math_fidelity =
         (args.fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
     if (args.fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0) {
         log_warning(
             tt::LogOp,
-            "Unary op with fp32_dest_acc_en on Wormhole B0: using HiFi3 instead of HiFi4 "
-            "to avoid hardware bug (#38306).");
+            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3. "
+            "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
     }
 
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
@@ -170,7 +170,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
         path,
         core_group_1,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity_for_config,
+            .math_fidelity = default_fp32_acc_math_fidelity,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise,
@@ -190,7 +190,7 @@ UnaryProgramFactory::cached_program_t UnaryProgramFactory::create(
             path,
             core_group_2,
             tt::tt_metal::ComputeConfig{
-                .math_fidelity = math_fidelity_for_config,
+                .math_fidelity = default_fp32_acc_math_fidelity,
                 .fp32_dest_acc_en = args.fp32_dest_acc_en,
                 .unpack_to_dest_mode = unpack_to_dest_mode,
                 .bfp8_pack_precise = args.bfp8_pack_precise,
@@ -403,19 +403,19 @@ UnarySubCoreGridProgramFactory::cached_program_t UnarySubCoreGridProgramFactory:
     if (args.fp32_dest_acc_en && input.device()->arch() == tt::ARCH::WORMHOLE_B0) {
         log_warning(
             tt::LogOp,
-            "Unary op with fp32_dest_acc_en on Wormhole B0: using HiFi3 instead of HiFi4 "
-            "to avoid hardware bug (#38306).");
+            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3. "
+            "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
     }
-    const auto math_fidelity_for_config_sub = (args.fp32_dest_acc_en && input.device()->arch() == tt::ARCH::WORMHOLE_B0)
-                                                  ? MathFidelity::HiFi3
-                                                  : MathFidelity::HiFi4;
+    const auto default_fp32_acc_math_fidelity_sub =
+        (args.fp32_dest_acc_en && input.device()->arch() == tt::ARCH::WORMHOLE_B0) ? MathFidelity::HiFi3
+                                                                                   : MathFidelity::HiFi4;
 
     auto eltwise_unary_kernel_id = tt::tt_metal::CreateKernel(
         program,
         path,
         all_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = math_fidelity_for_config_sub,
+            .math_fidelity = default_fp32_acc_math_fidelity_sub,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise,

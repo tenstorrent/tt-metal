@@ -1552,8 +1552,8 @@ MatmulParams create_matmul_attributes(
         parameters.compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
         log_warning(
             tt::LogOp,
-            "HiFi4 + fp32_dest_acc_en on Wormhole B0 may produce incorrect results "
-            "(hw bug #38306). Prefer HiFi3.");
+            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3. "
+            "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
     }
     auto in0_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_a, parameters.transpose_a);
     auto in1_tile = operations::matmul::utilities::get_matmul_tile(input_tensor_b, parameters.transpose_b);
