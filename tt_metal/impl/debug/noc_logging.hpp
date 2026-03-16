@@ -5,6 +5,7 @@
 #pragma once
 
 #include <host_api.hpp>
+#include <tt-metalium/device_types.hpp>
 #include <vector>
 
 namespace tt {

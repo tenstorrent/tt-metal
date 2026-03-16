@@ -22,7 +22,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     SavedWeight,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
-    COMPUTE_KERNEL_CONFIG_LOFI,
+    COMPUTE_KERNEL_CONFIG_HIFI2,
     SEQ_LEN_CHUNK_SIZE,
     USERS_PER_ROW,
     dram_sharded_weight_config,
@@ -51,7 +51,7 @@ class MLP(AbstractModule):
     """
 
     WEIGHT_TORCH_DTYPE = torch.bfloat16
-    WEIGHT_DTYPE = ttnn.bfloat4_b
+    WEIGHT_DTYPE = ttnn.bfloat8_b
 
     @dataclass
     class ProgramConfigData(OpConfigBase):
@@ -154,7 +154,9 @@ class MLP(AbstractModule):
             return dim, hidden_dim
 
     @classmethod
-    def prefill_model_config(cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device) -> ModelPrefillConfig:
+    def prefill_model_config(
+        cls, hf_config: PretrainedConfig, mesh_device: ttnn.Device, fabric_config: ttnn.FabricConfig
+    ) -> ModelPrefillConfig:
         """Generate prefill configuration for this module.
 
         Args:
@@ -179,7 +181,7 @@ class MLP(AbstractModule):
         linear_op_config = LinearConfig(
             input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+            compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
         )
 
         # Construct the config
@@ -215,6 +217,7 @@ class MLP(AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        fabric_config: ttnn.FabricConfig,
         input_num_cores: int | None = None,
         output_num_cores: int | None = None,
     ) -> ModelDecodeConfig:
@@ -278,7 +281,7 @@ class MLP(AbstractModule):
                 program_config=get_dram_sharded_matmul_config(
                     USERS_PER_ROW, dim, even_int_div(hidden_dim, mesh_width), input_num_cores, inner_num_cores
                 ),
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
             "w2": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
@@ -290,7 +293,7 @@ class MLP(AbstractModule):
                     inner_num_cores,
                     output_num_cores,
                 ),
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
             "w3": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
@@ -298,7 +301,7 @@ class MLP(AbstractModule):
                 program_config=get_dram_sharded_matmul_config(
                     USERS_PER_ROW, dim, even_int_div(hidden_dim, mesh_width), input_num_cores, inner_num_cores
                 ),
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
             "mul": MulConfig(
                 memory_config=ttnn.L1_WIDTH_SHARDED_MEMORY_CONFIG,
@@ -397,34 +400,6 @@ class MLP(AbstractModule):
         )
 
     @staticmethod
-    def _silu_workaround(x: ttnn.Tensor) -> ttnn.Tensor:  # TODO: remove once ttnn.silu PCC is fixed
-        """Workaround for the silu PCC issue in ttnn."""
-        # -x
-        x1 = ttnn.neg(x)
-
-        # 1
-        x2 = ttnn.ones_like(x)
-
-        # exp(-x)
-        x3 = ttnn.exp(x1)
-        ttnn.deallocate(x1)
-
-        # 1 + exp(-x)
-        x4 = ttnn.add(x3, 1)
-        ttnn.deallocate(x3)
-
-        # 1 / (1 + exp(-x))
-        x5 = ttnn.div(x2, x4)
-        ttnn.deallocate(x2)
-        ttnn.deallocate(x4)
-
-        # x * (1 / (1 + exp(-x)))
-        x6 = ttnn.mul(x, x5)
-        ttnn.deallocate(x5)
-
-        return x6
-
-    @staticmethod
     def _fwd_all_gather_preff1_3(x: ttnn.Tensor, cfg: dict, ccl) -> ttnn.Tensor:
         """Wrapper for all-gather before FF1/3 projections.
         Matches: forward_prefill line 439, forward_decode line 491
@@ -462,8 +437,7 @@ class MLP(AbstractModule):
             w3_out: Second input
             mul_cfg: Config for mul operation (cfg["mul"])
 
-        Note: For prefill, mul_cfg should contain input_tensor_a_activations=[SILU] for fused activation.
-              For decode, caller should apply MLP._silu_workaround(w1_out) before calling this.
+        Note: mul_cfg should contain input_tensor_a_activations=[SILU] for fused activation.
         """
         return ttnn.mul(w1_out, w3_out, **mul_cfg)
 
@@ -580,13 +554,9 @@ class MLP(AbstractModule):
         w1_out = ttnn.linear(x, **cfg["w1"])
         w3_out = ttnn.linear(x, **cfg["w3"])
 
-        # Apply silu
-        w1_out_activated = cls._silu_workaround(w1_out)
-        ttnn.deallocate(w1_out)
-
         # Apply activation and multiply
-        activated = ttnn.mul(w1_out_activated, w3_out, **cfg["mul"])
-        ttnn.deallocate(w1_out_activated)
+        activated = ttnn.mul(w1_out, w3_out, **cfg["mul"])
+        ttnn.deallocate(w1_out)
         ttnn.deallocate(w3_out)
 
         # Down projection

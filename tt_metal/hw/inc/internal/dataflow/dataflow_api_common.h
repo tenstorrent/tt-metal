@@ -43,10 +43,16 @@ extern uint32_t tt_l1_ptr* sem_l1_base[];
  * \private
  */
 
+#ifdef ARCH_QUASAR
+#define NOC_UNICAST_WRITE_VC 2
+#define NOC_MULTICAST_WRITE_VC 8
+#define NOC_DISPATCH_MULTICAST_WRITE_VC 9
+#else
 // Use VC 1 for unicast writes, and VC 4 for mcast writes
 #define NOC_UNICAST_WRITE_VC 1
 #define NOC_MULTICAST_WRITE_VC 4
 #define NOC_DISPATCH_MULTICAST_WRITE_VC 5  // Only to be used by the dispatch cores
+#endif
 
 #define EXCLUDE_ENABLED 1
 #define EXCLUDE_ENABLED_OFFSET 22

@@ -5,18 +5,13 @@
 #pragma once
 #include "ttnn/decorators.hpp"
 
-namespace ttnn::operations::index_fill {
-
-struct IndexFill {
-    static Tensor invoke(
-        const Tensor& input,
-        uint32_t dim,
-        const Tensor& index,
-        std::variant<float, int> value,
-        const std::optional<MemoryConfig>& memory_config);
-};
-}  // namespace ttnn::operations::index_fill
-
 namespace ttnn {
-constexpr auto index_fill = ttnn::register_operation<"ttnn::index_fill", ttnn::operations::index_fill::IndexFill>();
+
+Tensor index_fill(
+    const Tensor& input,
+    uint32_t dim,
+    const Tensor& index,
+    std::variant<float, int> value,
+    const std::optional<MemoryConfig>& memory_config = std::nullopt);
+
 }  // namespace ttnn

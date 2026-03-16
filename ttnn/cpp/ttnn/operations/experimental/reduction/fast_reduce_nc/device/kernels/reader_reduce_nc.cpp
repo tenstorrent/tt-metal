@@ -4,6 +4,9 @@
 
 #include "api/dataflow/dataflow_api.h"
 #include "ttnn/kernel/dataflow/generate_reduce_scaler.hpp"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 inline uint32_t get_read_tile_id(uint32_t output_tile_id, uint32_t reduce_tile_size, uint32_t inner_tile_size) {
     return ((output_tile_id / inner_tile_size) * reduce_tile_size) + (output_tile_id % inner_tile_size);
@@ -31,13 +34,16 @@ void kernel_main() {
     constexpr uint32_t cb_id_in1 = 1;
     constexpr uint32_t scaler = 0;
 
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_in0_obj(cb_id_in0);
+
     generate_reduce_scaler(cb_id_in1, scaler);
 
-    uint32_t l1_write_addr_in0;
     constexpr uint32_t input_tile_bytes = get_tile_size(cb_id_in0);
 
     auto tensor_accessor = TensorAccessor(tensor_args, input_addr, input_tile_bytes);
     uint32_t input_granularity_index = 0;
+    uint32_t write_offset = 0;
 
     // For each shard, start at the index of the first shard to be reduced (same
     // index as output), then increment by the appropriate increment (based on
@@ -59,16 +65,21 @@ void kernel_main() {
             // 128+130, 128+260, and 128+390.
             for (uint32_t j = 0; j < num_input_tiles; ++j) {
                 if (input_granularity_index == 0) {
-                    cb_reserve_back(cb_id_in0, input_granularity);
-                    l1_write_addr_in0 = get_write_ptr(cb_id_in0);
+                    cb_in0_obj.reserve_back(input_granularity);
+                    write_offset = 0;
                 }
-                noc_async_read_page(read_tile_id, tensor_accessor, l1_write_addr_in0);
-                l1_write_addr_in0 += input_tile_bytes;
+                noc.async_read(
+                    tensor_accessor,
+                    cb_in0_obj,
+                    input_tile_bytes,
+                    {.page_id = read_tile_id},
+                    {.offset_bytes = write_offset});
+                write_offset += input_tile_bytes;
                 read_tile_id += inner_tile_size;
                 input_granularity_index++;
                 if (input_granularity_index == input_granularity) {
-                    noc_async_read_barrier();
-                    cb_push_back(cb_id_in0, input_granularity);
+                    noc.async_read_barrier();
+                    cb_in0_obj.push_back(input_granularity);
                     input_granularity_index = 0;
                 }
             }
