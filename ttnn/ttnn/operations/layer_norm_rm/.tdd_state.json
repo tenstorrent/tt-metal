@@ -1,0 +1,113 @@
+{
+  "op_name": "layer_norm_rm",
+  "op_path": "ttnn/ttnn/operations/layer_norm_rm",
+  "spec_path": "ttnn/ttnn/operations/layer_norm_rm/op_design.md",
+  "layout": "ROW_MAJOR_LAYOUT",
+  "current_stage_index": 0,
+  "last_passing_commit": null,
+  "stages": [
+    {
+      "name": "pure_normalize",
+      "description": "Full row-wise layer normalization without gamma/beta: tilize, mean, center, variance, rsqrt, normalize, untilize",
+      "kernel_files": [
+        "reader_layer_norm_rm.cpp",
+        "compute_layer_norm_rm.cpp",
+        "writer_unary_interleaved_start_id_blocked_rm_output.cpp"
+      ],
+      "test_file": "test_stage_pure_normalize.py",
+      "reference_body": "import torch.nn.functional as F\ngolden = F.layer_norm(x_torch, [x_torch.shape[-1]], eps=1e-5)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 128)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "gamma_scale",
+      "description": "Add gamma (scale) multiplication to normalization: read gamma RM, tilize gamma, apply mul<ROW> broadcast",
+      "kernel_files": [
+        "reader_layer_norm_rm.cpp",
+        "compute_layer_norm_rm.cpp"
+      ],
+      "test_file": "test_stage_gamma_scale.py",
+      "reference_body": "import torch.nn.functional as F\ngamma_torch = torch.randn(1, 1, 1, x_torch.shape[-1])\ngamma_ttnn = ttnn.from_torch(gamma_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)\ngolden = F.layer_norm(x_torch, [x_torch.shape[-1]], weight=gamma_torch.squeeze(), eps=1e-5)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 128)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "gamma=gamma_ttnn",
+      "extra_setup": "gamma_torch = torch.randn(1, 1, 1, shape[-1])",
+      "extra_ttnn_setup": "gamma_ttnn = ttnn.from_torch(gamma_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "full_affine",
+      "description": "Add beta (shift) addition to normalization with gamma: read beta RM, tilize beta, apply add<ROW> broadcast",
+      "kernel_files": [
+        "reader_layer_norm_rm.cpp",
+        "compute_layer_norm_rm.cpp"
+      ],
+      "test_file": "test_stage_full_affine.py",
+      "reference_body": "import torch.nn.functional as F\ngamma_torch = torch.randn(1, 1, 1, x_torch.shape[-1])\nbeta_torch = torch.randn(1, 1, 1, x_torch.shape[-1])\ngamma_ttnn = ttnn.from_torch(gamma_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)\nbeta_ttnn = ttnn.from_torch(beta_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)\ngolden = F.layer_norm(x_torch, [x_torch.shape[-1]], weight=gamma_torch.squeeze(), bias=beta_torch.squeeze(), eps=1e-5)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 32, 128)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "gamma=gamma_ttnn, beta=beta_ttnn",
+      "extra_setup": "gamma_torch = torch.randn(1, 1, 1, shape[-1])\nbeta_torch = torch.randn(1, 1, 1, shape[-1])",
+      "extra_ttnn_setup": "gamma_ttnn = ttnn.from_torch(gamma_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)\nbeta_ttnn = ttnn.from_torch(beta_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
