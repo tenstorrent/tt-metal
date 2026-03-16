@@ -7,9 +7,9 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaReduceScatterCreateHeads::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> llama_rs_create_heads(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& intermediate_packet_buffer,
     const int32_t dim,
@@ -52,4 +52,4 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteLlamaReduceScatterCr
     return {output_tensors[0], output_tensors[1], output_tensors[2]};
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

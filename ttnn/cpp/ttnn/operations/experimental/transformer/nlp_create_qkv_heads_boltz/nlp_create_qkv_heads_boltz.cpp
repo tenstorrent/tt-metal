@@ -5,8 +5,8 @@
 #include "nlp_create_qkv_heads_boltz.hpp"
 
 #include <utility>
-namespace ttnn::operations::experimental::transformer {
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsBoltzOperation::invoke(
+namespace ttnn::experimental {
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> nlp_create_qkv_heads_boltz(
     const Tensor& input_tensor_q,
     const std::optional<Tensor>& input_tensor_kv,
     const uint32_t num_q_heads,
@@ -40,4 +40,4 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> NlpCreateHeadsBoltzOperatio
         optional_output_tensors);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

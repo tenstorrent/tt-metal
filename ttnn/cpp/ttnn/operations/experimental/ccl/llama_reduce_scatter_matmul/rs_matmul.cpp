@@ -5,9 +5,9 @@
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.hpp"
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/rs_matmul.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-std::vector<ttnn::Tensor> ExecuteLlamaReduceScatterMatmul::invoke(
+std::vector<ttnn::Tensor> llama_rs_matmul(
     const ttnn::Tensor& input_tensor,               // mm0 used
     const ttnn::Tensor& weight_tensor,              // mm1 used
     ttnn::Tensor& intermediate_packet_buffer,       // rs2
@@ -66,4 +66,4 @@ std::vector<ttnn::Tensor> ExecuteLlamaReduceScatterMatmul::invoke(
         second_weight_tensor);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

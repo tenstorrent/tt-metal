@@ -9,7 +9,6 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/decorators.hpp"
 #include "moe_gate_mm_device_operation_types.hpp"
 #include "moe_gate_mm_program_factory.hpp"
 
@@ -37,9 +36,3 @@ struct MoEGateMMDeviceOperation {
 };
 
 }  // namespace ttnn::operations::experimental::deepseek::moe::moe_gate_mm
-
-namespace ttnn::experimental::deepseek::moe {
-constexpr auto moe_gate_mm = ttnn::register_operation<
-    "ttnn::experimental::deepseek::moe::moe_gate_mm",
-    ttnn::operations::experimental::deepseek::moe::moe_gate_mm::MoEGateMMDeviceOperation>();
-}  // namespace ttnn::experimental::deepseek::moe

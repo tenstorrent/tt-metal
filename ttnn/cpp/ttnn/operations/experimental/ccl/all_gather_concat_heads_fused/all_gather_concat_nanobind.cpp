@@ -4,77 +4,17 @@
 
 #include "all_gather_concat_nanobind.hpp"
 
-#include <cstdint>
-#include <optional>
-
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_concat_heads_fused/all_gather_concat.hpp"
-#include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/global_semaphore.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
-namespace {
-
-template <typename ccl_operation_t>
-void bind_all_gather_concat(nb::module_& mod, const ccl_operation_t& operation, const char* doc) {
-    bind_registered_operation(
-        mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const ccl_operation_t& self,
-               const ttnn::Tensor& input_tensor,
-               ttnn::Tensor& buffer_tensor,
-               const int32_t dim,
-               const uint32_t cluster_axis,
-               const MeshDevice& mesh_device,
-               const GlobalSemaphore& global_semaphore,
-               const uint32_t num_heads,
-               const ttnn::MemoryConfig& memory_config,
-               const bool use_noc1_only,
-               const std::optional<uint32_t> num_links,
-               const ttnn::ccl::Topology topology,
-               std::optional<tt::tt_metal::SubDeviceId> subdevice_id) -> ttnn::Tensor {
-                return self(
-                    input_tensor,
-                    buffer_tensor,
-                    dim,
-                    cluster_axis,
-                    mesh_device,
-                    global_semaphore,
-                    num_heads,
-                    memory_config,
-                    use_noc1_only,
-                    num_links,
-                    topology,
-                    subdevice_id);
-            },
-            nb::arg("input_tensor"),
-            nb::arg("buffer_tensor"),
-            nb::arg("dim"),
-            nb::arg("cluster_axis"),
-            nb::arg("mesh_device"),
-            nb::arg("multi_device_global_semaphore"),
-            nb::arg("num_heads").noconvert(),
-            nb::arg("memory_config"),
-            nb::kw_only(),
-            nb::arg("use_noc1_only") = false,
-            nb::arg("num_links") = 1,
-            nb::arg("topology") = ttnn::ccl::Topology::Linear,
-            nb::arg("subdevice_id") = nb::none()});
-}
-
-}  // namespace
-
 void bind_all_gather_concat(nb::module_& mod) {
-    bind_all_gather_concat(
+    ttnn::bind_function<"all_gather_concat", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::all_gather_concat,
         R"doc(
         Performs a fused all-gather/concat operation on multi-device (specific to llama model):attr:`input_tensor` across all devices.
         Args:
@@ -91,7 +31,22 @@ void bind_all_gather_concat(nb::module_& mod) {
             topology (ttnn.Topology, optional): The topology configuration to run the operation in. Valid options are Ring and Linear. Defaults to `ttnn.Topology.Linear`.
         Returns:
             ttnn.Tensor: the output tensor.
-        )doc");
+        )doc",
+        ttnn::overload_t(
+            &ttnn::experimental::all_gather_concat,
+            nb::arg("input_tensor"),
+            nb::arg("buffer_tensor"),
+            nb::arg("dim"),
+            nb::arg("cluster_axis"),
+            nb::arg("mesh_device"),
+            nb::arg("multi_device_global_semaphore"),
+            nb::arg("num_heads").noconvert(),
+            nb::arg("memory_config"),
+            nb::kw_only(),
+            nb::arg("use_noc1_only") = false,
+            nb::arg("num_links") = 1,
+            nb::arg("topology") = ttnn::ccl::Topology::Linear,
+            nb::arg("subdevice_id") = nb::none()));
 }
 
 }  // namespace ttnn::operations::experimental::ccl

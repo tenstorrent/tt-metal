@@ -49,12 +49,8 @@ struct ExecuteTestHangDeviceOperation {
 
 }  // namespace ttnn::prim
 
-namespace ttnn {
-struct TestHangOp {
-    static Tensor invoke(const Tensor& input) {
-        return device_operation::launch<ttnn::prim::ExecuteTestHangDeviceOperation>({}, {input});
-    }
-};
+namespace ttnn::operations::experimental::test {
 
-constexpr auto hang_device_operation = ttnn::register_operation<"ttnn::hang_device_operation", ttnn::TestHangOp>();
-}  // namespace ttnn
+Tensor test_hang_device_operation(const Tensor& input_tensor);
+
+}  // namespace ttnn::operations::experimental::test

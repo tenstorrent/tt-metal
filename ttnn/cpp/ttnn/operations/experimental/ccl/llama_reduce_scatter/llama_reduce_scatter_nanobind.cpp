@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "llama_reduce_scatter.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -53,49 +53,22 @@ void bind_llama_reduce_scatter(nb::module_& mod) {
                                 num_links=num_links,
                                 memory_config=output_mem_config))doc";
 
-    using OperationType = decltype(ttnn::experimental::llama_reduce_scatter);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"llama_reduce_scatter", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::llama_reduce_scatter,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               ttnn::Tensor& intermediate_packet_buffer,
-               uint32_t dim,
-               const GlobalSemaphore& cross_device_semaphore,
-               const tt::tt_metal::SubDeviceId& subdevice_id,
-               const uint32_t cluster_axis,
-               const MeshDevice& mesh_device,
-               const uint32_t num_links,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               tt::tt_fabric::Topology topology,
-               bool use_noc1_only) {
-                return self(
-                    input_tensor,
-                    intermediate_packet_buffer,
-                    dim,
-                    cross_device_semaphore,
-                    subdevice_id,
-                    cluster_axis,
-                    mesh_device,
-                    num_links,
-                    memory_config,
-                    topology,
-                    use_noc1_only);
-            },
-            nb::arg("input_tensor").noconvert(),
-            nb::arg("intermediate_packet_buffer").noconvert(),
-            nb::arg("dim"),
-            nb::arg("cross_device_semaphore"),
-            nb::arg("subdevice_id"),
-            nb::arg("cluster_axis"),
-            nb::arg("mesh_device"),
-            nb::kw_only(),
-            nb::arg("num_links") = 1,
-            nb::arg("memory_config") = nb::none(),
-            nb::arg("topology") = tt::tt_fabric::Topology::Linear,
-            nb::arg("use_noc1_only") = false});
+        &ttnn::experimental::llama_reduce_scatter,
+        nb::arg("input_tensor").noconvert(),
+        nb::arg("intermediate_packet_buffer").noconvert(),
+        nb::arg("dim"),
+        nb::arg("cross_device_semaphore"),
+        nb::arg("subdevice_id"),
+        nb::arg("cluster_axis"),
+        nb::arg("mesh_device"),
+        nb::kw_only(),
+        nb::arg("num_links") = 1,
+        nb::arg("memory_config") = nb::none(),
+        nb::arg("topology") = tt::tt_fabric::Topology::Linear,
+        nb::arg("use_noc1_only") = false);
 }
 
 }  // namespace ttnn::operations::experimental::ccl

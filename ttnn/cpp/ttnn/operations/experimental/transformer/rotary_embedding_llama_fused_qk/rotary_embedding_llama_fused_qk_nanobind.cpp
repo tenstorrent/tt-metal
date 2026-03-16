@@ -9,15 +9,14 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "rotary_embedding_llama_fused_qk.hpp"
 
 namespace ttnn::operations::experimental::transformer {
 
 void bind_rotary_embedding_llama_fused_qk(nb::module_& mod) {
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"rotary_embedding_llama_fused_qk", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::rotary_embedding_llama_fused_qk,
         R"doc(
             Applies rotary embeddings to both `q_input_tensor` and `k_input_tensor` in parallel using precomputed sine and cosine values. This function is optimized for parallel execution, and both input tensors should share the same batch size and head dimensions.
 
@@ -35,14 +34,14 @@ void bind_rotary_embedding_llama_fused_qk(nb::module_& mod) {
                 ttnn.Tensor, ttnn.Tensor: q and k output tensors with rotary embeddings applied.
 
         )doc",
-        ttnn::nanobind_arguments_t{
-            nb::arg("q_input_tensor"),
-            nb::arg("k_input_tensor"),
-            nb::arg("cos_cache"),
-            nb::arg("sin_cache"),
-            nb::arg("trans_mat"),
-            nb::kw_only(),
-            nb::arg("compute_kernel_config") = nb::none()});
+        &ttnn::experimental::rotary_embedding_llama_fused_qk,
+        nb::arg("q_input_tensor"),
+        nb::arg("k_input_tensor"),
+        nb::arg("cos_cache"),
+        nb::arg("sin_cache"),
+        nb::arg("trans_mat"),
+        nb::kw_only(),
+        nb::arg("compute_kernel_config") = nb::none());
 }
 
 }  // namespace ttnn::operations::experimental::transformer

@@ -4,7 +4,6 @@
 
 #include "all_to_all_dispatch_metadata.hpp"
 #include "device/all_to_all_dispatch_metadata_device_operation.hpp"
-#include "ttnn/operation.hpp"
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/hal.hpp>
@@ -13,9 +12,9 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
+std::array<ttnn::Tensor, 3> all_to_all_dispatch_metadata(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& expert_indices_tensor,
     const ttnn::Tensor& expert_scores_tensor,
@@ -23,11 +22,11 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
     std::optional<uint32_t> axis,
     const std::optional<std::array<ttnn::Tensor, 3>>& optional_output_tensors,
     std::optional<uint32_t> num_links,
-    const std::optional<CoreCoord>& drain_sync_tilizer_core,
-    WorkerMode worker_mode,
-    DispatchAlgorithm dispatch_algorithm,
-    const std::optional<CoreRangeSet>& worker_core_range_set,
-    const std::optional<CoreRangeSet>& mux_core_range_set,
+    const std::optional<tt::tt_metal::CoreCoord>& drain_sync_tilizer_core,
+    ttnn::operations::experimental::ccl::WorkerMode worker_mode,
+    ttnn::operations::experimental::ccl::DispatchAlgorithm dispatch_algorithm,
+    const std::optional<tt::tt_metal::CoreRangeSet>& worker_core_range_set,
+    const std::optional<tt::tt_metal::CoreRangeSet>& mux_core_range_set,
     const std::optional<GlobalSemaphore>& cross_device_semaphore) {
     auto* mesh_device = input_tensor.device();
 
@@ -41,7 +40,7 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
     // - If explicitly provided, use it
     // - If persistent output tensors are provided, extract from their shard spec (must be single core)
     // - Otherwise, error - one of the above must be provided
-    std::optional<CoreCoord> resolved_drain_sync_tilizer_core = drain_sync_tilizer_core;
+    std::optional<tt::tt_metal::CoreCoord> resolved_drain_sync_tilizer_core = drain_sync_tilizer_core;
     if (!resolved_drain_sync_tilizer_core.has_value() && optional_output_tensors.has_value()) {
         // Extract drain core from the metadata tensor's shard spec (indices tensor is at index 1)
         const auto& indices_out_tensor = optional_output_tensors.value()[1];
@@ -63,11 +62,12 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
         "(so drain core can be extracted from their shard spec)");
 
     // Default worker cores: (0,0) to (0,7) - 8 cores for 4 links (2 workers per link)
-    CoreRangeSet worker_cores =
-        worker_core_range_set.value_or(CoreRangeSet(CoreRange(CoreCoord(0, 0), CoreCoord(0, 7))));
+    tt::tt_metal::CoreRangeSet worker_cores = worker_core_range_set.value_or(tt::tt_metal::CoreRangeSet(
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(0, 0), tt::tt_metal::CoreCoord(0, 7))));
 
     // Default mux cores: (1,0) to (1,7) - 8 cores (2 per link × 4 links)
-    CoreRangeSet mux_cores = mux_core_range_set.value_or(CoreRangeSet(CoreRange(CoreCoord(1, 0), CoreCoord(1, 7))));
+    tt::tt_metal::CoreRangeSet mux_cores = mux_core_range_set.value_or(tt::tt_metal::CoreRangeSet(
+        tt::tt_metal::CoreRange(tt::tt_metal::CoreCoord(1, 0), tt::tt_metal::CoreCoord(1, 7))));
 
     log_debug(tt::LogOp, "worker_mode: {}", static_cast<int>(worker_mode));
     log_debug(tt::LogOp, "dispatch_algorithm: {}", static_cast<int>(dispatch_algorithm));
@@ -89,4 +89,4 @@ std::array<ttnn::Tensor, 3> ExecuteAllToAllDispatchMetadata::invoke(
         cross_device_semaphore);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental
