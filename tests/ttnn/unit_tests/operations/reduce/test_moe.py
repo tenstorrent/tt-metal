@@ -9,13 +9,16 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 def run_moe_test(N, C, H, W, k, E, e, dtype, device):
     # torch.manual_seed(2005)
     shape = [N, C, H, W]
     torch_dtype = torch.bfloat16
-
+    torch.manual_seed(2005)
     input = torch.randn(shape, dtype=torch_dtype)
     input[:, :, :, E:] = 0  # padded input
 
@@ -46,7 +49,15 @@ def run_moe_test(N, C, H, W, k, E, e, dtype, device):
         ttnn_weights_1SB1 = ttnn.to_torch(weights_1SB1)
 
         pcc_values = 0.95
-
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"test_moe[N={N},C={C},H={H},W={W},k={k},E={E},e={e},dtype={dtype},iteration={i}]"
+        collect_and_dump_numeric_metrics(
+            torch_weights_1SB1,
+            ttnn_weights_1SB1,
+            test_name=test_name,
+            csv_filename="test_moe_numeric_results.csv",
+            test_params=None,
+        )
         assert_with_pcc(torch_weights_1SB1, ttnn_weights_1SB1, pcc_values)
 
 

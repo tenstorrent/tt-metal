@@ -11,6 +11,9 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 @pytest.mark.parametrize("N", [8, 16])
@@ -69,6 +72,16 @@ def test_sharded_reduce_h(N, in_sharded, out_sharded, dtype, device, function_le
     tt_got_back = yt.cpu().to_torch()
 
     y = torch.amax(x, 2)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_sharded_reduce_h[N={N},in_sharded={in_sharded},out_sharded={out_sharded},dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        y,
+        tt_got_back,
+        test_name=test_name,
+        csv_filename="test_reduce_nightly_numeric_results.csv",
+        test_params=None,
+    )
 
     if dtype == ttnn.bfloat16:
         passing, output = comp_equal(y, tt_got_back)

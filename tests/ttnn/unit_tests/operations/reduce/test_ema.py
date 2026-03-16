@@ -9,6 +9,9 @@ from models.common.utility_functions import is_watcher_enabled
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 @pytest.mark.parametrize(
@@ -58,4 +61,13 @@ def test_ema(device, T, B, C, cores_y, cores_x):
         prev_value = golden_output_tensor[0, :, :, t]
 
     # Compare with golden output
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_ema[T={T},B={B},C={C},cores_y={cores_y},cores_x={cores_x}]"
+    collect_and_dump_numeric_metrics(
+        golden_output_tensor,
+        torch_output_tensor,
+        test_name=test_name,
+        csv_filename="test_ema_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(golden_output_tensor, torch_output_tensor, pcc=0.9999)

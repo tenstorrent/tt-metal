@@ -8,6 +8,9 @@ from loguru import logger
 
 import ttnn
 from models.common.utility_functions import comp_allclose_and_pcc, skip_for_blackhole
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 TILE_HEIGHT = 32
 TILE_WIDTH = 32
@@ -79,6 +82,16 @@ def test_prod_dims(input_shape, dims, device):
 
     rtol = atol = 0.1
     passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_prod_dims[input_shape={input_shape},dims={dims}]"
+    collect_and_dump_numeric_metrics(
+        torch_output,
+        tt_output_cpu,
+        test_name=test_name,
+        csv_filename="test_prod_nc_nightly_numeric_results.csv",
+        test_params=None,
+    )
 
     logger.info(f"Out passing={passing}")
     logger.info(f"Output pcc={output_pcc}")

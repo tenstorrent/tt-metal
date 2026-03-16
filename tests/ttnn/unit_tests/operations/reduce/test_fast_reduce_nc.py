@@ -15,6 +15,9 @@ from tests.ttnn.unit_tests.operations.test_utils import (
     TILE_HEIGHT,
     TILE_WIDTH,
 )
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 def get_tensors(input_shape, output_shape, device, *, with_padding=True, use_randint=True, dataformat=ttnn.bfloat16):
@@ -81,6 +84,15 @@ def test_fast_reduce_nc(input_shape, dims, compute_kernel_options, dataformat, d
     )
     tt_output_cpu = tt_output.cpu().to(cpu_layout).to_torch()
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_fast_reduce_nc[input_shape={input_shape},dims={dims},compute_kernel_options={compute_kernel_options},dataformat={dataformat}]"
+    collect_and_dump_numeric_metrics(
+        torch_output,
+        tt_output_cpu,
+        test_name=test_name,
+        csv_filename="test_fast_reduce_nc_numeric_results.csv",
+        test_params=None,
+    )
     # test for equivalance
     rtol = atol = 0.12
     if dataformat == ttnn.bfloat8_b:
@@ -154,6 +166,15 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
         tt_output = ttnn.experimental.fast_reduce_nc(tt_input, dims=dims, output=None)
         tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape_1).to_torch()
 
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"test_fast_reduce_nc_with_prgm_caching[dims={dims},input_shape={input_shape_1},iteration={_}]"
+        collect_and_dump_numeric_metrics(
+            torch_output,
+            tt_output_cpu,
+            test_name=test_name,
+            csv_filename="test_fast_reduce_nc_numeric_results.csv",
+            test_params=None,
+        )
         # test for equivalance
         rtol = atol = 0.12
         passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
@@ -180,6 +201,15 @@ def test_fast_reduce_nc_with_prgm_caching(dims, device):
         tt_output = ttnn.experimental.fast_reduce_nc(tt_input, dims=dims, output=None)
         tt_output_cpu = tt_output.cpu().to(cpu_layout).unpad_from_tile(output_shape_2).to_torch()
 
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"test_fast_reduce_nc_with_prgm_caching[dims={dims},input_shape={input_shape_2},iteration={_}]"
+        collect_and_dump_numeric_metrics(
+            torch_output,
+            tt_output_cpu,
+            test_name=test_name,
+            csv_filename="test_fast_reduce_nc_numeric_results.csv",
+            test_params=None,
+        )
         # test for equivalance
         rtol = atol = 0.12
         passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)

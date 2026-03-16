@@ -6,6 +6,9 @@ import torch
 import pytest
 import ttnn
 from functools import partial
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 @pytest.mark.parametrize(
@@ -71,6 +74,17 @@ def test_min_max_for_dim_hw(device, shape_dim, kind, layout):
         tt_npu = ttnn.mean(tt_input)
 
     tt_output = tt_npu.cpu().to_torch()
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_min_max_for_dim_hw[shape={shape},dim={dim},kind={kind},layout={layout}]"
+    collect_and_dump_numeric_metrics(
+        torch_output,
+        tt_output,
+        test_name=test_name,
+        csv_filename="test_min_max_nightly_numeric_results.csv",
+        test_params=None,
+    )
+
     comparison_fn = torch.equal
     if kind == "mean":
         comparison_fn = partial(torch.isclose, atol=1e-1, rtol=1e-2)

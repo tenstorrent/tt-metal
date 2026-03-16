@@ -11,6 +11,9 @@ import ttnn
 
 from loguru import logger
 from tests.ttnn.utils_for_testing import check_with_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 @pytest.mark.parametrize(
@@ -113,7 +116,15 @@ def test_argmax(device, tensor_shape, tensor_layout, dim, keepdim, use_multicore
         return
 
     ttnn_result = ttnn.to_torch(ttnn.from_device(ttnn_result)).to(torch.int32)
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_argmax[tensor_shape={tensor_shape},tensor_layout={tensor_layout},dim={dim},keepdim={keepdim},use_multicore={use_multicore},dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        torch_result,
+        ttnn_result,
+        test_name=test_name,
+        csv_filename="test_argmax_numeric_results.csv",
+        test_params=None,
+    )
     pcc_result, msg = check_with_pcc(torch_result, ttnn_result, 0.99)
 
     assert pcc_result, msg + f"mismatch in pcc: torch: {torch_result}, ttnn: {ttnn_result}"

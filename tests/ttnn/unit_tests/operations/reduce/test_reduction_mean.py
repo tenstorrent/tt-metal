@@ -10,7 +10,10 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc, assert_allclose
-from models.common.utility_functions import torch_random, comp_allclose
+from models.common.utility_functions import torch_random
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -29,6 +32,15 @@ def test_mean(device, batch_size, h, w, dim, keepdim):
 
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_mean[batch_size={batch_size},h={h},w={w},dim={dim},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_reduction_mean.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
@@ -48,7 +60,15 @@ def test_mean_scaling(device, shape, dim, keepdim):
 
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_mean_scaling[shape={shape},dim={dim},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_reduction_mean.csv",
+        test_params=None,
+    )
     assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
 
 
@@ -65,7 +85,15 @@ def test_mean_scaling_factor(device, shape, dim, scalar):
 
     output_tensor = ttnn.mean(input_tensor, dim=dim, scalar=scalar)
     output_tensor = ttnn.to_torch(output_tensor)
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_mean_scaling_factor[shape={shape},dim={dim},scalar={scalar}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_reduction_mean.csv",
+        test_params=None,
+    )
     assert_allclose(torch_output_tensor, output_tensor, rtol=1e-2, atol=1e-2)
 
 
@@ -98,4 +126,13 @@ def test_mean_shard(device, mem_config, keepdim):
     )
     tt_output_torch = ttnn.to_torch(output_tensor)
     torch_output = torch.mean(torch_input_tensor, -1, keepdim)
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_mean_shard[mem_config={mem_config},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output,
+        tt_output_torch,
+        test_name=test_name,
+        csv_filename="test_reduction_mean.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output, tt_output_torch)

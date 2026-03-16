@@ -10,6 +10,9 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 @pytest.mark.parametrize(
@@ -52,7 +55,15 @@ def test_mean_row_major(device, input_shape, dim, keepdim):
 
     output_tensor = ttnn.mean(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_mean_row_major[input_shape={input_shape},dim={dim},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_row_major_reduce_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
@@ -88,7 +99,15 @@ def test_sum_row_major(device, input_shape, dim, keepdim):
 
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_sum_row_major[input_shape={input_shape},dim={dim},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_row_major_reduce_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
@@ -116,7 +135,15 @@ def test_sum_global_row_major(device, input_shape):
 
     output_tensor = ttnn.sum(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_sum_global_row_major[input_shape={input_shape}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_row_major_reduce_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
@@ -144,7 +171,15 @@ def test_max_row_major(device, input_shape, dim, keepdim):
 
     output_tensor = ttnn.max(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_max_row_major[input_shape={input_shape},dim={dim},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_row_major_reduce_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
@@ -174,7 +209,15 @@ def test_min_row_major(device, input_shape, dim, keepdim):
     output_tensor = ttnn.min(input_tensor, dim=dim, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
     print(torch.max(torch.abs(output_tensor - torch_output_tensor)))
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_min_row_major[input_shape={input_shape},dim={dim},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_row_major_reduce_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)
 
 
@@ -202,7 +245,15 @@ def test_std_row_major(device, input_shape, dim):
 
     output_tensor = ttnn.std(input_tensor, dim=dim, keepdim=False)
     output_tensor = ttnn.to_torch(output_tensor)
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_std_row_major[input_shape={input_shape},dim={dim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_row_major_reduce_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -230,7 +281,15 @@ def test_var_row_major(device, input_shape, dim):
 
     output_tensor = ttnn.var(input_tensor, dim=dim, keepdim=False)
     output_tensor = ttnn.to_torch(output_tensor)
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_var_row_major[input_shape={input_shape},dim={dim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_row_major_reduce_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -259,7 +318,15 @@ def test_mean_multi_dim_row_major(device, input_shape, dims, keepdim):
 
     output_tensor = ttnn.mean(input_tensor, dim=dims, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_mean_multi_dim_row_major[input_shape={input_shape},dims={dims},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_row_major_reduce_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.98)
 
 
@@ -287,5 +354,13 @@ def test_sum_multi_dim_row_major(device, input_shape, dims, keepdim):
 
     output_tensor = ttnn.sum(input_tensor, dim=dims, keepdim=keepdim)
     output_tensor = ttnn.to_torch(output_tensor)
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_sum_multi_dim_row_major[input_shape={input_shape},dims={dims},keepdim={keepdim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_row_major_reduce_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)

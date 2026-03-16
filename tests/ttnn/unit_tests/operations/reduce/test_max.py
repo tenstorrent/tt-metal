@@ -11,6 +11,9 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -31,7 +34,15 @@ def test_max(device, batch_size, h, w, dim, dtype):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_max[batch_size={batch_size},h={h},w={w},dim={dim},dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_max_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
@@ -53,7 +64,15 @@ def test_max_4d(device, batch_size1, batch_size2, h, w, dim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_max_4d[batch_size1={batch_size1},batch_size2={batch_size2},h={h},w={w},dim={dim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_max_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
@@ -73,7 +92,15 @@ def test_max_2d(device, h, w, dim):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_max_2d[h={h},w={w},dim={dim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_max_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
@@ -91,7 +118,15 @@ def test_max_global(device, batch_size, h, w):
     output_tensor = ttnn.max(input_tensor)
     output_tensor = ttnn.to_torch(output_tensor)
     output_tensor = output_tensor
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_max_global[batch_size={batch_size},h={h},w={w}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_max_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 

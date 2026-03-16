@@ -455,6 +455,20 @@ def test_grouped_gate(device, num_batches, batch_size, seq_len):
     ttnn_scores = ttnn.to_torch(ttnn_scores)
     ttnn_top_k_experts_indices = ttnn.to_torch(ttnn_top_k_experts_indices)
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_grouped_gate[num_batches={num_batches},batch_size={batch_size},seq_len={seq_len}]"
+    from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+        collect_and_dump_numeric_metrics,
+    )
+
+    collect_and_dump_numeric_metrics(
+        torch_scores,
+        ttnn_scores,
+        test_name=test_name,
+        csv_filename="test_deepseek_grouped_gate_nightly_numeric_results.csv",
+        test_params=None,
+    )
+
     logger.debug(f"torch_top_k_experts_indices: {torch_top_k_experts_indices[-1, -1, -1, :]}")
     logger.debug(f"ttnn_top_k_experts_indices: {ttnn_top_k_experts_indices[-1, -1, -1, :]}")
 

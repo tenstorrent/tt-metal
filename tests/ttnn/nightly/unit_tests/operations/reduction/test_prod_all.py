@@ -9,6 +9,9 @@ from functools import partial
 
 import ttnn
 from models.common.utility_functions import comp_allclose_and_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 from tests.tt_eager.python_api_testing.sweep_tests import (
     comparison_funcs,
@@ -68,6 +71,16 @@ def test_prod(shapes, device):
     rtol = atol = 0.12
     # passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
     passing, output_pcc = comp_allclose_and_pcc(torch_output, tt_output_cpu, pcc=0.999, rtol=rtol, atol=atol)
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_prod[shapes={shapes}]"
+    collect_and_dump_numeric_metrics(
+        torch_output,
+        tt_output_cpu,
+        test_name=test_name,
+        csv_filename="test_prod_all_nightly_numeric_results.csv",
+        test_params=None,
+    )
 
     logger.info(f"Out passing={passing}")
     logger.info(f"Output pcc={output_pcc}")

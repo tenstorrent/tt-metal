@@ -12,6 +12,9 @@ from functools import partial
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 from tests.tt_eager.python_api_testing.sweep_tests.generation_funcs import gen_func_with_cast_tt
 
@@ -59,6 +62,15 @@ def test_3D_tensor(device, batch_size, h, w, c, n, dim, input_dtype, input_memor
         output_tensor = ttnn.to_torch(output_tensor).squeeze(dim=dim)
     else:
         output_tensor = ttnn.to_torch(output_tensor).squeeze()
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_3D_tensor[batch_size={batch_size},h={h},w={w},c={c},n={n},dim={dim},input_dtype={input_dtype},input_memory_config={input_memory_config},output_memory_config={output_memory_config}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_reduction_h_interleaved_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -109,6 +121,15 @@ def test_2D_tensor_full_grid(
         output_tensor = ttnn.to_torch(output_tensor).squeeze(dim=dim)
     else:
         output_tensor = ttnn.to_torch(output_tensor).squeeze()
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_2D_tensor_full_grid[batch_size={batch_size},h={h},w={w},c={c},n={n},dim={dim},input_dtype={input_dtype},input_memory_config={input_memory_config},output_memory_config={output_memory_config}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_reduction_h_interleaved_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
 
@@ -155,4 +176,13 @@ def test_2D_tensor(device, batch_size, h, w, c, n, dim, input_dtype, input_memor
         output_tensor = ttnn.to_torch(output_tensor).squeeze(dim=dim)
     else:
         output_tensor = ttnn.to_torch(output_tensor).squeeze()
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_2D_tensor[batch_size={batch_size},h={h},w={w},c={c},n={n},dim={dim},input_dtype={input_dtype},input_memory_config={input_memory_config},output_memory_config={output_memory_config}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_reduction_h_interleaved_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)

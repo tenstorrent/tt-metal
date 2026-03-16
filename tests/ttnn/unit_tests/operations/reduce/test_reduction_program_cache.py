@@ -26,6 +26,9 @@ import torch
 
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 @pytest.fixture
@@ -63,10 +66,28 @@ def test_reduce_cache_reuse_same_config(device, isolate_program_cache):
 
     torch.manual_seed(0)
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_reduce_cache_reuse_same_config[shape={shape},iteration=1]"
+    collect_and_dump_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        test_name=test_name,
+        csv_filename="test_reduction_program_cache_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_ref1, tt_out1, 0.999)
 
     torch.manual_seed(42)
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name_2 = f"test_reduce_cache_reuse_same_config[shape={shape},iteration=2]"
+    collect_and_dump_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        test_name=test_name_2,
+        csv_filename="test_reduction_program_cache_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_ref2, tt_out2, 0.999)
 
     assert device.num_program_cache_entries() == 1
@@ -83,9 +104,27 @@ def test_reduce_cache_miss_different_math_ops(device, isolate_program_cache):
     shape = [1, 1, 64, 64]
 
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_reduce_cache_miss_different_math_ops[shape={shape},op=sum]"
+    collect_and_dump_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        test_name=test_name,
+        csv_filename="test_reduction_program_cache_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_ref1, tt_out1, 0.999)
 
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.max, shape, dim=-1, dtype=ttnn.bfloat16)
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name_2 = f"test_reduce_cache_miss_different_math_ops[shape={shape},op=max]"
+    collect_and_dump_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        test_name=test_name_2,
+        csv_filename="test_reduction_program_cache_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_ref2, tt_out2, 0.999)
 
     assert device.num_program_cache_entries() == 2
@@ -97,10 +136,28 @@ def test_reduce_cache_miss_different_dims(device, isolate_program_cache):
 
     # dim=-1 (W): ReduceMultiCoreWProgramFactory
     torch_ref1, tt_out1 = run_reduce_op(device, ttnn.sum, shape, dim=-1, dtype=ttnn.bfloat16)
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_reduce_cache_miss_different_dims[shape={shape},dim=-1]"
+    collect_and_dump_numeric_metrics(
+        torch_ref1,
+        tt_out1,
+        test_name=test_name,
+        csv_filename="test_reduction_program_cache_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_ref1, tt_out1, 0.999)
 
     # dim=-2 (H): ReduceMultiCoreHProgramFactory
     torch_ref2, tt_out2 = run_reduce_op(device, ttnn.sum, shape, dim=-2, dtype=ttnn.bfloat16)
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name_2 = f"test_reduce_cache_miss_different_dims[shape={shape},dim=-2]"
+    collect_and_dump_numeric_metrics(
+        torch_ref2,
+        tt_out2,
+        test_name=test_name_2,
+        csv_filename="test_reduction_program_cache_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_ref2, tt_out2, 0.999)
 
     assert device.num_program_cache_entries() == 2
@@ -162,7 +219,26 @@ def test_reduce_cache_miss_sub_core_grids(device, isolate_program_cache):
     tt_out2 = ttnn.sum(tt_a, dim=-1, keepdim=True, sub_core_grids=grid_b)
 
     torch_ref = torch.sum(torch_a, dim=-1, keepdim=True)
-    assert_with_pcc(torch_ref, ttnn.to_torch(tt_out1), 0.999)
-    assert_with_pcc(torch_ref, ttnn.to_torch(tt_out2), 0.999)
+    tt_out1_torch = ttnn.to_torch(tt_out1)
+    tt_out2_torch = ttnn.to_torch(tt_out2)
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name_1 = f"test_reduce_cache_miss_sub_core_grids[shape={shape},grid=grid_a]"
+    collect_and_dump_numeric_metrics(
+        torch_ref,
+        tt_out1_torch,
+        test_name=test_name_1,
+        csv_filename="test_reduction_program_cache_numeric_results.csv",
+        test_params=None,
+    )
+    test_name_2 = f"test_reduce_cache_miss_sub_core_grids[shape={shape},grid=grid_b]"
+    collect_and_dump_numeric_metrics(
+        torch_ref,
+        tt_out2_torch,
+        test_name=test_name_2,
+        csv_filename="test_reduction_program_cache_numeric_results.csv",
+        test_params=None,
+    )
+    assert_with_pcc(torch_ref, tt_out1_torch, 0.999)
+    assert_with_pcc(torch_ref, tt_out2_torch, 0.999)
 
     assert device.num_program_cache_entries() == 2

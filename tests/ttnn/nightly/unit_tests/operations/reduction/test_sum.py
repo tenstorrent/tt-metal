@@ -5,6 +5,9 @@
 import torch
 import pytest
 import ttnn
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 @pytest.mark.parametrize(
@@ -28,12 +31,24 @@ def test_sum_for_dim_hw(device, shape_dim):
     input_shape = (N, C, H, W)
     x = 1.0 + torch.arange(0, N * C * H * W).reshape(input_shape).bfloat16()
 
-    value = x.sum(dim=dim, keepdim=True)[0, 0, 0, 0]
+    torch_output = x.sum(dim=dim, keepdim=True)
+    value = torch_output[0, 0, 0, 0]
     # print(f"x.sum = {value}")
 
     dev_x = ttnn.Tensor(x, ttnn.DataType.BFLOAT16).to(ttnn.Layout.TILE).to(device)
     tt_npu = ttnn.sum(dev_x, dim=dim, keepdim=True)
     tt_dev = tt_npu.cpu().to(ttnn.Layout.ROW_MAJOR).to_torch()
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_sum_for_dim_hw[shape={shape},dim={dim}]"
+    collect_and_dump_numeric_metrics(
+        torch_output,
+        tt_dev,
+        test_name=test_name,
+        csv_filename="test_sum_nightly_numeric_results.csv",
+        test_params=None,
+    )
+
     assert torch.equal(tt_dev[0, 0, 0, 0], torch.Tensor([value]).bfloat16()[0])
 
 
@@ -62,4 +77,15 @@ def test_sum_global(device, shape):
     dev_x = ttnn.Tensor(x, ttnn.DataType.BFLOAT16).to(ttnn.Layout.TILE).to(device)
     tt_npu = ttnn.sum(dev_x)
     tt_dev = tt_npu.cpu().to(ttnn.Layout.ROW_MAJOR).to_torch()
+
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_sum_global[shape={shape}]"
+    collect_and_dump_numeric_metrics(
+        torch_output,
+        tt_dev,
+        test_name=test_name,
+        csv_filename="test_sum_nightly_numeric_results.csv",
+        test_params=None,
+    )
+
     assert torch.equal(tt_dev.bfloat16(), torch_output.bfloat16())

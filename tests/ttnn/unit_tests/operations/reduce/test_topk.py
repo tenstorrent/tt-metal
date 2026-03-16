@@ -9,6 +9,9 @@ pytestmark = pytest.mark.use_module_device
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 UINT16_MAX = 65535
 
@@ -59,6 +62,17 @@ def run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_g
     assert list(ttnn_topk_values.shape) == desired_shape
     assert list(ttnn_topk_indices.shape) == desired_shape
 
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = (
+        f"run_topk_test[N={N},C={C},H={H},W={W},k={k},dtype={dtype},dim={dim},sorted={sorted},largest={largest}]"
+    )
+    collect_and_dump_numeric_metrics(
+        pyt_topk_values,
+        ttnn_torch_values,
+        test_name=test_name,
+        csv_filename="test_topk_numeric_results.csv",
+        test_params=None,
+    )
     assert_equal(ttnn_torch_values, pyt_topk_values)
 
     # Assert indices correctness using gather

@@ -11,6 +11,9 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -32,6 +35,15 @@ def test_min(device, batch_size, h, w, dim, keepdim, dtype):
     output_tensor = ttnn.from_device(output_tensor)
 
     output_tensor = ttnn.to_torch(output_tensor)
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_min[batch_size={batch_size},h={h},w={w},dim={dim},keepdim={keepdim},dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_reduction_min_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
@@ -52,5 +64,13 @@ def test_min_global(device, batch_size, h, w):
 
     output_tensor = ttnn.to_torch(output_tensor)
     output_tensor = output_tensor
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_min_global[batch_size={batch_size},h={h},w={w}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_reduction_min_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor)

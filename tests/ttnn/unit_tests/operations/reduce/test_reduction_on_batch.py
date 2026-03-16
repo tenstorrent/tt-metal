@@ -11,6 +11,9 @@ import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import torch_random
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 @pytest.mark.parametrize(
@@ -62,5 +65,13 @@ def test_reduce_on_batch(shape, shard_shape, dim, interleaved, device):
 
     output_tensor = ttnn.sum(input_tensor, dim=dim, keepdim=True, memory_config=output_memory_config)
     output_tensor = ttnn.to_torch(output_tensor)
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_reduce_on_batch[shape={shape},shard_shape={shard_shape},dim={dim},interleaved={interleaved}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_var_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.995)

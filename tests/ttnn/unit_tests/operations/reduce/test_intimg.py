@@ -6,6 +6,9 @@ import torch
 import ttnn
 import pytest
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 def ttnn_integral_image_cumsum_channel_last(features_nhwc):
@@ -52,6 +55,17 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     )
     output_tensor = ttnn_integral_image_cumsum_channel_last(input_tensor)
     ttnn_output_tensor = ttnn.to_torch(output_tensor)
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = (
+        f"test_cumsum_channel_last[input_shape_nhwc={input_shape_nhwc},dtype={dtype},memory_config={memory_config}]"
+    )
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        ttnn_output_tensor,
+        test_name=test_name,
+        csv_filename="test_intimg_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor, pcc=0.998)
 
     # experimental intimg
@@ -60,4 +74,15 @@ def test_cumsum_channel_last(device, input_shape_nhwc, dtype, memory_config):
     )
     output_tensor_2 = ttnn_integral_image_channel_last(input_tensor)
     ttnn_output_tensor_2 = ttnn.to_torch(output_tensor_2)
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name_2 = (
+        f"test_intimg_channel_last[input_shape_nhwc={input_shape_nhwc},dtype={dtype},memory_config={memory_config}]"
+    )
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        ttnn_output_tensor_2,
+        test_name=test_name_2,
+        csv_filename="test_intimg_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, ttnn_output_tensor_2, pcc=0.998)

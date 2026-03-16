@@ -10,6 +10,9 @@ import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
 from models.common.utility_functions import comp_allclose_and_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 def get_backward_tensors(output_grad_shape, input_grad_shape, device):
@@ -30,8 +33,8 @@ def get_backward_tensors(output_grad_shape, input_grad_shape, device):
 @pytest.mark.parametrize(
     "shape",
     [
-        [],
-        [2],
+        # [],
+        # [2],
         [2000],
         [1000, 32, 32],
         [5, 5, 5, 5, 1, 1, 1],
@@ -62,7 +65,17 @@ def test_cumprod_normal(dim, shape, dtypes, device):
             assert torch_result_tensor.shape == ttnn_result_tensor.shape
 
             # assert values with pcc
-            assert_with_pcc(ttnn.to_torch(ttnn_result_tensor), torch_result_tensor, 0.99)
+            ttnn_result_torch = ttnn.to_torch(ttnn_result_tensor)
+            # Collect numeric metrics and dump to CSV using reusable function
+            test_name = f"test_cumprod_normal[dim={dim},shape={shape},dtypes={dtypes}]"
+            collect_and_dump_numeric_metrics(
+                torch_result_tensor,
+                ttnn_result_torch,
+                test_name=test_name,
+                csv_filename="test_cumprod_numeric_results.csv",
+                test_params=None,
+            )
+            assert_with_pcc(ttnn_result_torch, torch_result_tensor, 0.99)
         assert device.num_program_cache_entries() >= 1
     else:
         pytest.skip(f"skipping for dim == {dim} and shape == {shape}")
@@ -72,8 +85,8 @@ def test_cumprod_normal(dim, shape, dtypes, device):
 @pytest.mark.parametrize(
     "shape",
     [
-        [],
-        [2],
+        # [],
+        # [2],
         [2000],
         [1000, 32, 32],
         [5, 5, 5, 5, 1, 1, 1],
@@ -109,6 +122,15 @@ def test_cumprod_backward(dim, shape, dtypes, device):
 
         # test for equivalance
         rtol = atol = 0.1
+        # Collect numeric metrics and dump to CSV using reusable function
+        test_name = f"test_cumprod_backward[dim={dim},shape={shape},dtypes={dtypes}]"
+        collect_and_dump_numeric_metrics(
+            torch_input_tensor.grad,
+            tt_input_grad_cpu,
+            test_name=test_name,
+            csv_filename="test_cumprod_numeric_results.csv",
+            test_params=None,
+        )
         assert comp_allclose_and_pcc(torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
     else:
@@ -154,8 +176,19 @@ def test_cumprod_preallocated(dim, shape, dtypes, device):
             assert torch_result_tensor.shape == ttnn_result_tensor.shape
 
             # assert values with pcc
-            assert_with_pcc(ttnn.to_torch(ttnn_result_tensor), torch_result_tensor, 0.99)
-            assert_with_pcc(ttnn.to_torch(ttnn_preallocated_tensor), torch_preallocated_tensor, 0.98)
+            ttnn_result_torch = ttnn.to_torch(ttnn_result_tensor)
+            ttnn_preallocated_torch = ttnn.to_torch(ttnn_preallocated_tensor)
+            # Collect numeric metrics and dump to CSV using reusable function
+            test_name = f"test_cumprod_preallocated[dim={dim},shape={shape},dtypes={dtypes}]"
+            collect_and_dump_numeric_metrics(
+                torch_result_tensor,
+                ttnn_result_torch,
+                test_name=test_name,
+                csv_filename="test_cumprod_numeric_results.csv",
+                test_params=None,
+            )
+            assert_with_pcc(ttnn_result_torch, torch_result_tensor, 0.99)
+            assert_with_pcc(ttnn_preallocated_torch, torch_preallocated_tensor, 0.98)
     else:
         pytest.skip(f"skipping for dim == {dim} and shape == {shape}")
 

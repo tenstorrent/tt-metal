@@ -8,6 +8,9 @@ import pytest
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose, assert_with_ulp
 from models.common.utility_functions import comp_allclose_and_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import (
+    collect_and_dump_numeric_metrics,
+)
 
 
 def get_backward_tensors(output_grad_shape, input_grad_shape, device):
@@ -84,6 +87,15 @@ def test_cumsum(size, dim, dtypes, device):
         expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
 
         if torch_output.numel() > 0:
+            # Collect numeric metrics and dump to CSV using reusable function
+            test_name = f"test_cumsum[size={size},dim={dim},dtypes={dtypes}]"
+            collect_and_dump_numeric_metrics(
+                expected_output,
+                torch_output,
+                test_name=test_name,
+                csv_filename="test_cumsum_numeric_results.csv",
+                test_params=None,
+            )
             if torch_dtype is torch.float32:
                 assert_allclose(expected_output, torch_output, atol=0.05, rtol=0.01)
             else:
@@ -132,7 +144,15 @@ def test_cumsum_with_preallocated_output(size, dim, dtypes, device):
     torch_output = ttnn.to_torch(output_tensor, dtype=torch_dtype)
 
     expected_output = torch.cumsum(torch_input_tensor, dim=dim, dtype=torch_dtype)
-
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_cumsum_with_preallocated_output[size={size},dim={dim},dtypes={dtypes}]"
+    collect_and_dump_numeric_metrics(
+        expected_output,
+        torch_output,
+        test_name=test_name,
+        csv_filename="test_cumsum_numeric_results.csv",
+        test_params=None,
+    )
     assert output_tensor.dtype == expected_output_dtype
     assert preallocated_output_tensor.dtype == expected_output_dtype
 
@@ -197,6 +217,15 @@ def test_cumsum_backward(size, dim, dtypes, device):
 
     # test for equivalance
     rtol = atol = 0.1
+    # Collect numeric metrics and dump to CSV using reusable function
+    test_name = f"test_cumsum_backward[size={size},dim={dim},dtypes={dtypes}]"
+    collect_and_dump_numeric_metrics(
+        torch_input_tensor.grad,
+        tt_input_grad_cpu,
+        test_name=test_name,
+        csv_filename="test_cumsum_numeric_results.csv",
+        test_params=None,
+    )
     assert comp_allclose_and_pcc(torch_input_tensor.grad, tt_input_grad_cpu, pcc=0.999, rtol=rtol, atol=atol)
 
 
