@@ -207,8 +207,8 @@ TEST_F(TrivialTnnFixedTest, TestSumOverBatch_1) {
     std::vector<float> data(batch_size * features);
     float step = 0.1F;
     float value = 0.0F;
-    for (int i = 0; i < data.size(); ++i) {
-        data[i] = value;
+    for (auto& elem : data) {
+        elem = value;
         value += step;
     }
 
