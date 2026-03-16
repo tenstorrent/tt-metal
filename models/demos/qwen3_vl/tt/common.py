@@ -62,8 +62,6 @@ def merge_vision_tokens_ttnn(
 
     B, S, H = input_embeds.shape
     input_ids = input_ids.view(-1)
-    input_embeds = ttnn.reshape(input_embeds, (-1, H))
-    zeros = ttnn.zeros_like(input_embeds)
     mask_indices = torch.where(input_ids == hf_config.image_token_id)[0]
     if len(mask_indices) == 0:
         return input_embeds, deepstack_visual_embeds
@@ -71,6 +69,8 @@ def merge_vision_tokens_ttnn(
     mask_indices_tt = ttnn.from_torch(
         mask_indices, device=model_args.mesh_device, dtype=ttnn.int32, layout=ttnn.ROW_MAJOR_LAYOUT
     )
+    zeros = ttnn.zeros_like(input_embeds)
+    input_embeds = ttnn.reshape(input_embeds, (-1, H))
     input_embeds = ttnn.scatter(input_embeds, 0, mask_indices_tt, image_embeds)
     input_embeds = ttnn.reshape(input_embeds, (B, S, H))
     if deepstack_visual_embeds is not None:
