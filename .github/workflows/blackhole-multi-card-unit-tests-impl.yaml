@@ -129,7 +129,7 @@ jobs:
             test-type: loudbox
             owner_id: U08E1JCMAJF # Marko Bezulj
             model-name: deepseek_prefill
-          - name: bh_qb_DeepSeek_PREFIL
+          - name: bh_qb_DeepSeek_PREFILL
             cmd: |
               pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_dispatch.py -vvv --tb=short
               pytest models/demos/deepseek_v3_d_p/tests/pcc/test_prefill_combine.py -vvv --tb=short
