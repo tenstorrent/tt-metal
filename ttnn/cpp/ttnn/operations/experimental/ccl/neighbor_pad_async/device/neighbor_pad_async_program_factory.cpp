@@ -350,7 +350,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
 
     uint32_t num_sticks_to_write_per_packet = 1;
-    uint32_t cb_num_pages = 3 * num_sticks_to_write_per_packet;  // triple buffering
+    uint32_t cb_num_pages = 2 * num_sticks_to_write_per_packet;  // double buffering
     tt::DataFormat df = datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
 
     // CBs for transferring data between reader and writer
@@ -454,6 +454,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
         // L1 recv buffer on W fabric cores: fabric-delivered W padding data arrives here
         // instead of going directly to DRAM. With multi-link, each link processes a subset
         // of rows, so buffer is sized for the max per-link portion (not full w_outer_dim_size).
+        // Buffer must hold ALL outer_dims' sticks (no per-outer_dim reuse) because the
+        // W reader processes its entire main loop before reading incoming data from L1.
         w_rows_per_link = w_outer_dim_size / pad2_num_links;
         w_extra_rows = w_outer_dim_size % pad2_num_links;
         uint32_t max_w_link_rows = w_rows_per_link + (w_extra_rows > 0 ? 1 : 0);
