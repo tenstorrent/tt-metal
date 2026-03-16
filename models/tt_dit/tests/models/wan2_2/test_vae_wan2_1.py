@@ -238,11 +238,19 @@ def test_wan_rmsnorm(device, B, C, T, H, W, images, mean, std):
     ("B, C, T, H, W"),
     [
         (1, 384, 1, 90, 160),  # decoder.mid_block.resnets.0.norm1
+        (1, 384, 3, 90, 160),
+        (1, 384, 8, 90, 160),
         (1, 384, 1, 60, 104),  # decoder.mid_block.resnets.0.norm1
+        (1, 384, 3, 60, 104),
+        (1, 384, 8, 60, 104),
     ],
     ids=[
-        "720p",
-        "480p",
+        "Tdim1-720p",
+        "Tdim3-720p",
+        "Tdim8-720p",
+        "Tdim1-480p",
+        "Tdim3-480p",
+        "Tdim8-480p",
     ],
 )
 @pytest.mark.parametrize("mean, std", [(0, 1)])
