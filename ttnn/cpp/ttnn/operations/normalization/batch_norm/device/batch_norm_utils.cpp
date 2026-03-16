@@ -19,7 +19,7 @@ DeviceComputeKernelConfig resolve_compute_kernel_config(
         input.storage_type());
 
     const auto arch = input.device()->arch();
-    const auto default_math_fidelity = MathFidelity::HiFi4;
+    const auto default_fp32_acc_math_fidelity = MathFidelity::HiFi4;
     const auto default_approx_mode = false;
     const auto default_fp32_acc = true;
     const auto default_l1_acc = true;
@@ -27,7 +27,7 @@ DeviceComputeKernelConfig resolve_compute_kernel_config(
     return init_device_compute_kernel_config(
         arch,
         compute_kernel_config,
-        default_math_fidelity,
+        default_fp32_acc_math_fidelity,
         default_approx_mode,
         default_fp32_acc,
         default_l1_acc,

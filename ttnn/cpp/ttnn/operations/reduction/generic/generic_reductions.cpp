@@ -436,8 +436,8 @@ Tensor non_height_width_reduce(
         compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
         log_warning(
             tt::LogOp,
-            "HiFi4 + fp32_dest_acc_en on Wormhole B0 may produce incorrect results "
-            "(hw bug #38306). Prefer HiFi3.");
+            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3. "
+            "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
     }
     Tensor output_tensor = ttnn::experimental::reduction::fast_reduce_nc(
         input_tensor, dims, /*output=*/std::nullopt, memory_config, config);

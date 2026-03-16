@@ -401,6 +401,22 @@ SoftmaxDeviceOperation::create_op_performance_model(
     return result;
 }
 
+// hw bug (#38306): on Wormhole B0, HiFi4 with fp32 accumulation can produce less accurate
+// results than HiFi3 for some inputs. Use HiFi3 as the safe default when fp32 acc is enabled.
+static DeviceComputeKernelConfig softmax_init_compute_kernel_config(
+    tt::ARCH arch, const std::optional<const DeviceComputeKernelConfig>& compute_kernel_config, bool is_fp32) {
+    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
+    const auto default_fidelity = (is_wormhole && is_fp32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
+    if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
+        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
+        log_warning(
+            tt::LogOp,
+            "On Wormhole with fp32 accumulation, output accuracy can be worse with HiFi4 than HiFi3. "
+            "Prefer using HiFi3 with fp32 accumulation on Wormhole.");
+    }
+    return init_device_compute_kernel_config(arch, compute_kernel_config, default_fidelity, true, is_fp32, false);
+}
+
 Tensor softmax(
     const Tensor& input_tensor,
     int8_t dim,
@@ -413,22 +429,8 @@ Tensor softmax(
         input_tensor.device() != nullptr,
         "input_tensor.device() == nullptr, No device found, move input_tensor to device");
 
-    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en produces incorrect results on Wormhole B0.
-    // Change the default to HiFi3 when this op defaults to fp32=True (i.e. input is FLOAT32).
-    const auto is_wormhole = input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0;
-    const auto default_math_fidelity = (is_wormhole && is_fp32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
-
-    const auto compute_kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, default_math_fidelity, true, is_fp32, false);
-
-    // Warn if user explicitly passed HiFi4 + fp32_dest_acc_en on Wormhole B0.
-    if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
-        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
-        log_warning(
-            tt::LogOp,
-            "HiFi4 + fp32_dest_acc_en on Wormhole B0 may produce incorrect results "
-            "(hw bug #38306). Prefer HiFi3.");
-    }
+    const auto compute_kernel_config_val =
+        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, is_fp32);
 
     const auto rank = input_tensor.logical_shape().size();
     const auto dim_calculated = dim < 0 ? rank + dim : dim;
@@ -505,17 +507,8 @@ Tensor scale_mask_softmax(
     bool numeric_stable) {
     // Constants
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
-    const auto arch = input_tensor.device()->arch();
-    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
-    const auto default_math_fidelity = (is_wormhole && is_fp32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
     const auto compute_kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, default_math_fidelity, true, is_fp32, false);
-    if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
-        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
-        log_warning(
-            tt::LogOp,
-            "HiFi4 + fp32_dest_acc_en on Wormhole B0 may produce incorrect results (hw bug #38306). Prefer HiFi3.");
-    }
+        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, is_fp32);
 
     // Input tensor formatting
     const ttnn::Shape input_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
@@ -598,17 +591,8 @@ Tensor softmax_in_place(
     bool numeric_stable) {
     // Constants
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
-    const auto arch = input_tensor.device()->arch();
-    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
-    const auto default_math_fidelity = (is_wormhole && is_fp32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
     const auto compute_kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, default_math_fidelity, true, is_fp32, false);
-    if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
-        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
-        log_warning(
-            tt::LogOp,
-            "HiFi4 + fp32_dest_acc_en on Wormhole B0 may produce incorrect results (hw bug #38306). Prefer HiFi3.");
-    }
+        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, is_fp32);
 
     // Operation specific checks
     TT_FATAL(
@@ -646,17 +630,8 @@ Tensor scale_mask_softmax_in_place(
     bool numeric_stable) {
     // Constants
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
-    const auto arch = input_tensor.device()->arch();
-    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
-    const auto default_math_fidelity = (is_wormhole && is_fp32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
     const auto compute_kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, default_math_fidelity, true, is_fp32, false);
-    if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
-        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
-        log_warning(
-            tt::LogOp,
-            "HiFi4 + fp32_dest_acc_en on Wormhole B0 may produce incorrect results (hw bug #38306). Prefer HiFi3.");
-    }
+        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, is_fp32);
     const auto rank = input_tensor.logical_shape().size();
     const auto dim = rank - 1;
 
@@ -685,17 +660,8 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
     bool numeric_stable) {
     // Constants
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
-    const auto arch = input_tensor.device()->arch();
-    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
-    const auto default_math_fidelity = (is_wormhole && is_fp32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
     const auto compute_kernel_config_val =
-        init_device_compute_kernel_config(arch, compute_kernel_config, default_math_fidelity, true, is_fp32, false);
-    if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
-        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
-        log_warning(
-            tt::LogOp,
-            "HiFi4 + fp32_dest_acc_en on Wormhole B0 may produce incorrect results (hw bug #38306). Prefer HiFi3.");
-    }
+        softmax_init_compute_kernel_config(input_tensor.device()->arch(), compute_kernel_config, is_fp32);
     const auto rank = input_tensor.logical_shape().size();
     const auto dim = rank - 1;
 
