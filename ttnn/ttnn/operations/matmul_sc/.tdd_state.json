@@ -1,0 +1,77 @@
+{
+  "op_name": "matmul_sc",
+  "op_path": "ttnn/ttnn/operations/matmul_sc",
+  "spec_path": "ttnn/ttnn/operations/matmul_sc/op_design.md",
+  "layout": "TILE_LAYOUT",
+  "current_stage_index": 0,
+  "last_passing_commit": null,
+  "stages": [
+    {
+      "name": "data_pipeline",
+      "description": "Reader reads A tiles into cb_in0, compute copies cb_in0 to cb_out (identity), writer writes cb_out to DRAM. Verifies data pipeline without matmul logic.",
+      "kernel_files": [
+        "kernels/matmul_sc_reader.cpp",
+        "kernels/matmul_sc_compute.cpp",
+        "kernels/matmul_sc_writer.cpp"
+      ],
+      "test_file": "test_stage_data_pipeline.py",
+      "reference_body": "input_a",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.01
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 64)",
+        "(1, 1, 32, 128)",
+        "(1, 1, 128, 128)"
+      ],
+      "extra_imports": "",
+      "extra_args": "input_b_tensor",
+      "extra_setup": "input_b = torch.randn(shape, dtype=torch.bfloat16)\ninput_b_tensor = ttnn.from_torch(input_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "list(shape)",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "matmul_compute",
+      "description": "Full matmul C=AxB using all three helpers: read_matmul_tiles, matmul_1d, write_matmul_tiles.",
+      "kernel_files": [
+        "kernels/matmul_sc_reader.cpp",
+        "kernels/matmul_sc_compute.cpp",
+        "kernels/matmul_sc_writer.cpp"
+      ],
+      "test_file": "test_stage_matmul_compute.py",
+      "reference_body": "torch.matmul(input_a, input_b)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 128)",
+        "(1, 1, 128, 64)",
+        "(1, 1, 32, 256)"
+      ],
+      "extra_imports": "",
+      "extra_args": "input_b_tensor",
+      "extra_setup": "M, K = shape[-2], shape[-1]\nN = {\"(1, 1, 32, 32)\": 32, \"(1, 1, 64, 128)\": 64, \"(1, 1, 32, 128)\": 64, \"(1, 1, 128, 64)\": 128, \"(1, 1, 32, 256)\": 32}[str(shape)]\ninput_b = torch.randn(*shape[:-2], K, N, dtype=torch.bfloat16)\ninput_b_tensor = ttnn.from_torch(input_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "list(input_b_tensor.shape)",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
