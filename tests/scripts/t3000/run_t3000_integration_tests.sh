@@ -448,13 +448,13 @@ run_t3000_tests() {
   run_t3000_llama3_70n90b_accuracy_tests
 
   # Run Llama3.2-11B Vision tests
-  #run_t3000_llama3.2-11b-vision_freq_tests
+  run_t3000_llama3.2-11b-vision_freq_tests
 
   # Run Llama3.2-11B Vision tests on spoofed N300
-  #run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests
+  run_t3000_spoof_n300_llama3.2-11b-vision_freq_tests
 
   # Run Llama3.2-90B Vision tests
-  #run_t3000_llama3.2-90b-vision_freq_tests
+  run_t3000_llama3.2-90b-vision_freq_tests
 
   # Run mistral tests
   run_t3000_mistral_tests
