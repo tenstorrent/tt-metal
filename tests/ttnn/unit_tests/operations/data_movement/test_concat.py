@@ -499,8 +499,14 @@ def test_nd_sharded_concat(device, num_tensors, tensor_shape, shard_shape, conca
             actual_shape == expected_shape
         ), f"Shard shape mismatch: expected {list(expected_shape)}, got {list(actual_shape)}"
 
+    # Create memory config with ND shard spec
+    output_nd_sharded_memory_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.L1,
+        nd_shard_spec=input_nd_shard_spec,
+    )
+
     # memory_config for ttnn_output will be calculated according first input tensor memory config)
-    ttnn_output = ttnn.concat(ttnn_tensors, dim=concat_dim)
+    ttnn_output = ttnn.concat(ttnn_tensors, dim=concat_dim, memory_config=output_nd_sharded_memory_config)
 
     # Convert back to torch and compare
     actual_output = ttnn.to_torch(ttnn_output)
@@ -574,8 +580,14 @@ def test_nd_sharded_concat_core_range(device, num_tensors, tensor_shape, shard_s
             actual_shape == expected_shape
         ), f"Shard shape mismatch: expected {list(expected_shape)}, got {list(actual_shape)}"
 
+    # Create memory config with ND shard spec
+    output_nd_sharded_memory_config = ttnn.MemoryConfig(
+        buffer_type=ttnn.BufferType.L1,
+        nd_shard_spec=input_nd_shard_spec,
+    )
+
     # memory_config for ttnn_output will be calculated according first input tensor memory config)
-    ttnn_output = ttnn.concat(ttnn_tensors, dim=concat_dim)
+    ttnn_output = ttnn.concat(ttnn_tensors, dim=concat_dim, memory_config=output_nd_sharded_memory_config)
 
     # Convert back to torch and compare
     actual_output = ttnn.to_torch(ttnn_output)
