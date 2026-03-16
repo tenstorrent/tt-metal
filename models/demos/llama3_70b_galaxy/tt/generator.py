@@ -582,6 +582,7 @@ class Generator(WarmupForwardMixin):
             self.prev_page_table = (
                 page_table.clone()
             )  # Make sure we reference a fresh page table, in case it has changed
+            reset_inputs = True  # First decode ever also needs to load inputs
         if torch.any(self.prev_page_table != page_table).item():
             reset_inputs = True  # doesn't this do what reset_batch does?
             self.prev_page_table = (
@@ -679,8 +680,7 @@ class Generator(WarmupForwardMixin):
                 self.model.complete_bitmask_to_device()
                 tt_tok = self.model.apply_bitmask_to_logits(tt_tok)
             return self.model.sampling.sample(
-                logits=tt_tok,
-                tt_out_tok=tt_tokens,
+                logits=tt_tok,  # doesn't work with tt_out_tok=tt_tokens. Does it without?
                 enable_trace=False,
             )
 
