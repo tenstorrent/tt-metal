@@ -1,9 +1,9 @@
 name: "(Galaxy) DeepSeek Prefill tests"
 
 on:
-  # push:
-  #   branches:
-  #     - ddjekic/deepseek_moe_gate_prefill
+  push:
+    branches:
+      - ddjekic/deepseek_moe_gate_prefill
   workflow_dispatch:
     inputs:
       test-type:
