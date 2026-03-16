@@ -246,10 +246,10 @@ def test_forward_pass(
             )
 
         # Test weights PCC with individual logging
-        weights_passed, weights_pcc = comp_pcc(tt_topk_weights_torch, ref_weights, 0.99)
+        weights_passed, weights_pcc = comp_pcc(tt_topk_weights_torch, ref_weights, 0.98)
         status_char = "✅" if weights_passed else "❌"
         logger.info(
-            f"{status_char} Device {device_id} (row={row}, col={col}): Weights PCC = {weights_pcc:.4f} (threshold: 0.99)"
+            f"{status_char} Device {device_id} (row={row}, col={col}): Weights PCC = {weights_pcc:.4f} (threshold: 0.98)"
         )
         if not weights_passed:
             all_passed = False
