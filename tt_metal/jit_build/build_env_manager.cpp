@@ -253,7 +253,7 @@ void BuildEnvManager::build_firmware(ChipId device_id, bool ignore_precompiled) 
     ZoneScoped;
     const auto& build_env = get_device_build_env(device_id);
     if (!ignore_precompiled && build_env.firmware_precompiled) {
-        log_info(
+        log_debug(
             tt::LogBuildKernels,
             "Using pre-compiled firmware from: {}",
             build_env.build_env.get_firmware_binary_root());
@@ -266,7 +266,7 @@ std::string BuildEnvManager::get_firmware_binary_path(
     ChipId device_id, uint32_t programmable_core, uint32_t processor_class, int processor_id) {
     const auto& env = get_device_build_env(device_id).build_env;
     const auto& state = get_firmware_build_state(device_id, programmable_core, processor_class, processor_id);
-    return env.get_firmware_binary_root() + state.get_target_full_path();
+    return (env.get_firmware_binary_root() / state.get_target_full_path()).string();
 }
 
 // Get build environment info for all devices

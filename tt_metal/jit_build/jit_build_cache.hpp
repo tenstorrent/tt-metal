@@ -28,9 +28,10 @@ public:
 
     // Execute build_fn exactly once for a given hash.
     // Concurrent callers with the same hash block until the build completes.
-    // Returns immediately if hash was already built.
+    // Returns true (without calling build_fn) if hash was already built.
+    // Returns false after successfully executing build_fn for the first time.
     // If build_fn throws, the entry is removed so subsequent callers can retry.
-    void build_once(size_t hash, const std::function<void()>& build_fn);
+    bool build_once(size_t hash, const std::function<void()>& build_fn);
 
     // Clear completed entries. After clear(), the next build_once() for any hash
     // will re-execute the build function.

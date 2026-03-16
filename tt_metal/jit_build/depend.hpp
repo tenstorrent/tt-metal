@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <filesystem>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -17,20 +18,42 @@ ParsedDependencies parse_dependency_file(std::istream& file);
 
 // Writes the hashes of the dependencies of `obj` to `hash_file`.
 // Sets badbit on `hash_file` on any failure.
+//
+// When `canonical_dir` is non-empty (scratch-mode), dependency paths anywhere
+// under the scratch tree are rewritten to the corresponding NFS cache paths.
+// The scratch root and cache root are derived from the common suffix of
+// `out_dir` and `canonical_dir` (they share the same build_key/kernels/...
+// suffix but have different root prefixes).  Paths are lexically normalized
+// before comparison so that "../" segments (common for genfiles in parent
+// directories) are resolved correctly.  See depend.cpp for the full invariant.
 void write_dependency_hashes(
     const ParsedDependencies& dependencies,
-    const std::string& out_dir,
-    const std::string& obj,
-    std::ostream& hash_file);
+    const std::filesystem::path& out_dir,
+    const std::filesystem::path& obj,
+    std::ostream& hash_file,
+    const std::filesystem::path& canonical_dir = {});
 
-// Reads dependencies from .d file and writes their hashes to .hash file.
-// Deletes the .hash file on any failure.
-void write_dependency_hashes(const std::string& out_dir, const std::string& obj, const std::string& hash_path);
+// Reads dependencies from .d file and writes their hashes to .dephash file.
+// Deletes the .dephash file on any failure.
+// When `canonical_dir` is non-empty, scratch-local paths in the .dephash
+// output are rewritten to NFS cache paths (see overload above for details).
+void write_dependency_hashes(
+    const std::filesystem::path& out_dir,
+    const std::filesystem::path& obj,
+    const std::filesystem::path& hash_path,
+    const std::filesystem::path& canonical_dir = {});
 
 // Returns true if all dependencies' hashes match those stored in `hash_file`.
-bool dependencies_up_to_date(std::istream& hash_file);
+// Paths in the hash_file are resolved relative to `out_dir` if they are relative.
+// When `hash_file_mtime` is provided (non-default), dependencies whose mtime is
+// older than the hash file are assumed unchanged, skipping the expensive content
+// hash. Pass default file_time_type{} to disable this optimization (e.g. on NFS).
+bool dependencies_up_to_date(
+    std::istream& hash_file,
+    const std::filesystem::path& out_dir = {},
+    std::filesystem::file_time_type hash_file_mtime = {});
 
-// Returns true if all dependencies' hashes match those stored in the .hash file.
-bool dependencies_up_to_date(const std::string& out_dir, const std::string& obj);
+// Returns true if all dependencies' hashes match those stored in the .dephash file.
+bool dependencies_up_to_date(const std::filesystem::path& out_dir, const std::filesystem::path& obj);
 
 }  // namespace tt::jit_build

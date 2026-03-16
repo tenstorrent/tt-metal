@@ -4,11 +4,13 @@
 
 #pragma once
 
+#ifdef __linux__
 #include <pthread.h>
+#endif
 #include <taskflow/taskflow.hpp>
+#include <cstdio>
 #include <cstdlib>
 #include <thread>
-#include <tt_stl/assert.hpp>
 
 namespace tt::tt_metal::detail {
 inline static const size_t EXECUTOR_NTHREADS = std::getenv("TT_METAL_THREADCOUNT")
@@ -19,10 +21,15 @@ using Executor = tf::Executor;
 using ExecTask = tf::Task;
 
 inline Executor& GetExecutor() {
-    // Child process needs to reinitialize the executor after fork()
-    // otherwise it will hang because it will try to reference stale thread state
-    // copied from the parent process.
-    // Also ensure that no work is in-flight on the main process before forking.
+#ifdef __linux__
+    // After fork(), the child process must reinitialize the Executor because
+    // the parent's worker threads do not survive across fork boundaries.
+    // Without this, the child hangs trying to dispatch work to dead threads.
+    //
+    // Only the *child* handler recreates the Executor.  The parent's Executor
+    // is left untouched -- destroying and recreating it in prepare/parent
+    // would needlessly tear down the thread pool on every fork() call
+    // (including those from posix_spawn fallback paths or Python subprocess).
     static Executor* exec = [] {
         auto* e = new Executor(EXECUTOR_NTHREADS);
         std::atexit([] {
@@ -32,19 +39,30 @@ inline Executor& GetExecutor() {
         pthread_atfork(
             /*prepare=*/
             [] {
-                TT_FATAL(
-                    exec->num_topologies() == 0,
-                    "fork() called while executor has in-flight work "
-                    "(num_topologies={}). All tasks must complete before forking.",
-                    exec->num_topologies());
-                delete exec;
-                exec = nullptr;
+                if (exec && exec->num_topologies() != 0) {
+                    fprintf(
+                        stderr,
+                        "WARNING: fork() called while executor has in-flight work "
+                        "(num_topologies=%zu). This may cause hangs in the child process.\n",
+                        exec->num_topologies());
+                }
             },
-            /*parent=*/[] { exec = new Executor(EXECUTOR_NTHREADS); },
-            /*child=*/[] { exec = new Executor(EXECUTOR_NTHREADS); });
+            /*parent=*/nullptr,
+            /*child=*/
+            [] {
+                // The parent's threads are gone in the child; replace with a
+                // fresh Executor.  Intentionally leak the old one -- its
+                // internal state (mutexes, threads) is invalid post-fork and
+                // destroying it would deadlock or crash.
+                exec = new Executor(EXECUTOR_NTHREADS);
+            });
         return e;
     }();
     return *exec;
+#else
+    static Executor exec(EXECUTOR_NTHREADS);
+    return exec;
+#endif
 }
 
 inline std::mutex& GetExecutorMutex() {

@@ -13,17 +13,16 @@ fi
 
 run_quad_galaxy_unit_tests() {
   fail=0
+  setup_quad_galaxy_env
 
-  # tt-run --tcp-interface handles tcp and tag flags
-  local mpi_args_base="--map-by rankfile:file=/etc/mpirun/rankfile"
-  local tcp_interface="cnx1"
-  local mpi_host="--host g05glx04,g05glx03,g05glx02,g05glx01"
+  local mpi_args_base="--map-by rankfile:file=$RANKFILE"
+  local mpi_host="--host $HOSTS"
   local mpi_args="$mpi_host $mpi_args_base"
 
-  local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include cnx1 --tag-output"
+  local mpirun_args_base="$mpi_args_base --mca btl self,tcp --mca btl_tcp_if_include $TCP_INTERFACE --tag-output"
   local mpirun_args="$mpi_host $mpirun_args_base"
 
-  local rank_binding="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
+  local rank_binding="$RANK_BINDING_YAML"
   local descriptor_path="${DESCRIPTOR_PATH:-/etc/mpirun}"
 
   # TODO: Currently failing
@@ -41,6 +40,80 @@ run_quad_galaxy_unit_tests() {
   if [[ $fail -ne 0 ]]; then
     exit 1
   fi
+}
+
+###############################################################################
+# Cluster connectivity validation
+#
+# The QUAD galaxy uses a torus topology (dims: [8, 16], RING in both X and Y)
+# with host_topology [1, 4]. The 4 hosts must be physically cabled in the
+# correct ring order for the topology mapper to succeed. If the host order
+# in MPI (--host flag) or the rankfile doesn't match the physical ring,
+# intra-mesh mapping will fail with:
+#   "Graph specified in MGD could not fit in the discovered physical topology"
+#
+# Expected physical ring: glx04 <-> glx03 <-> glx02 <-> glx01 <-> glx04
+# Verify with: ./build/test/tt_metal/tt_fabric/test_system_health
+###############################################################################
+
+validate_quad_connectivity() {
+  setup_quad_galaxy_env
+
+  local descriptor_path="${DESCRIPTOR_PATH:-/etc/mpirun}"
+  local mpirun_args="--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include $TCP_INTERFACE --tag-output"
+
+  echo "=== Validating QUAD galaxy cluster connectivity ===" >&2
+  echo "Hosts: $HOSTS" >&2
+  echo "Rankfile: $RANKFILE" >&2
+  echo "Cabling descriptor: ${descriptor_path}/cabling_descriptor.textproto" >&2
+  echo "Deployment descriptor: ${descriptor_path}/deployment_descriptor.textproto" >&2
+
+  mpirun-ulfm $mpirun_args \
+      -x TT_METAL_HOME=$(pwd) \
+      -x LD_LIBRARY_PATH=$(pwd)/build/lib \
+      ./build/tools/scaleout/run_cluster_validation \
+      --send-traffic \
+      --cabling-descriptor-path "${descriptor_path}/cabling_descriptor.textproto" \
+      --deployment-descriptor-path "${descriptor_path}/deployment_descriptor.textproto"
+
+  if [[ -x "./build/test/tt_metal/tt_fabric/test_system_health" ]]; then
+      echo "Running system health check..." >&2
+      mpirun-ulfm $mpirun_args \
+          -x TT_METAL_HOME=$(pwd) \
+          -x LD_LIBRARY_PATH=$(pwd)/build/lib \
+          ./build/test/tt_metal/tt_fabric/test_system_health
+  fi
+
+  echo "=== QUAD galaxy cluster connectivity validation passed ===" >&2
+}
+
+validate_dual_connectivity() {
+  setup_dual_galaxy_env
+
+  local descriptor_path="${DESCRIPTOR_PATH:-/etc/mpirun}"
+  local mpirun_args="--host $HOSTS --map-by rankfile:file=$RANKFILE --mca btl self,tcp --mca btl_tcp_if_include $TCP_INTERFACE --tag-output"
+
+  echo "=== Validating DUAL galaxy cluster connectivity ===" >&2
+  echo "Hosts: $HOSTS" >&2
+  echo "Rankfile: $RANKFILE" >&2
+
+  mpirun-ulfm $mpirun_args \
+      -x TT_METAL_HOME=$(pwd) \
+      -x LD_LIBRARY_PATH=$(pwd)/build/lib \
+      ./build/tools/scaleout/run_cluster_validation \
+      --send-traffic \
+      --cabling-descriptor-path "${descriptor_path}/cabling_descriptor.textproto" \
+      --deployment-descriptor-path "${descriptor_path}/deployment_descriptor.textproto"
+
+  if [[ -x "./build/test/tt_metal/tt_fabric/test_system_health" ]]; then
+      echo "Running system health check..." >&2
+      mpirun-ulfm $mpirun_args \
+          -x TT_METAL_HOME=$(pwd) \
+          -x LD_LIBRARY_PATH=$(pwd)/build/lib \
+          ./build/test/tt_metal/tt_fabric/test_system_health
+  fi
+
+  echo "=== DUAL galaxy cluster connectivity validation passed ===" >&2
 }
 
 ###############################################################################
@@ -64,14 +137,81 @@ _resolve_deepseekv3_cache() {
     fi
 }
 
+# Kill stale processes holding Tenstorrent devices and remove leftover UMD lock
+# files on all Galaxy hosts.  This prevents zombie processes from a previous run
+# from blocking chip initialization via CHIP_IN_USE robust mutexes.
+#
+# Usage: _cleanup_multihost <comma-separated-hosts> [true|false]
+#   $1 - hosts (required, comma-separated, e.g. "g05glx01,g05glx02")
+#   $2 - run tt-smi reset after cleanup (optional, default: false)
+_cleanup_multihost() {
+    local hosts="${1:-}"
+    local do_reset="${2:-false}"
+
+    if [[ -z "$hosts" ]]; then
+        echo "  _cleanup_multihost: no hosts set, skipping." >&2
+        return 0
+    fi
+
+    echo "=== Cleaning up stale processes on all hosts ===" >&2
+    for host in ${hosts//,/ }; do
+        echo "  Cleaning $host..." >&2
+        ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$host" bash -s <<-'CLEANUP_EOF' 2>/dev/null || true
+            # Kill orphaned MPI daemons (prted/orted) whose parent mpirun is
+            # already dead (reparented to init, PID 1).  This is safe because
+            # a legitimately running MPI job keeps its prted children parented
+            # to the live mpirun process.
+            pkill -9 --parent 1 -f 'prted|orted' 2>/dev/null || true
+
+            # Kill orphaned test processes reparented to init.  These are
+            # children of dead prted/mpirun that still hold device files.
+            pkill -9 --parent 1 -f 'pytest|python.*tt_metal|python.*ttnn|fabric_unit_tests|run_cluster_validation|test_system_health' 2>/dev/null || true
+
+            # Kill any remaining process groups holding Tenstorrent devices.
+            # Use fuser in read-only mode, then selectively kill only
+            # non-system processes to avoid nuking sshd.
+            for dev in /dev/tenstorrent/*; do
+                [ -e "$dev" ] || continue
+                pids=$(fuser "$dev" 2>/dev/null) || true
+                for pid in $pids; do
+                    comm=$(ps -o comm= -p "$pid" 2>/dev/null) || continue
+                    case "$comm" in
+                        sshd|systemd*|udevd|agetty|login|bash|sh) continue ;;
+                    esac
+                    # Kill the entire process group so descendants are cleaned
+                    # up too.  Fall back to single-pid kill if pgid lookup fails.
+                    pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ') || true
+                    if [ -n "$pgid" ] && [ "$pgid" != "0" ] && [ "$pgid" != "1" ]; then
+                        kill -9 -- -"$pgid" 2>/dev/null || true
+                    else
+                        kill -9 "$pid" 2>/dev/null || true
+                    fi
+                done
+            done
+            rm -f /dev/shm/TT_UMD_LOCK.* 2>/dev/null || true
+CLEANUP_EOF
+        if [[ "$do_reset" == "true" ]]; then
+            ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$host" \
+                "tt-smi -r 2>/dev/null || true" 2>/dev/null || true
+        fi
+    done
+    echo "=== Cleanup complete ===" >&2
+}
+
 setup_dual_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
     export HOSTS="g05glx01,g05glx02"
+    _cleanup_multihost "$HOSTS"
     export RANKFILE=/etc/mpirun/rankfile_g05glx01_g05glx02
     export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
     export TCP_INTERFACE="cnx1"
     mkdir -p logs
     mkdir -p generated/artifacts
+
+    export TT_METAL_CACHE="${TT_METAL_CACHE:-$(pwd)/.cache/tt-metal-cache}"
+    export TT_METAL_LOGS_PATH="${TT_METAL_LOGS_PATH:-$(pwd)/generated/logs}"
+
+    sync
 
     if ! test -f "$RANKFILE"; then
         echo "File '$RANKFILE' does not exist."
@@ -81,6 +221,17 @@ setup_dual_galaxy_env() {
         echo "File '$RANK_BINDING_YAML' does not exist."
         exit 1
     fi
+
+    echo "=== DUAL Galaxy Environment ===" >&2
+    echo "  Hosts: $HOSTS" >&2
+    echo "  Rankfile: $RANKFILE" >&2
+    echo "  Rank Binding: $RANK_BINDING_YAML" >&2
+    echo "  MESH_DEVICE: DUAL" >&2
+    for host in ${HOSTS//,/ }; do
+        if ! ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$host" "echo '  Host $host: reachable'" 2>/dev/null; then
+            echo "  WARNING: Cannot reach host $host" >&2
+        fi
+    done
 
     export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
     _resolve_deepseekv3_cache
@@ -90,11 +241,17 @@ setup_dual_galaxy_env() {
 setup_quad_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
     export HOSTS="g05glx04,g05glx03,g05glx02,g05glx01"
+    _cleanup_multihost "$HOSTS"
     export RANKFILE=/etc/mpirun/rankfile
     export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
     export TCP_INTERFACE="cnx1"
     mkdir -p logs
     mkdir -p generated/artifacts
+
+    export TT_METAL_CACHE="${TT_METAL_CACHE:-$(pwd)/.cache/tt-metal-cache}"
+    export TT_METAL_LOGS_PATH="${TT_METAL_LOGS_PATH:-$(pwd)/generated/logs}"
+
+    sync
 
     if ! test -f "$RANKFILE"; then
         echo "File '$RANKFILE' does not exist."
@@ -104,6 +261,17 @@ setup_quad_galaxy_env() {
         echo "File '$RANK_BINDING_YAML' does not exist."
         exit 1
     fi
+
+    echo "=== QUAD Galaxy Environment ===" >&2
+    echo "  Hosts: $HOSTS" >&2
+    echo "  Rankfile: $RANKFILE" >&2
+    echo "  Rank Binding: $RANK_BINDING_YAML" >&2
+    echo "  MESH_DEVICE: QUAD" >&2
+    for host in ${HOSTS//,/ }; do
+        if ! ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$host" "echo '  Host $host: reachable'" 2>/dev/null; then
+            echo "  WARNING: Cannot reach host $host" >&2
+        fi
+    done
 
     export DEEPSEEK_V3_HF_MODEL="/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-dequantized"
     _resolve_deepseekv3_cache
@@ -124,9 +292,32 @@ _demo_timeout() {
 
 # Helper: run a test command via tt-run using the current environment
 _run_deepseekv3_tt() {
-    tt-run --tcp-interface $TCP_INTERFACE --rank-binding "$RANK_BINDING_YAML" \
+    tt-run --tcp-interface "$TCP_INTERFACE" --rank-binding "$RANK_BINDING_YAML" \
         --mpi-args "$MPI_ARGS" \
         "$@"
+}
+
+# Retry wrapper for transient multi-host failures (e.g., topology mapping timeouts).
+# Usage: _retry_deepseekv3_tt <max_attempts> <backoff_seconds> <args...>
+_retry_deepseekv3_tt() {
+    local max_attempts=$1; shift
+    local backoff=$1; shift
+    local attempt=1
+
+    while (( attempt <= max_attempts )); do
+        echo "=== Attempt $attempt/$max_attempts ===" >&2
+        if _run_deepseekv3_tt "$@"; then
+            return 0
+        fi
+        if (( attempt < max_attempts )); then
+            echo "Attempt $attempt failed. Cleaning up stale state before retry..." >&2
+            _cleanup_multihost "${HOSTS:-}" false
+            sleep "$backoff"
+        fi
+        (( attempt++ ))
+    done
+    echo "All $max_attempts attempts failed." >&2
+    return 1
 }
 
 ###############################################################################
@@ -148,7 +339,7 @@ run_quad_deepseekv3_unit_tests() {
     fail=0
     setup_quad_galaxy_env
 
-    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests/unit ; fail+=$?
+    _retry_deepseekv3_tt 2 30 pytest -svvv models/demos/deepseek_v3/tests/unit ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -174,7 +365,7 @@ run_quad_deepseekv3_module_tests() {
     fail=0
     setup_quad_galaxy_env
 
-    _run_deepseekv3_tt pytest -svvv models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests ; fail+=$?
+    _retry_deepseekv3_tt 2 30 pytest -svvv models/demos/deepseek_v3/tests --ignore=models/demos/deepseek_v3/tests/unit --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests ; fail+=$?
 
     if [[ $fail -ne 0 ]]; then
         exit 1
@@ -333,10 +524,20 @@ main() {
     cd $TT_METAL_HOME
     export PYTHONPATH=$TT_METAL_HOME
 
+    # Ensure stale chip locks and zombie processes are cleaned up on exit,
+    # regardless of how the script terminates (success, failure, or signal).
+    trap '_cleanup_multihost "${HOSTS:-}" false' EXIT
+
     # Support running specific test function via argument
     local test_function="${1:-all}"
 
     case "$test_function" in
+        "validate_quad_connectivity")
+            validate_quad_connectivity
+            ;;
+        "validate_dual_connectivity")
+            validate_dual_connectivity
+            ;;
         "unit_tests")
             run_quad_galaxy_unit_tests
             ;;
@@ -381,7 +582,7 @@ main() {
             ;;
         *)
             echo "Unknown test function: $test_function" 1>&2
-            echo "Available options: unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, quad_demo, dual_demo_stress, quad_demo_stress, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all" 1>&2
+            echo "Available options: validate_quad_connectivity, validate_dual_connectivity, unit_tests, dual_deepseekv3_unit_tests, quad_deepseekv3_unit_tests, dual_deepseekv3_module_tests, quad_deepseekv3_module_tests, dual_teacher_forced, quad_teacher_forced, dual_demo, quad_demo, dual_demo_stress, quad_demo_stress, dual_deepseekv3_integration_tests, quad_deepseekv3_integration_tests, all" 1>&2
             exit 1
             ;;
     esac

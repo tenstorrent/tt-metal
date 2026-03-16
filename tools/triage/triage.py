@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--triage-summary-path=<path>]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -23,7 +23,6 @@ Options:
                                      Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
     --disable-colors                 Disable colored output. [default: False]
     --disable-progress               Disable progress bars. [default: False]
-    --triage-summary-path=<path>     Write a triage summary file to the given path (used by CI for hang reports).
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -344,6 +343,75 @@ class TriageScript:
         return scripts
 
 
+def summarize_failure_message(message: str | None) -> str:
+    """Extract a concise single-line summary from a traceback or error message."""
+    if not message:
+        return "No failure details available."
+
+    lines = [line.strip() for line in message.splitlines() if line.strip()]
+    if not lines:
+        return "No failure details available."
+
+    for line in reversed(lines):
+        if line.startswith("Traceback"):
+            continue
+        if line.startswith("File "):
+            continue
+        if line.startswith("During handling of the above exception"):
+            continue
+        if line == "^":
+            continue
+        return line
+    return lines[-1]
+
+
+def add_contextual_failure_hint(script_name: str | None, summary: str, message: str | None) -> str:
+    """Append script-aware hints to otherwise generic exception summaries."""
+    script_name = script_name or ""
+    full_message = message or ""
+
+    if (
+        script_name == "check_arc.py"
+        and "TypeError: 'NoneType' object is not iterable" in summary
+        and "heartbeat_samples" in full_message
+    ):
+        return (
+            f"{summary} (check_arc could not collect heartbeat samples; this usually means upstream device data "
+            "collection failed. Check prior failures from run_checks.py / metal_device_id_mapping.py / inspector data.)"
+        )
+
+    return summary
+
+
+def format_failure_message_lines(message: str | None, indent: str = "    ") -> list[str]:
+    if not message:
+        return [f"{indent}No additional details available."]
+    return [f"{indent}{line}" if line.strip() else indent for line in message.splitlines()]
+
+
+def get_failed_dependencies(script: "TriageScript") -> list["TriageScript"]:
+    return [dep for dep in script.depends if dep.failed]
+
+
+def build_dependency_failure_lines(script: "TriageScript") -> list[str]:
+    failed_dependencies = get_failed_dependencies(script)
+    if not failed_dependencies:
+        return ["No failed dependencies were recorded."]
+
+    lines = ["Failed dependencies:"]
+    for failed_dep in failed_dependencies:
+        summary = summarize_failure_message(failed_dep.failure_message)
+        summary = add_contextual_failure_hint(failed_dep.name, summary, failed_dep.failure_message)
+        lines.append(f"- {failed_dep.name}: {summary}")
+    lines.append(
+        "Action: fix dependency failures above. For inspector-related failures, verify --inspector-log-path or "
+        "--inspector-rpc-host/--inspector-rpc-port and that TT_METAL_INSPECTOR=1 and TT_METAL_INSPECTOR_RPC=1. "
+        "In multi-rank runs, ensure TT_METAL_LOGS_PATH contains <hostname>_rank_N directories and that "
+        "the Inspector RPC port (base_port + rank) is correctly matched between C++ and triage tools."
+    )
+    return lines
+
+
 def resolve_execution_order(scripts: dict[str, TriageScript]) -> list[TriageScript]:
     # Build script dependents graph and script missing dependencies map
     script_dependents = defaultdict(list)  # dep_path -> list of scripts depending on it
@@ -606,7 +674,13 @@ def serialize_result(script: TriageScript | None, result, execution_time: str = 
             for failure in failures:
                 utils.ERROR(f"    {failure}")
             if script.failed:
-                utils.ERROR(f"    {script.failure_message}")
+                summary = summarize_failure_message(script.failure_message)
+                summary = add_contextual_failure_hint(script.name, summary, script.failure_message)
+                utils.ERROR(f"    Summary: {summary}")
+                if script.failure_message and script.failure_message.strip() != summary:
+                    utils.ERROR("    Details:")
+                    for detail_line in format_failure_message_lines(script.failure_message, indent="      "):
+                        utils.ERROR(detail_line)
 
                 import textwrap
 
@@ -842,7 +916,9 @@ def run_script(
     result: Any = None
     for script in script_queue:
         if not all(not dep.failed for dep in script.depends):
-            raise TTTriageError(f"{script.name}: Cannot run script due to failed dependencies.")
+            dependency_lines = build_dependency_failure_lines(script)
+            dependency_message = "\n".join(dependency_lines)
+            raise TTTriageError(f"{script.name}: Cannot run script due to failed dependencies.\n{dependency_message}")
         else:
             result = script.run(args=args, context=context, log_error=False)
             if script.config.data_provider and result is None:
@@ -861,16 +937,6 @@ class TTTriageError(Exception):
     """Base class for TT Triage errors."""
 
     pass
-
-
-def _build_triage_summary(script_queue: list[TriageScript]) -> str:
-    summary_lines = []
-    for script in script_queue:
-        if script.failed:
-            summary_lines.append(f"{script.name}: FAIL - {script.failure_message or 'unknown error'}")
-        elif not script.config.data_provider:
-            summary_lines.append(f"{script.name}: pass")
-    return "\n".join(summary_lines) if summary_lines else "No triage scripts executed."
 
 
 def main():
@@ -945,10 +1011,15 @@ def main():
             for script in script_queue:
                 progress.update(scripts_task, description=f"Running {script.name}")
                 if not all(not dep.failed for dep in script.depends):
+                    dependency_lines = build_dependency_failure_lines(script)
                     utils.INFO(f"{script.name}:")
                     utils.WARN(f"  Cannot run script due to failed dependencies.")
+                    for dependency_line in dependency_lines:
+                        utils.WARN(f"  {dependency_line}")
                     script.failed = True
-                    script.failure_message = "Cannot run script due to failed dependencies."
+                    script.failure_message = "Cannot run script due to failed dependencies.\n" + "\n".join(
+                        dependency_lines
+                    )
                 else:
                     start_time = time()
                     result = script.run(args=args, context=context)
@@ -960,7 +1031,13 @@ def main():
                             print()
                             utils.INFO(f"{script.name}{execution_time}:")
                             if script.failure_message is not None:
-                                utils.ERROR(f"  Data provider script failed: {script.failure_message}")
+                                summary = summarize_failure_message(script.failure_message)
+                                summary = add_contextual_failure_hint(script.name, summary, script.failure_message)
+                                utils.ERROR(f"  Data provider script failed: {summary}")
+                                if script.failure_message.strip() != summary:
+                                    utils.ERROR("  Details:")
+                                    for detail_line in format_failure_message_lines(script.failure_message, "    "):
+                                        utils.ERROR(detail_line)
                             else:
                                 utils.ERROR(f"  Data provider script did not return any data.")
                         elif execution_time:
@@ -979,16 +1056,6 @@ def main():
                 utils.INFO(f"Total serialization time: {serialization_time:.2f}s")
                 utils.INFO(f"Total execution time: {total_time:.2f}s")
         progress.remove_task(scripts_task)
-
-    triage_summary_path = args["--triage-summary-path"]
-    if triage_summary_path:
-        try:
-            os.makedirs(os.path.dirname(triage_summary_path), exist_ok=True)
-            with open(triage_summary_path, "w") as f:
-                f.write(_build_triage_summary(script_queue))
-            utils.INFO(f"Triage summary written to {triage_summary_path}")
-        except Exception as e:
-            utils.WARN(f"Failed to write triage summary: {e}")
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)

@@ -177,7 +177,7 @@ TEST_F(CompileSetsKernelBinariesFixture, CompileSetsKernelBinaries) {
                 std::filesystem::remove_all(
                     BuildEnvManager::get_instance()
                         .get_device_build_env(devices_[i]->id())
-                        .build_env.get_out_kernel_root_path() +
+                        .build_env.get_out_kernel_root_path() /
                     kernel_name);
             }
         }

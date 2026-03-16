@@ -10,7 +10,8 @@ Usage:
     parse_inspector_logs.py [<log-directory>]
 
 Arguments:
-    <log-directory>  Path to inspector log directory. Defaults to $TT_METAL_HOME/generated/inspector
+    <log-directory>  Path to inspector log directory. Defaults to inspector logs derived from
+                     TT_METAL_LOGS_PATH when set, otherwise $TT_METAL_HOME/generated/inspector.
 
 Description:
     This script parses inspector logs and transfers them into a structured format.
@@ -21,6 +22,7 @@ from collections import namedtuple
 from dataclasses import dataclass
 from functools import cached_property
 import os
+import re
 import sys
 from typing import Literal, TypeAlias
 import yaml
@@ -426,11 +428,88 @@ def get_devices_in_use(programs: list[ProgramData]) -> set[int]:
     return used_devices
 
 
+def _find_rank_scoped_inspector_directory(logs_root: str) -> str | None:
+    """Find inspector logs under rank-scoped TT_METAL_LOGS_PATH directories.
+
+    Expected layout:
+      <logs_root>/<hostname>_rank_<N>/generated/inspector
+    """
+    if not os.path.isdir(logs_root):
+        return None
+
+    rank_dir_pattern = re.compile(r"^.+_rank_\d+$")
+    try:
+        rank_dirs = sorted(
+            entry
+            for entry in os.listdir(logs_root)
+            if rank_dir_pattern.match(entry) and os.path.isdir(os.path.join(logs_root, entry))
+        )
+    except FileNotFoundError:
+        # Directory was removed between isdir check and listdir - treat as no rank dirs found
+        rank_dirs = []
+    candidates = [os.path.join(logs_root, rank_dir, "generated", "inspector") for rank_dir in rank_dirs]
+    existing_candidates = [candidate for candidate in candidates if os.path.exists(candidate)]
+    if not existing_candidates:
+        return None
+
+    def _get_current_rank() -> int | None:
+        for rank_env in ("OMPI_COMM_WORLD_RANK", "PMI_RANK", "TT_MESH_HOST_RANK"):
+            rank_value = os.environ.get(rank_env)
+            if rank_value is None:
+                continue
+            try:
+                rank = int(rank_value)
+                if rank >= 0:
+                    return rank
+            except ValueError:
+                continue
+        return None
+
+    def _extract_rank(path: str) -> int | None:
+        rank_dir = os.path.basename(os.path.dirname(os.path.dirname(path)))
+        match = re.search(r"_rank_(\d+)$", rank_dir)
+        if not match:
+            return None
+        return int(match.group(1))
+
+    current_rank = _get_current_rank()
+    if current_rank is not None:
+        rank_matches = [candidate for candidate in existing_candidates if _extract_rank(candidate) == current_rank]
+        if rank_matches:
+            return sorted(rank_matches)[0]
+
+    def _is_rank_zero_candidate(path: str) -> bool:
+        rank_dir = os.path.basename(os.path.dirname(os.path.dirname(path)))
+        return rank_dir.endswith("_rank_0")
+
+    rank_zero_candidates = [candidate for candidate in existing_candidates if _is_rank_zero_candidate(candidate)]
+    if rank_zero_candidates:
+        return sorted(rank_zero_candidates)[0]
+
+    if len(existing_candidates) > 1:
+        utils.WARN(
+            "Multiple rank-scoped inspector directories found under TT_METAL_LOGS_PATH. "
+            f"Using {existing_candidates[0]}. Use --inspector-log-path to choose explicitly."
+        )
+    return existing_candidates[0]
+
+
 def get_log_directory(log_directory: str | None = None) -> str:
     if log_directory:
         return log_directory
     elif "TT_METAL_LOGS_PATH" in os.environ:
-        return os.path.join(os.environ.get("TT_METAL_LOGS_PATH"), "generated", "inspector")
+        logs_root = os.environ.get("TT_METAL_LOGS_PATH")
+        default_directory = os.path.join(logs_root, "generated", "inspector")
+        if os.path.exists(default_directory):
+            return default_directory
+
+        rank_scoped_directory = _find_rank_scoped_inspector_directory(logs_root)
+        if rank_scoped_directory is not None:
+            return rank_scoped_directory
+
+        return default_directory
+    elif "TT_METAL_HOME" in os.environ:
+        return os.path.join(os.environ.get("TT_METAL_HOME"), "generated", "inspector")
     else:
         import tempfile
 
