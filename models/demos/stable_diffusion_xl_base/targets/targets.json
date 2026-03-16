@@ -1,5 +1,5 @@
 {
-  "sdxl": {
+  "sdxl-1024": {
     "perf": {
       "functional": 125,
       "complete":   25,
@@ -21,7 +21,30 @@
       "warning": 25
     }
   },
-  "sdxl-inpaint": {
+  "sdxl-512": {
+    "perf": {
+      "functional": 62.5,
+      "complete": 12.5,
+      "target": 6.25
+    },
+    "perf-tp": {
+      "functional": 31.25,
+      "complete": 6.25,
+      "target": 3.125
+    },
+    "accuracy": {
+      "_TODO": "Determine proper ranges for 512x512 resolution",
+      "fid_valid_range_full_dataset": [10.0, 50.0],
+      "clip_valid_range_full_dataset": [20.0, 40.0],
+      "clip_valid_range_100": [20.0, 40.0],
+      "fid_valid_range_100": [100.0, 300.0]
+    },
+    "clip_score_thresholds": {
+      "error": 19,
+      "warning": 25
+    }
+  },
+  "sdxl-inpaint-1024": {
     "perf": {
       "functional": 125,
       "complete":   25,
@@ -43,7 +66,30 @@
       "warning": 25
     }
   },
-  "sdxl-img2img": {
+  "sdxl-inpaint-512": {
+    "perf": {
+      "functional": 62.5,
+      "complete": 12.5,
+      "target": 6.25
+    },
+    "perf-tp": {
+      "functional": 31.25,
+      "complete": 6.25,
+      "target": 3.125
+    },
+    "accuracy": {
+      "_TODO": "Determine proper ranges for 512x512 resolution",
+      "fid_valid_range_full_dataset": [10.0, 50.0],
+      "clip_valid_range_full_dataset": [20.0, 40.0],
+      "clip_valid_range_100": [20.0, 40.0],
+      "fid_valid_range_100": [100.0, 300.0]
+    },
+    "clip_score_thresholds": {
+      "error": 19.5,
+      "warning": 25
+    }
+  },
+  "sdxl-img2img-1024": {
     "perf": {
       "functional": 125,
       "complete":   25,
@@ -59,7 +105,24 @@
       "clip_valid_range_100": [0.111, 0.1188]
     }
   },
-  "sdxl-base-refiner": {
+  "sdxl-img2img-512": {
+    "perf": {
+      "functional": 62.5,
+      "complete": 12.5,
+      "target": 6.25
+    },
+    "perf-tp": {
+      "functional": 31.25,
+      "complete": 6.25,
+      "target": 3.125
+    },
+    "accuracy": {
+      "_TODO": "Determine proper ranges for 512x512 resolution",
+      "clip_valid_range_full_dataset": [0.05, 0.2],
+      "clip_valid_range_100": [0.05, 0.2]
+    }
+  },
+  "sdxl-base-refiner-1024": {
     "perf": {
       "functional": 125,
       "complete":   25,
@@ -81,7 +144,30 @@
       "warning": 25
     }
   },
-  "sdxl-lora": {
+  "sdxl-base-refiner-512": {
+    "perf": {
+      "functional": 62.5,
+      "complete": 12.5,
+      "target": 6.25
+    },
+    "perf-tp": {
+      "functional": 31.25,
+      "complete": 6.25,
+      "target": 3.125
+    },
+    "accuracy": {
+      "_TODO": "Determine proper ranges for 512x512 resolution",
+      "fid_valid_range_full_dataset": [10.0, 50.0],
+      "clip_valid_range_full_dataset": [20.0, 40.0],
+      "clip_valid_range_100": [20.0, 40.0],
+      "fid_valid_range_100": [100.0, 300.0]
+    },
+    "clip_score_thresholds": {
+      "error": 19.5,
+      "warning": 25
+    }
+  },
+  "sdxl-lora-1024": {
     "perf": {
       "functional": 125,
       "complete":   25,
@@ -97,6 +183,29 @@
       "clip_valid_range_full_dataset": [34.4303, 35.2303],
       "clip_valid_range_100": [34.6343, 35.4343],
       "fid_valid_range_100": [264.3848, 280.3848]
+    },
+    "clip_score_thresholds": {
+      "error": 20,
+      "warning": 28
+    }
+  },
+  "sdxl-lora-512": {
+    "perf": {
+      "functional": 62.5,
+      "complete": 12.5,
+      "target": 6.25
+    },
+    "perf-tp": {
+      "functional": 31.25,
+      "complete": 6.25,
+      "target": 3.125
+    },
+    "accuracy": {
+      "_TODO": "Determine proper ranges for 512x512 resolution",
+      "fid_valid_range_full_dataset": [50.0, 200.0],
+      "clip_valid_range_full_dataset": [25.0, 45.0],
+      "clip_valid_range_100": [25.0, 45.0],
+      "fid_valid_range_100": [200.0, 400.0]
     },
     "clip_score_thresholds": {
       "error": 20,

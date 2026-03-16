@@ -9,6 +9,7 @@ from datasets import load_dataset
 from loguru import logger
 
 from models.demos.stable_diffusion_xl_base.conftest import get_device_name
+from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.demo.demo_inpainting import test_demo
 from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_FABRIC_CONFIG, SDXL_TRACE_REGION_SIZE
 from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
@@ -110,8 +111,8 @@ def test_accuracy_sdxl_inpaint(
     use_cfg_parallel,
     strength,
 ):
-    if image_resolution == (512, 512):
-        pytest.skip("Accuracy test on 512x512 image resolution is not yet supported for inpainting pipeline.")
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
 
     start_from, num_prompts = evaluation_range
     input_images, input_masks, prompts = get_dataset_for_inpainting_accuracy(num_prompts)
@@ -148,7 +149,7 @@ def test_accuracy_sdxl_inpaint(
 
     accuracy_metrics = calculate_accuracy_metrics(images, prompts, coco_statistics_path)
 
-    model_name = "sdxl-inpaint-tp" if use_cfg_parallel else "sdxl-inpaint"
+    model_name = f"sdxl-inpaint-{image_resolution[0]}" + ("-tp" if use_cfg_parallel else "")
     metadata = {
         "model_name": model_name,
         "device": get_device_name(),
