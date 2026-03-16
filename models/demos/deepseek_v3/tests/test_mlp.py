@@ -3,6 +3,8 @@
 
 
 import os
+from pathlib import Path
+from uuid import uuid4
 
 import pytest
 import torch
@@ -26,41 +28,80 @@ from models.demos.deepseek_v3.utils.test_utils import (
     run_module_forward,
 )
 
+_SHARED_TEST_RUN_ID_ENV_VARS = (
+    "PMIX_NAMESPACE",
+    "PMI_NAMESPACE",
+    "PMI_JOBID",
+    "SLURM_STEP_ID",
+    "SLURM_JOB_ID",
+)
 
-# TODO: Doesn't work on multi-host - we should figure out why
+
+def _sanitize_cache_component(value: str) -> str:
+    sanitized = "".join(char if char.isalnum() or char in "._-" else "_" for char in value)
+    return sanitized.strip("._") or "unknown"
+
+
+def _is_multihost_distributed() -> bool:
+    if not ttnn.distributed_context_is_initialized():
+        return False
+    return int(ttnn.distributed_context_get_size()) > 1
+
+
+def _get_weight_conversion_run_id() -> str:
+    explicit_run_id = os.getenv("DEEPSEEK_TEST_RUN_ID")
+    if explicit_run_id:
+        return _sanitize_cache_component(explicit_run_id)
+
+    github_run_id = os.getenv("GITHUB_RUN_ID")
+    if github_run_id:
+        github_parts = [github_run_id, os.getenv("GITHUB_RUN_ATTEMPT"), os.getenv("GITHUB_JOB")]
+        return _sanitize_cache_component("-".join(part for part in github_parts if part))
+
+    for env_var in _SHARED_TEST_RUN_ID_ENV_VARS:
+        value = os.getenv(env_var)
+        if value:
+            return _sanitize_cache_component(value)
+
+    if _is_multihost_distributed():
+        raise RuntimeError(
+            "Multihost MLP weight conversion tests require a shared run identifier. "
+            "Set DEEPSEEK_TEST_RUN_ID or run under an environment that provides "
+            "GITHUB_RUN_ID, PMIX_NAMESPACE, PMI_NAMESPACE, PMI_JOBID, SLURM_STEP_ID, or SLURM_JOB_ID."
+        )
+
+    return f"local-{uuid4().hex}"
+
+
+def _get_weight_conversion_cache_root(cache_path: Path) -> Path:
+    return cache_path / "scratch_weight_conversion" / _get_weight_conversion_run_id()
+
+
 @pytest.mark.requires_device(["TG"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
-def test_convert_weights_for_non_dequantized_mlp(hf_config, tmp_path, mesh_device):
-    # Add a skip for mesh device shape 8x8 due to known issue https://github.com/tenstorrent/tt-metal/issues/35375
-    if tuple(mesh_device.shape) == (8, 8):
-        pytest.skip(
-            "Skipping test for mesh device shape 8x8 due to known issue https://github.com/tenstorrent/tt-metal/issues/35375"
-        )
+def test_convert_weights_for_non_dequantized_mlp(hf_config, cache_path, mesh_device):
     reference_model = DeepseekV3MLP(hf_config).eval()
     reference_state_dict = reference_model.to(torch.bfloat16).state_dict()
     run_weight_conversion_test(
         MLPClass=MLP,
         hf_config=hf_config,
         state_dict=reference_model.state_dict(),
-        tmp_path=tmp_path
-        / "mesh_8x8",  # TODO: dummy mesh shape required until convert_weights no longer relies on this for parsing the absolutem filepaths
+        weight_cache_root=_get_weight_conversion_cache_root(cache_path),
+        test_name="test_convert_weights_for_non_dequantized_mlp",
         mesh_device=mesh_device,
         reference_w1=reference_state_dict["gate_proj.weight"],
+        real_weights=False,
+        layer_id=None,
     )
 
 
-# TODO: Doesn't work on multi-host - we should figure out why
 @pytest.mark.requires_device(["TG"])
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 @pytest.mark.parametrize(
     "MLPClass,module_path",
     [(NonExpert, "model.layers.0.mlp"), (SharedExpert, "model.layers.3.mlp.shared_experts")],
 )
-def test_convert_weights_for_dequantized_mlps(MLPClass, module_path, hf_config, tmp_path, mesh_device, state_dict):
-    if tuple(mesh_device.shape) == (8, 8):
-        pytest.skip(
-            "Skipping test for mesh device shape 8x8 due to known issue https://github.com/tenstorrent/tt-metal/issues/35375"
-        )
+def test_convert_weights_for_dequantized_mlps(MLPClass, module_path, hf_config, cache_path, mesh_device, state_dict):
     state_dict = sub_state_dict(state_dict, module_path + ".")
     reference_w1 = state_dict["gate_proj.weight"]
     assert (
@@ -70,23 +111,41 @@ def test_convert_weights_for_dequantized_mlps(MLPClass, module_path, hf_config, 
         MLPClass=MLPClass,
         hf_config=hf_config,
         state_dict=state_dict,
-        tmp_path=tmp_path
-        / "mesh_8x8",  # TODO: dummy mesh shape required until convert_weights no longer relies on this for parsing the absolutem filepaths
+        weight_cache_root=_get_weight_conversion_cache_root(cache_path),
+        test_name=f"test_convert_weights_for_dequantized_mlps_{MLPClass.__name__}",
         mesh_device=mesh_device,
         reference_w1=reference_w1,
+        real_weights=True,
+        layer_id=module_path,
     )
 
 
-def run_weight_conversion_test(MLPClass, hf_config, state_dict, tmp_path, reference_w1, mesh_device):
-    if tuple(mesh_device.shape) == (8, 8):
-        pytest.skip(
-            "Skipping test for mesh device shape 8x8 due to known issue https://github.com/tenstorrent/tt-metal/issues/35375"
-        )
+def run_weight_conversion_test(
+    MLPClass,
+    hf_config,
+    state_dict,
+    weight_cache_root,
+    test_name,
+    reference_w1,
+    mesh_device,
+    *,
+    real_weights,
+    layer_id,
+):
     num_module_layers, _ = mesh_device.shape
 
-    # Convert the weights
-    weight_config = MLPClass.convert_weights(
-        hf_config, [state_dict] + [None] * (num_module_layers - 1), tmp_path, mesh_device
+    # Use a per-run shared scratch namespace so multihost peers see the same cache files
+    # without touching the durable shared cache tree.
+    weight_config = get_test_weight_config(
+        MLPClass,
+        hf_config,
+        tuple([state_dict] + [None] * (num_module_layers - 1)),
+        weight_cache_root,
+        mesh_device,
+        True,
+        test_name=test_name,
+        real_weights=real_weights,
+        layer_id=layer_id,
     )
 
     # Verify weight_config structure
@@ -101,9 +160,6 @@ def run_weight_conversion_test(MLPClass, hf_config, state_dict, tmp_path, refere
     # assert Path(weight_config["w1"]["input_tensor_b"]).exists()
     # assert Path(weight_config["w2"]["input_tensor_b"]).exists()
     # assert Path(weight_config["w3"]["input_tensor_b"]).exists()
-
-    # Make the path absolute - this is required since load_weight expects an absolute path
-    weight_config["w1"]["input_tensor_b"].path = tmp_path / weight_config["w1"]["input_tensor_b"].path
 
     # Load and verify a weight
     w1_ttnn = load_weight(weight_config["w1"]["input_tensor_b"], device=mesh_device)
