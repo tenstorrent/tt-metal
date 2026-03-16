@@ -1149,7 +1149,7 @@ MoEComputeMeshWorkloadFactory::create_at(
 
     auto combine_reader_kernel_id = selective_reduce_combine_artifacts.reader_kernel_id;
     auto combine_writer_kernel_id = selective_reduce_combine_artifacts.writer_kernel_id;
-    auto combine_data_cb_handle = selective_reduce_combine_artifacts.data_cb_id;
+    auto combine_data_cb_handle = selective_reduce_combine_artifacts.data_cb_handle;
     auto combine_init_semaphore = selective_reduce_combine_artifacts.init_semaphore;
     auto combine_cross_device_semaphore = selective_reduce_combine_artifacts.cross_device_semaphore;
 
