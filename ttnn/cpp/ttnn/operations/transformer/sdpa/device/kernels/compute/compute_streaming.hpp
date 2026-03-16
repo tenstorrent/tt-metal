@@ -1120,12 +1120,11 @@ void sdpa_standard_v2(
     const uint32_t cb_sum_A,
     const uint32_t cb_sum_B) {
     // Neginf tile is permanently fronted by the writer — wait once before any K-chunk loop.
-    constexpr uint32_t padded_k_tiles_v2 = (Sk_chunk_t - (Skt % Sk_chunk_t)) % Sk_chunk_t;
-    if constexpr (use_padded_mask && padded_k_tiles_v2 > 0) {
+    constexpr uint32_t padded_k_tiles_inner = (Sk_chunk_t - (Skt % Sk_chunk_t)) % Sk_chunk_t;
+    if constexpr (use_padded_mask && padded_k_tiles_inner > 0) {
         cb_wait_front(cb_mask_in, 1);
     }
 
-    constexpr uint32_t padded_k_tiles_inner = (Sk_chunk_t - (Skt % Sk_chunk_t)) % Sk_chunk_t;
     constexpr uint32_t last_chunk_Sk = Sk_chunk_t - padded_k_tiles_inner;
 
     for (uint32_t q = 0; q < q_chunks_per_core; q++) {
@@ -1133,7 +1132,8 @@ void sdpa_standard_v2(
         AccumulatorHalf cur = {cb_sum_B, cb_max_B, cb_out_im_B};
 
         // reduce_trigger enables early reduce start via semaphore signaling from packer to unpacker.
-        // All conditions are compile-time except the active_Sk == Sk_chunk_t guard (padded last chunk).
+        // The unpack MOP is split in half (block_ct_dim / 2), so active_Sk must be even,
+        // and we need >1 subblock so the semaphore fires before the reduce's second half.
         constexpr bool can_reduce_trigger =
             (Sk_chunk_t % qkt_subblock_w == 0) && (Sk_chunk_t / qkt_subblock_w > 1) && (Sk_chunk_t % 2 == 0);
 
@@ -1142,6 +1142,11 @@ void sdpa_standard_v2(
         constexpr uint32_t padded_sbw = (last_chunk_Sk < Sk_chunk_t && last_chunk_Sk % qkt_subblock_w != 0)
                                             ? largest_factor_le(last_chunk_Sk, qkt_subblock_w)
                                             : qkt_subblock_w;
+
+        // With largest_factor_le, padded chunks also have evenly-dividing subblocks,
+        // so reduce_trigger can be enabled when the same constraints hold for last_chunk_Sk.
+        constexpr bool can_reduce_trigger_padded = (padded_k_tiles_inner > 0) && (last_chunk_Sk % padded_sbw == 0) &&
+                                                   (last_chunk_Sk / padded_sbw > 1) && (last_chunk_Sk % 2 == 0);
 
         auto call_step = [&](auto profiling_tag,
                              bool is_last,
@@ -1191,7 +1196,7 @@ void sdpa_standard_v2(
 
             bool is_padded = is_last && padded_k_tiles_inner > 0;
             uint32_t chunk_active_Sk = is_padded ? last_chunk_Sk : Sk_chunk_t;
-            bool chunk_reduce_trigger = can_reduce_trigger && !is_padded;
+            bool chunk_reduce_trigger = is_padded ? can_reduce_trigger_padded : can_reduce_trigger;
             call_step(
                 std::false_type{},
                 is_last,
@@ -1384,22 +1389,17 @@ void sdpa_ring_v2(
 
             // Tile-level matmul skip for global_n, local_n, or joint_n padding.
             // Runtime reduce narrows to active_Sk; matmul/sub_exp/V also need narrowing.
+            // Also select pre-computed subblock width for this chunk's mask type.
             uint32_t active_Sk_param = Sk_chunk_t;
-            if (is_global_n_mask_chunk) {
-                active_Sk_param = Sk_chunk_t - lw_mask.global_n_padded_tiles;
-            } else if (is_local_n_mask_chunk) {
-                active_Sk_param = Sk_chunk_t - lw_mask.local_n_padded_tiles;
-            } else if (is_joint_n_mask_chunk) {
-                active_Sk_param = Sk_chunk_t - lw_mask.joint_n_padded_tiles;
-            }
-
-            // Select pre-computed subblock width for this chunk's mask type.
             uint32_t chunk_sbw = full_sbw;
             if (is_global_n_mask_chunk) {
+                active_Sk_param = Sk_chunk_t - lw_mask.global_n_padded_tiles;
                 chunk_sbw = global_n_sbw;
             } else if (is_local_n_mask_chunk) {
+                active_Sk_param = Sk_chunk_t - lw_mask.local_n_padded_tiles;
                 chunk_sbw = local_n_sbw;
             } else if (is_joint_n_mask_chunk) {
+                active_Sk_param = Sk_chunk_t - lw_mask.joint_n_padded_tiles;
                 chunk_sbw = joint_n_sbw;
             }
 
