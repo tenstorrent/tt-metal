@@ -23,7 +23,7 @@ class MetalEnv;
 class SubDevice {
 public:
     explicit SubDevice(tt::stl::Span<const CoreRangeSet> cores);
-    // [[Experimental]] Creates a SubDevice which will use the given MetalEnv
+    // [[Experimental]] Creates a SubDevice that uses the given MetalEnv instance.
     explicit SubDevice(tt::tt_metal::MetalEnv& env, tt::stl::Span<const CoreRangeSet> cores);
     // Internal constructor (internal use only)
     SubDevice(SubDeviceImpl&& impl);
