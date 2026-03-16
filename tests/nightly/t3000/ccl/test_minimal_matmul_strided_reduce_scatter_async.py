@@ -532,6 +532,27 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
             ),
             id="non_div_Wt_large_5x6_cwimb2_rs4",
         ),
+        pytest.param(
+            MinimalMatmulStridedReduceScatterTestConfig(
+                # Non-divisible slice_Wt: x=7 → mm_N_full_block_wt=ceil(160/7)=23, slice_Wt=20,
+                # 20%23≠0 → fallback path active. 42 MM cores (7×6) + 16 RS cores (n=7) in
+                # rows 6-7 = 58/64 total (best possible for non-div Wt with row-band RS placement).
+                # M=4608 = 3 × (256×6) ensures exact M-block tiling across 6 MM rows.
+                M=4608,
+                K=3456,
+                N=5120,
+                dim=3,
+                mm_block_m=256,
+                mm_block_k=128,
+                mm_block_n=256,
+                mm_core_grid=ttnn.CoreCoord(7, 6),
+                chunk_width_in_mm_blocks=1,
+                num_workers_per_link=7,
+                subblock_h=2,
+                subblock_w=1,
+            ),
+            id="xlarge_4608_3456_5120_x7_y6_cwimb1_rs7_sh2_non_div_Wt",
+        ),
     ],
 )
 @pytest.mark.parametrize(
@@ -547,16 +568,17 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (False, 1),
+        (False, 2),
     ],
-    ids=["check"],
+    ids=["check", "perf"],
 )
 @pytest.mark.parametrize(
     "rs_mode",
     [
-        # "separate",
-        # "separate_strided",
         "fused",
+        "separate_strided",
+        "comparison",
+        "original",
     ],
 )
 @pytest.mark.parametrize(
@@ -568,6 +590,7 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
     ids=["fabric_ring"],
 )
 @skip_for_blackhole("t3000 tests are wormhole_b0 only")
+@pytest.mark.timeout(3000)
 def test_minimal_matmul_strided_reduce_scatter_async(
     mesh_device,
     test_config,
