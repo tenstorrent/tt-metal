@@ -40,20 +40,16 @@ void kernel_main() {
             get_named_compile_time_arg_val("core_noc_x"),
             get_named_compile_time_arg_val("core_noc_y")>;
 
-        // Dummy WriterCTArgs - not used by NCRISC but needed for Op template
-        using WriterCTArgs = Sender::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-
         Sender::RTArgs args{};
         args.tensor_address = get_common_arg_val<uint32_t>(0);
 
-        Sender::Op<ReaderCTArgs, WriterCTArgs> op;
+        Sender::Op<ReaderCTArgs> op;
         op(args);
     } else {
         using Receiver = deepseek_b1_ops::AllReduceReceiver;
 
         using ReaderCTArgs = Receiver::ReaderCTArgs<
             get_named_compile_time_arg_val("cb_in1"),
-            get_named_compile_time_arg_val("l1_alignment"),
             get_named_compile_time_arg_val("cb_in2"),
             get_named_compile_time_arg_val("remote_sender_noc_x"),
             get_named_compile_time_arg_val("remote_sender_noc_y"),
@@ -61,13 +57,10 @@ void kernel_main() {
             get_named_compile_time_arg_val("cb_residual"),
             get_named_compile_time_arg_val("has_residual")>;
 
-        // Dummy ComputeCTArgs - not used by NCRISC but needed for Op template
-        using ComputeCTArgs = Receiver::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0>;
-
         Receiver::RTArgs args{};
         args.sender_semaphore_addr = get_common_arg_val<uint32_t>(0);
 
-        Receiver::Op<ReaderCTArgs, ComputeCTArgs> op;
+        Receiver::Op<ReaderCTArgs> op;
         op(args);
     }
 
@@ -78,13 +71,8 @@ void kernel_main() {
     if constexpr (is_sender) {
         using Sender = deepseek_b1_ops::AllReduceSender;
 
-        // Dummy ReaderCTArgs - not used by BRISC but needed for Op template
-        using ReaderCTArgs = Sender::ReaderCTArgs<0, 0, 0, 0, 0>;
-
         using WriterCTArgs = Sender::WriterCTArgs<
-            get_named_compile_time_arg_val("packet_header_cb_id"),
             get_named_compile_time_arg_val("packet_cb_id"),
-            get_named_compile_time_arg_val("l1_alignment"),
             get_named_compile_time_arg_val("input_num_tiles"),
             get_named_compile_time_arg_val("page_size_bytes"),
             get_named_compile_time_arg_val("payload_size_bytes"),
@@ -99,7 +87,7 @@ void kernel_main() {
         args.receiver_base_address = get_common_arg_val<uint32_t>(0);
         args.receive_semaphore_addr = get_common_arg_val<uint32_t>(1);
 
-        Sender::Op<ReaderCTArgs, WriterCTArgs> op;
+        Sender::Op<WriterCTArgs> op;
         op(args);
     }
     // else: receiver BRISC is no-op
@@ -111,15 +99,11 @@ void kernel_main() {
     if constexpr (!is_sender) {
         using Receiver = deepseek_b1_ops::AllReduceReceiver;
 
-        // Dummy ReaderCTArgs - not used by TRISC but needed for Op template
-        using ReaderCTArgs = Receiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0>;
-
         using ComputeCTArgs = Receiver::ComputeCTArgs<
             get_named_compile_time_arg_val("cb_in0"),
             get_named_compile_time_arg_val("cb_in1"),
             get_named_compile_time_arg_val("cb_out0"),
             get_named_compile_time_arg_val("cb_residual"),
-            get_named_compile_time_arg_val("cb_temp"),
             get_named_compile_time_arg_val("has_residual"),
             get_named_compile_time_arg_val("num_tiles")>;
 
@@ -127,7 +111,7 @@ void kernel_main() {
 
         Receiver::RTArgs args{};
 
-        Receiver::Op<ReaderCTArgs, ComputeCTArgs> op;
+        Receiver::Op<ComputeCTArgs> op;
         op(args);
     }
     // else: sender TRISC is no-op
