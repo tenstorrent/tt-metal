@@ -124,7 +124,7 @@ def get_input_mem_config(config, mesh_shape):
 
 def adjust_shapes_for_testing(config, mesh_device):
     """
-    Adjust the input dimensions just in case the test is tun on a smaller grid to preserve per-device shapes
+    Adjust the input dimensions just in case the test is run on a smaller grid to preserve per-device shapes
     """
     n_sp_devices, n_tp_devices = mesh_device.shape
     if n_sp_devices != 32:

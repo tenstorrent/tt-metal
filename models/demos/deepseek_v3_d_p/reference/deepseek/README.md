@@ -13,5 +13,5 @@ All original license and copyright information has been retained.
 
 To install the required Python dependencies, use the following requirements file:
 ```
-pip install -r models/demos/deepseek_v3/reference/deepseek/requirements.txt
+pip install -r models/demos/deepseek_v3_d_p/reference/deepseek/requirements.txt
 ```

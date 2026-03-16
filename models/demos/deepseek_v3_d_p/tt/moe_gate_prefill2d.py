@@ -20,12 +20,10 @@ class MoEGatePrefill:
         self.route_scale = config.route_scale
         self.mesh_device = mesh_device
         self.seq_len_per_chip = config.sp_dim
-        self.num_chips_in_row = mesh_device.get_num_devices()
-        self.num_chips_in_col = mesh_device.get_num_devices()
 
         self.core_grid = config.core_grid
 
-        self.n_routed_experts = 256
+        self.n_routed_experts = config.n_routed_experts
         self.experts_per_chip = 8
         self.mm_compute_config = config.mm_configs["DEFAULT_COMPUTE_CONFIG"]
         self.mm_program_config = config.mm_configs["DEFAULT_PROGRAM_CONFIG"]
@@ -96,7 +94,7 @@ class MoEGatePrefill:
             layout=ttnn.ROW_MAJOR_LAYOUT,
             device=global_expert_indices.device(),
         )
-        global_updates = ttnn.ones_like(global_onehot_experts)
+        global_updates = ttnn.ones_like(global_expert_indices)
         global_onehot_experts = ttnn.scatter(
             global_onehot_experts, 1, global_expert_indices, global_updates, memory_config=ttnn.L1_MEMORY_CONFIG
         )
@@ -120,7 +118,7 @@ class MoEGatePrefill:
         cumsum_result = cumsum_result * self.experts_in_dispatch_row
         return cumsum_result
 
-    def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor]:
+    def forward(self, x: ttnn.Tensor) -> tuple[ttnn.Tensor, ttnn.Tensor, ttnn.Tensor, ttnn.Tensor]:
         signpost(header="moe_gate_linear_allreduce")
         logits = self.all_reduce(self.linear(x))
         signpost(header="moe_gate_linear_allreduce")
@@ -129,11 +127,11 @@ class MoEGatePrefill:
         ttnn_scores, ttnn_top_k_experts_indices = ttnn.experimental.deepseek_grouped_gate(
             logits,
             self.bias,
-            n_groups=8,
+            n_groups=self.n_groups,
             summed_experts_per_group=2,
-            topk_groups=4,
-            n_activated_experts=8,
-            route_scale=1.0,
+            topk_groups=self.topk_groups,
+            n_activated_experts=self.topk,
+            route_scale=self.route_scale,
             epsilon=1e-20,
         )
         signpost(header="moe_gate_deepseek_grouped_gate")

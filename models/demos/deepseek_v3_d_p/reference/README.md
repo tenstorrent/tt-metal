@@ -11,7 +11,7 @@ Loading the model structure without loading weights or CUDA dependencies:
 ```python
 from transformers import AutoConfig
 from transformers.modeling_utils import no_init_weights
-from models.demos.deepseek_v3.reference.modeling_deepseek import DeepseekV3ForCausalLM
+from models.demos.deepseek_v3_d_p.reference.modeling_deepseek import DeepseekV3ForCausalLM
 
 config = AutoConfig.from_pretrained("deepseek-ai/DeepSeek-R1-0528", trust_remote_code=True)
 
