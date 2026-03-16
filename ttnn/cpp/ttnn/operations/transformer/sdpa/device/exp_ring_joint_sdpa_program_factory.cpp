@@ -23,6 +23,61 @@ using namespace tt::tt_metal;
 
 namespace ttnn::prim {
 
+namespace {
+
+// Appends 5 compile-time args needed for a fabric MUX client worker kernel.
+static void fabric_mux_connection_ct_args(
+    const uint32_t num_workers_per_link,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    std::vector<uint32_t>& worker_ct_args) {
+    auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+    worker_ct_args.push_back(mux_kernel_config.get_num_buffers(channel_type));
+    worker_ct_args.push_back(mux_kernel_config.get_buffer_size_bytes(channel_type));
+    worker_ct_args.push_back(mux_kernel_config.get_status_address());
+    worker_ct_args.push_back(mux_kernel_config.get_termination_signal_address());
+    worker_ct_args.push_back(num_workers_per_link);  // num_mux_clients
+}
+
+// Appends 17 runtime args for a fabric MUX client worker.
+// Creates 5 semaphores on worker_logical_core for the connection state.
+static void fabric_mux_connection_rt_args(
+    const bool mux_connection_valid,
+    const bool is_termination_master,
+    const CoreCoord& mux_logical_core,
+    const uint32_t worker_id,
+    const CoreCoord& worker_logical_core,
+    const tt::tt_fabric::FabricMuxConfig& mux_kernel_config,
+    tt::tt_metal::Program& program,
+    const CoreCoord& termination_master_logical_core,
+    tt::tt_metal::IDevice* device,
+    std::vector<uint32_t>& worker_rt_args) {
+    auto channel_type = tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL;
+    const CoreCoord mux_virtual_core = device->worker_core_from_logical_core(mux_logical_core);
+    const CoreCoord termination_master_virtual_core =
+        device->worker_core_from_logical_core(termination_master_logical_core);
+
+    worker_rt_args.push_back(static_cast<uint32_t>(mux_connection_valid));
+    worker_rt_args.push_back(static_cast<uint32_t>(is_termination_master));
+    worker_rt_args.push_back(mux_virtual_core.x);
+    worker_rt_args.push_back(mux_virtual_core.y);
+    const uint8_t ch_id = static_cast<uint8_t>(worker_id);
+    worker_rt_args.push_back(mux_kernel_config.get_channel_base_address(channel_type, ch_id));
+    worker_rt_args.push_back(mux_kernel_config.get_connection_info_address(channel_type, ch_id));
+    worker_rt_args.push_back(mux_kernel_config.get_connection_handshake_address(channel_type, ch_id));
+    worker_rt_args.push_back(mux_kernel_config.get_flow_control_address(channel_type, ch_id));
+    worker_rt_args.push_back(mux_kernel_config.get_buffer_index_address(channel_type, ch_id));
+    worker_rt_args.push_back(mux_kernel_config.get_channel_credits_stream_id(channel_type, ch_id));
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // termination_sync_address
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_fabric_mux_status_address
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_flow_control_address
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_teardown_address
+    worker_rt_args.push_back(CreateSemaphore(program, {worker_logical_core}, 0));  // local_buffer_index_address
+    worker_rt_args.push_back(termination_master_virtual_core.x);
+    worker_rt_args.push_back(termination_master_virtual_core.y);
+}
+
+}  // namespace
+
 ExpRingJointSDPAProgramFactory::cached_mesh_workload_t ExpRingJointSDPAProgramFactory::create_mesh_workload(
     const ExpRingJointSDPAParams& args,
     const ttnn::MeshCoordinateRangeSet& tensor_coords,
@@ -1081,6 +1136,25 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
     // Update mcast_enabled compile-time arg now that chain construction is complete
     reader_compile_time_args[sem_args_offset + 3] = (mcast_chains > 0) ? 1 : 0;
 
+    // ---- Fabric MUX config (needed for writer kernel CT args below) ----
+    // Hardcoded positions: backward-direction MUX at (11,0), (11,5); forward-direction MUX at (11,4), (11,9).
+    const std::vector<CoreCoord> mux_backward_logical_cores = {{11, 0}, {11, 5}};
+    const std::vector<CoreCoord> mux_forward_logical_cores = {{11, 4}, {11, 9}};
+
+    const uint32_t l1_unreserved_base_address =
+        mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
+    const uint32_t num_mux_full_size_channels = args.num_workers_per_link;
+    const uint32_t num_mux_header_only_channels = 0;
+    const uint32_t num_mux_buffers_per_channel = args.num_buffers_per_channel;
+    const size_t mux_buffer_size_bytes = tt::tt_fabric::get_tt_fabric_channel_buffer_size_bytes();
+    auto mux_kernel_config = tt::tt_fabric::FabricMuxConfig(
+        num_mux_full_size_channels,
+        num_mux_header_only_channels,
+        num_mux_buffers_per_channel,
+        0,
+        mux_buffer_size_bytes,
+        l1_unreserved_base_address);
+
     // Create kernels (deferred until after chain construction for mcast_enabled flag)
     auto reader_kernels_id = CreateKernel(
         program,
@@ -1088,11 +1162,26 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         core_grid,
         tt::tt_metal::ReaderDataMovementConfig(reader_compile_time_args, defines));
 
+    // Non-fabric writer: columns 0..(grid_size.x-3)
+    // grid_size.x-2 and grid_size.x-1 are fabric MUX client columns
+    CoreRange non_fabric_writer_range({0, 0}, {grid_size.x - 3, grid_size.y - 1});
     auto writer_kernels_id = CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_writer.cpp",
-        core_grid,
+        non_fabric_writer_range,
         tt::tt_metal::WriterDataMovementConfig(writer_compile_time_args, defines));
+
+    // Fabric writer: columns grid_size.x-2 and grid_size.x-1 (backward and forward MUX clients)
+    CoreRange fabric_writer_range({grid_size.x - 2, 0}, {grid_size.x - 1, grid_size.y - 1});
+    auto writer_fabric_compile_time_args = writer_compile_time_args;
+    fabric_mux_connection_ct_args(args.num_workers_per_link, mux_kernel_config, writer_fabric_compile_time_args);
+    auto writer_fabric_defines = defines;
+    writer_fabric_defines["USE_MUX"] = "1";
+    auto writer_fabric_kernels_id = CreateKernel(
+        program,
+        "ttnn/cpp/ttnn/operations/transformer/sdpa/device/kernels/dataflow/exp_ring_joint_writer.cpp",
+        fabric_writer_range,
+        tt::tt_metal::WriterDataMovementConfig(writer_fabric_compile_time_args, writer_fabric_defines));
 
     auto compute_kernels_id = CreateKernel(
         program,
@@ -1183,7 +1272,70 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
             global_q_end,
         };
         sdpa_fused_op_signaler->push_ring_sdpa_fused_op_rt_args(writer_args);
-        SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
+
+        const bool is_backward_client = (core.x == grid_size.x - 2);
+        const bool is_forward_client = (core.x == grid_size.x - 1);
+        if (is_backward_client || is_forward_client) {
+            // Determine which MUX this core connects to and its worker_id within the MUX channel
+            const uint32_t link = core.y / args.num_workers_per_link;
+            const uint32_t worker_idx = core.y % args.num_workers_per_link;
+            const bool is_term_master = (worker_idx == 0);
+
+            const bool link_in_range = (link < args.num_links) && (link < mux_backward_logical_cores.size()) &&
+                                       (link < mux_forward_logical_cores.size());
+            if (is_backward_client && link_in_range) {
+                const CoreCoord& mux_core = mux_backward_logical_cores[link];
+                const CoreCoord termination_master_logical = {core.x, link * args.num_workers_per_link};
+                fabric_mux_connection_rt_args(
+                    backward_coord.has_value(),
+                    is_term_master,
+                    mux_core,
+                    worker_idx,
+                    core,
+                    mux_kernel_config,
+                    program,
+                    termination_master_logical,
+                    device,
+                    writer_args);
+            } else if (is_forward_client && link_in_range) {
+                const CoreCoord& mux_core = mux_forward_logical_cores[link];
+                const CoreCoord termination_master_logical = {core.x, link * args.num_workers_per_link};
+                fabric_mux_connection_rt_args(
+                    forward_coord.has_value(),
+                    is_term_master,
+                    mux_core,
+                    worker_idx,
+                    core,
+                    mux_kernel_config,
+                    program,
+                    termination_master_logical,
+                    device,
+                    writer_args);
+            } else {
+                // link index out of range or invalid direction — append a disconnected MUX connection
+                // Still need valid semaphore addresses for the 5 semaphore fields
+                writer_args.push_back(0);                                    // mux_connection_valid = false
+                writer_args.push_back(0);                                    // is_termination_master
+                writer_args.push_back(0);                                    // mux_x
+                writer_args.push_back(0);                                    // mux_y
+                writer_args.push_back(0);                                    // channel_base_address
+                writer_args.push_back(0);                                    // connection_info_address
+                writer_args.push_back(0);                                    // connection_handshake_address
+                writer_args.push_back(0);                                    // flow_control_address
+                writer_args.push_back(0);                                    // buffer_index_address
+                writer_args.push_back(0);                                    // channel_credits_stream_id
+                writer_args.push_back(CreateSemaphore(program, {core}, 0));  // termination_sync
+                writer_args.push_back(CreateSemaphore(program, {core}, 0));  // local_fabric_mux_status
+                writer_args.push_back(CreateSemaphore(program, {core}, 0));  // local_flow_control
+                writer_args.push_back(CreateSemaphore(program, {core}, 0));  // local_teardown
+                writer_args.push_back(CreateSemaphore(program, {core}, 0));  // local_buffer_index
+                writer_args.push_back(0);                                    // termination_master_noc_x
+                writer_args.push_back(0);                                    // termination_master_noc_y
+            }
+            SetRuntimeArgs(program, writer_fabric_kernels_id, core, writer_args);
+        } else {
+            SetRuntimeArgs(program, writer_kernels_id, core, writer_args);
+        }
 
         // Compute args
         std::vector<uint32_t> compute_args = {
@@ -1212,17 +1364,29 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
 
     const auto& op_config = ttnn::ccl::CCLOpConfig(all_gather_input_tensors, all_gather_output_tensors, args.topology);
 
-    // Choose CCL worker cores: 2 senders (forward/backward) per link
-    const auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
-        args.num_links,
-        2 /*num_senders_per_link*/,
-        mesh_device,
-        args.sub_device_id,
-        args.ccl_core_grid_offset,
-        std::nullopt,
-        args.core_allocation_strategy);
+    // Choose CCL worker cores: 2 senders (forward/backward) per link.
+    // If explicit cores are provided, use them directly; otherwise fall back to choose_worker_cores.
+    std::vector<CoreCoord> sender_worker_cores;
+    if (args.ccl_worker_cores.has_value()) {
+        sender_worker_cores = args.ccl_worker_cores.value();
+        TT_FATAL(
+            sender_worker_cores.size() == args.num_links * 2,
+            "ccl_worker_cores must have exactly num_links * 2 = {} entries, got {}",
+            args.num_links * 2,
+            sender_worker_cores.size());
+    } else {
+        auto [core_range, cores] = ttnn::ccl::choose_worker_cores(
+            args.num_links,
+            2 /*num_senders_per_link*/,
+            mesh_device,
+            args.sub_device_id,
+            args.ccl_core_grid_offset,
+            std::nullopt,
+            args.core_allocation_strategy);
+        sender_worker_cores = std::move(cores);
+    }
 
-    // Odd-indexed cores → forward; even-indexed → backward
+    // Per link: even-indexed → backward, odd-indexed → forward
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
     for (int i = 0; i < static_cast<int>(sender_worker_cores.size()); i++) {
@@ -1434,6 +1598,49 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         sender_backward_core_ranges,
         sender_writer_backward_kernel_config);
 
+    // ---- Fabric MUX cores ----
+    std::vector<CoreRange> mux_core_ranges;
+    for (uint32_t link = 0; link < args.num_links; ++link) {
+        if (backward_coord.has_value()) {
+            mux_core_ranges.emplace_back(mux_backward_logical_cores[link]);
+        }
+        if (forward_coord.has_value()) {
+            mux_core_ranges.emplace_back(mux_forward_logical_cores[link]);
+        }
+    }
+    CoreRangeSet mux_core_range_set(mux_core_ranges);
+
+    tt::tt_metal::KernelHandle ccl_mux_kernel_id{};
+    if (!mux_core_ranges.empty()) {
+        ccl_mux_kernel_id = tt::tt_metal::CreateKernel(
+            program,
+            "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
+            mux_core_range_set,
+            tt::tt_metal::DataMovementConfig{
+                .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
+                .noc = tt::tt_metal::NOC::RISCV_1_default,
+                .compile_args = mux_kernel_config.get_fabric_mux_compile_time_args(),
+                .opt_level = tt::tt_metal::KernelBuildOptLevel::O3});
+
+        const auto src_node_id = mesh_device->get_fabric_node_id(coord);
+        for (uint32_t link = 0; link < args.num_links; ++link) {
+            if (backward_coord.has_value()) {
+                const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+                auto mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                    src_node_id, dst_node_id, link, program, {mux_backward_logical_cores[link]});
+                tt::tt_metal::SetRuntimeArgs(
+                    program, ccl_mux_kernel_id, {mux_backward_logical_cores[link]}, mux_rt_args);
+            }
+            if (forward_coord.has_value()) {
+                const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+                auto mux_rt_args = mux_kernel_config.get_fabric_mux_run_time_args(
+                    src_node_id, dst_node_id, link, program, {mux_forward_logical_cores[link]});
+                tt::tt_metal::SetRuntimeArgs(
+                    program, ccl_mux_kernel_id, {mux_forward_logical_cores[link]}, mux_rt_args);
+            }
+        }
+    }
+
     // CCL kernel runtime args
     const uint32_t batch_head_size = ccl_input_tensor_shape[0] * ccl_input_tensor_shape[1];
     const uint32_t single_batch_head_num_pages = ccl_input_tensor_num_pages / batch_head_size;
@@ -1573,6 +1780,7 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
          .grid_size = grid_size,
          .reader_kernels_id = reader_kernels_id,
          .writer_kernels_id = writer_kernels_id,
+         .writer_fabric_kernels_id = writer_fabric_kernels_id,
          .compute_kernels_id = compute_kernels_id,
          .ccl_reader_forward_kernel_id = ccl_reader_forward_kernel_id,
          .ccl_writer_forward_kernel_id = ccl_writer_forward_kernel_id,
@@ -1582,7 +1790,10 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
          .ccl_num_inputs = ccl_num_inputs,
          .ccl_reader_sender_rt_offset = ccl_reader_sender_rt_offset,
          .ccl_writer_sender_rt_offset = ccl_writer_sender_rt_offset,
-         .ccl_num_links = args.num_links}};
+         .ccl_num_links = args.num_links,
+         .ccl_mux_kernel_id = ccl_mux_kernel_id,
+         .ccl_mux_backward_cores = mux_backward_logical_cores,
+         .ccl_mux_forward_cores = mux_forward_logical_cores}};
 }
 
 void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
@@ -1676,12 +1887,12 @@ void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
 
         auto& reader_args_by_core = GetRuntimeArgs(program, shared_vars.reader_kernels_id);
         auto& writer_args_by_core = GetRuntimeArgs(program, shared_vars.writer_kernels_id);
+        auto& writer_fabric_args_by_core = GetRuntimeArgs(program, shared_vars.writer_fabric_kernels_id);
 
         for (uint32_t i = 0; i < shared_vars.num_cores; ++i) {
             CoreCoord core = {i % shared_vars.grid_size.x, i / shared_vars.grid_size.x};
 
             auto& reader_args = reader_args_by_core[core.x][core.y];
-            auto& writer_args = writer_args_by_core[core.x][core.y];
 
             // Update reader args
             reader_args[0] = q_addr;
@@ -1693,10 +1904,19 @@ void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
             reader_args[6] = joint_k_addr;
             reader_args[7] = joint_v_addr;
 
-            // Update writer args
-            writer_args[0] = out_addr;
-            writer_args[1] = joint_out_addr;
-            writer_args[2] = stats_addr;
+            // Update writer args — fabric clients (last 2 columns) use writer_fabric_kernels_id
+            const bool is_fabric_client = (core.x >= shared_vars.grid_size.x - 2);
+            if (is_fabric_client) {
+                auto& writer_args = writer_fabric_args_by_core[core.x][core.y];
+                writer_args[0] = out_addr;
+                writer_args[1] = joint_out_addr;
+                writer_args[2] = stats_addr;
+            } else {
+                auto& writer_args = writer_args_by_core[core.x][core.y];
+                writer_args[0] = out_addr;
+                writer_args[1] = joint_out_addr;
+                writer_args[2] = stats_addr;
+            }
         }
     }
 }
