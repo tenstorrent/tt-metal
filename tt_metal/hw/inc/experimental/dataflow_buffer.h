@@ -35,6 +35,8 @@ public:
 
     uint32_t get_entry_size() const { return local_dfb_interface_.entry_size; }
 
+    uint32_t get_stride_size() const { return local_dfb_interface_.stride_size; }
+
     // Explicit sync APIs
     void reserve_back(uint16_t num_entries) {
         ASSERT(num_entries == 1);
