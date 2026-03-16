@@ -105,6 +105,11 @@ class TT_Qwen3VLProcessingInfo(Qwen3VLProcessingInfo):
     Qwen3VLMultiModalProcessor, info=TT_Qwen3VLProcessingInfo, dummy_inputs=Qwen3VLDummyInputsBuilder
 )
 class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
+    model_capabilities = {
+        "supports_prefix_caching": False,
+        "supports_async_decode": True,
+    }
+
     def __init__(self, *args, **kwargs):
         self.reference_model = kwargs.pop("reference_model", None)
         self.visual_model = kwargs.pop("visual_model", None)
