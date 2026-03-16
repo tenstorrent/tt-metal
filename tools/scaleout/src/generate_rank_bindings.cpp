@@ -20,6 +20,7 @@
 #include <cxxopts.hpp>
 #include <fmt/format.h>
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/assert.hpp>
 #include <tt-metalium/distributed_context.hpp>
 #include "tt_metal/fabric/physical_system_descriptor.hpp"
 #include <tt-metalium/experimental/fabric/topology_mapper_utils.hpp>
@@ -91,10 +92,8 @@ PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& p
             log_info(
                 tt::LogFabric, "Loading Physical Grouping Descriptor from provided path: {}", explicit_path.string());
             return PhysicalGroupingDescriptor(explicit_path);
-        } else {
-            throw std::runtime_error(
-                "Physical Grouping Descriptor path provided but file does not exist: " + explicit_path.string());
         }
+        TT_THROW("Physical Grouping Descriptor path provided but file does not exist: {}", explicit_path.string());
     }
 
     // Check for explicit PGD path from environment variable
@@ -107,10 +106,9 @@ PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& p
                 "Loading Physical Grouping Descriptor from environment variable: {}",
                 explicit_path.string());
             return PhysicalGroupingDescriptor(explicit_path);
-        } else {
-            throw std::runtime_error(
-                "TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH is set but file does not exist: " + explicit_path.string());
         }
+        TT_THROW(
+            "TT_METAL_PHYSICAL_GROUPING_DESCRIPTOR_PATH is set but file does not exist: {}", explicit_path.string());
     }
 
     // Get cluster name from environment variable
@@ -203,7 +201,7 @@ void print_logical_adjacency_map(const LogicalMultiMeshGraph& multi_mesh_graph) 
  * @brief Print physical multi-mesh adjacency map
  */
 void print_physical_adjacency_map(
-    const PhysicalMultiMeshGraph& multi_mesh_graph, const PhysicalSystemDescriptor& physical_system_descriptor) {
+    const PhysicalMultiMeshGraph& multi_mesh_graph, const PhysicalSystemDescriptor& /*physical_system_descriptor*/) {
     log_info(tt::LogFabric, "Physical Multi-Mesh Adjacency Map:");
 
     // Print adjacency maps using topology solver's print functions (includes degree histograms)
@@ -524,7 +522,7 @@ void gather_mock_cluster_desc_paths(
     try {
         my_path = std::filesystem::absolute(std::filesystem::path(my_path)).string();
     } catch (...) {
-        // Keep original if resolution fails
+        // Keep original if resolution fails - filesystem operations may fail on invalid paths
     }
 
     if (world_size == 1) {
@@ -577,7 +575,7 @@ void gather_mock_cluster_desc_paths(
  */
 void write_phase2_mock_mapping_yaml(
     const std::vector<RankBindingConfig>& rank_bindings,
-    const PhysicalSystemDescriptor& psd,
+    const PhysicalSystemDescriptor& /*psd*/,
     const std::map<int, std::string>& mpi_rank_to_path,
     const std::string& output_file) {
     if (mpi_rank_to_path.empty()) {
@@ -683,19 +681,19 @@ ProgramArgs parse_arguments(int argc, char** argv) {
     try {
         const auto result = options.parse(argc, argv);
 
-        if (result.count("help") || argc == 1) {
+        if (result.contains("help") || argc == 1) {
             std::cout << options.help() << std::endl;
             exit(0);
         }
 
-        if (!result.count("mesh-graph-descriptor")) {
+        if (!result.contains("mesh-graph-descriptor")) {
             throw std::invalid_argument("--mesh-graph-descriptor (-m) is required");
         }
 
         ProgramArgs args;
         args.mesh_graph_descriptor_path = result["mesh-graph-descriptor"].as<std::string>();
 
-        if (result.count("physical-grouping-descriptor")) {
+        if (result.contains("physical-grouping-descriptor")) {
             args.physical_grouping_descriptor_path = result["physical-grouping-descriptor"].as<std::string>();
         }
 
@@ -724,7 +722,7 @@ int main(int argc, char** argv) {
     // Verify that we have a valid MPI context
     // Check if context supports fault tolerance (MPI contexts do, SingleHost doesn't)
     // OR check if we have multiple processes (size > 1)
-    auto context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
+    const auto& context = tt::tt_metal::distributed::multihost::DistributedContext::get_current_world();
 
     try {
         log_info(tt::LogFabric, "Generating rank bindings...");
