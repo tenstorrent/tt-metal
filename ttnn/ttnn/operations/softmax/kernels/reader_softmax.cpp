@@ -17,6 +17,11 @@ constexpr uint32_t dim = get_compile_time_arg_val(3);  // 0 = width (dim=-1), 1 
 constexpr uint32_t numeric_stable = get_compile_time_arg_val(4);
 constexpr auto input_tensor_args = TensorAccessorArgs<5>();  // Input tensor accessor
 
+// Number of passes per work unit:
+// stable mode: 3 (max, exp+sum, normalize)
+// unstable mode: 2 (exp+sum, normalize)
+constexpr uint32_t num_passes = numeric_stable ? 3 : 2;
+
 void kernel_main() {
     // Runtime args
     const uint32_t src_addr = get_arg_val<uint32_t>(0);
@@ -32,42 +37,45 @@ void kernel_main() {
     if constexpr (dim == 0) {
         // dim=-1 (width): work unit = tile-row
         // Each work unit is one tile-row of Wt tiles
-        // For passthrough (stage 1): single pass, stream all tiles
+        // For softmax: stream tiles num_passes times per row
+        // CB backpressure handles synchronization between passes
         for (uint32_t wu = 0; wu < num_work_units; wu++) {
             const uint32_t row_idx = start_work_unit + wu;
-            // row_idx = nc * Ht + ht
             const uint32_t nc = row_idx / Ht;
             const uint32_t ht = row_idx % Ht;
             const uint32_t base_tile_id = nc * HtWt + ht * Wt;
 
-            // Stream Wt tiles for this row
-            for (uint32_t wt = 0; wt < Wt; wt++) {
-                cb_reserve_back(c_0, 1);
-                uint32_t l1_addr = get_write_ptr(c_0);
-                uint64_t noc_addr = input_accessor.get_noc_addr(base_tile_id + wt);
-                noc_async_read(noc_addr, l1_addr, page_size);
-                noc_async_read_barrier();
-                cb_push_back(c_0, 1);
+            // Stream Wt tiles num_passes times for this row
+            for (uint32_t pass = 0; pass < num_passes; pass++) {
+                for (uint32_t wt = 0; wt < Wt; wt++) {
+                    cb_reserve_back(c_0, 1);
+                    uint32_t l1_addr = get_write_ptr(c_0);
+                    uint64_t noc_addr = input_accessor.get_noc_addr(base_tile_id + wt);
+                    noc_async_read(noc_addr, l1_addr, page_size);
+                    noc_async_read_barrier();
+                    cb_push_back(c_0, 1);
+                }
             }
         }
     } else {
         // dim=-2 (height): work unit = tile-column
         // Each work unit is one tile-column of Ht tiles
+        // Stream tiles num_passes times per column
         for (uint32_t wu = 0; wu < num_work_units; wu++) {
             const uint32_t col_idx = start_work_unit + wu;
-            // col_idx = nc * Wt + wt
             const uint32_t nc = col_idx / Wt;
             const uint32_t wt = col_idx % Wt;
             const uint32_t base_tile_id = nc * HtWt;
 
-            // Stream Ht tiles for this column (strided access)
-            for (uint32_t ht = 0; ht < Ht; ht++) {
-                cb_reserve_back(c_0, 1);
-                uint32_t l1_addr = get_write_ptr(c_0);
-                uint64_t noc_addr = input_accessor.get_noc_addr(base_tile_id + ht * Wt + wt);
-                noc_async_read(noc_addr, l1_addr, page_size);
-                noc_async_read_barrier();
-                cb_push_back(c_0, 1);
+            for (uint32_t pass = 0; pass < num_passes; pass++) {
+                for (uint32_t ht = 0; ht < Ht; ht++) {
+                    cb_reserve_back(c_0, 1);
+                    uint32_t l1_addr = get_write_ptr(c_0);
+                    uint64_t noc_addr = input_accessor.get_noc_addr(base_tile_id + ht * Wt + wt);
+                    noc_async_read(noc_addr, l1_addr, page_size);
+                    noc_async_read_barrier();
+                    cb_push_back(c_0, 1);
+                }
             }
         }
     }

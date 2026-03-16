@@ -142,9 +142,12 @@ def create_softmax_program_descriptor(
         ],
     )
 
-    # CB 25: exp intermediate (double-buffered, 2 pages)
+    # CB 25: exp intermediate -- needs to hold full row/col of tiles
+    # because tile_regs sync forces sub (producer) and reduce (consumer)
+    # to run in the same TRISC phase, so all output must buffer.
+    cb_exp_pages = Wt if dim == -1 else Ht
     cb_exp_desc = ttnn.CBDescriptor(
-        total_size=2 * page_size,
+        total_size=cb_exp_pages * page_size,
         core_ranges=core_grid,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
