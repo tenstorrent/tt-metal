@@ -201,3 +201,93 @@ def test_kimi_demo(case: dict) -> None:
                 f"generation[{i}]['text'] must be str, got {type(gen_result['text'])}"
             )
             # Decoded text may be empty for short generation runs — only check it's not None
+
+
+# ---------------------------------------------------------------------------
+# Throughput benchmark test
+# ---------------------------------------------------------------------------
+
+
+# Minimum acceptable decode throughput (t/s total) — conservative floor for
+# a 5-layer random-init run on TG.  This catches complete performance
+# regressions (e.g. trace disabled, serialised decode) rather than being a
+# tight SLA.  Real-weight, full-model targets will be tuned separately once
+# baseline hardware numbers are established.
+_MIN_DECODE_TOK_S_RANDOM = 1.0  # t/s — floor for smoke/5-layer runs
+_MIN_DECODE_TOK_S_REAL = 5.0    # t/s — floor for real-weight 5-layer run
+
+
+@pytest.mark.timeout(600)
+@pytest.mark.parametrize(
+    "random_weights, min_tok_s, case_id",
+    [
+        pytest.param(True, _MIN_DECODE_TOK_S_RANDOM, "smoke", id="throughput_smoke_random_weights"),
+        pytest.param(False, _MIN_DECODE_TOK_S_REAL, "tg_light", id="throughput_tg_light"),
+    ],
+)
+def test_kimi_throughput(random_weights: bool, min_tok_s: float, case_id: str) -> None:
+    """Throughput benchmark — decode t/s must meet a minimum floor.
+
+    Runs the Kimi K2.5 demo with 5 layers + 8 prompts + 32 new tokens and
+    asserts that ``statistics["decode_t/s"]`` is at or above ``min_tok_s``.
+
+    This catches performance regressions (trace disabled, serialised decode,
+    incorrect batching) without being a tight SLA.  Tighten thresholds once
+    baseline numbers are established on real hardware.
+    """
+    if not random_weights and not _MODEL_PATH.exists():
+        pytest.skip(
+            f"Kimi K2.5 model not found at '{_MODEL_PATH}'. "
+            f"Set KIMI_HF_MODEL to the checkpoint directory."
+        )
+
+    prompts: list[str] | None
+    if random_weights:
+        prompts = None
+    elif _PROMPTS_FILE.exists():
+        prompts = load_prompts_from_json(str(_PROMPTS_FILE), max_prompts=8)
+    else:
+        prompts = [
+            "What is Tenstorrent?",
+            "Explain MoE routing in one sentence.",
+            "Write a haiku about silicon.",
+            "What is 1337 in hex?",
+        ]
+
+    results = run_demo(
+        prompts,
+        model_path=_MODEL_PATH,
+        max_new_tokens=32,
+        cache_dir=_CACHE_DIR,
+        random_weights=random_weights,
+        override_num_layers=2 if random_weights else 5,
+        enable_trace=True,
+        repeat_batches=1,
+        sample_on_device=True,
+    )
+
+    # Basic generation sanity
+    assert "generations" in results, "run_demo must return 'generations'"
+    assert len(results["generations"]) > 0, "At least one generation expected"
+
+    # Throughput assertion
+    stats = results.get("statistics") or {}
+    decode_tok_s = stats.get("decode_t/s")
+    if decode_tok_s is None:
+        pytest.skip(
+            "Generator did not return 'decode_t/s' statistics. "
+            "Either trace is disabled or the generator does not report throughput yet."
+        )
+
+    assert decode_tok_s >= min_tok_s, (
+        f"Kimi K2.5 decode throughput {decode_tok_s:.2f} t/s is below the "
+        f"minimum acceptable floor of {min_tok_s:.1f} t/s for case '{case_id}'. "
+        f"Full statistics: {stats}"
+    )
+
+    # Log for CI visibility
+    import logging
+    logging.getLogger(__name__).info(
+        f"[kimi_throughput/{case_id}] decode_t/s={decode_tok_s:.2f} "
+        f"(floor={min_tok_s:.1f})"
+    )
