@@ -634,11 +634,17 @@ class MoE(SharedStateAddOn, AbstractModule):
 
             for batch_start in range(0, batch_size_per_device, chunk_size):
                 batch_end = min(batch_start + chunk_size, batch_size_per_device)
+                batch_chunk = batch_end - batch_start
 
                 x_rm_chunk = ttnn.slice(
                     x_rm,
                     [batch_start, 0, 0, 0],
                     [batch_end, 1, seq_len, cfg["hidden_size"]],
+                )
+                x_rm_chunk = ttnn.pad(
+                    x_rm_chunk,
+                    padding=((0, batch_chunk), (0, 0), (0, 0), (0, 0)),
+                    value=0.0,
                 )
 
                 topk_experts_indices_rm_chunk = ttnn.slice(
@@ -646,11 +652,21 @@ class MoE(SharedStateAddOn, AbstractModule):
                     [batch_start, 0, 0, 0],
                     [batch_end, 1, seq_len, cfg["num_experts_per_tok"]],
                 )
+                topk_experts_indices_rm_chunk = ttnn.pad(
+                    topk_experts_indices_rm_chunk,
+                    padding=((0, batch_chunk), (0, 0), (0, 0), (0, 0)),
+                    value=0.0,
+                )
 
                 topk_experts_weights_rm_chunk = ttnn.slice(
                     topk_experts_weights_rm,
                     [batch_start, 0, 0, 0],
                     [batch_end, 1, seq_len, cfg["num_experts_per_tok"]],
+                )
+                topk_experts_weights_rm_chunk = ttnn.pad(
+                    topk_experts_weights_rm_chunk,
+                    padding=((0, batch_chunk), (0, 0), (0, 0), (0, 0)),
+                    value=0.0,
                 )
 
                 post_combine_output_tensor = cls._forward_moe_quad_ring_impl(
@@ -659,6 +675,12 @@ class MoE(SharedStateAddOn, AbstractModule):
                     topk_experts_indices_rm_chunk,
                     topk_experts_weights_rm_chunk,
                 )
+                post_combine_output_tensor = ttnn.slice(
+                    post_combine_output_tensor,
+                    [0, 0, 0, 0],
+                    [cfg["num_experts_per_tok"], 1, batch_chunk, cfg["hidden_size"]],
+                )
+
                 output_chunks.append(post_combine_output_tensor)
 
             ttnn.deallocate(topk_experts_indices_rm)
