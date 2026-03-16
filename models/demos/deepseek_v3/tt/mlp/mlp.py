@@ -524,7 +524,6 @@ class MLP(AbstractModule):
             cfg["w3"],
             program_config=cls._get_prefill_pc(seq_len=seq_len, is_w2=False, **cfg["linear_pc_gen"]),
         )
-        ttnn.deallocate(x)
 
         # Apply activation and multiply
         activated = cls._fwd_mul(w1_out, w3_out, cfg["mul"])
@@ -547,7 +546,6 @@ class MLP(AbstractModule):
         """Decode computation without CCL operations."""
         # Gate and up projections
         w1_out, w3_out = cls._fwd_ff1_3(x, cfg["w1"], cfg["w3"])
-        ttnn.deallocate(x)
 
         # Apply activation and multiply
         activated = cls._fwd_mul(w1_out, w3_out, cfg["mul"])
