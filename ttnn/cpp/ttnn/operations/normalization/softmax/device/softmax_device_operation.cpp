@@ -412,8 +412,24 @@ Tensor softmax(
     TT_FATAL(
         input_tensor.device() != nullptr,
         "input_tensor.device() == nullptr, No device found, move input_tensor to device");
+
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en produces incorrect results on Wormhole B0.
+    // Change the default to HiFi3 when this op defaults to fp32=True (i.e. input is FLOAT32).
+    const auto is_wormhole = input_tensor.device()->arch() == tt::ARCH::WORMHOLE_B0;
+    const auto default_math_fidelity = (is_wormhole && is_fp32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
+
     const auto compute_kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
+        input_tensor.device()->arch(), compute_kernel_config, default_math_fidelity, true, is_fp32, false);
+
+    // Warn if user explicitly passed HiFi4 + fp32_dest_acc_en on Wormhole B0.
+    if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
+        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
+        log_warning(
+            tt::LogOp,
+            "HiFi4 + fp32_dest_acc_en on Wormhole B0 may produce incorrect results "
+            "(hw bug #38306). Prefer HiFi3.");
+    }
+
     const auto rank = input_tensor.logical_shape().size();
     const auto dim_calculated = dim < 0 ? rank + dim : dim;
     if (rank > 4) {
@@ -489,8 +505,17 @@ Tensor scale_mask_softmax(
     bool numeric_stable) {
     // Constants
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
-    const auto compute_kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
+    const auto arch = input_tensor.device()->arch();
+    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
+    const auto default_math_fidelity = (is_wormhole && is_fp32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
+    const auto compute_kernel_config_val =
+        init_device_compute_kernel_config(arch, compute_kernel_config, default_math_fidelity, true, is_fp32, false);
+    if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
+        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
+        log_warning(
+            tt::LogOp,
+            "HiFi4 + fp32_dest_acc_en on Wormhole B0 may produce incorrect results (hw bug #38306). Prefer HiFi3.");
+    }
 
     // Input tensor formatting
     const ttnn::Shape input_pad_shape = ttnn::operations::data_movement::pad_to_tile_shape(input_tensor.padded_shape());
@@ -573,8 +598,17 @@ Tensor softmax_in_place(
     bool numeric_stable) {
     // Constants
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
-    const auto compute_kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
+    const auto arch = input_tensor.device()->arch();
+    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
+    const auto default_math_fidelity = (is_wormhole && is_fp32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
+    const auto compute_kernel_config_val =
+        init_device_compute_kernel_config(arch, compute_kernel_config, default_math_fidelity, true, is_fp32, false);
+    if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
+        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
+        log_warning(
+            tt::LogOp,
+            "HiFi4 + fp32_dest_acc_en on Wormhole B0 may produce incorrect results (hw bug #38306). Prefer HiFi3.");
+    }
 
     // Operation specific checks
     TT_FATAL(
@@ -612,8 +646,17 @@ Tensor scale_mask_softmax_in_place(
     bool numeric_stable) {
     // Constants
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
-    const auto compute_kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
+    const auto arch = input_tensor.device()->arch();
+    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
+    const auto default_math_fidelity = (is_wormhole && is_fp32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
+    const auto compute_kernel_config_val =
+        init_device_compute_kernel_config(arch, compute_kernel_config, default_math_fidelity, true, is_fp32, false);
+    if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
+        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
+        log_warning(
+            tt::LogOp,
+            "HiFi4 + fp32_dest_acc_en on Wormhole B0 may produce incorrect results (hw bug #38306). Prefer HiFi3.");
+    }
     const auto rank = input_tensor.logical_shape().size();
     const auto dim = rank - 1;
 
@@ -642,8 +685,17 @@ Tensor scale_causal_mask_hw_dims_softmax_in_place(
     bool numeric_stable) {
     // Constants
     const auto is_fp32 = input_tensor.dtype() == DataType::FLOAT32;
-    const auto compute_kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(), compute_kernel_config, MathFidelity::HiFi4, true, is_fp32, false);
+    const auto arch = input_tensor.device()->arch();
+    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
+    const auto default_math_fidelity = (is_wormhole && is_fp32) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
+    const auto compute_kernel_config_val =
+        init_device_compute_kernel_config(arch, compute_kernel_config, default_math_fidelity, true, is_fp32, false);
+    if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
+        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
+        log_warning(
+            tt::LogOp,
+            "HiFi4 + fp32_dest_acc_en on Wormhole B0 may produce incorrect results (hw bug #38306). Prefer HiFi3.");
+    }
     const auto rank = input_tensor.logical_shape().size();
     const auto dim = rank - 1;
 

@@ -5,6 +5,7 @@
 #include "minimal_matmul_device_operation.hpp"
 #include "minimal_matmul_program_factory.hpp"
 
+#include <tt-logger/tt-logger.hpp>
 #include <tt-metalium/math.hpp>
 #include <tt-metalium/tt_metal.hpp>
 #include <tt-metalium/constants.hpp>
@@ -267,13 +268,23 @@ std::vector<Tensor> minimal_matmul(
     const std::optional<Tensor>& fused_ternary_input_a,
     const std::optional<Tensor>& fused_ternary_input_b) {
     using OperationType = experimental::prim::MinimalMatmulDeviceOperation;
+    const auto arch = input_tensor.device()->arch();
     auto kernel_config_val = init_device_compute_kernel_config(
-        input_tensor.device()->arch(),
+        arch,
         compute_kernel_config,
         MathFidelity::HiFi2,
         false /*approx_mode*/,
         true /*fp32_acc*/,
         true /*packer_acc*/);
+    // Warn if user explicitly passed HiFi4 + fp32_dest_acc_en on Wormhole B0 (hw bug #38306).
+    // The default (HiFi2 + fp32_acc) is safe; only user-supplied HiFi4+fp32 is vulnerable.
+    if (arch == tt::ARCH::WORMHOLE_B0 && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
+        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
+        log_warning(
+            tt::LogOp,
+            "HiFi4 + fp32_dest_acc_en on Wormhole B0 may produce incorrect results "
+            "(hw bug #38306). Prefer HiFi3.");
+    }
 
     return ttnn::device_operation::launch<OperationType>(
         OperationType::operation_attributes_t{
