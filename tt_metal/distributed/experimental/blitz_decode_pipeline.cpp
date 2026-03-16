@@ -490,6 +490,7 @@ std::vector<BlitzDecodePipelineStage> build_pipeline(
             tt::tt_metal::ASICLocation(stage_config.exit_node_asic_location));
         logical_pipeline_stage_configs.emplace_back(BlitzDecodePipelineStage{
             .stage_index = stage_index,
+            .mesh_id = stage_index % num_procs,
             .entry_node_coord = asic_id_to_mesh_coord.at(entry_node_asic_id),
             .exit_node_coord = asic_id_to_mesh_coord.at(exit_node_asic_id)});
     }

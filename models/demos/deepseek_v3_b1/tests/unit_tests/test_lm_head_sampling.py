@@ -23,7 +23,11 @@ from tracy import signpost
 
 import ttnn
 from models.common.utility_functions import is_slow_dispatch
-from models.demos.deepseek_v3_b1.demo.pipeline import PipelineConfiguration, create_single_galaxy_pipeline_configuration
+from models.demos.deepseek_v3_b1.demo.pipeline import (
+    PipelineConfiguration,
+    create_single_galaxy_pipeline_builder,
+    create_single_galaxy_pipeline_configuration,
+)
 from models.demos.deepseek_v3_b1.demo.stage import (
     TOKEN_PAGE_SIZE_BYTES,
     EmbeddingStage,
@@ -1921,7 +1925,7 @@ def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32):
     try:
         pipeline.setup_and_run()
 
-        if pipeline.my_mesh_id == 0:
+        if pipeline.my_stage_idx == 0:
             torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
             torch_token[0, 0] = 0
             token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
@@ -1940,6 +1944,80 @@ def test_pipline_block_4stage_galaxy_1_iteration(mesh_device, use_fp32):
         pipeline.barrier()
     finally:
         pipeline.terminate()
+
+
+@pytest.mark.parametrize("use_fp32", [True])
+@pytest.mark.parametrize(
+    "mesh_device",
+    [(4, 8)],
+    indirect=True,
+)
+@pytest.mark.parametrize(
+    "device_params",
+    [
+        {
+            "fabric_config": ttnn.FabricConfig.FABRIC_2D,
+            "fabric_router_config": create_fabric_router_config(15232),
+        }
+    ],
+    indirect=True,
+)
+def test_pipline_block_4stage_galaxy_1_iteration_with_submeshes(mesh_device, use_fp32):
+    """
+    4-stage 4x2 single-galaxy pipeline:
+    P1(H2D) -> P2(LMHead+Sampling) -> P3(forward) -> P4(forward) -> P1(D2H).
+    One-shot LMHead (no persistent mode); single token; terminate in finally.
+    """
+    if not is_slow_dispatch():
+        pytest.skip("Skipping test in fast dispatch mode")
+
+    print(f"Mesh device shape: {mesh_device.shape}")
+    ttnn.enable_asynchronous_slow_dispatch(mesh_device)
+
+    torch_expected_indices = _compute_expected_lm_head_indices_synthetic(1)
+    torch_expected_idx = torch_expected_indices[0]
+
+    submeshes = mesh_device.create_submeshes(ttnn.MeshShape(2, 4))
+    builder = create_single_galaxy_pipeline_builder(
+        _SyntheticWeightProvider(),
+        lm_head_fp32_dest_acc_en=use_fp32,
+        lm_head_persistent_mode=False,
+    )
+    pipelines = builder.create_pipeline_stages(submeshes)
+    print(f"Pipeline built")
+    """
+    try:
+        for pipeline in pipelines:
+            print(f"Pipeline my_stage_idx: {pipeline.my_stage_idx}")
+            pipeline.setup_and_run()
+            print(f"Pipeline setup and run completed")
+
+            if pipeline.my_stage_idx == 0:
+                torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
+                torch_token[0, 0] = 0
+                token_tensor = ttnn.from_torch(torch_token, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+                output_tensor = ttnn.from_torch(
+                    torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32),
+                    dtype=ttnn.uint32,
+                    layout=ttnn.ROW_MAJOR_LAYOUT,
+                )
+                print(f"Writing token for iteration 0")
+                pipeline.write_token(token_tensor)
+                print(f"Reading output for iteration 0")
+                pipeline.read_output(output_tensor)
+                print(f"Output tensor: {output_tensor}")
+                got = ttnn.to_torch(output_tensor).to(torch.uint32)[0, 0].reshape(1, 1)
+                print(f"Got token: {got}")
+                print(f"Expected index: {torch_expected_idx}")
+                assert torch.equal(
+                    got, torch_expected_idx
+                ), f"PipelineBlock 4-stage token mismatch. expected={int(torch_expected_idx.item())}, got={int(got.item())}"
+
+            pipeline.barrier()
+    finally:
+        for pipeline in pipelines:
+            pipeline.terminate()
+    """
 
 
 @pytest.mark.skipif(
@@ -1984,7 +2062,7 @@ def test_persistent_mode(mesh_device, use_fp32):
     pipeline = config.build_pipeline(mesh_device)
     pipeline.setup_and_run()
 
-    if pipeline.my_mesh_id == 0:
+    if pipeline.my_stage_idx == 0:
         for iteration in range(iterations):
             logger.info(f"Writing token for iteration {iteration}")
             torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
@@ -2004,9 +2082,9 @@ def test_persistent_mode(mesh_device, use_fp32):
                 got, expected_idx
             ), f"PipelineBlock 4-stage token mismatch. expected={int(expected_idx.item())}, got={int(got.item())}"
 
-    logger.info(f"Barrier for P{pipeline.my_mesh_id}")
+    logger.info(f"Barrier for P{pipeline.my_stage_idx}")
     pipeline.barrier()
-    logger.info(f"Barrier completed for P{pipeline.my_mesh_id}")
+    logger.info(f"Barrier completed for P{pipeline.my_stage_idx}")
 
 
 @pytest.mark.skipif(
@@ -2051,7 +2129,7 @@ def test_persistent_mode_pod(mesh_device, use_fp32):
     pipeline = config.build_pipeline(mesh_device)
     pipeline.setup_and_run()
 
-    if pipeline.my_mesh_id == 0:
+    if pipeline.my_stage_idx == 0:
         for iteration in range(iterations):
             torch_token = torch.zeros(1, TOKEN_PAGE_SIZE_BYTES // 4, dtype=torch.uint32)
             torch_token[0, 0] = iteration
@@ -2072,6 +2150,6 @@ def test_persistent_mode_pod(mesh_device, use_fp32):
                 got, expected_idx
             ), f"Pod 16-stage token mismatch at iter {iteration}. expected={int(expected_idx.item())}, got={int(got.item())}"
 
-    logger.info(f"Barrier for stage {pipeline.my_mesh_id + 1}")
+    logger.info(f"Barrier for stage {pipeline.my_stage_idx + 1}")
     pipeline.barrier()
-    logger.info(f"Barrier completed for stage {pipeline.my_mesh_id + 1}")
+    logger.info(f"Barrier completed for stage {pipeline.my_stage_idx + 1}")

@@ -40,7 +40,7 @@ class StageContext:
 
     mesh_device: ttnn.MeshDevice
     pipeline_config: list
-    my_mesh_id: int
+    my_stage_idx: int
 
 
 class StageKind(ABC):
@@ -76,6 +76,7 @@ class EmbeddingStage(StageKind):
             d2h_socket_fifo_size=TOKEN_FIFO_SIZE,
             d2h_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
             embedding_tensor=self._weights.embedding,
+            pipeline_config=ctx.pipeline_config,
         )
 
 
@@ -105,6 +106,7 @@ class PassthroughStage(StageKind):
             downstream_d2d_socket_fifo_size=down_fifo,
             upstream_d2d_socket_page_size=up_page,
             downstream_d2d_socket_page_size=down_page,
+            pipeline_config=ctx.pipeline_config,
         )
 
 
@@ -123,6 +125,7 @@ class MoEDecoderStage(StageKind):
             downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
             upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            pipeline_config=ctx.pipeline_config,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -147,6 +150,7 @@ class DenseDecoderStage(StageKind):
             downstream_d2d_socket_fifo_size=ACTIVATION_FIFO_SIZE,
             upstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
             downstream_d2d_socket_page_size=ACTIVATION_PAGE_SIZE_BYTES,
+            pipeline_config=ctx.pipeline_config,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
@@ -186,13 +190,13 @@ class LMHeadStage(StageKind):
 
     def create_pipeline_block(self, ctx: StageContext) -> PipelineBlock:
         mesh_device = ctx.mesh_device
-        my_mesh_id = ctx.my_mesh_id
+        my_stage_idx = ctx.my_stage_idx
         pipeline_config = ctx.pipeline_config
         lmhead_entry_core = ttnn.MeshCoreCoord(
-            pipeline_config[my_mesh_id].entry_node_coord, LMHeadStage.LMHEAD_INPUT_CORE
+            pipeline_config[my_stage_idx].entry_node_coord, LMHeadStage.LMHEAD_INPUT_CORE
         )
         lmhead_exit_core = ttnn.MeshCoreCoord(
-            pipeline_config[my_mesh_id].exit_node_coord, LMHeadStage.ARGMAX_FINAL_CORE
+            pipeline_config[my_stage_idx].exit_node_coord, LMHeadStage.ARGMAX_FINAL_CORE
         )
         return PipelineBlock(
             mesh_device,
@@ -203,17 +207,18 @@ class LMHeadStage(StageKind):
             downstream_d2d_socket_page_size=TOKEN_PAGE_SIZE_BYTES,
             entry_node_downstream=lmhead_entry_core,
             exit_node_upstream=lmhead_exit_core,
+            pipeline_config=ctx.pipeline_config,
         )
 
     def setup(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         mesh_device = ctx.mesh_device
-        my_mesh_id = ctx.my_mesh_id
+        my_stage_idx = ctx.my_stage_idx
         pipeline_config = ctx.pipeline_config
         torch_a = torch.zeros((LMHeadStage.M, LMHeadStage.K), dtype=torch.bfloat16)
 
         mesh_shape = mesh_device.shape
         mesh_rows, mesh_cols = mesh_shape[0], mesh_shape[1]
-        sender_coord = pipeline_config[my_mesh_id].entry_node_coord
+        sender_coord = pipeline_config[my_stage_idx].entry_node_coord
         num_devices = mesh_rows * mesh_cols
 
         mcast_core_grid = ttnn.CoreRangeSet(
@@ -373,18 +378,18 @@ class LMHeadStage(StageKind):
     def launch_compute(self, ctx: StageContext, pipeline_block: PipelineBlock) -> None:
         d = self._lmhead_state
         pipeline_config = ctx.pipeline_config
-        my_mesh_id = ctx.my_mesh_id
+        my_stage_idx = ctx.my_stage_idx
         LMHeadSampling.op(
             d["input_tensor_mesh"],
             d["intermediate_tensor_mesh"],
             d["ttnn_gamma"],
             d["ttnn_b"],
             d["ttnn_scores"],
-            sender_coord=pipeline_config[my_mesh_id].entry_node_coord,
+            sender_coord=pipeline_config[my_stage_idx].entry_node_coord,
             indices_tensor=d["ttnn_indices"],
             output_index_tensor=d["ttnn_output_index"],
             argmax_final_core_coord=LMHeadStage.ARGMAX_FINAL_CORE,
-            argmax_final_mesh_coord=pipeline_config[my_mesh_id].exit_node_coord,
+            argmax_final_mesh_coord=pipeline_config[my_stage_idx].exit_node_coord,
             semaphores=[
                 d["out_ready_semaphore"],
                 d["barrier_semaphore"],

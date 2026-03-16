@@ -14,6 +14,7 @@ namespace tt::tt_metal::experimental::blitz {
 
 struct BlitzDecodePipelineStage {
     std::size_t stage_index;
+    std::size_t mesh_id;
     ::tt::tt_metal::distributed::MeshCoordinate entry_node_coord;
     ::tt::tt_metal::distributed::MeshCoordinate exit_node_coord;
 };

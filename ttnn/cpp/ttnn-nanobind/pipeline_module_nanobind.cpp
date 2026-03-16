@@ -18,11 +18,12 @@ void bind_blitz_decode_pipeline(nb::module_& mod) {
 
     nb::class_<BlitzDecodePipelineStage>(mod, "BlitzDecodePipelineStage")
         .def_ro("stage_index", &BlitzDecodePipelineStage::stage_index)
+        .def_ro("mesh_id", &BlitzDecodePipelineStage::mesh_id)
         .def_ro("entry_node_coord", &BlitzDecodePipelineStage::entry_node_coord)
         .def_ro("exit_node_coord", &BlitzDecodePipelineStage::exit_node_coord)
         .def("__repr__", [](const BlitzDecodePipelineStage& stage) {
             std::ostringstream repr;
-            repr << "BlitzDecodePipelineStage(stage_index=" << stage.stage_index
+            repr << "BlitzDecodePipelineStage(stage_index=" << stage.stage_index << ", mesh_id=" << stage.mesh_id
                  << ", entry_node_coord=" << stage.entry_node_coord << ", exit_node_coord=" << stage.exit_node_coord
                  << ")";
             return repr.str();

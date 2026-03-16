@@ -222,6 +222,24 @@ void bind_fabric_api(nb::module_& mod) {
         R"(
             Returns the maximum fabric packet payload size in bytes.
         )");
+
+    mod.def(
+        "are_fabric_neighbours",
+        [](const tt::tt_fabric::FabricNodeId& src_fabric_node_id, const tt::tt_fabric::FabricNodeId& dst_fabric_node_id)
+            -> bool { return tt::tt_fabric::are_fabric_neighbours(src_fabric_node_id, dst_fabric_node_id); },
+        nb::arg("src_fabric_node_id"),
+        nb::arg("dst_fabric_node_id"),
+        R"(
+            Check if two fabric nodes are directly connected via an ethernet link.
+            Uses get_forwarding_direction to determine the routing direction from
+            src to dst, then verifies the destination is a direct neighbor in that
+            direction via get_chip_neighbors.
+            Args:
+                src_fabric_node_id: FabricNodeId of the source chip
+                dst_fabric_node_id: FabricNodeId of the destination chip
+            Returns:
+                True if the two nodes are neighbours in the fabric, False otherwise.
+        )");
 }
 
 }  // namespace ttnn::fabric

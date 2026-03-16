@@ -202,29 +202,40 @@ class PipelineConfiguration:
 
     def build_pipeline(self, mesh_device: ttnn.MeshDevice) -> Pipeline:
         """Create a Pipeline for this process's stage (determined by mesh_id)."""
-        my_mesh_id = mesh_device.get_system_mesh_id()
-        stage = self._stage_factories[my_mesh_id](mesh_device)
+        my_stage_idx = mesh_device.get_system_mesh_id()
+        stage = self._stage_factories[my_stage_idx](mesh_device)
         return Pipeline(mesh_device, stage)
 
 
 class Pipeline:
     """Orchestrator for one pipeline stage with explicit 4-phase setup."""
 
-    def __init__(self, mesh_device: ttnn.MeshDevice, stage_kind: StageKind) -> None:
+    def __init__(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        stage_kind: StageKind,
+        pipeline_config: list | None = None,
+        stage_idx: int | None = None,
+    ) -> None:
         self._mesh_device = mesh_device
         self._stage_kind = stage_kind
-        self._my_mesh_id = mesh_device.get_system_mesh_id()
-        self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+        if pipeline_config is None:
+            self._pipeline_config = ttnn._ttnn.multi_device.experimental.generate_blitz_decode_pipeline(mesh_device)
+            self._my_stage_idx = mesh_device.get_system_mesh_id()
+        else:
+            self._pipeline_config = pipeline_config
+            self._my_stage_idx = stage_idx
+
         self._ctx = StageContext(
             mesh_device=mesh_device,
             pipeline_config=self._pipeline_config,
-            my_mesh_id=self._my_mesh_id,
+            my_stage_idx=self._my_stage_idx,
         )
         self._pipeline_block: PipelineBlock | None = None
 
     @property
-    def my_mesh_id(self) -> int:
-        return self._my_mesh_id
+    def my_stage_idx(self) -> int:
+        return self._my_stage_idx
 
     def configure_block(self) -> None:
         """Phase 1: Create the PipelineBlock (socket wiring)."""
@@ -272,3 +283,60 @@ class Pipeline:
         """Terminate the pipeline block if it was created (e.g. for one-shot tests)."""
         if self._pipeline_block is not None:
             self._pipeline_block.terminate()
+
+
+def create_single_galaxy_pipeline_builder(
+    weight_provider: WeightProvider,
+    *,
+    lm_head_fp32_dest_acc_en: bool = True,
+    lm_head_persistent_mode: bool = True,
+) -> PipelineBuilder:
+    """4-stage single-galaxy: Embed -> LMHead -> Token fwd -> Token fwd."""
+
+    def stage_0(submesh: ttnn.MeshDevice) -> StageKind:
+        return EmbeddingStage(weight_provider.load_embedding(submesh))
+
+    def stage_1(submesh: ttnn.MeshDevice) -> StageKind:
+        return LMHeadStage(
+            weights=weight_provider.load_lm_head(submesh),
+            lm_head_fp32_dest_acc_en=lm_head_fp32_dest_acc_en,
+            lm_head_persistent_mode=lm_head_persistent_mode,
+            submesh=submesh,
+        )
+
+    # opening a 2x4 submesh on 4x8 big mesh, layout is
+    # 0  2
+    # 1  3
+    return PipelineBuilder(
+        {
+            0: stage_0,
+            2: stage_1,
+            3: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
+            1: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
+        }
+    )
+
+
+class PipelineBuilder:
+    """Maps stage IDs to stage factories. Each host builds only its stage (lazy weights)."""
+
+    def __init__(
+        self,
+        stage_factories: dict[int, Callable[[ttnn.MeshDevice], StageKind]],
+    ) -> None:
+        self._stage_factories = stage_factories
+
+    @property
+    def num_stages(self) -> int:
+        return len(self._stage_factories)
+
+    # Build a semi hard coded pipeline for testing now
+    def create_pipeline_stages(self, submeshes: list[ttnn.MeshDevice]) -> list[Pipeline]:
+        """Create a Pipeline for this process's stage ()."""
+        assert len(submeshes) == self.num_stages, "Number of submeshes must match number of stages"
+        pipeline_stages = []
+        pipeline_config = []
+        for submesh_idx, stage in self._stage_factories.items():
+            pipeline_stage = Pipeline(submeshes[submesh_idx], stage, pipeline_configs[submesh_idx])
+            pipeline_stages.append(pipeline_stage)
+        return pipeline_stages
