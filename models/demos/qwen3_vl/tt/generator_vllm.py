@@ -245,7 +245,9 @@ class Qwen3VLForConditionalGeneration(QwenVLGenerator, SupportsMultiModal):
         else:
             # text-only users
             image_embeds, deepstack_visual_embeds = (
-                torch.tensor([], dtype=torch.bfloat16, device=tokens.device),
+                ttnn.from_torch(
+                    torch.tensor([], dtype=torch.bfloat16), device=self.model_args.mesh_device, dtype=ttnn.bfloat16
+                ),
                 None,
             )
 
