@@ -120,10 +120,7 @@ jobs:
         timeout-minutes: ${{ matrix.test-group.timeout }}
         run: |
           pytest models/demos/kimi_k25/tests \
-            --ignore=models/demos/kimi_k25/tests/test_moe.py \
-            --ignore=models/demos/kimi_k25/tests/test_moe_gate.py \
-            --ignore=models/demos/kimi_k25/tests/test_mla.py \
-            -k "not test_forward_pass and not test_full_model and not HardWare" \
+            -k "not test_forward_pass and not test_full_model and not Hardware" \
             --timeout 60 --durations=0
 
       # ------------------------------------------------------------------
