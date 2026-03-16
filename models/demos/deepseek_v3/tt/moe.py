@@ -403,7 +403,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         for start in range(0, seq_len, chunk_size):
             end = min(start + chunk_size, seq_len)
             x_chunk = ttnn.slice(x, [0, 0, start, 0], [x.shape[0], x.shape[1], end, x.shape[3]])
-            output_chunks.append(cls._forward_impl(x_chunk, cfg))
+            output_chunks.append(cls._forward_prefill_impl(x_chunk, cfg))
             ttnn.deallocate(x_chunk)
 
         if len(output_chunks) == 1:
