@@ -6,10 +6,8 @@
 
 #include <concepts>
 #include <optional>
-#include <random>
 #include <tt-logger/tt-logger.hpp>
 #include <tt_stl/overloaded.hpp>
-#include <tt_stl/indestructible.hpp>
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include <unordered_map>
@@ -18,9 +16,8 @@
 #include <tracy/Tracy.hpp>
 #include "tools/profiler/op_profiler.hpp"
 #include <tt_stl/concepts.hpp>
-#include "ttnn/graph/graph_serialization.hpp"
 #include "ttnn/graph/graph_processor.hpp"
-#include "ttnn/core.hpp"
+#include "ttnn/graph/graph_serialization.hpp"  // serialize_tracked_arg<T> definitions, used via track_function_start
 #include "ttnn/distributed/api.hpp"
 #include <tt-metalium/distributed.hpp>
 #include <tt-metalium/experimental/inspector.hpp>
