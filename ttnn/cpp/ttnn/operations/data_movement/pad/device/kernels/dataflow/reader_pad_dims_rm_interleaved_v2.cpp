@@ -15,6 +15,28 @@ inline __attribute__((always_inline)) void fill_pad_cb_with_val(
     }
 }
 
+// Helper to read multiple input pages for a single stick into L1.
+// This encapsulates the common pattern of reading (num_pages - 1) full pages
+// followed by a final partially filled page, and advances i_page accordingly.
+template <typename StreamState>
+inline __attribute__((always_inline)) void read_input_pages_into_l1(
+    const StreamState& s,
+    uint32_t& i_page,
+    uint32_t l1_write_addr,
+    const uint32_t num_input_pages_in_row,
+    const uint32_t input_page_size,
+    const uint32_t size_of_valid_data_in_last_input_page_in_row) {
+    uint32_t write_addr = l1_write_addr;
+    for (uint32_t p = 0; p < num_input_pages_in_row - 1; ++p) {
+        uint64_t page_noc_addr = s.get_noc_addr(i_page + p);
+        noc_async_read(page_noc_addr, write_addr, input_page_size);
+        write_addr += input_page_size;
+    }
+    uint64_t last_page_noc_addr = s.get_noc_addr(i_page + num_input_pages_in_row - 1);
+    noc_async_read(last_page_noc_addr, write_addr, size_of_valid_data_in_last_input_page_in_row);
+    i_page += num_input_pages_in_row;
+}
+
 void kernel_main() {
     uint32_t src_addr = get_arg_val<uint32_t>(0);
     uint32_t num_sticks_per_core = get_arg_val<uint32_t>(1);
@@ -93,13 +115,13 @@ void kernel_main() {
             if (read_stick) {
                 if constexpr (front_padding) {  // Read noc into cb_pad_align l1
                     uint32_t temp_addr = get_write_ptr(cb_pad_align);
-                    for (uint32_t p = 0; p < num_input_pages_in_row - 1; p++) {
-                        uint64_t page_noc_addr = s.get_noc_addr(i_page + p);
-                        noc_async_read(page_noc_addr, temp_addr, input_page_size);
-                        temp_addr += input_page_size;
-                    }
-                    uint64_t last_page_noc_addr = s.get_noc_addr(i_page + num_input_pages_in_row - 1);
-                    noc_async_read(last_page_noc_addr, temp_addr, size_of_valid_data_in_last_input_page_in_row);
+                    read_input_pages_into_l1(
+                        s,
+                        i_page,
+                        temp_addr,
+                        num_input_pages_in_row,
+                        input_page_size,
+                        size_of_valid_data_in_last_input_page_in_row);
                     noc_async_read_barrier();
                     memmove(
                         (void*)(l1_write_addr + stick_size_padded_front),
@@ -107,26 +129,24 @@ void kernel_main() {
                         (size_t)(stick_size_bytes));
                 } else if constexpr (unaligned) {
                     uint32_t temp_addr = get_write_ptr(cb_pad_align);
-                    for (uint32_t p = 0; p < num_input_pages_in_row - 1; p++) {
-                        uint64_t page_noc_addr = s.get_noc_addr(i_page + p);
-                        noc_async_read(page_noc_addr, temp_addr, input_page_size);
-                        temp_addr += input_page_size;
-                    }
-                    uint64_t last_page_noc_addr = s.get_noc_addr(i_page + num_input_pages_in_row - 1);
-                    noc_async_read(last_page_noc_addr, temp_addr, size_of_valid_data_in_last_input_page_in_row);
+                    read_input_pages_into_l1(
+                        s,
+                        i_page,
+                        temp_addr,
+                        num_input_pages_in_row,
+                        input_page_size,
+                        size_of_valid_data_in_last_input_page_in_row);
                     noc_async_read_barrier();
                     noc_async_read(pad_align_noc_addr, l1_write_addr, stick_size_bytes);
                 } else {
-                    uint32_t write_addr = l1_write_addr;
-                    for (uint32_t p = 0; p < num_input_pages_in_row - 1; p++) {
-                        uint64_t page_noc_addr = s.get_noc_addr(i_page + p);
-                        noc_async_read(page_noc_addr, write_addr, input_page_size);
-                        write_addr += input_page_size;
-                    }
-                    uint64_t last_page_noc_addr = s.get_noc_addr(i_page + num_input_pages_in_row - 1);
-                    noc_async_read(last_page_noc_addr, write_addr, size_of_valid_data_in_last_input_page_in_row);
+                    read_input_pages_into_l1(
+                        s,
+                        i_page,
+                        l1_write_addr,
+                        num_input_pages_in_row,
+                        input_page_size,
+                        size_of_valid_data_in_last_input_page_in_row);
                 }
-                i_page += num_input_pages_in_row;
             }
             l1_write_addr += stick_size_padded_aligned;
             curr_h++;
