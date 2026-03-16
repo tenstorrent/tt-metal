@@ -66,6 +66,10 @@ class TtTransformer(LightweightModule):
             args.rope_theta,
             args.use_scaled_rope,
             args.rope_scaling_factor,
+            use_yarn=getattr(args, "is_olmo", False),
+            original_max_position_embeddings=getattr(args, "orig_context_len", 8192),
+            beta_fast=getattr(args, "yarn_beta_fast", 32.0),
+            beta_slow=getattr(args, "yarn_beta_slow", 1.0),
         )
         self.trans_mats_dict = self.rope_setup.get_both_trans_mats()
 
@@ -250,6 +254,11 @@ class TtTransformer(LightweightModule):
                     self.mesh_device,
                     seq_len=self.args.max_seq_len,
                     scale_factor=self.args.rope_scaling_factor,
+                    use_yarn=getattr(self.args, "is_olmo", False),
+                    rope_theta=self.args.rope_theta,
+                    original_max_position_embeddings=getattr(self.args, "orig_context_len", 8192),
+                    beta_fast=getattr(self.args, "yarn_beta_fast", 32.0),
+                    beta_slow=getattr(self.args, "yarn_beta_slow", 1.0),
                 )
             self.tt_rot_mats_prefill = tt_rot_mats_prefill
         else:
@@ -731,7 +740,6 @@ class TtTransformer(LightweightModule):
             self.mesh_device.set_sub_device_stall_group([self.prefetcher_setup.worker_sub_device_id])
 
         h = None
-        # x needs to be in bfloat16_b as it gets reused as the residual tensor
         for i, layer in enumerate(self.layers):
             x, h = layer(
                 x,
@@ -757,7 +765,6 @@ class TtTransformer(LightweightModule):
 
         if mode == "prefill":
             return x
-        # Output norm
         x, res = self.norm(x, res=None, mode=mode)
 
         if get_last_token != -1:

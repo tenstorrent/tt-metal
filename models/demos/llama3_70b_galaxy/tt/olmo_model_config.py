@@ -131,14 +131,17 @@ class TtOlmoModelArgs(TtModelArgs):
         self.intermediate_dim_per_tp = self.intermediate_dim // self.intermediate_dim_tp_factor  # 27648 // 8 = 3456
         self.intermediate_dim_per_tp_padded_24_cores = 3840
 
-        # Disable prefetcher for OLMo decode debugging
-        # Note: This requires OLMo-specific MLP decode path that doesn't use double_matmul
+        # Prefetcher disabled: use full 7x10 core grid (0,0)-(6,9) as single device
+        # This avoids sub-device restrictions that require sub_core_grids on every op
         # if self.num_devices == 32:
         #     self.use_prefetcher = True
 
         # Prefetcher setup
         _, _, _, self.pf_receiver_cores_list, _, _, _, _ = get_core_ranges(12, 2, False)
 
+        # sub_core_grids: cores used for memory layout / sharding (same whether prefetcher is on or off).
+        # With prefetcher OFF, the single 70-core sub-device includes all of these 50 cores, so
+        # no "Kernel group cores do not match" errors occur even without passing sub_core_grids.
         self.sub_core_grids = ttnn.CoreRangeSet(
             [
                 ttnn.CoreRange(ttnn.CoreCoord(1, 0), ttnn.CoreCoord(3, 9)),
@@ -502,9 +505,54 @@ class TtOlmoModelArgs(TtModelArgs):
             use_height_and_width_as_shard_shape=True,
         )
 
+        # OLMo-specific FF2 input config: intermediate_dim_per_tp=3456 = 27 cores × 128
+        # Used for all_gather output after reduce_scatter in MLP decode
+        OLMO_FF2_IN_CORES = 27
+        olmo_ff2_in_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            self.start_core, OLMO_FF2_IN_CORES, self.sub_core_grids, row_wise=True
+        )
+        self.model_config["FF2_IN_OLMO_MEMCFG"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.intermediate_dim_per_tp // OLMO_FF2_IN_CORES),  # (32, 3456//27) = (32, 128)
+            core_grid=olmo_ff2_in_core_grid,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
         self.model_config["FF2_OUT_RING_MEMCFG"] = ttnn.create_sharded_memory_config(
             shape=(32, self.dim_padded_24_cores // 4 // RING_SIZE),
             core_grid=pf_mm_out_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
+        # OLMo FF2 DRAM-sharded config for decode (avoids auto-selected invalid core grid)
+        # K=3456 (108 tiles), N=1280 (40 tiles). GCD=4, so use 4 cores.
+        FF2_OLMO_NUM_CORES = 4
+        ff2_olmo_core_range_set = ttnn.num_cores_to_corerangeset_in_subcoregrids(
+            self.start_core, FF2_OLMO_NUM_CORES, self.sub_core_grids, row_wise=True
+        )
+        self.model_config["W2_DRAM_SHARDED_MEMCFG_OLMO"] = self.create_dram_sharded_mem_config(
+            k=self.intermediate_dim_per_tp,  # 3456
+            n=self.dim_per_tp,  # 1280
+        )
+        self.model_config["FF2_DRAM_SHARDED_PROGCFG_OLMO"] = self.dram_matmul_config(
+            m=32,
+            k=self.intermediate_dim_per_tp,  # 3456
+            n=self.dim_per_tp,  # 1280
+            num_cores=FF2_OLMO_NUM_CORES,
+        )
+        self.model_config["FF2_ACT_SHARDED_MEMCFG_OLMO"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.intermediate_dim_per_tp // FF2_OLMO_NUM_CORES),  # (32, 864)
+            core_grid=ff2_olmo_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+        self.model_config["FF2_OUT_SHARDED_MEMCFG_OLMO"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim_per_tp // FF2_OLMO_NUM_CORES),  # (32, 320)
+            core_grid=ff2_olmo_core_range_set,
             strategy=ttnn.ShardStrategy.WIDTH,
             orientation=ttnn.ShardOrientation.ROW_MAJOR,
             use_height_and_width_as_shard_shape=True,
@@ -822,6 +870,27 @@ class TtOlmoModelArgs(TtModelArgs):
             use_height_and_width_as_shard_shape=True,
         )
 
+        # OLMo WO DRAM-sharded config for decode (avoids auto-selected invalid core grid)
+        # K=1024, N=1280 (dim_per_tp). 8 compute cores, per_core_N=5 tiles=160
+        WO_OLMO_NUM_CORES = 8
+        self.model_config["WO_DRAM_SHARDED_MEMCFG_OLMO"] = self.create_dram_sharded_mem_config(
+            k=wo_k_decode,  # 1024
+            n=self.dim_per_tp,  # 1280
+        )
+        self.model_config["WO_DRAM_SHARDED_PROGCFG_OLMO"] = self.dram_matmul_config(
+            m=32,
+            k=wo_k_decode,  # 1024
+            n=self.dim_per_tp,  # 1280
+            num_cores=WO_OLMO_NUM_CORES,
+        )
+        self.model_config["WO_OUT_SHARDED_MEMCFG_OLMO"] = ttnn.create_sharded_memory_config(
+            shape=(32, self.dim_per_tp // WO_OLMO_NUM_CORES),  # (32, 160)
+            core_grid=wo_input_core_range_set,
+            strategy=ttnn.ShardStrategy.WIDTH,
+            orientation=ttnn.ShardOrientation.ROW_MAJOR,
+            use_height_and_width_as_shard_shape=True,
+        )
+
         # OLMo-specific WO output config for decode: dim_per_tp=1280, not padded 1536
         # 1280 / 10 cores = 128 per shard (tile-aligned)
         self.model_config["SHARDED_WO_OUT_RING_MEMCFG_OLMO"] = ttnn.create_sharded_memory_config(
@@ -1018,7 +1087,7 @@ class TtOlmoModelArgs(TtModelArgs):
         padded_vocab_per_device = (
             (self.padded_vocab_size // 8 + RING_TILE_ALIGN - 1) // RING_TILE_ALIGN
         ) * RING_TILE_ALIGN
-        self.lm_head_shape = (self.dim // 4, padded_vocab_per_device)  # (1280, 13056)
+        self.lm_head_shape = (self.dim_per_tp, padded_vocab_per_device)  # (1280, 13056)
 
         # Import grids from parent module
         from models.demos.llama3_70b_galaxy.tt.model_config import (
@@ -1044,8 +1113,10 @@ class TtOlmoModelArgs(TtModelArgs):
         # Padded shape for ring matmul - already properly aligned via RING_TILE_ALIGN above
         lm_head_out_padded = padded_vocab_per_device  # Already multiple of 768
 
+        # For OLMo: keep the input shard config using sub_core_grids (10 cores × 128)
+        # The ring matmul is bypassed for OLMo decode (uses DRAM linear instead)
         lm_head_input_n_cores = 10
-        lm_head_input_shard_w = self.dim_per_tp // lm_head_input_n_cores  # 1280 // 10 = 128 (tile-aligned)
+        lm_head_input_shard_w = self.dim_per_tp // lm_head_input_n_cores  # 1280 // 10 = 128
         lm_head_input_core_grid = ttnn.num_cores_to_corerangeset_in_subcoregrids(
             self.start_core, lm_head_input_n_cores, self.sub_core_grids, row_wise=True
         )
@@ -1255,21 +1326,7 @@ class TtOlmoModelArgs(TtModelArgs):
             }
         )
 
-        # Without prefetch, limit to 7 columns (0-6) to avoid dispatch core on column 7
-        if prefetch:
-            grid = num_to_coregrid(num_cores)
-        else:
-            # Use 7-column grid: for 24 cores, use 6x4=24 or adjust
-            if num_cores == 24:
-                grid = ttnn.CoreGrid(y=4, x=6)  # 6 cols x 4 rows = 24
-            elif num_cores == 8:
-                grid = ttnn.CoreGrid(y=2, x=4)  # 4 cols x 2 rows = 8
-            elif num_cores % 7 == 0:
-                grid = ttnn.CoreGrid(y=num_cores // 7, x=7)
-            elif num_cores % 6 == 0:
-                grid = ttnn.CoreGrid(y=num_cores // 6, x=6)
-            else:
-                grid = num_to_coregrid(num_cores)  # Fallback
+        grid = num_to_coregrid(num_cores)
 
         program_config = ttnn.MatmulMultiCoreReuseMultiCast1DProgramConfig(
             compute_with_storage_grid_size=(grid.x, grid.y),

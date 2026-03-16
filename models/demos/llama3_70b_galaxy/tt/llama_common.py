@@ -205,8 +205,31 @@ def gather_cos_sin(position_ids, cos, sin):
     return cos, sin
 
 
-def get_prefill_rot_mat(head_dim, max_seq_len, mesh_device, seq_len, scale_factor, start_pos=0):
-    cos, sin = precompute_freqs(head_dim, max_seq_len * 2, scale_factor=scale_factor)
+def get_prefill_rot_mat(
+    head_dim,
+    max_seq_len,
+    mesh_device,
+    seq_len,
+    scale_factor,
+    start_pos=0,
+    use_yarn=False,
+    rope_theta=500000.0,
+    original_max_position_embeddings=8192,
+    beta_fast=32.0,
+    beta_slow=1.0,
+):
+    if use_yarn:
+        cos, sin, _ = precompute_freqs_yarn(
+            dim=head_dim,
+            end=max_seq_len * 2,
+            theta=rope_theta,
+            scaling_factor=scale_factor,
+            original_max_position_embeddings=original_max_position_embeddings,
+            beta_fast=beta_fast,
+            beta_slow=beta_slow,
+        )
+    else:
+        cos, sin = precompute_freqs(head_dim, max_seq_len * 2, scale_factor=scale_factor)
     cos_gathered, sin_gathered = gather_cos_sin(torch.arange(start_pos, start_pos + seq_len), cos, sin)
     assert cos_gathered.size() == (1, 1, seq_len, head_dim)
     assert sin_gathered.size() == (1, 1, seq_len, head_dim)

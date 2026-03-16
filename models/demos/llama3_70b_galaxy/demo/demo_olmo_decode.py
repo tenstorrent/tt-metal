@@ -686,6 +686,21 @@ def run_olmo_demo(
             False,  # stress_test
             0,  # start_pos
         ),
+        (  # quick 1L demo, batch 1
+            "instruct",
+            1,
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            50,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
+            False,  # stress_test
+            0,  # start_pos
+        ),
         (  # Stress test: 4*128k generation length
             "instruct",
             64,
@@ -750,7 +765,8 @@ def run_olmo_demo(
     ids=[
         "full",  # full demo
         "quick",  # 3L demo (uses 3 layers to test sliding window pattern: 3 sliding + 1 full)
-        "single",  # 1L demo for fastest iteration
+        "single",  # 1L demo for fastest iteration (batch=32)
+        "single-batch1",  # 1L demo for batch=1 testing
         "stress-test",  # stress test with many iterations and same token index, full model
         "mini-stress-test",  # mini stress test with 2048 max_generated_tokens
         "measure-device-perf",  # 10L demo for device performance measurements

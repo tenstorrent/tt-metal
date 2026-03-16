@@ -7,7 +7,7 @@
 
 ## Standards
 - PCC > 0.99 is MANDATORY for all ttnn blocks.
-- Reset device with 'tt-smi -r' if a hang occurs.
+- NEVER run device reset commands (tt-smi -r, tt-smi -glx_reset, etc.) yourself. Always ask the user to reset the device when needed (after hangs/segfaults).
 - Follow the "Relay Race" flow: Architecture -> Reference -> TTNN -> Debug -> Opt.
 
 ## Session Management

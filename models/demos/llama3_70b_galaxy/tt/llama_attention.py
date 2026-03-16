@@ -57,6 +57,8 @@ class TtLlamaAttention(LightweightModule):
         self.is_olmo = getattr(configuration, "is_olmo", False)
         self.n_local_heads_padded = 8 if (self.is_olmo and self.n_local_heads < 8) else self.n_local_heads
         self.cluster_shape = configuration.cluster_shape
+        self.capture_intermediates = False  # Set by parent decoder for PCC debug
+        self.captured = {}  # Stores reconstructed torch tensors
 
         # TODO: Fix this once all-gather supports < tile_size
         if self.TG:
@@ -367,9 +369,9 @@ class TtLlamaAttention(LightweightModule):
                 self.olmo_q_norm_cpu = q_norm_full.clone()  # [5120]
                 self.olmo_k_norm_cpu = k_norm_full.clone()  # [1024]
 
-                # Full-dim Q norm weight for prefill: normalize over all local Q dims (640)
-                # instead of per-head (128), matching HF's Olmo3RMSNorm(5120) more closely.
-                # Shape [1, 1, 5120//32, 32] = [1, 1, 160, 32], sharded to [1, 1, 20, 32] per device
+                # Full-dim Q norm weight: normalize over all local Q dims (640 per row device)
+                # Shape [1, 1, 5120//32, 32] = [1, 1, 160, 32], sharded to [1, 1, 20, 32] per row device
+                # dims=(2, None): d0=2 shards over axis 0 (8 row devices) → 160/8=20 per device ✓
                 q_dim = q_norm_full.shape[0]  # 5120
                 q_norm_full_2d = q_norm_full.view(1, 1, q_dim // SHARD_HEIGHT, SHARD_HEIGHT)
                 self.olmo_q_norm_weight_full_prefill = ttnn.as_tensor(
@@ -383,8 +385,9 @@ class TtLlamaAttention(LightweightModule):
                     ),
                 )
 
-                # Full-dim K norm weight for prefill: normalize over all local K dims (128)
-                # Shape [1, 1, 1024//32, 32] = [1, 1, 32, 32], sharded to [1, 1, 4, 32] per device
+                # Full-dim K norm weight: normalize over all local K dims (128 per row device)
+                # Shape [1, 1, 1024//32, 32] = [1, 1, 32, 32], sharded to [1, 1, 4, 32] per row device
+                # dims=(2, None): d0=2 shards over axis 0 (8 row devices) → 32/8=4 per device ✓
                 k_norm_full_2d = k_norm_full.view(1, 1, k_dim // SHARD_HEIGHT, SHARD_HEIGHT)
                 self.olmo_k_norm_weight_full_prefill = ttnn.as_tensor(
                     k_norm_full_2d,
@@ -550,6 +553,28 @@ class TtLlamaAttention(LightweightModule):
 
             logger.error(f"    ATTN [ERROR] {name}: {e}")
 
+    def _capture_attn(self, name, tensor):
+        """Capture a tensor as CPU torch for PCC debug. Only active when capture_intermediates=True.
+
+        Uses dims=(0, 1) to match unit test convention for create_heads output.
+        Also logs the ttnn per-device shape for debugging.
+        """
+        if not self.capture_intermediates:
+            return
+        try:
+            from loguru import logger
+
+            logger.info(f"  [capture] {name}: ttnn_shape={list(tensor.shape)}")
+            t = ttnn.to_torch(
+                tensor,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(self.mesh_device, dims=(0, 1), mesh_shape=self.cluster_shape),
+            ).float()
+            self.captured[name] = t
+        except Exception as e:
+            from loguru import logger
+
+            logger.warning(f"  [attn capture] {name}: failed — {e}")
+
     def forward_decode(
         self,
         x: ttnn.Tensor,
@@ -608,28 +633,78 @@ class TtLlamaAttention(LightweightModule):
             q_mem_cfg = q_heads_pre_rot_1BQD.memory_config()
             k_mem_cfg = k_heads_pre_rot_1BKD.memory_config()
 
-            # K norm: exact (1 head per device, rms_norm over 128 elements)
+            self._capture_attn("q_pre_norm", q_heads_pre_rot_1BQD)
+            self._capture_attn("k_pre_norm", k_heads_pre_rot_1BKD)
+            self._capture_attn("v_heads", v_heads_1BKD)
+
+            # ---- K global norm: distributed rms_norm over 8 row devices (1024 total elements) ----
+            # K [1,1,32,128] (1 KV head per device, 128 dims per row device)
+            # all_gather on cluster_axis=0 (row axis, 8 devices) to compute global variance over 1024 dims
             k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, ttnn.DRAM_MEMORY_CONFIG)
             k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.TILE_LAYOUT)
-            k_heads_pre_rot_1BKD = ttnn.rms_norm(k_heads_pre_rot_1BKD, weight=self.olmo_k_norm_weight, epsilon=1e-6)
+            k_stats = ttnn.rms_norm_pre_all_gather(
+                k_heads_pre_rot_1BKD, dtype=ttnn.bfloat16, compute_kernel_config=self.compute_kernel_config_hifi2
+            )
+            k_stats_gathered = self._olmo_qk_norm_all_gather(k_stats, cluster_axis=0)
+            ttnn.deallocate(k_stats)
+            k_heads_pre_rot_1BKD = ttnn.rms_norm_post_all_gather(
+                k_heads_pre_rot_1BKD,
+                k_stats_gathered,
+                epsilon=1e-6,
+                weight=self.olmo_k_norm_weight,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
+            )
+            ttnn.deallocate(k_stats_gathered)
             k_heads_pre_rot_1BKD = ttnn.to_layout(k_heads_pre_rot_1BKD, ttnn.ROW_MAJOR_LAYOUT)
             k_heads_pre_rot_1BKD = ttnn.to_memory_config(k_heads_pre_rot_1BKD, k_mem_cfg)
 
-            # Q norm: per-head normalize, then apply per-head trained weights.
-            # Reshape [1,8,32,128] → [1,1,256,128] to normalize each head's 128-dim slice
+            # ---- Q global norm: distributed rms_norm over 8 row devices (5120 total elements) ----
+            # create_heads output: [1, batch(8), padded_heads(8), head_dim(128)]
+            # batch is in dim 1 (8 users per device group), heads in dim 2.
+            # Normalize over 5 real heads × 128 = 640 per device (globally 5120 across 8 row devices).
             q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, ttnn.DRAM_MEMORY_CONFIG)
-            q_batch = q_heads_pre_rot_1BQD.shape[2]  # actual batch dim (e.g., 32)
-            q_heads_pre_rot_1BQD = ttnn.reshape(
-                q_heads_pre_rot_1BQD, [1, 1, self.n_local_heads_padded * q_batch, self.head_dim]
+            q_batch = q_heads_pre_rot_1BQD.shape[1]  # batch dimension
+
+            # Slice 5 real Q heads in dim 2: [1, batch, 8, 128] → [1, batch, 5, 128]
+            q_real = ttnn.slice(q_heads_pre_rot_1BQD, [0, 0, 0, 0], [1, q_batch, self.n_local_heads, self.head_dim])
+            ttnn.deallocate(q_heads_pre_rot_1BQD)
+
+            # Reshape [1, batch, 5, 128] → [1, 1, batch, 640]: flatten heads into last dim
+            q_flat = ttnn.reshape(q_real, [1, 1, q_batch, self.n_local_heads * self.head_dim])
+            ttnn.deallocate(q_real)
+            q_flat = ttnn.to_layout(q_flat, ttnn.TILE_LAYOUT)
+
+            # Distributed global Q norm: all_gather on cluster_axis=0 (8 row devices)
+            q_stats = ttnn.rms_norm_pre_all_gather(
+                q_flat, dtype=ttnn.bfloat16, compute_kernel_config=self.compute_kernel_config_hifi2
             )
-            q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.TILE_LAYOUT)
-            q_heads_pre_rot_1BQD = ttnn.rms_norm(q_heads_pre_rot_1BQD, weight=self.olmo_q_norm_ones, epsilon=1e-6)
-            q_heads_pre_rot_1BQD = ttnn.reshape(
-                q_heads_pre_rot_1BQD, [1, self.n_local_heads_padded, q_batch, self.head_dim]
+            q_stats_gathered = self._olmo_qk_norm_all_gather(q_stats, cluster_axis=0)
+            ttnn.deallocate(q_stats)
+            q_flat = ttnn.rms_norm_post_all_gather(
+                q_flat,
+                q_stats_gathered,
+                epsilon=1e-6,
+                weight=self.olmo_q_norm_weight_full_prefill,
+                compute_kernel_config=self.compute_kernel_config_hifi2,
             )
-            # Apply per-head trained weights: Q[1,8,32,128] * weight[1,8,1,128]
-            q_heads_pre_rot_1BQD = ttnn.multiply(q_heads_pre_rot_1BQD, self.olmo_q_head_weight)
-            q_heads_pre_rot_1BQD = ttnn.to_layout(q_heads_pre_rot_1BQD, ttnn.ROW_MAJOR_LAYOUT)
+            ttnn.deallocate(q_stats_gathered)
+            q_flat = ttnn.to_layout(q_flat, ttnn.ROW_MAJOR_LAYOUT)
+
+            # Undo reshape [1, 1, batch, 640] → [1, batch, 5, 128]
+            q_real_normed = ttnn.reshape(q_flat, [1, q_batch, self.n_local_heads, self.head_dim])
+            ttnn.deallocate(q_flat)
+
+            # Pad 3 zero heads in dim 2: [1, batch, 5, 128] → [1, batch, 8, 128]
+            n_pad = self.n_local_heads_padded - self.n_local_heads
+            if n_pad > 0:
+                q_heads_pre_rot_1BQD = ttnn.pad(q_real_normed, [(0, 0), (0, 0), (0, n_pad), (0, 0)], value=0.0)
+                ttnn.deallocate(q_real_normed)
+            else:
+                q_heads_pre_rot_1BQD = q_real_normed
+
+            self._capture_attn("q_post_norm", q_heads_pre_rot_1BQD)
+            self._capture_attn("k_post_norm", k_heads_pre_rot_1BKD)
+
             q_heads_pre_rot_1BQD = ttnn.to_memory_config(q_heads_pre_rot_1BQD, q_mem_cfg)
         else:
             (
@@ -734,8 +809,10 @@ class TtLlamaAttention(LightweightModule):
             # Move to DRAM first to avoid sharding issues with slice
             k_heads_expanded_dram = ttnn.to_memory_config(k_heads_expanded, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(k_heads_expanded)
+            self._capture_attn("k_expanded_post_rope", k_heads_expanded_dram)
             k_heads_1BKD = ttnn.slice(k_heads_expanded_dram, [0, 0, 0, 0], [1, k_shape[1], 1, k_shape[3]])
             ttnn.deallocate(k_heads_expanded_dram)
+            self._capture_attn("k_post_rope_sliced", k_heads_1BKD)
             # Move back to original memory config
             k_heads_1BKD = ttnn.to_memory_config(k_heads_1BKD, k_mem_config)
         else:
@@ -747,6 +824,8 @@ class TtLlamaAttention(LightweightModule):
             ttnn.deallocate(k_heads_pre_rot_1BKD)
         self._debug_check_attn("q_heads_post_rope", q_heads_1BQD)
         self._debug_check_attn("k_heads_post_rope", k_heads_1BKD)
+        self._capture_attn("q_post_rope", q_heads_1BQD)
+        self._capture_attn("v_from_create_heads", v_heads_1BKD)
         # print("done rotary embeddings")
 
         ###
@@ -841,31 +920,44 @@ class TtLlamaAttention(LightweightModule):
 
         ttnn.deallocate(q_heads_1BQD)
         self._debug_check_attn("sdpa_output", attn_output_1G4D_sharded)
+        self._capture_attn("sdpa_out", attn_output_1G4D_sharded)
+        self._capture_attn("values_cache", values)  # KV cache values for debug
 
         # OLMo decode: Use 8 padded heads to match fused RoPE (num_heads * head_dim = 1024)
         # For other models with 8 local heads, n_local_heads == 8 already
         decode_num_heads = 8 if (self.is_olmo and self.n_local_heads < 8) else self.n_local_heads
 
         if self.is_olmo:
-            # OLMo wo matmul: use local SDPA output directly (no all_gather needed).
-            # sdpa_output shape per device: [1, n_local_heads_padded, batch, head_dim]
-            #   = [1, 8, 32, 128]
-            # Correct reshape: [1, 1, batch, n_local_heads * head_dim] = [1, 1, 32, 1024]
-            # so that each row of the matmul represents one user's head outputs.
-            # Each col device computes a partial dot product over its 8 (padded) heads;
-            # the line_all_reduce (cluster_axis=0) below sums contributions from all 8 col groups.
-            #
-            # IMPORTANT: Convert to DRAM_MEMORY_CONFIG before reshape to avoid data corruption
-            # when reshaping a sharded (HEIGHT_SHARDED) tensor.
+            # OLMo SDPA→WO: slice padded heads, then all_gather batch across col devices.
+            # SDPA output per device: [1, B=8, NH_padded=32, D=128] (batch=8 per col device,
+            #   heads tile-padded from 8→32, head_dim=128).
+            # llama_rs_create_heads did reduce_scatter splitting batch 32→8 across 4 col devices.
+            # We reverse this: slice to 5 real heads, reshape, all_gather → [1, 1, 32, 640].
             sdpa_dram = ttnn.to_memory_config(attn_output_1G4D_sharded, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(attn_output_1G4D_sharded)
+            sdpa_dram = ttnn.to_layout(sdpa_dram, ttnn.ROW_MAJOR_LAYOUT)
 
-            n_heads_local = sdpa_dram.shape[1]  # 8 (padded local Q heads)
-            batch_all = sdpa_dram.shape[2]  # 32 (full batch from paged SDPA)
-            head_dim_local = sdpa_dram.shape[3]  # 128
+            batch_per_dev = sdpa_dram.shape[1]  # 8 (batch_size_per_device_group)
 
-            attn_output_cat = ttnn.reshape(sdpa_dram, [1, 1, batch_all, n_heads_local * head_dim_local])
+            # Slice to 5 real Q heads in dim2: [1, 8, 32, 128] → [1, 8, 5, 128]
+            sdpa_real = ttnn.slice(sdpa_dram, [0, 0, 0, 0], [1, batch_per_dev, self.n_local_heads, self.head_dim])
+            ttnn.deallocate(sdpa_dram)
+
+            # Reshape [1, 8, 5, 128] → [1, 1, 8, 640] (flatten heads*head_dim)
+            sdpa_flat = ttnn.reshape(sdpa_real, [1, 1, batch_per_dev, self.n_local_heads * self.head_dim])
+            ttnn.deallocate(sdpa_real)
+
+            # All_gather across col devices (cluster_axis=1) in dim2: [1, 1, 8, 640] → [1, 1, 32, 640]
+            attn_output_cat = self.tt_ccl.line_all_gather(
+                sdpa_flat,
+                dim=2,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            ttnn.deallocate(sdpa_flat)
             self._debug_check_attn("attn_output_cat", attn_output_cat)
+            self._capture_attn("wo_input", attn_output_cat)
         else:
             # Standard path for Llama/Qwen - use all_gather_concat
             attn_output_cat = self.tt_ccl.all_gather_concat(  # [1, 1, 32, 1024]
@@ -895,18 +987,22 @@ class TtLlamaAttention(LightweightModule):
 
         # Original matmul on each device [1, 1, 32, 1024] @ [1, 1, 1024, 2048]
         if self.is_olmo:
-            # OLMo: use simpler matmul with DRAM interleaved tensors
-            # Use wo_interleaved to avoid circular buffer issues
+            # OLMo: use unpadded wo (640 rows = 5 real heads × 128 per col device)
+            # attn_output_cat is [1, 1, 32, 640] (sliced to 5 real heads only)
+            wo_decode = (
+                self.wo_interleaved_unpadded if self.wo_interleaved_unpadded is not None else self.wo_interleaved
+            )
             dense_out_ttnn = ttnn.matmul(  # [1, 1, 32, 1280]
                 attn_output_cat,
-                self.wo_interleaved,
+                wo_decode,
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 dtype=ttnn.bfloat8_b,
             )
             ttnn.deallocate(attn_output_cat)
             self._debug_check_attn("wo_matmul_out", dense_out_ttnn)
-            # OLMo: Use device-side all_reduce with OLMo-specific sharded config
-            # Reshard to SHARDED_WO_OUT_RING_MEMCFG_OLMO (10 cores × 128 = 1280)
+            # wo weight dims=(2,3): K(5120 heads) over rows(axis 0), N(5120 model) over cols(axis 1).
+            # Each device computes partial_Y = X[32,640_i] @ W[640_i,1280_j].
+            # All-reduce over rows (axis 0) sums partial K contributions → correct output per col.
             dense_out_sharded = ttnn.to_memory_config(
                 dense_out_ttnn, self.model_config["SHARDED_WO_OUT_RING_MEMCFG_OLMO"]
             )
@@ -942,6 +1038,7 @@ class TtLlamaAttention(LightweightModule):
             )
             ttnn.deallocate(dense_out_ttnn)
         self._debug_check_attn("attn_output_final", dense_out_reduced)
+        self._capture_attn("attn_out_final", dense_out_reduced)
 
         # print("done all reduce")
 
@@ -994,6 +1091,41 @@ class TtLlamaAttention(LightweightModule):
             mesh_mapper=ttnn.ShardTensor2dMesh(self.mesh_device, dims=(1, 3), mesh_shape=self.cluster_shape),
         )
         return ttnn.reshape(result_dev, [1, n_heads, seq, self.head_dim])
+
+    def _olmo_qk_norm_all_gather_single_axis(self, stats_tensor, cluster_axis):
+        """All-gather stats along a single axis using async API with semaphores."""
+        ccl = self.tt_ccl
+        idx = ccl.gather_idx[cluster_axis]
+        sem_handles = ccl.gather_semaphore_handles[cluster_axis]
+        if isinstance(sem_handles[idx], list):
+            semaphores = sem_handles[idx]
+        else:
+            semaphores = [sem_handles[idx], sem_handles[(idx + 1) % ccl.num_cbs]]
+        barrier_semaphore = ccl.get_and_cycle_barrier_semaphore_handle(cluster_axis)
+        result = ttnn.experimental.all_gather_async(
+            stats_tensor,
+            dim=3,
+            cluster_axis=cluster_axis,
+            mesh_device=ccl.mesh_device,
+            topology=ttnn.Topology.Linear,
+            multi_device_global_semaphore=semaphores,
+            persistent_output_tensor=None,
+            barrier_semaphore=barrier_semaphore,
+            num_links=1,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            subdevice_id=ccl.worker_sub_device_id,
+        )
+        ccl.gather_idx[cluster_axis] = (idx + 1) % ccl.num_cbs
+        return result
+
+    def _olmo_qk_norm_all_gather(self, stats_tensor, cluster_axis=0):
+        """All-gather QK-norm stats across row devices (axis 0, 8 devices).
+
+        After create_heads' all-reduce, all 4 cols have identical Q/K data.
+        Only need to gather across 8 rows to collect stats for global RMS
+        (5120 Q dims = 8 rows × 640, or 1024 K dims = 8 rows × 128).
+        """
+        return self._olmo_qk_norm_all_gather_single_axis(stats_tensor, cluster_axis=0)
 
     def forward_prefill(
         self,
@@ -1085,20 +1217,14 @@ class TtLlamaAttention(LightweightModule):
             # OLMo QK-norm: distributed RMS across 8 row devices for exact global normalization.
             # HF normalizes Q over 5120 dims (all 40 heads) before head split.
             # Each row device has 640 dims (5 heads × 128). Use rms_norm_pre/post_all_gather
-            # with line_all_gather on cluster_axis=0 to compute global variance.
+            # with all_gather on cluster_axis=0 to compute global variance over 5120 dims.
             q_seq = q_heads_1QSD_pre_rot.shape[2]
             q_flat = ttnn.reshape(q_heads_1QSD_pre_rot, [1, 1, q_seq, self.n_local_heads * self.head_dim])
             q_flat = ttnn.to_layout(q_flat, ttnn.TILE_LAYOUT)
             q_stats = ttnn.rms_norm_pre_all_gather(
                 q_flat, compute_kernel_config=self.compute_kernel_config_hifi2, dtype=ttnn.bfloat16
             )
-            q_stats_gathered = self.tt_ccl.line_all_gather(
-                q_stats,
-                dim=3,
-                cluster_axis=0,
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            q_stats_gathered = self._olmo_qk_norm_all_gather(q_stats, cluster_axis=0)
             ttnn.deallocate(q_stats)
             q_normed_flat = ttnn.rms_norm_post_all_gather(
                 q_flat,
@@ -1130,17 +1256,12 @@ class TtLlamaAttention(LightweightModule):
         elif self.is_olmo and self.qk_norm:
             # OLMo K norm: distributed RMS across 8 row devices for exact global normalization.
             # HF normalizes K over 1024 dims (all 8 KV heads). Each row device has 128.
+            # all_gather on cluster_axis=0 to compute global variance over 1024 dims.
             k_heads_1KSD_pre_rot = ttnn.to_layout(k_heads_1KSD_pre_rot, ttnn.TILE_LAYOUT)
             k_stats = ttnn.rms_norm_pre_all_gather(
                 k_heads_1KSD_pre_rot, compute_kernel_config=self.compute_kernel_config_hifi2, dtype=ttnn.bfloat16
             )
-            k_stats_gathered = self.tt_ccl.line_all_gather(
-                k_stats,
-                dim=3,
-                cluster_axis=0,
-                num_links=1,
-                memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            )
+            k_stats_gathered = self._olmo_qk_norm_all_gather(k_stats, cluster_axis=0)
             ttnn.deallocate(k_stats)
             k_heads_1KSD_pre_rot = ttnn.rms_norm_post_all_gather(
                 k_heads_1KSD_pre_rot,
@@ -1318,7 +1439,6 @@ class TtLlamaAttention(LightweightModule):
             output_11SH = ttnn.reshape(output_11SH, [1, 1, seq_len, -1])
         ttnn.deallocate(attn_output_11SH)
 
-        # Reduce-scatter
         output_11SH_reduced = self.tt_ccl.line_all_reduce(
             output_11SH,
             cluster_axis=0,

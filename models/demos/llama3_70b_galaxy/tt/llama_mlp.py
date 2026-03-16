@@ -156,17 +156,11 @@ class TtLlamaMLP(LightweightModule):
             )
             pc_2 = self.model_config.get("FF2_TG_RING_PROGCFG_NO_PREFETCH", self.model_config["FF2_TG_RING_PROGCFG"])
 
-        # OLMo decode: Use separate matmuls when prefetcher is disabled
-        # double_matmul_line_reduce_scatter requires global_cb for multi-tensor matmul
         is_olmo = getattr(self.args, "is_olmo", False)
+
         if not self.model_config["USE_PREFETCHER"]:
-            # OLMo and non-prefetcher path: Use sharded weights with program config
-            # The sharded weights (self.w1, self.w3) have correct K=dim/4=1280 for decode input
-            # Ring matmul requires sharded output, so use SHARDED_FF12_OUT_RING_MEMCFG
-            # OLMo: all_gather(dim=0) + fast_reduce_nc to sum across 4 column devices
-            # (matches tt_transformers approach for TG models with dim < 8192)
             if is_olmo:
-                self._debug_check_mlp("olmo_ff_input", x)
+                # OLMo decode: ring matmul outputs 3840-padded, slice to 3456 before reduce_scatter
                 unpadded_width = self.args.intermediate_dim_per_tp  # 3456
 
                 w1_out = ttnn.linear(
@@ -179,28 +173,18 @@ class TtLlamaMLP(LightweightModule):
                     program_config=pc_1_3,
                     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
                 )
-                self._debug_check_mlp("olmo_w1_out", w1_out)
                 w1_out_dram = ttnn.to_memory_config(w1_out, ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(w1_out)
                 w1_out_unpadded = ttnn.slice(w1_out_dram, [0, 0, 0, 0], [1, 1, 32, unpadded_width])
-                w1_gathered = self.tt_ccl.line_all_gather(
+                w1_out_reduced = self.tt_ccl.line_reduce_scatter(
                     w1_out_unpadded,
-                    dim=0,
                     cluster_axis=1,
                     num_links=self.model_config["GALAXY_NUM_LINKS"],
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    use_noc1_only=False,
                 )
-                ttnn.deallocate(w1_out_unpadded)
                 ttnn.deallocate(w1_out_dram)
-                w1_out_reduced = ttnn.experimental.fast_reduce_nc(
-                    w1_gathered,
-                    dims=[0],
-                    output=None,
-                    compute_kernel_config=None,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                ttnn.deallocate(w1_gathered)
-                self._debug_check_mlp("olmo_w1_reduced", w1_out_reduced)
+                ttnn.deallocate(w1_out_unpadded)
 
                 w3_out = ttnn.linear(
                     x,
@@ -213,30 +197,19 @@ class TtLlamaMLP(LightweightModule):
                     memory_config=self.model_config["SHARDED_FF12_OUT_RING_MEMCFG"],
                 )
                 ttnn.deallocate(x)
-                self._debug_check_mlp("olmo_w3_out", w3_out)
                 w3_out_dram = ttnn.to_memory_config(w3_out, ttnn.DRAM_MEMORY_CONFIG)
                 ttnn.deallocate(w3_out)
                 w3_out_unpadded = ttnn.slice(w3_out_dram, [0, 0, 0, 0], [1, 1, 32, unpadded_width])
-                w3_gathered = self.tt_ccl.line_all_gather(
+                w3_out_reduced = self.tt_ccl.line_reduce_scatter(
                     w3_out_unpadded,
-                    dim=0,
                     cluster_axis=1,
                     num_links=self.model_config["GALAXY_NUM_LINKS"],
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                    use_noc1_only=False,
                 )
-                ttnn.deallocate(w3_out_unpadded)
                 ttnn.deallocate(w3_out_dram)
-                w3_out_reduced = ttnn.experimental.fast_reduce_nc(
-                    w3_gathered,
-                    dims=[0],
-                    output=None,
-                    compute_kernel_config=None,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                ttnn.deallocate(w3_gathered)
-                self._debug_check_mlp("olmo_w3_reduced", w3_out_reduced)
+                ttnn.deallocate(w3_out_unpadded)
             else:
-                # W1 matmul
                 w1_out = ttnn.linear(
                     x,
                     self.w1,
@@ -258,7 +231,6 @@ class TtLlamaMLP(LightweightModule):
                 ttnn.deallocate(w1_out)
                 self._debug_check_mlp("w1_out_reduced", w1_out_reduced)
 
-                # W3 matmul
                 w3_out = ttnn.linear(
                     x,
                     self.w3,
@@ -314,12 +286,7 @@ class TtLlamaMLP(LightweightModule):
             )
             ttnn.deallocate(w3_out)
 
-        # OLMo decode: Use DRAM for intermediate results due to L1 constraints
-        ff1ff3_mem_config = (
-            ttnn.DRAM_MEMORY_CONFIG
-            if (is_olmo and mode == "decode")
-            else self.model_config["REDUCE_SCATTER_OUT_MEMCFG"]
-        )
+        ff1ff3_mem_config = ttnn.DRAM_MEMORY_CONFIG if is_olmo else self.model_config["REDUCE_SCATTER_OUT_MEMCFG"]
         ff1ff3 = ttnn.mul(
             w1_out_reduced,
             w3_out_reduced,
@@ -331,20 +298,28 @@ class TtLlamaMLP(LightweightModule):
 
         ttnn.deallocate(w3_out_reduced)
         ttnn.deallocate(w1_out_reduced)
+
         if is_olmo and mode == "decode":
-            w2_in = ff1ff3
-        else:
-            ff2_in_mem_config = self.model_config["FF2_IN_RING_MEMCFG"]
             w2_in = self.tt_ccl.line_all_gather(
                 ff1ff3,
                 dim=3,
                 cluster_axis=1,
                 num_links=self.model_config["GALAXY_NUM_LINKS"],
-                memory_config=ff2_in_mem_config,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                buffer_key="BINARY_MUL",
+                use_optimal_ccl_for_llama=True,
+            )
+        else:
+            w2_in = self.tt_ccl.line_all_gather(
+                ff1ff3,
+                dim=3,
+                cluster_axis=1,
+                num_links=self.model_config["GALAXY_NUM_LINKS"],
+                memory_config=self.model_config["FF2_IN_RING_MEMCFG"],
                 buffer_key="BINARY_MUL",
                 use_optimal_ccl_for_llama=False if mode == "prefill" else True,
             )
-            ttnn.deallocate(ff1ff3)
+        ttnn.deallocate(ff1ff3)
 
         if is_olmo and mode == "decode":
             w2_out = ttnn.linear(
@@ -356,8 +331,6 @@ class TtLlamaMLP(LightweightModule):
             )
             ttnn.deallocate(w2_in)
             self._debug_check_mlp("w2_out", w2_out)
-            # OLMo: Use device-side all_reduce with OLMo-specific sharded config
-            # Reshard to FF2_OUT_RING_MEMCFG_OLMO (10 cores × 128 = 1280)
             w2_out_sharded = ttnn.to_memory_config(w2_out, self.model_config["FF2_OUT_RING_MEMCFG_OLMO"])
             ttnn.deallocate(w2_out)
             w2_out_reduced = self.tt_ccl.line_all_reduce(
@@ -498,7 +471,6 @@ class TtLlamaMLP(LightweightModule):
         )
         ttnn.deallocate(w2_in)
 
-        # For shorter sequence lengths use the original matmul since it performs better than the minimal matmul
         if seq_len < 4096 or batch_size > 1:
             w2_out = ttnn.linear(
                 w2_in_gathered,

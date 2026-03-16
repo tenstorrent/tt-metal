@@ -50,6 +50,8 @@ class TtTransformerBlock(LightweightModule):
         self.unfuse_res_add = args.unfuse_res_add
         self.enable_trace = False  # Set to True during trace capture to skip input deallocation
         self.is_olmo = getattr(args, "is_olmo", False)
+        self.capture_intermediates = False  # Set to True to capture intermediates for PCC debug
+        self.captured = {}  # Stores reconstructed torch tensors when capture_intermediates=True
 
         self.attention = TtLlamaAttention(
             mesh_device=mesh_device,
@@ -119,6 +121,45 @@ class TtTransformerBlock(LightweightModule):
         self.feed_forward.prefetch(prefetcher_setup, tt_ccl)
         self.attention_norm.tt_ccl = tt_ccl
         self.ff_norm.tt_ccl = tt_ccl
+
+    def _capture(self, name, tensor):
+        """Capture a tensor as CPU torch tensor for PCC comparison. Only active when capture_intermediates=True."""
+        if not self.capture_intermediates:
+            return
+        try:
+            t = ttnn.to_torch(
+                tensor,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device, dims=(3, 1), mesh_shape=self.args.cluster_shape
+                ),
+            ).float()
+            self.captured[name] = t
+        except Exception as e:
+            from loguru import logger
+
+            logger.warning(f"  [capture] {name}: failed to reconstruct — {e}")
+
+    def _capture_prefill(self, name, tensor):
+        """Capture a prefill tensor for PCC comparison. Only active when capture_intermediates=True.
+
+        In prefill, tensors are sharded across mesh dim 1 (hidden dim) and replicated
+        across mesh dim 0. Concat across mesh dim 1 along tensor dim 3 to reconstruct
+        the full hidden dim; mesh dim 0 copies are stacked along tensor dim 1.
+        """
+        if not self.capture_intermediates:
+            return
+        try:
+            t = ttnn.to_torch(
+                tensor,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(
+                    self.mesh_device, dims=(1, 3), mesh_shape=self.args.cluster_shape
+                ),
+            ).float()
+            self.captured[name] = t
+        except Exception as e:
+            from loguru import logger
+
+            logger.warning(f"  [capture_prefill] {name}: failed to reconstruct — {e}")
 
     def _debug_check(self, name, tensor):
         """Check tensor for Inf/NaN and log stats."""
@@ -191,31 +232,24 @@ class TtTransformerBlock(LightweightModule):
                 skip_input_dealloc=True,  # keep x alive for residual add
             )
             self._debug_check("attn_out", attn_out)
+            self._capture_prefill("attn_out", attn_out)
             attn_out_normed, _ = self.ff_norm(attn_out, None, mode)  # post-attention norm
+            self._capture_prefill("attn_normed", attn_out_normed)
             h = ttnn.add(x, attn_out_normed, memory_config=skip_mem_cfg)
+            self._capture_prefill("h_attn", h)
             if not self.enable_trace:
                 x.deallocate(True)
             ff_out = self.feed_forward.forward(h, mode, batch_size=batch_size, skip_input_dealloc=True)
             self._debug_check("ff_out", ff_out)
+            self._capture_prefill("ff_out", ff_out)
             ff_out_normed, _ = self.attention_norm(ff_out, None, mode)  # post-FFN norm
+            self._capture_prefill("ff_normed", ff_out_normed)
             out = ttnn.add(h, ff_out_normed, memory_config=skip_mem_cfg)
+            self._capture_prefill("layer_out", out)
             h.deallocate(True)
             return out, None
 
         elif self.is_olmo and mode == "decode":
-            # OLMo post-sublayer-norm DECODE path (mirrors prefill logic, adapted for decode).
-            # Weight mapping (same as prefill):
-            #   self.ff_norm        has post_attention_layernorm weights  → applied after attention
-            #   self.attention_norm has post_feedforward_layernorm weights → applied after FFN
-            #
-            # In decode, each layer always returns (out, None) so the next layer also gets h=None.
-            # The full accumulated residual is passed as x each time.
-            #
-            # Memory format challenge: attention ring-matmul expects SHARDED_ATTN_INPUT_RING_MEMCFG
-            # (24 cores × 64 = 1536 capacity/col) while x is in DECODE_RESIDUAL_MEMCFG
-            # (10 cores × 128 = 1280 capacity/col). Route through DRAM to reshard without norm.
-
-            # Combine residuals (h is always None for OLMo decode, but handle defensively)
             if h is not None:
                 x_combined = ttnn.add(x, h)
                 if not self.enable_trace:
@@ -223,18 +257,11 @@ class TtTransformerBlock(LightweightModule):
             else:
                 x_combined = x
 
-            self._debug_check("olmo_decode_x_combined", x_combined)
-
-            # Reshard x to attention input ring format WITHOUT applying normalization.
-            # Both formats store [1,1,32,1280] logical data; go via DRAM to handle
-            # different shard capacities (1280 vs 1536).
             x_res_dram = ttnn.to_memory_config(x_combined, ttnn.DRAM_MEMORY_CONFIG)
             if not self.enable_trace and h is not None:
                 x_combined.deallocate(True)
             attn_in = ttnn.to_memory_config(x_res_dram, self.model_config["SHARDED_ATTN_INPUT_RING_MEMCFG"])
-            self._debug_check("olmo_decode_attn_in_raw", attn_in)
 
-            # Attention on raw (un-normalized) x
             attn_out = self.attention.forward(
                 attn_in,
                 current_pos,
@@ -247,42 +274,35 @@ class TtTransformerBlock(LightweightModule):
                 kv_cache=kv_cache,
                 batch_size=batch_size,
             )
-            # attn_out is in DECODE_RESIDUAL_MEMCFG
-            self._debug_check("attn_out", attn_out)
+            self._capture("attn_out", attn_out)
 
-            # Post-attention norm: ff_norm has post_attention_layernorm weights for OLMo
             attn_normed, _ = self.ff_norm(attn_out, None, mode)
+            self._capture("attn_normed", attn_normed)
             attn_normed_dram = ttnn.to_memory_config(attn_normed, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(attn_normed)
 
-            # Residual: h_attn = x + post_attn_norm(attn(x))
             h_attn_dram = ttnn.add(x_res_dram, attn_normed_dram)
+            self._capture("h_attn", h_attn_dram)
             ttnn.deallocate(attn_normed_dram)
             ttnn.deallocate(x_res_dram)
-            self._debug_check("olmo_decode_h_attn", h_attn_dram)
 
-            # Reshard h_attn to FFN input ring format WITHOUT applying normalization
             ff_in = ttnn.to_memory_config(h_attn_dram, self.model_config["SHARDED_FF12_RING_MEMCFG"])
-            self._debug_check("olmo_decode_ff_in_raw", ff_in)
 
-            # FFN on raw h_attn
             ff_out = self.feed_forward.forward(ff_in, mode, batch_size=batch_size)
-            # ff_out is in DECODE_RESIDUAL_MEMCFG
-            self._debug_check("ff_out", ff_out)
+            self._capture("ff_out", ff_out)
 
-            # Post-FFN norm: attention_norm has post_feedforward_layernorm weights for OLMo
             ff_normed, _ = self.attention_norm(ff_out, None, mode)
+            self._capture("ff_normed", ff_normed)
             ff_normed_dram = ttnn.to_memory_config(ff_normed, ttnn.DRAM_MEMORY_CONFIG)
             ttnn.deallocate(ff_normed)
 
-            # Final residual: out = h_attn + post_ffn_norm(ffn(h_attn))
             out_dram = ttnn.add(h_attn_dram, ff_normed_dram)
             ttnn.deallocate(h_attn_dram)
             ttnn.deallocate(ff_normed_dram)
 
-            # Convert back to DECODE_RESIDUAL_MEMCFG for output
             out = ttnn.to_memory_config(out_dram, skip_mem_cfg)
             ttnn.deallocate(out_dram)
+            self._capture("layer_out", out)
 
             return out, None
 

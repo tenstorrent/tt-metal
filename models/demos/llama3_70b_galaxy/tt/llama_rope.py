@@ -5,12 +5,40 @@
 import torch
 import ttnn
 from models.common.lightweightmodule import LightweightModule
-from models.demos.llama3_70b_galaxy.tt.llama_common import precompute_freqs, get_rot_transformation_mat, gather_cos_sin
+from models.demos.llama3_70b_galaxy.tt.llama_common import (
+    precompute_freqs,
+    precompute_freqs_yarn,
+    get_rot_transformation_mat,
+    gather_cos_sin,
+)
 from models.common.utility_functions import nearest_32
 
 
 def compute_gather_cos_sin(dhead, end, theta, position_ids, use_scaled_rope, scale_factor):
     cos, sin = precompute_freqs(dhead, end, theta, use_scaled_rope, scale_factor)
+    return gather_cos_sin(position_ids, cos, sin)
+
+
+def compute_gather_cos_sin_yarn(
+    dhead,
+    end,
+    theta,
+    position_ids,
+    scaling_factor,
+    original_max_position_embeddings,
+    beta_fast,
+    beta_slow,
+):
+    """YaRN-specific cos/sin computation using uniform frequency scaling."""
+    cos, sin, _ = precompute_freqs_yarn(
+        dim=dhead,
+        end=end,
+        theta=theta,
+        scaling_factor=scaling_factor,
+        original_max_position_embeddings=original_max_position_embeddings,
+        beta_fast=beta_fast,
+        beta_slow=beta_slow,
+    )
     return gather_cos_sin(position_ids, cos, sin)
 
 
@@ -25,6 +53,10 @@ class TtLlamaRotarySetup(LightweightModule):
         use_scaled_rope: bool = False,
         scale_factor: float = 8,
         datatype=ttnn.bfloat16,
+        use_yarn: bool = False,
+        original_max_position_embeddings: int = 8192,
+        beta_fast: float = 32.0,
+        beta_slow: float = 1.0,
     ):
         super().__init__()
 
@@ -51,14 +83,26 @@ class TtLlamaRotarySetup(LightweightModule):
         self.start_core = ttnn.CoreCoord(1, 0)
 
         # Generate the cos/sin matrices needed for ttnn.embedding op
-        cos_matrix, sin_matrix = compute_gather_cos_sin(
-            dhead=head_dim,
-            end=max_seq_len * 2,
-            theta=rope_theta,
-            position_ids=torch.arange(max_seq_len),
-            use_scaled_rope=use_scaled_rope,
-            scale_factor=scale_factor,
-        )
+        if use_yarn:
+            cos_matrix, sin_matrix = compute_gather_cos_sin_yarn(
+                dhead=head_dim,
+                end=max_seq_len * 2,
+                theta=rope_theta,
+                position_ids=torch.arange(max_seq_len),
+                scaling_factor=scale_factor,
+                original_max_position_embeddings=original_max_position_embeddings,
+                beta_fast=beta_fast,
+                beta_slow=beta_slow,
+            )
+        else:
+            cos_matrix, sin_matrix = compute_gather_cos_sin(
+                dhead=head_dim,
+                end=max_seq_len * 2,
+                theta=rope_theta,
+                position_ids=torch.arange(max_seq_len),
+                use_scaled_rope=use_scaled_rope,
+                scale_factor=scale_factor,
+            )
 
         self.cos_matrix = ttnn.from_torch(
             cos_matrix,

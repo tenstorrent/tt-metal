@@ -43,11 +43,13 @@ class LMHead(LightweightModule):
         self.output_weights_decode = []
         self.output_weights_prefill = []
         num_splits = 1
+        is_olmo_init = getattr(args, "is_olmo", False)
+        decode_cache_suffix = "dram_interleaved_decode" if is_olmo_init else "dram_width_sharded_decode"
         cache_file_name_decode = (
             None
             if args.dummy_weights
             else weight_cache_path
-            / f"output_lm_head_{num_splits}_split_shard_0_v{self.padded_vocab_size}_dram_width_sharded_decode"
+            / f"output_lm_head_{num_splits}_split_shard_0_v{self.padded_vocab_size}_{decode_cache_suffix}"
         )
         cache_file_name_prefill = (
             None
@@ -58,9 +60,14 @@ class LMHead(LightweightModule):
         padded_lm_head[:, :, :, : self.vocab_size] = torch_output_weights
 
         if args.is_70b:
-            memory_config_decode = args.create_dram_sharded_mem_config_lm_head(
-                k=args.dim // 4, n=self.padded_vocab_size // 8
-            )
+            is_olmo = getattr(args, "is_olmo", False)
+            if is_olmo:
+                # OLMo: use DRAM interleaved weight; ring matmul bypassed in forward
+                memory_config_decode = ttnn.DRAM_MEMORY_CONFIG
+            else:
+                memory_config_decode = args.create_dram_sharded_mem_config_lm_head(
+                    k=args.dim // 4, n=self.padded_vocab_size // 8
+                )
             memory_config_prefill = ttnn.DRAM_MEMORY_CONFIG
         else:
             memory_config = (
@@ -101,7 +108,6 @@ class LMHead(LightweightModule):
             packer_l1_acc=True,
             dst_full_sync_en=True,
         )
-
         self.program_configs = [args.model_config["LM_HEAD_TG_RING_PROGCFG"]] * num_splits
         self.output_memory_config = args.model_config["LM_HEAD_OUT_RING_MEMCFG"]
         self.prefill_pc = args.model_config["LM_HEAD_PREFILL_PROGCFG"]
@@ -142,21 +148,36 @@ class LMHead(LightweightModule):
     def forward(self, x: ttnn.Tensor, worker_sub_device_id, mode):
         outputs = []
         num_links = self.args.model_config.get("GALAXY_NUM_LINKS", 1)
+        is_olmo = getattr(self.args, "is_olmo", False)
         if mode == "decode":
-            for weight, pc in zip(self.output_weights_decode, self.program_configs):
-                x = ttnn.to_memory_config(x, self.args.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"])
-                output = ttnn.linear(
-                    x,
-                    weight,
-                    compute_kernel_config=self.compute_kernel_config,
-                    program_config=pc,
-                    memory_config=self.output_memory_config,
-                    dtype=ttnn.bfloat8_b,
-                    sub_device_id=worker_sub_device_id,
-                )
-                output = ttnn.to_memory_config(output, self.args.model_config["LM_HEAD_OUT_RING_RESHARD_MEMCFG"])
-
-                outputs.append(output)
+            if is_olmo:
+                # OLMo: ring matmul bypassed (K=1280 not divisible by ring_size*32=768).
+                # Use plain DRAM linear: weight loaded as DRAM interleaved per device.
+                x_dram = ttnn.to_memory_config(x, ttnn.DRAM_MEMORY_CONFIG)
+                for weight in self.output_weights_decode:
+                    output = ttnn.linear(
+                        x_dram,
+                        weight,
+                        compute_kernel_config=self.compute_kernel_config,
+                        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                        dtype=ttnn.bfloat8_b,
+                    )
+                    outputs.append(output)
+                ttnn.deallocate(x_dram)
+            else:
+                for weight, pc in zip(self.output_weights_decode, self.program_configs):
+                    x = ttnn.to_memory_config(x, self.args.model_config["SHARDED_LM_HEAD_INPUT_32_RING_MEMCFG"])
+                    output = ttnn.linear(
+                        x,
+                        weight,
+                        compute_kernel_config=self.compute_kernel_config,
+                        program_config=pc,
+                        memory_config=self.output_memory_config,
+                        dtype=ttnn.bfloat8_b,
+                        sub_device_id=worker_sub_device_id,
+                    )
+                    output = ttnn.to_memory_config(output, self.args.model_config["LM_HEAD_OUT_RING_RESHARD_MEMCFG"])
+                    outputs.append(output)
         else:
             is_minimal_config = hasattr(self.prefill_pc, "M_block_size")
             for weight, pc in zip(self.output_weights_prefill, self.program_configs):
@@ -181,19 +202,18 @@ class LMHead(LightweightModule):
                 outputs.append(output)
 
         outputs_reduced = []
-        is_olmo = getattr(self.args, "is_olmo", False)
         for output in outputs:
             if is_olmo and mode == "decode":
-                output_dram = ttnn.to_memory_config(output, ttnn.DRAM_MEMORY_CONFIG)
-                ttnn.deallocate(output)
+                # output is already in DRAM_MEMORY_CONFIG from the OLMo linear path;
+                # pass directly to avoid double-dealloc via to_memory_config alias
                 rs_output = self.tt_ccl.line_reduce_scatter(
-                    output_dram,
+                    output,
                     cluster_axis=1,
                     num_links=num_links,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                     use_noc1_only=False,
                 )
-                ttnn.deallocate(output_dram)
+                ttnn.deallocate(output)
                 ag_output = self.tt_ccl.line_all_gather(
                     rs_output,
                     dim=3,

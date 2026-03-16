@@ -324,7 +324,7 @@ class TT_CCL:
         persistent_buffers["LOGPROBS_LOGITS"] = tt_buffer
 
         # Binary Mult + Silu
-        # OLMo: 3456 (unpadded intermediate_dim_per_tp), Qwen: 3200, Llama: 3584
+        # OLMo: 3456 (intermediate_dim_per_tp, 27 cores × 128), Qwen: 3200, Llama: 3584
         if self.is_olmo:
             binary_mul_width = 3456  # intermediate_dim_per_tp (unpadded)
             binary_mul_mem_config = ttnn.DRAM_MEMORY_CONFIG
@@ -1445,8 +1445,6 @@ def tt_distributed_rmsnorm(
         compute_kernel_config=compute_kernel_config,
         use_2d_core_grid=use_2d_grid,
     )
-    # tt_stats_gathered.deallocate(True)
-    # inp.deallocate(True)
 
     return tt_out, None
 
