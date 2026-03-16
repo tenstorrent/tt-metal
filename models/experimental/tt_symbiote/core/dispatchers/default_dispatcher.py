@@ -1089,6 +1089,112 @@ def handle_scatter_value_inplace(func, args, kwargs):
     return input_tensor
 
 
+def handle_index_put_(func, args, kwargs):
+    """Handle index_put_ (in-place) using ttnn.index_fill.
+
+    Supports the case where indices is a tuple with exactly one index tensor
+    (others None), and value is a scalar. This maps to ttnn.index_fill(input, dim, index, value).
+    ttnn.index_fill requires ROW_MAJOR layout; we convert to/from TILE as needed.
+    """
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    input_tensor = args[0]
+    indices = args[1]
+    value = args[2]
+
+    # Find the single dimension that has an index tensor (rest are None / slice)
+    index_dim = None
+    index_tensor = None
+    if isinstance(indices, (list, tuple)):
+        for dim, idx in enumerate(indices):
+            if isinstance(idx, (torch.Tensor, TorchTTNNTensor)):
+                if index_tensor is not None:
+                    raise NotImplementedError(
+                        "aten::index_put_ with multiple index tensors is not supported; "
+                        "only single-dim index (compatible with index_fill) is supported."
+                    )
+                index_dim = dim
+                index_tensor = idx
+
+    if index_dim is None or index_tensor is None:
+        raise NotImplementedError("aten::index_put_ requires exactly one index tensor in the indices tuple.")
+
+    # value must be scalar for ttnn.index_fill
+    if isinstance(value, torch.Tensor) and value.numel() != 1:
+        raise NotImplementedError(
+            "aten::index_put_ with non-scalar value is not supported; use scalar value for index_fill."
+        )
+    if isinstance(value, torch.Tensor):
+        value = value.item()
+
+    device = None
+    deallocate_input = False
+    if not isinstance(input_tensor, TorchTTNNTensor):
+        input_tensor = TorchTTNNTensor(input_tensor)
+        deallocate_input = True
+    else:
+        if input_tensor.ttnn_tensor is None:
+            deallocate_input = True
+        device = input_tensor.to_ttnn.device()
+
+    deallocate_index = False
+    if not isinstance(index_tensor, TorchTTNNTensor):
+        if isinstance(index_tensor, (int, float)):
+            index_tensor = torch.tensor([index_tensor], dtype=torch.int64)
+        else:
+            index_tensor = index_tensor if isinstance(index_tensor, torch.Tensor) else torch.tensor(index_tensor)
+        # ttnn.index_fill expects 1D index; ensure contiguous indices
+        if index_tensor.dim() > 1:
+            index_tensor = index_tensor.flatten()
+        index_tensor = TorchTTNNTensor(index_tensor, dtype=torch.int64)
+        deallocate_index = True
+    else:
+        if index_tensor.ttnn_tensor is None:
+            deallocate_index = True
+        device = index_tensor.to_ttnn.device() if device is None else device
+        if index_tensor.to_ttnn.dim() > 1:
+            index_tensor.ttnn_tensor = ttnn.reshape(index_tensor.to_ttnn, -1)
+
+    if device is None:
+        raise RuntimeError("At least one of the inputs must be a TTNN tensor.")
+    if input_tensor.to_ttnn.device() != index_tensor.to_ttnn.device():
+        input_tensor.ttnn_tensor = ttnn.to_device(input_tensor.to_ttnn, device)
+        index_tensor.ttnn_tensor = ttnn.to_device(index_tensor.to_ttnn, device)
+    if deallocate_input:
+        input_tensor.ttnn_tensor = ttnn.to_device(input_tensor.to_ttnn, device)
+    if deallocate_index:
+        index_tensor.ttnn_tensor = ttnn.to_device(index_tensor.to_ttnn, device)
+
+    # Empty index: nothing to fill; return input unchanged (avoids SIGFPE in C++ index_fill)
+    index_shape = index_tensor.shape
+    if index_shape is not None and (not index_shape or 0 in index_shape):
+        if deallocate_index:
+            _cleanup_tensors((index_tensor, True))
+        return input_tensor
+
+    # ttnn.index_fill only supports ROW_MAJOR layout
+    input_tt = input_tensor.to_ttnn
+    original_layout = input_tt.layout
+    if original_layout != ttnn.ROW_MAJOR_LAYOUT:
+        input_tt = ttnn.to_layout(input_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    index_tt = index_tensor.to_ttnn
+    if index_tt.layout != ttnn.ROW_MAJOR_LAYOUT:
+        index_tt = ttnn.to_layout(index_tt, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    # ttnn.index_fill requires index tensor to be UINT32
+    if index_tt.dtype != ttnn.uint32:
+        index_tt = ttnn.typecast(index_tt, ttnn.uint32)
+
+    result = ttnn.index_fill(input_tt, index_dim, index_tt, value)
+    if original_layout != ttnn.ROW_MAJOR_LAYOUT:
+        result = ttnn.to_layout(result, original_layout, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+    input_tensor.ttnn_tensor = result
+    input_tensor.elem = None
+
+    if deallocate_index:
+        _cleanup_tensors((index_tensor, True))
+    return input_tensor
+
+
 def handle_bitwise_not(func, args, kwargs):
     """Handle bitwise_not operation."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
@@ -1198,6 +1304,7 @@ func_to_ttnn_compatible = {
     "aten::addmm": handle_addmm,
     "aten::zeros_like": handle_zeros_like,
     "aten::index.Tensor": handle_index,
+    "aten::index_put_": handle_index_put_,
     "aten::topk": handle_topk,
     "aten::permute": handle_permute,
     "aten::clamp": handle_clamp,
