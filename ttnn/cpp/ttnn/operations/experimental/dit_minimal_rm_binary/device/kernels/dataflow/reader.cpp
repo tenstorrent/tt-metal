@@ -27,19 +27,58 @@ FORCE_INLINE void read_chunk(
     uint32_t cb_id,
     uint32_t chunk_bytes,
     uint32_t row_size_bytes) {
+    uint32_t l1_write_addr = get_write_ptr(cb_id);
+
     uint32_t cb_write_offset = 0;
     uint32_t remaining = chunk_bytes;
+
     while (remaining > 0) {
         uint32_t avail = row_size_bytes - cur_offset;
         uint32_t n = avail < remaining ? avail : remaining;
-        noc_async_read(acc.get_noc_addr(cur_row, cur_offset), get_write_ptr(cb_id) + cb_write_offset, n);
-        cb_write_offset += n;
+        DPRINT << "Reading " << n << " bytes from (" << cur_row << ", " << cur_offset << ") " << ENDL();
+        noc_async_read(acc.get_noc_addr(cur_row, cur_offset), l1_write_addr, n);
         remaining -= n;
         cur_offset += n;
         if (cur_offset == row_size_bytes) {
             cur_row++;
             cur_offset = 0;
         }
+        l1_write_addr += n;
+    }
+    DPRINT << "pushed " << cb_write_offset << " bytes to cb" << ENDL();
+}
+
+template <typename Accessor>
+FORCE_INLINE void read_chunks(
+    const Accessor& acc_a,
+    const Accessor& acc_b,
+    uint32_t& cur_row,
+    uint32_t& cur_offset,
+    uint32_t cb_a,
+    uint32_t cb_b,
+    uint32_t chunk_bytes,
+    uint32_t row_size_bytes) {
+    uint32_t l1_write_addr_cba = get_write_ptr(cb_a);
+    uint32_t l1_write_addr_cbb = get_write_ptr(cb_b);
+
+    uint32_t remaining = chunk_bytes;
+
+    while (remaining > 0) {
+        uint32_t avail = row_size_bytes - cur_offset;
+        uint32_t n = avail < remaining ? avail : remaining;
+        // IDEA: read page if enough; read bytes otherwise
+
+        noc_async_read(acc_a.get_noc_addr(cur_row, cur_offset), l1_write_addr_cba, n);
+        noc_async_read(acc_b.get_noc_addr(cur_row, cur_offset), l1_write_addr_cbb, n);
+
+        remaining -= n;
+        cur_offset += n;
+        if (cur_offset == row_size_bytes) {
+            cur_row++;
+            cur_offset = 0;
+        }
+        l1_write_addr_cba += n;
+        l1_write_addr_cbb += n;
     }
 }
 
@@ -53,7 +92,7 @@ void kernel_main() {
     uint32_t cur_row_a = get_arg_val<uint32_t>(3);
     uint32_t cur_offset_a = get_arg_val<uint32_t>(4);
     const uint32_t last_chunk_bytes = get_arg_val<uint32_t>(5);
-    const uint32_t row_size_bytes = get_arg_val<uint32_t>(6);
+    const uint32_t bytes_per_row = get_arg_val<uint32_t>(6);
 
     // b cursor mirrors a (same shape, same starting position).
     uint32_t cur_row_b = cur_row_a;
@@ -67,18 +106,17 @@ void kernel_main() {
     // i.e. the absolute CT index of the first arg AFTER a_args — so b_args uses
     // that value directly, with no extra +1.
     constexpr auto a_args = TensorAccessorArgs<1>();
-    const auto a = TensorAccessor(a_args, src_a_addr, row_size_bytes);
+    const auto a = TensorAccessor(a_args, src_a_addr, bytes_per_row);
 
     constexpr auto b_args = TensorAccessorArgs<a_args.next_compile_time_args_offset()>();
-    const auto b = TensorAccessor(b_args, src_b_addr, row_size_bytes);
+    const auto b = TensorAccessor(b_args, src_b_addr, bytes_per_row);
 
     // Full 1024-element sticks.
     for (uint32_t i = 0; i < num_full_sticks; ++i) {
         cb_reserve_back(cb_a, 1);
         cb_reserve_back(cb_b, 1);
 
-        read_chunk(a, cur_row_a, cur_offset_a, cb_a, STICK_SIZE_BYTES, row_size_bytes);
-        read_chunk(b, cur_row_b, cur_offset_b, cb_b, STICK_SIZE_BYTES, row_size_bytes);
+        read_chunks(a, b, cur_row_a, cur_offset_a, cb_a, cb_b, STICK_SIZE_BYTES, bytes_per_row);
 
         noc_async_read_barrier();
 
@@ -89,10 +127,12 @@ void kernel_main() {
     // Partial last chunk (< 1024 elements); only present when
     // total_elements % STICK_SIZE != 0.
     if (last_chunk_bytes > 0) {
+        DPRINT << "Reading last chunk of " << last_chunk_bytes << " bytes" << ENDL();
+
         cb_reserve_back(cb_a, 1);
         cb_reserve_back(cb_b, 1);
 
-        read_chunk(a, cur_row_a, cur_offset_a, cb_a, last_chunk_bytes, row_size_bytes);
+        read_chunk(a, cur_row_a, cur_offset_a, cb_a, last_chunk_bytes, bytes_per_row);
         read_chunk(b, cur_row_b, cur_offset_b, cb_b, last_chunk_bytes, row_size_bytes);
 
         noc_async_read_barrier();
