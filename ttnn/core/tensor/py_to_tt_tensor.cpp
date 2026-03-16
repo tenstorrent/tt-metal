@@ -126,7 +126,7 @@ Tensor create_tt_tensor_from_host_data(
 
         TensorSpec tensor_spec(tensor_shape, dst_tensor_layout);
         return Tensor::from_span(
-            tt::stl::make_const_span(host_buffer.view_as<T>()),
+            ttsl::make_const_span(host_buffer.view_as<T>()),
             tensor_spec,
             nullptr,
             std::nullopt,
@@ -265,7 +265,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         }
         new_dims.push_back(N);
         new_dims.push_back(K);
-        effective_shape = ttnn::Shape(tt::stl::Span<const uint32_t>(new_dims.data(), new_dims.size()));
+        effective_shape = ttnn::Shape(ttsl::Span<const uint32_t>(new_dims.data(), new_dims.size()));
     }
 
     Tensor output = create_tt_tensor_from_host_data(

@@ -17,6 +17,7 @@ from models.demos.stable_diffusion_xl_base.tests.test_common import (
     SDXL_L1_SMALL_SIZE,
 )
 from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
+    accuracy_assert,
     calculate_accuracy_metrics,
     check_clip_scores,
     create_report_json,
@@ -211,3 +212,4 @@ def test_accuracy_sdxl(
     print(json.dumps(report_json, indent=4))
 
     check_clip_scores(model_name, evaluation_range, prompts, accuracy_metrics["clip_scores"])
+    accuracy_assert(metadata, accuracy_metrics)

@@ -62,7 +62,7 @@ auto invoke_op(Op&& op, Tuple& args) {
 template <typename T>
 inline std::vector<Tensor> extract_output_tensors(const T& result) {
     std::vector<Tensor> tensors;
-    tt::stl::reflection::visit_object_of_type<Tensor>([&tensors](auto&& tensor) { tensors.push_back(tensor); }, result);
+    ttsl::reflection::visit_object_of_type<Tensor>([&tensors](auto&& tensor) { tensors.push_back(tensor); }, result);
     return tensors;
 }
 
@@ -72,7 +72,7 @@ inline std::vector<Tensor> extract_output_tensors(const std::variant<Ts...>& res
     std::vector<Tensor> tensors;
     std::visit(
         [&tensors](auto&& value) {
-            tt::stl::reflection::visit_object_of_type<Tensor>(
+            ttsl::reflection::visit_object_of_type<Tensor>(
                 [&tensors](auto&& tensor) { tensors.push_back(tensor); }, value);
         },
         result);

@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 namespace NAMESPACE {
 void process_and_sort_tiles(
     uint32_t input_cb_index,
@@ -272,7 +274,9 @@ void process_iteration(
 void transpose_and_pack(uint32_t transposed_cb_index, uint32_t dest_cb_index, uint32_t Kt, uint32_t Wt) {
     reconfig_data_format_srca(transposed_cb_index);
     transpose_wh_init_short(transposed_cb_index);
-    pack_reconfig_data_format(transposed_cb_index);
+    // Pack using the DESTINATION CB format: transposed_cb may be bf16 (higher-precision
+    // intermediate) while dest_cb is the original bfp8/bfp4 output format.
+    pack_reconfig_data_format(dest_cb_index);
 
     cb_wait_front(transposed_cb_index, Kt);
     for (uint32_t i = 0; i < Kt; ++i) {
