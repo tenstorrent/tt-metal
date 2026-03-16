@@ -6,7 +6,7 @@
 #include "../offline/data_processor.hpp"
 #include "../offline/data_extractor.hpp"
 #include "../offline/yaml_serializer.hpp"
-#include "../common/types.hpp"
+#include <tt-metalium/experimental/noc_estimator/types.hpp>
 #include <iostream>
 #include <filesystem>
 
@@ -29,10 +29,10 @@ std::vector<std::string> find_all_csvs(const std::string& data_dir) {
 }
 
 bool generate_yaml_from_csvs(const std::vector<std::string>& csv_paths, const std::string& output_path) {
-    std::vector<tt::tt_metal::noc_estimator::offline::DataPoint> all_points;
+    std::vector<tt::tt_metal::experimental::noc_estimator::offline::DataPoint> all_points;
 
     for (const auto& path : csv_paths) {
-        tt::tt_metal::noc_estimator::offline::CsvReader reader;
+        tt::tt_metal::experimental::noc_estimator::offline::CsvReader reader;
         if (!reader.load_csv(path)) {
             std::cerr << "Failed to load " << path << std::endl;
             continue;
@@ -48,16 +48,18 @@ bool generate_yaml_from_csvs(const std::vector<std::string>& csv_paths, const st
         return false;
     }
 
-    auto groups = tt::tt_metal::noc_estimator::offline::group_by_parameters(all_points);
+    auto groups = tt::tt_metal::experimental::noc_estimator::offline::group_by_parameters(all_points);
     std::cout << "\nExtracting latencies for " << groups.size() << " groups...\n";
 
-    std::map<tt::tt_metal::noc_estimator::common::GroupKey, tt::tt_metal::noc_estimator::common::LatencyData> entries;
+    std::
+        map<tt::tt_metal::experimental::noc_estimator::GroupKey, tt::tt_metal::experimental::noc_estimator::LatencyData>
+            entries;
     for (const auto& [key, points] : groups) {
-        auto latency_data = tt::tt_metal::noc_estimator::offline::extract_latencies(points);
+        auto latency_data = tt::tt_metal::experimental::noc_estimator::offline::extract_latencies(points);
         entries[key] = latency_data;
     }
 
-    if (!tt::tt_metal::noc_estimator::offline::save_latency_data_to_yaml(entries, output_path)) {
+    if (!tt::tt_metal::experimental::noc_estimator::offline::save_latency_data_to_yaml(entries, output_path)) {
         return false;
     }
 
@@ -72,7 +74,7 @@ int main(int argc, char** argv) {
         std::cerr << "Usage: " << argv[0] << " <data_directory> <output_yaml>\n";
         std::cerr << "Example: " << argv[0]
                   << " tests/tt_metal/tt_metal/data_movement/data "
-                     "tests/tt_metal/tt_metal/data_movement/noc_estimator/noc_latencies.yaml\n";
+                     "tt_metal/impl/experimental/noc_estimator/latencies/noc_latencies.yaml\n";
         return 1;
     }
 

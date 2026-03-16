@@ -5,9 +5,9 @@ Estimates NOC bandwidth and latency for various data movement patterns on Tensto
 ## Usage
 
 ```cpp
-#include "noc_estimator.hpp"
+#include <tt-metalium/experimental/noc_estimator/noc_estimator.hpp>
 
-using namespace tt::tt_metal::noc_estimator;
+using namespace tt::tt_metal::experimental::noc_estimator;
 
 // Set up your parameters
 NocEstimatorParams params{

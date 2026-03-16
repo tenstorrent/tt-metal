@@ -9,7 +9,7 @@
 #include <string>
 #include <cstdint>
 
-namespace tt::tt_metal::noc_estimator::common {
+namespace tt::tt_metal::experimental::noc_estimator {
 
 // Values match tt::ARCH from umd/device/types/arch.hpp
 enum class Architecture { WORMHOLE_B0 = 2, BLACKHOLE = 3 };
@@ -126,4 +126,4 @@ struct NumericFields {
     }
 };
 
-}  // namespace tt::tt_metal::noc_estimator::common
+}  // namespace tt::tt_metal::experimental::noc_estimator
