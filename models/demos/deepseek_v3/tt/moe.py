@@ -71,6 +71,7 @@ class MoE(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.Device,
+        fabric_config: ttnn.FabricConfig,
     ) -> ModelState:
         """Create shared model state containing tensors that are constant across all instances.
 
@@ -80,7 +81,37 @@ class MoE(SharedStateAddOn, AbstractModule):
         Returns:
             ModelState containing shared tensors
         """
+        num_devices = mesh_device.get_num_devices()
+        num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
         num_dispatch_device_rows = mesh_device.shape[0]
+
+        # optimized ops (exclusive to quad with ring fabric) use a different mapping format
+        if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING and num_dispatch_device_rows == 16:
+            num_experts = num_devices * num_experts_per_device
+            tp_size = mesh_device.shape[1]
+            num_experts_per_cluster = num_experts // tp_size
+
+            e = torch.arange(num_experts, dtype=torch.int32)
+            torch_expert_mapping_tensor = (
+                (((e % num_experts_per_cluster) // num_experts_per_device) * tp_size + (e // num_experts_per_cluster))
+                .unsqueeze(0)
+                .repeat(num_devices, 1)
+            )
+        else:
+            torch_expert_mapping_tensor = (
+                torch.eye(num_devices, dtype=torch.int32)
+                .repeat_interleave(num_experts_per_device, dim=0)
+                .unsqueeze(0)
+                .unsqueeze(0)
+            )
+        expert_mapping_tensor = ttnn.from_torch(
+            torch_expert_mapping_tensor,
+            device=mesh_device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+            dtype=ttnn.uint16,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
+        )
 
         remap_topk_mask = ttnn.from_torch(
             torch.ones((1, num_dispatch_device_rows, 1, hf_config.n_routed_experts), dtype=torch.bfloat16),
@@ -91,10 +122,29 @@ class MoE(SharedStateAddOn, AbstractModule):
             layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
-        return {
+        config = {
+            "expert_mapping_tensor": expert_mapping_tensor,
             "remap_topk_mask": remap_topk_mask,
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
         }
+
+        # optimized ops (exclusive to quad with ring fabric) require preallocated tensors for all_to_all_dispatch_metadata
+        # TODO: (GR)
+        if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING and num_dispatch_device_rows == 16:
+            batch = USERS_PER_ROW * mesh_device.shape[0]
+            preallocated_all_to_all_dispatch_metadata_tensors = (
+                AllToAllDispatchMetadataConfig.create_preallocated_dispatch_output_tensors(
+                    mesh_device,
+                    batch,
+                    hf_config.hidden_size,
+                    hf_config.num_experts_per_tok,
+                )
+            )
+            config[
+                "quad_ring_preallocated_all_to_all_dispatch_metadata_tensors"
+            ] = preallocated_all_to_all_dispatch_metadata_tensors
+
+        return config
 
     @classmethod
     def create_state(
@@ -143,9 +193,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         """
 
         num_experts_per_device = MoEExperts._get_num_experts_per_device(hf_config, mesh_device)
-        expert_mapping_tensor = cls._create_expert_mapping_tensor(
-            mesh_device, fabric_config, mode, num_experts_per_device
-        )
 
         if mode == "decode":
             memory_config = ttnn.L1_MEMORY_CONFIG
@@ -167,7 +214,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             )
 
             # Construct the config
-            decode_config = {
+            config = {
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 "num_devices": mesh_device.get_num_devices(),
                 "fabric_config": fabric_config,
@@ -175,7 +222,6 @@ class MoE(SharedStateAddOn, AbstractModule):
                 "hidden_size": hf_config.hidden_size,
                 "num_experts_per_tok": hf_config.num_experts_per_tok,
                 "num_dispatch_devices": mesh_device.shape[0],
-                "expert_mapping_tensor": expert_mapping_tensor,
                 "moe_gate": MoEGate.model_config(hf_config, mesh_device, mode, topk_fallback=topk_fallback),
                 "all_to_all_dispatch_output_memory_config": memory_config,
                 "all_to_all_dispatch_metadata_memory_config": ttnn.DRAM_MEMORY_CONFIG,
@@ -214,54 +260,11 @@ class MoE(SharedStateAddOn, AbstractModule):
                     cluster_axis=1,
                 ),
             }
-
-            # optimized MoE ops only functional for quad torus
-            if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING and mesh_device.shape[0] == 16:
-                batch = USERS_PER_ROW * mesh_device.shape[0]
-                seq_len = 1
-
-                decode_config["quad_ring_all_to_all_dispatch_metadata"] = AllToAllDispatchMetadataConfig(
-                    cluster_axis=0,
-                    worker_mode=ttnn.WorkerMode.DIRECT,
-                    dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
-                    output_tensors=AllToAllDispatchMetadataConfig.create_preallocated_dispatch_output_tensors(
-                        mesh_device,
-                        batch,
-                        HIDDEN_SIZE,
-                        hf_config.num_experts_per_tok,
-                    ),
-                )
-                decode_config["quad_ring_moreh_full"] = MorehFullConfig(
-                    shape=ttnn.Shape([hf_config.num_experts_per_tok, USERS_PER_ROW, hf_config.hidden_size]),
-                    fill_value=0,
-                    device=mesh_device,
-                    dtype=torch.bfloat16,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-                decode_config["quad_ring_moe_compute"] = MoEComputeConfig(
-                    output_height_shard_dim=4,
-                    output_width_shard_dim=4,
-                    cluster_axis=0,
-                )
-                decode_config["quad_ring_selective_reduce_combine"] = SelectiveReduceCombineConfig(
-                    hidden_size=hf_config.hidden_size,
-                    batch=batch,
-                    seq=seq_len,
-                    select_experts_k=hf_config.num_experts_per_tok,
-                    experts=hf_config.n_routed_experts,
-                    axis=0,
-                    token_parallel_core_dim=4,
-                    data_parallel_core_dim=4,
-                    worker_cores=ttnn.experimental.get_moe_combine_cores(mesh_device),
-                    mux_core_range_set=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(4, 7))}),
-                )
-
-            return decode_config
         else:
             memory_config = ttnn.DRAM_MEMORY_CONFIG
+
             # Construct the config
-            return {
+            config = {
                 "mesh_device": MeshDeviceStub(mesh_device.shape),
                 "num_devices": mesh_device.get_num_devices(),
                 "fabric_config": fabric_config,
@@ -295,57 +298,43 @@ class MoE(SharedStateAddOn, AbstractModule):
                 ),
             }
 
-    @classmethod
-    def _create_expert_mapping_tensor(
-        cls,
-        mesh_device: ttnn.Device,
-        fabric_config: ttnn.FabricConfig,
-        mode: str,
-        num_experts_per_device: int,
-    ):
-        num_devices = mesh_device.get_num_devices()
-        if mode == "decode":
-            # optimized MoE ops only functional for quad torus
-            num_dispatch_devices = mesh_device.shape[0]
-            if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING and num_dispatch_devices == 16:
-                num_experts = num_devices * num_experts_per_device
-                tp_size = mesh_device.shape[1]
-                num_experts_per_cluster = num_experts // tp_size
+        # configs for optimized ops (exclusive to quad with ring fabric)
+        if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING and mesh_device.shape[0] == 16:
+            batch = USERS_PER_ROW * mesh_device.shape[0]
+            seq_len = 1
 
-                e = torch.arange(num_experts, dtype=torch.int32)
-                torch_expert_mapping_tensor = (
-                    (
-                        ((e % num_experts_per_cluster) // num_experts_per_device) * tp_size
-                        + (e // num_experts_per_cluster)
-                    )
-                    .unsqueeze(0)
-                    .repeat(num_devices, 1)
-                )
-            else:
-                torch_expert_mapping_tensor = (
-                    torch.eye(num_devices, dtype=torch.int32)
-                    .repeat_interleave(num_experts_per_device, dim=0)
-                    .unsqueeze(0)
-                    .unsqueeze(0)
-                )
-        else:
-            torch_expert_mapping_tensor = (
-                torch.eye(num_devices, dtype=torch.int32)
-                .repeat_interleave(num_experts_per_device, dim=0)
-                .unsqueeze(0)
-                .unsqueeze(0)
+            config["quad_ring_all_to_all_dispatch_metadata"] = AllToAllDispatchMetadataConfig(
+                cluster_axis=0,
+                worker_mode=ttnn.WorkerMode.DIRECT,
+                dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH,
+            )
+            config["quad_ring_moreh_full"] = MorehFullConfig(
+                shape=ttnn.Shape([hf_config.num_experts_per_tok, USERS_PER_ROW, hf_config.hidden_size]),
+                fill_value=0,
+                device=mesh_device,
+                dtype=torch.bfloat16,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            config["quad_ring_moe_compute"] = MoEComputeConfig(
+                output_height_shard_dim=4,
+                output_width_shard_dim=4,
+                cluster_axis=0,
+            )
+            config["quad_ring_selective_reduce_combine"] = SelectiveReduceCombineConfig(
+                hidden_size=hf_config.hidden_size,
+                batch=batch,
+                seq=seq_len,
+                select_experts_k=hf_config.num_experts_per_tok,
+                experts=hf_config.n_routed_experts,
+                axis=0,
+                token_parallel_core_dim=4,
+                data_parallel_core_dim=4,
+                worker_cores=ttnn.experimental.get_moe_combine_cores(mesh_device),
+                mux_core_range_set=ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(3, 0), ttnn.CoreCoord(4, 7))}),
             )
 
-        expert_mapping_tensor = ttnn.from_torch(
-            torch_expert_mapping_tensor,
-            device=mesh_device,
-            mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
-            dtype=ttnn.uint16,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-            layout=ttnn.ROW_MAJOR_LAYOUT,
-        )
-
-        return expert_mapping_tensor
+        return config
 
     @classmethod
     def decode_model_config(
@@ -521,6 +510,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 topk_experts_indices,  # TODO: (GR) need to change shard spec of aho gate module output (once it's merged)
                 topk_experts_weights,  # TODO: (GR) need to change shard spec of aho gate module output (once it's merged)
                 cfg["expert_mapping_tensor"],
+                output_tensors=cfg["quad_ring_preallocated_all_to_all_dispatch_metadata_tensors"],
                 **ccl.populate_all_to_all_dispatch_metadata_args(cfg["quad_ring_all_to_all_dispatch_metadata"]),
             )
 

@@ -164,12 +164,14 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                 DecoderBlock2D.create_shared_state(
                     hf_config,
                     mesh_device,
+                    get_fabric_config(),
                 )
             ],
             "moe_decoder_block": [
                 MoEDecoderBlock2D.create_shared_state(
                     hf_config,
                     mesh_device,
+                    get_fabric_config(),
                 )
             ],
         }

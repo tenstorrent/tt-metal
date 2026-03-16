@@ -134,7 +134,7 @@ def test_forward_pass(
     model_state = MoE.create_state(hf_config, mesh_device, ccl)
 
     # Create a new model shared state
-    model_shared_state = MoE.create_shared_state(hf_config, mesh_device)
+    model_shared_state = MoE.create_shared_state(hf_config, mesh_device, device_params["fabric_config"])
 
     # Create RunConfig using both weight_config and model_config
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)

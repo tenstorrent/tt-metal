@@ -82,12 +82,14 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
     ) -> ModelState:
         return {
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
             "mlp": cls.create_mlp_shared_state(
                 hf_config,
                 mesh_device,
+                fabric_config,
             ),
         }
 
@@ -167,6 +169,7 @@ class DecoderBlockBase(SharedStateAddOn, AbstractModule):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
     ) -> ModelState:
         """
         Create the shared state for the MLP component of the decoder layer.
