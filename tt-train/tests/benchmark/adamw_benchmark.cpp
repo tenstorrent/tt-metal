@@ -4,10 +4,6 @@
 #include <benchmark/benchmark.h>
 
 #include <chrono>
-#include <iomanip>
-#include <iostream>
-#include <random>
-#include <vector>
 
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
@@ -74,7 +70,7 @@ void BM_AdamW(benchmark::State& state) {
     const auto& adamw_shape = adamw_shapes[shape_index];
 
     const auto device_id = 0;
-    auto device = ttnn::device::open_mesh_device(device_id, /*l1_small_size=*/0, /*trace_region_size=*/1048576);
+    auto device = ttnn::device::open_mesh_device(device_id);
     device->enable_program_cache();
 
     const auto dtype = ttnn::DataType::BFLOAT16;
