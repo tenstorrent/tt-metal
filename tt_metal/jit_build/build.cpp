@@ -10,8 +10,10 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
+#include <ctime>
 #include <filesystem>
 #include <fstream>
 #include <iterator>
@@ -746,6 +748,21 @@ void JitBuildState::build(const JitBuildSettings* settings, std::span<const JitB
             } else {
                 fs::remove(src_path);
             }
+        }
+    }
+
+    // Append JIT compile stats to process-private log (recompiled vs cache hit)
+    {
+        const std::string log_path = jit_build::utils::FileRenamer::generate_temp_path("jit_compile_stats.log");
+        std::ofstream log(log_path, std::ios::app);
+        if (log) {
+            auto now = std::chrono::system_clock::now();
+            std::time_t t = std::chrono::system_clock::to_time_t(now);
+            char buf[32];
+            std::strftime(buf, sizeof(buf), "%Y-%m-%d %H:%M:%S", std::localtime(&t));
+            const size_t recompiled = compiled.count();
+            const size_t cache_hit = num_objs - recompiled;
+            log << buf << "  " << kernel_name << "  recompiled=" << recompiled << "  cache_hit=" << cache_hit << "\n";
         }
     }
 
