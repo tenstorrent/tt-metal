@@ -125,28 +125,14 @@ class WN:
                 g_l = ttnn.zeros_like(x_in)
 
             in_act = ttnn.add(x_in, g_l, output_tensor=x_in)
-            t_act = ttnn.slice(in_act, (0, 0, 0), (in_act.shape[0], in_act.shape[1], self.hidden_channels))
-            s_act = ttnn.slice(
-                in_act,
-                (0, 0, self.hidden_channels),
-                (in_act.shape[0], in_act.shape[1], 2 * self.hidden_channels),
-            )
+            t_act, s_act = ttnn.chunk(in_act, 2, dim=-1)
             acts = ttnn.multiply(
                 ttnn.sigmoid(s_act, output_tensor=s_act), ttnn.tanh(t_act, output_tensor=t_act), output_tensor=s_act
             )
 
             res_skip_acts = res_skip_layer(acts)
             if i < self.n_layers - 1:
-                res_acts = ttnn.slice(
-                    res_skip_acts,
-                    (0, 0, 0),
-                    (res_skip_acts.shape[0], res_skip_acts.shape[1], self.hidden_channels),
-                )
-                skip_acts = ttnn.slice(
-                    res_skip_acts,
-                    (0, 0, self.hidden_channels),
-                    (res_skip_acts.shape[0], res_skip_acts.shape[1], 2 * self.hidden_channels),
-                )
+                res_acts, skip_acts = ttnn.chunk(res_skip_acts, 2, dim=-1)
                 x = ttnn.add(x, res_acts, output_tensor=x)
                 output = ttnn.add(output, skip_acts, output_tensor=output)
             else:
@@ -301,8 +287,7 @@ class ResidualCouplingLayer:
         self.post_linear.load_parameters(parameters, key=post_key, prefix=prefix)
 
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
-        x0 = ttnn.slice(x, (0, 0, 0), (x.shape[0], x.shape[1], self.half_channels))
-        x1 = ttnn.slice(x, (0, 0, self.half_channels), (x.shape[0], x.shape[1], 2 * self.half_channels))
+        x0, x1 = ttnn.chunk(x, 2, dim=-1)
         h = self.pre_linear(x0)
         h = self.enc(h, g=g)
         stats = self.post_linear(h)
