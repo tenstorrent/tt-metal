@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 import ttnn
-from typing import Optional, Tuple
+from typing import Optional
 
 from ..core.module import TTNNModule
 
@@ -100,50 +100,26 @@ def fused_decay_and_write_ttnn(
     K = h.shape[2]
     V = h.shape[3]
 
-    if step_idx == 0:
-        print(
-            f"[DEBUG FUSED {step_idx}] Input shapes - h: {h.shape}, k_t: {k_t.shape}, delta: {delta.shape}, decay_t: {decay_t.shape}, beta_t: {beta_t.shape}"
-        )
-        h_torch = ttnn.to_torch(h)
-        k_t_torch = ttnn.to_torch(k_t)
-        delta_torch = ttnn.to_torch(delta)
-        print(f"[DEBUG FUSED {step_idx}] h before sample (first 3): {h_torch.flatten()[:3].tolist()}")
-        print(f"[DEBUG FUSED {step_idx}] k_t sample (first 3): {k_t_torch.flatten()[:3].tolist()}")
-        print(f"[DEBUG FUSED {step_idx}] delta sample (first 3): {delta_torch.flatten()[:3].tolist()}")
-
-    # decay: [B, H] -> [B, H, 1, 1]
-    # decay_t is already exp(g_t); keep recurrent path in BF16.
-    # Optimize: combine typecast and reshape into single operation
     decay = ttnn.reshape(
         ttnn.typecast(decay_t, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG),
         [B, H, 1, 1],
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    if step_idx == 0:
-        decay_torch = ttnn.to_torch(decay)
-        print(f"[DEBUG FUSED {step_idx}] decay sample (first 3): {decay_torch.flatten()[:3].tolist()}")
 
-    # beta: [B, H] -> [B, H, 1, 1]
     beta_expanded = ttnn.reshape(beta_t, [B, H, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG)
-    if step_idx == 0:
-        beta_torch = ttnn.to_torch(beta_expanded)
-        print(f"[DEBUG FUSED {step_idx}] beta_expanded sample (first 3): {beta_torch.flatten()[:3].tolist()}")
 
-    # k_t: [B, H, K] -> [B, H, K, 1] - ensure TILE_LAYOUT and L1 in one go
     k_col = ttnn.to_layout(
         ttnn.reshape(k_t, [B, H, K, 1], memory_config=ttnn.L1_MEMORY_CONFIG),
         ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    # delta: [B, H, V] -> [B, H, 1, V] - ensure TILE_LAYOUT and L1 in one go
     d_row = ttnn.to_layout(
         ttnn.reshape(delta, [B, H, 1, V], memory_config=ttnn.L1_MEMORY_CONFIG),
         ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    # Optimize: Use program config for outer product matmul to improve performance
     if outer_product_prog_cfg is None and device is not None:
         try:
             outer_product_prog_cfg = _recurrent_outer_product_program_config(device, K, V)
@@ -164,45 +140,15 @@ def fused_decay_and_write_ttnn(
         compute_kernel_config=matmul_compute_cfg,
         program_config=outer_product_prog_cfg,
     )
-    if step_idx == 0:
-        print(f"[DEBUG FUSED {step_idx}] After outer product - outer shape: {outer.shape}")
-        outer_torch = ttnn.to_torch(outer)
-        print(f"[DEBUG FUSED {step_idx}] outer sample (first 3): {outer_torch.flatten()[:3].tolist()}")
-        print(
-            f"[DEBUG FUSED {step_idx}] outer stats - min: {outer_torch.min().item():.6f}, max: {outer_torch.max().item():.6f}, mean: {outer_torch.mean().item():.6f}"
-        )
 
-    # apply beta
     outer = ttnn.multiply(
         outer,
         beta_expanded,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
-    if step_idx == 0:
-        outer_torch = ttnn.to_torch(outer)
-        print(
-            f"[DEBUG FUSED {step_idx}] After beta multiply - outer sample (first 3): {outer_torch.flatten()[:3].tolist()}"
-        )
-        print(
-            f"[DEBUG FUSED {step_idx}] After beta multiply outer stats - min: {outer_torch.min().item():.6f}, max: {outer_torch.max().item():.6f}, mean: {outer_torch.mean().item():.6f}"
-        )
 
-    # fused-style update: decay * h + outer
     h = ttnn.multiply(h, decay, memory_config=ttnn.L1_MEMORY_CONFIG)
-    if step_idx == 0:
-        h_torch = ttnn.to_torch(h)
-        print(f"[DEBUG FUSED {step_idx}] After decay multiply - h sample (first 3): {h_torch.flatten()[:3].tolist()}")
-        print(
-            f"[DEBUG FUSED {step_idx}] After decay multiply h stats - min: {h_torch.min().item():.6f}, max: {h_torch.max().item():.6f}, mean: {h_torch.mean().item():.6f}"
-        )
-
     h = ttnn.add(h, outer, memory_config=ttnn.L1_MEMORY_CONFIG)
-    if step_idx == 0:
-        h_torch = ttnn.to_torch(h)
-        print(f"[DEBUG FUSED {step_idx}] After add - h sample (first 3): {h_torch.flatten()[:3].tolist()}")
-        print(
-            f"[DEBUG FUSED {step_idx}] After add h stats - min: {h_torch.min().item():.6f}, max: {h_torch.max().item():.6f}, mean: {h_torch.mean().item():.6f}"
-        )
 
     return h
 
@@ -227,23 +173,6 @@ def recurrent_delta_rule_step_ttnn(
     K = q_t.shape[2]
     V = v_t.shape[2]
 
-    if step_idx == 0 or (seq_len is not None and step_idx == seq_len - 1):
-        print(
-            f"[DEBUG STEP {step_idx}] Input shapes - q_t: {q_t.shape}, k_t: {k_t.shape}, v_t: {v_t.shape}, h: {h.shape}"
-        )
-        q_t_torch = ttnn.to_torch(q_t)
-        k_t_torch = ttnn.to_torch(k_t)
-        v_t_torch = ttnn.to_torch(v_t)
-        h_torch = ttnn.to_torch(h)
-        print(f"[DEBUG STEP {step_idx}] q_t sample (first 3): {q_t_torch.flatten()[:3].tolist()}")
-        print(f"[DEBUG STEP {step_idx}] k_t sample (first 3): {k_t_torch.flatten()[:3].tolist()}")
-        print(f"[DEBUG STEP {step_idx}] v_t sample (first 3): {v_t_torch.flatten()[:3].tolist()}")
-        print(f"[DEBUG STEP {step_idx}] h sample (first 3): {h_torch.flatten()[:3].tolist()}")
-        print(
-            f"[DEBUG STEP {step_idx}] h stats - min: {h_torch.min().item():.6f}, max: {h_torch.max().item():.6f}, mean: {h_torch.mean().item():.6f}"
-        )
-
-    # Optimize: combine layout and memory config conversion
     h = ttnn.to_layout(h, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # Cache compute config if not provided
@@ -262,14 +191,12 @@ def recurrent_delta_rule_step_ttnn(
         except Exception:
             pass
 
-    # Optimize: combine reshape, layout, and memory config in fewer operations
     k_row = ttnn.to_layout(
         ttnn.reshape(k_t, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG),
         ttnn.TILE_LAYOUT,
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    # Read from state: k_row @ h (contract over K dimension)
     v_prime = ttnn.matmul(
         k_row,
         h,
@@ -278,25 +205,8 @@ def recurrent_delta_rule_step_ttnn(
         compute_kernel_config=read_query_compute_cfg,
     )
     v_prime = ttnn.reshape(v_prime, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG)
-    if step_idx == 0 or (seq_len is not None and step_idx == seq_len - 1):
-        print(f"[DEBUG STEP {step_idx}] After read - v_prime shape: {v_prime.shape}")
-        v_prime_torch = ttnn.to_torch(v_prime)
-        print(f"[DEBUG STEP {step_idx}] v_prime sample (first 3): {v_prime_torch.flatten()[:3].tolist()}")
-        print(
-            f"[DEBUG STEP {step_idx}] v_prime stats - min: {v_prime_torch.min().item():.6f}, max: {v_prime_torch.max().item():.6f}, mean: {v_prime_torch.mean().item():.6f}"
-        )
 
-    # Compute delta = v_t - v_prime
     delta = ttnn.subtract(v_t, v_prime, memory_config=ttnn.L1_MEMORY_CONFIG)
-    if step_idx == 0 or (seq_len is not None and step_idx == seq_len - 1):
-        print(f"[DEBUG STEP {step_idx}] After delta computation - delta shape: {delta.shape}")
-        delta_torch = ttnn.to_torch(delta)
-        print(f"[DEBUG STEP {step_idx}] delta sample (first 3): {delta_torch.flatten()[:3].tolist()}")
-        print(
-            f"[DEBUG STEP {step_idx}] delta stats - min: {delta_torch.min().item():.6f}, max: {delta_torch.max().item():.6f}, mean: {delta_torch.mean().item():.6f}"
-        )
-
-    # Fused-style decay + write to state (decay_t already = exp(g_t))
     h = fused_decay_and_write_ttnn(
         h=h,
         k_t=k_t,
@@ -307,15 +217,6 @@ def recurrent_delta_rule_step_ttnn(
         outer_product_prog_cfg=outer_product_prog_cfg,
         step_idx=step_idx,
     )
-    if step_idx == 0 or (seq_len is not None and step_idx == seq_len - 1):
-        print(f"[DEBUG STEP {step_idx}] After write - h shape: {h.shape}")
-        h_torch = ttnn.to_torch(h)
-        print(f"[DEBUG STEP {step_idx}] h after write sample (first 3): {h_torch.flatten()[:3].tolist()}")
-        print(
-            f"[DEBUG STEP {step_idx}] h after write stats - min: {h_torch.min().item():.6f}, max: {h_torch.max().item():.6f}, mean: {h_torch.mean().item():.6f}"
-        )
-
-    # Optimize: combine reshape, layout, and memory config in fewer operations
     q_row = ttnn.to_layout(
         ttnn.reshape(q_t, [B, H, 1, K], memory_config=ttnn.L1_MEMORY_CONFIG),
         ttnn.TILE_LAYOUT,
@@ -330,13 +231,6 @@ def recurrent_delta_rule_step_ttnn(
     )
     use_l1 = seq_len is not None and seq_len <= 64
     o_t = ttnn.reshape(o_t, [B, H, V], memory_config=ttnn.L1_MEMORY_CONFIG if use_l1 else None)
-    if step_idx == 0 or (seq_len is not None and step_idx == seq_len - 1):
-        print(f"[DEBUG STEP {step_idx}] Final o_t shape: {o_t.shape}")
-        o_t_torch = ttnn.to_torch(o_t)
-        print(f"[DEBUG STEP {step_idx}] o_t sample (first 3): {o_t_torch.flatten()[:3].tolist()}")
-        print(
-            f"[DEBUG STEP {step_idx}] o_t stats - min: {o_t_torch.min().item():.6f}, max: {o_t_torch.max().item():.6f}, mean: {o_t_torch.mean().item():.6f}"
-        )
 
     return o_t, h
 
@@ -351,32 +245,54 @@ def recurrent_gated_delta_rule_ttnn(
     device=None,
     scale=None,
 ):
-    """Recurrent gated delta rule implementation."""
-    B, T, H, K = q.shape
+    """
+    Token-by-token recurrent gated delta rule using TTNN ops.
+    Used for decode (T=1).
+
+    For each timestep t:
+      1. Decay the state:  h = h * exp(g_t)
+      2. Read from state:  v_read = sum_k(h * k_t)
+      3. Compute delta:    delta = (v_t - v_read) * beta_t
+      4. Write to state:   h = h + outer(k_t, delta)
+      5. Query state:      o_t = h @ q_t
+
+    Args:
+        q: [B, T, H, K] (already L2 normalized)
+        k: [B, T, H, K] (already L2 normalized)
+        v: [B, T, H, V]
+        beta: [B, T, H]
+        g: [B, T, H]
+        scale: float
+        initial_state: [B, H, K, V]
+        device: ttnn device
+
+    Returns:
+        output: [B, T, H, V]
+        final_state: [B, H, K, V]
+    """
+    B = q.shape[0]
+    T = q.shape[1]
+    H = q.shape[2]
+    K = q.shape[3]
     V = v.shape[3]
 
-    print(f"[DEBUG RECURRENT] Starting recurrent delta rule - B: {B}, T: {T}, H: {H}, K: {K}, V: {V}")
-
-    # Apply scale factor to q (default: K**-0.5)
     if scale is None:
         scale = K**-0.5
-    q = ttnn.multiply(q, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # Transpose to [B, H, T, D] for head-first processing
     q = ttnn.transpose(q, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     k = ttnn.transpose(k, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     v = ttnn.transpose(v, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
     beta = ttnn.transpose(beta, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, T]
     g = ttnn.transpose(g, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, H, T]
 
-    # Typecast to bfloat16
+    q = ttnn.multiply(q, scale, memory_config=ttnn.L1_MEMORY_CONFIG)
+
     q = ttnn.typecast(q, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
     k = ttnn.typecast(k, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
     v = ttnn.typecast(v, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
     beta = ttnn.typecast(beta, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
     g = ttnn.typecast(g, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-    # Precompute exp(g) once and slice per timestep in the loop
     g_exp = ttnn.exp(g, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     # Initialize state
@@ -390,7 +306,6 @@ def recurrent_gated_delta_rule_ttnn(
             memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-    # Pre-compute and cache program/config to avoid recreation in loop
     read_query_prog_cfg = None
     read_query_compute_cfg = None
     outer_product_prog_cfg = None
@@ -409,10 +324,7 @@ def recurrent_gated_delta_rule_ttnn(
 
     outputs = []
     for t in range(T):
-        if t == 0 or t == T - 1:  # Debug first and last step
-            print(f"[DEBUG RECURRENT] Processing timestep {t}/{T}")
-        # Use tensor indexing for efficient slicing
-        q_t = q[:, :, t]  # [B, H, K]
+        q_t = q[:, :, t]
         k_t = k[:, :, t]  # [B, H, K]
         v_t = v[:, :, t]  # [B, H, V]
         beta_t = beta[:, :, t]  # [B, H]
@@ -432,25 +344,12 @@ def recurrent_gated_delta_rule_ttnn(
             read_query_compute_cfg=read_query_compute_cfg,
             outer_product_prog_cfg=outer_product_prog_cfg,
         )
-        # Optimize: reshape immediately and collect for concat
         o_4d = ttnn.reshape(o_t, [B, H, 1, V], memory_config=ttnn.L1_MEMORY_CONFIG)
         outputs.append(o_4d)
 
-    # Optimize: single concat operation instead of creating list then concat
     o = ttnn.concat(outputs, dim=2, memory_config=ttnn.L1_MEMORY_CONFIG)
-    # Transpose from [B, H, T, V] to [B, T, H, V]
     o = ttnn.transpose(o, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
-    print(f"[DEBUG RECURRENT] Final output shape: {o.shape}, final state shape: {h.shape}")
-    o_torch = ttnn.to_torch(o)
-    h_torch = ttnn.to_torch(h)
-    print(f"[DEBUG RECURRENT] Final output sample (first 5): {o_torch.flatten()[:5].tolist()}")
-    print(
-        f"[DEBUG RECURRENT] Final output stats - min: {o_torch.min().item():.6f}, max: {o_torch.max().item():.6f}, mean: {o_torch.mean().item():.6f}"
-    )
-    print(f"[DEBUG RECURRENT] Final state sample (first 5): {h_torch.flatten()[:5].tolist()}")
-    print(
-        f"[DEBUG RECURRENT] Final state stats - min: {h_torch.min().item():.6f}, max: {h_torch.max().item():.6f}, mean: {h_torch.mean().item():.6f}"
-    )
+    o = ttnn.typecast(o, ttnn.bfloat16, memory_config=ttnn.L1_MEMORY_CONFIG)
     return o, h
 
 
@@ -465,8 +364,6 @@ def chunk_gated_delta_rule_ttnn(
     device=None,
 ):
     """Chunked gated delta rule implementation."""
-    # This would contain the chunked implementation
-    # For brevity, using recurrent as fallback
     return recurrent_gated_delta_rule_ttnn(q, k, v, beta, g, initial_state, device)
 
 
@@ -481,87 +378,151 @@ def rms_norm_ttnn(x, weight, eps=1e-6):
 
 def rms_norm_gated_ttnn(x, gate, weight, eps=1e-6):
     """RMSNorm with SiLU gating using TTNN ops."""
-    print(f"[DEBUG RMS_NORM_GATED] Input x shape: {x.shape}, gate shape: {gate.shape}, weight shape: {weight.shape}")
-    x_torch = ttnn.to_torch(x)
-    gate_torch = ttnn.to_torch(gate)
-    weight_torch = ttnn.to_torch(weight)
-    print(f"[DEBUG RMS_NORM_GATED] x sample (first 3): {x_torch.flatten()[:3].tolist()}")
-    print(
-        f"[DEBUG RMS_NORM_GATED] x stats - min: {x_torch.min().item():.6f}, max: {x_torch.max().item():.6f}, mean: {x_torch.mean().item():.6f}"
-    )
-    print(f"[DEBUG RMS_NORM_GATED] gate sample (first 3): {gate_torch.flatten()[:3].tolist()}")
-    print(f"[DEBUG RMS_NORM_GATED] weight sample (first 3): {weight_torch.flatten()[:3].tolist()}")
-
-    # Ensure x and gate are in TILE_LAYOUT
     x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     gate = ttnn.to_layout(gate, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
 
     x_sq = ttnn.multiply(x, x, memory_config=ttnn.L1_MEMORY_CONFIG)
     variance = ttnn.mean(x_sq, dim=-1, keepdim=True, memory_config=ttnn.L1_MEMORY_CONFIG)
-    variance_torch = ttnn.to_torch(variance)
-    print(f"[DEBUG RMS_NORM_GATED] variance sample (first 3): {variance_torch.flatten()[:3].tolist()}")
-    print(
-        f"[DEBUG RMS_NORM_GATED] variance stats - min: {variance_torch.min().item():.6f}, max: {variance_torch.max().item():.6f}, mean: {variance_torch.mean().item():.6f}"
-    )
 
     inv_rms = ttnn.rsqrt(
         ttnn.add(variance, eps, memory_config=ttnn.L1_MEMORY_CONFIG), memory_config=ttnn.L1_MEMORY_CONFIG
     )
-    inv_rms_torch = ttnn.to_torch(inv_rms)
-    print(f"[DEBUG RMS_NORM_GATED] inv_rms sample (first 3): {inv_rms_torch.flatten()[:3].tolist()}")
-    print(
-        f"[DEBUG RMS_NORM_GATED] inv_rms stats - min: {inv_rms_torch.min().item():.6f}, max: {inv_rms_torch.max().item():.6f}, mean: {inv_rms_torch.mean().item():.6f}"
-    )
 
     x_normed = ttnn.multiply(x, inv_rms, memory_config=ttnn.L1_MEMORY_CONFIG)
-    x_normed_torch = ttnn.to_torch(x_normed)
-    print(
-        f"[DEBUG RMS_NORM_GATED] After multiply inv_rms - x_normed sample (first 3): {x_normed_torch.flatten()[:3].tolist()}"
-    )
-    print(
-        f"[DEBUG RMS_NORM_GATED] After multiply inv_rms - x_normed stats - min: {x_normed_torch.min().item():.6f}, max: {x_normed_torch.max().item():.6f}, mean: {x_normed_torch.mean().item():.6f}"
-    )
 
-    # Ensure weight is in TILE_LAYOUT for proper broadcasting
     weight = ttnn.to_layout(weight, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     x_normed = ttnn.multiply(x_normed, weight, memory_config=ttnn.L1_MEMORY_CONFIG)
-    x_normed_torch = ttnn.to_torch(x_normed)
-    print(
-        f"[DEBUG RMS_NORM_GATED] After multiply weight - x_normed sample (first 3): {x_normed_torch.flatten()[:3].tolist()}"
-    )
-    print(
-        f"[DEBUG RMS_NORM_GATED] After multiply weight - x_normed stats - min: {x_normed_torch.min().item():.6f}, max: {x_normed_torch.max().item():.6f}, mean: {x_normed_torch.mean().item():.6f}"
-    )
 
-    # Ensure gate is in TILE_LAYOUT before silu
     gate = ttnn.to_layout(gate, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     gate_act = ttnn.silu(gate, memory_config=ttnn.L1_MEMORY_CONFIG)
-    gate_act_torch = ttnn.to_torch(gate_act)
-    print(f"[DEBUG RMS_NORM_GATED] gate_act (silu) sample (first 3): {gate_act_torch.flatten()[:3].tolist()}")
-    print(
-        f"[DEBUG RMS_NORM_GATED] gate_act stats - min: {gate_act_torch.min().item():.6f}, max: {gate_act_torch.max().item():.6f}, mean: {gate_act_torch.mean().item():.6f}"
-    )
 
-    # Ensure both tensors are in the same layout before multiplying
     x_normed = ttnn.to_layout(x_normed, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     gate_act = ttnn.to_layout(gate_act, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
     result = ttnn.multiply(x_normed, gate_act, memory_config=ttnn.L1_MEMORY_CONFIG)
-    result_torch = ttnn.to_torch(result)
-    print(f"[DEBUG RMS_NORM_GATED] Final result sample (first 3): {result_torch.flatten()[:3].tolist()}")
-    print(
-        f"[DEBUG RMS_NORM_GATED] Final result stats - min: {result_torch.min().item():.6f}, max: {result_torch.max().item():.6f}, mean: {result_torch.mean().item():.6f}"
-    )
     return result
 
 
-def causal_conv1d_ttnn(x, weight, bias, kernel_size, device):
-    """Causal convolution1d using TTNN."""
-    B, T, D = x.shape
+def _causal_conv1d_fir(x, weight, bias, kernel_size, device):
+    """
+    Manual FIR decomposition of depthwise causal conv1d + SiLU.
 
-    # For now, return input as-is (placeholder implementation)
-    # In a full implementation, this would perform actual causal conv1d + SiLU
-    # The actual implementation should maintain sequence length T
-    return x
+    Used for large T where native ttnn.conv1d would OOM in L1.
+    Decomposes the convolution into K element-wise multiply+accumulate
+    operations on shifted slices.
+
+    Args / Returns: same as causal_conv1d_ttnn.
+    """
+    B, T, D = x.shape[0], x.shape[1], x.shape[2]
+
+    pad = ttnn.zeros(
+        [B, kernel_size - 1, D],
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    x_padded = ttnn.concat([pad, x], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, T+K-1, D]
+
+    weight_torch = ttnn.to_torch(weight)  # [D, 1, K]
+
+    out = None
+    for k in range(kernel_size):
+        x_slice = x_padded[:, k : k + T]
+        x_slice = ttnn.to_layout(x_slice, ttnn.TILE_LAYOUT)
+
+        w_k = weight_torch[:, 0, k].reshape(1, 1, D).contiguous()
+        w_k_dev = ttnn.from_torch(
+            w_k, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+
+        term = ttnn.multiply(x_slice, w_k_dev, memory_config=ttnn.L1_MEMORY_CONFIG)
+        out = term if out is None else ttnn.add(out, term, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    if bias is not None:
+        bias_torch = ttnn.to_torch(bias).reshape(1, 1, D).contiguous()
+        bias_dev = ttnn.from_torch(
+            bias_torch, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        out = ttnn.add(out, bias_dev, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+    return ttnn.silu(out, memory_config=ttnn.L1_MEMORY_CONFIG)
+
+
+def causal_conv1d_ttnn(x, weight, bias, kernel_size, device, max_conv_len=512):
+    """
+    Depthwise causal conv1d + SiLU using native ttnn.conv1d.
+
+    Falls back to manual FIR decomposition for T > max_conv_len to
+    avoid L1 OOM in the conv1d kernel.
+
+    Args:
+        x: [B, T, D] input (TILE_LAYOUT on device)
+        weight: conv weight [D, 1, K] (on host, ROW_MAJOR)
+        bias: conv bias [D] or None
+        kernel_size: int
+        device: ttnn device
+        max_conv_len: T threshold; above this, use FIR fallback
+
+    Returns:
+        output: [B, T, D] (TILE_LAYOUT on device)
+    """
+    B, T, D = x.shape[0], x.shape[1], x.shape[2]
+
+    if T > max_conv_len:
+        return _causal_conv1d_fir(x, weight, bias, kernel_size, device)
+
+    # conv1d requires ROW_MAJOR NLC input
+    x_rm = ttnn.to_layout(x, ttnn.ROW_MAJOR_LAYOUT)
+
+    # Causal left-padding: prepend (K-1) zeros along the time dim
+    pad_zeros = ttnn.zeros(
+        [B, kernel_size - 1, D],
+        device=device,
+        dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
+    )
+    x_padded = ttnn.concat([pad_zeros, x_rm], dim=1, memory_config=ttnn.L1_MEMORY_CONFIG)  # [B, T+K-1, D]
+
+    conv_config = ttnn.Conv1dConfig(
+        weights_dtype=ttnn.bfloat16,
+        shard_layout=None,
+        deallocate_activation=True,
+        activation=ttnn.UnaryWithParam(ttnn.UnaryOpType.SILU),
+        # Optimization: Store config tensors in DRAM to reduce L1_SMALL pressure
+        # This can help with L1 memory management and reduce fragmentation
+        config_tensors_in_dram=True,
+    )
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.LoFi,
+    )
+
+    [out, out_length, _] = ttnn.conv1d(
+        input_tensor=x_padded,
+        weight_tensor=weight,
+        in_channels=D,
+        out_channels=D,
+        device=device,
+        bias_tensor=bias,
+        kernel_size=kernel_size,
+        stride=1,
+        padding=0,
+        batch_size=B,
+        input_length=T + kernel_size - 1,
+        groups=D,
+        dtype=ttnn.bfloat16,
+        conv_config=conv_config,
+        compute_config=compute_config,
+        return_output_dim=True,
+        return_weights_and_bias=True,
+    )
+
+    # Convert from HEIGHT_SHARDED to interleaved, reshape, then TILE_LAYOUT
+    out = ttnn.sharded_to_interleaved(out, memory_config=ttnn.L1_MEMORY_CONFIG)
+    out = ttnn.reshape(out, [B, T, D])
+    out = ttnn.to_layout(out, ttnn.TILE_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG)
+    return out
 
 
 def gated_deltanet_forward_ttnn(
@@ -602,92 +563,40 @@ def gated_deltanet_forward_ttnn(
     B = hidden_states.shape[0]
     T = hidden_states.shape[1]
 
-    print(f"[DEBUG DELTANET] Input hidden_states shape: {hidden_states.shape}")
-    hidden_states_torch = ttnn.to_torch(hidden_states)
-    print(f"[DEBUG DELTANET] Input hidden_states sample (first 5): {hidden_states_torch.flatten()[:5].tolist()}")
-    print(
-        f"[DEBUG DELTANET] Input hidden_states stats - min: {hidden_states_torch.min().item():.6f}, max: {hidden_states_torch.max().item():.6f}, mean: {hidden_states_torch.mean().item():.6f}"
-    )
-
-    # 1. Linear projections
     q = ttnn.linear(hidden_states, q_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
     k = ttnn.linear(hidden_states, k_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
     v = ttnn.linear(hidden_states, v_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
-    print(f"[DEBUG DELTANET] After linear proj - q shape: {q.shape}, k shape: {k.shape}, v shape: {v.shape}")
-    q_torch = ttnn.to_torch(q)
-    print(f"[DEBUG DELTANET] After linear proj q sample (first 5): {q_torch.flatten()[:5].tolist()}")
-    print(
-        f"[DEBUG DELTANET] After linear proj q stats - min: {q_torch.min().item():.6f}, max: {q_torch.max().item():.6f}, mean: {q_torch.mean().item():.6f}"
-    )
 
-    # 2. Causal conv1d + SiLU
     q = causal_conv1d_ttnn(q, q_conv_weight, q_conv_bias, conv_kernel_size, device)
     k = causal_conv1d_ttnn(k, k_conv_weight, k_conv_bias, conv_kernel_size, device)
     v = causal_conv1d_ttnn(v, v_conv_weight, v_conv_bias, conv_kernel_size, device)
-    print(f"[DEBUG DELTANET] After causal conv - q shape: {q.shape}, k shape: {k.shape}, v shape: {v.shape}")
-    q_torch = ttnn.to_torch(q)
-    print(f"[DEBUG DELTANET] After causal conv q sample (first 5): {q_torch.flatten()[:5].tolist()}")
-    print(
-        f"[DEBUG DELTANET] After causal conv q stats - min: {q_torch.min().item():.6f}, max: {q_torch.max().item():.6f}, mean: {q_torch.mean().item():.6f}"
-    )
 
-    # 3. Reshape to multi-head
     q = ttnn.reshape(q, [B, T, num_heads, head_k_dim])
     k = ttnn.reshape(k, [B, T, num_heads, head_k_dim])
     v = ttnn.reshape(v, [B, T, num_v_heads, head_v_dim])
-    print(f"[DEBUG DELTANET] After reshape - q shape: {q.shape}, k shape: {k.shape}, v shape: {v.shape}")
-    q_torch = ttnn.to_torch(q)
-    print(f"[DEBUG DELTANET] After reshape q sample (first 5): {q_torch.flatten()[:5].tolist()}")
-    print(
-        f"[DEBUG DELTANET] After reshape q stats - min: {q_torch.min().item():.6f}, max: {q_torch.max().item():.6f}, mean: {q_torch.mean().item():.6f}"
-    )
 
-    # GVA: repeat q,k
     if num_v_heads > num_heads:
         repeats = num_v_heads // num_heads
         q = ttnn.repeat_interleave(q, repeats, dim=2)
         k = ttnn.repeat_interleave(k, repeats, dim=2)
 
-    # Apply L2 normalization to q and k (matching PyTorch use_qk_l2norm=True)
     q = l2_norm_ttnn(q, dim=-1)
     k = l2_norm_ttnn(k, dim=-1)
-    print(f"[DEBUG DELTANET] After L2 norm - q shape: {q.shape}, k shape: {k.shape}")
-    q_torch = ttnn.to_torch(q)
-    print(f"[DEBUG DELTANET] After L2 norm q sample (first 5): {q_torch.flatten()[:5].tolist()}")
-    print(
-        f"[DEBUG DELTANET] After L2 norm q stats - min: {q_torch.min().item():.6f}, max: {q_torch.max().item():.6f}, mean: {q_torch.mean().item():.6f}"
-    )
 
-    # 4. Compute beta and g
     beta = ttnn.sigmoid(
         ttnn.linear(hidden_states, b_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG),
         memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     if allow_neg_eigval:
         beta = ttnn.multiply(beta, 2.0, memory_config=ttnn.L1_MEMORY_CONFIG)
-    print(f"[DEBUG DELTANET] After beta computation - beta shape: {beta.shape}")
-    beta_torch = ttnn.to_torch(beta)
-    print(f"[DEBUG DELTANET] Beta sample (first 5): {beta_torch.flatten()[:5].tolist()}")
-    print(
-        f"[DEBUG DELTANET] Beta stats - min: {beta_torch.min().item():.6f}, max: {beta_torch.max().item():.6f}, mean: {beta_torch.mean().item():.6f}"
-    )
 
     a = ttnn.linear(hidden_states, a_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
-    # g = -A * softplus(a + dt_bias)
     a_biased = ttnn.add(a, dt_bias, memory_config=ttnn.L1_MEMORY_CONFIG)
     sp = ttnn.softplus(a_biased, memory_config=ttnn.L1_MEMORY_CONFIG)
     A = ttnn.exp(A_log, memory_config=ttnn.L1_MEMORY_CONFIG)
     A_neg = ttnn.neg(A, memory_config=ttnn.L1_MEMORY_CONFIG)
     g = ttnn.multiply(A_neg, sp, memory_config=ttnn.L1_MEMORY_CONFIG)
-    print(f"[DEBUG DELTANET] After g computation - g shape: {g.shape}")
-    g_torch = ttnn.to_torch(g)
-    print(f"[DEBUG DELTANET] G sample (first 5): {g_torch.flatten()[:5].tolist()}")
-    print(
-        f"[DEBUG DELTANET] G stats - min: {g_torch.min().item():.6f}, max: {g_torch.max().item():.6f}, mean: {g_torch.mean().item():.6f}"
-    )
 
-    # 5. Gated delta rule (recurrent or chunked)
-    print(f"[DEBUG DELTANET] Before delta rule - q shape: {q.shape}, k shape: {k.shape}, v shape: {v.shape}")
     if mode == "chunk":
         o, new_state = chunk_gated_delta_rule_ttnn(
             q=q,
@@ -709,54 +618,18 @@ def gated_deltanet_forward_ttnn(
             initial_state=recurrent_state,
             device=device,
         )
-    print(f"[DEBUG DELTANET] After delta rule - o shape: {o.shape}, new_state shape: {new_state.shape}")
-    o_torch = ttnn.to_torch(o)
-    print(f"[DEBUG DELTANET] After delta rule o sample (first 5): {o_torch.flatten()[:5].tolist()}")
-    print(
-        f"[DEBUG DELTANET] After delta rule o stats - min: {o_torch.min().item():.6f}, max: {o_torch.max().item():.6f}, mean: {o_torch.mean().item():.6f}"
-    )
-
-    # 6. Output normalization
-    print(f"[DEBUG DELTANET] Before normalization - o shape: {o.shape}")
-    o_before_norm_torch = ttnn.to_torch(o)
-    print(f"[DEBUG DELTANET] Before normalization o sample (first 5): {o_before_norm_torch.flatten()[:5].tolist()}")
-    print(
-        f"[DEBUG DELTANET] Before normalization o stats - min: {o_before_norm_torch.min().item():.6f}, max: {o_before_norm_torch.max().item():.6f}, mean: {o_before_norm_torch.mean().item():.6f}"
-    )
 
     if use_gate and g_proj_weight is not None:
         gate = ttnn.linear(hidden_states, g_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
         gate = ttnn.reshape(gate, [B, T, num_v_heads, head_v_dim])
-        print(f"[DEBUG DELTANET] Gate shape: {gate.shape}")
-        gate_torch = ttnn.to_torch(gate)
-        print(f"[DEBUG DELTANET] Gate sample (first 5): {gate_torch.flatten()[:5].tolist()}")
-        print(
-            f"[DEBUG DELTANET] Gate stats - min: {gate_torch.min().item():.6f}, max: {gate_torch.max().item():.6f}, mean: {gate_torch.mean().item():.6f}"
-        )
-        print(f"[DEBUG DELTANET] o_norm_weight shape: {o_norm_weight.shape}")
-        o_norm_weight_torch = ttnn.to_torch(o_norm_weight)
-        print(f"[DEBUG DELTANET] o_norm_weight sample (first 5): {o_norm_weight_torch.flatten()[:5].tolist()}")
         o = rms_norm_gated_ttnn(o, gate, o_norm_weight, eps=norm_eps)
     else:
         o = rms_norm_ttnn(o, o_norm_weight, eps=norm_eps)
-    print(f"[DEBUG DELTANET] After normalization - o shape: {o.shape}")
-    o_torch = ttnn.to_torch(o)
-    print(f"[DEBUG DELTANET] After normalization o sample (first 5): {o_torch.flatten()[:5].tolist()}")
-    print(
-        f"[DEBUG DELTANET] After normalization o stats - min: {o_torch.min().item():.6f}, max: {o_torch.max().item():.6f}, mean: {o_torch.mean().item():.6f}"
-    )
 
-    # 7. Reshape and project output
     o = ttnn.reshape(o, [B, T, num_v_heads * head_v_dim])
     o = ttnn.linear(o, o_proj_weight, memory_config=ttnn.L1_MEMORY_CONFIG)
-    print(f"[DEBUG DELTANET] Final output - o shape: {o.shape}")
-    o_torch = ttnn.to_torch(o)
-    print(f"[DEBUG DELTANET] Final output o sample (first 5): {o_torch.flatten()[:5].tolist()}")
-    print(
-        f"[DEBUG DELTANET] Final output o stats - min: {o_torch.min().item():.6f}, max: {o_torch.max().item():.6f}, mean: {o_torch.mean().item():.6f}"
-    )
 
-    return o, new_state
+    return o
 
 
 class TTNNRecurrentDeltaNet(TTNNModule):
@@ -893,7 +766,7 @@ class TTNNRecurrentDeltaNet(TTNNModule):
         self,
         hidden_states: ttnn.Tensor,
         recurrent_state: Optional[ttnn.Tensor] = None,
-    ) -> Tuple[ttnn.Tensor, ttnn.Tensor]:
+    ) -> ttnn.Tensor:
         """
         Forward pass through Recurrent DeltaNet.
 
@@ -903,14 +776,11 @@ class TTNNRecurrentDeltaNet(TTNNModule):
 
         Returns:
             output: [B, T, hidden_size] output tensor
-            new_state: [B, H, K, V] updated recurrent state
         """
-        # Ensure input is in correct layout
         if hidden_states.layout != ttnn.TILE_LAYOUT:
             hidden_states = ttnn.to_layout(hidden_states, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
 
-        # Call the TTNN implementation
-        output, new_state = gated_deltanet_forward_ttnn(
+        output = gated_deltanet_forward_ttnn(
             hidden_states=hidden_states,
             q_proj_weight=self.q_proj_weight,
             k_proj_weight=self.k_proj_weight,
@@ -942,4 +812,4 @@ class TTNNRecurrentDeltaNet(TTNNModule):
             chunk_size=self.chunk_size,
         )
 
-        return output, new_state
+        return output
