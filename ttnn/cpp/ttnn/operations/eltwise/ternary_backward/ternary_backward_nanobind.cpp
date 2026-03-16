@@ -192,12 +192,12 @@ void py_module(nb::module_& mod) {
             bfloat8_b/bfloat4_b is only supported on TILE_LAYOUT
         )doc",
         ttnn::overload_t(
-            static_cast<std::vector<ttnn::Tensor> (*)(
+            nb::overload_cast<
                 const ttnn::Tensor&,
                 const ttnn::Tensor&,
                 const ttnn::Tensor&,
                 const ttnn::Tensor&,
-                const std::optional<ttnn::MemoryConfig>&)>(&ttnn::lerp_bw),
+                const std::optional<ttnn::MemoryConfig>&>(&ttnn::lerp_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
@@ -205,12 +205,12 @@ void py_module(nb::module_& mod) {
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()),
         ttnn::overload_t(
-            static_cast<std::vector<ttnn::Tensor> (*)(
+            nb::overload_cast<
                 const ttnn::Tensor&,
                 const ttnn::Tensor&,
                 const ttnn::Tensor&,
                 float,
-                const std::optional<ttnn::MemoryConfig>&)>(&ttnn::lerp_bw),
+                const std::optional<ttnn::MemoryConfig>&>(&ttnn::lerp_bw),
             nb::arg("grad_tensor"),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),

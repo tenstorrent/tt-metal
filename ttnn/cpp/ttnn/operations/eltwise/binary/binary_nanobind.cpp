@@ -20,7 +20,6 @@
 
 #include <ttnn-nanobind/small_vector_caster.hpp>
 
-#include "ttnn/decorators.hpp"  // testing
 #include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn-nanobind/export_enum.hpp"
 #include "ttnn/operations/eltwise/binary/binary.hpp"

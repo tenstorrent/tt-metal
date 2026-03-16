@@ -60,13 +60,13 @@ void bind_ternary_where(nb::module_& mod, const std::string& description) {
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            static_cast<Tensor (*)(
+            nb::overload_cast<
                 const Tensor&,
                 const TensorScalarVariant&,
                 const TensorScalarVariant&,
                 const std::optional<MemoryConfig>&,
                 const std::optional<Tensor>&,
-                const std::optional<CoreRangeSet>&)>(&ttnn::where),
+                const std::optional<CoreRangeSet>&>(&ttnn::where),
             nb::arg("predicate"),
             nb::arg("true_value"),
             nb::arg("false_value"),
@@ -138,12 +138,12 @@ void bind_ternary_lerp(nb::module_& mod, const std::string& description) {
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            static_cast<Tensor (*)(
+            nb::overload_cast<
                 const Tensor&,
                 const Tensor&,
                 const Tensor&,
                 const std::optional<MemoryConfig>&,
-                const std::optional<Tensor>&)>(&ttnn::lerp),
+                const std::optional<Tensor>&>(&ttnn::lerp),
             nb::arg("input"),
             nb::arg("end"),
             nb::arg("weight"),
@@ -151,9 +151,12 @@ void bind_ternary_lerp(nb::module_& mod, const std::string& description) {
             nb::arg("memory_config") = nb::none(),
             nb::arg("output_tensor") = nb::none()),
         ttnn::overload_t(
-            static_cast<Tensor (*)(
-                const Tensor&, const Tensor&, float, const std::optional<MemoryConfig>&, const std::optional<Tensor>&)>(
-                &ttnn::lerp),
+            nb::overload_cast<
+                const Tensor&,
+                const Tensor&,
+                float,
+                const std::optional<MemoryConfig>&,
+                const std::optional<Tensor>&>(&ttnn::lerp),
             nb::arg("input"),
             nb::arg("end"),
             nb::arg("weight"),
@@ -313,7 +316,7 @@ void bind_ternary_mac(nb::module_& mod, const std::string& description) {
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            static_cast<Tensor (*)(const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&)>(
+            nb::overload_cast<const Tensor&, const Tensor&, const Tensor&, const std::optional<MemoryConfig>&>(
                 &ttnn::mac),
             nb::arg("input_tensor_a"),
             nb::arg("input_tensor_b"),
@@ -321,7 +324,7 @@ void bind_ternary_mac(nb::module_& mod, const std::string& description) {
             nb::kw_only(),
             nb::arg("memory_config") = nb::none()),
         ttnn::overload_t(
-            static_cast<Tensor (*)(const Tensor&, float, float, const std::optional<MemoryConfig>&)>(&ttnn::mac),
+            nb::overload_cast<const Tensor&, float, float, const std::optional<MemoryConfig>&>(&ttnn::mac),
             nb::arg("input_tensor_a"),
             nb::arg("value1"),
             nb::arg("value2"),
