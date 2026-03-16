@@ -13,7 +13,7 @@ namespace ttnn::operations::experimental::reduction {
 
 ttnn::Tensor FastReduceNCOperation::invoke(
     const ttnn::Tensor& input,
-    tt::stl::Span<const int32_t> dims,
+    ttsl::Span<const int32_t> dims,
     const std::optional<const Tensor>& output,
     const ttnn::MemoryConfig& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {

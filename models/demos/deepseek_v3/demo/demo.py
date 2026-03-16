@@ -112,10 +112,11 @@ def create_parser() -> argparse.ArgumentParser:
         help="Select generator implementation: default = bp (batch parallel).",
     )
     p.add_argument(
-        "--enable-trace",
-        action="store_true",
-        default=False,
-        help="Enable trace for decode forward pass",
+        "--disable-trace",
+        action="store_false",
+        dest="enable_trace",
+        default=True,
+        help="Disable trace for decode forward pass.",
     )
     p.add_argument(
         "--enable-mem-profile",
@@ -146,10 +147,11 @@ def create_parser() -> argparse.ArgumentParser:
         help="Profile decode performance: skip prefill (use random tokens), and run only first dense layer + first MoE layer during decode.",
     )
     p.add_argument(
-        "--sample-on-device",
-        action="store_true",
-        default=False,
-        help="Enable on-device sampling (default: host-side sampling).",
+        "--sample-on-host",
+        action="store_false",
+        dest="sample_on_device",
+        default=True,
+        help="Disable on-device sampling and use host-side sampling.",
     )
     p.add_argument(
         "--force-recalculate",
@@ -283,13 +285,13 @@ def run_demo(
     tf_prompt_len: int | None = None,
     early_print_first_user: bool = True,
     generator: str = "bp",
-    enable_trace: bool = False,
+    enable_trace: bool = True,
     enable_mem_profile: bool = False,
     repeat_batches: int = 1,
     signpost: bool = False,
     prefill_max_tokens: int = None,
     profile_decode: bool = False,
-    sample_on_device: bool = False,
+    sample_on_device: bool = True,
     force_recalculate: bool = False,
     stop_at_eos: bool = True,
     checkpoint_jsonl: str | Path | None = None,

@@ -15,117 +15,148 @@ MODEL_PATH = Path(
 CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deepseek-ai/DeepSeek-R1-0528-Cache/CI"))
 
 
+def _demo_case(
+    *,
+    max_prompts: int,
+    repeat_batches: int,
+    max_new_tokens: int,
+    override_num_layers: int | None,
+    enable_trace: bool,
+    sample_on_device: bool,
+    artifact_name: str | None,
+    profile_decode: bool,
+    stop_at_eos: bool | None,
+    expect_full_length: bool,
+    case_id: str,
+    marks=None,
+):
+    return pytest.param(
+        {
+            "max_prompts": max_prompts,
+            "repeat_batches": repeat_batches,
+            "max_new_tokens": max_new_tokens,
+            "override_num_layers": override_num_layers,
+            "enable_trace": enable_trace,
+            "sample_on_device": sample_on_device,
+            "artifact_name": artifact_name,
+            "profile_decode": profile_decode,
+            "stop_at_eos": stop_at_eos,
+            "expect_full_length": expect_full_length,
+        },
+        id=case_id,
+        marks=marks,
+    )
+
+
+# Test matrix:
+# +------------------+-------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
+# | id               | max_prompts | repeat_batches | max_new_tokens | override_num_layers | enable_trace | sample_on_device | artifact_name            | profile_decode | stop_at_eos | expect_full_length |
+# +------------------+-------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
+# | tg_stress        | 56          | 2              | 128            | 5                   | False        | True             | None                     | False          | False       | True               |
+# | dual_full_demo   | 256         | 1              | 129            | None                | True         | True             | dual_demo_full_results   | False          | None        | False              |
+# | dual_stress_demo | 56          | 20             | 129            | None                | True         | True             | dual_demo_stress_results | False          | False       | True               |
+# | quad_full_demo   | 512         | 1              | 129            | None                | True         | True             | quad_demo_full_results   | False          | None        | False              |
+# | quad_stress_demo | 56          | 20             | 129            | None                | True         | True             | quad_demo_stress_results | False          | False       | True               |
+# | profile_decode   | 1           | 1              | 13             | 5                   | True         | True             | None                     | True           | False       | True               |
+# +------------------+-------------+----------------+----------------+---------------------+--------------+------------------+--------------------------+----------------+-------------+--------------------+
+
+
 @pytest.mark.parametrize(
-    "max_prompts,repeat_batches,max_new_tokens,override_num_layers,enable_trace,artifact_name,profile_decode,stop_at_eos,expect_full_length",
+    # update test matrix table above if new test cases are added
+    "case",
     [
-        pytest.param(
-            56,
-            2,
-            128,
-            5,
-            False,
-            None,
-            False,
-            False,
-            True,
-            id="tg_stress",
+        _demo_case(
+            max_prompts=56,
+            repeat_batches=2,
+            max_new_tokens=128,
+            override_num_layers=5,
+            enable_trace=False,
+            sample_on_device=True,
+            artifact_name=None,
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="tg_stress",
             marks=pytest.mark.requires_device(["TG"]),
         ),
-        pytest.param(
-            256,
-            1,
-            129,
-            None,
-            True,
-            "dual_demo_full_results",
-            False,
-            None,
-            False,
-            id="dual_full_demo",
+        _demo_case(
+            max_prompts=256,
+            repeat_batches=1,
+            max_new_tokens=129,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=True,
+            artifact_name="dual_demo_full_results",
+            profile_decode=False,
+            stop_at_eos=None,
+            expect_full_length=False,
+            case_id="dual_full_demo",
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
         ),
-        pytest.param(
-            56,
-            20,
-            129,
-            None,
-            True,
-            "dual_demo_stress_results",
-            False,
-            False,
-            True,
-            id="dual_stress_demo",
+        _demo_case(
+            max_prompts=56,
+            repeat_batches=20,
+            max_new_tokens=129,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=True,
+            artifact_name="dual_demo_stress_results",
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="dual_stress_demo",
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(5400)],
         ),
-        pytest.param(
-            512,
-            1,
-            129,
-            None,
-            True,
-            "quad_demo_full_results",
-            False,
-            None,
-            False,
-            id="quad_full_demo",
+        _demo_case(
+            max_prompts=512,
+            repeat_batches=1,
+            max_new_tokens=129,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=True,
+            artifact_name="quad_demo_full_results",
+            profile_decode=False,
+            stop_at_eos=None,
+            expect_full_length=False,
+            case_id="quad_full_demo",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
         ),
-        pytest.param(
-            56,
-            20,
-            129,
-            None,
-            True,
-            "quad_demo_stress_results",
-            False,
-            False,
-            True,
-            id="quad_stress_demo",
+        _demo_case(
+            max_prompts=56,
+            repeat_batches=20,
+            max_new_tokens=129,
+            override_num_layers=None,
+            enable_trace=True,
+            sample_on_device=True,
+            artifact_name="quad_demo_stress_results",
+            profile_decode=False,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="quad_stress_demo",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(5400)],
         ),
-        pytest.param(
-            1,
-            1,
-            13,
-            5,
-            True,
-            None,
-            True,
-            False,
-            True,
-            id="profile_decode",
+        _demo_case(
+            max_prompts=1,
+            repeat_batches=1,
+            max_new_tokens=13,
+            override_num_layers=5,
+            enable_trace=True,
+            sample_on_device=True,
+            artifact_name=None,
+            profile_decode=True,
+            stop_at_eos=False,
+            expect_full_length=True,
+            case_id="profile_decode",
             marks=pytest.mark.timeout(1800),
         ),
     ],
 )
-def test_demo(
-    max_prompts: int,
-    repeat_batches: int,
-    max_new_tokens: int,
-    override_num_layers: int,
-    enable_trace: bool,
-    artifact_name: str,
-    profile_decode: bool,
-    stop_at_eos: bool | None,
-    expect_full_length: bool,
-    force_recalculate_weight_config: bool,
-):
-    """
-    DeepSeek v3 demo test with prompts loaded from JSON file.
-
-    Test variants:
-    - tg_stress (TG): 56 prompts, 2 batches, 5 layers - stress test for CI
-    - dual_full_demo (DUAL): 256 prompts, 1 batch - tests full prompt capacity
-    - dual_stress_demo (DUAL): 56 prompts, 20 batches - tests stability under repeated execution
-    - quad_full_demo (QUAD): 512 prompts, 1 batch - tests full prompt capacity
-    - quad_stress_demo (QUAD): 56 prompts, 20 batches - tests stability under repeated execution
-    - profile_decode: Profile decode for non-moe and moe layers
-    """
+def test_demo(case: dict, force_recalculate_weight_config: bool):
     # Path to the external JSON file containing prompts
     json_path = "models/demos/deepseek_v3/demo/test_prompts.json"
 
     # Load prompts from JSON file
-    prompts = load_prompts_from_json(json_path, max_prompts=max_prompts)
+    prompts = load_prompts_from_json(json_path, max_prompts=case["max_prompts"])
 
     # Run demo
     run_kwargs = dict(
@@ -133,33 +164,34 @@ def test_demo(
         model_path=MODEL_PATH,
         cache_dir=CACHE_DIR,
         random_weights=False,
-        max_new_tokens=max_new_tokens,
-        repeat_batches=repeat_batches,
-        profile_decode=profile_decode,
+        max_new_tokens=case["max_new_tokens"],
+        repeat_batches=case["repeat_batches"],
+        enable_trace=case["enable_trace"],
+        sample_on_device=case["sample_on_device"],
+        profile_decode=case["profile_decode"],
         force_recalculate=force_recalculate_weight_config,
         signpost=True,
     )
-    if override_num_layers is not None:
-        run_kwargs["override_num_layers"] = override_num_layers
-    if enable_trace:
-        run_kwargs["enable_trace"] = True
-    if stop_at_eos is not None:
-        run_kwargs["stop_at_eos"] = stop_at_eos
+    if case["override_num_layers"] is not None:
+        run_kwargs["override_num_layers"] = case["override_num_layers"]
+    if case["stop_at_eos"] is not None:
+        run_kwargs["stop_at_eos"] = case["stop_at_eos"]
 
     results = run_demo(**run_kwargs)
 
-    # Check output
+    # Full-demo cases can stop early on EOS; stress/profile cases disable EOS and
+    # should always produce the requested token count.
     generated_lengths = [len(generation["tokens"]) for generation in results["generations"]]
-    if expect_full_length:
-        assert all(length == max_new_tokens for length in generated_lengths)
+    if case["expect_full_length"]:
+        assert all(length == case["max_new_tokens"] for length in generated_lengths)
     else:
-        assert all(length <= max_new_tokens for length in generated_lengths)
+        assert all(length <= case["max_new_tokens"] for length in generated_lengths)
 
     # Save results to JSON for artifact upload (QUAD tests only)
-    if artifact_name is not None:
+    if case["artifact_name"] is not None:
         artifact_dir = Path("generated/artifacts")
         artifact_dir.mkdir(parents=True, exist_ok=True)
-        output_file = artifact_dir / f"{artifact_name}.json"
+        output_file = artifact_dir / f"{case['artifact_name']}.json"
 
         output_data = {
             "prompts": prompts,

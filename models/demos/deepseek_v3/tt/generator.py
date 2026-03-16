@@ -131,13 +131,15 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.batch_size_per_row = USERS_PER_ROW
         self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
 
-        if sample_on_device and enable_trace:
-            raise ValueError("sample_on_device=True and enable_trace=True is not supported yet. Disable either one.")
         # Configure sampling
         if self.sample_on_device:
+            enable_internal_trace_sampling = enable_trace and self.sample_on_device
             self.sampling_args = make_deepseek_sampling_args(mesh_device, self.hf_config.vocab_size)
             self.sampling_generator = SamplingGenerator(
-                args=self.sampling_args, mesh_device=self.mesh_device, tt_ccl=self.ccl, enable_internal_trace=False
+                args=self.sampling_args,
+                mesh_device=self.mesh_device,
+                tt_ccl=self.ccl,
+                enable_internal_trace=enable_internal_trace_sampling,
             )
             # Use default sampling params (top-k=1, top-p=0.0, temperature=1.0) i.e. argmax sampling for device sampling
             self.sampling_params = SamplingParams(
@@ -353,6 +355,13 @@ class DeepseekGenerator(WarmupForwardMixin):
         except Exception as e:
             logger.warning(f"Failed to cleanup model shared state: {e}")
 
+        # Clean up sampling trace state
+        try:
+            if hasattr(self, "sampling_generator") and self.sampling_generator is not None:
+                self.sampling_generator.reset_trace()
+        except Exception as e:
+            logger.warning(f"Failed to reset sampling trace state: {e}")
+
         # Clean up trace state
         try:
             if self._trace_id is not None:
@@ -460,6 +469,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         self, logits: ttnn.Tensor, enable_trace: bool = False, user_slots: list[int] | None = None
     ) -> ttnn.Tensor:
         self.sampling_generator.seed_manager.get_new_values(user_slots)
+        self.sampling_generator.enable_internal_trace = enable_trace
         tt_out = self.sampling_generator.sample(logits, enable_trace=enable_trace)
 
         if isinstance(tt_out, tuple):
@@ -758,7 +768,9 @@ class DeepseekGenerator(WarmupForwardMixin):
                     if self.sample_on_device:
                         # Device sampling
                         prefill_logits = self._slice_last_token_logits(prefill_logits, prompt_len, expand_to_batch=True)
-                        prefill_logits_sampled_device = self._sample_tokens_device(prefill_logits, user_slots=[user_id])
+                        prefill_logits_sampled_device = self._sample_tokens_device(
+                            prefill_logits, user_slots=[user_id], enable_trace=False
+                        )
                         prefill_logits_sampled_host = self._tokens_from_device(
                             prefill_logits_sampled_device, self.mesh_device, batch_size_per_row=1
                         )
@@ -839,6 +851,9 @@ class DeepseekGenerator(WarmupForwardMixin):
                 # Generate remaining tokens with decode (each decode call produces the next token)
                 decode_steps = max_new_tokens - 1
                 profiler.start("inference_decode")
+                # In trace mode, outputs are reused across iterations. Track the
+                # last sampled-token tensor so we can release it after the loop.
+                pred_tokens_device: ttnn.Tensor | None = None
                 for gen_idx in range(decode_steps):
                     logger.info(f"Decoding step {gen_idx} for {num_of_prompts} user(s)...")
                     profiler.start(f"decode_time_{gen_idx}")
@@ -854,13 +869,14 @@ class DeepseekGenerator(WarmupForwardMixin):
                     profiler.end(f"decode_time_{gen_idx}")
                     self.ccl.reset_sem_counters()
                     if self.sample_on_device:
-                        pred_tokens_device = self._sample_tokens_device(decode_logits)
+                        pred_tokens_device = self._sample_tokens_device(decode_logits, enable_trace=self.enable_trace)
                         pred_tokens = self._tokens_from_device(
                             pred_tokens_device, self.mesh_device, batch_size_per_row=self.batch_size_per_row
                         )
-                        ttnn.deallocate(decode_logits)
-                        ttnn.deallocate(pred_tokens_device)
-
+                        if not self.enable_trace:
+                            # Non-trace path allocates fresh outputs each step.
+                            ttnn.deallocate(decode_logits)
+                            ttnn.deallocate(pred_tokens_device)
                     else:
                         assert isinstance(decode_logits, torch.Tensor), "decode_logits should be a torch.Tensor on host"
                         pred_tokens = self._sample_greedy_on_host(decode_logits)
@@ -892,6 +908,9 @@ class DeepseekGenerator(WarmupForwardMixin):
                             else:
                                 print(f"{token_value} ", end="", flush=True)
 
+                # Trace path: deallocate once after replay loop completes.
+                if self.sample_on_device and self.enable_trace and pred_tokens_device is not None:
+                    ttnn.deallocate(pred_tokens_device)
                 profiler.end("inference_decode")
 
             if early_print_first_user:
@@ -1167,8 +1186,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         # vLLM does not pass enable_trace param while initializing the model.
         # vLLM sets it in decode/prefill calls only, so we need to set it here too.
         self.enable_trace = enable_trace
-        if sample_on_device and enable_trace:
-            raise ValueError("sample_on_device=True and enable_trace=True is not supported yet. Disable either one.")
 
         if not enable_trace:
             return self._decode_step(tokens, start_pos, page_table, sample_on_device)
@@ -1178,6 +1195,11 @@ class DeepseekGenerator(WarmupForwardMixin):
                 self._capture_decode_trace(tokens, start_pos, batch_size_per_row, page_table)
                 # First call: return the captured run's output
                 assert self._trace_output is not None
+
+                if sample_on_device:
+                    # return trace output for sampling on device, no need to get logits on host
+                    return self._trace_output
+
                 logits = ttnn.to_torch(
                     self._trace_output,
                     mesh_composer=ttnn.ConcatMesh2dToTensor(
@@ -1237,6 +1259,18 @@ class DeepseekGenerator(WarmupForwardMixin):
                     f"Trace execution t/s/user @ {gen_idx}th token: {1/profiler.get_duration(f'trace_execution_{gen_idx}')}"
                 )
             assert self._trace_output is not None
+
+            if sample_on_device:
+                # return trace output for sampling on device, no need to get logits on host
+                if self.signpost:
+                    signpost(header="decode_execute_trace_sample_on_device")
+                if self.profile_decode:
+                    # trigger the profiler to read the device side data each iteration to not miss any data
+                    ttnn.ReadDeviceProfiler(self.mesh_device)
+                return self._trace_output
+
+            assert sample_on_device == False, "sample_on_device should be False at this point"
+
             logits = ttnn.to_torch(
                 self._trace_output,
                 mesh_composer=ttnn.ConcatMesh2dToTensor(
