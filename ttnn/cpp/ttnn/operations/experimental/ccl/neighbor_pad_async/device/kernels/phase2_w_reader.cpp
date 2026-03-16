@@ -15,14 +15,12 @@
 
 using address_t = uint32_t;
 
-constexpr bool is_first_chip = get_compile_time_arg_val(0);
-constexpr bool is_last_chip = get_compile_time_arg_val(1);
-constexpr uint32_t cb_output_id = get_compile_time_arg_val(2);
-constexpr bool direction = get_compile_time_arg_val(3);
-constexpr bool is_padding_zeros = get_compile_time_arg_val(4);
-constexpr uint32_t stick_size = get_compile_time_arg_val(5);
-// Output TensorAccessorArgs start at index 6 (variable length)
-constexpr auto dst_args = TensorAccessorArgs<6>();
+// Compile-time args (uniform across all W fabric reader cores)
+constexpr uint32_t cb_output_id = get_compile_time_arg_val(0);
+constexpr bool is_padding_zeros = get_compile_time_arg_val(1);
+constexpr uint32_t stick_size = get_compile_time_arg_val(2);
+// Output TensorAccessorArgs start at index 3 (variable length)
+constexpr auto dst_args = TensorAccessorArgs<3>();
 constexpr uint32_t ct_after_dst = dst_args.next_compile_time_args_offset();
 constexpr uint32_t recv_cb_id = get_compile_time_arg_val(ct_after_dst);
 
@@ -43,17 +41,24 @@ inline void zeroPad(uint32_t cb_id) {
 }
 
 void kernel_main() {
+    // Common runtime args (uniform across all cores, updated between dispatches)
+    const address_t output_tensor_address = get_common_arg_val<address_t>(0);
+    const uint32_t barrier_sem_addr = get_common_arg_val<uint32_t>(1);
+    const uint32_t w_neighbor_sem_addr = get_common_arg_val<uint32_t>(2);
+
+    // Per-core runtime args
     uint32_t arg_idx = 0;
     const uint32_t outer_dim_size = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t outer_dim_start = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t padding = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t barrier_sem_addr = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t barrier_count = get_arg_val<uint32_t>(arg_idx++);
-    const uint32_t w_neighbor_sem_addr = get_arg_val<uint32_t>(arg_idx++);
-    const address_t output_tensor_address = get_arg_val<address_t>(arg_idx++);
     const uint32_t output_row_width = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t pad2_left = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_interior_sticks = get_arg_val<uint32_t>(arg_idx++);
+    // Per-core direction args (moved from compile-time for kernel consolidation)
+    const bool is_first_chip = get_arg_val<uint32_t>(arg_idx++);
+    const bool is_last_chip = get_arg_val<uint32_t>(arg_idx++);
+    const bool direction = get_arg_val<uint32_t>(arg_idx++);
 
     const auto dst_accessor = TensorAccessor(dst_args, output_tensor_address, stick_size);
 
