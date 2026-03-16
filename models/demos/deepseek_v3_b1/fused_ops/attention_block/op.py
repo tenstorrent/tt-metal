@@ -722,7 +722,6 @@ class AttentionBlock:
         ccl_num_pages = gather3_dst_num_pages  # 7 pages of 32x32
         ccl_payload_size_bytes = ccl_num_pages * ccl_page_size_bytes  # 7 * 2048 = 14336 bytes
         ccl_packet_header_size_bytes = ttnn.get_tt_fabric_packet_header_size_bytes()
-        l1_alignment = 16
 
         has_residual = 1
 
@@ -942,7 +941,6 @@ class AttentionBlock:
         )  # CCL sender reads gather3 output (sender core)
         ccl_remote_data_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # CCL received remote data (receiver core)
         ccl_residual_cb = input_cb
-        ccl_temp_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # CCL temp for compute (receiver core)
         ccl_output_cb = cb_id_context.get_cb_id(data_format, TD_INTERP)  # CCL output (receiver core)
         ccl_packet_header_cb = cb_id_context.get_cb_id(
             ttnn.uint32, TD_32x32
@@ -1699,7 +1697,6 @@ class AttentionBlock:
             ("ccl_sender_gather3_completion_semaphore_id", gather3_completion_semaphore_id),
             # CCL receiver (NCRISC waits for remote data)
             ("ccl_receiver_cb_in1", ccl_remote_data_cb),
-            ("ccl_receiver_l1_alignment", l1_alignment),
             ("ccl_receiver_cb_in2", gather3_dst_cb),  # Local data from gather3
             ("ccl_receiver_remote_sender_noc_x", ccl_sender_noc_core.x),
             ("ccl_receiver_remote_sender_noc_y", ccl_sender_noc_core.y),
@@ -1766,9 +1763,7 @@ class AttentionBlock:
             ("ccl_sender_noc_x", ccl_sender_noc_core.x),
             ("ccl_sender_noc_y", ccl_sender_noc_core.y),
             # CCL sender (BRISC sends via fabric)
-            ("ccl_sender_packet_header_cb_id", ccl_packet_header_cb),
             ("ccl_sender_packet_cb_id", ccl_sender_in_cb),
-            ("ccl_sender_l1_alignment", l1_alignment),
             ("ccl_sender_input_num_tiles", ccl_num_pages),
             ("ccl_sender_page_size_bytes", ccl_page_size_bytes),
             ("ccl_sender_payload_size_bytes", ccl_payload_size_bytes),
@@ -1794,7 +1789,7 @@ class AttentionBlock:
                 ("sdpa_l_chunk_size_bytes", sdpa_l_chunk_size_bytes),
                 ("sdpa_num_l_chunks", sdpa_num_l_chunks),
                 ("sdpa_tiles_per_l_chunk", sdpa_tiles_per_l_chunk),
-                ("sdpa_l1_alignment", l1_alignment),
+                ("sdpa_l1_alignment", sdpa_l1_alignment),
                 ("sdpa_page_size_bytes", sdpa_l_tile_size),
                 ("sdpa_slot_size", sdpa_fwd_slot_size),
                 # SDPA scatter params
@@ -1833,7 +1828,6 @@ class AttentionBlock:
             ("ccl_receiver_cb_in1", gather3_dst_cb),  # Local data
             ("ccl_receiver_cb_out0", ccl_output_cb),
             ("ccl_receiver_cb_residual", ccl_residual_cb),
-            ("ccl_receiver_cb_temp", ccl_temp_cb),
             ("ccl_receiver_has_residual", has_residual),
             ("ccl_receiver_num_tiles", ccl_num_tiles),
         ]
@@ -2801,24 +2795,6 @@ class AttentionBlock:
         sdpa_kv_cache_running_offset_mcast_core += ccl_remote_data_cb_descriptor.total_size
         post_sdpa_cb_list.append(ccl_remote_data_cb_descriptor)
         ccl_send_addr = ttnn.get_cb_address(ccl_remote_data_cb_descriptor)
-
-        # CB 11: CCL temp scratch buffer (not backed by tensor)
-        ccl_temp_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=ccl_temp_cb,
-            data_format=data_format,
-            page_size=cb_page_size,
-            tile=tile_descriptor,
-        )
-        ccl_temp_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            ccl_temp_cb,
-            ref_sdpa_kv_cache_buffer,
-            address_offset=sdpa_kv_cache_running_offset_mcast_core,
-            total_size=ccl_num_tiles * tile_size,
-            core_ranges=full_device_grid,
-        )
-        ccl_temp_cb_descriptor.format_descriptors = [ccl_temp_cb_format]
-        sdpa_kv_cache_running_offset_mcast_core += ccl_temp_cb_descriptor.total_size
-        post_sdpa_cb_list.append(ccl_temp_cb_descriptor)
 
         # CB 12: CCL output (from sharded tensor)
         attention_block_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
