@@ -5,15 +5,13 @@
 #pragma once
 
 #include <umd/device/types/core_coordinates.hpp>
-#include <fstream>
-#include <sstream>
 #include <string>
-#include <tt_stl/unreachable.hpp>
 
 #include "api/tt-metalium/kernel_types.hpp"
 #include "api/tt-metalium/runtime_args_data.hpp"
 #include "api/tt-metalium/device.hpp"
 #include "api/tt-metalium/experimental/host_api.hpp"
+#include "impl/kernels/kernel_source.hpp"
 #include "impl/context/metal_context.hpp"
 #include "core_coord.hpp"
 #include "hal_types.hpp"
@@ -64,49 +62,6 @@ KernelHandle CreateKernelFromString(
     const std::string& kernel_src_code,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const EthernetConfig& config);
-
-struct KernelSource {
-    enum SourceType { FILE_PATH, SOURCE_CODE };
-
-    std::string source_;
-    SourceType source_type_;
-    // if source_type_ is FILE_PATH, file pointed by path_ exists at time of construction
-    std::filesystem::path path_;
-
-    KernelSource(const std::string& source, const SourceType& source_type);
-
-    std::string name() const {
-        std::string name;
-        if (this->source_type_ == SourceType::FILE_PATH) {
-            const std::size_t start_pos_of_name = this->source_.rfind('/') + 1;
-            const std::size_t pos_of_dot = this->source_.rfind('.');
-            name = this->source_.substr(start_pos_of_name, (pos_of_dot - start_pos_of_name));
-        } else {
-            name = "Kernel_Source_Code";
-        }
-        return name;
-    }
-
-    // Returns the actual source code (file content or source string)
-    std::string get_content() const {
-        switch (source_type_) {
-            case SourceType::FILE_PATH: {
-                std::ifstream file(path_);
-                if (!file.is_open()) {
-                    throw std::runtime_error("Cannot open kernel source file: " + path_.string());
-                }
-                std::stringstream buffer;
-                buffer << file.rdbuf();
-                if (file.fail() && !file.eof()) {
-                    throw std::runtime_error("Failed to read kernel source file: " + path_.string());
-                }
-                return buffer.str();
-            }
-            case SourceType::SOURCE_CODE: return source_;
-        }
-        ttsl::unreachable();
-    }
-};
 
 class Kernel : public JitBuildSettings {
 public:
@@ -197,6 +152,7 @@ public:
     // Binary management (moved from KernelImpl)
     const std::vector<const ll_api::memory*>& binaries(uint64_t build_key) const;
     void set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>&& binaries);
+    void set_elf_paths(uint64_t build_key, std::vector<std::string> elf_paths);
     bool binaries_exist_on_disk(const IDevice* device) const;
 
     virtual void set_build_options(JitBuildOptions& /*build_options*/) const {}
@@ -240,6 +196,8 @@ protected:
 
     // Build key -> binaries (moved from KernelImpl)
     std::unordered_map<uint64_t, std::vector<const ll_api::memory*>> binaries_;
+    // Build key -> ELF paths returned by remote compilation.
+    std::unordered_map<uint64_t, std::vector<std::string>> elf_paths_;
 
     virtual std::string config_hash() const = 0;
 
