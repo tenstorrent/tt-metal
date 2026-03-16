@@ -922,7 +922,6 @@ class AttentionBlock:
         sdpa_cb_r1_result_l = cb_id_context.get_cb_id(data_format, TD_SDPA)
         sdpa_cb_r1_result_ms = cb_id_context.get_cb_id(data_format, TD_SDPA)
         sdpa_cb_l_out = cb_id_context.get_cb_id(data_format, TD_SDPA)
-        sdpa_cb_packet_slot = cb_id_context.get_cb_id(ttnn.uint32, TD_32x32)
 
         matmul4_in0_cb = cb_id_context.get_cb_id(data_format, TD_1x32)  # Matmul4 input (kv_b2 grid)
         matmul4_in1_cb = cb_id_context.get_cb_id(  # Matmul4 weights (kv_b2 grid)
@@ -1789,7 +1788,6 @@ class AttentionBlock:
                 ("sdpa_cb_local_ms", sdpa_cb_local_ms),
                 ("sdpa_cb_r1_result_l", sdpa_cb_r1_result_l),
                 ("sdpa_cb_r1_result_ms", sdpa_cb_r1_result_ms),
-                ("sdpa_cb_packet_slot", sdpa_cb_packet_slot),
                 ("sdpa_cb_l_out", sdpa_cb_l_out),
                 # SDPA tile/chunk sizes
                 ("sdpa_ms_tile_size_bytes", sdpa_ms_tile_size),
@@ -2921,24 +2919,6 @@ class AttentionBlock:
         )
         post_sdpa_cb_list.append(sdpa_l_out_cb_descriptor)
 
-        # CB 21: SDPA packet slot (for fabric packet headers)
-        sdpa_packet_header_cb_size = 2 * ttnn.get_tt_fabric_packet_header_size_bytes()
-        sdpa_packet_slot_cb_format = ttnn.CBFormatDescriptor(
-            buffer_index=sdpa_cb_packet_slot,
-            data_format=ttnn.uint32,
-            page_size=sdpa_packet_header_cb_size,
-        )
-        sdpa_packet_slot_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-            sdpa_cb_packet_slot,
-            ref_sdpa_forwarder_scratch,
-            address_offset=sdpa_forwarder_scratch_running_offset,
-            total_size=sdpa_packet_header_cb_size,
-            core_ranges=full_device_grid,
-        )
-        sdpa_packet_slot_cb_descriptor.format_descriptors = [sdpa_packet_slot_cb_format]
-        sdpa_forwarder_scratch_running_offset += sdpa_packet_slot_cb_descriptor.total_size
-        post_sdpa_cb_list.append(sdpa_packet_slot_cb_descriptor)
-
         # ========================================================================
         # Semaphore descriptors
         # ========================================================================
@@ -3817,6 +3797,14 @@ class AttentionBlock:
                             pos_r2_neighbor_idx - 1 + sdpa_num_ring_devices
                         ) % sdpa_num_ring_devices
 
+                    # Deterministic reduction order based on device indices so all devices produce identical results.
+                    # R1: swap so lower device index is always arg1 ("worker")
+                    swap_r1_reduction_order = 1 if sdpa_ring_idx < pos_r1_neighbor_idx else 0
+                    # R2: swap so the R1 pair with lower min device index is always arg1 ("worker")
+                    r1_pair_min = min(sdpa_ring_idx, pos_r1_neighbor_idx)
+                    r2_pair_min = min(pos_r2_neighbor_idx, pos_r2_neighbor_r1_idx)
+                    swap_r2_reduction_order = 1 if r1_pair_min < r2_pair_min else 0
+
                     # TRISC args: pos_addr, device_idx, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
                     sdpa_worker_trisc_rt_args[worker_core.x][worker_core.y] = [
                         sdpa_pos_addr,
@@ -3824,6 +3812,8 @@ class AttentionBlock:
                         pos_r1_neighbor_idx,
                         pos_r2_neighbor_idx,
                         pos_r2_neighbor_r1_idx,
+                        swap_r1_reduction_order,
+                        swap_r2_reduction_order,
                     ]
 
                     # Extend NCRISC args: pos_addr, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
