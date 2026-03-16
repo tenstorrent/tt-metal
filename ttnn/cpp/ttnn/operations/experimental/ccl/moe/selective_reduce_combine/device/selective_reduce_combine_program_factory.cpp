@@ -358,26 +358,11 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const auto [mux_kernel_id, mux_kernel_config, mux_neigbor_core_maps] = detail::launch_mux_workers(
         *mesh_device, mux_core_range_set, fabric_node_id, neighbors, num_links, num_worker_cores, program);
 
-    const auto pstart_coord = needed_worker_core_range_set.bounding_box().start_coord;
-    const auto pend_coord = needed_worker_core_range_set.bounding_box().end_coord;
-
     const auto start_coord =
         mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().start_coord);
     const auto end_coord =
         mesh_device->worker_core_from_logical_core(needed_worker_core_range_set.bounding_box().end_coord);
 
-    std::cout << "physical pstart_coord.x: " << pstart_coord.x << " pstart_coord.y " << pstart_coord.y
-              << " end_coord.x " << pend_coord.x << " end_coord.y " << pend_coord.y << std::endl;
-    std::cout << "virtual start_coord.x: " << start_coord.x << " start_coord.y " << start_coord.y << " end_coord.x "
-              << end_coord.x << " end_coord.y " << end_coord.y << std::endl;
-    std::cout << "num_token_parallel_cores: " << num_token_parallel_cores
-              << " num_data_parallel_cores: " << num_data_parallel_cores
-              << " num_cores: " << needed_worker_core_range_set.num_cores() << std::endl;
-
-    for (auto& c : sender_cores) {
-        std::cout << c.x << ", " << c.y << " ";
-    }
-    std::cout << std::endl;
     // launch reader kernel
     std::unordered_map<std::string, uint32_t> reader_named_ct_args = {
         {"dense_token_maps_cb_id", dense_token_maps_cb_id},
@@ -479,7 +464,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
 
     const DataMovementConfig writer_config{
         .processor = DataMovementProcessor::RISCV_0,
-        .noc = NOC::NOC_0,
+        .noc = NOC::NOC_1,
         .compile_args = writer_compile_time_args,
         .defines = writer_defines,
         .named_compile_args = writer_named_ct_args};

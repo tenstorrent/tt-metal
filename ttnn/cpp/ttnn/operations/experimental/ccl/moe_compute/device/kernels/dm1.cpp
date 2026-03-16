@@ -231,7 +231,6 @@ void kernel_main() {
                 combine_semaphore_addr,
                 /*noc_id=*/1);
             noc_semaphore_inc(dest_sem_noc_addr, 1, /*noc_id=*/1, vchannel);
-            DPRINT << "compute Sending seminc \n ";
         };
     };
 
@@ -365,7 +364,5 @@ void kernel_main() {
             combine_semaphore_inc();
         }
     }
-
     noc_async_atomic_barrier(/*noc_idx=*/1);
-    DPRINT << "COMPUTE CORES DONE \n";
 }
