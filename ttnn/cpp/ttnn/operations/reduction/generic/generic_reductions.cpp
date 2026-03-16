@@ -343,12 +343,23 @@ Tensor non_height_width_reduce(
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config) {
     auto memory_config = memory_config_arg.value_or(input_tensor.memory_config());
     const auto& input_shape = input_tensor.logical_shape();
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en produces incorrect results on Wormhole B0.
+    // fp32_dest_acc_en defaults to True here, so always use HiFi3 as default on Wormhole B0.
+    const auto arch = input_tensor.device()->arch();
+    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
     ttnn::DeviceComputeKernelConfig config = compute_kernel_config.value_or(ttnn::init_device_compute_kernel_config(
-        input_tensor.device()->arch(),
+        arch,
         std::nullopt,
-        MathFidelity::HiFi4,
+        is_wormhole ? MathFidelity::HiFi3 : MathFidelity::HiFi4,
         /*default_approx_mode=*/false,
         /*default_fp32_acc=*/true));
+    if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
+        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
+        log_warning(
+            tt::LogOp,
+            "HiFi4 + fp32_dest_acc_en on Wormhole B0 may produce incorrect results "
+            "(hw bug #38306). Prefer HiFi3.");
+    }
     Tensor output_tensor = ttnn::experimental::reduction::fast_reduce_nc(
         input_tensor, dims, /*output=*/std::nullopt, memory_config, config);
     auto [start, end, step] = get_slice_parameters(input_shape, output_tensor.logical_shape());

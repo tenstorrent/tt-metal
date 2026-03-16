@@ -28,11 +28,25 @@ ttnn::Tensor dit_rms_norm_unary_fused(
                                                                    : ttnn::GetDefaultDevice()->arch();
     const bool approx_mode = true;
     const bool fp32_acc = false;
+    const bool is_fp32_input = input_tensor.dtype() == DataType::FLOAT32;
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en produces incorrect results on Wormhole B0.
+    // fp32_dest_acc_en will be True for FLOAT32 inputs (set below), so use HiFi3 as default on Wormhole B0.
+    const auto is_wormhole = arch == tt::ARCH::WORMHOLE_B0;
+    const auto default_fidelity = (is_wormhole && is_fp32_input) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
     auto kernel_config_val = compute_kernel_config.value_or(
-        init_device_compute_kernel_config(arch, std::nullopt, MathFidelity::HiFi4, approx_mode, fp32_acc));
+        init_device_compute_kernel_config(arch, std::nullopt, default_fidelity, approx_mode, fp32_acc));
 
     if (!compute_kernel_config.has_value()) {
         kernel_config_val.fp32_dest_acc_en = (input_tensor.dtype() == DataType::FLOAT32);
+    }
+    
+    // Warn if user explicitly passed HiFi4 + fp32_dest_acc_en on Wormhole B0 (hw bug #38306).
+    if (is_wormhole && compute_kernel_config.has_value() && compute_kernel_config->fp32_dest_acc_en &&
+        compute_kernel_config->math_fidelity == MathFidelity::HiFi4) {
+        log_warning(
+            tt::LogOp,
+            "HiFi4 + fp32_dest_acc_en on Wormhole B0 may produce incorrect results "
+            "(hw bug #38306). Prefer HiFi3.");
     }
 
     return ttnn::prim::layer_norm(

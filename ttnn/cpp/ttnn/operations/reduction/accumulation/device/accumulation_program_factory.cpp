@@ -96,8 +96,12 @@ AccumulationProgramFactory::cached_program_t AccumulationProgramFactory::create(
     std::vector<uint32_t> reader_compile_time_args;
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(reader_compile_time_args);
     const ReaderDataMovementConfig reader_config{reader_compile_time_args};
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en produces incorrect results on Wormhole B0.
+    // Use HiFi3 silently when fp32_dest_acc_en is True on Wormhole B0.
+    const auto math_fidelity =
+        (fp32_dest_acc_en && device->arch() == tt::ARCH::WORMHOLE_B0) ? MathFidelity::HiFi3 : MathFidelity::HiFi4;
     const ComputeConfig compute_config{
-        .math_fidelity = MathFidelity::HiFi4,
+        .math_fidelity = math_fidelity,
         .fp32_dest_acc_en = fp32_dest_acc_en,
         .math_approx_mode = false,
         .compile_args = {},

@@ -181,12 +181,24 @@ UnaryShardedProgramFactory::cached_program_t UnaryShardedProgramFactory::create(
     auto path =
         fmt::format("{}/{}", compute_root_sharded, utils::get_compute_kernel_path(ops_chain[0].type(), input.dtype()));
 
+    // Due to hardware bug (#38306), HiFi4 + fp32_dest_acc_en produces incorrect results on Wormhole B0.
+    // Use HiFi3 when fp32_dest_acc_en is True on Wormhole B0.
+    if (args.fp32_dest_acc_en && input.device()->arch() == tt::ARCH::WORMHOLE_B0) {
+        log_warning(
+            tt::LogOp,
+            "Unary op with fp32_dest_acc_en on Wormhole B0: using HiFi3 instead of HiFi4 "
+            "to avoid hardware bug (#38306).");
+    }
+    const auto math_fidelity_for_config = (args.fp32_dest_acc_en && input.device()->arch() == tt::ARCH::WORMHOLE_B0)
+                                              ? MathFidelity::HiFi3
+                                              : MathFidelity::HiFi4;
+
     auto eltwise_unary_kernel_group_1_id = tt::tt_metal::CreateKernel(
         program,
         path,
         all_cores,
         tt::tt_metal::ComputeConfig{
-            .math_fidelity = MathFidelity::HiFi4,
+            .math_fidelity = math_fidelity_for_config,
             .fp32_dest_acc_en = args.fp32_dest_acc_en,
             .unpack_to_dest_mode = unpack_to_dest_mode,
             .bfp8_pack_precise = args.bfp8_pack_precise,
