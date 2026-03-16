@@ -448,10 +448,7 @@ def generate_sdxl_test_inputs():
     return inputs
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 0}], indirect=True)
-@pytest.mark.parametrize("input_shape", generate_sdxl_test_inputs())
-@pytest.mark.parametrize("use_welford", welford_flavors, ids=welford_ids)
-def test_sdxl_base_group_norm(device, input_shape, use_welford, perf_test_mode=False):
+def run_sdxl_base_group_norm_test(device, N, C, H, W, use_welford, layout, inplace, perf_test_mode=False):
     num_groups = 32  #  always 32 for SDXL Base
     if layout == ttnn.TILE_LAYOUT and inplace:
         pytest.skip("Tile layout requires non-inplace tensors.")

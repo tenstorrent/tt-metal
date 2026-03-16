@@ -4,7 +4,6 @@
 import ttnn
 import pytest
 from tests.ttnn.nightly.unit_tests.operations.pool.test_avgpool2d import run_avg_pool2d
-from models.common.utility_functions import skip_with_llk_assert
 
 
 @pytest.fixture(scope="module")
@@ -14,7 +13,6 @@ def tensor_map():
     return tensor_map
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize(
     "input_shape",  # NCHW
     (
@@ -116,7 +114,6 @@ def test_avg_pool2d_post_commit(
     )
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory address.")
 @pytest.mark.parametrize(
     "input_shape, num_slices",  # NCHW
     (

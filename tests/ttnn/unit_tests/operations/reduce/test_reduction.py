@@ -9,7 +9,7 @@ import ttnn
 import sys
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
-from models.common.utility_functions import is_blackhole, torch_random, skip_with_llk_assert
+from models.common.utility_functions import skip_for_blackhole, is_blackhole, torch_random
 
 
 @pytest.mark.parametrize("batch_size", [1, 16])
@@ -278,7 +278,6 @@ def test_2d_topk(device, dim1, dim2, dim, k, largest, dtype):
     assert_with_pcc(pyt_topk_values, ttnn_torch_values, pcc_values)
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize("dim1", [1])
 @pytest.mark.parametrize("dim2", [128256, 151936])
 @pytest.mark.parametrize("dim", [1])
@@ -575,7 +574,6 @@ def run_reduce_sum_h(device, batch_size, h, w, dim):
     assert_with_pcc(torch_output_tensor, output_tensor)
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 4096}], indirect=True)
 @pytest.mark.parametrize(
     "input_shape",

@@ -324,7 +324,7 @@ void kernel_main() {
         // Loop through all K chunks
         for (uint32_t k_chunk = k_chunk_start; k_chunk < k_chunk_end; ++k_chunk) {
             // Reconfig register DF
-            reconfig_data_format(cb_k_in, cb_q_in);
+            reconfig_data_format(cb_q_in, cb_k_in);
             pack_reconfig_data_format(cb_qk_im);
 
             // OPTIMIZATION: Add the attention mask directly on top of DST if chunk sizes are dynamic
@@ -433,7 +433,7 @@ void kernel_main() {
                     cb_cur_sum, cb_cur_sum, Sk_chunk_t_dynamic, false);
 
                 /* OUT_IM = QK @ V_CHUNK */
-                reconfig_data_format(cb_v_in, cb_qk_im);  // DEBUG
+                reconfig_data_format(cb_qk_im, cb_v_in);  // DEBUG
                 pack_reconfig_data_format(cb_out_im);
                 matmul_blocks(
                     cb_qk_im,

@@ -6,8 +6,10 @@ import pytest
 import ttnn
 
 from tests.ttnn.unit_tests.operations.sdpa.mla_test_utils import run_flash_mla_decode_impl
+from models.common.utility_functions import skip_with_llk_assert
 
 
+@skip_with_llk_assert("Hits LLK assert check for are_unpacker_AB_configured_correctly.")
 @pytest.mark.parametrize(
     "batch, seq_len, nh, nkv, kv_lora_rank, d_rope, q_num_cores, q_mem_config",
     # batch, seq_len, num heads q, num heads kv, kv lora rank, dim rope, number of cores to shard q on

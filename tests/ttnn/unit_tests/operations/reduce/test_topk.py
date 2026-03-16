@@ -9,7 +9,6 @@ pytestmark = pytest.mark.use_module_device
 import torch
 import ttnn
 from tests.ttnn.utils_for_testing import assert_allclose, assert_equal
-from models.common.utility_functions import skip_with_llk_assert
 
 UINT16_MAX = 65535
 
@@ -189,7 +188,6 @@ def test_topk_sub_core_grids(N, C, H, W, dim, k, dtype, sorted, largest, device,
     run_topk_test(N, C, H, W, k, dtype, dim, sorted, largest, device, sub_core_grids, pass_indices_tensor)
 
 
-@skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
 @pytest.mark.parametrize(
     "dtype",
     (ttnn.bfloat16,),
