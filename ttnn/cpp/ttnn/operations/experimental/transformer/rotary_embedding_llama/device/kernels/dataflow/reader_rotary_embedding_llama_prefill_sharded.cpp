@@ -43,9 +43,14 @@ void kernel_main() {
     // ------------------------------------------------------------------
     // Read transformation matrix in CB (only once, because it will be reused)
     if constexpr (trans_mat_use_global_cb) {
+        // This block helps performance significantly. Although the `else` block works in all cases,
+        // removing this `if` block negatively affects performance. In most cases, we should land
+        // in this block unless users are improperly sharding `trans_mat`, e.g., replicating it on
+        // fewer cores than available in the chosen core grid.
         cb_reserve_back(trans_mat_cb_id, onetile);
         cb_push_back(trans_mat_cb_id, onetile);
     } else {
+        // Non-height-sharded/fewer-#shards-than-cores-height-sharded cases
         const uint32_t trans_mat_tile_bytes = get_tile_size(trans_mat_cb_id);
         const auto s3 = TensorAccessor(trans_mat_args, trans_mat_addr, trans_mat_tile_bytes);
 
