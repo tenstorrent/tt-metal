@@ -61,7 +61,7 @@ public:
      */
     void up(const Noc& noc, uint32_t noc_x, uint32_t noc_y, uint32_t value, uint8_t vc = NOC_UNICAST_WRITE_VC) {
         uint64_t dest_noc_addr = get_noc_addr(noc_x, noc_y, local_l1_addr_);
-        noc_semaphore_inc(dest_noc_addr, value, noc.get_noc_id(), vc);
+        noc_semaphore_inc<true>(dest_noc_addr, value, noc.get_noc_id(), vc);
     }
 
     /**

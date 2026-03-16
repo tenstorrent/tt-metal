@@ -330,7 +330,7 @@ noc_semaphore_inc(remote_sem_addr, 1);
 ```cpp
 experimental::Noc noc;
 experimental::Semaphore<> sem(sem_id);
-sem.up(noc, noc_x, noc_y, 1);  // Atomic remote increment
+sem.up(noc, noc_x, noc_y, 1);  // Atomic remote increment. Note: this is a posted atomic
 ```
 
 #### Multicast Semaphore
