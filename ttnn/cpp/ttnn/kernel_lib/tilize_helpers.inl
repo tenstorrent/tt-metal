@@ -56,6 +56,16 @@ constexpr bool has_supported_fast_tilize_format() {
     return format == 0 || format == 5;  // Float32 or Float16_b
 }
 
+template <uint32_t input_cb>
+constexpr bool is_fp32_input_format() {
+#if defined(UCK_CHLKC_PACK)
+    constexpr auto format = pack_dst_format[input_cb];
+#else
+    constexpr auto format = unpack_src_format[input_cb];
+#endif
+    return format == 0;  // Float32
+}
+
 template <uint32_t block_width_tiles, uint32_t input_cb, uint32_t output_cb>
 constexpr bool can_use_fast_tilize() {
     return block_width_tiles < 256 &&
@@ -89,7 +99,8 @@ template <
     uint32_t output_cb,
     tilize_config::InitUninitMode init_uninit_mode,
     tilize_config::WaitMode wait_mode,
-    tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode>
+    tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode,
+    tilize_config::Fp32Mode fp32_mode>
 ALWI void tilize(
     uint32_t num_blocks,
     std::optional<uint32_t> total_input_pages) {
@@ -107,8 +118,13 @@ ALWI void tilize(
     // Runtime parameter validation
     ASSERT(num_blocks > 0);
 
-    // Determine if we're using fast tilize mode (automatic detection based on tile size, sync mode, and data format)
-    constexpr bool use_fast = can_use_fast_tilize<block_width_tiles, input_cb, output_cb>();
+    // Determine if we're using fast tilize mode (automatic detection based on tile size, sync mode, and data format).
+    // Fp32Mode::Lossless disables fast tilize only for fp32 inputs to preserve exact values
+    // (fast tilize truncates fp32 → tf32). Has no effect on non-fp32 formats.
+    constexpr bool lossless_fp32_override = (fp32_mode == tilize_config::Fp32Mode::Lossless) &&
+                                            is_fp32_input_format<input_cb>();
+    constexpr bool use_fast = can_use_fast_tilize<block_width_tiles, input_cb, output_cb>() &&
+                              !lossless_fp32_override;
 
     // Determine if we're doing data type reconfiguration
     constexpr bool use_unpack_reconfig =

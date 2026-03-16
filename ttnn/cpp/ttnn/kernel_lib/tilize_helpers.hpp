@@ -45,6 +45,14 @@ enum class WaitMode : uint8_t {
     NoWait        // Caller manages synchronization externally
 };
 
+// Controls whether fast tilize is used for Float32 data.
+// Fast tilize truncates fp32 to tf32 precision during tilization (lossy).
+// Use Lossless when exact fp32 preservation is required.
+enum class Fp32Mode : uint8_t {
+    Fast,     // Default — uses fast_tilize for fp32 (lossy, truncates to tf32 precision)
+    Lossless  // Forces standard tilize path for fp32 data (exact, no truncation)
+};
+
 }  // namespace tilize_config
 
 /**
@@ -68,6 +76,9 @@ enum class WaitMode : uint8_t {
  *   init_uninit_mode — Init/uninit lifecycle control (default: InitAndUninit).
  *   wait_mode        — How to synchronize on input data (default: WaitBlock).
  *   reconfig_mode    — Register datatype reconfiguration (default: UnpackAndPackReconfigure).
+ *   fp32_mode        — Float32 precision control (default: Fast).
+ *                       Fast: uses fast_tilize when possible (lossy for fp32 — truncates to tf32 precision).
+ *                       Lossless: forces standard tilize path, preserving exact fp32 values.
  *
  * ── Block Geometry ─────────────────────────────────────────────────────────
  *
@@ -122,6 +133,13 @@ enum class WaitMode : uint8_t {
  *   compute_kernel_lib::tilize<w, cb_in, cb_out, tilize_config::InitUninitMode::InitOnly>(blocks);   // first
  *   compute_kernel_lib::tilize<w, cb_in, cb_out, tilize_config::InitUninitMode::Neither>(blocks);    // middle
  *   compute_kernel_lib::tilize<w, cb_in, cb_out, tilize_config::InitUninitMode::UninitOnly>(blocks); // last
+ *
+ *   // 7. Lossless fp32 tilize — exact fp32 preservation (no truncation to tf32)
+ *   compute_kernel_lib::tilize<block_w, cb_in, cb_out,
+ *          tilize_config::InitUninitMode::InitAndUninit,
+ *          tilize_config::WaitMode::WaitBlock,
+ *          tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+ *          tilize_config::Fp32Mode::Lossless>(num_blocks);
  */
 template <
     uint32_t block_width_tiles,
@@ -130,7 +148,8 @@ template <
     tilize_config::InitUninitMode init_uninit_mode = tilize_config::InitUninitMode::InitAndUninit,
     tilize_config::WaitMode wait_mode = tilize_config::WaitMode::WaitBlock,
     tilize_config::ReconfigureRegisterDatatypeMode reconfig_mode =
-        tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure>
+        tilize_config::ReconfigureRegisterDatatypeMode::UnpackAndPackReconfigure,
+    tilize_config::Fp32Mode fp32_mode = tilize_config::Fp32Mode::Fast>
 ALWI void tilize(uint32_t num_blocks, std::optional<uint32_t> total_input_pages = std::nullopt);
 
 }  // namespace compute_kernel_lib
