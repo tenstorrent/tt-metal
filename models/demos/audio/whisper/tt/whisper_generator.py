@@ -27,7 +27,7 @@ from .ttnn_optimized_functional_whisper import WHISPER_BATCH_SIZE
 class GenerationParams:
     """Dataclass for Whisper generation parameters.
 
-    Note: language, task, prompt, and use_trace are batch-homogeneous and must be
+    Note: language, task, and prompt are batch-homogeneous and must be
     passed as separate parameters to generate().
     """
 
@@ -124,10 +124,21 @@ class WhisperGenerator:
         # Cross-attention cache validity flag
         self.cross_attn_cache_valid = False
 
+        # Prefill trace (decoder-only, used during prefill with 2CQ events)
         self.trace_id_decoder = defaultdict(lambda: None)
         self.trace_input_decoder = defaultdict(lambda: None)
         self.trace_output_decoder = defaultdict(lambda: None)
-        # self.trace_compiled = False
+
+        # Decode trace (enlarged: embedding -> decoder -> lm_head -> argmax, persistent across generations)
+        self.trace_id_decode = defaultdict(lambda: None)
+
+        # 2CQ event tracking (initialized during trace capture)
+        self.op_event = None
+        self.write_event = None
+
+        # Per-batch-size host and device staging tensors for 2CQ token ID transfer
+        self.token_id_host = defaultdict(lambda: None)
+        self.token_id_device = defaultdict(lambda: None)
 
         # Pre-allocated encoder_hidden_states tensor
         # encoder_seq_len = 1500 for Whisper (30s max audio / 20ms per frame)
@@ -153,6 +164,54 @@ class WhisperGenerator:
                 ttnn.DRAM_MEMORY_CONFIG,
             )
 
+        # Separate uint32 position tensor for ttnn.embedding in the enlarged decode trace
+        # current_decode_pos_per_size stays int32 for the decoder's paged_update_cache
+        # Both are incremented via plus_one inside the trace
+        self.decode_pos_embed = defaultdict(lambda: None)
+        self.decode_pos_embed_host = defaultdict(lambda: None)
+
+        # Value must exist on all devices
+        pos_replicate_mapper = ttnn.ReplicateTensorToMesh(mesh_device) if mesh_device.get_num_devices() > 1 else None
+        for batch_size in [1, WHISPER_BATCH_SIZE]:
+            pos_host = ttnn.from_torch(
+                torch.zeros((1, 1), dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=pos_replicate_mapper,
+            )
+            self.decode_pos_embed[batch_size] = pos_host.to(mesh_device, ttnn.DRAM_MEMORY_CONFIG)
+            self.decode_pos_embed_host[batch_size] = pos_host
+
+        # Pre-allocated DRAM staging tensors for 2CQ token ID transfer (Q1 copy target)
+        for batch_size in [1, WHISPER_BATCH_SIZE]:
+            global_batch = batch_size * mesh_device.get_num_devices()
+            dummy_ids = torch.zeros((global_batch, 1), dtype=torch.long)
+            host_tensor = ttnn.from_torch(
+                dummy_ids,
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=input_mesh_mapper,
+            )
+            self.token_id_device[batch_size] = host_tensor.to(mesh_device, ttnn.DRAM_MEMORY_CONFIG)
+            self.token_id_host[batch_size] = host_tensor
+
+        # Pre-computed suppress tokens mask for on-device argmax (greedy decode)
+        # Sets suppressed token logits to -inf so argmax skips them
+        self.tt_suppress_mask = None
+        if hasattr(config, "suppress_tokens") and config.suppress_tokens:
+            vocab_size = config.vocab_size
+            suppress_mask = torch.zeros(1, 1, vocab_size, dtype=torch.bfloat16)
+            for token_id in config.suppress_tokens:
+                if 0 <= token_id < vocab_size:
+                    suppress_mask[0, 0, token_id] = float("-inf")
+            self.tt_suppress_mask = ttnn.from_torch(
+                suppress_mask,
+                dtype=ttnn.bfloat16,
+                layout=ttnn.TILE_LAYOUT,
+                device=mesh_device,
+                mesh_mapper=input_mesh_mapper,
+            )
+
     def _get_batch_size_per_device(self, unpadded_batch_size):
         if unpadded_batch_size % self.mesh_device.get_num_devices() != 0:
             raise ValueError(
@@ -175,27 +234,52 @@ class WhisperGenerator:
         pos_tensor_host = ttnn.from_torch(pos_host, dtype=ttnn.int32, mesh_mapper=self.input_mesh_mapper)
         trace_key = self._get_batch_size_per_device(global_batch_size)
         ttnn.copy_host_to_device_tensor(pos_tensor_host, self.current_decode_pos_per_size[trace_key])
+        # Also reset the uint32 position embedding tensor
+        if self.decode_pos_embed[trace_key] is not None:
+            pos_replicate_mapper = (
+                ttnn.ReplicateTensorToMesh(self.mesh_device) if self.mesh_device.get_num_devices() > 1 else None
+            )
+            pos_embed_host = ttnn.from_torch(
+                torch.tensor([[value]], dtype=torch.int32),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=pos_replicate_mapper,
+            )
+            ttnn.copy_host_to_device_tensor(pos_embed_host, self.decode_pos_embed[trace_key])
 
     def _release_decoder_trace(self):
-        """Release the decoder trace resources (for cleanup)."""
-        for trace_key in self.trace_id_decoder.keys():
+        """Release all trace resources (for cleanup)."""
+        # Release prefill traces
+        for trace_key in list(self.trace_id_decoder.keys()):
             if self.trace_id_decoder[trace_key] is not None:
                 ttnn.release_trace(self.mesh_device, self.trace_id_decoder[trace_key])
                 self.trace_id_decoder[trace_key] = None
                 self.trace_input_decoder[trace_key] = None
                 self.trace_output_decoder[trace_key] = None
-                logger.debug(f"Released decoder trace for batch size per device {trace_key}")
+                logger.debug(f"Released prefill trace for batch size per device {trace_key}")
 
-    def _capture_decoder_trace(self, trace_key, sample_decoder_hidden_states):
+        # Release decode traces (persistent enlarged trace)
+        for trace_key in list(self.trace_id_decode.keys()):
+            if self.trace_id_decode[trace_key] is not None:
+                ttnn.release_trace(self.mesh_device, self.trace_id_decode[trace_key])
+                self.trace_id_decode[trace_key] = None
+                logger.debug(f"Released decode trace for batch size per device {trace_key}")
+
+        # Clean up 2CQ and on-device sampling resources
+        self.op_event = None
+        self.write_event = None
+        self.token_id_host.clear()
+        self.token_id_device.clear()
+        self.decode_pos_embed.clear()
+        self.decode_pos_embed_host.clear()
+
+    def _capture_prefill_trace(self, trace_key, decode_pos):
         """
-        Capture decoder trace once, reuse for ALL subsequent generations.
-
-        The trace is captured after the first decoder iteration when cross_attn_cache
-        is already populated. The trace uses the pre-allocated encoder_hidden_states
-        tensor which has a stable memory address.
+        Capture decoder trace with 2CQ event protocol.
 
         Args:
-            sample_decoder_hidden_states: Sample input tensor for trace capture
+            trace_key: Batch size per device key for trace lookup
+            decode_pos: Host-side integer decode position for position embedding
         """
         if self.trace_id_decoder[trace_key] is not None:
             return  # Already captured
@@ -207,7 +291,7 @@ class WhisperGenerator:
                 self.config,
                 hidden_states,
                 decoder_attention_mask=None,
-                encoder_hidden_states=self.encoder_hidden_states_per_size[trace_key],  # Pre-allocated, stable address
+                encoder_hidden_states=self.encoder_hidden_states_per_size[trace_key],
                 kv_cache=self.kv_cache_per_batch_size[trace_key],
                 cross_attn_cache=self.cross_attn_cache_per_batch_size[trace_key],
                 cross_attn_cache_valid=True,
@@ -215,52 +299,231 @@ class WhisperGenerator:
                 parameters=self.parameters.decoder,
             )
 
-        # Move input to L1 for trace capture
-        l1_memory_config = ttnn.L1_MEMORY_CONFIG
-        l1_input = ttnn.to_memory_config(sample_decoder_hidden_states, l1_memory_config)
+        # Helper: run event-synchronized input transfer + embedding + position add
+        def _run_2cq_preprocessing(token_id_host, decode_pos):
+            ttnn.wait_for_event(1, self.op_event)
+            ttnn.copy_host_to_device_tensor(token_id_host, self.token_id_device[trace_key], 1)
+            self.write_event = ttnn.record_event(self.mesh_device, 1)
+            ttnn.wait_for_event(0, self.write_event)
+            # Embedding lookup on Q0
+            inputs_embeds = ttnn.embedding(
+                self.token_id_device[trace_key],
+                self.parameters.decoder.embed_tokens.weight,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+            # Position add on Q0 (host-integer indexed, outside trace)
+            positions = self.parameters.decoder.embed_positions.weight[decode_pos : decode_pos + 1]
+            positions = ttnn.to_layout(positions, ttnn.TILE_LAYOUT)
+            decoder_hidden_states = inputs_embeds + positions
+            return decoder_hidden_states
 
-        # Compile run
+        # Use the pre-allocated host staging tensor (created in __init__ with correct mesh metadata)
+        token_id_host = self.token_id_host[trace_key]
+
+        # Initialize op_event
+        self.op_event = ttnn.record_event(self.mesh_device, 0)
+
+        decoder_hidden_states = _run_2cq_preprocessing(token_id_host, decode_pos)
+        l1_input = ttnn.to_memory_config(decoder_hidden_states, ttnn.L1_MEMORY_CONFIG)
+        self.op_event = ttnn.record_event(self.mesh_device, 0)
         compile_output = traced_decoder_fn(trace_key, l1_input)
         ttnn.deallocate(compile_output, force=True)
         ttnn.deallocate(l1_input)
-        logger.info("Decoder trace compile run complete")
+        logger.info("Decoder trace 2CQ Phase 1 (JIT) complete")
 
-        # Allocate L1 input for trace capture
-        self.trace_input_decoder[trace_key] = ttnn.to_memory_config(sample_decoder_hidden_states, l1_memory_config)
+        decoder_hidden_states = _run_2cq_preprocessing(token_id_host, decode_pos)
+        l1_input = ttnn.to_memory_config(decoder_hidden_states, ttnn.L1_MEMORY_CONFIG)
+        self.op_event = ttnn.record_event(self.mesh_device, 0)
+        optimized_output = traced_decoder_fn(trace_key, l1_input)
+        ttnn.deallocate(optimized_output, force=True)
+        ttnn.deallocate(l1_input)
+        logger.info("Decoder trace 2CQ Phase 2 (optimized) complete")
 
-        # Capture trace
+        decoder_hidden_states = _run_2cq_preprocessing(token_id_host, decode_pos)
+        self.trace_input_decoder[trace_key] = ttnn.to_memory_config(decoder_hidden_states, ttnn.L1_MEMORY_CONFIG)
+        ttnn.deallocate(decoder_hidden_states)  # Free DRAM intermediate
+        self.op_event = ttnn.record_event(self.mesh_device, 0)
+
+        # Capture trace (decoder only)
         self.trace_id_decoder[trace_key] = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
         self.trace_output_decoder[trace_key] = traced_decoder_fn(trace_key, self.trace_input_decoder[trace_key])
 
         ttnn.end_trace_capture(self.mesh_device, self.trace_id_decoder[trace_key], cq_id=0)
         ttnn.synchronize_device(self.mesh_device)
 
-        logger.info(f"Persistent decoder trace capture complete for batch size per device {trace_key}")
+        logger.info(f"Persistent decoder trace 2CQ capture complete for batch size per device {trace_key}")
 
-    def _execute_decoder_trace(self, trace_key, decoder_hidden_states):
+    def _execute_prefill_trace(self, trace_key, token_id_host, decode_pos):
         """
-        Execute the captured decoder trace with new input.
+        Execute the captured decoder trace with 2CQ event protocol.
+
+        Q1 transfers token ID host->device while Q0 may still be finishing
+        previous trace. Then Q0 runs embedding + position add + trace.
 
         Args:
-            decoder_hidden_states: New decoder hidden states (on device)
+            trace_key: Batch size per device key for trace lookup
+            token_id_host: Host tensor with token IDs (uint32, shape [batch_size, 1])
+            decode_pos: Host-side integer decode position for position embedding
 
         Returns:
             Decoder output tensor
         """
         if self.trace_id_decoder[trace_key] is None:
-            raise RuntimeError("Decoder trace not captured. Call _capture_decoder_trace first.")
+            raise RuntimeError("Decoder trace not captured. Call _capture_prefill_trace first.")
 
-        # Copy new input to persistent L1 tensor
+        # Q1: transfer token ID while Q0 may still be executing previous trace
+        ttnn.wait_for_event(1, self.op_event)
+        ttnn.copy_host_to_device_tensor(token_id_host, self.token_id_device[trace_key], 1)
+        self.write_event = ttnn.record_event(self.mesh_device, 1)
+
+        # Q0: wait for Q1 transfer, then run embedding + position add
+        ttnn.wait_for_event(0, self.write_event)
+
+        # Embedding lookup on Q0
+        inputs_embeds = ttnn.embedding(
+            self.token_id_device[trace_key],
+            self.parameters.decoder.embed_tokens.weight,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+
+        # Position add on Q0 (host-integer indexed, outside trace)
+        positions = self.parameters.decoder.embed_positions.weight[decode_pos : decode_pos + 1]
+        positions = ttnn.to_layout(positions, ttnn.TILE_LAYOUT)
+        decoder_hidden_states = inputs_embeds + positions
+
+        # Copy to trace input L1 tensor at stable buffer address
         self.trace_input_decoder[trace_key] = ttnn.to_memory_config(
             decoder_hidden_states,
             ttnn.L1_MEMORY_CONFIG,
             output_tensor=self.trace_input_decoder[trace_key],
         )
 
-        # Execute trace
-        ttnn.execute_trace(self.mesh_device, self.trace_id_decoder[trace_key], cq_id=0, blocking=True)
+        # Record event before trace execution
+        self.op_event = ttnn.record_event(self.mesh_device, 0)
+
+        # Execute trace (non-blocking to allow Q1 overlap on next iteration)
+        ttnn.execute_trace(self.mesh_device, self.trace_id_decoder[trace_key], cq_id=0, blocking=False)
 
         return self.trace_output_decoder[trace_key]
+
+    def _capture_decode_trace(self, trace_key, decode_pos, batch_size):
+        """
+        Capture enlarged decoder trace with on-device argmax feedback loop.
+
+        Args:
+            trace_key: Batch size per device key for trace lookup
+            decode_pos: Starting decode position (int) for phase resets
+            batch_size: Global batch size for phase resets
+        """
+        if self.trace_id_decode[trace_key] is not None:
+            return  # Already captured
+
+        def traced_autoregressive_step():
+            # Token embedding lookup from feedback buffer
+            inputs_embeds = ttnn.embedding(
+                self.token_id_device[trace_key],
+                self.parameters.decoder.embed_tokens.weight,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            # Position embedding lookup from uint32 position tensor (replicated on all devices)
+            positions = ttnn.embedding(
+                self.decode_pos_embed[trace_key],
+                self.parameters.decoder.embed_positions.weight,
+                layout=ttnn.TILE_LAYOUT,
+                memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            )
+
+            # Combine embeddings
+            decoder_hidden_states = inputs_embeds + positions
+
+            # Move to L1 for decoder
+            decoder_hidden_states = ttnn.to_memory_config(decoder_hidden_states, ttnn.L1_MEMORY_CONFIG)
+
+            # Decoder forward pass (cross_attn_cache already populated)
+            decoder_output = ttnn_optimized_functional_whisper.decoder(
+                self.config,
+                decoder_hidden_states,
+                decoder_attention_mask=None,
+                encoder_hidden_states=self.encoder_hidden_states_per_size[trace_key],
+                kv_cache=self.kv_cache_per_batch_size[trace_key],
+                cross_attn_cache=self.cross_attn_cache_per_batch_size[trace_key],
+                cross_attn_cache_valid=True,
+                current_decode_pos=self.current_decode_pos_per_size[trace_key],
+                parameters=self.parameters.decoder,
+            )
+
+            # LM head projection
+            decoder_output = ttnn.squeeze(decoder_output, 1)
+            logits = decoder_output @ self.ttnn_linear_weight
+
+            # Apply suppress tokens mask (sets suppressed logits to -inf)
+            if self.tt_suppress_mask is not None:
+                logits = logits + self.tt_suppress_mask
+
+            # Convert to ROW_MAJOR for argmax
+            logits_rm = ttnn.to_layout(logits, ttnn.ROW_MAJOR_LAYOUT)
+
+            # Argmax -> separate tensor, then copy to feedback buffer
+            argmax_result = ttnn.argmax(logits_rm, dim=-1, use_multicore=True)
+            ttnn.copy(argmax_result, self.token_id_device[trace_key])
+
+            # Increment both position tensors for next iteration
+            ttnn.plus_one(self.current_decode_pos_per_size[trace_key])
+            ttnn.plus_one(self.decode_pos_embed[trace_key])
+
+        # Helper to reset state between phases
+        def _reset_state():
+            ttnn.copy_host_to_device_tensor(self.token_id_host[trace_key], self.token_id_device[trace_key])
+            self._reset_decode_pos(decode_pos, batch_size)
+            ttnn.synchronize_device(self.mesh_device)
+
+        # === Phase 1: JIT run ===
+        traced_autoregressive_step()
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info("On-device sampling trace Phase 1 (JIT) complete")
+        _reset_state()
+
+        # === Phase 2: Optimized run ===
+        traced_autoregressive_step()
+        ttnn.synchronize_device(self.mesh_device)
+        logger.info("On-device sampling trace Phase 2 (optimized) complete")
+        _reset_state()
+
+        # === Phase 3: Trace capture ===
+        self.trace_id_decode[trace_key] = ttnn.begin_trace_capture(self.mesh_device, cq_id=0)
+        traced_autoregressive_step()
+        ttnn.end_trace_capture(self.mesh_device, self.trace_id_decode[trace_key], cq_id=0)
+        ttnn.synchronize_device(self.mesh_device)
+        _reset_state()
+
+        logger.info(f"On-device sampling trace capture complete for batch size per device {trace_key}")
+
+    def _execute_decode_trace(self, trace_key):
+        """
+        Execute the on-device sampling trace.
+
+        Args:
+            trace_key: Batch size per device key for trace lookup
+
+        Returns:
+            The sampled token as a torch tensor (read from device).
+        """
+        if self.trace_id_decode[trace_key] is None:
+            raise RuntimeError("Decode trace not captured. Call _capture_decode_trace first.")
+
+        ttnn.execute_trace(self.mesh_device, self.trace_id_decode[trace_key], cq_id=0, blocking=True)
+
+        # Read back the tiny token tensor
+        sampled_token = ttnn.to_torch(
+            self.token_id_device[trace_key],
+            mesh_composer=self.output_mesh_composer,
+        )
+
+        return sampled_token
 
     def generate(
         self,
@@ -269,7 +532,6 @@ class WhisperGenerator:
         language: str = "en",
         task: str = "transcribe",
         prompt: Optional[str] = None,
-        use_trace: bool = True,
         stream_generation=False,
         return_perf_metrics=False,
     ):
@@ -282,7 +544,6 @@ class WhisperGenerator:
             language: Language code for transcription (batch-homogeneous)
             task: Task type ("transcribe" or "translate") (batch-homogeneous)
             prompt: Optional prompt to guide style/spelling (batch-homogeneous)
-            use_trace: Whether to use traced execution for decoder (batch-homogeneous)
             stream_generation: Whether to stream tokens
             return_perf_metrics: Whether to return performance metrics
 
@@ -386,7 +647,6 @@ class WhisperGenerator:
                 task=task,
                 prompt=prompt,
                 streaming=True,
-                use_trace=use_trace,
             )
 
         # Non-streaming mode: Try generation with different temperatures
@@ -409,7 +669,6 @@ class WhisperGenerator:
                     task=task,
                     prompt=prompt,
                     streaming=False,
-                    use_trace=use_trace,
                 )
 
                 # Non-streaming generation - consume the generator
@@ -525,7 +784,6 @@ class WhisperGenerator:
         task="transcribe",
         prompt=None,
         streaming=False,
-        use_trace=True,
     ):
         """
         Generate text with a specific temperature using fully persistent traces.
@@ -643,13 +901,15 @@ class WhisperGenerator:
                     input_mesh_mapper=self.input_mesh_mapper,
                 )
 
-                if (
-                    use_trace
-                    and self.kv_cache_per_batch_size[trace_key]
-                    and self.trace_id_decoder[trace_key]
-                    and prefill_pos > 0
-                ):
-                    decoder_output = self._execute_decoder_trace(trace_key, decoder_hidden_states)
+                if self.kv_cache_per_batch_size[trace_key] and self.trace_id_decoder[trace_key] and prefill_pos > 0:
+                    # Prepare host token ID for 2CQ trace execution
+                    prefill_token_host = ttnn.from_torch(
+                        prefill_input.reshape(-1, prefill_input.shape[-1]),
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=self.input_mesh_mapper,
+                    )
+                    decoder_output = self._execute_prefill_trace(trace_key, prefill_token_host, decode_pos=prefill_pos)
                 else:
                     decoder_output = ttnn_optimized_functional_whisper.decoder(
                         self.config,
@@ -667,12 +927,8 @@ class WhisperGenerator:
                     if prefill_pos == 0:
                         self.cross_attn_cache_valid = True
                         # Capture trace for reuse in subsequent prefill and decode iterations
-                        if (
-                            use_trace
-                            and self.kv_cache_per_batch_size[trace_key]
-                            and not self.trace_id_decoder[trace_key]
-                        ):
-                            self._capture_decoder_trace(trace_key, decoder_hidden_states)
+                        if self.kv_cache_per_batch_size[trace_key] and not self.trace_id_decoder[trace_key]:
+                            self._capture_prefill_trace(trace_key, decode_pos=prefill_pos)
 
                 # On last prefill iteration, sample the first transcription token
                 if prefill_pos == prefix_len - 1:
@@ -755,26 +1011,67 @@ class WhisperGenerator:
         if all(prompt_is_done):
             generation_start = MAX_GEN_LEN
 
+        # Release prefill trace before decode — decode uses its own separate trace
+        if self.trace_id_decoder[trace_key] is not None:
+            ttnn.release_trace(self.mesh_device, self.trace_id_decoder[trace_key])
+            self.trace_id_decoder[trace_key] = None
+            self.trace_input_decoder[trace_key] = None
+            self.trace_output_decoder[trace_key] = None
+            logger.info("Released prefill trace before decode loop")
+
+        # If persistent decode trace exists, write current token to device buffer
+        # so the trace reads the correct token on its first execution this generation
+        if self.trace_id_decode[trace_key] is not None and self.cross_attn_cache_valid:
+            token_host = ttnn.from_torch(
+                input_ids.reshape(-1, input_ids.shape[-1]),
+                dtype=ttnn.uint32,
+                layout=ttnn.ROW_MAJOR_LAYOUT,
+                mesh_mapper=self.input_mesh_mapper,
+            )
+            ttnn.copy_host_to_device_tensor(token_host, self.token_id_device[trace_key])
+
         for i in tqdm(range(generation_start, MAX_GEN_LEN), desc=f"Decode inference iterations (temp={temperature})"):
             start_iter = time.time()
 
-            decoder_hidden_states, decoder_attention_mask = ttnn_optimized_functional_whisper.preprocess_decoder_inputs(
-                config=self.config,
-                input_ids=input_ids,
-                attention_mask=None,
-                parameters=self.parameters.decoder,
-                device=self.mesh_device,
-                decode_pos=i if self.kv_cache_per_batch_size[trace_key] else None,
-                create_attention_mask=(not self.kv_cache_per_batch_size[trace_key]),
-                input_mesh_mapper=self.input_mesh_mapper,
-            )
+            if (
+                self.kv_cache_per_batch_size[trace_key]
+                and self.trace_id_decode[trace_key]
+                and self.cross_attn_cache_valid
+            ):
+                sampled_tokens_torch = self._execute_decode_trace(trace_key)
 
-            # Use persistent trace for iterations after the first
-            if use_trace and self.kv_cache_per_batch_size[trace_key] and self.trace_id_decoder[trace_key] and i > 0:
-                # Execute persistent trace (reused across ALL generations)
-                decoder_output = self._execute_decoder_trace(trace_key, decoder_hidden_states)
+                # Handle forced tokens: overwrite on-device argmax result if needed
+                if i in forced_tokens_dict:
+                    next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(input_features.shape[0])
+                    forced_host = ttnn.from_torch(
+                        next_tokens[:, None].int(),
+                        dtype=ttnn.uint32,
+                        layout=ttnn.ROW_MAJOR_LAYOUT,
+                        mesh_mapper=self.input_mesh_mapper,
+                    )
+                    ttnn.copy_host_to_device_tensor(forced_host, self.token_id_device[trace_key])
+                else:
+                    next_tokens = sampled_tokens_torch.reshape(-1).long()
+
+                # Note: decode_pos already incremented inside trace (plus_one)
+                input_ids = next_tokens[:, None]
+                next_token_logits = None  # Not available on traced path
+
             else:
-                # Regular decoder execution (first iteration or trace disabled)
+                (
+                    decoder_hidden_states,
+                    decoder_attention_mask,
+                ) = ttnn_optimized_functional_whisper.preprocess_decoder_inputs(
+                    config=self.config,
+                    input_ids=input_ids,
+                    attention_mask=None,
+                    parameters=self.parameters.decoder,
+                    device=self.mesh_device,
+                    decode_pos=i if self.kv_cache_per_batch_size[trace_key] else None,
+                    create_attention_mask=(not self.kv_cache_per_batch_size[trace_key]),
+                    input_mesh_mapper=self.input_mesh_mapper,
+                )
+
                 decoder_output = ttnn_optimized_functional_whisper.decoder(
                     self.config,
                     decoder_hidden_states,
@@ -791,50 +1088,70 @@ class WhisperGenerator:
                 if i == generation_start:
                     self.cross_attn_cache_valid = True
 
-                # Capture trace after first iteration (cross-attention cache is now populated)
+                # LM head on host (un-traced path)
+                if not self.kv_cache_per_batch_size[trace_key]:
+                    last_tile_start_idx = i // 32 * 32
+                    output_idx = i % 32
+                    decoder_output = decoder_output[:, last_tile_start_idx : last_tile_start_idx + 32, :]
+                else:
+                    output_idx = 0
+
+                decoder_output = ttnn.squeeze(decoder_output, 1)
+                decoder_output = decoder_output @ self.ttnn_linear_weight
+                logits_to_torch = ttnn.to_torch(decoder_output, mesh_composer=self.output_mesh_composer)
+                next_token_logits = logits_to_torch[:, output_idx, :]
+                next_tokens_scores = logits_processor(input_ids, next_token_logits)
+
+                if i in forced_tokens_dict:
+                    next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(input_features.shape[0])
+                else:
+                    next_tokens = self._sample_token(next_tokens_scores, temperature)
+
+                # Update input_ids and current_decode_pos (un-traced path)
+                if not self.kv_cache_per_batch_size[trace_key]:
+                    if (i + 1) % 32 == 0:
+                        input_ids = torch.cat([input_ids, decoder_start_values], dim=1)
+                    input_ids[:, i + 1] = next_tokens[:, None]
+                else:
+                    input_ids = next_tokens[:, None]
+                    ttnn.plus_one(self.current_decode_pos_per_size[trace_key])
+
+                # Capture enlarged decode trace after sampling and position update
                 if (
-                    use_trace
-                    and self.kv_cache_per_batch_size[trace_key]
+                    self.kv_cache_per_batch_size[trace_key]
                     and i == generation_start
-                    and not self.trace_id_decoder[trace_key]
+                    and not self.trace_id_decode[trace_key]
                 ):
-                    logger.info(f"Capturing fully persistent decoder trace for batch size per device {trace_key}")
-                    self._capture_decoder_trace(trace_key, decoder_hidden_states)
+                    if temperature == 0:
+                        logger.info(f"Capturing on-device sampling trace for batch size per device {trace_key}")
+                        # Write the per-device sampled tokens to device buffer
+                        token_host = ttnn.from_torch(
+                            input_ids.reshape(-1, input_ids.shape[-1]),
+                            dtype=ttnn.uint32,
+                            layout=ttnn.ROW_MAJOR_LAYOUT,
+                            mesh_mapper=self.input_mesh_mapper,
+                        )
+                        ttnn.copy_host_to_device_tensor(token_host, self.token_id_device[trace_key])
+                        self.token_id_host[trace_key] = token_host
+                        ttnn.synchronize_device(self.mesh_device)
+                        # decode_pos=i+1: position was already incremented by plus_one above
+                        self._capture_decode_trace(trace_key, decode_pos=i + 1, batch_size=unpadded_batch_size)
+                    else:
+                        logger.info(f"Skipping trace capture for temp={temperature} (host-side sampling)")
 
-            if not self.kv_cache_per_batch_size[trace_key]:
-                # Note: if not using a kv cache, the entire sequence is recomputed at each step
-                # Only run the lm head on the last tile to fix bad outputs and reduce redundant computation
-                last_tile_start_idx = i // 32 * 32
-                output_idx = i % 32
-                decoder_output = decoder_output[:, last_tile_start_idx : last_tile_start_idx + 32, :]
-            else:
-                output_idx = 0
-
-            # Squeeze extra dimension from 4D [batch, 1, seq, hidden] to 3D [batch, seq, hidden]
-            decoder_output = ttnn.squeeze(decoder_output, 1)
-            decoder_output = decoder_output @ self.ttnn_linear_weight
-            logits_to_torch = ttnn.to_torch(decoder_output, mesh_composer=self.output_mesh_composer)
-            next_token_logits = logits_to_torch[:, output_idx, :]
-            next_tokens_scores = logits_processor(input_ids, next_token_logits)
-
-            # Force tokens at specific positions based on forced_tokens_dict
-            if i in forced_tokens_dict:
-                next_tokens = torch.tensor([forced_tokens_dict[i]]).repeat(input_features.shape[0])
-            else:
-                next_tokens = self._sample_token(next_tokens_scores, temperature)
-
-            # Only collect output tokens after the forced prefix (prompt + special tokens)
-            # This ensures prompt text doesn't appear in the transcription
+            # Track log probabilities (only available on un-traced path)
             if i >= transcription_start_pos:
-                # Track log probabilities for actual transcription tokens only
-                with torch.no_grad():
-                    log_probs.append(
-                        torch.log_softmax(next_tokens_scores, dim=-1).gather(1, next_tokens.unsqueeze(1)).squeeze(1)
+                if next_token_logits is not None:
+                    next_tokens_scores_for_log = (
+                        logits_processor(input_ids, next_token_logits) if next_token_logits is not None else None
                     )
+                    with torch.no_grad():
+                        log_probs.append(
+                            torch.log_softmax(next_tokens_scores, dim=-1).gather(1, next_tokens.unsqueeze(1)).squeeze(1)
+                        )
 
                 output_ids.append(next_tokens)
 
-                # Track full token sequences for timestamp extraction
                 if return_timestamps_for_prefix:
                     for batch_idx in range(unpadded_batch_size):
                         full_token_sequences[batch_idx].append(next_tokens[batch_idx].item())
@@ -843,19 +1160,11 @@ class WhisperGenerator:
             if i == generation_start and ttft == 0.0:
                 first_token_time = time.time()
                 ttft = first_token_time - start_encode
-                # Extract no_speech probability from first frame logits
-                with torch.no_grad():
-                    probs = torch.softmax(next_token_logits, dim=-1)
-                    no_speech_probs = probs[:, NO_SPEECH_TOKEN_ID]
-
-            # Update input_ids and current_decode_pos
-            if not self.kv_cache_per_batch_size[trace_key]:
-                if (i + 1) % 32 == 0:
-                    input_ids = torch.cat([input_ids, decoder_start_values], dim=1)
-                input_ids[:, i + 1] = next_tokens[:, None]
-            else:
-                input_ids = next_tokens[:, None]
-                ttnn.plus_one(self.current_decode_pos_per_size[trace_key])
+                # Extract no_speech probability from first frame logits (un-traced path only)
+                if next_token_logits is not None:
+                    with torch.no_grad():
+                        probs = torch.softmax(next_token_logits, dim=-1)
+                        no_speech_probs = probs[:, NO_SPEECH_TOKEN_ID]
 
             total_decode_time += time.time() - start_iter
             # Calculate throughput based on tokens generated (not including prefix)
