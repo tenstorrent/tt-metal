@@ -16,6 +16,7 @@
 #include "internal/dataflow_buffer_interface.h"
 #include "hostdev/dev_msgs.h"
 #include "tools/profiler/kernel_profiler.hpp"
+#include "api/kernel_thread_globals.h"
 
 uint8_t noc_index;
 constexpr uint8_t noc_mode = DM_DEDICATED_NOC;

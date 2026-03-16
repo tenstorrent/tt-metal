@@ -19,6 +19,7 @@
 #include "api/remote_circular_buffer_api.h"
 #endif
 #include "internal/debug/stack_usage.h"
+#include "api/kernel_thread_globals.h"
 
 // Global vars
 uint32_t unp_cfg_context = 0;
@@ -68,6 +69,7 @@ uint32_t _start() {
 #endif
     wait_for_go_message();
     RecordPerfCounters();
+
     DeviceZoneScopedMainChildN("TRISC-KERNEL");
     EARLY_RETURN_FOR_DEBUG
     WAYPOINT("K");

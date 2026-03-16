@@ -482,6 +482,15 @@ KernelGroup::KernelGroup(
                 kernel_config.kernel_thread_id()[processor_index] = thread_idx;
             }
         }
+        if (auto* qk = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(kernel.get())) {
+            auto config = std::get<experimental::quasar::QuasarComputeConfig>(qk->config());
+            for (uint32_t engine_id = 0; engine_id < config.num_threads_per_cluster; engine_id++) {
+                uint32_t config_index =
+                    experimental::quasar::QUASAR_NUM_DM_CORES_PER_CLUSTER + engine_id;  // 8-11 for engines 0-3
+                kernel_config.num_sw_threads()[config_index] = config.num_threads_per_cluster;
+                kernel_config.kernel_thread_id()[config_index] = engine_id;
+            }
+        }
     }
     TT_FATAL(noc_modes.size() <= 1, "KernelGroup must have the same noc mode for all kernels");
 

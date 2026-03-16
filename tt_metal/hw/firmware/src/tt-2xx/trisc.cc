@@ -22,6 +22,8 @@
 #include "internal/dataflow_buffer_init.h"
 #endif
 #include "tt-metalium/circular_buffer_constants.h"
+#include "api/kernel_thread_globals.h"
+#include "hw_thread.h"
 // clang-format on
 
 #if defined(PROFILE_KERNEL)
@@ -41,6 +43,10 @@ uint8_t my_logical_x_ __attribute__((used));
 uint8_t my_logical_y_ __attribute__((used));
 uint8_t my_relative_x_ __attribute__((used));
 uint8_t my_relative_y_ __attribute__((used));
+
+// Per-processor kernel thread info for Quasar (set from kernel_config before kernel runs)
+thread_local uint32_t num_sw_threads __attribute__((used));
+thread_local uint32_t my_thread_id __attribute__((used));
 
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
 thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS] __attribute__((used));
@@ -155,6 +161,12 @@ extern "C" uint32_t _start1() {
 
         my_relative_x_ = my_logical_x_ - launch_msg->kernel_config.sub_device_origin_x;
         my_relative_y_ = my_logical_y_ - launch_msg->kernel_config.sub_device_origin_y;
+
+        // DM use indices 0-7; compute engines 0-3 use indices 8-11 (one slot per engine, 4 TRISCs share).
+        uint32_t neo_id = csr_read<CSR::NEO_ID>();
+        uint32_t config_index = MaxDMProcessorsPerCoreType + neo_id;
+        num_sw_threads = launch_msg->kernel_config.num_sw_threads[config_index];
+        my_thread_id = launch_msg->kernel_config.kernel_thread_id[config_index];
 
         WAYPOINT("R");
         uint32_t kernel_lma =
