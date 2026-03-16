@@ -4,6 +4,7 @@
 
 #include "api/compute/compute_kernel_hw_startup.h"
 #include "ttnn/cpp/ttnn/kernel_lib/copy_tile_helpers.hpp"
+#include "api/compute/eltwise_unary/exp.h"
 
 // CB indices
 constexpr uint32_t c_0 = 0;    // input
@@ -27,5 +28,8 @@ void kernel_main() {
     constexpr uint32_t tiles_per_work_unit = (dim == 0) ? Wt : Ht;
     const uint32_t total_tiles = num_rows_or_cols * tiles_per_work_unit;
 
-    compute_kernel_lib::copy_tiles(c_0, c_16, total_tiles);
+    compute_kernel_lib::copy_tiles(c_0, c_16, total_tiles, [](uint32_t dst) {
+        exp_tile_init();
+        exp_tile(dst);
+    });
 }
