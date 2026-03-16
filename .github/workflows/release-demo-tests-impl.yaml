@@ -118,7 +118,7 @@ jobs:
         GITHUB_ACTIONS: true
         GTEST_OUTPUT: xml:/work/generated/test_reports/
         HF_HUB_CACHE: ${{ (contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && '') || '/mnt/MLPerf/huggingface/hub' }}
-        HF_TOKEN: ${{ secrets.HUGGINGFACE_TOKEN }}
+        HF_TOKEN: ${{ (!contains(matrix.test-group.sku, 'wh_n150') && !contains(matrix.test-group.sku, 'wh_n300') && secrets.HUGGINGFACE_TOKEN) || '' }}
         HTTP_PROXY: ${{ (contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && env.HTTP_PROXY) || '' }}
         HTTPS_PROXY: ${{ (contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && env.HTTPS_PROXY) || '' }}
         NO_PROXY: ${{ (contains(join(matrix.test-group.runs_on, ' '), 'tt-ubuntu') && env.NO_PROXY) || '' }}
