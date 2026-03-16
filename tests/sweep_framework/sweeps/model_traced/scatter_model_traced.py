@@ -106,8 +106,6 @@ def run(
     dim = dim or kwargs.get("arg1", 0)
     if isinstance(dim, float):
         dim = int(dim)
-    if output_memory_config is None and memory_config is not None:
-        output_memory_config = memory_config
 
     if isinstance(input_a_shape, dict):
         shape = input_a_shape.get("self", (1, 1, 32, 32))

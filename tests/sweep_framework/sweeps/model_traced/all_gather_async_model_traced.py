@@ -278,8 +278,6 @@ def run(
     device,  # unused
     **kwargs,
 ) -> list:
-    is_mesh_device = hasattr(device, "get_num_devices")
-
     # Check if this is a model_traced run (V2 format has input_a_shape)
     is_model_traced = input_a_shape is not None
 

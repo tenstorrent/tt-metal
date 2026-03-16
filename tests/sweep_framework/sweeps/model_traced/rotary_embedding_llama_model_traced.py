@@ -64,8 +64,6 @@ from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
-    create_tensor_on_mesh,
-    mesh_tensor_to_torch,
 )
 
 # Override the default timeout in seconds for hang detection.
@@ -356,8 +354,6 @@ def run(
     # Reconcile input_shape vs input_a_shape (V2 vectors provide input_a_shape)
     if input_shape is None and input_a_shape is not None:
         input_shape = input_a_shape
-    elif input_shape is not None and input_a_shape is None:
-        input_a_shape = input_shape
     if input_a_dtype is None:
         input_a_dtype = ttnn.bfloat16
     if input_a_layout is None:

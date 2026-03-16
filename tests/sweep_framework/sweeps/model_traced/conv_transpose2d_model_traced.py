@@ -66,8 +66,6 @@ def run(
     device,
     **kwargs,
 ) -> list:
-    op_kwargs = build_op_kwargs(kwargs)
-
     # Build input_specs from flat kwargs when not provided directly
     if input_specs is None:
         batch_size = kwargs.get("batch_size")

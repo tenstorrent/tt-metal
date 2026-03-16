@@ -198,7 +198,7 @@ def dict_to_compute_kernel_config(cfg):
     if hasattr(cfg, "__class__") and "ComputeKernelConfig" in cfg.__class__.__name__:
         return cfg
     if not isinstance(cfg, dict):
-        return None
+        return cfg
 
     fidelity_str = str(cfg.get("math_fidelity", "HiFi4"))
     if "HiFi2" in fidelity_str:

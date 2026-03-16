@@ -16,7 +16,6 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
     create_tensor_on_mesh,
-    mesh_tensor_to_torch,
 )
 
 # Override the default timeout in seconds for hang detection.
@@ -83,9 +82,6 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-
-    if output_memory_config is None and memory_config is not None:
-        output_memory_config = memory_config
 
     # Extract dims from kwargs (from traced config) or use default
     dims = kwargs.get("dims", [0, 1])

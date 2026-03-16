@@ -16,9 +16,8 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
 from tests.sweep_framework.master_config_loader_v2 import (
     MasterConfigLoader,
     dict_to_memory_config,
-    dict_to_program_config,
 )
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
 # Linear operations with large shapes can take longer, increase timeout

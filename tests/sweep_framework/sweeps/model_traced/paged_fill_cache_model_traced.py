@@ -93,9 +93,6 @@ def run(
     is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"batch_idx"}, output_memory_config=output_memory_config)
 
-    if output_memory_config is None and memory_config is not None:
-        output_memory_config = memory_config
-
     # V2 vectors provide page_table as a named tensor (page_table_*) instead of input_c_*
     page_table_kwargs = extract_named_tensor_kwargs(kwargs, "page_table")
     if input_c_dtype is None and page_table_kwargs is not None:

@@ -11,7 +11,6 @@ from functools import partial
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
-    create_tensor_on_mesh,
     mesh_tensor_to_torch,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader

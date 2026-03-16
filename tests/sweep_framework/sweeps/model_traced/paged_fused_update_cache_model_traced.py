@@ -24,7 +24,7 @@ from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     mesh_tensor_to_torch,
 )
 from tests.sweep_framework.master_config_loader_v2 import MasterConfigLoader
-from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, extract_named_tensor_kwargs
+from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 
 # Override the default timeout in seconds for hang detection.
 TIMEOUT = 300
@@ -118,7 +118,7 @@ def run(
 
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     is_mesh_device = hasattr(device, "get_num_devices")
-    parsed_op_kwargs = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
+    _ = build_op_kwargs(kwargs, output_memory_config=output_memory_config)
 
     # Handle dict input_a_shape from traced configurations (multi-input)
     if isinstance(input_a_shape, dict):

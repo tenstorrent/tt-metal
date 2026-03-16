@@ -16,8 +16,6 @@ from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs, e
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
-    create_tensor_on_mesh,
-    mesh_tensor_to_torch,
 )
 
 TIMEOUT = 300
@@ -93,12 +91,7 @@ def run(
 ) -> list:
     torch.manual_seed(0)
 
-    input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
-    is_mesh_device = hasattr(device, "get_num_devices")
     op_kwargs = build_op_kwargs(kwargs, exclude={"batch_offset"}, output_memory_config=output_memory_config)
-
-    if output_memory_config is None and memory_config is not None:
-        output_memory_config = memory_config
 
     # V2 vectors provide named tensors: update_idxs_tensor_* → input_c, page_table_* → input_d
     update_idxs_tensor_kwargs = extract_named_tensor_kwargs(kwargs, "update_idxs_tensor")
