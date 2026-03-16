@@ -660,6 +660,9 @@ class MoE(SharedStateAddOn, AbstractModule):
                     topk_experts_weights_rm_chunk,
                 )
                 output_chunks.append(post_combine_output_tensor)
+
+            ttnn.deallocate(topk_experts_indices_rm)
+            ttnn.deallocate(topk_experts_weights_rm)
         else:
             # Repeat + Permute Expert weights
             topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
@@ -742,6 +745,9 @@ class MoE(SharedStateAddOn, AbstractModule):
 
                 output_chunks.append(post_combine_output_tensor)
 
+            ttnn.deallocate(topk_experts_indices_rm)
+            ttnn.deallocate(topk_experts_weights)
+
         if len(output_chunks) == 1:
             post_combine_output_tensor = output_chunks[0]
         else:
@@ -750,7 +756,6 @@ class MoE(SharedStateAddOn, AbstractModule):
                 ttnn.deallocate(chunk)
 
         ttnn.deallocate(x_rm)
-        ttnn.deallocate(topk_experts_indices_rm)
         return post_combine_output_tensor
 
     @classmethod
