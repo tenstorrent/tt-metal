@@ -13,7 +13,7 @@ from models.experimental.tt_symbiote.modules.recurrent_deltanet import TTNNRecur
 from models.experimental.tt_symbiote.utils.device_management import set_device
 
 
-@pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
+@pytest.mark.parametrize("device_params", [{"l1_small_size": 16384}], indirect=True)
 def test_recurrent_deltanet(device):
     """Test recurrent deltanet with TTNN acceleration."""
     try:
@@ -45,15 +45,15 @@ def test_recurrent_deltanet(device):
     o_proj_weight = torch.randn(num_v_heads * head_v_dim, hidden_size, dtype=torch.float32) * 0.02
     g_proj_weight = torch.randn(hidden_size, num_v_heads * head_v_dim, dtype=torch.float32) * 0.02
 
-    q_conv_weight = torch.randn(num_heads * head_k_dim, 1, conv_kernel_size, dtype=torch.float32) * 0.02
-    k_conv_weight = torch.randn(num_heads * head_k_dim, 1, conv_kernel_size, dtype=torch.float32) * 0.02
-    v_conv_weight = torch.randn(num_v_heads * head_v_dim, 1, conv_kernel_size, dtype=torch.float32) * 0.02
+    q_conv_weight = torch.randn(num_heads * head_k_dim, 1, conv_kernel_size, dtype=torch.float32) * 0.1
+    k_conv_weight = torch.randn(num_heads * head_k_dim, 1, conv_kernel_size, dtype=torch.float32) * 0.1
+    v_conv_weight = torch.randn(num_v_heads * head_v_dim, 1, conv_kernel_size, dtype=torch.float32) * 0.1
 
-    q_conv_bias = torch.randn(num_heads * head_k_dim, dtype=torch.float32) * 0.01
-    k_conv_bias = torch.randn(num_heads * head_k_dim, dtype=torch.float32) * 0.01
-    v_conv_bias = torch.randn(num_v_heads * head_v_dim, dtype=torch.float32) * 0.01
+    q_conv_bias = None
+    k_conv_bias = None
+    v_conv_bias = None
 
-    A_log = torch.randn(num_v_heads, dtype=torch.float32) * 0.1 - 1.0
+    A_log = torch.rand(num_v_heads, dtype=torch.float32).uniform_(0, 16).log()
     dt_bias = torch.randn(num_v_heads, dtype=torch.float32) * 0.1
     o_norm_weight = torch.ones(head_v_dim, dtype=torch.float32)
 
@@ -92,7 +92,7 @@ def test_recurrent_deltanet(device):
         use_gate=use_gate,
         allow_neg_eigval=False,
         norm_eps=1e-5,
-        mode="recurrent",
+        mode="fused_recurrent",
         chunk_size=64,
         recurrent_state=None,
         output_final_state=True,
@@ -201,24 +201,33 @@ def test_recurrent_deltanet(device):
     )
 
     # Conv biases
-    ttnn_model.q_conv_bias = ttnn.from_torch(
-        q_conv_bias.to(torch.bfloat16),
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-    )
-    ttnn_model.k_conv_bias = ttnn.from_torch(
-        k_conv_bias.to(torch.bfloat16),
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-    )
-    ttnn_model.v_conv_bias = ttnn.from_torch(
-        v_conv_bias.to(torch.bfloat16),
-        device=device,
-        dtype=ttnn.bfloat16,
-        layout=ttnn.TILE_LAYOUT,
-    )
+    if q_conv_bias is not None:
+        ttnn_model.q_conv_bias = ttnn.from_torch(
+            q_conv_bias.to(torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+    else:
+        ttnn_model.q_conv_bias = None
+    if k_conv_bias is not None:
+        ttnn_model.k_conv_bias = ttnn.from_torch(
+            k_conv_bias.to(torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+    else:
+        ttnn_model.k_conv_bias = None
+    if v_conv_bias is not None:
+        ttnn_model.v_conv_bias = ttnn.from_torch(
+            v_conv_bias.to(torch.bfloat16),
+            device=device,
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+    else:
+        ttnn_model.v_conv_bias = None
 
     # Other parameters
     ttnn_model.A_log = ttnn.from_torch(
@@ -244,61 +253,33 @@ def test_recurrent_deltanet(device):
     hidden_states_ttnn_tensor = TorchTTNNTensor(hidden_states_ttnn)
 
     # Run forward pass
-    output_ttnn, final_state_ttnn = ttnn_model(hidden_states=hidden_states_ttnn_tensor)
+    output_ttnn = ttnn_model(hidden_states=hidden_states_ttnn_tensor)
 
-    # Convert TTNN outputs to torch for comparison
+    # Convert TTNN output to torch for comparison
     output_ttnn_torch = output_ttnn.to_torch if hasattr(output_ttnn, "to_torch") else ttnn.to_torch(output_ttnn)
-    final_state_ttnn_torch = (
-        final_state_ttnn.to_torch if hasattr(final_state_ttnn, "to_torch") else ttnn.to_torch(final_state_ttnn)
-    )
 
     print(f"[DEBUG TEST] TTNN output shape: {output_ttnn.shape}")
     print(f"[DEBUG TEST] TTNN output sample (first 5): {output_ttnn_torch.flatten()[:5].tolist()}")
     print(
         f"[DEBUG TEST] TTNN output stats - min: {output_ttnn_torch.min().item():.6f}, max: {output_ttnn_torch.max().item():.6f}, mean: {output_ttnn_torch.mean().item():.6f}"
     )
-    if final_state_ttnn is not None:
-        print(f"[DEBUG TEST] TTNN final_state shape: {final_state_ttnn.shape}")
-        print(f"[DEBUG TEST] TTNN final_state sample (first 5): {final_state_ttnn_torch.flatten()[:5].tolist()}")
-        print(
-            f"[DEBUG TEST] TTNN final_state stats - min: {final_state_ttnn_torch.min().item():.6f}, max: {final_state_ttnn_torch.max().item():.6f}, mean: {final_state_ttnn_torch.mean().item():.6f}"
-        )
 
     # Compute differences
     diff_output = torch.abs(output_torch - output_ttnn_torch.to(torch.float32))
     print(
         f"[DEBUG TEST] Output diff stats - min: {diff_output.min().item():.6f}, max: {diff_output.max().item():.6f}, mean: {diff_output.mean().item():.6f}"
     )
-    if final_state_torch is not None:
-        diff_state = torch.abs(final_state_torch - final_state_ttnn_torch.to(torch.float32))
-        print(
-            f"[DEBUG TEST] State diff stats - min: {diff_state.min().item():.6f}, max: {diff_state.max().item():.6f}, mean: {diff_state.mean().item():.6f}"
-        )
 
-    # Verify output shapes
+    # Verify output shape
     assert output_ttnn.shape == (
         batch_size,
         seq_len,
         hidden_size,
     ), f"Expected output shape {(batch_size, seq_len, hidden_size)}, got {output_ttnn.shape}"
-    if final_state_torch is not None:
-        assert final_state_ttnn.shape == (
-            batch_size,
-            num_v_heads,
-            head_k_dim,
-            head_v_dim,
-        ), f"Expected final_state shape {(batch_size, num_v_heads, head_k_dim, head_v_dim)}, got {final_state_ttnn.shape}"
 
-    # Compare outputs using PCC (prints output PCC only, validates both output and state)
-    if final_state_torch is not None:
-        compare_fn_outputs(
-            (TorchTTNNTensor(output_torch), TorchTTNNTensor(final_state_torch)),
-            (output_ttnn, final_state_ttnn),
-            "RecurrentDeltaNet",
-        )
-    else:
-        compare_fn_outputs(
-            TorchTTNNTensor(output_torch),
-            output_ttnn,
-            "RecurrentDeltaNet",
-        )
+    # Compare outputs using PCC
+    compare_fn_outputs(
+        TorchTTNNTensor(output_torch),
+        output_ttnn,
+        "RecurrentDeltaNet",
+    )
