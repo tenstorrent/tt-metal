@@ -104,13 +104,13 @@ constexpr bool operator<(const CoreRange& left, const CoreRange& right) {
 
 class CoreRangeSet {
 public:
-    CoreRangeSet(tt::stl::Span<const CoreRange> core_ranges);
+    CoreRangeSet(ttsl::Span<const CoreRange> core_ranges);
 
     CoreRangeSet(const std::set<CoreRange>& core_ranges);
 
     CoreRangeSet(const CoreRange& core_range);
 
-    CoreRangeSet(tt::stl::Span<const CoreCoord> core_coords);
+    CoreRangeSet(ttsl::Span<const CoreCoord> core_coords);
 
     CoreRangeSet() = default;
 

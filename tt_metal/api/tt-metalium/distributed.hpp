@@ -101,9 +101,9 @@ bool EventQuery(const MeshEvent& event);
 MeshTraceId BeginTraceCapture(MeshDevice* device, uint8_t cq_id);
 
 void Synchronize(
-    MeshDevice* device, std::optional<uint8_t> cq_id, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+    MeshDevice* device, std::optional<uint8_t> cq_id, ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
-void Finish(MeshCommandQueue& mesh_cq, tt::stl::Span<const SubDeviceId> sub_device_ids = {});
+void Finish(MeshCommandQueue& mesh_cq, ttsl::Span<const SubDeviceId> sub_device_ids = {});
 
 // Returns true if the distributed environment is initialized and world_size > 1.
 bool UsingDistributedEnvironment();

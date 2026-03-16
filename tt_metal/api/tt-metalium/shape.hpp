@@ -58,7 +58,7 @@ public:
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Shape& shape);
 
-tt::stl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape);
+ttsl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape);
 
 /**
  * @brief Computes a flat (linear) index from multi-dimensional indices and strides.
@@ -74,7 +74,7 @@ tt::stl::SmallVector<size_t> compute_strides(const tt::tt_metal::Shape& shape);
  *
  * @note The `indices` and `strides` spans must have the same length.
  */
-std::size_t compute_flat_indices(tt::stl::Span<const uint32_t> indices, tt::stl::Span<const size_t> strides);
+std::size_t compute_flat_indices(ttsl::Span<const uint32_t> indices, ttsl::Span<const size_t> strides);
 
 }  // namespace tt::tt_metal
 
