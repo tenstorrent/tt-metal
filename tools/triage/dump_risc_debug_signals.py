@@ -19,6 +19,8 @@ Owner:
 from collections import defaultdict
 import json
 import os
+import subprocess
+
 from triage import ScriptConfig, log_warning, run_script, log_check_location
 from ttexalens.umd_device import TimeoutDeviceRegisterError
 from run_checks import run as get_run_checks, RunChecks
@@ -39,6 +41,23 @@ BLOCK_RISC_CORES = {
     "tensix": ["brisc", "trisc0", "trisc1", "trisc2"],
     "idle_eth": ["erisc", "erisc0", "erisc1"],
 }
+
+
+def _get_git_commit_hash() -> str:
+    """Return current git commit hash (full SHA) or 'unknown' if not in a repo or git unavailable."""
+    try:
+        out = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            cwd=os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+        )
+        if out.returncode == 0 and out.stdout:
+            return out.stdout.strip()
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    return "unknown"
 
 
 def get_firmware_text_address(
@@ -157,6 +176,7 @@ def run(args, context: Context):
             }
 
         if all_debug_bus_data:
+            all_debug_bus_data["git_commit"] = _get_git_commit_hash()
             output_path = args["--path"] if args["--path"] else "debug_bus_signal_groups.json"
             with open(output_path, "w") as f:
                 json.dump(all_debug_bus_data, f, indent=2)

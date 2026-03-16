@@ -172,31 +172,66 @@ def main() -> None:
     context = init_ttexalens()
     mock_location = OnChipCoordinate.create("0,0", context.devices[0])
 
-    selected_devices = _get_selected_devices(args["--devices"], data.keys())
+    selected_devices = _get_selected_devices(
+        args["--devices"], [key for key in data.keys() if key.startswith("Device")]
+    )
     printed_any = False
 
     for device_key in sorted(selected_devices, key=lambda k: int(k.split()[-1])):
-        device_data = data[device_key]
-        device_arch = device_data["arch"]
-        selected_block_types = _get_selected_block_types(args["--block-types"], device_data["block_types"].keys())
+        try:
+            device_data = data[device_key]
+        except KeyError:
+            ERROR(
+                f"Device key not found: {device_key}. Try using script version from git commit: {data['git_commit']}."
+            )
+            continue
+        try:
+            device_arch = device_data["arch"]
+        except KeyError:
+            ERROR(f"Device arch not found. Try using script version from git commit: {data['git_commit']}.")
+            continue
+        try:
+            block_types = device_data["block_types"]
+        except KeyError:
+            ERROR(f"Block types not found. Try using script version from git commit: {data['git_commit']}.")
+            continue
+        selected_block_types = _get_selected_block_types(args["--block-types"], block_types.keys())
         if not selected_block_types:
             continue
         for block_type in selected_block_types:
-            block_data = device_data["block_types"][block_type]
+            try:
+                block_data = device_data["block_types"][block_type]
+            except KeyError:
+                ERROR(
+                    f"Block type not found: {block_type}. Try using script version from git commit: {data['git_commit']}."
+                )
+                continue
             try:
                 noc_block = create_noc_block(device_arch, block_type, mock_location)
                 debug_bus = noc_block.debug_bus
                 assert debug_bus is not None
             except ValueError as e:
-                ERROR(f"Error: {e}")
+                ERROR(str(e))
                 continue
             selected_locations = _get_selected_locations(args["--locations"], list(block_data.keys()))
             if not selected_locations:
                 continue
 
             for loc_key in sorted(selected_locations):
-                loc_data = block_data[loc_key]
-                groups_data = loc_data["debug_bus_signal_groups"]
+                try:
+                    loc_data = block_data[loc_key]
+                except KeyError:
+                    ERROR(
+                        f"Location key not found: {loc_key}. Try using script version from git commit: {data['git_commit']}."
+                    )
+                    continue
+                try:
+                    groups_data = loc_data["debug_bus_signal_groups"]
+                except KeyError:
+                    ERROR(
+                        f"Debug bus signal groups not found: {loc_key}. Try using script version from git commit: {data['git_commit']}."
+                    )
+                    continue
                 selected_groups = _get_selected_groups(args["--groups"], list(groups_data.keys()))
                 if not selected_groups:
                     continue
