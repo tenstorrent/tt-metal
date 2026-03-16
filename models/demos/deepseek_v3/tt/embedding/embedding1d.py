@@ -219,7 +219,7 @@ class Embedding1D(AbstractModule):
         # CCL runtime initialization in execution order
         ccl = cfg["ccl"]
 
-        embeddings_ag = cls._fwd_all_gather_embedding(embeddings_tc, cfg)
+        embeddings_ag = cls._fwd_all_gather_embedding(embeddings_tc, cfg, ccl)
         ttnn.deallocate(embeddings_tc)
 
         assert len(embeddings_ag.shape) == 4
