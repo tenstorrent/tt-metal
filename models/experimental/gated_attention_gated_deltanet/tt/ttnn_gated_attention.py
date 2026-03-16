@@ -100,6 +100,7 @@ def gated_attention_forward_ttnn(
     head_dim,
     device,
     norm_eps=1e-6,
+    use_optimized_concat=False,
 ):
     """
     TTNN forward pass for Gated Attention.
@@ -120,6 +121,8 @@ def gated_attention_forward_ttnn(
         head_dim: dimension per head
         device: ttnn device
         norm_eps: RMSNorm epsilon
+        use_optimized_concat: if True, use ttnn.transformer.concatenate_heads
+                              instead of ttnn.transpose + ttnn.reshape
 
     Returns:
         output: ttnn.Tensor [B, T, hidden_size]
@@ -166,9 +169,12 @@ def gated_attention_forward_ttnn(
         compute_kernel_config=_get_sdpa_compute_kernel_config(),
     )
 
-    # Transpose back and reshape: [B, T, H*D]
-    attn_output = ttnn.transpose(attn_output, 1, 2)
-    attn_output = ttnn.reshape(attn_output, [B, T, num_attention_heads * head_dim])
+    # Convert from [B, H, T, D] back to [B, T, H*D]
+    if use_optimized_concat:
+        attn_output = ttnn.transformer.concatenate_heads(attn_output)
+    else:
+        attn_output = ttnn.transpose(attn_output, 1, 2)
+        attn_output = ttnn.reshape(attn_output, [B, T, num_attention_heads * head_dim])
 
     # Apply sigmoid gate
     gate = ttnn.sigmoid(gate)
