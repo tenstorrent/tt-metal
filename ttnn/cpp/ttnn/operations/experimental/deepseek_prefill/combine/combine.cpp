@@ -12,7 +12,7 @@
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine {
 
-ttnn::Tensor ExecuteCombine::invoke(
+ttnn::Tensor combine(
     const ttnn::Tensor& dispatched_buffer,
     const ttnn::Tensor& dispatched_metadata,
     const ttnn::Tensor& expert_token_counts,

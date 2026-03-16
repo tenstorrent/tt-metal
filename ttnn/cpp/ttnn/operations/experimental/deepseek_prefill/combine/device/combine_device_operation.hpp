@@ -5,102 +5,19 @@
 #pragma once
 
 #include <variant>
-#include <optional>
 
-#include "ttnn/distributed/types.hpp"
-#include "ttnn/tensor/tensor.hpp"
-#include "ttnn/core.hpp"
+#include "combine_types.hpp"
+#include "combine_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
-#include "ttnn/types.hpp"
 #include "ttnn/decorators.hpp"
-#include <tt-metalium/sub_device.hpp>
-#include <tt-metalium/experimental/fabric/fabric.hpp>
-#include <ttnn/global_semaphore.hpp>
 
 namespace ttnn::operations::experimental::deepseek_prefill::combine {
 
 struct CombineDeviceOperation {
-    struct operation_attributes_t {
-        const uint32_t dispatch_group_size;
-        const uint32_t experts_per_chip;
-        const uint32_t num_experts_per_tok;
-        const uint32_t seq_len_per_chip;
-        const std::optional<uint32_t> axis;
-        const uint32_t num_links;
-        const tt::tt_fabric::Topology topology;
-        const MemoryConfig output_mem_config;
-        const CoreRangeSet worker_core_range_set;
-        const bool init_zeros;
-
-        static constexpr auto attribute_names = std::forward_as_tuple(
-            "dispatch_group_size",
-            "experts_per_chip",
-            "num_experts_per_tok",
-            "seq_len_per_chip",
-            "axis",
-            "num_links",
-            "topology",
-            "output_mem_config",
-            "worker_core_range_set",
-            "init_zeros");
-
-        auto attribute_values() const {
-            return std::forward_as_tuple(
-                dispatch_group_size,
-                experts_per_chip,
-                num_experts_per_tok,
-                seq_len_per_chip,
-                axis,
-                num_links,
-                topology,
-                output_mem_config,
-                worker_core_range_set,
-                init_zeros);
-        };
-    };
-
-    struct tensor_args_t {
-        const ttnn::Tensor dispatched_buffer;
-        const ttnn::Tensor dispatched_metadata;
-        const ttnn::Tensor expert_token_counts;
-    };
-
+    using operation_attributes_t = CombineParams;
+    using tensor_args_t = CombineInputs;
     using spec_return_value_t = ttnn::TensorSpec;
     using tensor_return_value_t = ttnn::Tensor;
-
-    struct CombineProgramFactory {
-        struct shared_variables_t {
-            tt::tt_metal::KernelHandle reader_kernel_id;
-            tt::tt_metal::KernelHandle writer_kernel_id;
-            CoreCoord worker_core;
-            const GlobalSemaphore init_semaphore;
-            uint32_t zero_init_semaphore_id;  // Local semaphore ID for reader→writer sync
-        };
-
-        using cached_mesh_workload_t = ttnn::device_operation::AdaptedCachedMeshWorkload<shared_variables_t>;
-
-        static cached_mesh_workload_t create_mesh_workload(
-            const operation_attributes_t& operation_attributes,
-            const MeshCoordinateRangeSet& tensor_coords,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-
-        static ttnn::device_operation::CachedProgram<CombineDeviceOperation::CombineProgramFactory::shared_variables_t>
-        create_at(
-            const operation_attributes_t& operation_attributes,
-            const MeshCoordinate& mesh_coordinate,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value,
-            const MeshCoordinateRangeSet& tensor_coords,
-            const GlobalSemaphore& init_semaphore);
-
-        static void override_runtime_arguments(
-            cached_mesh_workload_t& cached_workload,
-            const operation_attributes_t& operation_attributes,
-            const tensor_args_t& tensor_args,
-            tensor_return_value_t& tensor_return_value);
-    };
-
     using program_factory_t = std::variant<CombineProgramFactory>;
 
     // Mandatory methods

@@ -12,7 +12,7 @@
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "dispatch.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -20,7 +20,8 @@
 namespace ttnn::operations::experimental::deepseek_prefill::dispatch::detail {
 
 void bind_dispatch(nb::module_& mod) {
-    const auto* doc =
+    ttnn::bind_function<"dispatch", "ttnn.experimental.deepseek_prefill.">(
+        mod,
         R"doc(
         Prefill dispatch operation for DeepSeek MoE models.
 
@@ -64,49 +65,9 @@ void bind_dispatch(nb::module_& mod) {
                     num_routed_experts=16,
                     metadata_len=5,
                     max_dispatched_tokens_per_expert=256)
-        )doc";
-
-    using OperationType = decltype(ttnn::dispatch);
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::dispatch,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& weights_tensor,
-               const ttnn::Tensor& indices_tensor,
-               const ttnn::Tensor& expert_offsets_tensor,
-               const ttnn::Tensor& expert_dispatch_table_tensor,
-               uint32_t dispatch_group_size,
-               uint32_t experts_per_chip,
-               uint32_t num_routed_experts,
-               uint32_t num_experts_per_tok,
-               uint32_t metadata_len,
-               uint32_t max_dispatched_tokens_per_expert,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-               std::optional<uint32_t> cluster_axis,
-               std::optional<uint32_t> num_links,
-               std::optional<tt::tt_fabric::Topology> topology) {
-                return self(
-                    input_tensor,
-                    weights_tensor,
-                    indices_tensor,
-                    expert_offsets_tensor,
-                    expert_dispatch_table_tensor,
-                    dispatch_group_size,
-                    experts_per_chip,
-                    num_routed_experts,
-                    num_experts_per_tok,
-                    metadata_len,
-                    max_dispatched_tokens_per_expert,
-                    memory_config,
-                    subdevice_id,
-                    cluster_axis,
-                    num_links,
-                    topology);
-            },
+        )doc",
+        ttnn::overload_t(
+            &dispatch,
             nb::arg("input_tensor").noconvert(),
             nb::arg("weights_tensor").noconvert(),
             nb::arg("indices_tensor").noconvert(),
@@ -123,7 +84,7 @@ void bind_dispatch(nb::module_& mod) {
             nb::arg("subdevice_id") = nb::none(),
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("num_links") = 1,
-            nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear)});
+            nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear)));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::dispatch::detail

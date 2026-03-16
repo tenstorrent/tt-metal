@@ -10,7 +10,7 @@
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "combine.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
@@ -18,7 +18,8 @@
 namespace ttnn::operations::experimental::deepseek_prefill::combine::detail {
 
 void bind_combine(nb::module_& mod) {
-    const auto* doc =
+    ttnn::bind_function<"combine", "ttnn.experimental.deepseek_prefill.">(
+        mod,
         R"doc(
         Prefill combine operation for DeepSeek MoE models.
 
@@ -55,43 +56,9 @@ void bind_combine(nb::module_& mod) {
                     experts_per_chip=8,
                     num_experts_per_tok=4,
                     seq_len_per_chip=512)
-        )doc";
-
-    using OperationType = decltype(ttnn::combine);
-    ttnn::bind_registered_operation(
-        mod,
-        ttnn::combine,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& dispatched_buffer,
-               const ttnn::Tensor& dispatched_metadata,
-               const ttnn::Tensor& expert_token_counts,
-               uint32_t dispatch_group_size,
-               uint32_t experts_per_chip,
-               uint32_t num_experts_per_tok,
-               uint32_t seq_len_per_chip,
-               const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
-               std::optional<uint32_t> cluster_axis,
-               std::optional<uint32_t> num_links,
-               std::optional<tt::tt_fabric::Topology> topology,
-               bool init_zeros) {
-                return self(
-                    dispatched_buffer,
-                    dispatched_metadata,
-                    expert_token_counts,
-                    dispatch_group_size,
-                    experts_per_chip,
-                    num_experts_per_tok,
-                    seq_len_per_chip,
-                    memory_config,
-                    subdevice_id,
-                    cluster_axis,
-                    num_links,
-                    topology,
-                    init_zeros);
-            },
+        )doc",
+        ttnn::overload_t(
+            &combine,
             nb::arg("dispatched_buffer").noconvert(),
             nb::arg("dispatched_metadata").noconvert(),
             nb::arg("expert_token_counts").noconvert(),
@@ -105,7 +72,7 @@ void bind_combine(nb::module_& mod) {
             nb::arg("cluster_axis") = nb::none(),
             nb::arg("num_links") = 1,
             nb::arg("topology") = nb::cast(tt::tt_fabric::Topology::Linear),
-            nb::arg("init_zeros") = true});
+            nb::arg("init_zeros") = true));
 }
 
 }  // namespace ttnn::operations::experimental::deepseek_prefill::combine::detail

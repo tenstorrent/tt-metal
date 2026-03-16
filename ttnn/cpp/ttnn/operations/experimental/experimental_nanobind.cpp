@@ -138,6 +138,8 @@ void py_module(nb::module_& mod) {
     isin::detail::bind_isin_operation(mod);
     deepseek::moe::detail::bind_moe_gate_mm(mod);
     deepseek::mla::detail::bind_matmul_wo(mod);
+
+    // DeepSeek prefill MoE operations
     deepseek_prefill::detail::bind_dispatch(mod);
     deepseek_prefill::detail::bind_combine(mod);
 }

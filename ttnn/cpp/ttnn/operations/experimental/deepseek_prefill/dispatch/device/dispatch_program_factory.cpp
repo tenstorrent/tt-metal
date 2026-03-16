@@ -68,14 +68,13 @@ void create_tensor_cb(
 
 }  // namespace detail
 
-DispatchDeviceOperation::DispatchProgramFactory::cached_mesh_workload_t
-DispatchDeviceOperation::DispatchProgramFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+DispatchProgramFactory::cached_mesh_workload_t DispatchProgramFactory::create_mesh_workload(
+    const DispatchParams& operation_attributes,
     const MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const DispatchInputs& tensor_args,
+    DispatchProgramFactory::tensor_return_value_t& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    std::unordered_map<ttnn::MeshCoordinateRange, DispatchSharedVariables> shared_variables;
 
     auto* mesh_device = tensor_args.input_tensor.device();
 
@@ -100,12 +99,11 @@ DispatchDeviceOperation::DispatchProgramFactory::create_mesh_workload(
     return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
 }
 
-ttnn::device_operation::CachedProgram<DispatchDeviceOperation::DispatchProgramFactory::shared_variables_t>
-DispatchDeviceOperation::DispatchProgramFactory::create_at(
-    const operation_attributes_t& operation_attributes,
+ttnn::device_operation::CachedProgram<DispatchSharedVariables> DispatchProgramFactory::create_at(
+    const DispatchParams& operation_attributes,
     const MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+    const DispatchInputs& tensor_args,
+    DispatchProgramFactory::tensor_return_value_t& tensor_return_value,
     const MeshCoordinateRangeSet& tensor_coords,
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore) {
@@ -477,11 +475,11 @@ DispatchDeviceOperation::DispatchProgramFactory::create_at(
          .cross_device_semaphore = cross_device_semaphore}};
 }
 
-void DispatchDeviceOperation::DispatchProgramFactory::override_runtime_arguments(
+void DispatchProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const DispatchParams& /*operation_attributes*/,
+    const DispatchInputs& tensor_args,
+    DispatchProgramFactory::tensor_return_value_t& tensor_return_value) {
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
         const auto& reader_kernel_id = shared_variables.reader_kernel_id;

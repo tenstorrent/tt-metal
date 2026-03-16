@@ -68,14 +68,13 @@ void create_tensor_cb(
 
 }  // namespace detail
 
-CombineDeviceOperation::CombineProgramFactory::cached_mesh_workload_t
-CombineDeviceOperation::CombineProgramFactory::create_mesh_workload(
-    const operation_attributes_t& operation_attributes,
+CombineProgramFactory::cached_mesh_workload_t CombineProgramFactory::create_mesh_workload(
+    const CombineParams& operation_attributes,
     const MeshCoordinateRangeSet& tensor_coords,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const CombineInputs& tensor_args,
+    ttnn::Tensor& tensor_return_value) {
     tt::tt_metal::distributed::MeshWorkload workload;
-    std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
+    std::unordered_map<ttnn::MeshCoordinateRange, CombineSharedVariables> shared_variables;
 
     auto* mesh_device = tensor_args.dispatched_buffer.device();
 
@@ -94,12 +93,11 @@ CombineDeviceOperation::CombineProgramFactory::create_mesh_workload(
     return cached_mesh_workload_t(std::move(workload), std::move(shared_variables));
 }
 
-ttnn::device_operation::CachedProgram<CombineDeviceOperation::CombineProgramFactory::shared_variables_t>
-CombineDeviceOperation::CombineProgramFactory::create_at(
-    const operation_attributes_t& operation_attributes,
+ttnn::device_operation::CachedProgram<CombineSharedVariables> CombineProgramFactory::create_at(
+    const CombineParams& operation_attributes,
     const MeshCoordinate& mesh_coordinate,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value,
+    const CombineInputs& tensor_args,
+    ttnn::Tensor& tensor_return_value,
     const MeshCoordinateRangeSet& tensor_coords,
     const GlobalSemaphore& init_semaphore) {
     tt::tt_metal::Program program{};
@@ -431,11 +429,11 @@ CombineDeviceOperation::CombineProgramFactory::create_at(
          .zero_init_semaphore_id = zero_init_semaphore_id}};
 }
 
-void CombineDeviceOperation::CombineProgramFactory::override_runtime_arguments(
+void CombineProgramFactory::override_runtime_arguments(
     cached_mesh_workload_t& cached_workload,
-    const operation_attributes_t& /*operation_attributes*/,
-    const tensor_args_t& tensor_args,
-    tensor_return_value_t& tensor_return_value) {
+    const CombineParams& /*operation_attributes*/,
+    const CombineInputs& tensor_args,
+    ttnn::Tensor& tensor_return_value) {
     // Update buffer addresses in runtime args when tensors are reallocated
     for (auto& [range, program] : cached_workload.workload.get_programs()) {
         const auto& shared_variables = cached_workload.shared_variables.at(range);
