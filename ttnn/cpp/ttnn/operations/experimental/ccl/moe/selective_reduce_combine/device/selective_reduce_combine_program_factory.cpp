@@ -552,13 +552,12 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     }
 
     return {
-        std::move(program),
-        {.reader_kernel_id = ternary_reader_kernel_id,
-         .writer_kernel_id = unary_writer_kernel_id,
-         .data_cb_handle = data_cb_handle,
-         .cores = sender_cores,
-         .init_semaphore = init_semaphore,
-         .cross_device_semaphore = cross_device_semaphore}};
+        .reader_kernel_id = ternary_reader_kernel_id,
+        .writer_kernel_id = unary_writer_kernel_id,
+        .data_cb_handle = data_cb_handle,
+        .cores = sender_cores,
+        .init_semaphore = init_semaphore,
+        .cross_device_semaphore = cross_device_semaphore};
 }
 
 void selective_reduce_combine_helper_override_runtime_arguments(
