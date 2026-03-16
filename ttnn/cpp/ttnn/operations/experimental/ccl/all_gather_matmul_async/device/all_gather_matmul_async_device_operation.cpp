@@ -107,7 +107,7 @@ AllGatherMatmulAsyncDeviceOperation::tensor_return_value_t AllGatherMatmulAsyncD
     return {all_gather_output_tensor, matmul_output_tensor};
 }
 
-tt::stl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t AllGatherMatmulAsyncDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllGatherMatmulAsyncDeviceOperation::compute_program_hash is called");
 
@@ -178,6 +178,7 @@ ttnn::experimental::prim::AllGatherMatmulAsyncDeviceOperation::tensor_return_val
             /*cluster_axis=*/std::nullopt,
             /*use_optimal_ccl_for_llama=*/false,
             /*use_all_gather_async_llama_sharded=*/false,
+            /*use_all_gather_async_via_broadcast*/ false,
             barrier_semaphore,
             chunks_per_sync,
             num_workers_per_link,

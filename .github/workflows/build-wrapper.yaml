@@ -44,6 +44,11 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      ref:
+        required: false
+        type: string
+        default: ""
+        description: "Git ref to checkout (defaults to github.sha if not provided)"
   workflow_dispatch:
     inputs:
       platform:
@@ -96,8 +101,9 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       publish-artifact: false
       publish-package: false
-      skip-tt-train: true
-      tracy: false
+      skip-tt-train: false
+      tracy: true
+      ref: ${{ inputs.ref }}
 
   # build job runs the matrix - either when called from merge-gate with pre-built tags,
   # or when called via workflow_call without the platform dropdown
@@ -135,8 +141,9 @@ jobs:
       enable-lto: ${{ matrix.config.enable-lto || false }}
       publish-artifact: false
       publish-package: false
-      skip-tt-train: true
-      tracy: false
+      skip-tt-train: false
+      tracy: true
+      ref: ${{ inputs.ref }}
       # Pass pre-built docker image tags based on platform
       ci-build-docker-image: ${{
         (matrix.config.platform == 'Ubuntu 24.04' && inputs.ubuntu-2404-ci-build-tag) ||

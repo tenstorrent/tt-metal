@@ -28,8 +28,8 @@
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/buffer_page_mapping.hpp>
+// UMD: re-exports CoreType (used in Buffer::core_type return type).
 #include <umd/device/types/core_coordinates.hpp>
-#include <umd/device/types/xy_pair.hpp>
 
 namespace tt::stl::json {
 template <typename T>
@@ -49,7 +49,7 @@ struct ShardSpec {
     /* Canonical tensor shape where the depth dimensions ([:-2] are folded along y) */
     std::array<uint32_t, 2> shape;
 
-    /* The sequence order of the grid cores that the shards are layed out onto. */
+    /* The sequence order of the grid cores that the shards are laid out onto. */
     ShardOrientation orientation = ShardOrientation::ROW_MAJOR;
 
     ShardSpec(

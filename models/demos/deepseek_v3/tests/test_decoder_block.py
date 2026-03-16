@@ -17,12 +17,11 @@ from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d_base import Deco
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
 from models.demos.deepseek_v3.tt.mla.mla1d import MLA1D
 from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
+from models.demos.deepseek_v3.tt.model.row_batched_model import get_fabric_config
 from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
-    add_inv_scale_to_state_dict,
     assert_hidden_dim_pcc,
-    dequantize_state_dict,
     get_model_config,
     get_rope_tensors,
     get_test_weight_config,
@@ -46,14 +45,9 @@ def generate_reference_io(
     reference_model = DeepseekV3DecoderLayer(hf_config, layer_idx=layer_idx).eval().to(torch.bfloat16)
     if module_path is not None:
         state_dict = sub_state_dict(state_dict, module_path + ".")
-        reference_model.load_state_dict(dequantize_state_dict(state_dict, hf_config))
+        reference_model.load_state_dict(state_dict)
     else:
-        # This needs to be disabled as deterministic way to quantize weights is not supported
-        torch.use_deterministic_algorithms(False)
-        state_dict = add_inv_scale_to_state_dict(
-            reference_model.state_dict(),
-            block_shape=hf_config.quantization_config["weight_block_size"],
-        )
+        state_dict = reference_model.state_dict()
 
     torch_input = torch.randn(batch_size, seq_len, hf_config.hidden_size, dtype=torch.bfloat16)
     position_ids = None
@@ -85,6 +79,7 @@ def generate_reference_io(
 
 def run_test_forward_pass_decoder2d(
     DecoderBlockClass: type[DecoderBlock2DBase],
+    fabric_config,
     module_path,
     reference_layer_idx,
     mode,
@@ -139,7 +134,7 @@ def run_test_forward_pass_decoder2d(
         real_weights=module_path is not None,
         layer_id=module_path,
     )
-    model_config = get_model_config(DecoderBlockClass, mode, hf_config_short, mesh_device)
+    model_config = get_model_config(DecoderBlockClass, mode, hf_config_short, mesh_device, fabric_config)
     model_state = DecoderBlockClass.create_state(
         hf_config_short,
         paged_config,
@@ -207,7 +202,7 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
 @pytest.mark.parametrize(
     "device_params",
     [
-        {"fabric_config": ttnn.FabricConfig.FABRIC_1D},
+        {"fabric_config": get_fabric_config()},
     ],
     indirect=True,
 )
@@ -251,6 +246,7 @@ TEST_CASES, TEST_IDS = build_test_cases_and_ids(
 )
 def test_forward_pass(
     DecoderBlockClass: type[DecoderBlock2DBase],
+    device_params,
     module_path,
     reference_layer_idx,
     mode,
@@ -272,6 +268,7 @@ def test_forward_pass(
 
     test_closure(
         DecoderBlockClass,
+        device_params["fabric_config"],
         module_path,
         reference_layer_idx,
         mode,

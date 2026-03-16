@@ -77,31 +77,30 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
     TT_FATAL(output.memory_config().is_sharded(), "Output must be sharded");
 
     TT_FATAL(
-        input.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
-        "This factory only supports HEIGHT_SHARDED input");
-    TT_FATAL(
         output.memory_config().memory_layout() == TensorMemoryLayout::HEIGHT_SHARDED,
         "This factory only supports HEIGHT_SHARDED output");
 
-    TT_FATAL(input.shard_spec().has_value(), "Input must have legacy shard_spec");
+    const bool input_is_legacy_sharded = input.shard_spec().has_value();
+    const bool input_is_nd_sharded = input.memory_config().created_with_nd_shard_spec();
+
+    TT_FATAL(input_is_legacy_sharded || input_is_nd_sharded, "Input must be legacy sharded or ND sharded");
     TT_FATAL(output.shard_spec().has_value(), "Output must have legacy shard_spec");
 
-    TT_FATAL(
-        !input.memory_config().created_with_nd_shard_spec(),
-        "Input created with ND shard spec is not supported by this factory");
     TT_FATAL(
         !output.memory_config().created_with_nd_shard_spec(),
         "Output created with ND shard spec is not supported by this factory");
 
     auto pad_value = operation_attributes.pad_value;
 
-    const auto input_shard_spec = input.shard_spec().value();
     const auto output_shard_spec = output.shard_spec().value();
 
     const auto all_cores = output_shard_spec.grid;
 
-    const uint32_t input_shard_height = input_shard_spec.shape[0];
-    const uint32_t input_shard_width = input_shard_spec.shape[1];
+    const uint32_t input_shard_width =
+        input_is_legacy_sharded ? input.shard_spec().value().shape[1] : input.nd_shard_spec().value().shard_shape[-1];
+    const uint32_t input_shard_height = input_is_legacy_sharded
+                                            ? input.shard_spec().value().shape[0]
+                                            : (input.nd_shard_spec().value().shard_shape.volume() / input_shard_width);
     const uint32_t output_shard_height = output_shard_spec.shape[0];
     const uint32_t output_shard_width = output_shard_spec.shape[1];
 
@@ -152,8 +151,8 @@ TilizeWithValPaddingMultiCoreHeightShardedFactory::create(
         output.padded_shape()[-1]);
 
     TT_FATAL(
-        shard_is_batch_partition || (input_shard_height * input_shard_count == flattened_input_logical_rows),
-        "For non-batch-partitioned height-sharded input, shard_height * shard_count must equal flattened logical rows "
+        shard_is_batch_partition || (input_shard_height * input_shard_count >= flattened_input_logical_rows),
+        "For non-batch-partitioned height-sharded input, shard capacity must cover flattened logical rows "
         "(shard_height={}, shard_count={}, flattened_input_logical_rows={})",
         input_shard_height,
         input_shard_count,

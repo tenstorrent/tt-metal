@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include "mesh_command_queue_base.hpp"
 
 #include <mesh_device.hpp>
@@ -215,7 +215,8 @@ void MeshCommandQueueBase::enqueue_read_mesh_buffer(
         this->read_sharded_buffer(*buffer, host_data);
     } else {
         std::vector<distributed::ShardDataTransfer> shard_data_transfers = {
-            distributed::ShardDataTransfer{MeshCoordinate(0, 0)}.host_data(host_data)};
+            distributed::ShardDataTransfer{MeshCoordinate::zero_coordinate(buffer->device()->shape().dims())}.host_data(
+                host_data)};
         // enqueue_read_shards will call lock_api_function_(), no need to call it here
         this->enqueue_read_shards(shard_data_transfers, buffer, blocking);
     }

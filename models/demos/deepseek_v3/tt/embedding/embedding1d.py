@@ -16,7 +16,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MeshDeviceStub,
     TypecastConfig,
 )
-from models.demos.deepseek_v3.utils.config_helpers import even_int_div, shard_and_save
+from models.demos.deepseek_v3.utils.config_helpers import even_int_div, get_dequantized_tensor, shard_and_save
 from models.demos.deepseek_v3.utils.run_config import (
     MESH_DEVICE_STATE_DICT_KEY,
     ModelDecodeConfig,
@@ -44,7 +44,7 @@ class Embedding1D(AbstractModule):
         (state_dict,) = state_dicts
 
         # Get the embedding weight from the state dict (in the full model: model.embed_tokens.weight)
-        torch_weight = state_dict["weight"]
+        torch_weight = get_dequantized_tensor(state_dict, "weight")
 
         # Split the last dim in 2 so that it can be sharded across the mesh
         assert (
@@ -160,6 +160,42 @@ class Embedding1D(AbstractModule):
             "ccl": ccl,
         }
 
+    @staticmethod
+    def _fwd_embedding(x: ttnn.Tensor, cfg: dict, original_seq_len: int) -> ttnn.Tensor:
+        """Wrapper for embedding lookup with optional padding.
+        Matches: _forward lines 180-185
+
+        Args:
+            x: Input token IDs tensor [1, 1, seq_len]
+            cfg: Config for embedding operation (cfg["embedding"])
+            original_seq_len: Original sequence length before padding
+
+        Returns:
+            Embeddings tensor after lookup
+        """
+        if original_seq_len % ttnn.TILE_SIZE == 0:
+            return ttnn.embedding(x, **cfg["embedding"])
+        else:
+            x_padded = ttnn.pad(x, [(0, 0), (0, 0), (0, ttnn.TILE_SIZE - original_seq_len % ttnn.TILE_SIZE)], 0)
+            embeddings = ttnn.embedding(x_padded, **cfg["embedding"])
+            ttnn.deallocate(x_padded)
+            return embeddings
+
+    @staticmethod
+    def _fwd_all_gather_embedding(x: ttnn.Tensor, cfg: dict, ccl) -> ttnn.Tensor:
+        """Wrapper for all-gather after embedding.
+        Matches: _forward line 195-197
+
+        Args:
+            x: Input tensor to gather
+            cfg: Config containing all_gather settings (cfg["all_gather"])
+            ccl: CCL runtime object
+
+        Returns:
+            Gathered tensor
+        """
+        return ttnn.experimental.all_gather_async(x, **ccl.populate_all_gather_runtime_args(cfg["all_gather"]))
+
     @classmethod
     def forward_prefill(cls, x, cfg):
         return cls._forward(x, cfg)
@@ -181,8 +217,6 @@ class Embedding1D(AbstractModule):
             x_padded = ttnn.pad(x, [(0, 0), (0, 0), (0, ttnn.TILE_SIZE - original_seq_len % ttnn.TILE_SIZE)], 0)
             embeddings = ttnn.embedding(x_padded, **cfg["embedding"])
             ttnn.deallocate(x_padded)
-
-        embeddings = ttnn.unsqueeze(embeddings, 0)
 
         embeddings_tc = ttnn.typecast(embeddings, **cfg["typecast"])
         ttnn.deallocate(embeddings)

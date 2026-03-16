@@ -86,6 +86,33 @@ inline uint8_t get_relative_logical_y() {
     return my_relative_y_;
 }
 
+#ifdef ARCH_QUASAR
+#include "internal/tt-2xx/quasar/kernel_thread_globals.h"
+// clang-format off
+/**
+ * Returns the number of threads (processors) in the kernel that this processor belongs to.
+ * Set by Quasar firmware from kernel_config before the kernel runs. Valid only on ARCH_QUASAR.
+ *
+ * Return value: Number of kernel threads (num_processors_per_cluster for this kernel).
+ */
+// clang-format on
+inline uint32_t get_num_threads() {
+    return num_sw_threads;
+}
+
+// clang-format off
+/**
+ * Returns this processor's thread ID within its kernel (0 to get_num_threads() - 1).
+ * Set by Quasar firmware from kernel_config before the kernel runs. Valid only on ARCH_QUASAR.
+ *
+ * Return value: Thread ID for this processor.
+ */
+// clang-format on
+inline uint32_t get_my_thread_id() {
+    return my_thread_id;
+}
+#endif
+
 // clang-format off
 /**
  * Helper function to check if an address is in L1 memory space (not register space).
@@ -410,7 +437,7 @@ void cb_reserve_back(int32_t operand, int32_t num_pages) {
 // clang-format off
 /**
  * A non-blocking call that tells the caller if the specified number of pages are available in the specified circular
- * buffer (CB). This call is used by the consumer of the CB to see if the prodcuers has fill the CB with at least the
+ * buffer (CB). This call is used by the consumer of the CB to see if the producers has fill the CB with at least the
  * specified number of tiles. Important note: in case multiple calls of cb_wait_front(n) are issued without a paired
  * cb_pop_front() call, n is expected to be incremented by the user to be equal to a cumulative total of tiles. Example:
  * 4 calls of cb_wait_front(8) followed by a cb_pop_front(32) would produce incorrect behavior. Instead 4 calls of
@@ -916,7 +943,7 @@ FORCE_INLINE void noc_async_write_multicast_one_packet(
  * | src_local_l1_addr                 | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
  * | dst_noc_addr_multicast            | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
  * | size                              | Size of data transfer in bytes                                           | uint32_t | 0..1MB                                     | True     |
- * | num_dests                         | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores -1)                    | True     |
+ * | num_dests                         | Number of destinations that the multicast source is targeting            | uint32_t | 0..(number of cores -1)                    | True     |
  * | linked                            | Whether the transaction is linked                                        | bool     | true or false                              | False    |
  * | noc                               | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  * | max_page_size (template argument) | Maximum size of a single transaction in bytes                            | uint32_t | Any uint32_t number                        | False    |
@@ -1057,10 +1084,12 @@ FORCE_INLINE void noc_async_read_page(
     uint8_t noc = noc_index) {
     static_assert(
         has_required_addrgen_traits_v<AddrGen>,
-        "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
+        "AddrGen must have get_noc_addr() and either get_aligned_page_size(), page_size, or log_base_2_of_page_size");
 
     uint32_t page_size;
-    if constexpr (has_page_size_v<AddrGen>) {
+    if constexpr (has_get_aligned_page_size_v<AddrGen>) {
+        page_size = addrgen.get_aligned_page_size();
+    } else if constexpr (has_page_size_v<AddrGen>) {
         page_size = addrgen.page_size;
     } else {
         page_size = (1 << addrgen.log_base_2_of_page_size);
@@ -1112,7 +1141,7 @@ FORCE_INLINE void noc_async_read_tile(
     uint32_t offset = 0,
     uint8_t noc = noc_index) {
     RECORD_NOC_EVENT_WITH_ID(
-        NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, addrgen.page_size, -1, false, noc);
+        NocEventType::READ, dst_local_l1_addr, id, addrgen, offset, addrgen.get_aligned_page_size(), -1, false, noc);
     noc_async_read_page<TensorAccessor<DSpec>, false>(id, addrgen, dst_local_l1_addr, offset, noc);
 }
 
@@ -1230,10 +1259,12 @@ FORCE_INLINE void noc_async_write_page(
     uint8_t noc = noc_index) {
     static_assert(
         has_required_addrgen_traits_v<AddrGen>,
-        "AddrGen must have get_noc_addr() and either page_size or log_base_2_of_page_size member variable");
+        "AddrGen must have get_noc_addr() and either get_aligned_page_size(), page_size, or log_base_2_of_page_size");
 
     uint32_t page_size;
-    if constexpr (has_page_size_v<AddrGen>) {
+    if constexpr (has_get_aligned_page_size_v<AddrGen>) {
+        page_size = addrgen.get_aligned_page_size();
+    } else if constexpr (has_page_size_v<AddrGen>) {
         page_size = addrgen.page_size;
     } else {
         page_size = (1 << addrgen.log_base_2_of_page_size);
@@ -1354,12 +1385,12 @@ FORCE_INLINE void noc_async_write_tile(
         id,
         addrgen,
         0 /* offset */,
-        addrgen.page_size,
+        addrgen.get_aligned_page_size(),
         NOC_UNICAST_WRITE_VC,
         false,
         noc);
     noc_async_write_page<TensorAccessor<DSpec>, false>(
-        id, addrgen, src_local_l1_addr, addrgen.page_size, 0 /* offset */, noc);
+        id, addrgen, src_local_l1_addr, addrgen.get_aligned_page_size(), 0 /* offset */, noc);
 }
 
 // clang-format off
@@ -1425,12 +1456,12 @@ FORCE_INLINE void noc_async_read_shard(
         NocEventType::READ,
         dst_local_l1_addr,
         s.get_shard_noc_addr(shard_id, noc),
-        s.page_size * shard_volume,
+        s.get_aligned_page_size() * shard_volume,
         -1,
         false,
         noc);
     noc_async_read<NOC_MAX_BURST_SIZE + 1, false>(
-        s.get_shard_noc_addr(shard_id, noc), dst_local_l1_addr, s.page_size * shard_volume, noc);
+        s.get_shard_noc_addr(shard_id, noc), dst_local_l1_addr, s.get_aligned_page_size() * shard_volume, noc);
 }
 
 // clang-format off
@@ -1459,12 +1490,12 @@ FORCE_INLINE void noc_async_write_shard(
         NocEventType::WRITE_,
         src_local_l1_addr,
         s.get_shard_noc_addr(shard_id, noc),
-        s.page_size * shard_volume,
+        s.get_aligned_page_size() * shard_volume,
         NOC_UNICAST_WRITE_VC,
         posted,
         noc);
     noc_async_write<NOC_MAX_BURST_SIZE + 1, false, posted>(
-        src_local_l1_addr, s.get_shard_noc_addr(shard_id, noc), s.page_size * shard_volume, noc);
+        src_local_l1_addr, s.get_shard_noc_addr(shard_id, noc), s.get_aligned_page_size() * shard_volume, noc);
 }
 
 // clang-format off
@@ -1556,7 +1587,7 @@ inline void noc_semaphore_set_remote(
  * |------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
  * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
  * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores - 1)                   | True     |
+ * | num_dests              | Number of destinations that the multicast source is targeting            | uint32_t | 0..(number of cores - 1)                   | True     |
  * | linked                 | Whether the transaction is linked                                        | bool     | true or false                              | False    |
  * | noc                    | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  */
@@ -1620,7 +1651,7 @@ inline void noc_semaphore_set_multicast(
  * |------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
  * | src_local_l1_addr      | Source address in local L1 memory                                        | uint32_t | 0..1MB                                     | True     |
  * | dst_noc_addr_multicast | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
- * | num_dests              | Number of destinations that the multicast source is targetting (including self) | uint32_t | 0..(number of cores)                       | True     |
+ * | num_dests              | Number of destinations that the multicast source is targeting (including self)  | uint32_t | 0..(number of cores)                       | True     |
  * | linked                 | Whether the transaction is linked                                        | bool     | true or false                              | False    |
  * | noc                    | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  */
@@ -2206,7 +2237,7 @@ FORCE_INLINE void noc_semaphore_inc(
  * |----------------------------|--------------------------------------------------------------------------|----------|--------------------------------------------|----------|
  * | addr                       | Encoding of the destinations nodes (x_start,y_start,x_end,y_end)+address | uint64_t | Results of \a get_noc_multicast_addr calls | True     |
  * | incr                       | The value to increment by                                                | uint32_t | Any uint32_t value                         | True     |
- * | num_dests                  | Number of destinations that the multicast source is targetting           | uint32_t | 0..(number of cores - 1)                   | True     |
+ * | num_dests                  | Number of destinations that the multicast source is targeting            | uint32_t | 0..(number of cores - 1)                   | True     |
  * | noc_id                     | Which NOC to use for the transaction                                     | uint8_t  | 0 or 1                                     | False    |
  * | posted (template argument) | Whether the call is posted or nonposted (i.e. needs to be acked)         | bool     | true or false                              | False    |
  */
