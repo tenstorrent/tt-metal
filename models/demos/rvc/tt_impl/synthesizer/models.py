@@ -200,12 +200,7 @@ class TextEncoder:
         x = ttnn.leaky_relu(x, negative_slope=0.1, output_tensor=x)
         x_e = self.encoder(x)
         stats = self.proj_linear(x_e)
-        m = ttnn.slice(stats, (0, 0, 0), (stats.shape[0], stats.shape[1], self.out_channels))
-        logs = ttnn.slice(
-            stats,
-            (0, 0, self.out_channels),
-            (stats.shape[0], stats.shape[1], self.out_channels * 2),
-        )
+        m, logs = ttnn.chunk(stats, chunks=2, dim=-1)
         return m, logs
 
 
