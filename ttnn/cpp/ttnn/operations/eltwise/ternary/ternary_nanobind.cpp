@@ -60,13 +60,15 @@ void bind_ternary_where(nb::module_& mod, const std::string& description) {
         mod,
         doc.c_str(),
         ttnn::overload_t(
-            nb::overload_cast<
+            // using static cast to disambiguate the template `where` and
+            // `where` with the fixed argument types.
+            static_cast<Tensor (*)(
                 const Tensor&,
                 const TensorScalarVariant&,
                 const TensorScalarVariant&,
                 const std::optional<MemoryConfig>&,
                 const std::optional<Tensor>&,
-                const std::optional<CoreRangeSet>&>(&ttnn::where),
+                const std::optional<CoreRangeSet>&)>(&ttnn::where),
             nb::arg("predicate"),
             nb::arg("true_value"),
             nb::arg("false_value"),
