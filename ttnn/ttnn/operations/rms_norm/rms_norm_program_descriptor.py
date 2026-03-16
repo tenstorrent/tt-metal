@@ -95,7 +95,9 @@ def create_program_descriptor(
     # Stick size for RM layout (full row width in bytes)
     elem_size = input_tensor.element_size()
     stick_size = W * elem_size
-    output_stick_size = W * output_tensor.element_size()
+    output_W = output_tensor.shape[-1]
+    Wt_out = (output_W + TILE_W - 1) // TILE_W
+    output_stick_size = output_W * output_tensor.element_size()
 
     # Gamma stick size (if present, gamma is always RM with shape (1,1,1,W))
     gamma_stick_size = 0
@@ -154,9 +156,10 @@ def create_program_descriptor(
     )
     cbs.append(cb1)
 
-    # --- c_2: cb_x_sq (x^2 intermediate, 2 pages for streaming) ---
+    # --- c_2: cb_x_sq (x^2 intermediate, Wt pages needed because square fills all
+    #     tiles before reduce consumes them -- both run on same compute RISC) ---
     cb2 = ttnn.CBDescriptor(
-        total_size=2 * tile_size,
+        total_size=Wt * tile_size,
         core_ranges=core_grid,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
@@ -228,9 +231,9 @@ def create_program_descriptor(
     cbs.append(cb9)
 
     # --- c_16: cb_out (output tiled data) ---
-    # For RM output: Wt pages (untilize needs all Wt tiles accumulated)
+    # For RM output: Wt_out pages (untilize needs all output tiles accumulated)
     # For TILE output: 2 pages (double buffer streaming)
-    cb16_pages = Wt if is_rm_output else 2
+    cb16_pages = Wt_out if is_rm_output else 2
     cb16 = ttnn.CBDescriptor(
         total_size=cb16_pages * tile_size,
         core_ranges=core_grid,
@@ -247,7 +250,7 @@ def create_program_descriptor(
     # --- c_17: cb_out_rm (untilized output sticks, only for RM output) ---
     if is_rm_output:
         cb17 = ttnn.CBDescriptor(
-            total_size=Wt * tile_size,
+            total_size=Wt_out * tile_size,
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
@@ -375,13 +378,13 @@ def create_program_descriptor(
     ]
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
-    # RT args: dst_addr, num_rows, Wt, num_tiles (total output tiles or sticks)
+    # RT args: dst_addr, num_rows, Wt_out, num_tiles (total output tiles or sticks)
     total_output_pages = output_tensor.buffer_num_pages()
     writer_rt_args = ttnn.RuntimeArgs()
     writer_rt_args[core.x][core.y] = [
         output_tensor.buffer_address(),
         num_rows,
-        Wt,
+        Wt_out,
         total_output_pages,
     ]
 

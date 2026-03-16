@@ -44,11 +44,16 @@ void kernel_main() {
     const uint32_t input_page_size = is_rm_input ? stick_size : get_tile_size(cb_in);
     const auto input_accessor = TensorAccessor(input_ta_args, src_addr, input_page_size);
 
+    // Fill cb_scaler with 1/W for reduce
+    // W = Wt * TILE_WIDTH (32)
+    float scaler_val = 1.0f / static_cast<float>(Wt * 32);
+    dataflow_kernel_lib::prepare_reduce_scaler<cb_scaler>(scaler_val);
+
+    // Pass 1: Read input tiles
     if constexpr (is_rm_input) {
         // RM input: read 32 sticks per tile-row, push Wt pages to cb_in_rm
         uint32_t stick_id = 0;
         for (uint32_t row = 0; row < num_rows; ++row) {
-            // Push Wt tile-equivalents of sticks (32 sticks = 1 tile-row)
             cb_reserve_back(cb_in_rm, Wt);
             uint32_t l1_write_addr = get_write_ptr(cb_in_rm);
             for (uint32_t s = 0; s < 32; ++s) {

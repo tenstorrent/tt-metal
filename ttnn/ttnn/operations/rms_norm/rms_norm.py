@@ -58,8 +58,8 @@ def rms_norm(
     device = input_tensor.device()
     output_memory_config = memory_config if memory_config is not None else ttnn.DRAM_MEMORY_CONFIG
 
-    # Output shape same as input
-    output_shape = list(input_tensor.shape)
+    # Output shape: reduced (stage 2 - square_reduce: tile-aligned reduced width)
+    output_shape = list(input_tensor.shape)[:-1] + [32]
 
     # Output layout matches input layout (RM in -> RM out, TILE in -> TILE out)
     output_layout = input_tensor.layout
