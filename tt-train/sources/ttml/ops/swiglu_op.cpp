@@ -46,20 +46,21 @@ autograd::TensorPtr swiglu(
     const auto w1_shape = w1->get_value().logical_shape();
     const auto w2_shape = w2->get_value().logical_shape();
     const auto w3_shape = w3->get_value().logical_shape();
-    if (w1_shape.rank() != 2 || w2_shape.rank() != 2 || w3_shape.rank() != 2) {
-        throw std::runtime_error("swiglu expects rank-2 LinearLayer weights: w1,w3 [H,D], w2 [D,H].");
+    if (w1_shape.rank() < 2 || w2_shape.rank() < 2 || w3_shape.rank() < 2) {
+        throw std::runtime_error(
+            "swiglu expects weights with at least 2 dims; trailing dims must be w1,w3 [H,D], w2 [D,H].");
     }
 
     const auto d = x_shape[-1];
-    const auto h = w1_shape[0];
-    if (w1_shape[1] != d) {
-        throw std::runtime_error("swiglu expects w1 shape [H,D] with D == input[-1].");
+    const auto h = w1_shape[-2];
+    if (w1_shape[-1] != d) {
+        throw std::runtime_error("swiglu expects w1 trailing dims [H,D] with D == input[-1].");
     }
-    if (w3_shape[0] != h || w3_shape[1] != d) {
-        throw std::runtime_error("swiglu expects w3 shape [H,D] matching w1.");
+    if (w3_shape[-2] != h || w3_shape[-1] != d) {
+        throw std::runtime_error("swiglu expects w3 trailing dims [H,D] matching w1.");
     }
-    if (w2_shape[0] != d || w2_shape[1] != h) {
-        throw std::runtime_error("swiglu expects w2 shape [D,H] matching input D and hidden H.");
+    if (w2_shape[-2] != d || w2_shape[-1] != h) {
+        throw std::runtime_error("swiglu expects w2 trailing dims [D,H] matching input D and hidden H.");
     }
 
     using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
