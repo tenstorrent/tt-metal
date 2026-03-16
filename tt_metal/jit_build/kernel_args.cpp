@@ -6,6 +6,7 @@
 #include "jit_build_utils.hpp"
 #include "common/filesystem_utils.hpp"
 #include <cstddef>
+#include <filesystem>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -53,11 +54,10 @@ void log_kernel_defines_and_args(
     }
 }
 
-void dump_kernel_defines_and_args(const string& out_kernel_root_path) {
-    // Make sure the directory exists
-    tt::jit_build::utils::create_file(out_kernel_root_path);
+void dump_kernel_defines_and_args(const std::filesystem::path& out_kernel_root_path) {
+    tt::filesystem::safe_create_directories(out_kernel_root_path);
 
-    string kernel_args_csv = out_kernel_root_path + "kernel_args.csv";
+    auto kernel_args_csv = out_kernel_root_path / "kernel_args.csv";
     auto tmp_path = tt::jit_build::utils::FileRenamer::generate_temp_path(kernel_args_csv);
 
     std::lock_guard<std::mutex> lock(mutex_kernel_defines_and_args_);

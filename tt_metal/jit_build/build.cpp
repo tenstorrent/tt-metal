@@ -792,7 +792,7 @@ std::bitset<JitBuildState::kMaxBuildBitset> JitBuildState::compile(
     }
 
     if (env_.get_rtoptions().get_watcher_enabled()) {
-        dump_kernel_defines_and_args(env_.get_out_kernel_root_path().string());
+        dump_kernel_defines_and_args(env_.get_out_kernel_root_path());
     }
     return compiled;
 }
