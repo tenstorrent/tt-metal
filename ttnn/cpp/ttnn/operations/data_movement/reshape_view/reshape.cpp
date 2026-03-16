@@ -434,7 +434,7 @@ ttnn::Tensor ttnn::reshape(
 
 ttnn::Tensor ttnn::reshape(
     const ttnn::Tensor& tensor,
-    tt::stl::Span<const int32_t> shape_vector,
+    ttsl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config,
     const std::optional<PadValue>& pad_value,
     const TileReshapeMapMode reshape_map_mode,

@@ -45,7 +45,7 @@ ttnn::Tensor view(const ttnn::Tensor& tensor, const ttnn::Shape& shape) {
     return operations::data_movement::PerformView(tensor, shape, shape, tile_first_dim, tile_second_dim);
 }
 
-ttnn::Tensor view(const ttnn::Tensor& tensor, tt::stl::Span<const int32_t> shape_vector) {
+ttnn::Tensor view(const ttnn::Tensor& tensor, ttsl::Span<const int32_t> shape_vector) {
     return ttnn::view(tensor, operations::data_movement::detail::infer_dims_for_reshape(tensor, shape_vector));
 }
 

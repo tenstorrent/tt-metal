@@ -23,7 +23,7 @@
 namespace ttnn::experimental::prim {
 
 using namespace tt::tt_metal;
-using namespace tt::stl;
+using namespace ttsl;
 
 struct IntImgDeviceOperation {
     using operation_attributes_t = IntImgParams;

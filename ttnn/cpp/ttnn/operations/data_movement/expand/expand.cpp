@@ -35,7 +35,7 @@ namespace ttnn {
 
 Tensor expand(
     const ttnn::Tensor& tensor,
-    const tt::stl::Span<const int32_t> shape_vector,
+    const ttsl::Span<const int32_t> shape_vector,
     const std::optional<MemoryConfig>& memory_config) {
     return ttnn::repeat(tensor, create_repetition_vector(tensor, shape_vector), memory_config);
 }

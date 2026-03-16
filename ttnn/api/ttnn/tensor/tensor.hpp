@@ -78,7 +78,7 @@ public:
     // The data in the buffer is copied into a tensor with host storage.
     template <typename T>
     [[nodiscard]] static Tensor from_span(
-        tt::stl::Span<const T> buffer,
+        ttsl::Span<const T> buffer,
         const TensorSpec& spec,
         distributed::MeshDevice* device = nullptr,
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
@@ -98,11 +98,11 @@ public:
     // void* mmap_addr = mmap(...);
     // MemoryPin memory_pin(std::shared_ptr<void>(mmap_addr, [](void* addr) { munmap(addr, ...); }));
     // Tensor tensor = Tensor::from_borrowed_data(
-    //     tt::stl::Span<T>(reinterpret_cast<T*>(mmap_addr), buffer_size), shape, memory_pin);
+    //     ttsl::Span<T>(reinterpret_cast<T*>(mmap_addr), buffer_size), shape, memory_pin);
     //
     template <typename T>
     [[nodiscard]] static Tensor from_borrowed_data(
-        tt::stl::Span<T> buffer,
+        ttsl::Span<T> buffer,
         const tt::tt_metal::Shape& shape,
         tt::tt_metal::MemoryPin buffer_pin,
         const std::optional<Tile>& tile = std::nullopt);
@@ -110,7 +110,7 @@ public:
     // Overload that takes `on_creation_callback` and `on_destruction_callback` as separate arguments.
     template <typename T>
     [[nodiscard]] static Tensor from_borrowed_data(
-        tt::stl::Span<T> buffer,
+        ttsl::Span<T> buffer,
         const tt::tt_metal::Shape& shape,
         const std::function<void()>& on_creation_callback,
         const std::function<void()>& on_destruction_callback,
@@ -126,7 +126,7 @@ public:
         distributed::MeshDevice* device = nullptr,
         std::optional<tt::tt_metal::QueueId> cq_id = std::nullopt,
         T pad_value = 0) {
-        return from_span(tt::stl::Span<const T>(buffer), spec, device, cq_id, pad_value);
+        return from_span(ttsl::Span<const T>(buffer), spec, device, cq_id, pad_value);
     }
 
     // Same as `from_vector`, but takes in an rvalue. No copies will be made, if the target layout is row-major,

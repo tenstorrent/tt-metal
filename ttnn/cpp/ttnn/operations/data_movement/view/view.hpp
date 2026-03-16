@@ -33,6 +33,6 @@ ttnn::Tensor view(const ttnn::Tensor& input_tensor, const ttnn::Shape& logical_s
  * @param shape_vector Vector of dimensions, where -1 can be used for automatic dimension inference
  * @return A tensor with the new shape that shares storage with the input
  */
-ttnn::Tensor view(const ttnn::Tensor& input_tensor, tt::stl::Span<const int32_t> shape_vector);
+ttnn::Tensor view(const ttnn::Tensor& input_tensor, ttsl::Span<const int32_t> shape_vector);
 
 }  // namespace ttnn

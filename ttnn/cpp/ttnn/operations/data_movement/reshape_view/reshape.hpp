@@ -50,7 +50,7 @@ ttnn::Tensor reshape(
 
 ttnn::Tensor reshape(
     const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const int32_t> shape_vector,
+    ttsl::Span<const int32_t> shape_vector,
     const std::optional<tt::tt_metal::MemoryConfig>& memory_config = std::nullopt,
     const std::optional<PadValue>& pad_value = std::nullopt,
     TileReshapeMapMode reshape_map_mode = TileReshapeMapMode::CACHE,
