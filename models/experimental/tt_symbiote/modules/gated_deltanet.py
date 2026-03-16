@@ -7,7 +7,7 @@ from typing import Optional
 from models.experimental.tt_symbiote.core.module import TTNNModule
 
 try:
-    from models.experimental.tt_symbiote.modules.delta_rule import fused_chunked_delta_rule_ttnn
+    from models.experimental.tt_symbiote.modules.chunked_deltanet import fused_chunked_delta_rule_ttnn
 except ImportError:
     fused_chunked_delta_rule_ttnn = None
 
@@ -185,8 +185,8 @@ def gated_deltanet_forward_ttnn(
     TTNN forward pass for the Gated DeltaNet layer.
 
     Supports two modes:
-      - "recurrent": token-by-token, best for decode (T=1)
-      - "chunk": chunked parallel, best for prefill (T>1)
+      - "recurrent": token-by-token, for decode (T=1)
+      - "chunk": chunked parallel, for prefill (T>1)
 
     Args:
         hidden_states: ttnn.Tensor [B, T, hidden_size]

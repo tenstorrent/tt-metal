@@ -29,8 +29,6 @@ def test_gated_deltanet_recurrent(device):
     params = make_gated_deltanet_params(seq_len=seq_len)
 
     # Run PyTorch reference implementation
-    # PyTorch expects weights in [out_features, in_features] format
-    # make_gated_deltanet_params returns weights in PyTorch format
     output_torch, _ = gated_deltanet_forward(**params, mode="fused_recurrent", output_final_state=False)
 
     # Convert input to bfloat16 for TTNN
@@ -51,43 +49,47 @@ def test_gated_deltanet_recurrent(device):
     )
     set_device(ttnn_model, device)
 
-    # Set weights (transpose for TTNN linear convention: TTNN uses [in_features, out_features])
-    # make_gated_deltanet_params returns weights in PyTorch format [out_features, in_features]
     ttnn_model.q_proj_weight = ttnn.from_torch(
         params["q_proj_weight"].T.contiguous().to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.k_proj_weight = ttnn.from_torch(
         params["k_proj_weight"].T.contiguous().to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.v_proj_weight = ttnn.from_torch(
         params["v_proj_weight"].T.contiguous().to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.a_proj_weight = ttnn.from_torch(
         params["a_proj_weight"].T.contiguous().to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.b_proj_weight = ttnn.from_torch(
         params["b_proj_weight"].T.contiguous().to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.o_proj_weight = ttnn.from_torch(
         params["o_proj_weight"].T.contiguous().to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     if params["g_proj_weight"] is not None:
         ttnn_model.g_proj_weight = ttnn.from_torch(
@@ -95,30 +97,38 @@ def test_gated_deltanet_recurrent(device):
             device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-    # Conv weights: for recurrent mode, keep on host (no device/memory_config)
-    # ttnn.conv1d handles device placement automatically
     ttnn_model.q_conv_weight = ttnn.from_torch(
         params["q_conv_weight"].to(torch.bfloat16),
+        device=device,
         dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.k_conv_weight = ttnn.from_torch(
         params["k_conv_weight"].to(torch.bfloat16),
+        device=device,
         dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.v_conv_weight = ttnn.from_torch(
         params["v_conv_weight"].to(torch.bfloat16),
+        device=device,
         dtype=ttnn.bfloat16,
+        layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
-    # Conv biases
     ttnn_model.q_conv_bias = (
         ttnn.from_torch(
             params["q_conv_bias"].to(torch.bfloat16),
             device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         if params["q_conv_bias"] is not None
         else None
@@ -129,6 +139,7 @@ def test_gated_deltanet_recurrent(device):
             device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         if params["k_conv_bias"] is not None
         else None
@@ -139,29 +150,32 @@ def test_gated_deltanet_recurrent(device):
             device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         if params["v_conv_bias"] is not None
         else None
     )
 
-    # Other parameters
     ttnn_model.A_log = ttnn.from_torch(
         params["A_log"].to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.dt_bias = ttnn.from_torch(
         params["dt_bias"].to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.o_norm_weight = ttnn.from_torch(
         params["o_norm_weight"].to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     # Wrap input as TorchTTNNTensor
@@ -203,7 +217,6 @@ def test_gated_deltanet_chunked(device):
     params = make_gated_deltanet_params(seq_len=seq_len)
 
     # Run PyTorch reference implementation
-    # PyTorch expects weights in [out_features, in_features] format
     output_torch, _ = gated_deltanet_forward(**params, mode="chunk", chunk_size=chunk_size, output_final_state=False)
 
     # Convert input to bfloat16 for TTNN
@@ -224,42 +237,47 @@ def test_gated_deltanet_chunked(device):
     )
     set_device(ttnn_model, device)
 
-    # Set weights (same as recurrent test)
     ttnn_model.q_proj_weight = ttnn.from_torch(
         params["q_proj_weight"].T.contiguous().to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.k_proj_weight = ttnn.from_torch(
         params["k_proj_weight"].T.contiguous().to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.v_proj_weight = ttnn.from_torch(
         params["v_proj_weight"].T.contiguous().to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.a_proj_weight = ttnn.from_torch(
         params["a_proj_weight"].T.contiguous().to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.b_proj_weight = ttnn.from_torch(
         params["b_proj_weight"].T.contiguous().to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.o_proj_weight = ttnn.from_torch(
         params["o_proj_weight"].T.contiguous().to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     if params["g_proj_weight"] is not None:
         ttnn_model.g_proj_weight = ttnn.from_torch(
@@ -267,9 +285,9 @@ def test_gated_deltanet_chunked(device):
             device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
-    # Conv weights: use L1_MEMORY_CONFIG for chunked mode (matching non-tt-symbiote test)
     ttnn_model.q_conv_weight = ttnn.from_torch(
         params["q_conv_weight"].to(torch.bfloat16),
         device=device,
@@ -298,6 +316,7 @@ def test_gated_deltanet_chunked(device):
             device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         if params["q_conv_bias"] is not None
         else None
@@ -308,6 +327,7 @@ def test_gated_deltanet_chunked(device):
             device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         if params["k_conv_bias"] is not None
         else None
@@ -318,6 +338,7 @@ def test_gated_deltanet_chunked(device):
             device=device,
             dtype=ttnn.bfloat16,
             layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
         if params["v_conv_bias"] is not None
         else None
@@ -328,18 +349,21 @@ def test_gated_deltanet_chunked(device):
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.dt_bias = ttnn.from_torch(
         params["dt_bias"].to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.o_norm_weight = ttnn.from_torch(
         params["o_norm_weight"].to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     hidden_states_ttnn_tensor = TorchTTNNTensor(hidden_states_ttnn)
