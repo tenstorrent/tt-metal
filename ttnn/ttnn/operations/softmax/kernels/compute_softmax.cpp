@@ -99,9 +99,74 @@ void kernel_main() {
             cb_pop_front(c_26, 1);  // recip
         }
     } else {
-        // dim=-2 (height softmax) -- placeholder for Stage 4
-        constexpr uint32_t tiles_per_work_unit = Ht;
-        const uint32_t total_tiles = num_rows_or_cols * tiles_per_work_unit;
-        compute_kernel_lib::copy_tiles(c_0, c_16, total_tiles);
+        // dim=-2 (height softmax)
+        for (uint32_t wu = 0; wu < num_rows_or_cols; wu++) {
+            // ============================================================
+            // Phase 1: Find max along column (REDUCE_COL on Ht tiles -> 1 tile in c_24)
+            // ============================================================
+            compute_kernel_lib::reduce<
+                PoolType::MAX,
+                ReduceDim::REDUCE_COL,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT>(
+                c_0, c_1, c_24, compute_kernel_lib::ReduceInputBlockShape::of(Ht, 1, 1));
+
+            // ============================================================
+            // Phase 2: exp(x - max), accumulate sum, compute recip
+            // ============================================================
+            // Step 2a: sub(input, max) with exp post_op -> c_25
+            // c_24 (max) uses WaitUpfrontNoPop -- persists for Phase 3
+            compute_kernel_lib::sub<
+                compute_kernel_lib::BroadcastDim::ROW,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::WaitUpfrontNoPop>(
+                c_0, c_24, c_25, compute_kernel_lib::BinaryInputBlockShape::of(Ht, 1), [](uint32_t dst) {
+                    exp_tile_init();
+                    exp_tile(dst);
+                });
+
+            // Step 2b: reduce SUM on c_25 -> c_26, with recip post_reduce_op
+            compute_kernel_lib::reduce<
+                PoolType::SUM,
+                ReduceDim::REDUCE_COL,
+                compute_kernel_lib::ReduceInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT>(
+                c_25,
+                c_1,
+                c_26,
+                compute_kernel_lib::ReduceInputBlockShape::of(Ht, 1, 1),
+                compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
+                compute_kernel_lib::NoAccumulation{},
+                [](uint32_t dst_idx) {
+                    recip_tile_init();
+                    recip_tile(dst_idx);
+                });
+
+            // ============================================================
+            // Phase 3: Normalize = exp(x - max) * recip
+            // ============================================================
+            // Step 3a: sub(input, max) with exp post_op -> c_25
+            // c_24 still persists (already waited, not popped)
+            compute_kernel_lib::sub<
+                compute_kernel_lib::BroadcastDim::ROW,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop>(
+                c_0, c_24, c_25, compute_kernel_lib::BinaryInputBlockShape::of(Ht, 1), [](uint32_t dst) {
+                    exp_tile_init();
+                    exp_tile(dst);
+                });
+
+            // Step 3b: mul(exp_tiles, recip) -> c_16 (output)
+            // c_26 (recip) uses WaitUpfrontNoPop -- popped manually after
+            compute_kernel_lib::mul<
+                compute_kernel_lib::BroadcastDim::ROW,
+                compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
+                compute_kernel_lib::BinaryInputPolicy::WaitUpfrontNoPop>(
+                c_25, c_26, c_16, compute_kernel_lib::BinaryInputBlockShape::of(Ht, 1));
+
+            // Manual cleanup: pop persistent CBs
+            cb_pop_front(c_24, 1);  // max
+            cb_pop_front(c_26, 1);  // recip
+        }
     }
 }
