@@ -421,6 +421,102 @@ TEST(PhysicalGroupingDescriptorTests, ValidationFailsWhenCircularDependency) {
         ::testing::ThrowsMessage<std::runtime_error>(::testing::HasSubstr("Circular dependencies detected")));
 }
 
+TEST(PhysicalGroupingDescriptorTests, MeshGroupingsCanBeLeafNodes) {
+    // Test that MESH groupings can be leaf nodes (using ASIC locations directly)
+    // This verifies that MESH groupings are allowed to use ASIC locations without grouping references
+    const std::string text_proto = get_required_groupings() + R"proto(
+        groupings {
+          name: "mesh_leaf_1"
+          preset_type: MESH
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }
+            , { id: 1 asic_location: ASIC_LOCATION_2 }
+            , { id: 2 asic_location: ASIC_LOCATION_3 }
+            , { id: 3 asic_location: ASIC_LOCATION_4 }]
+          row_major_mesh { dims: [ 2, 2 ] }
+        }
+        groupings {
+          name: "mesh_leaf_2"
+          preset_type: MESH
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_5 }
+            , { id: 1 asic_location: ASIC_LOCATION_6 }]
+          row_major_mesh { dims: [ 1, 2 ] }
+        }
+    )proto";
+
+    // Should succeed - MESH groupings can be leaf nodes
+    EXPECT_NO_THROW({ PhysicalGroupingDescriptor desc(text_proto); });
+}
+
+TEST(PhysicalGroupingDescriptorTests, MeshGroupingsCanHaveDifferentStructures) {
+    // Test that different MESH groupings can have different structures:
+    // - Some MESH groupings can be leaf nodes (using ASIC locations)
+    // - Other MESH groupings can reference other groupings
+    // This verifies that validation checks individual groupings, not grouping types
+    const std::string text_proto = get_required_groupings() + R"proto(
+        groupings {
+          name: "mesh_leaf"
+          preset_type: MESH
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }
+            , { id: 1 asic_location: ASIC_LOCATION_2 }]
+          row_major_mesh { dims: [ 1, 2 ] }
+        }
+        groupings {
+          name: "mesh_non_leaf"
+          preset_type: MESH
+          instances:
+          [ {
+            id: 0
+            grouping_ref { preset_type: TRAY_1 }
+          }]
+        }
+        groupings {
+          name: "mesh_another_leaf"
+          preset_type: MESH
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_3 }
+            , { id: 1 asic_location: ASIC_LOCATION_4 }
+            , { id: 2 asic_location: ASIC_LOCATION_5 }
+            , { id: 3 asic_location: ASIC_LOCATION_6 }]
+          row_major_mesh { dims: [ 2, 2 ] }
+        }
+    )proto";
+
+    // Should succeed - different MESH groupings can have different structures
+    EXPECT_NO_THROW({ PhysicalGroupingDescriptor desc(text_proto); });
+}
+
+TEST(PhysicalGroupingDescriptorTests, SingleGroupingCannotMixASICLocationsAndGroupingRefs) {
+    // Test that a single grouping cannot mix ASIC locations and grouping references
+    // This verifies that ASIC locations must be leaf nodes (within a single grouping)
+    const std::string text_proto = get_required_groupings() + R"proto(
+        groupings {
+          name: "meshes_required"
+          custom_type: "meshes"
+          instances:
+          [ { id: 0 asic_location: ASIC_LOCATION_1 }]
+        }
+        groupings {
+          name: "mesh_mixed_bad"
+          preset_type: MESH
+          instances:
+          [ {
+            id: 0
+            grouping_ref { preset_type: TRAY_1 }
+          }
+            , { id: 1 asic_location: ASIC_LOCATION_2 }]
+        }
+    )proto";
+
+    // Should fail - a single grouping cannot mix ASIC locations and grouping references
+    EXPECT_THAT(
+        ([&]() { PhysicalGroupingDescriptor desc(text_proto); }),
+        ::testing::ThrowsMessage<std::runtime_error>(
+            ::testing::HasSubstr("uses ASIC locations but also has grouping references")));
+}
+
 // ============================================================================
 // API TESTS
 // ============================================================================

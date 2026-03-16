@@ -440,19 +440,16 @@ void PhysicalGroupingDescriptor::instance_validate(std::vector<std::string>& err
 }
 
 void PhysicalGroupingDescriptor::validate_leaf_groupings(std::vector<std::string>& errors) const {
-    // Build dependency graph and identify leaf vs non-leaf groupings
-    std::unordered_map<std::string, bool> has_asic_locations;  // grouping -> true if uses ASIC locations
-    std::unordered_map<std::string, bool> has_grouping_refs;   // grouping -> true if uses grouping refs
-    std::unordered_set<std::string> all_grouping_types;
-
-    // First pass: identify all groupings and their characteristics
+    // Validation: At least one leaf grouping uses ASIC locations
+    // A leaf grouping is one that has ASIC locations and no grouping references
+    bool has_leaf_with_asic = false;
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         for (const auto& [type, groupings] : type_map) {
-            all_grouping_types.insert(type);
-            bool has_asic = false;
-            bool has_refs = false;
-
+            // Check each individual grouping
             for (const auto& grouping : groupings) {
+                bool has_asic = false;
+                bool has_refs = false;
+
                 for (const auto& item : grouping.items) {
                     if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
                         has_asic = true;
@@ -460,20 +457,18 @@ void PhysicalGroupingDescriptor::validate_leaf_groupings(std::vector<std::string
                         has_refs = true;
                     }
                 }
+
+                // A leaf grouping has ASIC locations but no grouping references
+                if (has_asic && !has_refs) {
+                    has_leaf_with_asic = true;
+                    break;
+                }
             }
-
-            // Update flags for this type (may be set by multiple names with same type)
-            has_asic_locations[type] = has_asic_locations[type] || has_asic;
-            has_grouping_refs[type] = has_grouping_refs[type] || has_refs;
+            if (has_leaf_with_asic) {
+                break;
+            }
         }
-    }
-
-    // Validation: At least one leaf grouping uses ASIC locations
-    // A leaf grouping is one that has ASIC locations and no grouping references
-    bool has_leaf_with_asic = false;
-    for (const auto& type : all_grouping_types) {
-        if (has_asic_locations[type] && !has_grouping_refs[type]) {
-            has_leaf_with_asic = true;
+        if (has_leaf_with_asic) {
             break;
         }
     }
@@ -483,19 +478,17 @@ void PhysicalGroupingDescriptor::validate_leaf_groupings(std::vector<std::string
 }
 
 void PhysicalGroupingDescriptor::validate_asic_location_usage(std::vector<std::string>& errors) const {
-    // Build dependency graph and identify groupings
-    std::unordered_map<std::string, bool> has_asic_locations;  // grouping -> true if uses ASIC locations
-    std::unordered_map<std::string, bool> has_grouping_refs;   // grouping -> true if uses grouping refs
-    std::unordered_set<std::string> all_grouping_types;
-
-    // First pass: identify all groupings and their characteristics
+    // Validation: Only leaf groupings should use ASIC locations, others should not
+    // A single grouping should not mix ASIC locations and grouping references
+    // However, different groupings of the same type can have different structures
+    // (e.g., some MESH groupings can be leaf with ASIC locations, others can reference other groupings)
     for (const auto& [name, type_map] : resolved_groupings_cache_) {
         for (const auto& [type, groupings] : type_map) {
-            all_grouping_types.insert(type);
-            bool has_asic = false;
-            bool has_refs = false;
-
+            // Check each individual grouping
             for (const auto& grouping : groupings) {
+                bool has_asic = false;
+                bool has_refs = false;
+
                 for (const auto& item : grouping.items) {
                     if (item.type == GroupingItemInfo::ItemType::ASIC_LOCATION) {
                         has_asic = true;
@@ -503,22 +496,18 @@ void PhysicalGroupingDescriptor::validate_asic_location_usage(std::vector<std::s
                         has_refs = true;
                     }
                 }
+
+                // A single grouping should not have both ASIC locations and grouping references
+                if (has_asic && has_refs) {
+                    errors.push_back(fmt::format(
+                        "Grouping '{}' (name: '{}') uses ASIC locations but also has grouping references. A single "
+                        "grouping should be either a leaf grouping (using ASIC locations) or reference other "
+                        "groupings, "
+                        "but not both.",
+                        type,
+                        name));
+                }
             }
-
-            // Update flags for this type (may be set by multiple names with same type)
-            has_asic_locations[type] = has_asic_locations[type] || has_asic;
-            has_grouping_refs[type] = has_grouping_refs[type] || has_refs;
-        }
-    }
-
-    // Validation: Only leaf groupings should use ASIC locations, others should not
-    // A grouping that has grouping references should not have ASIC locations
-    for (const auto& type : all_grouping_types) {
-        if (has_grouping_refs[type] && has_asic_locations[type]) {
-            errors.push_back(fmt::format(
-                "Grouping '{}' uses ASIC locations but also has grouping references. Only leaf groupings should use "
-                "ASIC locations",
-                type));
         }
     }
 }
@@ -757,14 +746,9 @@ void PhysicalGroupingDescriptor::validate_grouping_structure(
             // Validate ASIC location enum value
             if (has_asic_location) {
                 proto::AsicLocation loc = instance.asic_location();
-                if (loc == proto::ASIC_LOCATION_UNSPECIFIED) {
-                    errors.push_back(fmt::format(
-                        "Grouping '{}' instance {} uses ASIC_LOCATION_UNSPECIFIED; must use ASIC_LOCATION_1 through "
-                        "ASIC_LOCATION_8",
-                        name,
-                        j));
-                }
-                if (static_cast<int>(loc) < 1 || static_cast<int>(loc) > 8) {
+                // ASIC_LOCATION_UNSPECIFIED (0) is allowed - it means "any ASIC ID" (no constraint)
+                // Only validate that the value is in the valid range (0-8)
+                if (static_cast<int>(loc) < 0 || static_cast<int>(loc) > 8) {
                     errors.push_back(fmt::format(
                         "Grouping '{}' instance {} uses invalid ASIC location value {}",
                         name,

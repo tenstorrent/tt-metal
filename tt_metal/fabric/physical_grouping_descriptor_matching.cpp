@@ -860,6 +860,8 @@ MappingResult<uint32_t, AsicID> solve_for_one_grouping_to_psd(
         if (*item.tray_id > 0) {
             target_tray_traits[node_id] = item.tray_id;
         }
+        // Skip ASIC_LOCATION_UNSPECIFIED (0) - it means "any ASIC ID" (no constraint)
+        // Only add constraint for specified ASIC locations (1-8)
         if (*item.asic_location > 0) {
             target_location_traits[node_id] = item.asic_location;
         }
@@ -1044,7 +1046,7 @@ solve_for_many_groupings_to_psd_heterogeneous(
                 if (groupings[j].name != grouping.name) {
                     for (const auto& prev_result : results[j]) {
                         for (const auto& [_, prev_asic] : prev_result.target_to_global) {
-                            if (used_asic_ids.count(prev_asic)) {
+                            if (used_asic_ids.contains(prev_asic)) {
                                 overlaps_other_family = true;
                                 break;
                             }

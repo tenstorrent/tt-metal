@@ -483,7 +483,7 @@ PhysicalMultiMeshGraph build_physical_multi_mesh_adjacency_graph(
     // Get groupings for mesh level mappings
     TT_ASSERT(valid_groupings_map.contains("MESH"), "Internal error: MESH grouping not found in valid groupings map");
     TT_ASSERT(
-        valid_groupings_map.at("MESH").size() > 0,
+        !valid_groupings_map.at("MESH").empty(),
         "Internal error: Physical grouping descriptor was not able to find mesh groupings");
     // Collect all mesh groupings from all instances into a single vector
     std::vector<GroupingInfo> all_mesh_grouping_infos;
@@ -680,7 +680,7 @@ namespace {
     // Map: mesh_id_from_rank_map -> physical_mesh_id (from asic_id_to_mesh_rank)
     std::map<MeshId, MeshId> real_mesh_to_physical_mesh_id;
     for (const auto& [physical_mesh_id, physical_mesh_graph] : physical_graph.mesh_adjacency_graphs_) {
-        auto& asic_nodes = physical_mesh_graph.get_nodes();
+        const auto& asic_nodes = physical_mesh_graph.get_nodes();
         // Check that every asic node in physical mesh has a rank in asic_id_to_mesh_rank
         for (const auto& asic_id : asic_nodes) {
             for (const auto& [real_mesh_id, asic_ranks] : asic_id_to_mesh_rank) {
