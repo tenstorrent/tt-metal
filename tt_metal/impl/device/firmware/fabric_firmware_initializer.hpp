@@ -4,6 +4,8 @@
 
 #pragma once
 
+#include <atomic>
+
 #include "device/device_impl.hpp"
 #include "firmware_initializer.hpp"
 
@@ -40,7 +42,7 @@ private:
 
     tt::tt_fabric::ControlPlane& control_plane_;
     std::vector<Device*> devices_;
-    bool initialized_ = false;
+    std::atomic_flag initialized_ = ATOMIC_FLAG_INIT;
 };
 
 }  // namespace tt::tt_metal

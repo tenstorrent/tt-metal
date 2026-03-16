@@ -60,7 +60,7 @@ void FabricFirmwareInitializer::configure() {
     if (has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::INIT_FABRIC)) {
         wait_for_fabric_router_sync(get_fabric_router_sync_timeout_ms());
     }
-    initialized_ = true;
+    initialized_.test_and_set();
 }
 
 void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& init_done) {
@@ -69,7 +69,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
         "FabricFirmwareInitializer must be torn down after DispatchKernelInitializer");
     if (!has_flag(descriptor_->fabric_manager(), tt_fabric::FabricManagerMode::TERMINATE_FABRIC)) {
         devices_.clear();
-        initialized_ = false;
+        initialized_.clear();
         init_done.erase(key);
         return;
     }
@@ -77,7 +77,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
     tt_fabric::FabricConfig fabric_config = descriptor_->fabric_config();
     if (!tt_fabric::is_tt_fabric_config(fabric_config)) {
         devices_.clear();
-        initialized_ = false;
+        initialized_.clear();
         init_done.erase(key);
         return;
     }
@@ -128,7 +128,7 @@ void FabricFirmwareInitializer::teardown(std::unordered_set<InitializerKey>& ini
     }
 
     devices_.clear();
-    initialized_ = false;
+    initialized_.clear();
     init_done.erase(key);
 }
 
@@ -137,7 +137,7 @@ void FabricFirmwareInitializer::post_teardown() {
     tt::tt_fabric::SetFabricConfig(tt::tt_fabric::FabricConfig::DISABLED);
 }
 
-bool FabricFirmwareInitializer::is_initialized() const { return initialized_; }
+bool FabricFirmwareInitializer::is_initialized() const { return initialized_.test(); }
 
 void FabricFirmwareInitializer::compile_and_configure_fabric() {
     std::vector<std::shared_future<Device*>> events;
