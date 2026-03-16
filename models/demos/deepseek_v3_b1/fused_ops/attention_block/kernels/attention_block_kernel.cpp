@@ -442,7 +442,6 @@ void kernel_main() {
     // Note: skip_local_push=1 because gather3 already pushed to CB7 (gather3_dst_cb)
     using CCLReceiverReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<
         get_named_compile_time_arg_val("ccl_receiver_cb_in1"),
-        get_named_compile_time_arg_val("ccl_receiver_l1_alignment"),
         get_named_compile_time_arg_val("ccl_receiver_cb_in2"),
         get_named_compile_time_arg_val("ccl_receiver_remote_sender_noc_x"),
         get_named_compile_time_arg_val("ccl_receiver_remote_sender_noc_y"),
@@ -451,10 +450,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_receiver_has_residual"),
         get_named_compile_time_arg_val("ccl_receiver_skip_local_push")>;
 
-    // Dummy WriterCTArgs - not used by NCRISC but needed for Op template
-    using DummyWriterCTArgs = deepseek_b1_ops::AllReduceSender::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-    // Dummy ComputeCTArgs - not used by NCRISC but needed for Op template
-    using DummyComputeCTArgs = deepseek_b1_ops::AllReduceReceiver::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0>;
     deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
     deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
 
@@ -804,9 +799,7 @@ void kernel_main() {
 
     // CCL Sender BRISC CTArgs (sends via fabric)
     using CCLSenderWriterCTArgs = deepseek_b1_ops::AllReduceSender::WriterCTArgs<
-        get_named_compile_time_arg_val("ccl_sender_packet_header_cb_id"),
         get_named_compile_time_arg_val("ccl_sender_packet_cb_id"),
-        get_named_compile_time_arg_val("ccl_sender_l1_alignment"),
         get_named_compile_time_arg_val("ccl_sender_input_num_tiles"),
         get_named_compile_time_arg_val("ccl_sender_page_size_bytes"),
         get_named_compile_time_arg_val("ccl_sender_payload_size_bytes"),
@@ -817,8 +810,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_sender_dst_num_hops"),
         get_named_compile_time_arg_val("ccl_sender_num_connections")>;
 
-    // Dummy ReaderCTArgs - not used by BRISC but needed for Op template
-    using DummyReaderCTArgs = deepseek_b1_ops::AllReduceSender::ReaderCTArgs<0, 0, 0, 0, 0>;
     deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
     if constexpr (Core::is_ccl_sender_core) {
         ccl_sender_args = {
@@ -1117,12 +1108,9 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_receiver_cb_in1"),
         get_named_compile_time_arg_val("ccl_receiver_cb_out0"),
         get_named_compile_time_arg_val("ccl_receiver_cb_residual"),
-        get_named_compile_time_arg_val("ccl_receiver_cb_temp"),
         get_named_compile_time_arg_val("ccl_receiver_has_residual"),
         get_named_compile_time_arg_val("ccl_receiver_num_tiles")>;
 
-    using DummyReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0>;
-    // Dummy ReaderCTArgs - not used by TRISC but needed for Op template
     deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
 
     deepseek_compute_kernel_init();
@@ -1570,14 +1558,14 @@ void kernel_main() {
             noc_semaphore_wait(gather3_completion_semaphore_addr, 1);
             noc_semaphore_set(gather3_completion_semaphore_addr, 0);
 
-            deepseek_b1_ops::AllReduceSender::Op<CCLSenderReaderCTArgs, DummyWriterCTArgs> ccl_sender_reader;
+            deepseek_b1_ops::AllReduceSender::Op<CCLSenderReaderCTArgs> ccl_sender_reader;
             ccl_sender_reader(ccl_sender_args);
 #elif defined(COMPILE_FOR_BRISC)
             volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
                 get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
             noc_semaphore_wait(sync_sem, 2);
             noc_semaphore_set(sync_sem, 0);
-            deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
+            deepseek_b1_ops::AllReduceSender::Op<CCLSenderWriterCTArgs> ccl_sender_writer;
             ccl_sender_writer(ccl_sender_args);
 #endif
         }
@@ -1587,10 +1575,10 @@ void kernel_main() {
 #if defined(COMPILE_FOR_NCRISC)
             // TODO: We're popping the RMSNorm input and then re-pushing it here as the residual
             // Should avoid this and not pop in RMSNorm
-            deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverReaderCTArgs, DummyComputeCTArgs> ccl_receiver_reader;
+            deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverReaderCTArgs> ccl_receiver_reader;
             ccl_receiver_reader(ccl_receiver_args);
 #elif defined(COMPILE_FOR_TRISC)
-            deepseek_b1_ops::AllReduceReceiver::Op<DummyReaderCTArgs, CCLReceiverComputeCTArgs> ccl_receiver_compute;
+            deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverComputeCTArgs> ccl_receiver_compute;
             ccl_receiver_compute(ccl_receiver_args);
 #endif
         }
