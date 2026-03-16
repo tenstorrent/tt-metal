@@ -2,8 +2,11 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+from __future__ import annotations
+
 import time
 from collections import defaultdict
+from typing import TYPE_CHECKING
 
 import pytest
 import torch
@@ -24,12 +27,19 @@ from ....models.vae.vae_wan2_1 import (
     WanResample,
     WanResidualBlock,
     WanUpBlock,
+    defrag_cache,
+    update_cache_value,
 )
 from ....parallel.config import ParallelFactor, VaeHWParallelConfig
 from ....parallel.manager import CCLManager
+from ....utils import tensor
 from ....utils.check import assert_quality
 from ....utils.conv3d import conv_pad_height, conv_pad_in_channels, conv_unpad_height, count_convs
 from ....utils.tensor import bf16_tensor_2dshard, typed_tensor_2dshard
+from ....utils.tracing import Tracer
+
+if TYPE_CHECKING:
+    from collections.abc import Sequence
 
 
 def setup_hooks(model):
@@ -315,14 +325,7 @@ def test_wan_attention(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, dt
     tt_output = tt_model(tt_input_tensor, logical_h=logical_h)
 
     tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
-    concat_dims = [None, None]
-    concat_dims[h_axis] = 2
-    concat_dims[w_axis] = 3
-
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
-    )
+    tt_output_torch = tensor.to_torch(tt_output, mesh_axes=[..., h_axis, w_axis, None])
 
     tt_output_torch = conv_unpad_height(tt_output_torch, logical_h)
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
@@ -391,7 +394,11 @@ def test_wan_conv3d(
     tt_input_dtype = ttnn.bfloat16 if dtype == ttnn.DataType.BFLOAT16 else ttnn.float32
     torch_dtype = torch.float32
     torch_model = TorchWanCausalConv3d(
-        in_channels=C_in, out_channels=C_out, kernel_size=kernel_size, stride=stride, padding=padding
+        in_channels=C_in,
+        out_channels=C_out,
+        kernel_size=kernel_size,
+        stride=stride,
+        padding=(-(-padding[0] // 2), *padding[1:]),
     )
     torch_model.eval()
 
@@ -441,20 +448,18 @@ def test_wan_conv3d(
             shard_mapping={h_axis: 2, w_axis: 3},
             dtype=tt_input_dtype,
         )
+
+        tt_cache = {}
+        update_cache_value(tt_cache, "", tt_cache_tensor, length=padding[0])
     else:
         torch_cache_tensor = tt_cache_tensor = None
+        tt_cache = None
 
     with torch.no_grad():
         torch_output = torch_model(torch_input_tensor, cache_x=torch_cache_tensor)
-    tt_output = tt_model(tt_input_tensor, cache_x_BTHWC=tt_cache_tensor, logical_h=logical_h)
+    tt_output = tt_model(tt_input_tensor, logical_h, tt_cache)
 
-    concat_dims = [None, None]
-    concat_dims[h_axis] = 2
-    concat_dims[w_axis] = 3
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
-    )
+    tt_output_torch = tensor.to_torch(tt_output, mesh_axes=[..., h_axis, w_axis, None])
     if logical_h != tt_output_torch.shape[2]:
         logger.info(f"Checking that output padded portion is zeros")
         padding = tt_output_torch[:, :, logical_h:, :, :]
@@ -560,6 +565,8 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
     logger.info(f"torch_input_tensor.shape: {torch_input_tensor.shape}")
     logger.info(f"tt_input_tensor.shape: {tt_input_tensor.shape}")
 
+    tt_feat_cache = {}
+
     if cache_len is not None:
         torch_cache_tensor_1 = torch.randn(B, in_dim, cache_len, H, W, dtype=torch_dtype) * std + mean
         torch_cache_tensor_2 = torch.randn(B, out_dim, cache_len, H, W, dtype=torch_dtype) * std + mean
@@ -584,13 +591,11 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
             shard_mapping={h_axis: 2, w_axis: 3},
             dtype=tt_input_dtype,
         )
-        tt_feat_cache = [tt_cache_tensor_1, tt_cache_tensor_2]
-        tt_feat_idx = [0]
+        update_cache_value(tt_feat_cache, ".conv1", tt_cache_tensor_1, length=2)
+        update_cache_value(tt_feat_cache, ".conv2", tt_cache_tensor_2, length=2)
     else:
         torch_feat_cache = [None, None]
         torch_feat_idx = [0]
-        tt_feat_cache = [None, None]
-        tt_feat_idx = [0]
 
     with torch.no_grad():
         torch_output = torch_model(
@@ -599,36 +604,25 @@ def test_wan_residual_block(mesh_device, B, in_dim, out_dim, T, H, W, cache_len,
             feat_idx=torch_feat_idx,
         )
 
-    tt_output = tt_model(
-        tt_input_tensor,
-        logical_h,
-        feat_cache=tt_feat_cache,
-        feat_idx=tt_feat_idx,
-    )
+    tt_output = tt_model(tt_input_tensor, logical_h, feat_cache=tt_feat_cache)
 
     tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
-    concat_dims = [None, None]
-    concat_dims[h_axis] = 2
-    concat_dims[w_axis] = 3
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
-    )
+    tt_output_torch = tensor.to_torch(tt_output, mesh_axes=[..., h_axis, w_axis, None])
     tt_output_torch = conv_unpad_height(tt_output_torch, logical_h)
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
 
     logger.info(f"checking output")
     assert_quality(torch_output, tt_output_torch, pcc=0.999_900, relative_rmse=0.012)
 
-    for i in range(len(tt_feat_cache)):
-        tt_feat_cache[i] = ttnn.to_torch(
-            tt_feat_cache[i],
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
-        )
-        tt_feat_cache[i] = conv_unpad_height(tt_feat_cache[i], logical_h)
-        tt_feat_cache[i] = tt_feat_cache[i].permute(0, 4, 1, 2, 3)
-        logger.info(f"checking feat_cache {i}")
-        assert_quality(torch_feat_cache[i], tt_feat_cache[i], pcc=0.999_000, relative_rmse=0.04)
+    _check_feat_cache(
+        torch_feat_cache,
+        tt_feat_cache,
+        h_axis=h_axis,
+        w_axis=w_axis,
+        logical_h=logical_h,
+        pcc=0.999,
+        relative_rmse=0.04,
+    )
 
 
 @pytest.mark.parametrize(
@@ -720,9 +714,8 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
     tt_input_tensor = ttnn.to_layout(tt_input_tensor, ttnn.TILE_LAYOUT)
 
     torch_feat_cache = []
-    tt_feat_cache = []
     torch_feat_idx = [0]
-    tt_feat_idx = [0]
+    tt_feat_cache = {}
     for i in range(num_convs):
         torch.manual_seed(0)
         if cache_len is not None:
@@ -738,11 +731,10 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
                 shard_mapping={h_axis: 2, w_axis: 3},
                 dtype=tt_input_dtype,
             )
-            tt_feat_cache.append(tt_cache_tensor)
 
+            update_cache_value(tt_feat_cache, f".resnet{i // 2}.conv{i % 2 + 1}", tt_cache_tensor, length=2)
         else:
             torch_feat_cache.append(None)
-            tt_feat_cache.append(None)
 
     with torch.no_grad():
         torch_output = torch_model(
@@ -751,36 +743,25 @@ def test_wan_mid_block(mesh_device, B, dim, T, H, W, cache_len, mean, std, h_axi
             feat_idx=torch_feat_idx,
         )
 
-    tt_output = tt_model(
-        tt_input_tensor,
-        logical_h,
-        feat_cache=tt_feat_cache,
-        feat_idx=tt_feat_idx,
-    )
+    tt_output = tt_model(tt_input_tensor, logical_h, feat_cache=tt_feat_cache)
 
     tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
-    concat_dims = [None, None]
-    concat_dims[h_axis] = 2
-    concat_dims[w_axis] = 3
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
-    )
+    tt_output_torch = tensor.to_torch(tt_output, mesh_axes=[..., h_axis, w_axis, None])
     tt_output_torch = conv_unpad_height(tt_output_torch, logical_h)
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
 
     logger.info(f"checking output")
     assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
-    for i in range(len(tt_feat_cache)):
-        tt_feat_cache[i] = ttnn.to_torch(
-            tt_feat_cache[i],
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
-        )
-        tt_feat_cache[i] = conv_unpad_height(tt_feat_cache[i], logical_h)
-        tt_feat_cache[i] = tt_feat_cache[i].permute(0, 4, 1, 2, 3)
-        logger.info(f"checking feat_cache {i}")
-        assert_quality(torch_feat_cache[i], tt_feat_cache[i], pcc=0.999_000, relative_rmse=0.016)
+    _check_feat_cache(
+        torch_feat_cache,
+        tt_feat_cache,
+        h_axis=h_axis,
+        w_axis=w_axis,
+        logical_h=logical_h,
+        pcc=0.997,
+        relative_rmse=0.08,
+    )
 
 
 @pytest.mark.parametrize(
@@ -875,9 +856,8 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cach
     )
 
     torch_feat_cache = []
-    tt_feat_cache = []
+    tt_feat_cache = {}
     torch_feat_idx = [0]
-    tt_feat_idx = [0]
     for i in range(num_convs):
         if cache_len is not None:
             torch_cache_tensor = (
@@ -890,11 +870,10 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cach
             tt_cache_tensor = bf16_tensor_2dshard(
                 tt_cache_tensor, mesh_device, layout=ttnn.ROW_MAJOR_LAYOUT, shard_mapping={h_axis: 2, w_axis: 3}
             )
-            tt_feat_cache.append(tt_cache_tensor)
+            update_cache_value(tt_feat_cache, "", tt_cache_tensor, length=1 if "downsample" in mode else 2)
 
         else:
             torch_feat_cache.append(None)
-            tt_feat_cache.append(None)
 
     with torch.no_grad():
         torch_output = torch_model(
@@ -903,39 +882,16 @@ def test_wan_resample(mesh_device, B, dim, T, H, W, mode, resample_out_dim, cach
             feat_idx=torch_feat_idx,
         )
 
-    tt_output, new_logical_h = tt_model(
-        tt_input_tensor,
-        logical_h,
-        feat_cache=tt_feat_cache,
-        feat_idx=tt_feat_idx,
-    )
+    tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, feat_cache=tt_feat_cache)
 
-    concat_dims = [None, None]
-    concat_dims[h_axis] = 2
-    concat_dims[w_axis] = 3
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
-    )
+    tt_output_torch = tensor.to_torch(tt_output, mesh_axes=[..., h_axis, w_axis, None])
     tt_output_torch = conv_unpad_height(tt_output_torch, new_logical_h)
     tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
 
     logger.info(f"checking output")
     assert_quality(torch_output, tt_output_torch, pcc=0.999_900, relative_rmse=0.008)
 
-    for i in range(len(tt_feat_cache)):
-        logger.info(f"checking feat_cache {i}")
-        if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
-            logger.info(f"feat_cache {i} is Rep")
-            assert torch_feat_cache[i] == "Rep"
-            continue
-        tt_feat_cache[i] = ttnn.to_torch(
-            tt_feat_cache[i],
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
-        )
-        tt_feat_cache[i] = tt_feat_cache[i][:, :, : torch_feat_cache[i].shape[3], :, :]
-        tt_feat_cache[i] = tt_feat_cache[i].permute(0, 4, 1, 2, 3)
-        assert_quality(torch_feat_cache[i], tt_feat_cache[i], pcc=0.999_000, relative_rmse=0.016)
+    _check_feat_cache(torch_feat_cache, tt_feat_cache, h_axis=h_axis, w_axis=w_axis, pcc=0.999, relative_rmse=0.016)
 
 
 @pytest.mark.parametrize(
@@ -1015,12 +971,11 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
     num_convs = count_convs(tt_model)
 
     torch_feat_cache = [None for _ in range(num_convs)]
-    tt_feat_cache = [None for _ in range(num_convs)]
+    tt_feat_cache = {}
 
     # Run 4 times to get models to create their own caches
     for i in range(4):
         torch_feat_idx = [0]
-        tt_feat_idx = [0]
         logger.info(f"running test iteration {i}")
 
         torch_input_tensor = torch.randn(B, in_dim, T, H, W, dtype=torch_dtype) * std + mean
@@ -1046,69 +1001,19 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
             )
 
         logger.info(f"running tt model")
-        tt_output, new_logical_h = tt_model(
-            tt_input_tensor,
-            logical_h,
-            feat_cache=tt_feat_cache,
-            feat_idx=tt_feat_idx,
-        )
+        tt_output, new_logical_h = tt_model(tt_input_tensor, logical_h, feat_cache=tt_feat_cache)
 
         tt_output = ttnn.to_layout(tt_output, ttnn.ROW_MAJOR_LAYOUT)
-        concat_dims = [None, None]
-        concat_dims[h_axis] = 2
-        concat_dims[w_axis] = 3
-        tt_output_torch = ttnn.to_torch(
-            tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
-        )
+        tt_output_torch = tensor.to_torch(tt_output, mesh_axes=[..., h_axis, w_axis, None])
         tt_output_torch = conv_unpad_height(tt_output_torch, new_logical_h)
         tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
 
         logger.info(f"checking output")
         assert_quality(torch_output, tt_output_torch, pcc=0.999_000, relative_rmse=0.02)
 
-        for i in range(len(tt_feat_cache)):
-            logger.info(f"checking feat_cache {i}")
-            if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
-                logger.info(f"feat_cache {i} is Rep")
-                assert torch_feat_cache[i] == "Rep"
-                continue
-            tt_feat_cache_back = ttnn.to_torch(
-                tt_feat_cache[i],
-                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                    mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
-                ),
-            )
-            tt_feat_cache_back = tt_feat_cache_back[:, :, : torch_feat_cache[i].shape[3], :, :]
-            tt_feat_cache_back = tt_feat_cache_back.permute(0, 4, 1, 2, 3)
-            assert_quality(torch_feat_cache[i], tt_feat_cache_back, pcc=0.999_000, relative_rmse=0.03)
+        _check_feat_cache(torch_feat_cache, tt_feat_cache, h_axis=h_axis, w_axis=w_axis, pcc=0.999, relative_rmse=0.03)
 
-        # Defrag the cache
-        tt_feat_cache_host = []
-        for i in range(len(tt_feat_cache)):
-            if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
-                tt_feat_cache_host.append(tt_feat_cache[i])
-            else:
-                tt_feat_cache_host.append(
-                    ttnn.to_torch(
-                        tt_feat_cache[i],
-                        mesh_composer=ttnn.ConcatMesh2dToTensor(
-                            mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
-                        ),
-                    )
-                )
-                ttnn.deallocate(tt_feat_cache[i])
-        for i in range(len(tt_feat_cache)):
-            if isinstance(tt_feat_cache[i], str) and tt_feat_cache[i] == "Rep":
-                tt_feat_cache[i] = tt_feat_cache_host[i]
-            else:
-                tt_feat_cache[i] = typed_tensor_2dshard(
-                    tt_feat_cache_host[i],
-                    mesh_device,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    shard_mapping={h_axis: 2, w_axis: 3},
-                    dtype=tt_input_dtype,
-                )
+        defrag_cache(tt_feat_cache)
 
 
 @pytest.mark.parametrize(
@@ -1150,7 +1055,9 @@ def test_wan_upblock(mesh_device, B, in_dim, out_dim, T, H, W, mode, num_res_blo
     ],
     indirect=["mesh_device"],
 )
-@pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
+@pytest.mark.parametrize(
+    "device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D, "trace_region_size": 3300000}], indirect=True
+)
 def test_wan_decoder3d(
     mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_links, check_cache, dtype, MIN_PCC, MAX_RMSE
 ):
@@ -1205,18 +1112,19 @@ def test_wan_decoder3d(
         dtype=dtype,
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
+    tracer = Tracer(tt_model.forward, device=mesh_device, clone_prep_inputs=False)
+    traced = True
 
     num_convs = count_convs(tt_model)
 
     torch_feat_cache = [None for _ in range(num_convs)]
-    tt_feat_cache = [None for _ in range(num_convs)]
+    tt_feat_cache = {}
 
     # Run 4 times to get models to create their own caches
     for i in range(3):
         torch.manual_seed(0)
 
         torch_feat_idx = [0]
-        tt_feat_idx = [0]
         logger.info(f"running test iteration {i}")
 
         torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
@@ -1241,20 +1149,11 @@ def test_wan_decoder3d(
         logger.info(f"torch output shape: {torch_output.shape}")
 
         logger.info(f"running tt model")
-        tt_output, new_logical_h = tt_model(
-            tt_input_tensor,
-            logical_h,
-            feat_cache=tt_feat_cache,
-            feat_idx=tt_feat_idx,
+        tt_output, new_logical_h = (tracer if traced and i != 0 else tt_model)(
+            tt_input_tensor, logical_h, feat_cache=tt_feat_cache if i <= 1 else None
         )
 
-        concat_dims = [None, None]
-        concat_dims[h_axis] = 2
-        concat_dims[w_axis] = 3
-        tt_output_torch = ttnn.to_torch(
-            tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
-        )
+        tt_output_torch = tensor.to_torch(tt_output, mesh_axes=[..., h_axis, w_axis, None])
         tt_output_torch = conv_unpad_height(tt_output_torch, new_logical_h)
         tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
         # Trim padding on output channels
@@ -1266,63 +1165,11 @@ def test_wan_decoder3d(
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
         if check_cache:
-            for cache_idx in range(len(tt_feat_cache)):
-                logger.info(f"checking feat_cache {cache_idx}")
-                if isinstance(tt_feat_cache[cache_idx], str) and tt_feat_cache[cache_idx] == "Rep":
-                    logger.info(f"feat_cache {cache_idx} is Rep")
-                    assert torch_feat_cache[cache_idx] == "Rep"
-                    continue
-                tt_feat_cache_back = ttnn.to_torch(
-                    tt_feat_cache[cache_idx],
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
-                    ),
-                )
-                tt_feat_cache_back = tt_feat_cache_back.permute(0, 4, 1, 2, 3)
-                if tt_feat_cache_back.shape[1] != torch_feat_cache[cache_idx].shape[1]:
-                    tt_feat_cache_back = tt_feat_cache_back[:, : torch_feat_cache[cache_idx].shape[1]]
-                    logger.warning(f"Trimmed tt_feat_cache_back to {tt_feat_cache_back.shape}")
-                if tt_feat_cache_back.shape[3] != torch_feat_cache[cache_idx].shape[3]:
-                    tt_feat_cache_back = tt_feat_cache_back[:, :, :, : torch_feat_cache[cache_idx].shape[3]]
-                    logger.warning(f"Trimmed tt_feat_cache_back to {tt_feat_cache_back.shape}")
-                logger.info(
-                    f"feat_cache {cache_idx} shape: {torch_feat_cache[cache_idx].shape}, {tt_feat_cache_back.shape}"
-                )
-                try:
-                    assert_quality(torch_feat_cache[cache_idx], tt_feat_cache_back, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
-                except Exception as e:
-                    logger.error(
-                        f"Error checking feat_cache {cache_idx}: {e}. Known issue where when T=2 in cache, T=0 is corrupted after cache is updated."
-                    )
-                    # breakpoint()
-                    raise e
+            _check_feat_cache(
+                torch_feat_cache, tt_feat_cache, h_axis=h_axis, w_axis=w_axis, pcc=MIN_PCC, relative_rmse=MAX_RMSE
+            )
 
-        # Defrag the cache
-        tt_feat_cache_host = []
-        for j in range(len(tt_feat_cache)):
-            if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
-                tt_feat_cache_host.append(tt_feat_cache[j])
-            else:
-                tt_feat_cache_host.append(
-                    ttnn.to_torch(
-                        tt_feat_cache[j],
-                        mesh_composer=ttnn.ConcatMesh2dToTensor(
-                            mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
-                        ),
-                    )
-                )
-                ttnn.deallocate(tt_feat_cache[j])
-        for j in range(len(tt_feat_cache)):
-            if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
-                tt_feat_cache[j] = tt_feat_cache_host[j]
-            else:
-                tt_feat_cache[j] = typed_tensor_2dshard(
-                    tt_feat_cache_host[j],
-                    mesh_device,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    shard_mapping={h_axis: 2, w_axis: 3},
-                    dtype=tt_input_dtype,
-                )
+        defrag_cache(tt_feat_cache)
 
 
 @pytest.mark.parametrize(
@@ -1429,6 +1276,7 @@ def test_wan_decoder(
         dtype=dtype,
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
+    tracer = Tracer(tt_model.forward, device=mesh_device)
 
     torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
@@ -1446,18 +1294,9 @@ def test_wan_decoder(
 
     logger.info(f"running tt model")
     start = time.time()
-    tt_output, new_logical_h = tt_model(
-        tt_input_tensor,
-        logical_h,
-    )
+    tt_output, new_logical_h = tracer(tt_input_tensor, logical_h)
 
-    concat_dims = [None, None]
-    concat_dims[h_axis] = 3
-    concat_dims[w_axis] = 4
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
-    )
+    tt_output_torch = tensor.to_torch(tt_output, mesh_axes=[..., h_axis, w_axis])
     logger.info(f"tt time taken: {time.time() - start}")
     logger.info(f"tt output shape: {tt_output_torch.shape}")
 
@@ -1564,16 +1403,17 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         dtype=ttnn.bfloat16,
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
+    tracer = Tracer(tt_model.forward, device=mesh_device)
+    traced = True
 
     num_convs = count_convs(tt_model)
 
     torch_feat_cache = [None for _ in range(num_convs)]
-    tt_feat_cache = [None for _ in range(num_convs)]
+    tt_feat_cache = {}
 
     # Run 4 times to get models to create their own caches
     for i in range(3):
         torch_feat_idx = [0]
-        tt_feat_idx = [0]
         logger.info(f"running test iteration {i}")
 
         torch_input_tensor = torch.randn(B, C, (1 if i == 0 else T), H, W, dtype=torch_dtype) * std + mean
@@ -1596,20 +1436,11 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         logger.info(f"torch output shape: {torch_output.shape}")
 
         logger.info(f"running tt model")
-        tt_output, new_logical_h = tt_model(
-            tt_input_tensor,
-            logical_h,
-            feat_cache=tt_feat_cache,
-            feat_idx=tt_feat_idx,
+        tt_output, new_logical_h = (tracer if traced and i != 0 else tt_model)(
+            tt_input_tensor, logical_h, feat_cache=tt_feat_cache if i <= 1 else None
         )
 
-        concat_dims = [None, None]
-        concat_dims[h_axis] = 2
-        concat_dims[w_axis] = 3
-        tt_output_torch = ttnn.to_torch(
-            tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
-        )
+        tt_output_torch = tensor.to_torch(tt_output, mesh_axes=[..., h_axis, w_axis, None])
         tt_output_torch = conv_unpad_height(tt_output_torch, new_logical_h)
         tt_output_torch = tt_output_torch.permute(0, 4, 1, 2, 3)
 
@@ -1621,62 +1452,11 @@ def test_wan_encoder3d(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, nu
         assert_quality(torch_output, tt_output_torch, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
 
         if check_cache:
-            for cache_idx in range(len(tt_feat_cache)):
-                logger.info(f"checking feat_cache {cache_idx}")
-                if isinstance(tt_feat_cache[cache_idx], str) and tt_feat_cache[cache_idx] == "Rep":
-                    logger.info(f"feat_cache {cache_idx} is Rep")
-                    assert torch_feat_cache[cache_idx] == "Rep"
-                    continue
-                tt_feat_cache_back = ttnn.to_torch(
-                    tt_feat_cache[cache_idx],
-                    mesh_composer=ttnn.ConcatMesh2dToTensor(
-                        mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
-                    ),
-                )
-                tt_feat_cache_back = tt_feat_cache_back.permute(0, 4, 1, 2, 3)
-                if tt_feat_cache_back.shape[1] != torch_feat_cache[cache_idx].shape[1]:
-                    tt_feat_cache_back = tt_feat_cache_back[:, : torch_feat_cache[cache_idx].shape[1]]
-                    logger.warning(f"Trimmed tt_feat_cache_back to {tt_feat_cache_back.shape}")
-                if tt_feat_cache_back.shape[3] != torch_feat_cache[cache_idx].shape[3]:
-                    tt_feat_cache_back = tt_feat_cache_back[:, :, :, : torch_feat_cache[cache_idx].shape[3]]
-                    logger.warning(f"Trimmed tt_feat_cache_back to {tt_feat_cache_back.shape}")
-                logger.info(
-                    f"feat_cache {cache_idx} shape: {torch_feat_cache[cache_idx].shape}, {tt_feat_cache_back.shape}"
-                )
-                try:
-                    assert_quality(torch_feat_cache[cache_idx], tt_feat_cache_back, pcc=MIN_PCC, relative_rmse=MAX_RMSE)
-                except Exception as e:
-                    logger.error(
-                        f"Error checking feat_cache {cache_idx}: {e}. Known issue where when T=2 in cache, T=0 is corrupted after cache is updated."
-                    )
-                    # breakpoint()
-                    raise e
+            _check_feat_cache(
+                torch_feat_cache, tt_feat_cache, h_axis=h_axis, w_axis=w_axis, pcc=MIN_PCC, relative_rmse=MAX_RMSE
+            )
 
-        # Defrag the cache
-        tt_feat_cache_host = []
-        for j in range(len(tt_feat_cache)):
-            if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
-                tt_feat_cache_host.append(tt_feat_cache[j])
-            else:
-                tt_feat_cache_host.append(
-                    ttnn.to_torch(
-                        tt_feat_cache[j],
-                        mesh_composer=ttnn.ConcatMesh2dToTensor(
-                            mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims
-                        ),
-                    )
-                )
-                ttnn.deallocate(tt_feat_cache[j])
-        for j in range(len(tt_feat_cache)):
-            if isinstance(tt_feat_cache[j], str) and tt_feat_cache[j] == "Rep":
-                tt_feat_cache[j] = tt_feat_cache_host[j]
-            else:
-                tt_feat_cache[j] = bf16_tensor_2dshard(
-                    tt_feat_cache_host[j],
-                    mesh_device,
-                    layout=ttnn.ROW_MAJOR_LAYOUT,
-                    shard_mapping={h_axis: 2, w_axis: 3},
-                )
+        defrag_cache(tt_feat_cache)
 
 
 @pytest.mark.parametrize(
@@ -1771,6 +1551,7 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         dtype=ttnn.bfloat16,
     )
     tt_model.load_torch_state_dict(torch_model.state_dict())
+    tracer = Tracer(tt_model.forward, device=mesh_device)
 
     torch_input_tensor = torch.randn(B, C, T, H, W, dtype=torch_dtype) * std + mean
     tt_input_tensor = torch_input_tensor.permute(0, 2, 3, 4, 1)
@@ -1784,18 +1565,9 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
 
     logger.info(f"running tt model")
     start = time.time()
-    tt_output, new_logical_h = tt_model(
-        tt_input_tensor,
-        logical_h,
-    )
+    tt_output, new_logical_h = tracer(tt_input_tensor, logical_h)
 
-    concat_dims = [None, None]
-    concat_dims[h_axis] = 3
-    concat_dims[w_axis] = 4
-    tt_output_torch = ttnn.to_torch(
-        tt_output,
-        mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, mesh_shape=tuple(mesh_device.shape), dims=concat_dims),
-    )
+    tt_output_torch = tensor.to_torch(tt_output, mesh_axes=[..., h_axis, w_axis])
     logger.info(f"tt time taken: {time.time() - start}")
     logger.info(f"tt output shape: {tt_output_torch.shape}")
 
@@ -1820,3 +1592,35 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
         assert_quality(torch_output, tt_output_torch, pcc=0.995_000, relative_rmse=0.1)
     else:
         logger.warning("Skipping check")
+
+
+def _check_feat_cache(
+    torch_feat_cache: Sequence[torch.Tensor | str | None],
+    tt_feat_cache: dict[str, ttnn.Tensor],
+    *,
+    h_axis: int,
+    w_axis: int,
+    logical_h: int | None = None,
+    pcc: float,
+    relative_rmse: float,
+) -> None:
+    tt_features = tt_feat_cache.values()
+
+    for i, (tt_feat, torch_feat) in enumerate(zip(tt_features, torch_feat_cache, strict=True)):
+        logger.debug(f"checking feat_cache {i}")
+
+        if torch_feat == "Rep":
+            logger.debug(f"feat_cache {i} is Rep")
+            continue
+
+        assert isinstance(torch_feat, torch.Tensor)
+
+        tt_feat_torch = tensor.to_torch(tt_feat, mesh_axes=[..., h_axis, w_axis, None])
+        if logical_h is not None:
+            tt_feat_torch = conv_unpad_height(tt_feat_torch, logical_h)
+        tt_feat_torch = tt_feat_torch.permute(0, 4, 1, 2, 3)
+
+        tt_feat_torch = tt_feat_torch[:, : torch_feat.shape[1], -torch_feat.shape[2] :, : torch_feat.shape[3], :]
+        trimmed_torch_feat = torch_feat[:, :, -tt_feat_torch.shape[2] :, :, :]
+
+        assert_quality(trimmed_torch_feat, tt_feat_torch, pcc=pcc, relative_rmse=relative_rmse)

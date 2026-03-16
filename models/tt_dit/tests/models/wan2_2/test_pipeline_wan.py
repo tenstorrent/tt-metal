@@ -12,16 +12,18 @@ from models.tt_dit.pipelines.wan.pipeline_wan import WanPipeline
 
 from ....utils.test import line_params, ring_params
 
+DEVICE_PARAMS = {"trace_region_size": 90000000}
+
 
 @pytest.mark.parametrize(
     "mesh_device, mesh_shape, sp_axis, tp_axis, num_links, dynamic_load, device_params, topology, is_fsdp",
     [
-        [(2, 2), (2, 2), 0, 1, 2, False, line_params, ttnn.Topology.Linear, True],
-        [(2, 4), (2, 4), 0, 1, 1, True, line_params, ttnn.Topology.Linear, True],
+        ((2, 2), (2, 2), 0, 1, 2, False, {**DEVICE_PARAMS, **line_params}, ttnn.Topology.Linear, True),
+        ((2, 4), (2, 4), 0, 1, 1, True, {**DEVICE_PARAMS, **line_params}, ttnn.Topology.Linear, True),
         # WH (ring) on 4x8
-        [(4, 8), (4, 8), 1, 0, 4, False, ring_params, ttnn.Topology.Ring, True],
+        ((4, 8), (4, 8), 1, 0, 4, False, {**DEVICE_PARAMS, **ring_params}, ttnn.Topology.Ring, True),
         # BH (linear) on 4x8
-        [(4, 8), (4, 8), 1, 0, 2, False, line_params, ttnn.Topology.Linear, False],
+        ((4, 8), (4, 8), 1, 0, 2, False, {**DEVICE_PARAMS, **line_params}, ttnn.Topology.Linear, False),
     ],
     ids=[
         "2x2sp0tp1",
@@ -42,7 +44,15 @@ from ....utils.test import line_params, ring_params
         "resolution_720p",
     ],
 )
+@pytest.mark.parametrize(
+    "traced",
+    [
+        pytest.param(True, id="tracing_on"),
+        pytest.param(False, id="tracing_off"),
+    ],
+)
 def test_pipeline_inference(
+    *,
     mesh_device,
     mesh_shape,
     sp_axis,
@@ -53,6 +63,7 @@ def test_pipeline_inference(
     width,
     height,
     is_fsdp,
+    traced: bool,
 ):
     parent_mesh = mesh_device
     mesh_device = parent_mesh.create_submesh(ttnn.MeshShape(*mesh_shape))
@@ -86,6 +97,9 @@ def test_pipeline_inference(
             num_frames=num_frames,
             num_inference_steps=num_inference_steps,
             seed=seed,
+            traced=traced,
+            vae_traced=traced,
+            encoder_traced=traced,
             guidance_scale=4.0,
             guidance_scale_2=3.0,
         )
@@ -106,11 +120,16 @@ def test_pipeline_inference(
     elif isinstance(frames, torch.Tensor):
         print(f"  Video data range: [{frames.min().item():.3f}, {frames.max().item():.3f}]")
 
+    filename = "wan_output_video"
+    if traced:
+        filename += "_traced"
+    filename += ".mp4"
+
     # Save video using diffusers utility
     # Remove batch dimension
     frames = frames[0]
     try:
-        export_to_video(frames, "wan_output_video.mp4", fps=16)
-        print("✓ Saved video to: wan_output_video.mp4")
+        export_to_video(frames, filename, fps=16)
+        print(f"✓ Saved video to: {filename}")
     except AttributeError as e:
         print(f"AttributeError: {e}")
