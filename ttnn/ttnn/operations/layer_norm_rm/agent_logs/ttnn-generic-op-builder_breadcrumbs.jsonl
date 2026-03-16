@@ -10,3 +10,6 @@
 {"event":"file_created","file":"tests/ttnn/unit_tests/operations/layer_norm_rm/layer_norm_rm.py","type":"test_re-export","ts":"2026-03-16T09:27:21+00:00"}
 {"event":"test_run","test":"test_layer_norm_rm.py","result":"FAIL","error":"writer kernel build failed - missing layernorm_dataflow_utils.h include","ts":"2026-03-16T09:28:00+00:00"}
 {"event":"hypothesis","id":"H1","description":"Missing layernorm_dataflow_utils.h header - need to create it with write_row_major_block_from_cb function","confidence":"HIGH","evidence":"writer kernel includes it but header does not exist in repo","ts":"2026-03-16T09:28:43+00:00"}
+{"event":"test_run","test":"test_layer_norm_rm_runs[minimal]","result":"PASS","ts":"2026-03-16T09:31:58+00:00"}
+{"event":"hang_debug","symptom":"device hang on second test run","diagnosis":"Linter keeps adding implementation to reader stub, causing CB deadlock with empty compute","ts":"2026-03-16T09:35:49+00:00"}
+{"event":"recovery","hypothesis_id":"H1","action":"Removed bad tensor_accessor.hpp include, added generate_bcast_scalar.hpp","file":"reader_layer_norm_rm.cpp","ts":"2026-03-16T09:37:56+00:00"}
