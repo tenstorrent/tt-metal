@@ -14,3 +14,4 @@
 {"event":"analysis_complete","details":"Wrote tilize_analysis.md with focus on input_stage patterns: reader kernel, CB sizing, stick-to-tile batching, core distribution","ts":"2026-03-16T09:04:15+00:00"}
 {"event":"analysis_complete","details":"batch_norm_analysis.md written with compute-core focus for layer_norm_rm reference","ts":"2026-03-16T09:06:41+00:00"}
 {"event":"committed","details":"Commit 6af4efe830 - batch_norm analysis for compute_core reference","ts":"2026-03-16T09:09:33+00:00"}
+{"event":"commit_complete","details":"Committed tilize_analysis.md as eb26633f25 (with fd79bdb835). All sibling analyses restored.","ts":"2026-03-16T09:10:36+00:00"}
