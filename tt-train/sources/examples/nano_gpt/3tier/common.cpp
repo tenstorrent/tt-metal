@@ -40,7 +40,8 @@ TrainingConfig parse_config(const YAML::Node &yaml_config) {
             "Missing required field: model_config\n Please specify the path to the model configuration YAML file.");
     }
 
-    auto model_yaml = YAML::LoadFile(yaml_config["model_config"].as<std::string>())["transformer_config"];
+    auto model_config_path = expand_config_path(yaml_config["model_config"].as<std::string>());
+    auto model_yaml = YAML::LoadFile(model_config_path)["transformer_config"];
     std::string model_type = model_yaml["model_type"].as<std::string>();
 
     if (model_type == "gpt2") {
