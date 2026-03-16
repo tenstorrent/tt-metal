@@ -159,6 +159,8 @@ def create_multimodal_model(
     if tt_model_args.base_model_name == "Mistral-Small-3.1-24B":
         from models.tt_transformers.tt.multimodal.mistral_24b.mistral_e2e_model import MistralTransformer
 
+        tt_model_args.use_hf_rope = True
+        tt_model_args.CACHE_PATH = os.path.join(tt_model_args.CACHE_PATH, "hf_rope")
         model = MistralTransformer(
             mesh_device=mesh_device,
             state_dict=checkpoint,
