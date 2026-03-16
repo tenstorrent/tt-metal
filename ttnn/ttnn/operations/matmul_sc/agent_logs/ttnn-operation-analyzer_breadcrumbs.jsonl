@@ -1,2 +1,0 @@
-{"ts":"2026-03-16T20:48:06+00:00","event":"start","agent":"ttnn-operation-analyzer","operation":"matmul_multicore","input_files":["ttnn/cpp/ttnn/operations/matmul/device/factory/matmul_multicore_program_factory.cpp"]}
-{"event":"complete","final_status":"SUCCESS","output_file":"matmul_multicore_analysis.md","ts":"2026-03-16T20:50:30+00:00"}
