@@ -17,7 +17,7 @@
 #include "models/distributed/llama.hpp"
 #include "models/llama.hpp"
 #include "ops/losses.hpp"
-#include "optimizers/adamw.hpp"
+#include "optimizers/adamw_composite.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "tt-metalium/host_api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -245,11 +245,11 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
         model = ttml::models::llama::create(config.transformer_config);
     }
 
-    auto adamw_params = ttml::optimizers::AdamWConfig();
+    auto adamw_params = ttml::optimizers::AdamWCompositeConfig();
     adamw_params.lr = config.learning_rate;
     adamw_params.weight_decay = config.weight_decay;
 
-    auto optimizer = std::make_shared<ttml::optimizers::AdamW>(model->parameters(), adamw_params);
+    auto optimizer = std::make_shared<ttml::optimizers::MorehAdamW>(model->parameters(), adamw_params);
 
     auto get_loss_value = [](const TensorPtr &loss) {
         auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});
@@ -460,9 +460,9 @@ void run_fused_swiglu_comparison(const FusedSwiGLUTestConfig &test_cfg) {
 
         auto model = ttml::models::llama::create(config.transformer_config);
 
-        auto adamw_params = ttml::optimizers::AdamWConfig();
+        auto adamw_params = ttml::optimizers::AdamWCompositeConfig();
         adamw_params.lr = config.learning_rate;
-        auto optimizer = std::make_shared<ttml::optimizers::AdamW>(model->parameters(), adamw_params);
+        auto optimizer = std::make_shared<ttml::optimizers::MorehAdamW>(model->parameters(), adamw_params);
 
         RunResult result;
         uint32_t step = 0;
@@ -518,17 +518,29 @@ void run_fused_swiglu_comparison(const FusedSwiGLUTestConfig &test_cfg) {
                 fwd_ms = std::chrono::duration<double, std::milli>(t1 - t0).count();
                 bwd_ms = std::chrono::duration<double, std::milli>(t2 - t1).count();
 
-                auto fwd_peak = ttml::utils::MemoryUsageTracker::get_dram_usage("forward").peak;
-                auto bwd_peak = ttml::utils::MemoryUsageTracker::get_dram_usage("backward").peak;
-                auto opt_peak = ttml::utils::MemoryUsageTracker::get_dram_usage("optimizer").peak;
-                result.dram_peak = std::max({fwd_peak, bwd_peak, opt_peak});
+                const auto fwd_usage = ttml::utils::MemoryUsageTracker::get_dram_usage("forward");
+                const auto bwd_usage = ttml::utils::MemoryUsageTracker::get_dram_usage("backward");
+                const auto opt_usage = ttml::utils::MemoryUsageTracker::get_dram_usage("optimizer");
+
+                const long long fwd_current = static_cast<long long>(fwd_usage.total_allocations) -
+                                              static_cast<long long>(fwd_usage.total_deallocations);
+                const long long bwd_current = fwd_current + static_cast<long long>(bwd_usage.total_allocations) -
+                                              static_cast<long long>(bwd_usage.total_deallocations);
+
+                const long long fwd_abs_peak = static_cast<long long>(fwd_usage.peak);
+                const long long bwd_abs_peak = fwd_current + static_cast<long long>(bwd_usage.peak);
+                const long long opt_abs_peak = bwd_current + static_cast<long long>(opt_usage.peak);
+                const long long cumulative_abs_peak = std::max({fwd_abs_peak, bwd_abs_peak, opt_abs_peak});
+                result.dram_peak = static_cast<size_t>(std::max(0LL, cumulative_abs_peak));
 
                 fmt::print(
-                    "    [{}] DRAM peak by phase: fwd={:.0f}KB  bwd={:.0f}KB  opt={:.0f}KB\n",
+                    "    [{}] DRAM peak by phase: fwd_seg={:.0f}KB  bwd_seg={:.0f}KB  opt_seg={:.0f}KB  "
+                    "cumulative={:.0f}KB\n",
                     use_fused ? "fused" : "baseline",
-                    fwd_peak / 1024.0,
-                    bwd_peak / 1024.0,
-                    opt_peak / 1024.0);
+                    fwd_usage.peak / 1024.0,
+                    bwd_usage.peak / 1024.0,
+                    opt_usage.peak / 1024.0,
+                    static_cast<double>(result.dram_peak) / 1024.0);
 
                 ttml::utils::MemoryUsageTracker::clear();
             } else {
