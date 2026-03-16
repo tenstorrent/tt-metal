@@ -109,6 +109,20 @@ uint8_t RemapperIndexAllocator::allocate(const CoreCoord& core_coord) {
 
 void RemapperIndexAllocator::reset() { next_index_.clear(); }
 
+std::vector<uint8_t> TxnIdAllocator::allocate(uint8_t count) {
+    TT_FATAL(
+        next_id_ + count <= 32,
+        "TxnIdAllocator exhausted: requested {} IDs at next_id_={}, but only 32 are available",
+        count,
+        next_id_);
+    std::vector<uint8_t> ids;
+    ids.reserve(count);
+    for (uint8_t i = 0; i < count; i++) {
+        ids.push_back(next_id_++);
+    }
+    return ids;
+}
+
 uint8_t ClientTypeAllocator::allocate_for_consumer(uint8_t producer_client_type, uint8_t consumer_risc_id) {
     uint8_t client_type;
 
@@ -136,6 +150,56 @@ uint8_t ClientTypeAllocator::allocate_for_consumer(uint8_t producer_client_type,
     }
 
     return client_type;
+}
+
+// Computes dfb_txn_id_descriptor_t for either the producer or consumer side of a DFB.
+static ::experimental::dfb_txn_id_descriptor_t compute_txn_descriptor(
+    uint16_t capacity,
+    uint8_t num_producers,
+    uint8_t num_consumers,
+    bool is_producer,
+    const std::vector<uint8_t>& txn_ids,
+    uint8_t num_tcs_per_risc) {
+    uint8_t num_prods_or_cons = is_producer ? num_producers : num_consumers;
+    uint8_t num_txn_ids = static_cast<uint8_t>(txn_ids.size());
+
+    // threshold is the number of transactions that each txn ID needs to process before posting/acking
+    // for reads the transaction needs to be committed to dst, for writes the transaction needs to be sent out
+    uint8_t threshold;
+    if (num_producers == 1 && num_consumers == 1) {
+        TT_FATAL(
+            capacity % num_txn_ids == 0,
+            "DFB capacity {} must be divisible by num_txn_ids {} for implicit sync",
+            capacity,
+            num_txn_ids);
+        threshold = static_cast<uint8_t>(capacity / num_txn_ids);
+    } else {
+        threshold = num_prods_or_cons * num_tcs_per_risc;
+    }
+
+    TT_FATAL(
+        threshold % num_prods_or_cons == 0,
+        "num_entries_to_process_threshold {} must be divisible by num_prods_or_cons {}",
+        threshold,
+        num_prods_or_cons);
+    uint8_t per_txn = threshold / num_prods_or_cons;
+
+    TT_FATAL(
+        per_txn % num_tcs_per_risc == 0,
+        "num_entries_per_txn_id {} must be divisible by num_tcs_per_risc {}",
+        per_txn,
+        num_tcs_per_risc);
+    uint8_t per_txn_per_tc = per_txn / num_tcs_per_risc;
+
+    ::experimental::dfb_txn_id_descriptor_t desc = {};
+    desc.num_txn_ids = num_txn_ids;
+    desc.num_entries_to_process_threshold = threshold;
+    desc.num_entries_per_txn_id = per_txn; // number of transactions each DM producer/consumer contributes
+    desc.num_entries_per_txn_id_per_tc = per_txn_per_tc; // number of transactions each TC contributes
+    for (uint8_t i = 0; i < num_txn_ids; i++) {
+        desc.txn_ids[i] = txn_ids[i];
+    }
+    return desc;
 }
 
 bool has_dm_risc(uint16_t risc_mask) { return (risc_mask & 0xFF) != 0; }
@@ -230,12 +294,8 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
     init.risc_mask_bits.tensix_mask = (this->risc_mask >> 8) & 0x0F;
     init.risc_mask_bits.tensix_trisc_mask = this->tensix_trisc_mask & 0x0F;
     init.num_producers = this->config.num_producers;
-    init.num_txn_ids = this->num_txn_ids;
-    for (int i = 0; i < 4; i++) {
-        init.txn_ids[i] = this->txn_ids[i];
-    }
-    init.num_entries_per_txn_id = this->num_entries_per_txn_id;
-    init.num_entries_per_txn_id_per_tc = this->num_entries_per_txn_id_per_tc;
+    init.producer_txn_descriptor = this->producer_txn_descriptor;
+    init.consumer_txn_descriptor = this->consumer_txn_descriptor;
 
     log_info(
         tt::LogMetal,
@@ -250,12 +310,16 @@ std::vector<uint8_t> DataflowBufferImpl::serialize() const {
     log_info(tt::LogMetal, "Stride in entries: {}", this->stride_in_entries);
     log_info(tt::LogMetal, "Capacity: {}", this->capacity);
     log_info(tt::LogMetal, "Risc mask: 0x{:x}", this->risc_mask);
-    log_info(tt::LogMetal, "Num txn ids: {}", this->num_txn_ids);
-    for (int i = 0; i < ::experimental::NUM_TXN_IDS; i++) {
-        log_info(tt::LogMetal, "Txn id {}: {}", i, this->txn_ids[i]);
-    }
-    log_info(tt::LogMetal, "Num entries per txn id: {}", this->num_entries_per_txn_id);
-    log_info(tt::LogMetal, "Num entries per txn id per tc: {}", this->num_entries_per_txn_id_per_tc);
+    log_info(tt::LogMetal, "Producer txn descriptor: num_txn_ids={} threshold={} per_txn={} per_tc={}",
+        this->producer_txn_descriptor.num_txn_ids,
+        this->producer_txn_descriptor.num_entries_to_process_threshold,
+        this->producer_txn_descriptor.num_entries_per_txn_id,
+        this->producer_txn_descriptor.num_entries_per_txn_id_per_tc);
+    log_info(tt::LogMetal, "Consumer txn descriptor: num_txn_ids={} threshold={} per_txn={} per_tc={}",
+        this->consumer_txn_descriptor.num_txn_ids,
+        this->consumer_txn_descriptor.num_entries_to_process_threshold,
+        this->consumer_txn_descriptor.num_entries_per_txn_id,
+        this->consumer_txn_descriptor.num_entries_per_txn_id_per_tc);
 
     const auto* init_bytes = reinterpret_cast<const uint8_t*>(&init);
     data.insert(data.end(), init_bytes, init_bytes + sizeof(init));
@@ -390,7 +454,6 @@ uint32_t ProgramImpl::add_dataflow_buffer(const CoreRangeSet& core_range_set, co
 
     TT_FATAL(config.pap != ::experimental::AccessPattern::BLOCKED, "Blocked producer pattern not supported");
 
-    TT_FATAL(!config.enable_implicit_sync, "Implicit sync not supported yet");
     TT_FATAL(
         core_range_set.num_cores() == 1,
         "DFB only supports single core, but CoreRangeSet contains {} cores: {}",
@@ -534,9 +597,6 @@ void ProgramImpl::finalize_single_dfb_config(
         !(producer_is_tensix_only && consumer_is_tensix_only),
         "Both producer and consumer cannot be Tensix-only RISCs - at least one DM RISC is required to initialize tile "
         "counters");
-    TT_FATAL(
-        !(producer_is_tensix_only && config.cap == ::experimental::AccessPattern::BLOCKED),
-        "Tensix producer with BLOCKED consumer pattern is not supported");
 
     dfb->risc_mask = config.producer_risc_mask | config.consumer_risc_mask;
 
@@ -845,6 +905,53 @@ void ProgramImpl::finalize_single_dfb_config(
         risc_config.config.num_tcs_to_rr = num_consumer_tcs;
 
         dfb->risc_configs.push_back(risc_config);
+    }
+
+    // Allocate transaction IDs and compute ISR descriptor fields when implicit sync is enabled.
+    // Two txn IDs per side for double buffering.
+    if (config.enable_implicit_sync) {
+        constexpr uint8_t TXN_IDS_PER_SIDE = 2;
+
+        if (!producer_is_tensix_only) {
+            auto producer_txn_ids = txn_id_allocator_.allocate(TXN_IDS_PER_SIDE);
+            dfb->producer_txn_descriptor = compute_txn_descriptor(
+                dfb->capacity,
+                config.num_producers,
+                config.num_consumers,
+                /*is_producer=*/true,
+                producer_txn_ids,
+                num_producer_tcs);
+            log_info(
+                tt::LogMetal,
+                "DFB {} implicit sync: producer txn_ids=[{},{}] threshold={} per_txn={} per_tc={}",
+                dfb->id,
+                dfb->producer_txn_descriptor.txn_ids[0],
+                dfb->producer_txn_descriptor.txn_ids[1],
+                dfb->producer_txn_descriptor.num_entries_to_process_threshold,
+                dfb->producer_txn_descriptor.num_entries_per_txn_id,
+                dfb->producer_txn_descriptor.num_entries_per_txn_id_per_tc);
+        }
+
+        if (!consumer_is_tensix_only) {
+            auto consumer_txn_ids = txn_id_allocator_.allocate(TXN_IDS_PER_SIDE);
+            dfb->consumer_txn_descriptor = compute_txn_descriptor(
+                dfb->capacity,
+                config.num_producers,
+                config.num_consumers,
+                /*is_producer=*/false,
+                consumer_txn_ids,
+                num_consumer_tcs);
+            log_info(
+                tt::LogMetal,
+                "DFB {} implicit sync: "
+                "consumer txn_ids=[{},{}] threshold={} per_txn={} per_tc={}",
+                dfb->id,
+                dfb->consumer_txn_descriptor.txn_ids[0],
+                dfb->consumer_txn_descriptor.txn_ids[1],
+                dfb->consumer_txn_descriptor.num_entries_to_process_threshold,
+                dfb->consumer_txn_descriptor.num_entries_per_txn_id,
+                dfb->consumer_txn_descriptor.num_entries_per_txn_id_per_tc);
+        }
     }
 
     dfb->configs_finalized = true;
