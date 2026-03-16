@@ -385,8 +385,7 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
 
     output_ref, output_data_map = combine_goldens
 
-    assert torch_combine_out.shape == output_ref.shape
-
+    assert torch_combine_out.shape == output_ref[0].shape
     combine_all_passed = True
     for t in range(torch_combine_out.shape[0]):
         for k in range(torch_combine_out.shape[1]):
@@ -950,9 +949,8 @@ def compute_combine_golden(
     for l in range(layers):
         for m0, m1, d in device_mesh_iterator(mesh_shape):
             activations = dense_token_activations[l][d]
-
-            dense_token_index = 0
             for e in range(experts_per_device):
+                dense_token_index = 0
                 for a in activations:
                     if a["k_indices"][e] == -1:
                         continue
@@ -966,6 +964,9 @@ def compute_combine_golden(
                     output_data_map[l, k, gt] = 1
 
                     dense_token_index += 1
+    # TODO (AM) DEBUG
+    assert not (output_ref_tensor == 0).any()
+
     return output_ref_tensor, output_data_map
 
 
