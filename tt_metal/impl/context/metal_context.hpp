@@ -6,6 +6,7 @@
 
 #include <tt_stl/indestructible.hpp>
 #include <vector>
+#include <llrt/hal.hpp>  // Hal — full definition needed to call hal().get_*() via MetalContext
 #include <llrt/rtoptions.hpp>
 #include <impl/allocator/allocator_types.hpp>
 #include <tt-metalium/allocator.hpp>
@@ -37,7 +38,6 @@ class Data;
 class ContextDescriptor;
 class DataCollector;
 class DeviceManager;
-class Hal;
 class RiscFirmwareInitializer;
 class dispatch_core_manager;
 class DispatchQueryManager;
