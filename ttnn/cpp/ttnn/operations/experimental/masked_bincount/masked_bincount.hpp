@@ -12,7 +12,7 @@ namespace ttnn {
 namespace operations::experimental {
 
 struct MaskedBincountOperation {
-    static ttnn::Tensor invoke(const Tensor& input_tensor, uint32_t n_routed_experts);
+    static ttnn::Tensor invoke(const Tensor& input_tensor, const Tensor& expert_mask, uint32_t n_routed_experts);
 };
 
 }  // namespace operations::experimental

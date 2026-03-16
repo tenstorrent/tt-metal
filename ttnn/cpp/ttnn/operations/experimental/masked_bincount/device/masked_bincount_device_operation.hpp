@@ -16,7 +16,7 @@ namespace ttnn::experimental::prim {
 
 struct MaskedBincountDeviceOperation {
     using operation_attributes_t = MaskedBincountParams;
-    using tensor_args_t = Tensor;
+    using tensor_args_t = MaskedBincountInputs;
     using spec_return_value_t = TensorSpec;
     using tensor_return_value_t = Tensor;
     using program_factory_t = std::variant<MaskedBincountProgramFactory>;
@@ -31,5 +31,5 @@ struct MaskedBincountDeviceOperation {
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
-Tensor masked_bincount(const Tensor& input_tensor, uint32_t n_routed_experts);
+Tensor masked_bincount(const Tensor& input_tensor, const Tensor& expert_mask, uint32_t n_routed_experts);
 }  // namespace ttnn::prim

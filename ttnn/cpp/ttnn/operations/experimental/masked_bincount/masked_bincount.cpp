@@ -9,8 +9,9 @@
 
 namespace ttnn::operations::experimental {
 
-ttnn::Tensor MaskedBincountOperation::invoke(const Tensor& input_tensor, uint32_t n_routed_experts) {
-    return ttnn::prim::masked_bincount(input_tensor, n_routed_experts);
+ttnn::Tensor MaskedBincountOperation::invoke(
+    const Tensor& input_tensor, const Tensor& expert_mask, uint32_t n_routed_experts) {
+    return ttnn::prim::masked_bincount(input_tensor, expert_mask, n_routed_experts);
 }
 
 }  // namespace ttnn::operations::experimental

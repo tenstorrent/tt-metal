@@ -51,9 +51,12 @@ class MoEGatePrefill:
             layout=ttnn.TILE_LAYOUT,
         )
 
-        self.experts_in_dispatch_row = ttnn.ones(
-            [config.n_routed_experts],
+        self.experts_in_dispatch_row = ttnn.from_torch(
+            torch.ones(config.n_routed_experts, dtype=torch.int32),
             device=mesh_device,
+            dtype=ttnn.uint32,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            layout=ttnn.ROW_MAJOR_LAYOUT,
         )
 
         self.expert_index_sharded_mem_config = ttnn.create_sharded_memory_config(
@@ -101,7 +104,9 @@ class MoEGatePrefill:
             ttnn_top_k_experts_indices, self.expert_index_sharded_mem_config
         )
 
-        expert_histograms = ttnn.masked_bincount(ttnn_top_k_experts_indices, self.n_routed_experts)
+        expert_histograms = ttnn.masked_bincount(
+            ttnn_top_k_experts_indices, self.experts_in_dispatch_row, self.n_routed_experts
+        )
 
         dispatch_offsets = ttnn.offset_cumsum(
             expert_histograms,

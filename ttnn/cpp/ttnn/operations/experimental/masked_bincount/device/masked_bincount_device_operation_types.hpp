@@ -12,4 +12,9 @@ struct MaskedBincountParams {
     const uint32_t n_routed_experts;
 };
 
+struct MaskedBincountInputs {
+    const Tensor& input_tensor;
+    const Tensor& expert_mask;
+};
+
 }  // namespace ttnn::experimental::prim
