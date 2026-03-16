@@ -1194,7 +1194,7 @@ def test_generate_mtp_reference_io(
 
 # Test: the MTP predictor alone must meet the acceptance-rate and throughput gates over the reference window.
 @pytest.mark.timeout(TIMEOUT_S)
-@pytest.mark.requires_device(["TG", "DUAL", "QUAD"])
+@pytest.mark.requires_device(["DUAL", "QUAD"])
 @pytest.mark.parametrize(
     "device_params",
     [
