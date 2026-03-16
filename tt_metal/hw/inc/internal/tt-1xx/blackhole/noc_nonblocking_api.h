@@ -995,7 +995,7 @@ inline __attribute__((always_inline)) void noc_fast_spoof_write_dw_inline(
         dest_addr,
         4,
         static_vc,
-        false,  // mcast
+        mcast,  // mcast
         false,  // linked
         1,      // num_dests
         true,   // multicast_path_reserve
@@ -1012,14 +1012,15 @@ inline __attribute__((always_inline)) void noc_fast_default_write_dw_inline(
     uint32_t be,
     uint32_t static_vc,
     bool mcast,
-    bool posted = false) {
+    bool posted = false,
+    uint32_t num_dests = 1) {
     ASSERT(be == 0xF);
     if constexpr (noc_mode == DM_DYNAMIC_NOC) {
         if (posted) {
             inc_noc_counter_val<proc_type, NocBarrierType::POSTED_WRITES_NUM_ISSUED>(noc, 1);
         } else {
             inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_NUM_ISSUED>(noc, 1);
-            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, 1);
+            inc_noc_counter_val<proc_type, NocBarrierType::NONPOSTED_WRITES_ACKED>(noc, num_dests);
         }
     }
     bool static_vc_alloc = true;
@@ -1047,8 +1048,38 @@ inline __attribute__((always_inline)) void noc_fast_default_write_dw_inline(
             noc_posted_writes_num_issued[noc] += 1;
         } else {
             noc_nonposted_writes_num_issued[noc] += 1;
-            noc_nonposted_writes_acked[noc] += 1;
+            noc_nonposted_writes_acked[noc] += num_dests;
         }
+    }
+}
+
+template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool flush = true>
+inline __attribute__((always_inline)) void noc_fast_write_dw_inline_impl(
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint32_t val,
+    uint64_t dest_addr,
+    uint32_t be,
+    uint32_t static_vc,
+    bool mcast,
+    bool posted,
+    uint32_t customized_src_addr,
+    uint32_t num_dests) {
+    if constexpr (dst_type == InlineWriteDst::DEFAULT) {
+        if ((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR) {
+            noc_fast_default_write_dw_inline<noc_mode>(
+                noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, num_dests);
+        } else {
+            noc_fast_spoof_write_dw_inline<noc_mode, flush>(
+                noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr);
+        }
+    } else if constexpr (dst_type == InlineWriteDst::L1) {
+        noc_fast_spoof_write_dw_inline<noc_mode, flush>(
+            noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr);
+    } else {
+        ASSERT((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR);
+        noc_fast_default_write_dw_inline<noc_mode>(
+            noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, num_dests);
     }
 }
 
@@ -1063,20 +1094,24 @@ inline __attribute__((always_inline)) void noc_fast_write_dw_inline(
     bool mcast,
     bool posted = false,
     uint32_t customized_src_addr = 0) {
-    if constexpr (dst_type == InlineWriteDst::DEFAULT) {
-        if ((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR) {
-            noc_fast_default_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
-        } else {
-            noc_fast_spoof_write_dw_inline<noc_mode, flush>(
-                noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr);
-        }
-    } else if constexpr (dst_type == InlineWriteDst::L1) {
-        noc_fast_spoof_write_dw_inline<noc_mode, flush>(
-            noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr);
-    } else {
-        ASSERT((dest_addr & 0xFFFFFFFF) >= NOC_REG_SPACE_START_ADDR);
-        noc_fast_default_write_dw_inline<noc_mode>(noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted);
-    }
+    noc_fast_write_dw_inline_impl<noc_mode, dst_type, flush>(
+        noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr, 1);
+}
+
+template <uint8_t noc_mode = DM_DEDICATED_NOC, InlineWriteDst dst_type = InlineWriteDst::DEFAULT, bool flush = true>
+inline __attribute__((always_inline)) void noc_fast_write_dw_inline_multicast(
+    uint32_t noc,
+    uint32_t cmd_buf,
+    uint32_t val,
+    uint64_t dest_addr,
+    uint32_t be,
+    uint32_t static_vc,
+    bool mcast,
+    bool posted = false,
+    uint32_t customized_src_addr = 0,
+    uint32_t num_dests = 1) {
+    noc_fast_write_dw_inline_impl<noc_mode, dst_type, flush>(
+        noc, cmd_buf, val, dest_addr, be, static_vc, mcast, posted, customized_src_addr, num_dests);
 }
 
 template <uint8_t noc_mode = DM_DEDICATED_NOC, bool program_ret_addr = false>
