@@ -133,7 +133,14 @@ def run_test_forward_pass_decoder2d(
         real_weights=module_path is not None,
         layer_id=module_path,
     )
-    model_config = get_model_config(DecoderBlockClass, mode, hf_config_short, mesh_device, fabric_config)
+    model_config = get_model_config(
+        DecoderBlockClass,
+        mode,
+        hf_config_short,
+        mesh_device,
+        fabric_config,
+        batch_size_per_row,
+    )
     model_state = DecoderBlockClass.create_state(
         hf_config_short,
         paged_config,
