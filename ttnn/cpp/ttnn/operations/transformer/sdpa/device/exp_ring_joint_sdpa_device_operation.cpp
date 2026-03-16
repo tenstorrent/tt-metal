@@ -43,15 +43,17 @@ void ExpRingJointSDPADeviceOperation::validate_on_program_cache_miss(
 
     // Check that SDPA coregrid does not overlap with AllGather coregrid
     TT_FATAL(args.program_config.has_value(), "Program config must be provided");
-    const auto strategy = args.core_allocation_strategy;
-    if (strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR) {
-        TT_FATAL(
-            args.ccl_core_grid_offset.x >= args.program_config.value().compute_with_storage_grid_size.x,
-            "SDPA coregrid overlaps with AllGather coregrid (column-major)");
-    } else {
-        TT_FATAL(
-            args.ccl_core_grid_offset.y >= args.program_config.value().compute_with_storage_grid_size.y,
-            "SDPA coregrid overlaps with AllGather coregrid (row-major)");
+    if (!args.ccl_worker_cores.has_value()) {
+        const auto strategy = args.core_allocation_strategy;
+        if (strategy == ttnn::ccl::CoreAllocationStrategy::COL_MAJOR) {
+            TT_FATAL(
+                args.ccl_core_grid_offset.x >= args.program_config.value().compute_with_storage_grid_size.x,
+                "SDPA coregrid overlaps with AllGather coregrid (column-major)");
+        } else {
+            TT_FATAL(
+                args.ccl_core_grid_offset.y >= args.program_config.value().compute_with_storage_grid_size.y,
+                "SDPA coregrid overlaps with AllGather coregrid (row-major)");
+        }
     }
 
     // Validate joint strategy is 'rear'
@@ -349,7 +351,10 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
     std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
     const std::optional<float> scale,
     const std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
+    const ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
+    std::optional<std::vector<CoreCoord>> ccl_worker_cores,
+    const uint32_t num_workers_per_link,
+    const uint32_t num_buffers_per_channel) {
     using OperationType = ttnn::prim::ExpRingJointSDPADeviceOperation;
 
     auto kernel_config_val = init_device_compute_kernel_config(
@@ -385,7 +390,10 @@ ExpRingJointSDPAResult exp_ring_joint_scaled_dot_product_attention(
         subdevice_id,
         core_allocation_strategy,
         cluster_axis,
-        ccl_core_grid_offset);
+        ccl_core_grid_offset,
+        std::move(ccl_worker_cores),
+        num_workers_per_link,
+        num_buffers_per_channel);
 
     auto tensor_args = OperationType::tensor_args_t{
         .input_q = input_tensor_q,

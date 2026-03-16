@@ -481,7 +481,10 @@ void bind_sdpa(nb::module_& mod) {
            ttnn::ccl::Topology topology,
            std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
            CoreCoord ccl_core_grid_offset,
-           bool use_column_major_ccl) {
+           bool use_column_major_ccl,
+           std::optional<std::vector<CoreCoord>> ccl_worker_cores,
+           uint32_t num_workers_per_link,
+           uint32_t num_buffers_per_channel) {
             auto strategy = use_column_major_ccl ? ttnn::ccl::CoreAllocationStrategy::COL_MAJOR
                                                  : ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR;
             return ttnn::transformer::ExecuteExpRingJointAttention::invoke(
@@ -506,7 +509,10 @@ void bind_sdpa(nb::module_& mod) {
                 ccl_core_grid_offset,
                 scale,
                 compute_kernel_config,
-                strategy);
+                strategy,
+                std::move(ccl_worker_cores),
+                num_workers_per_link,
+                num_buffers_per_channel);
         },
         nb::arg("input_tensor_q").noconvert(),
         nb::arg("input_tensor_k").noconvert(),
@@ -530,7 +536,10 @@ void bind_sdpa(nb::module_& mod) {
         nb::arg("topology"),
         nb::arg("subdevice_id") = nb::none(),
         nb::arg("ccl_core_grid_offset"),
-        nb::arg("use_column_major_ccl") = false);
+        nb::arg("use_column_major_ccl") = false,
+        nb::arg("ccl_worker_cores") = nb::none(),
+        nb::arg("num_workers_per_link") = 1,
+        nb::arg("num_buffers_per_channel") = 8);
 
     const auto* const mla_doc =
         R"doc(
