@@ -11,6 +11,7 @@
  * It should only be included by tilize_helpers.hpp.
  */
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers.hpp"
+#include "experimental/circular_buffer.h"
 
 // JIT generates chlkc_descriptors.h (not per-variable files), included via chlkc_list.h.
 // The arrays are available in scope but guarded by TRISC type:
@@ -174,10 +175,14 @@ ALWI void tilize(
     }
     PACK(ASSERT(get_cb_num_pages(output_cb) >= block_width_tiles));
 
+    // Construct experimental::CircularBuffer objects for sync operations
+    experimental::CircularBuffer in_cb(input_cb);
+    experimental::CircularBuffer out_cb(output_cb);
+
     // Upfront wait (when requested)
     if constexpr (wait_mode == tilize_config::WaitMode::WaitUpfront) {
         uint32_t total_wait = asymmetric_cb_pages ? *total_input_pages : (block_width_tiles * num_blocks);
-        cb_wait_front(input_cb, total_wait);
+        in_cb.wait_front(total_wait);
     }
 
     // Main loop
@@ -191,10 +196,10 @@ ALWI void tilize(
         }
 
         if constexpr (wait_mode == tilize_config::WaitMode::WaitBlock) {
-            cb_wait_front(input_cb, input_pages);
+            in_cb.wait_front(input_pages);
         }
 
-        cb_reserve_back(output_cb, block_width_tiles);
+        out_cb.reserve_back(block_width_tiles);
 
         if constexpr (use_fast) {
             fast_tilize_block(input_cb, block_width_tiles, output_cb);
@@ -202,8 +207,8 @@ ALWI void tilize(
             tilize_block(input_cb, block_width_tiles, output_cb);
         }
 
-        cb_push_back(output_cb, block_width_tiles);
-        cb_pop_front(input_cb, input_pages);
+        out_cb.push_back(block_width_tiles);
+        in_cb.pop_front(input_pages);
 
         if (asymmetric_cb_pages) {
             pages_left -= input_pages;
