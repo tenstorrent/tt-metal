@@ -18,7 +18,6 @@
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operation.hpp"
-#include "ttnn/operations/ccl/ccl_common.hpp"
 
 using namespace tt::tt_metal;
 
@@ -1213,30 +1212,25 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
 
     const auto& op_config = ttnn::ccl::CCLOpConfig(all_gather_input_tensors, all_gather_output_tensors, args.topology);
 
-    // Choose CCL worker cores: 4 cores/link = [mux_bwd, worker_bwd, mux_fwd, worker_fwd]
+    // Choose CCL worker cores: 2 senders (forward/backward) per link
     const auto [sender_worker_core_range, sender_worker_cores] = ttnn::ccl::choose_worker_cores(
         args.num_links,
-        4 /*num_cores_per_link*/,
+        2 /*num_senders_per_link*/,
         mesh_device,
         args.sub_device_id,
         args.ccl_core_grid_offset,
         std::nullopt,
         args.core_allocation_strategy);
 
-    // Per link: [mux_bwd, worker_bwd, mux_fwd, worker_fwd]
+    // Odd-indexed cores → forward; even-indexed → backward
     std::set<CoreRange> sender_forward_core_ranges;
     std::set<CoreRange> sender_backward_core_ranges;
-    std::set<CoreRange> mux_forward_core_ranges;
-    std::set<CoreRange> mux_backward_core_ranges;
-    for (int l = 0; l < static_cast<int>(args.num_links); l++) {
-        CoreCoord mux_backward_core = sender_worker_cores[l * 4 + 0];
-        CoreCoord worker_backward_core = sender_worker_cores[l * 4 + 1];
-        CoreCoord mux_forward_core = sender_worker_cores[l * 4 + 2];
-        CoreCoord worker_forward_core = sender_worker_cores[l * 4 + 3];
-        mux_backward_core_ranges.insert(CoreRange(mux_backward_core));
-        sender_backward_core_ranges.insert(CoreRange(worker_backward_core));
-        mux_forward_core_ranges.insert(CoreRange(mux_forward_core));
-        sender_forward_core_ranges.insert(CoreRange(worker_forward_core));
+    for (int i = 0; i < static_cast<int>(sender_worker_cores.size()); i++) {
+        if (i % 2 == 1) {
+            sender_forward_core_ranges.insert(CoreRange(sender_worker_cores[i]));
+        } else {
+            sender_backward_core_ranges.insert(CoreRange(sender_worker_cores[i]));
+        }
     }
 
     // L1 scratch CBs
@@ -1310,67 +1304,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
             program, mesh_device, sender_forward_core_ranges, sender_workers_forward);
     }
 
-    // ---- Fabric MUX setup ----
-    const size_t max_packet_size_bytes = static_cast<size_t>(num_pages_per_packet) * l1_scratch_cb_page_size_bytes;
-    const size_t mux_base_l1_address = mesh_device->allocator()->get_base_allocator_addr(tt::tt_metal::HalMemType::L1);
-    constexpr uint8_t mux_num_buffers = 8;  // FabricMuxConfig default_num_buffers
-    tt::tt_fabric::FabricMuxConfig forward_mux_config(
-        /*num_full_size_channels=*/1,
-        /*num_header_only_channels=*/0,
-        /*num_buffers_full_size_channel=*/mux_num_buffers,
-        /*num_buffers_header_only_channel=*/0,
-        /*buffer_size_bytes_full_size_channel=*/max_packet_size_bytes,
-        /*base_l1_address=*/mux_base_l1_address,
-        tt::CoreType::WORKER);
-    tt::tt_fabric::FabricMuxConfig backward_mux_config(
-        /*num_full_size_channels=*/1,
-        /*num_header_only_channels=*/0,
-        /*num_buffers_full_size_channel=*/mux_num_buffers,
-        /*num_buffers_header_only_channel=*/0,
-        /*buffer_size_bytes_full_size_channel=*/max_packet_size_bytes,
-        /*base_l1_address=*/mux_base_l1_address,
-        tt::CoreType::WORKER);
-
-    auto ccl_mux_forward_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-        mux_forward_core_ranges,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = forward_mux_config.get_fabric_mux_compile_time_args(),
-        });
-    auto ccl_mux_backward_kernel_id = tt::tt_metal::CreateKernel(
-        program,
-        "tt_metal/fabric/impl/kernels/tt_fabric_mux.cpp",
-        mux_backward_core_ranges,
-        tt::tt_metal::DataMovementConfig{
-            .processor = tt::tt_metal::DataMovementProcessor::RISCV_0,
-            .noc = tt::tt_metal::NOC::RISCV_0_default,
-            .compile_args = backward_mux_config.get_fabric_mux_compile_time_args(),
-        });
-
-    // Set mux RT args per link
-    for (uint32_t link = 0; link < args.num_links; link++) {
-        CoreCoord mux_forward_logical = sender_worker_cores[link * 4 + 2];
-        CoreCoord mux_backward_logical = sender_worker_cores[link * 4 + 0];
-
-        if (forward_coord.has_value()) {
-            const auto src_node_id = mesh_device->get_fabric_node_id(coord);
-            const auto dst_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
-            auto mux_fwd_rt_args = forward_mux_config.get_fabric_mux_run_time_args(
-                src_node_id, dst_node_id, link, program, {mux_forward_logical});
-            tt::tt_metal::SetRuntimeArgs(program, ccl_mux_forward_kernel_id, {mux_forward_logical}, mux_fwd_rt_args);
-        }
-        if (backward_coord.has_value()) {
-            const auto src_node_id = mesh_device->get_fabric_node_id(coord);
-            const auto dst_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
-            auto mux_bwd_rt_args = backward_mux_config.get_fabric_mux_run_time_args(
-                src_node_id, dst_node_id, link, program, {mux_backward_logical});
-            tt::tt_metal::SetRuntimeArgs(program, ccl_mux_backward_kernel_id, {mux_backward_logical}, mux_bwd_rt_args);
-        }
-    }
-
     // Forward reader kernel
     auto sender_reader_forward_kernel_config = tt::tt_metal::WriterDataMovementConfig{};
     sender_reader_forward_kernel_config.compile_args = {
@@ -1429,12 +1362,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         tt::tt_metal::TensorAccessorArgs(all_gather_output_tensors[i].buffer())
             .append_to(sender_writer_forward_kernel_config.compile_args);
     }
-    ttnn::ccl::fabric_mux_connection_ct_args(
-        /*num_workers_per_direction=*/1,
-        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-        forward_mux_config,
-        sender_writer_forward_kernel_config.compile_args);
-    sender_writer_forward_kernel_config.defines["USE_WORKER_MUX"] = "1";
     auto ccl_writer_forward_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"
@@ -1500,12 +1427,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         tt::tt_metal::TensorAccessorArgs(all_gather_output_tensors[i].buffer())
             .append_to(sender_writer_backward_kernel_config.compile_args);
     }
-    ttnn::ccl::fabric_mux_connection_ct_args(
-        /*num_workers_per_direction=*/1,
-        tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-        backward_mux_config,
-        sender_writer_backward_kernel_config.compile_args);
-    sender_writer_backward_kernel_config.defines["USE_WORKER_MUX"] = "1";
     auto ccl_writer_backward_kernel_id = tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/operations/experimental/ccl/ring_attention_all_gather_async/device/kernels/"
@@ -1552,15 +1473,9 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         for (uint32_t input_idx = 0; input_idx < ccl_num_inputs; input_idx++) {
             reader_forward_rt_args.push_back(all_gather_output_tensors[input_idx].buffer()->address());
         }
-        // Per-link core assignments: [mux_bwd(0), worker_bwd(1), mux_fwd(2), worker_fwd(3)]
-        const CoreCoord worker_forward_logical = sender_worker_cores[link * 4 + 3];
-        const CoreCoord worker_backward_logical = sender_worker_cores[link * 4 + 1];
-        const CoreCoord mux_forward_logical_core = sender_worker_cores[link * 4 + 2];
-        const CoreCoord mux_backward_logical_core = sender_worker_cores[link * 4 + 0];
-
         fused_op_signaler_forward->push_all_gather_fused_op_rt_args(reader_forward_rt_args, args.num_links, link, 1);
         tt::tt_metal::SetRuntimeArgs(
-            program, ccl_reader_forward_kernel_id, {worker_forward_logical}, reader_forward_rt_args);
+            program, ccl_reader_forward_kernel_id, {sender_worker_cores[(link * 2) + 1]}, reader_forward_rt_args);
 
         std::vector<uint32_t> reader_backward_rt_args = {
             ccl_input_tensor_Wt,
@@ -1582,11 +1497,12 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         }
         fused_op_signaler_backward->push_all_gather_fused_op_rt_args(reader_backward_rt_args, args.num_links, link, 0);
         tt::tt_metal::SetRuntimeArgs(
-            program, ccl_reader_backward_kernel_id, {worker_backward_logical}, reader_backward_rt_args);
+            program, ccl_reader_backward_kernel_id, {sender_worker_cores[link * 2]}, reader_backward_rt_args);
 
-        const CoreCoord sender_forward_worker_core = mesh_device->worker_core_from_logical_core(worker_forward_logical);
+        const CoreCoord sender_forward_worker_core =
+            mesh_device->worker_core_from_logical_core(sender_worker_cores[(link * 2) + 1]);
         const CoreCoord sender_backward_worker_core =
-            mesh_device->worker_core_from_logical_core(worker_backward_logical);
+            mesh_device->worker_core_from_logical_core(sender_worker_cores[link * 2]);
 
         std::vector<uint32_t> writer_forward_rt_args = {
             ccl_input_tensor_Wt,
@@ -1606,27 +1522,19 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         for (uint32_t input_idx = 0; input_idx < ccl_num_inputs; input_idx++) {
             writer_forward_rt_args.push_back(all_gather_output_tensors[input_idx].buffer()->address());
         }
-        // MUX RT args: forward writer (direction=1) uses mux_backward to send to backward neighbor
-        {
-            const CoreCoord mux_bwd_virtual = mesh_device->worker_core_from_logical_core(mux_backward_logical_core);
-            const CoreCoord worker_fwd_virtual = sender_forward_worker_core;
-            ttnn::ccl::fabric_mux_connection_rt_args(
-                /*mux_connection_valid=*/backward_coord.has_value(),
-                /*is_termination_master=*/true,
-                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                mux_bwd_virtual,
-                /*worker_id=*/0,
-                worker_forward_logical,
-                backward_mux_config,
-                program,
-                worker_fwd_virtual,
-                writer_forward_rt_args,
-                std::nullopt);
+        writer_forward_rt_args.push_back(false);
+        writer_forward_rt_args.push_back(backward_coord.has_value());
+        if (backward_coord.has_value()) {
+            const auto target_fabric_node_id = mesh_device->get_fabric_node_id(coord);
+            const auto backward_fabric_node_id = mesh_device->get_fabric_node_id(backward_coord.value());
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                target_fabric_node_id, backward_fabric_node_id, link, program,
+                sender_worker_cores[(link * 2) + 1], writer_forward_rt_args);
         }
         fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(
             writer_forward_rt_args, args.num_links, link, 1);
         tt::tt_metal::SetRuntimeArgs(
-            program, ccl_writer_forward_kernel_id, worker_forward_logical, writer_forward_rt_args);
+            program, ccl_writer_forward_kernel_id, sender_worker_cores[(link * 2) + 1], writer_forward_rt_args);
 
         std::vector<uint32_t> writer_backward_rt_args = {
             ccl_input_tensor_Wt,
@@ -1645,26 +1553,18 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
         for (uint32_t input_idx = 0; input_idx < ccl_num_inputs; input_idx++) {
             writer_backward_rt_args.push_back(all_gather_output_tensors[input_idx].buffer()->address());
         }
-        // MUX RT args: backward writer (direction=0) uses mux_forward to send to forward neighbor
-        {
-            const CoreCoord mux_fwd_virtual = mesh_device->worker_core_from_logical_core(mux_forward_logical_core);
-            const CoreCoord worker_bwd_virtual = sender_backward_worker_core;
-            ttnn::ccl::fabric_mux_connection_rt_args(
-                /*mux_connection_valid=*/forward_coord.has_value(),
-                /*is_termination_master=*/true,
-                tt::tt_fabric::FabricMuxChannelType::FULL_SIZE_CHANNEL,
-                mux_fwd_virtual,
-                /*worker_id=*/0,
-                worker_backward_logical,
-                forward_mux_config,
-                program,
-                worker_bwd_virtual,
-                writer_backward_rt_args,
-                std::nullopt);
+        writer_backward_rt_args.push_back(forward_coord.has_value());
+        if (forward_coord.has_value()) {
+            const auto target_fabric_node_id = mesh_device->get_fabric_node_id(coord);
+            const auto forward_fabric_node_id = mesh_device->get_fabric_node_id(forward_coord.value());
+            tt::tt_fabric::append_fabric_connection_rt_args(
+                target_fabric_node_id, forward_fabric_node_id, link, program,
+                sender_worker_cores[link * 2], writer_backward_rt_args);
         }
+        writer_backward_rt_args.push_back(false);
         fused_op_signaler_sender_workers->push_all_gather_fused_op_rt_args(writer_backward_rt_args, 1, 0, 0);
         tt::tt_metal::SetRuntimeArgs(
-            program, ccl_writer_backward_kernel_id, worker_backward_logical, writer_backward_rt_args);
+            program, ccl_writer_backward_kernel_id, sender_worker_cores[link * 2], writer_backward_rt_args);
     }
 
     return cached_program_t{
@@ -1678,8 +1578,6 @@ ExpRingJointSDPAProgramFactory::cached_program_t ExpRingJointSDPAProgramFactory:
          .ccl_writer_forward_kernel_id = ccl_writer_forward_kernel_id,
          .ccl_reader_backward_kernel_id = ccl_reader_backward_kernel_id,
          .ccl_writer_backward_kernel_id = ccl_writer_backward_kernel_id,
-         .ccl_mux_forward_kernel_id = ccl_mux_forward_kernel_id,
-         .ccl_mux_backward_kernel_id = ccl_mux_backward_kernel_id,
          .ccl_worker_cores = sender_worker_cores,
          .ccl_num_inputs = ccl_num_inputs,
          .ccl_reader_sender_rt_offset = ccl_reader_sender_rt_offset,
@@ -1715,17 +1613,18 @@ void ExpRingJointSDPAProgramFactory::override_runtime_arguments(
             GetRuntimeArgs(program, shared_vars.ccl_writer_backward_kernel_id);
 
         for (int link = 0; link < static_cast<int>(ccl_num_links); link++) {
-            // Per-link layout: [mux_bwd(0), worker_bwd(1), mux_fwd(2), worker_fwd(3)]
-            const auto& worker_fwd_core = ccl_sender_worker_cores[link * 4 + 3];
-            const auto& worker_bwd_core = ccl_sender_worker_cores[link * 4 + 1];
             auto& worker_reader_sender_forward_runtime_args =
-                worker_reader_sender_forward_runtime_args_by_core[worker_fwd_core.x][worker_fwd_core.y];
+                worker_reader_sender_forward_runtime_args_by_core[ccl_sender_worker_cores[1 + (link * 2)].x]
+                                                                 [ccl_sender_worker_cores[1 + (link * 2)].y];
             auto& worker_reader_sender_backward_runtime_args =
-                worker_reader_sender_backward_runtime_args_by_core[worker_bwd_core.x][worker_bwd_core.y];
+                worker_reader_sender_backward_runtime_args_by_core[ccl_sender_worker_cores[0 + (link * 2)].x]
+                                                                  [ccl_sender_worker_cores[0 + (link * 2)].y];
             auto& worker_writer_sender_forward_runtime_args =
-                worker_writer_sender_forward_runtime_args_by_core[worker_fwd_core.x][worker_fwd_core.y];
+                worker_writer_sender_forward_runtime_args_by_core[ccl_sender_worker_cores[1 + (link * 2)].x]
+                                                                 [ccl_sender_worker_cores[1 + (link * 2)].y];
             auto& worker_writer_sender_backward_runtime_args =
-                worker_writer_sender_backward_runtime_args_by_core[worker_bwd_core.x][worker_bwd_core.y];
+                worker_writer_sender_backward_runtime_args_by_core[ccl_sender_worker_cores[0 + (link * 2)].x]
+                                                                  [ccl_sender_worker_cores[0 + (link * 2)].y];
 
             worker_reader_sender_forward_runtime_args[9] = semaphore.at(1).address();
             worker_reader_sender_backward_runtime_args[9] = semaphore.at(0).address();
