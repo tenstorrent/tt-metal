@@ -224,12 +224,14 @@ def test_forward_pass(
 
         # Test recall with individual logging
         recall = calculate_average_recall(tt_topk_indices_torch, ref_indices)
-        recall_passed = recall > 0.95
+        recall_passed = recall > 0.999
         status_char = "✅" if recall_passed else "❌"
-        logger.info(f"{status_char} Device {device_id} (row={row}, col={col}): Recall = {recall:.4f} (threshold: 0.95)")
+        logger.info(
+            f"{status_char} Device {device_id} (row={row}, col={col}): Recall = {recall:.4f} (threshold: 0.999)"
+        )
         if not recall_passed:
             all_passed = False
-            assert_msgs.append(f"Device {device_id} (row={row}, col={col}): Recall is {recall:.4f}, expected > 0.95")
+            assert_msgs.append(f"Device {device_id} (row={row}, col={col}): Recall is {recall:.4f}, expected > 0.999")
 
         # Test logits PCC with individual logging
         logits_passed, logits_pcc = comp_pcc(tt_logits_torch, ref_logits, 0.99)
@@ -244,15 +246,15 @@ def test_forward_pass(
             )
 
         # Test weights PCC with individual logging
-        weights_passed, weights_pcc = comp_pcc(tt_topk_weights_torch, ref_weights, 0.53)
+        weights_passed, weights_pcc = comp_pcc(tt_topk_weights_torch, ref_weights, 0.99)
         status_char = "✅" if weights_passed else "❌"
         logger.info(
-            f"{status_char} Device {device_id} (row={row}, col={col}): Weights PCC = {weights_pcc:.4f} (threshold: 0.53)"
+            f"{status_char} Device {device_id} (row={row}, col={col}): Weights PCC = {weights_pcc:.4f} (threshold: 0.99)"
         )
         if not weights_passed:
             all_passed = False
             assert_msgs.append(
-                f"Device {device_id} (row={row}, col={col}): Weights PCC is {weights_pcc:.4f}, expected > 0.53"
+                f"Device {device_id} (row={row}, col={col}): Weights PCC is {weights_pcc:.4f}, expected > 0.99"
             )
 
     # Compute reference dispatch offsets from tt_topk_indices (isolates bincount + cumsum logic)
