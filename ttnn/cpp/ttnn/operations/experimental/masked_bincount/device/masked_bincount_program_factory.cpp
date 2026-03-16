@@ -14,7 +14,12 @@
 namespace ttnn::experimental::prim {
 
 MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::create(
-    const MaskedBincountParams& operation_attributes, const Tensor& input, Tensor& tensor_return_value) {
+    const MaskedBincountParams& operation_attributes,
+    const MaskedBincountInputs& tensor_args,
+    Tensor& tensor_return_value) {
+    const auto& input = tensor_args.input_tensor;
+    const auto& expert_mask = tensor_args.expert_mask;
+
     tt::tt_metal::Program program{};
 
     tt::DataFormat input_cb_data_format = tt::tt_metal::datatype_to_dataformat_converter(input.dtype());
@@ -33,9 +38,11 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
 
     auto* src_buffer = input.buffer();
     auto* dst_buffer = tensor_return_value.buffer();
+    auto* mask_buffer = expert_mask.buffer();
 
     uint32_t input_page_size = src_buffer->aligned_page_size();
     uint32_t output_page_size = dst_buffer->aligned_page_size();
+    uint32_t mask_page_size = mask_buffer->aligned_page_size();
 
     auto all_cores_vec = tt::tt_metal::corerange_to_cores(all_cores, num_cores, true);
     CoreCoord collector_core = all_cores_vec[0];
@@ -72,6 +79,13 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
             .set_page_size(cb_gather_tmp, output_page_size);
     tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_gather_config);
 
+    // CB 4: expert mask (UINT32, one value per expert)
+    uint32_t cb_mask = tt::CBIndex::c_4;
+    tt::tt_metal::CircularBufferConfig cb_mask_config =
+        tt::tt_metal::CircularBufferConfig(mask_page_size, {{cb_mask, output_cb_data_format}})
+            .set_page_size(cb_mask, mask_page_size);
+    tt::tt_metal::CreateCircularBuffer(program, all_cores, cb_mask_config);
+
     // --- Semaphores ---
     auto init_sem_idx = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
     auto done_sem_idx = tt::tt_metal::CreateSemaphore(program, all_cores, 0);
@@ -81,6 +95,7 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
     std::vector<uint32_t> accessor_args;
     tt::tt_metal::TensorAccessorArgs(src_buffer).append_to(accessor_args);
     tt::tt_metal::TensorAccessorArgs(dst_buffer).append_to(accessor_args);
+    tt::tt_metal::TensorAccessorArgs(mask_buffer).append_to(accessor_args);
 
     // --- BRISC compile-time args ---
     std::vector<uint32_t> ct_args_brisc = {
@@ -99,6 +114,8 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
         (uint32_t)collector_noc.x,
         (uint32_t)collector_noc.y,
         num_cores,
+        cb_mask,
+        mask_page_size,
     };
     ct_args_brisc.insert(ct_args_brisc.end(), accessor_args.begin(), accessor_args.end());
 
@@ -119,6 +136,8 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
         (uint32_t)collector_noc.x,
         (uint32_t)collector_noc.y,
         num_cores,
+        cb_mask,
+        mask_page_size,
     };
     ct_args_ncrisc.insert(ct_args_ncrisc.end(), accessor_args.begin(), accessor_args.end());
 
@@ -174,9 +193,15 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
             parent_noc_y = p_noc.y;
         }
 
-        // rt_args: [src, dst, page_offset, num_receive, parent_noc_x, parent_noc_y, child0_x, child0_y, ...]
+        // rt_args: [src, dst, mask, page_offset, num_receive, parent_noc_x, parent_noc_y, child0_x, child0_y, ...]
         std::vector<uint32_t> rt_brisc = {
-            src_buffer->address(), dst_buffer->address(), page_offset, num_receive, parent_noc_x, parent_noc_y};
+            src_buffer->address(),
+            dst_buffer->address(),
+            mask_buffer->address(),
+            page_offset,
+            num_receive,
+            parent_noc_x,
+            parent_noc_y};
         rt_brisc.insert(rt_brisc.end(), children_noc.begin(), children_noc.end());
 
         tt::tt_metal::SetRuntimeArgs(program, kernel_id_brisc, all_cores_vec[i], rt_brisc);
@@ -184,7 +209,7 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
             program,
             kernel_id_ncrisc,
             all_cores_vec[i],
-            {src_buffer->address(), dst_buffer->address(), page_offset + h_brisc, 0u});
+            {src_buffer->address(), dst_buffer->address(), mask_buffer->address(), page_offset + h_brisc, 0u});
     }
 
     return cached_program_t{
@@ -192,7 +217,10 @@ MaskedBincountProgramFactory::cached_program_t MaskedBincountProgramFactory::cre
 }
 
 void MaskedBincountProgramFactory::override_runtime_arguments(
-    cached_program_t& cached_program, const MaskedBincountParams&, const Tensor& input, Tensor& tensor_return_value) {
+    cached_program_t& cached_program,
+    const MaskedBincountParams&,
+    const MaskedBincountInputs& tensor_args,
+    Tensor& tensor_return_value) {
     auto& program = cached_program.program;
     auto& all_cores_vec = cached_program.shared_variables.all_cores_vec;
     auto kernel_id_brisc = cached_program.shared_variables.kernel_id_brisc;
@@ -200,12 +228,14 @@ void MaskedBincountProgramFactory::override_runtime_arguments(
 
     for (const auto& core : all_cores_vec) {
         auto& rt_brisc = GetRuntimeArgs(program, kernel_id_brisc, core);
-        rt_brisc[0] = input.buffer()->address();
+        rt_brisc[0] = tensor_args.input_tensor.buffer()->address();
         rt_brisc[1] = tensor_return_value.buffer()->address();
+        rt_brisc[2] = tensor_args.expert_mask.buffer()->address();
 
         auto& rt_ncrisc = GetRuntimeArgs(program, kernel_id_ncrisc, core);
-        rt_ncrisc[0] = input.buffer()->address();
+        rt_ncrisc[0] = tensor_args.input_tensor.buffer()->address();
         rt_ncrisc[1] = tensor_return_value.buffer()->address();
+        rt_ncrisc[2] = tensor_args.expert_mask.buffer()->address();
     }
 }
 

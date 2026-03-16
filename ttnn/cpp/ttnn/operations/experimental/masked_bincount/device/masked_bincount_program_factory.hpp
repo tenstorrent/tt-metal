@@ -22,12 +22,14 @@ struct MaskedBincountProgramFactory {
     using cached_program_t = ttnn::device_operation::CachedProgram<shared_variables_t>;
 
     static cached_program_t create(
-        const MaskedBincountParams& operation_attributes, const Tensor& input, Tensor& tensor_return_value);
+        const MaskedBincountParams& operation_attributes,
+        const MaskedBincountInputs& tensor_args,
+        Tensor& tensor_return_value);
 
     static void override_runtime_arguments(
         cached_program_t& cached_program,
         const MaskedBincountParams& operation_attributes,
-        const Tensor& input,
+        const MaskedBincountInputs& tensor_args,
         Tensor& tensor_return_value);
 };
 

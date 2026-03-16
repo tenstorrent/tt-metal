@@ -8,7 +8,10 @@
 namespace ttnn::experimental::prim {
 
 void MaskedBincountDeviceOperation::validate_on_program_cache_miss(
-    const operation_attributes_t& args, const tensor_args_t& input_tensor) {
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_tensor = tensor_args.input_tensor;
+    const auto& expert_mask = tensor_args.expert_mask;
+
     TT_FATAL(input_tensor.dtype() == tt::tt_metal::DataType::UINT16, "Only UINT16 is supported for input!");
     TT_FATAL(input_tensor.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Only ROW_MAJOR layout is supported for input!");
     const auto& input_shape = input_tensor.padded_shape();
@@ -19,10 +22,19 @@ void MaskedBincountDeviceOperation::validate_on_program_cache_miss(
         "Input tensor must be height sharded!");
     TT_FATAL(input_tensor.shard_spec().has_value(), "Input tensor must have a shard spec!");
     TT_FATAL(args.n_routed_experts > 0, "n_routed_experts must be > 0");
+
+    TT_FATAL(expert_mask.dtype() == tt::tt_metal::DataType::UINT32, "Expert mask must be UINT32!");
+    TT_FATAL(expert_mask.layout() == tt::tt_metal::Layout::ROW_MAJOR, "Expert mask must be ROW_MAJOR!");
+    const auto& mask_shape = expert_mask.padded_shape();
+    TT_FATAL(
+        mask_shape.size() == 1 && mask_shape[0] == args.n_routed_experts,
+        "Expert mask must have shape [n_routed_experts={}], got [{}]",
+        args.n_routed_experts,
+        mask_shape[0]);
 }
 
 MaskedBincountDeviceOperation::spec_return_value_t MaskedBincountDeviceOperation::compute_output_specs(
-    const operation_attributes_t& args, const tensor_args_t& /*input_tensor*/) {
+    const operation_attributes_t& args, const tensor_args_t& /*tensor_args*/) {
     ttnn::Shape output_shape({args.n_routed_experts});
     return TensorSpec(
         output_shape,
@@ -33,26 +45,27 @@ MaskedBincountDeviceOperation::spec_return_value_t MaskedBincountDeviceOperation
 }
 
 tt::stl::hash::hash_t MaskedBincountDeviceOperation::compute_program_hash(
-    const operation_attributes_t& args, const tensor_args_t& input_tensor) {
-    const auto& input_shape = input_tensor.padded_shape();
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    const auto& input_shape = tensor_args.input_tensor.padded_shape();
     tt::tt_metal::operation::Hash hash = tt::tt_metal::operation::hash_operation<MaskedBincountDeviceOperation>(
-        args, input_tensor.dtype(), input_tensor.memory_config(), input_shape);
+        args, tensor_args.input_tensor.dtype(), tensor_args.input_tensor.memory_config(), input_shape);
     return hash;
 }
 
 MaskedBincountDeviceOperation::tensor_return_value_t MaskedBincountDeviceOperation::create_output_tensors(
-    const operation_attributes_t& args, const tensor_args_t& input_tensor) {
-    return create_device_tensor(compute_output_specs(args, input_tensor), input_tensor.device());
+    const operation_attributes_t& args, const tensor_args_t& tensor_args) {
+    return create_device_tensor(compute_output_specs(args, tensor_args), tensor_args.input_tensor.device());
 }
 
 }  // namespace ttnn::experimental::prim
 
 namespace ttnn::prim {
 
-Tensor masked_bincount(const Tensor& input_tensor, uint32_t n_routed_experts) {
+Tensor masked_bincount(const Tensor& input_tensor, const Tensor& expert_mask, uint32_t n_routed_experts) {
     using OperationType = ttnn::experimental::prim::MaskedBincountDeviceOperation;
     auto operation_attributes = OperationType::operation_attributes_t{.n_routed_experts = n_routed_experts};
-    return ttnn::device_operation::launch<OperationType>(operation_attributes, input_tensor);
+    auto tensor_args = OperationType::tensor_args_t{.input_tensor = input_tensor, .expert_mask = expert_mask};
+    return ttnn::device_operation::launch<OperationType>(operation_attributes, tensor_args);
 }
 
 }  // namespace ttnn::prim
