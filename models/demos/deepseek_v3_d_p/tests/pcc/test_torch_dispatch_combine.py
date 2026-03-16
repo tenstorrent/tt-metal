@@ -38,7 +38,12 @@ def test_torch_dispatch_combine(
 ):
     """Test dispatch→combine round-trip using PyTorch reference implementation."""
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices=dispatch_group_size,
+        dispatch_group_size=dispatch_group_size,
+        capacity_factor=capacity_factor,
     )
     print("\n")
 

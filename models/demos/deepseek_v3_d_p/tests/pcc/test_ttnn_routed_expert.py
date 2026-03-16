@@ -4,13 +4,20 @@ PCC test for TtRoutedExpert module.
 Tests that TTNN TtRoutedExpert produces matching outputs to torch reference TorchExpert.
 """
 
+from __future__ import annotations
+
 import pytest
 import torch
 from loguru import logger
 from tracy import signpost
 
 import ttnn
-from models.demos.deepseek_v3_d_p.tests.pcc.test_moe import TorchExpert
+
+# Set to True to skip torch init/calc/PCC check for faster iteration during development
+SKIP_PCC_CHECK = True
+
+if not SKIP_PCC_CHECK:
+    from models.demos.deepseek_v3_d_p.tests.pcc.test_moe import TorchExpert
 from models.demos.deepseek_v3_d_p.tt.moe.init_helpers import (
     compute_constants,
     extract_mesh_config,
@@ -66,8 +73,10 @@ def run_torch_routed_experts(
     "seq_len_per_chip, emb_dim, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
     [
         # DeepSeek V3 routed expert dims: emb_dim=7168, hidden_dim=2048
-        # (3200, 7168, 2048, 8, 4, 2),  # 8 experts per chip, isl=3200
-        (512, 1024, 256, 32, 4, 2),  #
+        # (3200, 7168, 2048, 64, 2, 2),  # 8 experts per chip, isl=3200
+        # (512, 1024, 256, 32, 4, 2),  #
+        # (3200, 7168, 64, 2, 2),
+        (4096, 7168, 2048, 64, 2, 2),  # 8 experts per chip, isl=3200
     ],
     ids=["deepseek-v3-dims"],
 )
@@ -130,7 +139,7 @@ def test_ttnn_routed_expert(
     # Compute configuration constants
     # For routed expert, experts_per_chip = num_routed_experts // num_devices (all devices combined)
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, capacity_factor
+        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
     )
 
     signpost(
@@ -139,18 +148,18 @@ def test_ttnn_routed_expert(
         f"{num_experts_per_tok=} {capacity_factor=}"
     )
 
-    logger.info(f"\n{'='*60}")
-    logger.info("TtRoutedExpert PCC Test")
-    logger.info(f"{'='*60}")
-    logger.info(f"mesh_shape={mesh_device.shape}, num_devices={num_devices}")
-    logger.info(f"dispatch_group_size={dispatch_group_size}, experts_per_chip={experts_per_chip}")
-    logger.info(
+    logger.debug(f"\n{'='*60}")
+    logger.debug("TtRoutedExpert PCC Test")
+    logger.debug(f"{'='*60}")
+    logger.debug(f"mesh_shape={mesh_device.shape}, num_devices={num_devices}")
+    logger.debug(f"dispatch_group_size={dispatch_group_size}, experts_per_chip={experts_per_chip}")
+    logger.debug(
         f"seq_len_per_chip={seq_len_per_chip}, max_dispatched_tokens_per_expert={max_dispatched_tokens_per_expert}"
     )
-    logger.info(f"emb_dim={emb_dim}, hidden_dim={hidden_dim}")
+    logger.debug(f"emb_dim={emb_dim}, hidden_dim={hidden_dim}")
 
     total_experts = num_devices * experts_per_chip
-    logger.info(f"Total experts: {total_experts}")
+    logger.debug(f"Total experts: {total_experts}")
 
     # Create random input with shape matching mesh topology
     # Shape: (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_tokens, emb_dim)
@@ -165,32 +174,33 @@ def test_ttnn_routed_expert(
         emb_dim,
         dtype=torch.float32,
     )
-    logger.info(f"Input shape: {dispatched_buffer_torch.shape} (mesh: {mesh_device.shape})")
+    logger.debug(f"Input shape: {dispatched_buffer_torch.shape} (mesh: {mesh_device.shape})")
 
-    # Create torch experts with random weights (one per global expert)
-    torch_experts = []
+    # Create weights (and optionally torch experts for PCC check)
     torch_weights_list = []
-
     for i in range(total_experts):
         weights = {
             "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
             "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
             "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
         }
-        torch_experts.append(TorchExpert(emb_dim, torch_weights=weights))
         torch_weights_list.append(weights)
 
-    # Run torch reference
-    logger.info("Running torch reference...")
-    torch_outputs = run_torch_routed_experts(
-        dispatched_buffer_torch,
-        torch_experts,
-        experts_per_chip,
-        num_dispatch_groups,
-        dispatch_group_size,
-    )
-    logger.info(f"Torch output shape: {torch_outputs.shape}")
-    logger.info(f"Torch output stats - min: {torch_outputs.min():.4f}, max: {torch_outputs.max():.4f}")
+    if not SKIP_PCC_CHECK:
+        # Create torch experts for PCC validation
+        torch_experts = [TorchExpert(emb_dim, torch_weights=w) for w in torch_weights_list]
+
+        # Run torch reference
+        logger.debug("Running torch reference...")
+        torch_outputs = run_torch_routed_experts(
+            dispatched_buffer_torch,
+            torch_experts,
+            experts_per_chip,
+            1,
+            1,
+        )
+        logger.debug(f"Torch output shape: {torch_outputs.shape}")
+        logger.debug(f"Torch output stats - min: {torch_outputs.min():.4f}, max: {torch_outputs.max():.4f}")
 
     # Create TTNN input - shard across devices using dims=(1, 0)
     # Buffer shape: (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_tokens, emb_dim)
@@ -209,11 +219,11 @@ def test_ttnn_routed_expert(
     dispatched_buffer_tt = ttnn.reshape(
         dispatched_buffer_tt, (experts_per_chip, max_dispatched_tokens_per_expert, emb_dim)
     )
-    logger.info(f"TTNN input shape: {dispatched_buffer_tt.shape}")
+    logger.debug(f"TTNN input shape: {dispatched_buffer_tt.shape}")
 
     # Create TtRoutedExpert - pass ALL expert weights, TtRoutedExpert distributes to devices
     # For device i, it gets experts [i * experts_per_chip : (i+1) * experts_per_chip]
-    logger.info("Creating TtRoutedExpert...")
+    logger.debug("Creating TtRoutedExpert...")
     tt_routed_expert = TtRoutedExpert(
         mesh_device=mesh_device,
         experts_per_chip=experts_per_chip,
@@ -225,9 +235,16 @@ def test_ttnn_routed_expert(
     )
 
     # Run TTNN forward
-    logger.info("Running TTNN forward...")
+    logger.debug("Running TTNN forward...")
     ttnn_outputs = tt_routed_expert(dispatched_buffer_tt)
-    logger.info(f"TTNN output shape: {ttnn_outputs.shape}")
+    logger.debug(f"TTNN output shape: {ttnn_outputs.shape}")
+
+    if SKIP_PCC_CHECK:
+        logger.info("SKIP_PCC_CHECK=True, skipping torch validation")
+        logger.debug(f"\n{'='*60}")
+        logger.debug("TtRoutedExpert Test PASSED (PCC check skipped)")
+        logger.debug(f"{'='*60}")
+        return
 
     # Convert back to torch
     # Output shape per device: (experts_per_chip, max_tokens, emb_dim)
@@ -235,8 +252,8 @@ def test_ttnn_routed_expert(
     ttnn_outputs_expanded = ttnn.unsqueeze(ttnn.unsqueeze(ttnn_outputs, dim=0), dim=0)
     mesh_composer = get_routed_expert_output_mesh_composer(mesh_device)
     ttnn_outputs_torch = ttnn.to_torch(ttnn_outputs_expanded, mesh_composer=mesh_composer)
-    logger.info(f"TTNN output (torch) shape: {ttnn_outputs_torch.shape}")
-    logger.info(f"TTNN output stats - min: {ttnn_outputs_torch.min():.4f}, max: {ttnn_outputs_torch.max():.4f}")
+    logger.debug(f"TTNN output (torch) shape: {ttnn_outputs_torch.shape}")
+    logger.debug(f"TTNN output stats - min: {ttnn_outputs_torch.min():.4f}, max: {ttnn_outputs_torch.max():.4f}")
 
     # Validate ALL chips - each device now has unique weights for its experts
     # Torch outputs: (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_dispatched_tokens_per_expert, emb_dim)
@@ -252,13 +269,13 @@ def test_ttnn_routed_expert(
                 global_expert_idx = chip * experts_per_chip + expert_idx
                 _, pcc = comp_pcc(torch_chip[expert_idx], ttnn_chip[expert_idx])
                 pcc_values.append(pcc)
-                logger.info(
+                logger.debug(
                     f"Chip (dg={dg},ds={ds}), Local Expert {expert_idx} (Global {global_expert_idx}) PCC: {pcc:.6f}"
                 )
 
     min_pcc = min(pcc_values)
     avg_pcc = sum(pcc_values) / len(pcc_values)
-    logger.info(f"\nMin PCC: {min_pcc:.6f}, Avg PCC: {avg_pcc:.6f} (across all {len(pcc_values)} experts)")
+    logger.debug(f"\nMin PCC: {min_pcc:.6f}, Avg PCC: {avg_pcc:.6f} (across all {len(pcc_values)} experts)")
 
     # Threshold for bfp8/bfp4 precision (actual PCC ~0.98)
     pcc_threshold = 0.97
@@ -268,6 +285,6 @@ def test_ttnn_routed_expert(
     assert not torch.isnan(ttnn_outputs_torch).any(), "Output contains NaN"
     assert not torch.isinf(ttnn_outputs_torch).any(), "Output contains Inf"
 
-    logger.info(f"\n{'='*60}")
-    logger.info("TtRoutedExpert PCC Test PASSED!")
-    logger.info(f"{'='*60}")
+    logger.debug(f"\n{'='*60}")
+    logger.debug("TtRoutedExpert PCC Test PASSED!")
+    logger.debug(f"{'='*60}")

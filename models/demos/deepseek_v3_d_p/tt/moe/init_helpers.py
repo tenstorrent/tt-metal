@@ -166,7 +166,9 @@ def get_gate_outputs(
     return expert_offsets, expert_token_counts, cum_sum
 
 
-def compute_constants(seq_len_per_chip, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor):
+def compute_constants(
+    seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+):
     """
     Compute derived constants for MoE configuration.
 
@@ -174,7 +176,8 @@ def compute_constants(seq_len_per_chip, num_routed_experts, num_experts_per_tok,
         seq_len_per_chip: Sequence length per chip
         num_routed_experts: Total number of routed experts across all chips
         num_experts_per_tok: Number of experts each token is routed to
-        dispatch_group_size: Number of chips in each dispatch group
+        num_devices: Number of devices across which experts are distributed
+        dispatch_group_size: Number of devices in each dispatch group
         capacity_factor: Capacity factor for load balancing
 
     Returns:
@@ -182,9 +185,10 @@ def compute_constants(seq_len_per_chip, num_routed_experts, num_experts_per_tok,
         metadata_len: Length of metadata per token
         max_dispatched_tokens_per_expert: Maximum tokens per expert
     """
-    experts_per_chip = num_routed_experts // dispatch_group_size
+    experts_per_chip = num_routed_experts // num_devices
     metadata_len = 5  # chip, token, topk_idx, routed_expert, weight
-    balanced_load = dispatch_group_size * seq_len_per_chip * num_experts_per_tok // num_routed_experts
+    # total number of tokens in group times x distribution ratio (8/256 == 2/64)
+    balanced_load = (dispatch_group_size * seq_len_per_chip) * num_experts_per_tok // num_routed_experts
     max_dispatched_tokens_per_expert = int(balanced_load * capacity_factor)
     return experts_per_chip, metadata_len, max_dispatched_tokens_per_expert
 

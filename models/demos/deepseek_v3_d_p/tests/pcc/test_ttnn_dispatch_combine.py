@@ -43,8 +43,9 @@ from models.demos.deepseek_v3_d_p.tt.moe.visualization_helpers import log_expert
 @pytest.mark.parametrize(
     "seq_len_per_chip, hidden_dim, num_routed_experts, num_experts_per_tok, capacity_factor",
     [
-        (512, 7168, 16, 4, 2),
+        (3200, 7168, 64, 2, 2),
     ],
+    ids=["3200-avg"],
 )
 @pytest.mark.parametrize(
     "mesh_device, device_params, num_links, topology",
@@ -208,16 +209,17 @@ def test_ttnn_dispatch_combine(
     logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
     ttnn.visualize_mesh_device(mesh_device)
 
+    # Compute configuration constants (use dispatch_group_size for dispatch/combine parallelism)
+    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
+        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
+    )
+
     signpost(
         f"TTNN Dispatch+Combine {mesh_device=} {num_devices=} {dispatch_group_size=} {num_dispatch_groups=} "
         f"{seq_len_per_chip=} {hidden_dim=} {num_routed_experts=} {num_experts_per_tok=} "
-        f"{capacity_factor=} {use_predictable_data=}"
+        f"{capacity_factor=} {use_predictable_data=} {max_dispatched_tokens_per_expert=}"
     )
 
-    # Compute configuration constants (use dispatch_group_size for dispatch/combine parallelism)
-    experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, capacity_factor
-    )
     logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
 
     # Generate test inputs

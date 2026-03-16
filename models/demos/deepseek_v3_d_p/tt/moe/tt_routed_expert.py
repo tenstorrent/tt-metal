@@ -14,6 +14,7 @@ from tracy import signpost
 
 import ttnn
 from models.common.lightweightmodule import LightweightModule
+from models.demos.deepseek_v3_d_p.tests.deepseek_v3_matmul_config import GRID_SIZE, get_prefill_matmul_program_config
 
 COMPUTE_KERNEL_CONFIG_LOFI = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.LoFi,
@@ -49,6 +50,7 @@ class TtRoutedExpert(LightweightModule):
         experts_per_chip: int,
         emb_dim: int = 7 * 1024,
         hidden_dim: int = 2 * 1024,
+        max_tokens: int = 1600,
         torch_weights: list[dict] = None,
         activations_dtype=ttnn.bfloat8_b,
         weights_dtype=ttnn.bfloat4_b,
@@ -62,6 +64,7 @@ class TtRoutedExpert(LightweightModule):
             experts_per_chip: Number of local experts per chip
             emb_dim: Embedding dimension (default: 7168)
             hidden_dim: Hidden/intermediate dimension (default: 2048)
+            max_tokens: Maximum tokens per expert (default: 1600, used for program config)
             torch_weights: Optional list of dicts with keys 'gate_proj', 'up_proj', 'down_proj'
                           containing torch tensors. Length must be num_devices * experts_per_chip
                           (total routed experts), with weights ordered by global expert index.
@@ -76,10 +79,48 @@ class TtRoutedExpert(LightweightModule):
         self.experts_per_chip = experts_per_chip
         self.emb_dim = emb_dim
         self.hidden_dim = hidden_dim
+        self.max_tokens = max_tokens
         self.num_devices = mesh_device.get_num_devices()
         self.activations_dtype = activations_dtype
         self.weights_dtype = weights_dtype
         self.compute_kernel_config = compute_kernel_config
+
+        # Build program configs for matmuls using optimal parameters from sweeps
+        if max_tokens in [1024, 1600, 2048] and emb_dim == 7168 and hidden_dim == 2048:
+            # w1 (gate_proj): M=max_tokens, K=emb_dim, N=hidden_dim
+            self.gate_program_config = get_prefill_matmul_program_config(
+                # max_tokens, emb_dim, hidden_dim, GRID_SIZE, OPTIMAL_PROGRAM_CONFIG.get("routed_expert_w1")
+                max_tokens,
+                emb_dim,
+                hidden_dim,
+                GRID_SIZE,
+                (28, 1, 3),
+            )
+            # w3 (up_proj): M=max_tokens, K=emb_dim, N=hidden_dim
+            self.up_program_config = get_prefill_matmul_program_config(
+                # max_tokens, emb_dim, hidden_dim, GRID_SIZE,  OPTIMAL_PROGRAM_CONFIG.get("routed_expert_w3")
+                max_tokens,
+                emb_dim,
+                hidden_dim,
+                GRID_SIZE,
+                (28, 1, 3),
+            )
+            # w2 (down_proj): M=max_tokens, K=hidden_dim, N=emb_dim
+            self.down_program_config = get_prefill_matmul_program_config(
+                # max_tokens, hidden_dim, emb_dim, GRID_SIZE, OPTIMAL_PROGRAM_CONFIG.get("routed_expert_w2")
+                max_tokens,
+                hidden_dim,
+                emb_dim,
+                GRID_SIZE,
+                (32, 1, 3),
+            )
+        else:
+            logger.warning(
+                f"RoutedExpert: No optimal program config for given dimensions {max_tokens=}{emb_dim=}{hidden_dim=}, using defaults."
+            )
+            self.gate_program_config = None
+            self.up_program_config = None
+            self.down_program_config = None
 
         total_experts = self.num_devices * experts_per_chip
         logger.info(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
@@ -91,6 +132,10 @@ class TtRoutedExpert(LightweightModule):
         self.gate_projs = []
         self.up_projs = []
         self.down_projs = []
+
+        self.gate_projs_pc = None
+        self.up_projs_pc = None
+        self.down_projs_pc = None
 
         if torch_weights is not None:
             assert len(torch_weights) == total_experts, (
@@ -216,27 +261,23 @@ class TtRoutedExpert(LightweightModule):
 
     def _create_random_weight(self, shape: tuple, name: str) -> ttnn.Tensor:
         """
-        Create random weight tensor replicated on all devices.
+        Allocate uninitialized weight tensor on device DRAM (fast, no host transfer).
 
         Args:
             shape: Weight shape (in_features, out_features) for TTNN matmul
             name: Weight name for logging
 
         Returns:
-            Random TTNN tensor replicated on all devices
+            Uninitialized TTNN tensor on device DRAM
         """
-        logger.info(f"Creating random weight {name} with shape {shape}")
+        logger.info(f"Allocating uninitialized weight {name} with shape {shape} on device DRAM")
 
-        torch_weight = torch.randn(*shape, dtype=torch.float32)
-
-        mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
-
-        tt_weight = ttnn.from_torch(
-            torch_weight,
-            mesh_mapper=mesh_mapper,
-            layout=ttnn.TILE_LAYOUT,
-            device=self.mesh_device,
-            dtype=self.weights_dtype,
+        tt_weight = ttnn.allocate_tensor_on_device(
+            ttnn.Shape(shape),
+            self.weights_dtype,
+            ttnn.TILE_LAYOUT,
+            self.mesh_device,
+            ttnn.DRAM_MEMORY_CONFIG,
         )
 
         return tt_weight
@@ -261,23 +302,32 @@ class TtRoutedExpert(LightweightModule):
             Output tensor (batch, tokens, emb_dim)
         """
         # gate_out = x @ gate_proj
-        gate_out = ttnn.matmul(x, gate_proj, compute_kernel_config=self.compute_kernel_config)
+        gate_out = ttnn.matmul(
+            x, gate_proj, program_config=self.gate_program_config, compute_kernel_config=self.compute_kernel_config
+        )
 
         # up_out = x @ up_proj
-        up_out = ttnn.matmul(x, up_proj, compute_kernel_config=self.compute_kernel_config)
+        up_out = ttnn.matmul(
+            x, up_proj, program_config=self.up_program_config, compute_kernel_config=self.compute_kernel_config
+        )
 
         # activated = silu(gate_out) * up_out - SiLU fused with multiply
         activated = ttnn.mul(gate_out, up_out, input_tensor_a_activations=[ttnn.UnaryOpType.SILU])
 
         # output = activated @ down_proj
-        output = ttnn.matmul(activated, down_proj, compute_kernel_config=self.compute_kernel_config)
+        output = ttnn.matmul(
+            activated,
+            down_proj,
+            program_config=self.down_program_config,
+            compute_kernel_config=self.compute_kernel_config,
+        )
 
         return output
 
     def forward(
         self,
         dispatched_buffer: ttnn.Tensor,
-        expert_token_counts: ttnn.Tensor = None,
+        expert_token_counts: ttnn.Tensor = None,  # Unused for now, can reduce compute
     ) -> ttnn.Tensor:
         """
         Process dispatched tokens through local experts.

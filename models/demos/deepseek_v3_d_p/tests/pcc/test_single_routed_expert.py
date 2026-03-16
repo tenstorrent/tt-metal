@@ -1,0 +1,154 @@
+"""
+Minimal single-device, single-expert test for TtRoutedExpert profiling.
+
+The simplest scenario: 1 chip, 1 expert, minimal dimensions.
+"""
+
+import pytest
+import torch
+import torch.nn as nn
+import torch.nn.functional as F
+from loguru import logger
+from tracy import signpost
+
+import ttnn
+from models.demos.deepseek_v3_d_p.tt.moe.tt_routed_expert import TtRoutedExpert
+from tests.ttnn.utils_for_testing import comp_pcc
+
+
+class TorchExpert(nn.Module):
+    """Simple torch reference for single expert FFN."""
+
+    def __init__(self, emb_dim: int, hidden_dim: int, torch_weights: dict = None):
+        super().__init__()
+        if torch_weights is not None:
+            self.gate_proj = nn.Parameter(torch_weights["gate_proj"].float())
+            self.up_proj = nn.Parameter(torch_weights["up_proj"].float())
+            self.down_proj = nn.Parameter(torch_weights["down_proj"].float())
+        else:
+            self.gate_proj = nn.Parameter(torch.randn(hidden_dim, emb_dim) * 0.02)
+            self.up_proj = nn.Parameter(torch.randn(hidden_dim, emb_dim) * 0.02)
+            self.down_proj = nn.Parameter(torch.randn(emb_dim, hidden_dim) * 0.02)
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        # gate_out = x @ gate_proj.T
+        gate_out = F.linear(x, self.gate_proj)
+        # up_out = x @ up_proj.T
+        up_out = F.linear(x, self.up_proj)
+        # activated = silu(gate_out) * up_out
+        activated = F.silu(gate_out) * up_out
+        # output = activated @ down_proj.T
+        output = F.linear(activated, self.down_proj)
+        return output
+
+
+@pytest.mark.parametrize(
+    "num_tokens, emb_dim, hidden_dim",
+    [
+        (1024, 7168, 2048),  # DeepSeek V3 dims, 1K tokens
+        (1600, 7168, 2048),  # DeepSeek V3 dims, 1.6K tokens
+        (2048, 7168, 2048),  # DeepSeek V3 dims, 2K tokens
+        (3200, 7168, 2048),  # DeepSeek V3 dims, 3.2K tokens
+        (4096, 7168, 2048),  # DeepSeek V3 dims, 4K tokens
+    ],
+    ids=["ds-v3-1k", "ds-v3-1.6k", "ds-v3-2k", "ds-v3-3.2k", "ds-v3-4k"],
+)
+@pytest.mark.parametrize(
+    "mesh_device, device_params",
+    [
+        pytest.param(
+            1,
+            {"fabric_config": ttnn.FabricConfig.DISABLED},
+            id="single-chip",
+        ),
+    ],
+    indirect=["mesh_device", "device_params"],
+)
+def test_single_routed_expert(
+    mesh_device,
+    device_params,
+    num_tokens: int,
+    emb_dim: int,
+    hidden_dim: int,
+):
+    """
+    Simplest test: 1 chip, 1 expert.
+
+    Perfect for profiling the core FFN computation without any mesh complexity.
+    """
+    experts_per_chip = 1
+
+    signpost(f"SingleRoutedExpert {num_tokens=} {emb_dim=} {hidden_dim=}")
+
+    logger.info(f"Testing single routed expert: {num_tokens=}, {emb_dim=}, {hidden_dim=}")
+    logger.info(f"Mesh: {mesh_device.shape}, num_devices={mesh_device.get_num_devices()}")
+
+    # Create random weights
+    torch.manual_seed(42)
+    weights = {
+        "gate_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
+        "up_proj": torch.randn(hidden_dim, emb_dim, dtype=torch.float32) * 0.02,
+        "down_proj": torch.randn(emb_dim, hidden_dim, dtype=torch.float32) * 0.02,
+    }
+
+    # Create torch reference
+    torch_expert = TorchExpert(emb_dim, hidden_dim, weights)
+
+    # Create random input: (experts_per_chip, num_tokens, emb_dim)
+    torch_input = torch.randn(experts_per_chip, num_tokens, emb_dim, dtype=torch.float32)
+    logger.info(f"Input shape: {torch_input.shape}")
+
+    # Run torch reference
+    logger.info("Running torch reference...")
+    with torch.no_grad():
+        torch_output = torch_expert(torch_input[0])  # Process first (only) expert's tokens
+    logger.info(f"Torch output shape: {torch_output.shape}")
+
+    # Create TTNN input
+    tt_input = ttnn.from_torch(
+        torch_input,
+        mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
+        layout=ttnn.TILE_LAYOUT,
+        device=mesh_device,
+        dtype=ttnn.bfloat8_b,
+    )
+    logger.info(f"TTNN input shape: {tt_input.shape}")
+
+    # Create TtRoutedExpert
+    logger.info("Creating TtRoutedExpert...")
+    tt_expert = TtRoutedExpert(
+        mesh_device=mesh_device,
+        experts_per_chip=experts_per_chip,
+        emb_dim=emb_dim,
+        hidden_dim=hidden_dim,
+        max_tokens=num_tokens,
+        torch_weights=[weights],  # List with single expert weights
+        activations_dtype=ttnn.bfloat8_b,
+        weights_dtype=ttnn.bfloat4_b,
+    )
+
+    # Run TTNN forward
+    logger.info("Running TTNN forward...")
+    tt_output = tt_expert(tt_input)
+    logger.info(f"TTNN output shape: {tt_output.shape}")
+
+    # Convert back to torch for comparison
+    tt_output_torch = ttnn.to_torch(
+        tt_output,
+        mesh_composer=ttnn.ConcatMeshToTensor(mesh_device, dim=0),
+    )
+    # Extract the single expert output: (experts_per_chip, num_tokens, emb_dim) -> (num_tokens, emb_dim)
+    tt_output_single = tt_output_torch[0]
+    logger.info(f"TTNN output (torch) shape: {tt_output_single.shape}")
+
+    # Compare PCC
+    _, pcc = comp_pcc(torch_output, tt_output_single)
+    logger.info(f"PCC: {pcc:.6f}")
+
+    # Validate
+    pcc_threshold = 0.97
+    assert pcc >= pcc_threshold, f"PCC {pcc:.6f} below threshold {pcc_threshold}"
+    assert not torch.isnan(tt_output_torch).any(), "Output contains NaN"
+    assert not torch.isinf(tt_output_torch).any(), "Output contains Inf"
+
+    logger.info("Test PASSED!")

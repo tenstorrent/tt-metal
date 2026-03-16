@@ -396,7 +396,12 @@ def test_moe(
 
     # Compute derived constants
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices=dispatch_group_size,
+        dispatch_group_size=dispatch_group_size,
+        capacity_factor=capacity_factor,
     )
 
     # Initialize test inputs
@@ -542,7 +547,12 @@ def test_moe_real_weights(
 
     # Compute derived constants
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
-        seq_len_per_chip, num_routed_experts, num_experts_per_tok, dispatch_group_size, capacity_factor
+        seq_len_per_chip,
+        num_routed_experts,
+        num_experts_per_tok,
+        num_devices=dispatch_group_size,
+        dispatch_group_size=dispatch_group_size,
+        capacity_factor=capacity_factor,
     )
 
     # Initialize test inputs with real dimensions
