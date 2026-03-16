@@ -1,11 +1,14 @@
 # SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 # SPDX-License-Identifier: Apache-2.0
 
-"""TP training script for the Python Llama model.
+"""TP training script for the Python Llama model using SFTTrainer infrastructure.
 
 Uses the new layout-aware dispatch layer (``ttml.distributed``) to distribute
 the Python Llama model with tensor parallelism.  Model code is written once;
 distribution is handled by module rules and op dispatch.
+
+This script demonstrates how to use the SFTTrainer infrastructure for distributed
+training with TP (tensor parallelism) and DP (data parallelism) support.
 
 Example:
     python train_llama_tp.py -c training_shakespeare_tinyllama_tp_galaxy.yaml \
@@ -19,7 +22,8 @@ import math
 import os
 import random
 import time
-from typing import Optional, Tuple
+from functools import partial
+from typing import Any, Callable, Optional, Tuple
 
 import numpy as np
 import ml_dtypes
@@ -27,9 +31,13 @@ import ml_dtypes
 import ttnn
 import ttml
 from ttml.models.llama import Llama, LlamaConfig, LlamaRopeScalingConfig
-from ttml.common.utils import round_up_to_tile, get_tt_metal_home, create_optimizer
+from ttml.common.utils import round_up_to_tile, get_tt_metal_home
 from ttml.common.config import load_config, DeviceConfig
 from ttml.common.data import CharTokenizer, build_causal_mask
+
+# SFT Trainer infrastructure
+from ttml.trainers import SFTConfig, SFTTrainer, TrainerCallback
+from ttml.datasets import Batch, InMemoryDataloader
 
 # Layout-aware dispatch layer
 import ttml.distributed
@@ -57,9 +65,6 @@ def print_memory_stats(label: str):
     - net change: allocations - deallocations (memory retained)
     """
     try:
-        # Get memory usage for the specific snapshot name
-        # DRAMUsage has .peak, .total_allocations, .total_deallocations fields
-        # L1UsagePerCore has .peak_cb, .peak_l1, .peak_total fields
         dram = MemoryUsageTracker.get_dram_usage(label)
         l1 = MemoryUsageTracker.get_l1_usage(label)
 
@@ -128,11 +133,97 @@ def parse_model_config(yaml_config: dict) -> LlamaConfig:
 
 
 # ---------------------------------------------------------------------------
+# Data Parallel Model Wrapper
+# ---------------------------------------------------------------------------
+
+
+class _GradSyncFunction(ttml.autograd.Function):
+    """Custom autograd function that syncs gradients in backward pass."""
+
+    @staticmethod
+    def forward(ctx, output, model, dp_axis):
+        """Forward pass - just returns the output unchanged."""
+        ctx.model = model
+        ctx.dp_axis = dp_axis
+        return output.get_value()
+
+    @staticmethod
+    def backward(ctx, grad_output):
+        """Backward pass - sync gradients across DP axis, then return grad unchanged."""
+        sync_gradients(ctx.model, cluster_axes=[ctx.dp_axis])
+        return grad_output
+
+
+class DataParallelModel:
+    """Wrapper that adds automatic gradient synchronization for data parallel training.
+
+    This wrapper is orthogonal to the trainer - it wraps any model and adds
+    automatic gradient synchronization across the DP axis at the end of backward.
+
+    The gradient sync happens automatically when backward() is called on the loss,
+    because the wrapper inserts a custom autograd function that syncs gradients
+    in its backward pass.
+
+    Example::
+
+        model = Llama(config)
+        model = distribute_module(model, mesh_device, tp_policy)  # TP sharding
+        model = DataParallelModel(model, dp_axis=0)  # DP wrapper
+
+        # Use with SFTTrainer - no special hooks needed
+        trainer = SFTTrainer(model, ...)
+    """
+
+    def __init__(self, model: Any, dp_axis: int):
+        """
+        Args:
+            model: The underlying model to wrap.
+            dp_axis: The mesh axis for data parallelism (gradient sync axis).
+        """
+        self._model = model
+        self._dp_axis = dp_axis
+
+    def __call__(self, *args, **kwargs):
+        """Forward pass with automatic gradient sync in backward."""
+        output = self._model(*args, **kwargs)
+        # Insert gradient sync node into the autograd graph
+        return _GradSyncFunction.apply(output, self._model, self._dp_axis)
+
+    def train(self):
+        """Set model to training mode."""
+        self._model.train()
+
+    def eval(self):
+        """Set model to evaluation mode."""
+        self._model.eval()
+
+    def parameters(self):
+        """Return model parameters."""
+        return self._model.parameters()
+
+    @property
+    def config(self):
+        """Return model config (for gradient checkpointing support)."""
+        return self._model.config
+
+    @config.setter
+    def config(self, value):
+        """Set model config."""
+        self._model.config = value
+
+    def __getattr__(self, name: str):
+        """Delegate attribute access to the underlying model."""
+        return getattr(self._model, name)
+
+
+# ---------------------------------------------------------------------------
 # Dataset helpers (same as NanoGPT example)
 # ---------------------------------------------------------------------------
 
 
 class InMemoryTokenDataset:
+    """Simple dataset that yields (input_tokens, target_tokens) pairs."""
+
     def __init__(self, tokens: np.ndarray, seq_length: int):
         self.tokens = tokens
         self.seq_length = seq_length
@@ -143,10 +234,10 @@ class InMemoryTokenDataset:
         return len(self.tokens) - self.seq_length
 
     def __getitem__(self, index: int):
-        return (
-            self.tokens[index : index + self.seq_length],
-            self.tokens[index + 1 : index + self.seq_length + 1],
-        )
+        return {
+            "input_ids": self.tokens[index : index + self.seq_length],
+            "labels": self.tokens[index + 1 : index + self.seq_length + 1],
+        }
 
 
 def create_dataset(text: str, seq_length: int):
@@ -155,106 +246,126 @@ def create_dataset(text: str, seq_length: int):
     return InMemoryTokenDataset(tokens, seq_length), tokenizer
 
 
-def collate(samples, seq_length: int, mesh_device=None, dp_axis: int = None):
-    """Collate samples into batch tensors.
+def distributed_collate_fn(
+    examples: list,
+    seq_length: int,
+    mesh_device: Any = None,
+    dp_axis: Optional[int] = None,
+) -> Batch:
+    """Collate samples into a Batch with distributed tensor support.
 
-    If dp_axis is provided, the batch is sharded across that mesh axis.
+    This collate function creates Batch objects compatible with SFTTrainer,
+    with optional DP sharding when dp_axis is provided.
+
+    Use with functools.partial to bind seq_length, mesh_device, and dp_axis::
+
+        collate = partial(distributed_collate_fn, seq_length=1024,
+                          mesh_device=mesh_device, dp_axis=0)
+        dataloader = InMemoryDataloader(dataset, collate, batch_size=8)
+
+    Args:
+        examples: List of dicts with "input_ids" and "labels" keys.
+        seq_length: Sequence length for the batch.
+        mesh_device: Mesh device for distributed tensors.
+        dp_axis: Data parallel axis for batch sharding (None to disable).
+
+    Returns:
+        Batch object with input_ids, labels, and loss_mask tensors.
     """
-    batch_size = len(samples)
-    data, targets = [], []
-    for s, t in samples:
-        data.extend(s)
-        targets.extend(t)
-    data_np = np.array(data, dtype=np.uint32).reshape(batch_size, 1, 1, seq_length)
-    targets_np = np.array(targets, dtype=np.uint32).reshape(batch_size, seq_length)
+    batch_size = len(examples)
 
-    # Shard batch across DP axis if enabled - create tensor directly with mapper
+    input_ids_np = np.zeros((batch_size, 1, 1, seq_length), dtype=np.uint32)
+    labels_np = np.zeros((batch_size, seq_length), dtype=np.uint32)
+
+    for i, ex in enumerate(examples):
+        input_ids = ex["input_ids"]
+        labels = ex["labels"]
+        n = min(len(input_ids), seq_length)
+        input_ids_np[i, 0, 0, :n] = input_ids[:n]
+        labels_np[i, :n] = labels[:n]
+
+    # Shard batch across DP axis if enabled
     if dp_axis is not None and mesh_device is not None:
         mapper = ttml.core.distributed.shard_tensor_to_mesh_mapper(
-            mesh_device, 0, dp_axis  # shard dim 0 (batch) across dp_axis
+            mesh_device, 0, dp_axis
         )
-        data_t = ttml.autograd.Tensor.from_numpy(
-            data_np,
+        input_ids_t = ttml.autograd.Tensor.from_numpy(
+            input_ids_np,
             layout=ttnn.Layout.ROW_MAJOR,
             new_type=ttnn.DataType.UINT32,
             mapper=mapper,
         )
-        targets_t = ttml.autograd.Tensor.from_numpy(
-            targets_np,
+        labels_t = ttml.autograd.Tensor.from_numpy(
+            labels_np,
             layout=ttnn.Layout.ROW_MAJOR,
             new_type=ttnn.DataType.UINT32,
             mapper=mapper,
         )
     else:
-        data_t = ttml.autograd.Tensor.from_numpy(
-            data_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
+        input_ids_t = ttml.autograd.Tensor.from_numpy(
+            input_ids_np,
+            layout=ttnn.Layout.ROW_MAJOR,
+            new_type=ttnn.DataType.UINT32,
         )
-        targets_t = ttml.autograd.Tensor.from_numpy(
-            targets_np, layout=ttnn.Layout.ROW_MAJOR, new_type=ttnn.DataType.UINT32
+        labels_t = ttml.autograd.Tensor.from_numpy(
+            labels_np,
+            layout=ttnn.Layout.ROW_MAJOR,
+            new_type=ttnn.DataType.UINT32,
         )
 
-    return data_t, targets_t
-
-
-# ---------------------------------------------------------------------------
-# Training step
-# ---------------------------------------------------------------------------
-
-
-def train_step(
-    model: Llama,
-    optimizer,
-    input_tokens,
-    target_tokens,
-    mask,
-    mesh_device,
-    dp_axis: int = None,
-    grad_accum_steps: int = 1,
-    use_clip_grad_norm: bool = False,
-    clip_grad_norm_max_norm: float = 1.0,
-    track_memory: bool = False,
-) -> float:
-    optimizer.zero_grad()
-
-    logits = model(input_tokens, mask)
-    loss = ttml.ops.loss.cross_entropy_loss(
-        logits, target_tokens, reduce=ttml.ops.ReduceType.MEAN
+    return Batch(
+        input_ids=input_ids_t,
+        labels=labels_t,
+        loss_mask=None,
     )
 
-    if grad_accum_steps > 1:
-        loss = ttml.ops.binary.mul(loss, 1.0 / float(grad_accum_steps))
 
-    # Use composer to gather distributed loss tensor before getting scalar value
-    composer = ttml.core.distributed.concat_mesh_to_tensor_composer(mesh_device, 0)
-    loss_numpy = loss.to_numpy(composer=composer)
-    loss_float = float(loss_numpy.flatten()[0])
+# ---------------------------------------------------------------------------
+# Callbacks
+# ---------------------------------------------------------------------------
 
-    if track_memory:
-        MemoryUsageTracker.snapshot("FORWARD_PASS")
-        print_memory_stats("FORWARD_PASS")
 
-    loss.backward(False)
+class MemoryTrackingCallback(TrainerCallback):
+    """Callback for memory tracking on the first training step."""
 
-    if track_memory:
-        MemoryUsageTracker.snapshot("BACKWARD_PASS")
-        print_memory_stats("BACKWARD_PASS")
+    def __init__(self):
+        self._memory_guard = None
+        self._is_first_step = True
 
-    ttml.autograd.AutoContext.get_instance().reset_graph()
+    def on_train_begin(self, trainer: "SFTTrainer") -> None:
+        print("\n   Memory tracking enabled")
+        self._memory_guard = MemoryUsageTracker.begin_capture()
 
-    # Sync gradients across DP axis if enabled
-    cluster_axes = [dp_axis] if dp_axis is not None else None
-    sync_gradients(model, cluster_axes=cluster_axes)
+    def on_step_end(
+        self, trainer: "SFTTrainer", step: int, loss: float, lr: float
+    ) -> None:
+        if self._is_first_step:
+            self._is_first_step = False
+            MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
+            print("\n" + "=" * 70)
+            print("MEMORY USAGE REPORT")
+            print("=" * 70)
+            MemoryUsageTracker.print_memory_usage()
+            MemoryUsageTracker.clear()
+            if self._memory_guard:
+                self._memory_guard.release()
+                self._memory_guard = None
+            print("=" * 70 + "\n")
 
-    if use_clip_grad_norm:
-        ttml.core.clip_grad_norm(
-            model.parameters(),
-            clip_grad_norm_max_norm,
-            2.0,
-            False,
-        )
 
-    optimizer.step()
-    return loss_float
+class DispatchTraceCallback(TrainerCallback):
+    """Callback for dispatch trace logging."""
+
+    def on_train_begin(self, trainer: "SFTTrainer") -> None:
+        dispatch_trace.enable()
+
+    def on_train_end(self, trainer: "SFTTrainer") -> None:
+        dispatch_trace.disable()
+        print(f"\nDispatch trace: {len(dispatch_trace.entries)} recorded events")
+        for entry in dispatch_trace.entries[:20]:
+            print(f"  {entry}")
+        if len(dispatch_trace.entries) > 20:
+            print(f"  ... and {len(dispatch_trace.entries) - 20} more")
 
 
 # ---------------------------------------------------------------------------
@@ -302,7 +413,7 @@ def build_llama_tp_policy(mesh_device, tp_axis: int) -> dict:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Llama TP Training")
+    parser = argparse.ArgumentParser(description="Llama TP Training with SFTTrainer")
     parser.add_argument(
         "-c", "--config", type=str, required=True, help="YAML config path"
     )
@@ -339,10 +450,40 @@ def main():
         action="store_true",
         help="Enable memory usage tracking (DRAM/L1)",
     )
+    # SFTTrainer specific options
+    parser.add_argument(
+        "--eval_interval",
+        type=int,
+        default=0,
+        help="Evaluation interval (0 to disable)",
+    )
+    parser.add_argument(
+        "--save_interval",
+        type=int,
+        default=0,
+        help="Checkpoint save interval (0 to disable)",
+    )
+    parser.add_argument(
+        "--checkpoint_dir",
+        type=str,
+        default="checkpoints",
+        help="Directory for checkpoints",
+    )
+    parser.add_argument(
+        "--warmup_steps",
+        type=int,
+        default=0,
+        help="Number of warmup steps for LR schedule",
+    )
+    parser.add_argument(
+        "--gradient_checkpointing",
+        action="store_true",
+        help="Enable gradient checkpointing (memory efficient mode)",
+    )
     args = parser.parse_args()
 
     print("=" * 70)
-    print("Llama TP Training (layout-aware dispatch)")
+    print("Llama TP Training with SFTTrainer (layout-aware dispatch)")
     print("=" * 70)
 
     # Env setup
@@ -378,6 +519,8 @@ def main():
     grad_accum = int(tc.get("gradient_accumulation_steps", 1))
     use_clip = tc.get("use_clip_grad_norm", False)
     clip_norm = float(tc.get("clip_grad_norm_max_norm", 1.0))
+    optimizer_cfg = tc.get("optimizer", {})
+    learning_rate = float(optimizer_cfg.get("lr", tc.get("learning_rate", 3e-4)))
 
     # Data
     data_path = args.data_path or tc.get("data_path", "")
@@ -462,12 +605,6 @@ def main():
     print("\n   Initializing dispatch layer...")
     init_ops()
 
-    # Memory tracking
-    memory_guard = None
-    if args.track_memory:
-        print("\n   Memory tracking enabled")
-        memory_guard = MemoryUsageTracker.begin_capture()
-
     # Model
     print("\n3. Creating Llama model...")
 
@@ -492,121 +629,82 @@ def main():
     )
     print(f"   Total parameters: {total_params:,}")
 
-    if args.track_memory:
-        MemoryUsageTracker.snapshot("MODEL_CREATION")
-        print_memory_stats("MODEL_CREATION")
-
-    # Distribute
+    # Distribute model with TP
     if tp_axis is not None:
         print("\n4. Distributing model with TP...")
         policy = build_llama_tp_policy(mesh_device, tp_axis)
         print(f"   Policy covers {len(policy)} parameter patterns")
-
-        if args.debug_dispatch:
-            dispatch_trace.enable()
-
         model = distribute_module(model, mesh_device, policy)
         print("   Model distributed.")
-
-        if args.track_memory:
-            MemoryUsageTracker.snapshot("MODEL_DISTRIBUTED")
-            print_memory_stats("MODEL_DISTRIBUTED")
     else:
         print("\n4. TP not enabled, skipping distribution...")
-        if args.debug_dispatch:
-            dispatch_trace.enable()
 
-    # Optimizer
-    print("\n5. Creating optimizer...")
-    optimizer = create_optimizer(model, yaml_config)
-    print(f"   Optimizer: {optimizer.get_name()}, lr={optimizer.get_lr()}")
+    # Wrap model with DataParallelModel for DP gradient sync
+    if dp_axis is not None:
+        print(f"\n   Wrapping model with DataParallelModel (dp_axis={dp_axis})...")
+        model = DataParallelModel(model, dp_axis)
 
-    if args.track_memory:
-        MemoryUsageTracker.snapshot("OPTIMIZER_CREATION")
-        print_memory_stats("OPTIMIZER_CREATION")
+    # Create dataloader with distributed collate function
+    print("\n5. Creating dataloader...")
+    collate_fn = partial(
+        distributed_collate_fn,
+        seq_length=seq_len,
+        mesh_device=mesh_device,
+        dp_axis=dp_axis,
+    )
+    train_dataloader = InMemoryDataloader(
+        dataset=dataset,
+        collate_fn=collate_fn,
+        batch_size=batch_size,
+        shuffle=True,
+        drop_last=True,
+    )
+    print(f"   Dataloader: {len(train_dataloader)} batches, batch_size={batch_size}")
 
-    # Mask
-    mask_np = build_causal_mask(seq_len)
-    mask = ttml.autograd.Tensor.from_numpy(
-        mask_np, layout=ttnn.Layout.TILE, new_type=ttnn.DataType.BFLOAT16
+    # Create SFTConfig
+    sft_config = SFTConfig(
+        max_steps=max_steps,
+        gradient_accumulation_steps=grad_accum,
+        eval_interval=args.eval_interval,
+        save_interval=args.save_interval,
+        checkpoint_dir=args.checkpoint_dir,
+        seed=seed,
+        max_seq_len=seq_len,
+        learning_rate=learning_rate,
+        warmup_steps=args.warmup_steps,
+        max_grad_norm=clip_norm if use_clip else 0.0,
+        log_interval=1,
+        gradient_checkpointing=args.gradient_checkpointing,
     )
 
-    # Training loop
-    print(f"\n6. Training for {max_steps} steps (batch_size={batch_size})...")
-    model.train()
-    dataset_len = len(dataset)
-    indices = np.arange(dataset_len, dtype=np.int64)
+    # Build optimizer config from yaml (use optimizer_cfg directly, with defaults)
+    optimizer_dict = (
+        optimizer_cfg if optimizer_cfg else {"type": "AdamW", "lr": learning_rate}
+    )
 
-    global_step = 0
-    start_time = time.time()
-    is_first_step = True
-
-    for epoch in range(int(tc.get("num_epochs", 1))):
-        np.random.shuffle(indices)
-        for batch_start in range(0, dataset_len, batch_size):
-            batch_end = min(batch_start + batch_size, dataset_len)
-            samples = [dataset[i] for i in indices[batch_start:batch_end]]
-            input_tokens, target_tokens = collate(
-                samples,
-                seq_len,
-                mesh_device=mesh_device if dp_axis is not None else None,
-                dp_axis=dp_axis,
-            )
-
-            # Track memory only on first step
-            track_this_step = args.track_memory and is_first_step
-
-            step_start = time.time()
-            loss = train_step(
-                model,
-                optimizer,
-                input_tokens,
-                target_tokens,
-                mask,
-                mesh_device,
-                dp_axis,
-                grad_accum,
-                use_clip,
-                clip_norm,
-                track_memory=track_this_step,
-            )
-            step_time = time.time() - step_start
-
-            global_step += 1
-            elapsed = time.time() - start_time
-            print(
-                f"  Step {global_step:5d} | loss={loss:.4f} | step_time={step_time:.3f}s | elapsed={elapsed:.1f}s"
-            )
-
-            # Print memory report after first step
-            if track_this_step:
-                is_first_step = False
-                MemoryUsageTracker.end_capture("FIRST_ITERATION_COMPLETE")
-                print("\n" + "=" * 70)
-                print("MEMORY USAGE REPORT")
-                print("=" * 70)
-                MemoryUsageTracker.print_memory_usage()
-                MemoryUsageTracker.clear()
-                if memory_guard:
-                    memory_guard.release()
-                    memory_guard = None
-                print("=" * 70 + "\n")
-
-            if global_step >= max_steps:
-                break
-        if global_step >= max_steps:
-            break
-
-    elapsed = time.time() - start_time
-    print(f"\nTraining complete: {global_step} steps in {elapsed:.1f}s")
-
+    # Setup callbacks
+    callbacks = []
+    if args.track_memory:
+        callbacks.append(MemoryTrackingCallback())
     if args.debug_dispatch:
-        dispatch_trace.disable()
-        print(f"\nDispatch trace: {len(dispatch_trace.entries)} recorded events")
-        for entry in dispatch_trace.entries[:20]:
-            print(f"  {entry}")
-        if len(dispatch_trace.entries) > 20:
-            print(f"  ... and {len(dispatch_trace.entries) - 20} more")
+        callbacks.append(DispatchTraceCallback())
+
+    # Create and run trainer
+    print(f"\n6. Training for {max_steps} steps...")
+    trainer = SFTTrainer(
+        model=model,
+        train_dataloader=train_dataloader,
+        eval_dataloader=None,
+        config=sft_config,
+        optimizer=optimizer_dict,
+        callbacks=callbacks if callbacks else None,
+    )
+
+    start_time = time.time()
+    trainer.train()
+    elapsed = time.time() - start_time
+
+    print(f"\nTraining complete: {trainer.step} steps in {elapsed:.1f}s")
 
     ttml.autograd.AutoContext.get_instance().close_device()
 

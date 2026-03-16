@@ -124,8 +124,8 @@ def dispatch(op_name: str, *args, **kwargs):
         else:
             other_args.append(a)
 
-    # Check if any tensor has a layout set (meaning it's distributed)
-    has_distributed = any(get_layout(t) is not None for t in tensor_args)
+    # Check if any tensor is actually distributed (lives on a mesh device)
+    has_distributed = any(is_distributed(t) for t in tensor_args)
     if not has_distributed:
         raw = _get_raw(op_name)
         return raw(*args, **kwargs)
