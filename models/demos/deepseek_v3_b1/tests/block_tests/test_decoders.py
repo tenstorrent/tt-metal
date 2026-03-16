@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Full decoder tests: per-family forward comparison + compose-from-primitives vs HF reference."""
 
 import torch
@@ -197,7 +201,7 @@ def test_decoder_cache_chunking_equivalence_per_family():
 
 
 # ===========================================================================
-# Real HF model comparison tests
+# HF model comparison tests
 # ===========================================================================
 
 # --- Helpers for manual forward replication ---
@@ -271,7 +275,7 @@ def test_deepseek_v3_decoder_from_primitives(variant):
     """
     Compose a full DeepSeek V3 decoder layer from our primitive functions
     (mla_attention_torch/hf from mla.py, moe_torch/hf + moe_shared_experts
-    from moe.py) and compare against the real HF DeepseekV3DecoderLayer.
+    from moe.py) and compare against the HF DeepseekV3DecoderLayer.
 
     Tests both dense (layer 0) and MoE (layer 1) decoder layers.
     """
@@ -383,7 +387,7 @@ def test_deepseek_v3_decoder_from_primitives(variant):
 
         # 4) Compare
         assert_close(hf_out, h, atol=1e-5, rtol=1e-5), (
-            f"DeepSeek V3 ({label}): composed vs real HF "
+            f"DeepSeek V3 ({label}): composed vs HF "
             f"layer_idx={layer_idx} mismatch"
         )
 
@@ -492,7 +496,7 @@ def test_kimi_k25_decoder_from_primitives(variant):
 
         # 4) Compare
         assert_close(hf_out, h, atol=1e-4, rtol=1e-4), (
-            f"Kimi K2.5 ({label}): composed vs real HF "
+            f"Kimi K2.5 ({label}): composed vs HF "
             f"layer_idx={layer_idx} mismatch"
         )
 
@@ -578,12 +582,12 @@ def test_glm4_decoder_from_primitives(variant):
     # 4) Compare
     label = variant
     assert_close(hf_out, h, atol=1e-4, rtol=1e-4), \
-        f"GLM-4 ({label}): composed vs real HF GLM-4 mismatch"
+        f"GLM-4 ({label}): composed vs HF GLM-4 mismatch"
 
 
 # ---------------------------------------------------------------------------
 # Full GPT-OSS 120B decoder layer composed from gqa.py + moe.py functions
-#   (using Mixtral as real HF reference — same GQA + MoE architecture)
+#   (using Mixtral as HF reference — same GQA + MoE architecture)
 # ---------------------------------------------------------------------------
 
 @torch.no_grad()
@@ -647,7 +651,7 @@ def test_gpt_oss_decoder_from_primitives(variant):
     # 4) Compare
     label = variant
     assert_close(hf_out, h, atol=1e-4, rtol=1e-4), \
-        f"GPT-OSS 120B ({label}): composed vs real HF Mixtral proxy mismatch"
+        f"GPT-OSS 120B ({label}): composed vs HF Mixtral proxy mismatch"
 
 
 # ===========================================================================
@@ -874,7 +878,7 @@ def test_llama_decoder_from_primitives(variant, model_name, config_overrides, se
     # 4) Compare
     label = variant
     assert_close(hf_out, h, atol=1e-4, rtol=1e-4), \
-        f"{model_name} ({label}): composed vs real HF Llama mismatch"
+        f"{model_name} ({label}): composed vs HF Llama mismatch"
 
 
 @torch.no_grad()
@@ -935,7 +939,7 @@ def test_grok2_decoder_from_primitives(variant):
     # 4) Compare
     label = variant
     assert_close(hf_out, h, atol=1e-4, rtol=1e-4), \
-        f"Grok 2 ({label}): composed vs real HF Mixtral proxy mismatch"
+        f"Grok 2 ({label}): composed vs HF Mixtral proxy mismatch"
 
 
 # ---------------------------------------------------------------------------
@@ -1014,7 +1018,7 @@ def test_llama4_decoder_from_primitives(variant, model_name, config_overrides, s
     # 4) Compare
     label = variant
     assert_close(hf_out, h, atol=1e-4, rtol=1e-4), \
-        f"{model_name} ({label}): composed vs real HF Llama4 mismatch"
+        f"{model_name} ({label}): composed vs HF Llama4 mismatch"
 
 
 # ---------------------------------------------------------------------------
@@ -1086,7 +1090,7 @@ def test_minimax_m25_decoder_from_primitives(variant):
     # 4) Compare
     label = variant
     assert_close(hf_out, h, atol=1e-4, rtol=1e-4), \
-        f"MiniMax M25 ({label}): composed vs real HF MiniMax mismatch"
+        f"MiniMax M25 ({label}): composed vs HF MiniMax mismatch"
 
 
 # ---------------------------------------------------------------------------
@@ -1156,7 +1160,7 @@ def test_olmoe_decoder_from_primitives(variant):
     # 4) Compare
     label = variant
     assert_close(hf_out, h, atol=1e-4, rtol=1e-4), \
-        f"OLMoE ({label}): composed vs real HF OLMoE mismatch"
+        f"OLMoE ({label}): composed vs HF OLMoE mismatch"
 
 
 # ---------------------------------------------------------------------------
@@ -1215,7 +1219,7 @@ def test_qwen2_5_decoder_from_primitives(variant):
     # 4) Compare
     label = variant
     assert_close(hf_out, h, atol=1e-4, rtol=1e-4), \
-        f"Qwen2.5 ({label}): composed vs real HF Qwen2 mismatch"
+        f"Qwen2.5 ({label}): composed vs HF Qwen2 mismatch"
 
 
 # ---------------------------------------------------------------------------
@@ -1294,7 +1298,7 @@ def test_qwen3moe_decoder_from_primitives(variant, model_name, config_overrides,
     # 4) Compare
     label = variant
     assert_close(hf_out, h, atol=1e-4, rtol=1e-4), \
-        f"{model_name} ({label}): composed vs real HF Qwen3Moe mismatch"
+        f"{model_name} ({label}): composed vs HF Qwen3Moe mismatch"
 
 
 # ---------------------------------------------------------------------------
@@ -1351,4 +1355,4 @@ def test_qwen3_32b_decoder_from_primitives(variant):
     # 4) Compare
     label = variant
     assert_close(hf_out, h, atol=1e-4, rtol=1e-4), \
-        f"Qwen3-32B ({label}): composed vs real HF Qwen3 mismatch"
+        f"Qwen3-32B ({label}): composed vs HF Qwen3 mismatch"

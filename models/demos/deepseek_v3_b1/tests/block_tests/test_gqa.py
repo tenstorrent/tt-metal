@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """GQA unit tests + comparison vs HF attention."""
 
 import torch
@@ -77,7 +81,7 @@ def test_gqa_cache_chunking_equivalence():
 def test_gqa_glm4():
     """
     Compare gqa_attention_torch and gqa_attention_tt from gqa.py against the
-    real HF Glm4Attention module with real RoPE (GLM4 interleaved, partial).
+    HF Glm4Attention module with RoPE (GLM4 interleaved, partial).
     """
     from transformers import Glm4Config
     from transformers.models.glm4.modeling_glm4 import (
@@ -141,8 +145,8 @@ def test_gqa_glm4():
 @torch.no_grad()
 def test_gqa_llama():
     """
-    Compare gqa_attention_torch against real HF LlamaAttention
-    with standard RoPE and real position_ids.
+    Compare gqa_attention_torch against HF LlamaAttention
+    with standard RoPE and position_ids.
     """
     from transformers import LlamaConfig
     from transformers.models.llama.modeling_llama import (

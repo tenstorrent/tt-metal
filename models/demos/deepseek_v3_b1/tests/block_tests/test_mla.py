@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """MLA unit tests + comparison vs HF attention."""
 
 import torch
@@ -81,8 +85,8 @@ def test_mla_cache_chunking_equivalence():
 @torch.no_grad()
 def test_mla_deepseek_v3():
     """
-    Compare mla_attention_torch against real HF DeepseekV3Attention
-    with real RoPE (nope+rope split) and real position_ids.
+    Compare mla_attention_torch against HF DeepseekV3Attention
+    with RoPE (nope+rope split) and position_ids.
 
     Adaptations:
     - q_lora_rank=None → direct Q projection (no LoRA), matches our wq

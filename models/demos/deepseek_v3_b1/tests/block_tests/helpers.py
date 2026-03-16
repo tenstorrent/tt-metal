@@ -1,3 +1,7 @@
+# SPDX-FileCopyrightText: (c) 2026 Tenstorrent AI ULC
+
+# SPDX-License-Identifier: Apache-2.0
+
 """Shared helpers for attention/MoE reference implementations and tests."""
 
 import random
