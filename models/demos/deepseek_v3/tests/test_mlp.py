@@ -16,7 +16,7 @@ from models.demos.deepseek_v3.tt.mlp.mlp import MLP
 from models.demos.deepseek_v3.tt.mlp.mlp_dequant import MLPDequant
 from models.demos.deepseek_v3.tt.mlp.non_expert import NonExpert
 from models.demos.deepseek_v3.tt.mlp.shared_expert import SharedExpert
-from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config, sub_state_dict
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, get_fabric_config, sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config, load_weight
 from models.demos.deepseek_v3.utils.test_utils import (
     assert_hidden_dim_pcc,
@@ -194,7 +194,14 @@ def test_forward_pass(
         real_weights=module_path is not None,
         layer_id=module_path,
     )
-    model_config = get_model_config(MLPClass, mode, hf_config, mesh_device, device_params["fabric_config"])
+    model_config = get_model_config(
+        MLPClass,
+        mode,
+        hf_config,
+        mesh_device,
+        device_params["fabric_config"],
+        batch_size_per_row=USERS_PER_ROW,
+    )
     model_state = MLPClass.create_state(hf_config, mesh_device, ccl)
     run_config = create_run_config(model_config, weight_config, model_state)
 

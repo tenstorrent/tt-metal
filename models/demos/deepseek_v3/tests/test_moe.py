@@ -168,7 +168,13 @@ def test_forward_pass(
     )
 
     model_config = get_model_config(
-        MoE, mode, hf_config, mesh_device, device_params["fabric_config"], topk_fallback=topk_fallback
+        MoE,
+        mode,
+        hf_config,
+        mesh_device,
+        device_params["fabric_config"],
+        batch_size_per_row=USERS_PER_ROW,
+        topk_fallback=topk_fallback,
     )
     model_state = MoE.create_state(hf_config, mesh_device, ccl)
     model_shared_state = MoE.create_shared_state(hf_config, mesh_device)

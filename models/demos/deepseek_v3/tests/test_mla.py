@@ -192,7 +192,7 @@ def run_test_forward_pass_mla2d(
 ):
     # Check params
     if mode == "prefill":
-        assert batch_size_per_row == 1, "Prefill only supports a batch size of 1"
+        assert batch_size_per_row == USERS_PER_ROW, f"Prefill expects a full row batch of {USERS_PER_ROW}"
         batch_size = batch_size_per_row
     else:
         assert mode == "decode" and seq_len == 1, "Decode only supports a sequence length of 1"

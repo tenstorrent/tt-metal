@@ -2,6 +2,7 @@
 
 # SPDX-License-Identifier: Apache-2.0
 
+import inspect
 import itertools
 import os
 from copy import deepcopy
@@ -475,14 +476,25 @@ def pad_or_trim_seq_len(tensor: torch.Tensor, mode: Literal["prefill", "decode"]
     return padded_tensor
 
 
-def get_model_config(ModuleClass: type[AbstractModule], mode: Literal["prefill", "decode"], *args, **kwargs) -> Any:
+def get_model_config(
+    ModuleClass: type[AbstractModule],
+    mode: Literal["prefill", "decode"],
+    *args,
+    batch_size_per_row: int | None = None,
+    **kwargs,
+) -> Any:
     """Get the module config for the given mode and kwargs."""
     if mode == "prefill":
-        return ModuleClass.prefill_model_config(*args, **kwargs)
+        config_fn = ModuleClass.prefill_model_config
     elif mode == "decode":
-        return ModuleClass.decode_model_config(*args, **kwargs)
+        config_fn = ModuleClass.decode_model_config
     else:
         raise ValueError(f"Unsupported mode: {mode}. Supported modes are 'prefill' and 'decode'.")
+
+    if batch_size_per_row is not None and "batch_size_per_row" in inspect.signature(config_fn).parameters:
+        kwargs.setdefault("batch_size_per_row", batch_size_per_row)
+
+    return config_fn(*args, **kwargs)
 
 
 def run_module_forward(ModuleClass: type[AbstractModule], mode: Literal["prefill", "decode"], *args, **kwargs) -> Any:
