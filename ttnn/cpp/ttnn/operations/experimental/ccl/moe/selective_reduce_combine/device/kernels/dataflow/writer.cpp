@@ -189,8 +189,8 @@ void kernel_main() {
                 num_token_parallel_cores * num_data_parallel_cores - 1,
                 /*linked=*/false,
                 /*noc=*/1);
-            noc_async_write_barrier(/*noc=*/1);
-            noc_async_atomic_barrier(/*noc=*/1);
+            noc_async_writes_flushed(/*noc=*/1);
+
         } else {
             noc_semaphore_wait(init_semaphore_ptr, replicate_group_devices - 1);
         }
@@ -287,8 +287,8 @@ void kernel_main() {
 
         auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
 
-        noc_async_write_barrier(/*noc=*/1);
-        noc_async_atomic_barrier(/*noc=*/1);
+        noc_async_write_barrier();
+        noc_async_atomic_barrier();
 
         close_direction_connections<
             Num_Directions,
@@ -309,8 +309,8 @@ void kernel_main() {
             sync_args.termination_master_noc_x,
             sync_args.termination_master_noc_y,
             sync_args.termination_sync_address,
-            0);
-        noc_semaphore_inc(safe_termination_sync_address, 1);
+            /*noc=*/1);
+        noc_semaphore_inc(safe_termination_sync_address, 1, /*noc=*/1);
 
         noc_async_write_barrier(/*noc=*/1);
         noc_async_atomic_barrier(/*noc=*/1);

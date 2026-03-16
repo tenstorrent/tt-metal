@@ -394,6 +394,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const DataMovementConfig reader_config{
         .processor = DataMovementProcessor::RISCV_1,
         .noc = NOC::NOC_1,
+        .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
         .compile_args = reader_compile_time_args,
         .named_compile_args = reader_named_ct_args};
 
@@ -465,6 +466,7 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const DataMovementConfig writer_config{
         .processor = DataMovementProcessor::RISCV_0,
         .noc = NOC::NOC_1,
+        .noc_mode = tt::tt_metal::NOC_MODE::DM_DYNAMIC_NOC,
         .compile_args = writer_compile_time_args,
         .defines = writer_defines,
         .named_compile_args = writer_named_ct_args};
