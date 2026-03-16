@@ -24,6 +24,10 @@
 #include "api/remote_circular_buffer.h"
 #endif
 
+// Per-processor kernel thread info for Quasar (set from kernel_config before kernel runs)
+thread_local uint32_t num_sw_threads __attribute__((used));
+thread_local uint32_t my_thread_id __attribute__((used));
+
 extern "C" [[gnu::section(".start")]]
 uint32_t _start() {
     // Enable GPREL optimizations.
