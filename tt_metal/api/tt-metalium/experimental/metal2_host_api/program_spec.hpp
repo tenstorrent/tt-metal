@@ -16,15 +16,21 @@
 
 namespace tt::tt_metal::experimental::metal2_host_api {
 
+using WorkerSpecName = std::string;
+
 // WorkerSpec describes the configuration of a worker node
 struct WorkerSpec {
+    // Worker type identifier
+    WorkerSpecName unique_id;
+
     // Kernels, DFBs, and semaphores for this worker
-    std::vector<KernelSpec> kernels;
+    std::vector<DataMovementKernelSpec> data_movement_kernels;
+    std::vector<ComputeKernelSpec> compute_kernels;
     std::vector<DataflowBufferSpec> dataflow_buffers;
     std::vector<SemaphoreSpec> semaphores;
 
     // The set of nodes configured by this WorkerSpec
-    std::variant<NodeCoord, NodeRange, NodeRangeSet> nodes;
+    std::variant<NodeCoord, NodeRange, NodeRangeSet> target_nodes;
 };
 
 

@@ -115,6 +115,9 @@ struct KernelSpec {
     };
     RuntimeArgSchema runtime_arguments_schema;
 
+    // Make KernelSpec an abstract type
+    // ComputeKernelSpec and DataMovementKernelSpec are the concrete types
+    virtual ~KernelSpec() = default;
 };
 
 struct ComputeKernelSpec : public KernelSpec {
