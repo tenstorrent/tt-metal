@@ -76,12 +76,40 @@ constexpr uint32_t ETH_RETRAIN_LINK_SYNC_STREAM_ID = NAMED_CT_ARG("ETH_RETRAIN_L
 // ============================================================================
 constexpr size_t MAX_NUM_SENDER_CHANNELS = NAMED_CT_ARG("MAX_NUM_SENDER_CHANNELS");
 constexpr size_t MAX_NUM_RECEIVER_CHANNELS = NAMED_CT_ARG("MAX_NUM_RECEIVER_CHANNELS");
+constexpr size_t MAX_NUM_VCS = NAMED_CT_ARG("MAX_NUM_VCS");
+
+// Per-VC actual sender channel counts
+constexpr size_t ACTUAL_VC0_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC0_SENDER_CHANNELS");
+constexpr size_t ACTUAL_VC1_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC1_SENDER_CHANNELS");
+
 // VC0 and VC1 channel counts depend on router type:
 // Z_ROUTER: 5 VC0 + 4 VC1 = 9 total
 // MESH: 4 VC0 + 4 VC1 = 8 total (with some unused)
-constexpr size_t MAX_NUM_SENDER_CHANNELS_VC0 = (MAX_NUM_SENDER_CHANNELS >= 9) ? 5 : 4;
-constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = MAX_NUM_SENDER_CHANNELS - MAX_NUM_SENDER_CHANNELS_VC0;
-constexpr size_t VC1_SENDER_CHANNEL_START = MAX_NUM_SENDER_CHANNELS_VC0;
+constexpr size_t MAX_NUM_SENDER_CHANNELS_VC0 = ACTUAL_VC0_SENDER_CHANNELS;
+constexpr size_t MAX_NUM_SENDER_CHANNELS_VC1 = ACTUAL_VC1_SENDER_CHANNELS;
+constexpr size_t VC1_SENDER_CHANNEL_START = ACTUAL_VC0_SENDER_CHANNELS;
+
+static_assert(
+    MAX_NUM_VCS == 2, "MAX_NUM_VCS must be 2 for the current implementation. Additional VCs required code changes");
+// Per-VC arrays (for N-VC generalization)
+constexpr size_t ACTUAL_SENDER_CHANNELS_PER_VC[MAX_NUM_VCS] = {ACTUAL_VC0_SENDER_CHANNELS, ACTUAL_VC1_SENDER_CHANNELS};
+constexpr size_t VC_SENDER_CHANNEL_START[MAX_NUM_VCS] = {0, ACTUAL_VC0_SENDER_CHANNELS};
+
+// ============================================================================
+// Per-VC sender channel array slicing helper
+// Extracts a sub-array for a given VC from a flat MAX_NUM_SENDER_CHANNELS-sized array
+// ============================================================================
+template <size_t vc, typename T, size_t N>
+constexpr auto slice_sender_channels_for_vc(const std::array<T, N>& flat) {
+    constexpr size_t offset = VC_SENDER_CHANNEL_START[vc];
+    constexpr size_t count = ACTUAL_SENDER_CHANNELS_PER_VC[vc];
+    std::array<T, count> result{};
+    static_assert(flat.size() >= offset + count, "trying to slice out of bounds of constexpr array");
+    for (size_t i = 0; i < count; i++) {
+        result[i] = flat[offset + i];
+    }
+    return result;
+}
 
 // ============================================================================
 // Downstream tensix connections
@@ -96,11 +124,11 @@ constexpr size_t NUM_RECEIVER_CHANNELS = NAMED_CT_ARG("NUM_RECEIVER_CHANNELS");
 constexpr size_t NUM_DOWNSTREAM_CHANNELS = NAMED_CT_ARG("NUM_DOWNSTREAM_CHANNELS");
 constexpr size_t NUM_DOWNSTREAM_SENDERS_VC0 = NAMED_CT_ARG("NUM_DOWNSTREAM_SENDERS_VC0");
 constexpr size_t NUM_DOWNSTREAM_SENDERS_VC1 = NAMED_CT_ARG("NUM_DOWNSTREAM_SENDERS_VC1");
+constexpr size_t NUM_DOWNSTREAM_SENDERS_PER_VC[MAX_NUM_VCS] = {NUM_DOWNSTREAM_SENDERS_VC0, NUM_DOWNSTREAM_SENDERS_VC1};
 constexpr bool wait_for_host_signal = NAMED_CT_ARG("WAIT_FOR_HOST_SIGNAL");
 
-static_assert(
-    NUM_RECEIVER_CHANNELS <= NUM_SENDER_CHANNELS,
-    "NUM_RECEIVER_CHANNELS must be less than or equal to NUM_SENDER_CHANNELS");
+// NUM_RECEIVER_CHANNELS = MAX_NUM_VCS (one per VC, with 0-buffer placeholders for inactive VCs)
+// This can exceed NUM_SENDER_CHANNELS when VCs have receivers but no senders
 static_assert(
     NUM_RECEIVER_CHANNELS <= MAX_NUM_RECEIVER_CHANNELS,
     "NUM_RECEIVER_CHANNELS must be less than or equal to MAX_NUM_RECEIVER_CHANNELS");
@@ -123,6 +151,7 @@ constexpr size_t handshake_addr = NAMED_CT_ARG("HANDSHAKE_ADDR");
 
 static_assert(fuse_receiver_flush_and_completion_ptr == 1, "fuse_receiver_flush_and_completion_ptr must be 0");
 
+// Receiver channels are indexed directly by VC (no flat/compact indexing)
 constexpr size_t VC0_RECEIVER_CHANNEL = 0;
 constexpr size_t VC1_RECEIVER_CHANNEL = 1;
 
@@ -141,12 +170,12 @@ constexpr bool skip_src_ch_id_update = fabric_tensix_extension_mux_mode;
 
 constexpr bool ENABLE_FIRST_LEVEL_ACK_VC0 = NAMED_CT_ARG("ENABLE_FIRST_LEVEL_ACK_VC0");
 constexpr bool ENABLE_FIRST_LEVEL_ACK_VC1 = NAMED_CT_ARG("ENABLE_FIRST_LEVEL_ACK_VC1");
+constexpr bool ENABLE_FIRST_LEVEL_ACK_PER_VC[MAX_NUM_VCS] = {ENABLE_FIRST_LEVEL_ACK_VC0, ENABLE_FIRST_LEVEL_ACK_VC1};
 constexpr bool ENABLE_RISC_CPU_DATA_CACHE = NAMED_CT_ARG("ENABLE_RISC_CPU_DATA_CACHE");
 constexpr bool z_router_enabled = NAMED_CT_ARG("Z_ROUTER_ENABLED");
 constexpr size_t VC0_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC0_DOWNSTREAM_EDM_SIZE");
 constexpr size_t VC1_DOWNSTREAM_EDM_SIZE = NAMED_CT_ARG("VC1_DOWNSTREAM_EDM_SIZE");
-constexpr size_t ACTUAL_VC0_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC0_SENDER_CHANNELS");
-constexpr size_t ACTUAL_VC1_SENDER_CHANNELS = NAMED_CT_ARG("ACTUAL_VC1_SENDER_CHANNELS");
+constexpr size_t DOWNSTREAM_EDM_SIZE_PER_VC[MAX_NUM_VCS] = {VC0_DOWNSTREAM_EDM_SIZE, VC1_DOWNSTREAM_EDM_SIZE};
 
 // Remote channel info (always available; 0 when inactive)
 constexpr size_t remote_worker_sender_channel = NAMED_CT_ARG("REMOTE_WORKER_SENDER_CHANNEL");
@@ -163,6 +192,11 @@ constexpr size_t CHANNEL_ALLOCATIONS_IDX = 0;
 using channel_allocs = ChannelAllocations<CHANNEL_ALLOCATIONS_IDX, NUM_SENDER_CHANNELS, NUM_RECEIVER_CHANNELS>;
 
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_TO_ENTRY_IDX = channel_allocs::sender_channel_to_entry_index;
+// Per-VC sender entry indices (pad to MAX, then slice)
+static constexpr auto SENDER_TO_ENTRY_IDX_PADDED_ =
+    take_first_n_elements<MAX_NUM_SENDER_CHANNELS, NUM_SENDER_CHANNELS, size_t>(SENDER_TO_ENTRY_IDX);
+constexpr auto SENDER_TO_ENTRY_IDX_VC0 = slice_sender_channels_for_vc<0>(SENDER_TO_ENTRY_IDX_PADDED_);
+constexpr auto SENDER_TO_ENTRY_IDX_VC1 = slice_sender_channels_for_vc<1>(SENDER_TO_ENTRY_IDX_PADDED_);
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_TO_ENTRY_IDX =
     channel_allocs::receiver_channel_to_entry_index;
 
@@ -234,7 +268,8 @@ constexpr uint32_t notify_worker_of_read_counter_update_src_address =
 // ============================================================================
 // Channel servicing flags
 // ============================================================================
-constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced = {
+// Flat array (kept for internal slicing only)
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced_flat_ = {
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_0_SERVICED")),
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_1_SERVICED")),
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_2_SERVICED")),
@@ -245,10 +280,30 @@ constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> is_sender_channel_serviced =
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_7_SERVICED")),
     static_cast<bool>(NAMED_CT_ARG("IS_SENDER_CHANNEL_8_SERVICED")),
 };
+// Per-VC sender channel servicing arrays
+constexpr auto is_sender_channel_serviced_vc0 = slice_sender_channels_for_vc<0>(is_sender_channel_serviced_flat_);
+constexpr auto is_sender_channel_serviced_vc1 = slice_sender_channels_for_vc<1>(is_sender_channel_serviced_flat_);
+
 constexpr std::array<bool, MAX_NUM_RECEIVER_CHANNELS> is_receiver_channel_serviced = {
     static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_0_SERVICED")),
     static_cast<bool>(NAMED_CT_ARG("IS_RECEIVER_CHANNEL_1_SERVICED")),
 };
+
+// Per-VC servicing accessors (compile-time VC selection)
+template <size_t vc, size_t ch>
+constexpr auto& get_is_sender_channel_serviced() {
+    static_assert(vc <= 1, "At most 2 VCs currently supported");
+    if constexpr (vc == 0) {
+        return is_sender_channel_serviced_vc0[ch];
+    } else {
+        return is_sender_channel_serviced_vc1[ch];
+    }
+}
+template <size_t vc, size_t ch>
+constexpr bool is_vc_sender_channel_serviced() {
+    return get_is_sender_channel_serviced<vc, ch>();
+}
+constexpr bool is_vc_receiver_channel_serviced(size_t vc) { return is_receiver_channel_serviced[vc]; }
 
 // ============================================================================
 // RISC configuration
@@ -303,8 +358,10 @@ constexpr bool is_intramesh_router_on_edge = NAMED_CT_ARG("IS_INTRAMESH_ROUTER_O
 // ============================================================================
 // Sender channel per-channel arrays
 // Arrays are sized to NUM_SENDER_CHANNELS, built from MAX-sized intermediaries.
+// Per-VC arrays (preferred) are created below; flat aliases kept for backward compat
+// with functions not yet converted to per-VC (see per_vc_conversion_remaining_todos.md)
 // ============================================================================
-static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_ch_live_check_skip_all_ = {
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_ch_live_check_skip_all_ = {
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_0_LIVE_CHECK_SKIP")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_1_LIVE_CHECK_SKIP")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_2_LIVE_CHECK_SKIP")),
@@ -315,14 +372,23 @@ static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_ch_live_check_
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_7_LIVE_CHECK_SKIP")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_8_LIVE_CHECK_SKIP")),
 };
-constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_ch_live_check_skip =
-    take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, bool>(sender_ch_live_check_skip_all_);
+constexpr auto sender_ch_live_check_skip_vc0 = slice_sender_channels_for_vc<0>(sender_ch_live_check_skip_all_);
+constexpr auto sender_ch_live_check_skip_vc1 = slice_sender_channels_for_vc<1>(sender_ch_live_check_skip_all_);
+template <size_t vc>
+constexpr auto& get_sender_ch_live_check_skip() {
+    static_assert(vc <= 1, "At most 2 VCs currently supported");
+    if constexpr (vc == 0) {
+        return sender_ch_live_check_skip_vc0;
+    } else {
+        return sender_ch_live_check_skip_vc1;
+    }
+}
 
 // A channel is a "traffic injection channel" if it is a sender channel that is adding *new*
 // traffic to this dimension/ring. Examples include channels service worker traffic and
 // sender channels that receive traffic from a "turn" (e.g. an EAST channel receiving traffic from NORTH)
 // This attribute is necessary to support bubble flow control.
-static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channel_is_traffic_injection_channel_all_ = {
+constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channel_is_traffic_injection_channel_all_ = {
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_0_IS_INJECTION")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_1_IS_INJECTION")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_2_IS_INJECTION")),
@@ -333,12 +399,22 @@ static constexpr std::array<bool, MAX_NUM_SENDER_CHANNELS> sender_channel_is_tra
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_7_IS_INJECTION")),
     static_cast<bool>(NAMED_CT_ARG("SENDER_CH_8_IS_INJECTION")),
 };
-constexpr std::array<bool, NUM_SENDER_CHANNELS> sender_channel_is_traffic_injection_channel =
-    take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, bool>(
-        sender_channel_is_traffic_injection_channel_all_);
+constexpr auto sender_channel_is_traffic_injection_vc0 =
+    slice_sender_channels_for_vc<0>(sender_channel_is_traffic_injection_channel_all_);
+constexpr auto sender_channel_is_traffic_injection_vc1 =
+    slice_sender_channels_for_vc<1>(sender_channel_is_traffic_injection_channel_all_);
+template <size_t vc>
+constexpr auto& get_sender_channel_is_traffic_injection() {
+    static_assert(vc <= 1, "At most 2 VCs currently supported");
+    if constexpr (vc == 0) {
+        return sender_channel_is_traffic_injection_vc0;
+    } else {
+        return sender_channel_is_traffic_injection_vc1;
+    }
+}
 constexpr size_t BUBBLE_FLOW_CONTROL_INJECTION_SENDER_CHANNEL_MIN_FREE_SLOTS = 2;
 
-static constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_noc_ids_all_ = {
+constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_noc_ids_all_ = {
     static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_0_ACK_NOC_ID")),
     static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_1_ACK_NOC_ID")),
     static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_2_ACK_NOC_ID")),
@@ -349,10 +425,19 @@ static constexpr std::array<size_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_
     static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_7_ACK_NOC_ID")),
     static_cast<size_t>(NAMED_CT_ARG("SENDER_CH_8_ACK_NOC_ID")),
 };
-constexpr std::array<size_t, NUM_SENDER_CHANNELS> sender_channel_ack_noc_ids =
-    take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, size_t>(sender_channel_ack_noc_ids_all_);
+constexpr auto sender_channel_ack_noc_ids_vc0 = slice_sender_channels_for_vc<0>(sender_channel_ack_noc_ids_all_);
+constexpr auto sender_channel_ack_noc_ids_vc1 = slice_sender_channels_for_vc<1>(sender_channel_ack_noc_ids_all_);
+template <size_t vc>
+constexpr auto& get_sender_channel_ack_noc_ids() {
+    static_assert(vc <= 1, "At most 2 VCs currently supported");
+    if constexpr (vc == 0) {
+        return sender_channel_ack_noc_ids_vc0;
+    } else {
+        return sender_channel_ack_noc_ids_vc1;
+    }
+}
 
-static constexpr std::array<uint8_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_cmd_buf_ids_all_ = {
+constexpr std::array<uint8_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack_cmd_buf_ids_all_ = {
     static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_0_ACK_CMD_BUF_ID")),
     static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_1_ACK_CMD_BUF_ID")),
     static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_2_ACK_CMD_BUF_ID")),
@@ -363,8 +448,19 @@ static constexpr std::array<uint8_t, MAX_NUM_SENDER_CHANNELS> sender_channel_ack
     static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_7_ACK_CMD_BUF_ID")),
     static_cast<uint8_t>(NAMED_CT_ARG("SENDER_CH_8_ACK_CMD_BUF_ID")),
 };
-constexpr std::array<uint8_t, NUM_SENDER_CHANNELS> sender_channel_ack_cmd_buf_ids =
-    take_first_n_elements<NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint8_t>(sender_channel_ack_cmd_buf_ids_all_);
+constexpr auto sender_channel_ack_cmd_buf_ids_vc0 =
+    slice_sender_channels_for_vc<0>(sender_channel_ack_cmd_buf_ids_all_);
+constexpr auto sender_channel_ack_cmd_buf_ids_vc1 =
+    slice_sender_channels_for_vc<1>(sender_channel_ack_cmd_buf_ids_all_);
+template <size_t vc>
+constexpr auto& get_sender_channel_ack_cmd_buf_ids() {
+    static_assert(vc <= 1, "At most 2 VCs currently supported");
+    if constexpr (vc == 0) {
+        return sender_channel_ack_cmd_buf_ids_vc0;
+    } else {
+        return sender_channel_ack_cmd_buf_ids_vc1;
+    }
+}
 
 // ============================================================================
 // Receiver channel per-channel arrays
@@ -504,8 +600,6 @@ struct BufferSlot {
 
 using buffer_slot = BufferSlot<channel_buffer_size, sizeof(PACKET_HEADER_TYPE)>;
 
-constexpr size_t NUM_FORWARDED_SENDER_CHANNELS = NUM_SENDER_CHANNELS - 1;
-
 //////////////////////////////////////////////////////////////////////////////////////////
 ////                CT ARGS FETCHING DONE
 //////////////////////////////////////////////////////////////////////////////////////////
@@ -525,6 +619,7 @@ constexpr std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS> to_receiver_packets_se
         std::array<uint32_t, MAX_NUM_RECEIVER_CHANNELS>{to_receiver_0_pkts_sent_id, to_receiver_1_pkts_sent_id});
 
 // not in symbol table - because not used
+constexpr size_t INVALID_STREAM_ID = 33;
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_streams =
     take_first_n_elements<MAX_NUM_SENDER_CHANNELS, MAX_NUM_SENDER_CHANNELS, uint32_t>(
         std::array<uint32_t, MAX_NUM_SENDER_CHANNELS>{
@@ -534,10 +629,10 @@ constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_acked_
             to_sender_2_pkts_acked_id,
             to_sender_3_pkts_acked_id,
             // VC1
-            0,  // Padding upto MAX_NUM_SENDER_CHANNELS. VC1 does not use first level acks.
-            0,
-            0,
-            0});
+            INVALID_STREAM_ID,  // Padding upto MAX_NUM_SENDER_CHANNELS. VC1 does not use first level acks.
+            INVALID_STREAM_ID,
+            INVALID_STREAM_ID,
+            INVALID_STREAM_ID});
 
 // data section
 constexpr std::array<uint32_t, MAX_NUM_SENDER_CHANNELS> to_sender_packets_completed_streams =
@@ -567,7 +662,7 @@ static constexpr uint8_t edm_to_downstream_noc = receiver_channel_forwarding_noc
 #ifdef ARCH_BLACKHOLE
 static constexpr uint8_t worker_handshake_noc = noc_index;
 #else
-static constexpr uint8_t worker_handshake_noc = sender_channel_ack_noc_ids[0];
+static constexpr uint8_t worker_handshake_noc = sender_channel_ack_noc_ids_vc0[0];
 #endif
 constexpr bool local_chip_noc_equals_downstream_noc =
     receiver_channel_forwarding_noc_ids[0] == receiver_channel_local_write_noc_ids[0];
@@ -612,6 +707,20 @@ constexpr std::array<size_t, NumChannels> build_remote_num_slots_array() {
 
 constexpr std::array<size_t, NUM_SENDER_CHANNELS> SENDER_NUM_BUFFERS_ARRAY =
     build_num_slots_array<channel_allocs, SENDER_TO_ENTRY_IDX, NUM_SENDER_CHANNELS>();
+// Per-VC sender buffer count arrays (pad to MAX first, then slice per VC)
+constexpr auto SENDER_NUM_BUFFERS_PADDED_ =
+    take_first_n_elements<MAX_NUM_SENDER_CHANNELS, NUM_SENDER_CHANNELS, size_t>(SENDER_NUM_BUFFERS_ARRAY);
+constexpr auto SENDER_NUM_BUFFERS_VC0 = slice_sender_channels_for_vc<0>(SENDER_NUM_BUFFERS_PADDED_);
+constexpr auto SENDER_NUM_BUFFERS_VC1 = slice_sender_channels_for_vc<1>(SENDER_NUM_BUFFERS_PADDED_);
+template <size_t vc>
+constexpr auto& get_sender_num_buffers() {
+    static_assert(vc <= 1, "At most 2 VCs currently supported");
+    if constexpr (vc == 0) {
+        return SENDER_NUM_BUFFERS_VC0;
+    } else {
+        return SENDER_NUM_BUFFERS_VC1;
+    }
+}
 
 constexpr std::array<size_t, NUM_RECEIVER_CHANNELS> RECEIVER_NUM_BUFFERS_ARRAY =
     build_num_slots_array<channel_allocs, RECEIVER_TO_ENTRY_IDX, NUM_RECEIVER_CHANNELS>();

@@ -28,11 +28,16 @@ void FabricRemoteChannelsAllocator::emit_ct_args(std::vector<uint32_t>& ct_args)
     // Emit per-entry data in ChannelBufferEntry format for all VCs sequentially (VC0 first, then VC1)
     // Format: for each receiver channel per VC: (base_address, num_buffers, remote_address, remote_num_buffers)
     for (size_t vc = 0; vc < builder_config::MAX_NUM_VCS; ++vc) {
-        for (size_t i = 0; i < this->num_used_receiver_channels_per_vc_[vc]; ++i) {
-            ct_args.push_back(static_cast<uint32_t>(this->remote_receiver_channels_base_address_[vc][i]));
-            ct_args.push_back(static_cast<uint32_t>(this->remote_receiver_channels_num_buffers_[vc][i]));
+        if (this->num_used_receiver_channels_per_vc_[vc] > 0) {
+            ct_args.push_back(static_cast<uint32_t>(this->remote_receiver_channels_base_address_[vc][0]));
+            ct_args.push_back(static_cast<uint32_t>(this->remote_receiver_channels_num_buffers_[vc][0]));
             ct_args.push_back(0);  // remote_address (unused for remote pools)
             ct_args.push_back(0);  // remote_num_buffers (unused for remote pools)
+        } else {
+            ct_args.push_back(0);  // base_address (inactive VC)
+            ct_args.push_back(0);  // num_buffers (inactive VC)
+            ct_args.push_back(0);  // remote_address (inactive VC)
+            ct_args.push_back(0);  // remote_num_buffers (inactive VC)
         }
     }
 }

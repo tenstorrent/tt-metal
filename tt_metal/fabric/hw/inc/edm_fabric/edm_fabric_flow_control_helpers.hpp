@@ -212,11 +212,16 @@ struct OutboundReceiverChannelPointers {
     }
 
     FORCE_INLINE void init(uint32_t const remote_receiver_buffer_address, uint32_t const slot_size_bytes) {
-        this->slot_size_bytes = slot_size_bytes;
-        this->remote_receiver_channel_address_base = remote_receiver_buffer_address;
-        this->remote_receiver_channel_address_ptr = remote_receiver_buffer_address;
-        this->remote_receiver_channel_address_last = remote_receiver_buffer_address + ((RECEIVER_NUM_BUFFERS - 1U) * slot_size_bytes);
-        this->num_free_slots = RECEIVER_NUM_BUFFERS;
+        if constexpr (RECEIVER_NUM_BUFFERS == 0) {
+            init();
+        } else {
+            this->slot_size_bytes = slot_size_bytes;
+            this->remote_receiver_channel_address_base = remote_receiver_buffer_address;
+            this->remote_receiver_channel_address_ptr = remote_receiver_buffer_address;
+            this->remote_receiver_channel_address_last =
+                remote_receiver_buffer_address + ((RECEIVER_NUM_BUFFERS - 1U) * slot_size_bytes);
+            this->num_free_slots = RECEIVER_NUM_BUFFERS;
+        }
     }
 
     FORCE_INLINE bool has_space_for_packet() const { return num_free_slots; }

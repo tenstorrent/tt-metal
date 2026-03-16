@@ -52,9 +52,11 @@ constexpr auto initialize_receiver_channel_trid_starts() -> std::array<uint8_t, 
 template <size_t NUM_TO_TAKE, size_t IN_ARRAY_SIZE, typename T>
 constexpr auto take_first_n_elements(const std::array<T, IN_ARRAY_SIZE>& arr_in) -> std::array<T, NUM_TO_TAKE> {
     std::array<T, NUM_TO_TAKE> arr{};
-    for (size_t i = 0; i < NUM_TO_TAKE; i++) {
+    constexpr size_t copy_count = NUM_TO_TAKE < IN_ARRAY_SIZE ? NUM_TO_TAKE : IN_ARRAY_SIZE;
+    for (size_t i = 0; i < copy_count; i++) {
         arr[i] = arr_in[i];
     }
+    // Elements beyond IN_ARRAY_SIZE are value-initialized to T{} (from arr{} above)
     return arr;
 }
 
