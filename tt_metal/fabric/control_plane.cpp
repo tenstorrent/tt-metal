@@ -2564,7 +2564,7 @@ void ControlPlane::collect_and_merge_router_port_directions_from_all_hosts() {
             // root
             distributed_context.barrier();
         }
-    } catch (const distributed::DistributedException& e) {
+    } catch (const tt_metal::distributed::multihost::DistributedException& e) {
         // Log context about which broadcast root failed, then re-throw with more context
         log_error(
             tt::LogFabric,

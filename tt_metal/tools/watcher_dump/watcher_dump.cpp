@@ -8,6 +8,7 @@
 #include <string>
 #include <vector>
 
+#include <tt_metal/common/filesystem_utils.hpp>
 #include "device.hpp"
 #include "dispatch_core_common.hpp"
 #include "impl/context/metal_context.hpp"
@@ -43,7 +44,7 @@ void dump_data(
     std::filesystem::path parent_dir(
         tt::tt_metal::MetalContext::instance().rtoptions().get_root_dir() + output_dir_name);
     std::filesystem::path cq_dir(parent_dir.string() + "command_queue_dump/");
-    std::filesystem::create_directories(cq_dir);
+    tt::filesystem::safe_create_directories(cq_dir);
 
     // Only look at user-specified devices
     vector<std::unique_ptr<IDevice>> devices;
