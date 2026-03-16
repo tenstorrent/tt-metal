@@ -202,13 +202,18 @@ Tensor group_norm(
     auto kernel_config_val =
         init_device_compute_kernel_config(arch, compute_kernel_config, math_fidelity, approx_mode, fp32_acc);
 
-    // For non-sharded DRAM tensors, validate that the requested core grid is not too
-    // large for the input spatial dimensions. The constraint is Ht >= num_virtual_rows,
-    // where num_virtual_rows = (grid_x / num_virtual_cols) * grid_y and Ht = NHW / TILE_SIZE.
-    // Violating this leads to per_core_Mt == 0, causing division-by-zero in kernels.
+    // For non-sharded DRAM tensors, use a core grid that fits the input spatial dimensions.
+    // If the requested grid is invalid (e.g. Ht not divisible by num_virtual_rows), use the
+    // largest valid grid within the requested bounds instead of throwing (see issue #39806).
     if (!input_tensor.is_sharded()) {
         const uint32_t W = input_padded_shape[3];
         const uint32_t Ht = nhw / ttnn::types::TILE_SIZE;
+        const CoreGrid requested = core_grid.value();
+        auto valid_grid =
+            operations::normalization::find_expected_dram_grid(requested.x, requested.y, W, num_groups, nhw);
+        if (valid_grid.has_value() && valid_grid->x == requested.x) {
+            core_grid = *valid_grid;
+        }
         validate_dram_grid(core_grid.value(), W, Ht, num_groups);
     }
 
