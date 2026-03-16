@@ -10,11 +10,14 @@ import torch
 from loguru import logger
 
 import ttnn
-
-# Import from local reference files instead of HuggingFace
 from models.demos.deepseek_v3_d_p.reference.deepseek.model import Gate as ReferenceMoEGate
 from models.demos.deepseek_v3_d_p.reference.deepseek.model import linear as referenceLinear
 from models.demos.deepseek_v3_d_p.tt.moe_gate_prefill2d import MoEGatePrefill
+from models.demos.deepseek_v3_d_p.utils.test_utils import (
+    adjust_shapes_for_testing,
+    calculate_average_recall,
+    get_input_mem_config,
+)
 from tests.ttnn.utils_for_testing import comp_pcc
 
 random.seed(42)
@@ -69,75 +72,10 @@ class MoEGateConfig:
     ccl_config["NUM_LINKS"] = 2
 
 
-def get_or_create_2d_mesh(device_params=None):
-    fabric_cfg = (device_params or {}).get("fabric_config", ttnn.FabricConfig.DISABLED)
-    cluster_type = ttnn.cluster.get_cluster_type()
-
-    if cluster_type == ttnn.cluster.ClusterType.BLACKHOLE_GALAXY:
-        if fabric_cfg != ttnn.FabricConfig.DISABLED:
-            ttnn.set_fabric_config(fabric_cfg)
-        mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(8, 4))
-        return mesh
-
-    elif cluster_type == ttnn.cluster.ClusterType.P150_X8:
-        if fabric_cfg != ttnn.FabricConfig.DISABLED:
-            ttnn.set_fabric_config(fabric_cfg)
-        mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(4, 2))
-        return mesh
-
-    elif cluster_type == ttnn.cluster.ClusterType.P150_X4:
-        if fabric_cfg != ttnn.FabricConfig.DISABLED:
-            ttnn.set_fabric_config(fabric_cfg)
-        mesh = ttnn.open_mesh_device(mesh_shape=ttnn.MeshShape(2, 2))
-        return mesh
-
-    else:
-        raise ValueError(
-            f"Unsupported cluster type, expected P150_X4, P150_X8 or BLACKHOLE_GALAXY, but got {cluster_type}"
-        )
-
-
-def calculate_average_recall(predicted_experts, reference_experts):
-    recall = 0
-
-    for i in range(predicted_experts.shape[0]):
-        pred_row_set = set([e.item() for e in predicted_experts[i]])
-        ref_row_set = set([e.item() for e in reference_experts[i]])
-        recall += len(pred_row_set.intersection(ref_row_set)) / len(ref_row_set) if len(ref_row_set) > 0 else 0
-
-    return recall / predicted_experts.shape[0]
-
-
-def get_input_mem_config(config, mesh_shape):
-    shard_height = (config.sp_dim + config.num_cores - 1) // config.num_cores
-    shard_height = ((shard_height + 31) // 32) * 32
-    shard_width = (config.dim + mesh_shape[1] - 1) // mesh_shape[1]
-    sharded_mem_config = ttnn.create_sharded_memory_config(
-        shape=(shard_height, shard_width),
-        core_grid=config.core_grid,
-        strategy=ttnn.ShardStrategy.HEIGHT,
-        orientation=ttnn.ShardOrientation.ROW_MAJOR,
-        use_height_and_width_as_shard_shape=True,
-    )
-    return sharded_mem_config
-
-
-def adjust_shapes_for_testing(config, mesh_device):
-    """
-    Adjust the input dimensions just in case the test is run on a smaller grid to preserve per-device shapes
-    """
-    n_sp_devices, n_tp_devices = mesh_device.shape
-    if n_sp_devices != 32:
-        config.max_seq_len = config.max_seq_len // (32 // n_sp_devices)
-    if n_tp_devices != 4:
-        config.dim = config.dim // (4 // n_tp_devices)
-
-
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
 def test_forward_pass(
-    device_params,
+    mesh_device,
 ):
-    mesh_device = get_or_create_2d_mesh(device_params)
     config = MoEGateConfig()
     adjust_shapes_for_testing(config, mesh_device)
 
@@ -305,10 +243,6 @@ def test_forward_pass(
     ttnn.deallocate(tt_topk_indices)
     ttnn.deallocate(tt_logits)
     ttnn.deallocate(dispatch_offsets)
-
-    # Proper teardown
-    if mesh_device:
-        ttnn.close_mesh_device(mesh_device)
 
 
 if __name__ == "__main__":
