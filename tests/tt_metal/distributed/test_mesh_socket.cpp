@@ -2155,6 +2155,48 @@ TEST_F(MeshSocketTest, MultiConnectionSingleDeviceSocketWithWorkersLoopAck) {
     test_single_device_socket_with_workers(md0, 4096, 1088, 9792, socket_core_mappings, false);
 }
 
+// Create Socket Config and Data Buffers and arbitary addresses dor 10 iterations
+// and ensure that the sockets are created correctly with the correct addresses
+// Multiple iterations allow us to ensure that the allocator is not mimicing the
+// correct behaviour by chance.
+TEST_F(MeshSocketTest, ManualAllocations) {
+    auto md0 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+    auto md1 = mesh_device_->create_submesh(MeshShape(1, 1), MeshCoordinate(0, 0));
+
+    constexpr uint32_t socket_fifo_size = 1024;
+    auto sender_logical_coord = CoreCoord(0, 0);
+    auto recv_logical_coord = CoreCoord(0, 0);
+
+    SocketConnection socket_connection(
+        MeshCoreCoord(MeshCoordinate(0, 0), sender_logical_coord),
+        MeshCoreCoord(MeshCoordinate(0, 0), recv_logical_coord));
+
+    const auto& hal = tt::tt_metal::MetalContext::instance().hal();
+    uint32_t l1_unreserved_base = hal.get_dev_addr(
+        tt::tt_metal::HalProgrammableCoreType::TENSIX, tt::tt_metal::HalL1MemAddrType::DEFAULT_UNRESERVED);
+
+    for (int i = 0; i < 10; i++) {
+        uint32_t config_buffer_addr = l1_unreserved_base + i * hal.get_alignment(HalMemType::L1);
+        uint32_t data_buffer_addr = config_buffer_addr + socket_fifo_size;
+
+        SocketMemoryConfig socket_mem_config(
+            BufferType::L1,
+            socket_fifo_size,
+            std::nullopt,  // sender sub device
+            std::nullopt,  // receiver sub device
+            data_buffer_addr,
+            config_buffer_addr,
+            config_buffer_addr);
+
+        SocketConfig socket_config({socket_connection}, socket_mem_config);
+        auto [send_socket, recv_socket] = MeshSocket::create_socket_pair(md0, md1, socket_config);
+
+        EXPECT_EQ(send_socket.get_config_buffer()->address(), config_buffer_addr);
+        EXPECT_EQ(recv_socket.get_config_buffer()->address(), config_buffer_addr);
+        EXPECT_EQ(recv_socket.get_data_buffer()->address(), data_buffer_addr);
+    }
+}
+
 // ========= Multi Device Data Movement Tests (1D Fabric) =========
 
 TEST_F(MeshSocketTest1DFabric, SingleConnectionMultiDeviceSocketWithWorkers) {
