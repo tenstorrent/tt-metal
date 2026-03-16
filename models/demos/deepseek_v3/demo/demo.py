@@ -9,6 +9,7 @@ import os
 from glob import glob
 from pathlib import Path
 
+import torch
 from loguru import logger
 
 import ttnn
@@ -325,6 +326,13 @@ def run_demo(
         mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape, trace_region_size=trace_region_size)
     else:
         mesh_device = ttnn.open_mesh_device(mesh_shape=mesh_shape)
+
+    # MPI_Init_thread (triggered by open_mesh_device in multi-host configs) sets OpenMP threads to 1,
+    # torch inherits this setting, which makes CPU-side computations extremely slow.
+    if requested_system_name.upper() in ("DUAL", "QUAD"):
+        num_torch_threads = max(1, os.cpu_count())
+        logger.info(f"Restoring torch num_threads to {num_torch_threads}")
+        torch.set_num_threads(num_torch_threads)
 
     # Load tokenizer only for full-model mode; in random-weights mode we synthesize token ids
     tokenizer = None
