@@ -13,6 +13,7 @@ in a causal+balanced ring would compute, using pre-staged KV data instead of
 actual ring communication.
 """
 
+import os
 import torch
 import pytest
 from typing import List, Tuple
@@ -1021,6 +1022,7 @@ def test_ring_joint_sdpa_profile_seq_lengths(device, seq_len_per_device: int):
 # ============================================================================
 
 
+@pytest.mark.skipif(os.environ.get("RUN_PROFILE") != "1", reason="Set RUN_PROFILE=1 to run")
 @pytest.mark.parametrize("k_chunk_size", [64, 128, 256, 512])
 @pytest.mark.parametrize("q_chunk_size", [64, 128, 256, 512])
 @pytest.mark.parametrize(
@@ -1031,7 +1033,7 @@ def test_ring_joint_sdpa_profile_seq_lengths(device, seq_len_per_device: int):
     ],
 )
 @pytest.mark.parametrize("ring_index", list(range(32)))
-def test_ring_joint_sdpa_profile_production_scale(
+def test_profile_ring_joint_sdpa_production_scale(
     device, ring_index: int, total_seq: int, q_chunk_size: int, k_chunk_size: int
 ):
     """
