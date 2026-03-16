@@ -149,7 +149,7 @@ def get_base_test_cases(users_per_row, prefill_seq_len, include_decode_random_po
           - when DEEPSEEK_MAX_SEQ_LEN_OVERRIDE is not set, includes one prefill case using
             prefill_seq_len: ("prefill", prefill_seq_len, users_per_row, None)
           - when DEEPSEEK_MAX_SEQ_LEN_OVERRIDE is set, replaces the prefill list with a single case:
-            ("prefill", max_seq_len, users_per_row, None)
+            ("prefill", max_seq_len // users_per_row, users_per_row, None)
 
     """
     base_cases = []
@@ -161,12 +161,15 @@ def get_base_test_cases(users_per_row, prefill_seq_len, include_decode_random_po
         # If DEEPSEEK_MAX_SEQ_LEN_OVERRIDE is not set, use the default prefill sequence length.
         base_cases += [("prefill", prefill_seq_len, users_per_row, None)]
     else:
-        # If DEEPSEEK_MAX_SEQ_LEN_OVERRIDE is set, use it to expand prefill and decode coverage.
+        # If DEEPSEEK_MAX_SEQ_LEN_OVERRIDE is set, use it to expand decode coverage.
+        # For prefill, scale the sequence length by users_per_row so the total token
+        # budget stays roughly aligned with the historical single-user-row workload.
         max_seq_len = int(max_seq_len_env)
+        prefill_max_seq_len = max(1, max_seq_len // max(1, users_per_row))
         base_cases += [
             ("decode", 1, users_per_row, 0),  # decode position_id 0
             ("decode", 1, users_per_row, max_seq_len - 1),  # decode position_id max_seq_len - 1
-            ("prefill", max_seq_len, users_per_row, None),  # prefill at max_seq_len
+            ("prefill", prefill_max_seq_len, users_per_row, None),  # prefill scaled for row-batched coverage
         ]
     return base_cases
 
