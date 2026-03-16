@@ -27,6 +27,51 @@ from loguru import logger
 
 from models.demos.kimi_k25.utils.config_adapter import KimiK25Config
 
+
+
+# ---------------------------------------------------------------------------
+# Marker registration + device-gating hooks
+# ---------------------------------------------------------------------------
+
+
+def pytest_configure(config):
+    """Register custom markers used by Kimi K2.5 tests."""
+    config.addinivalue_line(
+        "markers",
+        "requires_device(device_types): mark test to run only on specified device types. "
+        "device_types can be a single string or list of strings from: N150, N300, T3K, TG, DUAL, QUAD. "
+        "Example: @pytest.mark.requires_device(['T3K', 'TG'])",
+    )
+
+
+def pytest_collection_modifyitems(config, items):
+    """Skip tests whose ``requires_device`` marker doesn't match ``MESH_DEVICE``.
+
+    Unlike the DSV3 implementation this hook **never** calls ``pytest.exit()``
+    when ``MESH_DEVICE`` is unset — it simply skips all device-gated tests so
+    that CPU-only unit test runs work without setting the variable.
+    """
+    current_device_env = os.getenv("MESH_DEVICE")
+    current_device = current_device_env.upper() if current_device_env else None
+
+    for item in items:
+        marker = item.get_closest_marker("requires_device")
+        if marker is None:
+            continue
+
+        device_types = marker.args[0] if marker.args else marker.kwargs.get("device_types", [])
+        if isinstance(device_types, str):
+            device_types = [device_types]
+        elif not isinstance(device_types, (list, tuple)):
+            device_types = [device_types]
+
+        if current_device is None or current_device not in device_types:
+            reason = (
+                f"Test requires device type(s) {device_types}; "
+                f"MESH_DEVICE={'not set' if current_device is None else current_device}"
+            )
+            item.add_marker(pytest.mark.skip(reason=reason))
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
