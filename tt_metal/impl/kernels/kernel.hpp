@@ -82,6 +82,7 @@ KernelHandle CreateKernelFromString(
     const std::string& kernel_src_code,
     const std::variant<CoreCoord, CoreRange, CoreRangeSet>& core_spec,
     const DramConfig& config);
+
 class Kernel : public JitBuildSettings {
 public:
     using Config = std::variant<
@@ -172,6 +173,7 @@ public:
     // Binary management (moved from KernelImpl)
     const std::vector<const ll_api::memory*>& binaries(uint64_t build_key) const;
     void set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>&& binaries);
+    void set_elf_paths(uint64_t build_key, std::vector<std::string> elf_paths);
     bool binaries_exist_on_disk(const IDevice* device) const;
 
     virtual void set_build_options(JitBuildOptions& /*build_options*/) const {}
@@ -215,6 +217,8 @@ protected:
 
     // Build key -> binaries (moved from KernelImpl)
     std::unordered_map<uint64_t, std::vector<const ll_api::memory*>> binaries_;
+    // Build key -> ELF paths returned by remote compilation.
+    std::unordered_map<uint64_t, std::vector<std::string>> elf_paths_;
 
     virtual std::string config_hash() const = 0;
 
