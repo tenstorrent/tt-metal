@@ -1,0 +1,45 @@
+---
+description: Evaluate and close stale CI maintenance issues in tt-metal using latest main-branch evidence.
+alwaysApply: false
+---
+
+# Close CI Maintenance Tickets
+
+Use this rule when asked to review and close no-longer-relevant CI maintenance issues for `tenstorrent/tt-metal`.
+
+## Scope
+
+- Only evaluate issues labeled `glean CI maintenance`.
+- Evaluate all candidates first; apply close cap only at the final close step.
+
+## Execution Model
+
+- Use direct `gh` / `gh api` commands only.
+- If temporary scripts are required, place them in `.auto_triage/data/ci_ticketing_temp`.
+- Before review, clear stale logs under `.auto_triage/output/ci_ticketing/close_tickets/glean_review_logs`.
+
+## Decision Rule (Latest completed run on `main`)
+
+Extract failing test and root-cause error from ticket body, inspect the latest finished run for that job, then:
+
+- Close if exact failing test is now passing, or
+- Close if exact failing test still fails but with clearly different test-level root cause.
+
+Do not close when:
+
+- Same root cause is still present.
+- Differences are cosmetic (timestamps, ANSI, formatting, host/runner, dynamic IDs).
+- Evidence is infrastructure-only noise (transient network/runner/process exit lines).
+- Matrix has multiple matching instances and at least one still fails with the same root cause.
+
+## Output File
+
+Write closed issues to:
+
+- `.auto_triage/output/ci_ticketing/close_tickets/closed_tickets.json`
+
+Each object must include:
+
+- `issue_url`
+- `old_failure_message`
+- `new_failure_message` (use `"currently passing"` when applicable)
