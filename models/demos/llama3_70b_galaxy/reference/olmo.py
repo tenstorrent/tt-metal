@@ -122,9 +122,9 @@ def precompute_yarn_freqs_cis(args: OlmoModelArgs) -> Tuple[torch.Tensor, float]
     )
     inv_freq_mask = 1 - yarn_linear_ramp_mask(low, high, dim // 2)
 
-    # Apply scaling
+    # Apply scaling: blend unscaled (high-freq) with scaled (low-freq) per YaRN paper
     inv_freq_scaled = inv_freq / args.rope_scaling_factor
-    inv_freq = inv_freq_scaled * inv_freq_mask + inv_freq_scaled * (1 - inv_freq_mask)
+    inv_freq = inv_freq * inv_freq_mask + inv_freq_scaled * (1 - inv_freq_mask)
 
     # Compute frequencies
     t = torch.arange(end, dtype=torch.float32)
@@ -153,11 +153,15 @@ def precompute_freqs_cis(
     return torch.polar(torch.ones_like(freqs), freqs)
 
 
-def reshape_for_broadcast(freqs_cis: torch.Tensor, x: torch.Tensor):
-    ndim = x.ndim
-    assert freqs_cis.shape == (x.shape[1], x.shape[-1])
-    shape = [d if i == 1 or i == ndim - 1 else 1 for i, d in enumerate(x.shape)]
-    return freqs_cis.view(*shape)
+def rotate_half(x):
+    """Rotates half the hidden dims of the input (HF/neox-style).
+
+    OLMo was trained with HF's rotate_half where element pairs (i, i+dim//2)
+    form rotation groups, NOT adjacent pairs (2i, 2i+1) like GPT-J/Meta style.
+    """
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
 
 
 def apply_rotary_emb(
@@ -165,13 +169,23 @@ def apply_rotary_emb(
     xk: torch.Tensor,
     freqs_cis: torch.Tensor,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """Apply rotary embeddings to Q and K."""
-    xq_ = torch.view_as_complex(xq.float().reshape(*xq.shape[:-1], -1, 2))
-    xk_ = torch.view_as_complex(xk.float().reshape(*xk.shape[:-1], -1, 2))
-    freqs_cis = reshape_for_broadcast(freqs_cis, xq_)
-    xq_out = torch.view_as_real(xq_ * freqs_cis).flatten(3)
-    xk_out = torch.view_as_real(xk_ * freqs_cis).flatten(3)
-    return xq_out.type_as(xq), xk_out.type_as(xk)
+    """Apply rotary embeddings using rotate_half (HF/neox-style).
+
+    freqs_cis: complex tensor [seq_len, head_dim//2] from precompute_yarn_freqs_cis.
+    xq: [batch, seq, n_heads, head_dim], xk: [batch, seq, n_kv_heads, head_dim].
+    """
+    cos_half = freqs_cis.real.float()  # [seq, dim//2]
+    sin_half = freqs_cis.imag.float()  # [seq, dim//2]
+
+    cos = torch.cat([cos_half, cos_half], dim=-1)  # [seq, dim]
+    sin = torch.cat([sin_half, sin_half], dim=-1)  # [seq, dim]
+
+    cos = cos.unsqueeze(0).unsqueeze(2)  # [1, seq, 1, dim]
+    sin = sin.unsqueeze(0).unsqueeze(2)
+
+    xq_out = (xq.float() * cos + rotate_half(xq.float()) * sin).type_as(xq)
+    xk_out = (xk.float() * cos + rotate_half(xk.float()) * sin).type_as(xk)
+    return xq_out, xk_out
 
 
 def repeat_kv(x: torch.Tensor, n_rep: int) -> torch.Tensor:

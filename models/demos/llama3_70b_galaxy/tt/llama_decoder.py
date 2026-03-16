@@ -218,6 +218,8 @@ class TtTransformerBlock(LightweightModule):
         #   self.ff_norm        has post_attention_layernorm weights  → applied after attention
         #   self.attention_norm has post_feedforward_layernorm weights → applied after FFN
         if self.is_olmo and mode == "prefill":
+            self.attention.capture_intermediates = self.capture_intermediates
+            self._capture_prefill("input", x)
             attn_out = self.attention.forward(
                 x,
                 current_pos,
@@ -232,6 +234,8 @@ class TtTransformerBlock(LightweightModule):
                 skip_input_dealloc=True,  # keep x alive for residual add
             )
             self._debug_check("attn_out", attn_out)
+            if self.capture_intermediates:
+                self.captured.update(self.attention.captured)
             self._capture_prefill("attn_out", attn_out)
             attn_out_normed, _ = self.ff_norm(attn_out, None, mode)  # post-attention norm
             self._capture_prefill("attn_normed", attn_out_normed)

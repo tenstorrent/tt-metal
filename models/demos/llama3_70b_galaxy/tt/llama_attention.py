@@ -575,6 +575,32 @@ class TtLlamaAttention(LightweightModule):
 
             logger.warning(f"  [attn capture] {name}: failed — {e}")
 
+    def _capture_prefill_attn(self, name, tensor):
+        """Capture a prefill-path tensor for PCC debug using per-device extraction."""
+        if not self.capture_intermediates:
+            return
+        try:
+            from loguru import logger
+
+            logger.info(f"  [prefill_attn capture] {name}: ttnn_shape={list(tensor.shape)}")
+            device_tensors = ttnn.get_device_tensors(tensor)
+            per_dev = []
+            for dt in device_tensors:
+                per_dev.append(ttnn.to_torch(dt).float())
+            n_rows, n_cols = self.cluster_shape
+            # Arrange: device_tensors order is row-major: (0,0), (0,1), ..., (0,3), (1,0), ...
+            grid = {}
+            for idx, t in enumerate(per_dev):
+                r, c = idx // n_cols, idx % n_cols
+                grid[(r, c)] = t
+            self.captured[name] = grid
+            # Also log first device shape
+            logger.info(f"    per-dev shape: {list(per_dev[0].shape)}, n_devices={len(per_dev)}")
+        except Exception as e:
+            from loguru import logger
+
+            logger.warning(f"  [prefill_attn capture] {name}: failed — {e}")
+
     def forward_decode(
         self,
         x: ttnn.Tensor,
@@ -1206,10 +1232,14 @@ class TtLlamaAttention(LightweightModule):
         # Rotary embeddings
         ###
 
+        self._capture_prefill_attn("v_heads", v_heads_1VSD)
+
         if q_heads_1QSD_pre_rot.dtype != ttnn.bfloat16:
             q_heads_1QSD_pre_rot_bf8 = q_heads_1QSD_pre_rot
             q_heads_1QSD_pre_rot = ttnn.typecast(q_heads_1QSD_pre_rot, dtype=ttnn.bfloat16)
             ttnn.deallocate(q_heads_1QSD_pre_rot_bf8)
+
+        self._capture_prefill_attn("q_before_norm", q_heads_1QSD_pre_rot)
 
         if self.qk_norm and not self.is_olmo:
             q_heads_1QSD_pre_rot = self.q_norm(q_heads_1QSD_pre_rot, mode="prefill")
@@ -1218,8 +1248,14 @@ class TtLlamaAttention(LightweightModule):
             # HF normalizes Q over 5120 dims (all 40 heads) before head split.
             # Each row device has 640 dims (5 heads × 128). Use rms_norm_pre/post_all_gather
             # with all_gather on cluster_axis=0 to compute global variance over 5120 dims.
+            #
+            # Q shape is [1, n_heads, seq, head_dim]. Must transpose to [1, seq, n_heads, head_dim]
+            # before flattening so heads are contiguous per position (not per head across positions).
             q_seq = q_heads_1QSD_pre_rot.shape[2]
-            q_flat = ttnn.reshape(q_heads_1QSD_pre_rot, [1, 1, q_seq, self.n_local_heads * self.head_dim])
+            q_transposed = ttnn.transpose(q_heads_1QSD_pre_rot, 1, 2)  # [1, seq, 5, 128]
+            ttnn.deallocate(q_heads_1QSD_pre_rot)
+            q_flat = ttnn.reshape(q_transposed, [1, 1, q_seq, self.n_local_heads * self.head_dim])
+            ttnn.deallocate(q_transposed)
             q_flat = ttnn.to_layout(q_flat, ttnn.TILE_LAYOUT)
             q_stats = ttnn.rms_norm_pre_all_gather(
                 q_flat, compute_kernel_config=self.compute_kernel_config_hifi2, dtype=ttnn.bfloat16
@@ -1234,8 +1270,12 @@ class TtLlamaAttention(LightweightModule):
                 compute_kernel_config=self.compute_kernel_config_hifi2,
             )
             ttnn.deallocate(q_flat)
-            ttnn.deallocate(q_heads_1QSD_pre_rot)
-            q_heads_1QSD_pre_rot = ttnn.reshape(q_normed_flat, [1, self.n_local_heads, q_seq, self.head_dim])
+            q_unflat = ttnn.reshape(q_normed_flat, [1, q_seq, self.n_local_heads, self.head_dim])
+            ttnn.deallocate(q_normed_flat)
+            q_heads_1QSD_pre_rot = ttnn.transpose(q_unflat, 1, 2)  # [1, 5, seq, 128]
+            ttnn.deallocate(q_unflat)
+
+        self._capture_prefill_attn("q_after_norm", q_heads_1QSD_pre_rot)
 
         q_heads_1QSD = ttnn.experimental.rotary_embedding_llama(
             q_heads_1QSD_pre_rot,
@@ -1244,12 +1284,15 @@ class TtLlamaAttention(LightweightModule):
             self.transformation_mats["prefill"],
             is_decode_mode=False,
         )
+        self._capture_prefill_attn("q_after_rope", q_heads_1QSD)
         ttnn.deallocate(q_heads_1QSD_pre_rot)
 
         if k_heads_1KSD_pre_rot.dtype != ttnn.bfloat16:
             k_heads_1KSD_pre_rot_bf8 = k_heads_1KSD_pre_rot
             k_heads_1KSD_pre_rot = ttnn.typecast(k_heads_1KSD_pre_rot, dtype=ttnn.bfloat16)
             ttnn.deallocate(k_heads_1KSD_pre_rot_bf8)
+
+        self._capture_prefill_attn("k_before_norm", k_heads_1KSD_pre_rot)
 
         if self.qk_norm and not self.is_olmo:
             k_heads_1KSD_pre_rot = self.k_norm(k_heads_1KSD_pre_rot, mode="prefill")
@@ -1271,7 +1314,8 @@ class TtLlamaAttention(LightweightModule):
                 compute_kernel_config=self.compute_kernel_config_hifi2,
             )
 
-        # k_heads_1KSD = k_heads_1KSD_pre_rot
+        self._capture_prefill_attn("k_after_norm", k_heads_1KSD_pre_rot)
+
         k_heads_1KSD = ttnn.experimental.rotary_embedding_llama(
             k_heads_1KSD_pre_rot,
             rot_mats[0],
@@ -1279,6 +1323,7 @@ class TtLlamaAttention(LightweightModule):
             self.transformation_mats["prefill"],
             is_decode_mode=False,
         )
+        self._capture_prefill_attn("k_after_rope", k_heads_1KSD)
         ttnn.deallocate(k_heads_1KSD_pre_rot)
 
         # Fill KV-Cache
@@ -1447,6 +1492,8 @@ class TtLlamaAttention(LightweightModule):
             buffer_key="WO_AG" if seq_len <= 4096 else "WO",
         )
         output_11SH.deallocate()
+
+        self._capture_prefill_attn("wo_out", output_11SH_reduced)
 
         return output_11SH_reduced
 

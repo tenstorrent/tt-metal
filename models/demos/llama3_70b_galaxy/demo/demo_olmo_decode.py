@@ -701,6 +701,21 @@ def run_olmo_demo(
             False,  # stress_test
             0,  # start_pos
         ),
+        (  # 1L profiler run: 1 decode token for tracy
+            "instruct",
+            1,
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            1,  # batch_size
+            1,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
+            False,  # stress_test
+            0,  # start_pos
+        ),
         (  # Stress test: 4*128k generation length
             "instruct",
             64,
@@ -714,6 +729,21 @@ def run_olmo_demo(
             {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
             {"top_k": 1, "top_p": 0.0, "temperature": 1.0, "seed": 42},  # sampling_params
             True,  # stress_test
+            0,  # start_pos
+        ),
+        (  # full model batch 32 perf
+            "instruct",
+            64,
+            "models/demos/llama3_70b_galaxy/demo/sample_prompts/input_data_questions_prefill_128.json",  # input_prompts
+            True,  # instruct mode
+            1,  # repeat_batches
+            128 * 1024,  # max_seq_len
+            32,  # batch_size
+            200,  # max_generated_tokens
+            True,  # paged_attention
+            {"page_block_size": 64, "page_max_num_blocks": 4096},  # page_params
+            {"top_k": 1, "top_p": 0.00, "temperature": 1.0, "seed": 42},  # sampling_params (argmax)
+            False,  # stress_test
             0,  # start_pos
         ),
         (  # mini stress test
@@ -767,6 +797,8 @@ def run_olmo_demo(
         "quick",  # 3L demo (uses 3 layers to test sliding window pattern: 3 sliding + 1 full)
         "single",  # 1L demo for fastest iteration (batch=32)
         "single-batch1",  # 1L demo for batch=1 testing
+        "profiler",  # 1L, batch=1, 1 decode token for tracy profiling
+        "full-batch32",  # 64L, batch=32, 200 tokens for E2E perf
         "stress-test",  # stress test with many iterations and same token index, full model
         "mini-stress-test",  # mini stress test with 2048 max_generated_tokens
         "measure-device-perf",  # 10L demo for device performance measurements

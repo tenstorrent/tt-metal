@@ -38,8 +38,8 @@
 ### PCC Status (with hidden state + logits split)
 | Component | Hidden State PCC | Logits PCC | Std Ratio (tt/ref) | Notes |
 |-----------|-----------------|------------|-------------------|-------|
-| Prefill 1L | **0.9989** | 0.9445 | 1.01x | Layer output excellent; logits drop is LM head bfp8 quantization |
-| Prefill 64L | **0.9623** | 0.7023 | 1.43x | Magnitude inflation compounds over 64 layers |
+| Prefill 1L | **0.9998** | 0.9992 | ~1.0x | After Q-norm reshape fix + RoPE format fix |
+| Prefill 64L | **0.9776** | 0.9438 | — | Token match ✓ (4815). Significant improvement from 0.7023 |
 | Decode 4L | **0.9963** | — | ~1.0x | Above 0.99 target |
 | Decode 64L | — | 0.8165 | — | Needs hidden state measurement |
 
@@ -50,19 +50,27 @@ The logits PCC is systematically lower than hidden state PCC because:
 3. **Host-side verification**: Running norm+LM head on HOST in float32 with TTNN hidden state gives **identical PCC** (0.9447 for 1L, 0.7023 for 64L) — confirming device-side norm+LM adds NO extra error
 4. **Correct argmax via host**: For 1L, the host-side float32 LM head on TTNN hidden state produces the correct token (2582). Device bfp8 argmax fails due to quantization ties.
 
+### Fixed — Prefill Q-norm Reshape Bug + RoPE Format Mismatch
+| Component | PCC (before) | PCC (after fix) | Notes |
+|-----------|-------------|-----------------|-------|
+| Prefill 1L hidden state | 0.9989 | **0.9998** | Q-norm reshape bug fixed |
+| Prefill 1L logits | 0.9445 | **0.9992** | Correct token prediction now |
+| Prefill 64L hidden state | 0.9623 | **0.9776** | Major improvement |
+| Prefill 64L logits | 0.7023 | **0.9438** | Token match ✓ (4815) |
+
 ### Needs Investigation
 | Issue | Details |
 |-------|---------|
-| **64L magnitude inflation** | TTNN hidden std=3.15 vs ref std=2.20 (1.43x). Per-layer `ff_out` has norm_ratio=1.086 (8.6% excess). After norm→residual, excess is ~1.1%/layer, compounding to ~43% over 64 layers. |
-| E2E multi-step (prefill→decode×N) | 1/11 token match — needs retest after decode attention fix |
+| E2E multi-step (prefill→decode×N) | 1/11 token match — needs retest after all fixes |
+| Decode 64L PCC | 0.8165 — still low, compounding error over 64 layers |
 
 ### E2E Demo (Traced Prefill+Decode, 64L)
 | Metric | Value |
 |--------|-------|
 | TTFT | 266 ms (128 token prefill) |
-| Decode speed | 54.7 ms/tok @ 18.3 tok/s/user |
+| Decode speed | 55.5 ms/tok @ 18.0 tok/s/user |
 | Batch size | 1 |
-| Output quality | **Incoherent** — gibberish tokens (e.g. "Ged Erlavisets Schro sleeper Za elaborusher") |
+| Output quality | **Coherent** — generates meaningful, well-structured text about condiments with proper formatting (paragraphs, markdown) |
 
 ### Device-Side QK-Norm (Verified Correct)
 | Component | PCC | Notes |
@@ -186,6 +194,16 @@ SDPA [1,8,32,128] → to_DRAM, ROW_MAJOR
 ---
 
 ## Session Log
+
+### 2026-03-16 (session 6) — Prefill Q-norm Reshape Fix + RoPE Format Fix
+- **Root cause 1: Q-norm reshape bug in prefill path.** `ttnn.reshape` on Q tensor `[1, n_heads, seq, head_dim]→[1, 1, seq, n_heads*head_dim]` incorrectly mixed heads and sequence positions due to C-contiguous memory layout. Fix: transpose (heads, seq) before flattening and after unflattening.
+- **Root cause 2: RoPE format mismatch in reference model.** Reference `apply_rotary_emb` used GPT-J style complex arithmetic on Neox-style (HF) weights. Fix: switched to `rotate_half` (Neox-style) matching HF OLMo training.
+- **Root cause 3: YaRN RoPE blending bug.** Both reference and TTNN used uniform scaling instead of proper YaRN blended scaling. Fix: `inv_freq = inv_freq * mask + inv_freq_scaled * (1 - mask)`.
+- **Results after all fixes**:
+  - 1L prefill: hidden state PCC 0.9998, logits PCC 0.9992, correct token
+  - 64L prefill: hidden state PCC 0.9776, logits PCC 0.9438, token match ✓
+  - Per-op `q_after_norm` PCC improved from 0.47-0.81 to >0.9999
+- Added `_gptj_to_neox` helper in test for correct Q/K format comparison between TTNN (GPT-J) and reference (Neox).
 
 ### 2026-03-16 (session 5) — Prefill PCC Investigation: Hidden State vs Logits
 - **Key finding**: Prefill layer output (hidden state) PCC is **0.999** for 1L, **0.962** for 64L. The reported "prefill PCC" of 0.9445 was measuring LOGITS, not hidden states.

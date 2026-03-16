@@ -312,6 +312,87 @@ The most common false negative: **bugs in the PCC test's tensor extraction**, no
 
 **Lesson**: Always compare `tt_std` vs `ref_std` alongside PCC. A 10×+ std ratio indicates a broken data path even if overall layer PCC is 0.99+.
 
+### Case Study: OLMo Prefill Q-norm Reshape Bug
+
+**Symptom**: `q_after_norm` PCC=0.47–0.81 in prefill, but `q_before_norm` PCC>0.999 and `k_after_norm` PCC>0.999. Decode Q-norm was fine. Overall 1L prefill hidden state PCC=0.999 masked the issue because padding positions (PCC>0.999) dominated over real token positions (PCC=0.94).
+
+**Root cause**: `ttnn.reshape` on Q tensor `[1, n_heads, seq, head_dim]` → `[1, 1, seq, n_heads*head_dim]` does NOT transpose — it reinterprets C-contiguous memory. With heads in dim1 and sequence in dim2, flattening interleaved elements from different heads across sequence positions instead of concatenating heads per position.
+
+**Why K-norm wasn't affected**: K has shape `[1, 1, seq, head_dim]` (one head per device), so the reshape to `[1, 1, seq, head_dim]` is a no-op.
+
+**Why decode wasn't affected**: Decode Q has shape `[1, n_heads, batch, head_dim]` which was reshaped to `[1, 1, batch, n_heads*head_dim]` — heads and batch were transposed beforehand in decode, but not in prefill.
+
+**Fix**: Insert `ttnn.transpose(..., 1, 2)` before flattening and after unflattening to ensure heads are contiguous per sequence position:
+```python
+# Before: [1, n_heads, seq, head_dim] → reshape → WRONG
+# After:  [1, n_heads, seq, head_dim] → transpose → [1, seq, n_heads, head_dim] → reshape → CORRECT
+q_transposed = ttnn.transpose(q, 1, 2)
+q_flat = ttnn.reshape(q_transposed, [1, 1, seq, n_heads * head_dim])
+# ... norm ...
+q_unflat = ttnn.reshape(q_normed, [1, seq, n_heads, head_dim])
+q = ttnn.transpose(q_unflat, 1, 2)  # back to [1, n_heads, seq, head_dim]
+```
+
+**Lesson**: `ttnn.reshape` reinterprets memory layout without moving data. When dimensions are not in the expected order, reshape will silently mix data from different logical dimensions. Always verify dimension ordering before reshape, and use `ttnn.transpose` to reorder if needed.
+
+### Case Study: RoPE Format Mismatch (Neox vs GPT-J)
+
+**Symptom**: Per-op PCC comparison showed `q_before_norm` PCC≈0 and `k_before_norm` PCC≈0 despite correct QKV matmul weights. But `v_heads` PCC>0.999 from the same QKV projection.
+
+**Root cause**: Two different RoPE rotation styles exist:
+- **Neox/HF style** (`rotate_half`): Element pairs `(i, i+dim//2)` form rotation groups. Used by HuggingFace OLMo.
+- **GPT-J/Meta style** (interleaved): Adjacent pairs `(2i, 2i+1)` form rotation groups. Used internally by TTNN's `rotary_embedding_llama`.
+
+The weight loading code (`load_checkpoints.py`) correctly converts Q/K weights from Neox→GPT-J format via `reverse_permute`. So TTNN's Q/K outputs are in GPT-J format. But the CPU reference model loaded raw HF weights (Neox format) and applied `apply_rotary_emb` using complex-number arithmetic that implicitly assumes GPT-J format — resulting in incorrect RoPE application in the reference.
+
+**Fix (two parts)**:
+1. Fix the reference model's `apply_rotary_emb` to use `rotate_half` (Neox-style) matching HF's training format.
+2. In the test, convert TTNN's GPT-J format Q/K to Neox format before comparison:
+```python
+def _gptj_to_neox(tensor):
+    hd = tensor.shape[-1]
+    reshaped = tensor.reshape(*tensor.shape[:-1], hd // 2, 2)
+    reals = reshaped[..., 0]
+    imags = reshaped[..., 1]
+    return torch.cat([reals, imags], dim=-1)
+```
+
+**Lesson**: When debugging per-op PCC, V is a canary — it doesn't go through RoPE or format conversion. If V PCC is high but Q/K PCC is near zero, suspect a RoPE format mismatch rather than a matmul bug.
+
+### Case Study: YaRN RoPE Blending Bug
+
+**Symptom**: After fixing the RoPE format, PCC at position 6 (last real token) dropped from 0.942 to 0.845, exposing a deeper issue.
+
+**Root cause**: Both reference and TTNN used uniform scaling (`inv_freq / factor`) instead of proper YaRN blended scaling. Correct YaRN uses a frequency-dependent mask to blend between unscaled and scaled frequencies:
+```python
+# WRONG (uniform):
+inv_freq = inv_freq / factor
+
+# CORRECT (blended):
+inv_freq = inv_freq * inv_freq_mask + inv_freq_scaled * (1 - inv_freq_mask)
+```
+The mask preserves low frequencies (which encode local position) while scaling high frequencies (which encode distant position).
+
+**Why it was hidden**: With uniform scaling, ALL frequencies were dampened equally, producing a narrow dynamic range that happened to give reasonable (but wrong) PCC. Correct blending widens the dynamic range, amplifying errors from other bugs (like the Q-norm reshape bug).
+
+**Lesson**: When fixing one bug makes PCC worse, it often means the fix exposed a second bug that was previously masked. Don't revert the correct fix — find the newly exposed bug.
+
+### Per-Position PCC Analysis
+
+Overall PCC can be misleading when padding dominates. For prefill with seq_len < tile_size, most positions are padding zeros which inflate PCC.
+
+```python
+# Compare PCC at specific positions, not just overall
+for pos in range(seq_len):
+    ref_pos = ref_hidden[0, 0, pos, :]
+    tt_pos = tt_hidden[0, 0, pos, :]
+    pcc = comp_pcc(ref_pos.unsqueeze(0), tt_pos.unsqueeze(0), 0.0)[0]
+    marker = "REAL" if pos < num_real_tokens else "PAD"
+    print(f"  pos {pos} [{marker}]: PCC={pcc:.4f}")
+```
+
+**Key insight**: If overall PCC=0.999 but the last real token position has PCC=0.94, the model's next-token prediction will be poor despite the high aggregate PCC. Always check PCC at the positions that matter for output generation.
+
 ## Debugging Checklist
 
 - [ ] **Reference produces correct output** (not just runs without errors)

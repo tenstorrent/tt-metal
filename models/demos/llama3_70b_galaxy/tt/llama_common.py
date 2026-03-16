@@ -121,9 +121,9 @@ def compute_yarn_inv_freq(
     # Step 4: Scale frequencies for context extension
     inv_freq_scaled = inv_freq / scaling_factor
 
-    # Step 5: Blend using mask (YaRN NTK-aware interpolation)
-    # For OLMo, this simplifies to just using scaled frequencies
-    inv_freq = inv_freq_scaled
+    # Step 5: Blend unscaled (high-freq) with scaled (low-freq) per YaRN paper
+    # inv_freq_mask: 1 = keep original, 0 = use scaled
+    inv_freq = inv_freq * inv_freq_mask + inv_freq_scaled * (1 - inv_freq_mask)
 
     return inv_freq
 

@@ -1497,7 +1497,62 @@ class TestOlmoE2EPCC:
         ref_captures["input"] = x.clone()
 
         # OLMo post-sublayer-norm: attention(x) → norm → residual, then FFN(h) → norm → residual
-        attn_raw = ref_layer.attention(x, 0, freqs_cis, mask)
+        # Step-by-step attention to capture Q/K intermediates
+        from models.demos.llama3_70b_galaxy.reference.olmo import apply_rotary_emb
+
+        attn = ref_layer.attention
+        bsz_r, seqlen_r, _ = x.shape
+        xq_raw, xk_raw, xv_raw = attn.wq(x), attn.wk(x), attn.wv(x)
+
+        # Capture Q/K/V before norm
+        xq_heads_raw = xq_raw.view(bsz_r, seqlen_r, attn.n_heads, attn.head_dim)
+        xk_heads_raw = xk_raw.view(bsz_r, seqlen_r, attn.n_kv_heads, attn.head_dim)
+        xv_heads = xv_raw.view(bsz_r, seqlen_r, attn.n_kv_heads, attn.head_dim)
+        ref_captures["q_before_norm"] = xq_heads_raw.clone()
+        ref_captures["k_before_norm"] = xk_heads_raw.clone()
+        ref_captures["v_heads"] = xv_heads.clone()
+
+        def _global_rms_norm(t, weight):
+            t_f = t.float()
+            rms = torch.rsqrt(t_f.pow(2).mean(-1, keepdim=True) + 1e-6)
+            return (t_f * rms * weight.to(t_f.device)).type_as(t)
+
+        xq_normed = _global_rms_norm(xq_raw, attn.q_norm_weight)
+        xk_normed = _global_rms_norm(xk_raw, attn.k_norm_weight)
+
+        xq_heads = xq_normed.view(bsz_r, seqlen_r, attn.n_heads, attn.head_dim)
+        xk_heads = xk_normed.view(bsz_r, seqlen_r, attn.n_kv_heads, attn.head_dim)
+
+        ref_captures["q_after_norm"] = xq_heads.clone()  # [1, seq, 40, 128]
+        ref_captures["k_after_norm"] = xk_heads.clone()  # [1, seq, 8, 128]
+
+        xq_rot, xk_rot = apply_rotary_emb(xq_heads, xk_heads, freqs_cis=freqs_cis)
+        ref_captures["q_after_rope"] = xq_rot.clone()
+        ref_captures["k_after_rope"] = xk_rot.clone()
+
+        attn.cache_k = attn.cache_k.to(xq_rot)
+        attn.cache_v = attn.cache_v.to(xq_rot)
+        attn.cache_k[:bsz_r, :seqlen_r] = xk_rot
+        attn.cache_v[:bsz_r, :seqlen_r] = xv_heads
+        keys = attn.cache_k[:bsz_r, :seqlen_r]
+        values = attn.cache_v[:bsz_r, :seqlen_r]
+        from models.demos.llama3_70b_galaxy.reference.olmo import repeat_kv
+
+        keys = repeat_kv(keys, attn.n_rep)
+        values = repeat_kv(values, attn.n_rep)
+        xq_t = xq_rot.transpose(1, 2)
+        keys_t = keys.transpose(1, 2)
+        values_t = values.transpose(1, 2)
+        scale = (attn.head_dim**-0.5) * attn.mscale
+        scores = torch.matmul(xq_t, keys_t.transpose(2, 3)) * scale
+        if mask is not None:
+            scores = scores + mask
+        scores = torch.nn.functional.softmax(scores.float(), dim=-1).type_as(xq_t)
+        attn_output = torch.matmul(scores, values_t)
+        attn_output = attn_output.transpose(1, 2).contiguous().view(bsz_r, seqlen_r, -1)
+        ref_captures["wo_input"] = attn_output.clone()  # [1, seq, 5120]
+        attn_raw = attn.wo(attn_output)
+        ref_captures["wo_out"] = attn_raw.clone()
         ref_captures["attn_out"] = attn_raw.clone()
 
         attn_normed = ref_layer.attention_norm(attn_raw)
@@ -1648,62 +1703,169 @@ class TestOlmoE2EPCC:
         tt_captured = tt_model.layers[0].captured
         logger.info(f"\nCaptured TTNN intermediates: {list(tt_captured.keys())}")
 
-        import torch.nn.functional as F
+        def _extract_tt(t):
+            """Extract first replica from mesh-composed tensor."""
+            if t.dim() == 4 and t.shape[1] > 1:
+                t = t[:, 0, :, :]
+            if t.dim() == 4 and t.shape[1] == 1:
+                t = t.squeeze(1)
+            return t.float()
+
+        def _per_pos_pcc(name, ref_3d, tt_3d, real_len):
+            """Per-position PCC: real vs padding breakdown."""
+            ref_3d = ref_3d.float()
+            tt_3d = tt_3d.float()
+            # Full, real, padding PCC
+            _, full_pcc = comp_pcc(ref_3d, tt_3d, 0.0)
+            _, real_pcc = comp_pcc(ref_3d[:, :real_len, :], tt_3d[:, :real_len, :], 0.0)
+            _, pad_pcc = comp_pcc(ref_3d[:, real_len:, :], tt_3d[:, real_len:, :], 0.0)
+            logger.info(f"    {name:15s}: FULL={full_pcc}, REAL(0:{real_len})={real_pcc}, PAD({real_len}:)={pad_pcc}")
+            # Per-position for key positions
+            for p in [0, 1, seq_len - 1, padded_len // 2, padded_len - 1]:
+                if p >= ref_3d.shape[1]:
+                    continue
+                r = ref_3d[:, p, :]
+                t = tt_3d[:, p, :]
+                _, pos_pcc = comp_pcc(r, t, 0.0)
+                r_std = r.std().item()
+                t_std = t.std().item()
+                mae = (r - t).abs().max().item()
+                tag = "REAL" if p < real_len else "PAD"
+                logger.info(
+                    f"      pos {p:3d} [{tag}]: PCC={pos_pcc}, max_abs={mae:.4f}, "
+                    f"ref_std={r_std:.4f}, tt_std={t_std:.4f}"
+                )
+            return full_pcc, real_pcc, pad_pcc
+
+        # Helper to compare attention Q/K heads: TTNN has [1, NH_row, seq, HD*4cols]
+        # Reference has [1, seq, NH, HD]. We need to align them.
+        n_heads_total = model_args.n_heads  # 40
+        n_kv_heads_total = model_args.n_kv_heads  # 8
+        head_dim = model_args.head_dim  # 128
+        n_rows = model_args.cluster_shape[0]  # 8
+        n_cols = model_args.cluster_shape[1]  # 4
 
         results = {}
+
+        # --- Per-device Q comparison (direct per-device extraction) ---
+        n_local_q = n_heads_total // n_rows  # 5
+        n_local_kv = n_kv_heads_total // n_rows  # 1
+
+        def _gptj_to_neox(tensor):
+            """Convert Q/K from GPT-J format [r0,i0,r1,i1,...] to neox format [r0,r1,...,i0,i1,...].
+
+            TTNN stores Q/K in GPT-J format (via reverse_permute on weights), while the
+            reference model uses HF/neox format. This converts TTNN captures for comparison.
+            Operates on the last dimension (head_dim).
+            """
+            hd = tensor.shape[-1]
+            reshaped = tensor.reshape(*tensor.shape[:-1], hd // 2, 2)
+            reals = reshaped[..., 0]
+            imags = reshaped[..., 1]
+            return torch.cat([reals, imags], dim=-1)
+
+        def _compare_grid(name, ref_bshd, tt_grid, n_local, is_qk=False):
+            """Compare tensor captured as per-device grid.
+            ref_bshd: [1, seq, total_heads, head_dim]
+            tt_grid: dict[(row, col)] → per-device torch tensor [1, n_local, seq, head_dim]
+            is_qk: if True, convert TTNN from GPT-J to neox format before comparison
+            """
+            ref = ref_bshd.float()
+            logger.info(f"\n  {name}: ref_shape={list(ref.shape)}, is_qk={is_qk}")
+            for r in range(n_rows):
+                tt_dev = tt_grid[(r, 0)].float()
+                if is_qk:
+                    tt_dev = _gptj_to_neox(tt_dev)
+                ref_row = ref[:, :, r * n_local : (r + 1) * n_local, :]
+                ref_match = ref_row.permute(0, 2, 1, 3)
+                _, pcc = comp_pcc(ref_match, tt_dev, 0.0)
+                best = {"pcc": float(pcc.split()[-1]) if isinstance(pcc, str) else float(pcc), "row": r}
+                for trial_r in range(n_rows):
+                    if trial_r == r:
+                        continue
+                    ref_trial = ref[:, :, trial_r * n_local : (trial_r + 1) * n_local, :].permute(0, 2, 1, 3)
+                    _, trial_pcc = comp_pcc(ref_trial, tt_dev, 0.0)
+                    trial_val = float(trial_pcc.split()[-1]) if isinstance(trial_pcc, str) else float(trial_pcc)
+                    if trial_val > best["pcc"]:
+                        best = {"pcc": trial_val, "row": trial_r}
+                logger.info(
+                    f"      PCC(mesh_row{r} vs ref_row{r})={pcc}, "
+                    f"best_match=ref_row{best['row']}(PCC={best['pcc']:.6f})"
+                )
+
+        for name, n_local in [
+            ("q_before_norm", n_local_q),
+            ("q_after_norm", n_local_q),
+            ("k_before_norm", n_local_kv),
+            ("k_after_norm", n_local_kv),
+            ("v_heads", n_local_kv),
+        ]:
+            if name not in tt_captured or name not in ref_captures:
+                logger.warning(f"  {name}: NOT captured")
+                continue
+            is_qk = name.startswith("q_") or name.startswith("k_")
+            _compare_grid(name, ref_captures[name], tt_captured[name], n_local, is_qk=is_qk)
+
+        # --- WO out (from attention capture, stored as per-device grid) ---
+        if "wo_out" in tt_captured and "wo_out" in ref_captures:
+            wo_grid = tt_captured["wo_out"]
+            # wo_out per device: [1, 1, seq, 1280]. After all_reduce on axis=0, all rows identical.
+            # Reconstruct by concatenating cols: [1, seq, 1280*4=5120]
+            wo_dev = wo_grid[(0, 0)]  # [1, 1, seq, 1280] from row 0, col 0
+            # Check cols are different (hidden dim parts) or same
+            wo_cols = [wo_grid[(0, c)] for c in range(n_cols)]
+            col_diff = (wo_cols[0] - wo_cols[1]).abs().max().item()
+            logger.info(f"\n  wo_out: per_dev_shape={list(wo_dev.shape)}, col0-col1_diff={col_diff:.4f}")
+            if col_diff < 1e-3:
+                # All cols identical (replicated), take col 0 from all rows
+                wo_row0 = wo_cols[0].squeeze(1)  # [1, seq, 1280]
+                logger.info(f"    wo cols are identical. Shape: {list(wo_row0.shape)}")
+                tt_wo = wo_row0
+            else:
+                # Cols have different hidden dim parts, concatenate
+                tt_wo = torch.cat([c.squeeze(1) for c in wo_cols], dim=-1)  # [1, seq, 5120]
+            ref_wo = ref_captures["wo_out"].float()
+            logger.info(f"    tt_wo shape: {list(tt_wo.shape)}, ref_wo shape: {list(ref_wo.shape)}")
+            if tt_wo.shape[-1] == ref_wo.shape[-1]:
+                full_pcc, real_pcc, pad_pcc = _per_pos_pcc("wo_out", ref_wo, tt_wo, seq_len)
+                results["wo_out"] = {"full": full_pcc, "real": real_pcc, "pad": pad_pcc, "ratio": 1.0}
+
+        # --- Decoder intermediates (all have [1, seq, 5120] shape, stored as tensors) ---
         for name in ["attn_out", "attn_normed", "h_attn", "ff_out", "ff_normed", "layer_out"]:
-            if name not in tt_captured:
-                logger.warning(f"  {name}: NOT captured in TTNN")
-                continue
-            if name not in ref_captures:
-                logger.warning(f"  {name}: NOT captured in reference")
+            if name not in tt_captured or name not in ref_captures:
+                logger.warning(f"  {name}: NOT captured")
                 continue
 
-            tt_t = tt_captured[name]
-            ref_t = ref_captures[name]  # [1, seq_len, 5120]
-
-            # TTNN capture has shape [1, N_replicas, seq_len, hidden_dim] from ConcatMesh2dToTensor
-            # Take first replica if dim 1 > 1
-            if tt_t.dim() == 4 and tt_t.shape[1] > 1:
-                tt_t = tt_t[:, 0, :, :]
-            if tt_t.dim() == 4 and tt_t.shape[1] == 1:
-                tt_t = tt_t.squeeze(1)
-
-            logger.info(f"\n  {name}: tt_shape={list(tt_t.shape)}, ref_shape={list(ref_t.shape)}")
+            tt_val = tt_captured[name]
+            if isinstance(tt_val, dict):
+                logger.warning(f"  {name}: is a grid (unexpected for decoder capture)")
+                continue
+            tt_t = _extract_tt(tt_val)
+            ref_t = ref_captures[name].float()
 
             if tt_t.shape != ref_t.shape:
                 min_seq = min(tt_t.shape[-2], ref_t.shape[-2])
                 min_dim = min(tt_t.shape[-1], ref_t.shape[-1])
-                tt_cmp = tt_t[..., :min_seq, :min_dim].float()
-                ref_cmp_op = ref_t[..., :min_seq, :min_dim].float()
-                logger.info(f"    Comparing truncated: [{min_seq}, {min_dim}]")
-            else:
-                tt_cmp = tt_t.float()
-                ref_cmp_op = ref_t.float()
+                tt_t = tt_t[..., :min_seq, :min_dim]
+                ref_t = ref_t[..., :min_seq, :min_dim]
 
-            passing_op, pcc_op = comp_pcc(ref_cmp_op, tt_cmp, 0.80)
-            cos_sim = F.cosine_similarity(ref_cmp_op.flatten().unsqueeze(0), tt_cmp.flatten().unsqueeze(0)).item()
-            max_abs = (ref_cmp_op - tt_cmp).abs().max().item()
-            norm_ratio = tt_cmp.std().item() / max(ref_cmp_op.std().item(), 1e-10)
+            full_pcc, real_pcc, pad_pcc = _per_pos_pcc(name, ref_t, tt_t, seq_len)
+            norm_ratio = tt_t.std().item() / max(ref_t.std().item(), 1e-10)
+            results[name] = {"full": full_pcc, "real": real_pcc, "pad": pad_pcc, "ratio": norm_ratio}
 
-            results[name] = {
-                "pcc": pcc_op,
-                "cos_sim": cos_sim,
-                "max_abs": max_abs,
-                "norm_ratio": norm_ratio,
-                "ref_std": ref_cmp_op.std().item(),
-                "tt_std": tt_cmp.std().item(),
-            }
-            logger.info(
-                f"    PCC={pcc_op}, cos_sim={cos_sim:.6f}, max_abs={max_abs:.4e}, "
-                f"norm_ratio={norm_ratio:.4f}, ref_std={ref_cmp_op.std():.6f}, tt_std={tt_cmp.std():.6f}"
-            )
+        # Also compare embedding input to verify it's identical
+        ref_emb = ref_captures["input"]
+        tt_emb_val = tt_model.layers[0].captured.get("input")
+        if tt_emb_val is not None and not isinstance(tt_emb_val, dict):
+            tt_emb = _extract_tt(tt_emb_val)
+            if tt_emb.shape == ref_emb.shape:
+                _per_pos_pcc("embedding", ref_emb, tt_emb, seq_len)
 
         logger.info("\n" + "=" * 70)
-        logger.info("PREFILL PER-OP PCC SUMMARY")
+        logger.info("PREFILL PER-OP PCC SUMMARY (full / real-only / pad-only)")
         logger.info("=" * 70)
         for name, r in results.items():
-            logger.info(f"  {name:15s}: PCC={r['pcc']}, cos={r['cos_sim']:.4f}, ratio={r['norm_ratio']:.4f}")
+            logger.info(f"  {name:15s}: FULL={r['full']}, REAL={r['real']}, PAD={r['pad']}, ratio={r['ratio']:.4f}")
         logger.info(f"  {'hidden_state':15s}: PCC={pcc_msg}")
         logger.info(f"  {'logits':15s}: PCC={pcc_logits_msg}")
         logger.info("=" * 70)
