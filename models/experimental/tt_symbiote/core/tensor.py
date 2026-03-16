@@ -7,6 +7,7 @@
 from typing import Optional
 
 import torch
+import ttnn
 
 from models.experimental.tt_symbiote.core.run_config import DistributedTensorConfig, get_tensor_run_implementation
 
@@ -95,9 +96,9 @@ class TorchTTNNTensor(torch.Tensor):
         return self.to_torch.numpy()
 
     def clone(self, **kwargs):
-        return TorchTTNNTensor(
-            self.ttnn_tensor.clone() if self.ttnn_tensor is not None else self.elem.clone(**kwargs), dtype=self.dtype
-        )
+        if self.ttnn_tensor is not None:
+            return TorchTTNNTensor(ttnn.clone(self.ttnn_tensor), dtype=self.dtype)
+        return TorchTTNNTensor(self.elem.clone(**kwargs), dtype=self.dtype)
 
     def set_distributed_tensor_config(self, distributed_tensor_config: DistributedTensorConfig):
         self._distributed_tensor_config = distributed_tensor_config

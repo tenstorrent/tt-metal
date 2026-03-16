@@ -24,6 +24,7 @@ from models.experimental.tt_symbiote.tests.deepseek_ocr_vision_model.ttnn_symbio
 from models.experimental.tt_symbiote.utils.device_management import set_device
 from models.experimental.tt_symbiote.utils.module_replacement import register_module_replacement_dict
 from models.experimental.tt_symbiote.core.run_config import DispatchManager
+from models.experimental.tt_symbiote.modules.conv import TTNNImageEncoderViT
 from tqdm import tqdm
 from torch.nn import functional as F
 
@@ -95,7 +96,6 @@ class ImageEncoderViT(nn.Module):
 @pytest.mark.parametrize("device_params", [{"l1_small_size": 245760}], indirect=True)
 def test_deepseek_ocr(device):
     """Full DeepSeek-OCR end-to-end test with TTNN acceleration and timing CSV output."""
-
     model_name = "deepseek-ai/DeepSeek-OCR"
 
     tokenizer = AutoTokenizer.from_pretrained(model_name, trust_remote_code=True)
@@ -109,7 +109,7 @@ def test_deepseek_ocr(device):
 
     # Module-level replacements (nn_to_nn): custom wrappers that rewrite forward()
     nn_to_nn = {
-        model.model.sam_model.__class__: ImageEncoderViT,
+        # model.model.sam_model.__class__: ImageEncoderViT,
         model.model.layers[0].input_layernorm.__class__: TTNNRMSNorm,
     }
 
@@ -126,6 +126,7 @@ def test_deepseek_ocr(device):
         sam_attn_class: TTNNSAMAttention,
         moe_class: TTNNDeepseekV2MoE,
         model.model.vision_model.__class__: TTNNVitModel,
+        model.model.sam_model.__class__: TTNNImageEncoderViT,
     }
 
     prompt = "<image>\n<|grounding|>Convert the document to markdown. "
