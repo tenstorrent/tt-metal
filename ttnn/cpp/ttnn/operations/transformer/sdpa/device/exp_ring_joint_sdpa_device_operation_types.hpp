@@ -35,6 +35,9 @@ struct ExpRingJointSDPAParams {
     ttnn::ccl::CoreAllocationStrategy core_allocation_strategy;
     uint32_t cluster_axis;
     CoreCoord ccl_core_grid_offset;
+    std::optional<std::vector<CoreCoord>> ccl_worker_cores;
+    uint32_t num_workers_per_link = 1;
+    uint32_t num_buffers_per_channel = 8;
 
     ExpRingJointSDPAParams(
         std::string joint_strategy,
@@ -51,7 +54,10 @@ struct ExpRingJointSDPAParams {
         std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
         ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
         uint32_t cluster_axis,
-        CoreCoord ccl_core_grid_offset) :
+        CoreCoord ccl_core_grid_offset,
+        std::optional<std::vector<CoreCoord>> ccl_worker_cores = std::nullopt,
+        uint32_t num_workers_per_link = 1,
+        uint32_t num_buffers_per_channel = 8) :
         joint_strategy(std::move(joint_strategy)),
         scale(scale),
         logical_n(logical_n),
@@ -66,7 +72,10 @@ struct ExpRingJointSDPAParams {
         sub_device_id(sub_device_id),
         core_allocation_strategy(core_allocation_strategy),
         cluster_axis(cluster_axis),
-        ccl_core_grid_offset(ccl_core_grid_offset) {}
+        ccl_core_grid_offset(ccl_core_grid_offset),
+        ccl_worker_cores(std::move(ccl_worker_cores)),
+        num_workers_per_link(num_workers_per_link),
+        num_buffers_per_channel(num_buffers_per_channel) {}
 
     auto attributes() const {
         using tt::stl::reflection::Attribute;
