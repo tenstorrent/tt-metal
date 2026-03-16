@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_1d_dataflow_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_1d_writer_helpers.hpp"
 
 void kernel_main() {
     uint32_t dst_addr = get_arg_val<uint32_t>(0);

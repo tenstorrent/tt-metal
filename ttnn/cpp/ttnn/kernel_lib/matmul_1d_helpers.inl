@@ -3,6 +3,8 @@
 
 #pragma once
 
+#include "api/compute/cb_helpers.hpp"
+
 /**
  * @file matmul_1d_helpers.inl
  * @brief Implementation of matmul_1d helper function.

@@ -30,6 +30,19 @@ out_cb: tile-sized pages, >= 1 page
 All CBs use tiled data format (not row-major). in0_cb and in1_cb must differ from out_cb
 (enforced by static_assert).
 
+## Numerical Precision: fp32_dest_acc_en
+
+For Kt > 4 (K > 128 elements), bf16 accumulation in the DEST register degrades precision
+below typical test tolerances (rtol=0.05, atol=0.2). Enable fp32 DEST accumulation in the
+program descriptor's `ComputeConfigDescriptor`:
+
+```python
+ComputeConfigDescriptor(math_fidelity="HiFi4", dst_full_sync_en=True, fp32_dest_acc_en=True)
+```
+
+With `fp32_dest_acc_en=True`, each partial product is accumulated in fp32 before the final
+result is packed back to bf16, significantly reducing accumulated rounding error for large K.
+
 ## compute_kernel_lib::matmul_1d
 
 Performs `C = A × B` tile-by-tile using `mm_init` + `matmul_tiles`. Loop order:
@@ -78,8 +91,8 @@ void write_matmul_tiles(
 ## Full Single-Core Matmul Kernel Skeleton
 
 ```cpp
-// reader kernel
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_1d_dataflow_helpers.hpp"
+// reader kernel — use reader-only header
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_1d_reader_helpers.hpp"
 void kernel_main() {
     uint32_t in0_addr = get_arg_val<uint32_t>(0);
     uint32_t in1_addr = get_arg_val<uint32_t>(1);
@@ -92,8 +105,11 @@ void kernel_main() {
     dataflow_kernel_lib::read_matmul_tiles<cb_in0, cb_in1>(in0_addr, in1_addr, Mt, Nt, Kt, batch);
 }
 
-// writer kernel
-#include "ttnn/cpp/ttnn/kernel_lib/matmul_1d_dataflow_helpers.hpp"
+// writer kernel — MUST use writer-only header (not the combined dataflow header)
+// The combined header includes read_matmul_tiles which chains TensorAccessorArgs
+// for two tensors; a writer kernel only provides args for one tensor accessor,
+// so including the reader template causes a compile error.
+#include "ttnn/cpp/ttnn/kernel_lib/matmul_1d_writer_helpers.hpp"
 void kernel_main() {
     uint32_t out_addr = get_arg_val<uint32_t>(0);
     uint32_t Mt       = get_arg_val<uint32_t>(1);
