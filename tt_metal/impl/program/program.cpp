@@ -13,6 +13,7 @@
 #include <ranges>
 #include <tt_align.hpp>
 #include <algorithm>
+#include <random>
 #include <array>
 #include <atomic>
 #include <bitset>
@@ -1512,8 +1513,17 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     std::vector<std::shared_future<void>> events;
 
+    std::random_device rd;
+    std::mt19937 rng(rd());
     for (auto& kernels : kernels_) {
-        for (auto& [id, kernel] : kernels) {
+        std::vector<KernelHandle> order;
+        order.reserve(kernels.size());
+        for (const auto& [id, k] : kernels) {
+            order.push_back(id);
+        }
+        std::shuffle(order.begin(), order.end(), rng);
+        for (KernelHandle id : order) {
+            auto& kernel = kernels.at(id);
             validate_kernel_placement(force_slow_dispatch, kernel);
             launch_build_step(
                 [kernel, device, this, &build_env] {
