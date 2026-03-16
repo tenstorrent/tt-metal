@@ -1104,9 +1104,15 @@ def test_attention_block(
     # ========================================================================
     # Validate attention block output (full pipeline: SDPA -> kv_b2 -> o_proj -> all-reduce + residual)
     # ========================================================================
+    ref_device_idx = 0
+    ref_device_output = output_torch[ref_device_idx : ref_device_idx + 1, :]
     for device_idx in range(mesh_rows * mesh_cols):
         received = output_torch[device_idx : device_idx + 1, :]
-        passing, pcc = comp_pcc(torch_output_expected, received, 0.996)
+        if device_idx != ref_device_idx:
+            dev_eq = torch.equal(received, ref_device_output)
+            assert dev_eq, f"Device {device_idx} output mismatch"
+
+        passing, pcc = comp_pcc(torch_output_expected, received, 0.997)
         logger.info(f"Device {device_idx} Attention Block Output PCC: {pcc}")
         assert passing, f"Device {device_idx} Attention Block Output PCC check failed: {pcc}"
 

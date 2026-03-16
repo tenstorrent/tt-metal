@@ -311,6 +311,7 @@ struct Mcast {
                         CTArgsT::is_part_of_receiver_grid,
                         linked,
                         posted>(mcast_flag_noc_addr, args.data_sender_semaphore_addr);
+                    noc_async_posted_writes_flushed();
                 }
                 noc_semaphore_set(data_sender_semaphore_addr_ptr, VALID);
             }
