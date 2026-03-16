@@ -134,7 +134,7 @@ void JitBuildEnv::init(
     string common_flags = "-std=c++17 -flto=auto -ffast-math -fno-exceptions ";
 
     if (rtoptions.get_jit_analytics_enabled()) {
-        common_flags += "-fdump-rtl-all -fdump-tree-original ";
+        common_flags += " -fdump-rtl-all -fdump-tree-original ";
     }
 
     if (rtoptions.get_riscv_debug_info_enabled()) {
@@ -477,7 +477,7 @@ void JitBuildState::compile_one(const string& out_dir, const JitBuildSettings* s
     string defines = this->defines_;
 
     if (env_.get_rtoptions().get_build_map_enabled()) {
-        cmd += "-save-temps=obj -fdump-tree-all -fdump-rtl-all ";
+        cmd += "-v -save-temps=obj -fdump-tree-all -fdump-rtl-all ";
     }
 
     if (settings) {
