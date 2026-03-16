@@ -15,6 +15,7 @@ from typing import Optional
 import torch
 
 import ttnn
+from tests.nightly.tg.ccl.moe.test_moe_compute_6U import gen_expert_mapping
 
 
 @dataclass
@@ -281,38 +282,115 @@ class ThroughputProgramConfig:
         )
 
 
+@dataclass
+class FusedMoeGptConfig:
+    """Configuration and pre-allocated resources for the fused MoE decode flow.
+
+    The fused flow uses three ops instead of the dense all_to_all flow:
+      all_to_all_dispatch_metadata → moe_gpt → selective_reduce_combine
+
+    Pre-allocated resources (dispatch/combine output tensors and semaphores) are
+    reused across iterations to avoid per-call allocations.
+
+    Attributes:
+        tt_w0_w1: moe_gpt gate+up weight tensor (DRAM HEIGHT_SHARDED, prepared by
+            prepare_w0_w1_tensor from experts_throughput.weights)
+        tt_w2: moe_gpt down weight tensor (DRAM HEIGHT_SHARDED, prepared by
+            prepare_w2_tensor from experts_throughput.weights)
+        tt_dispatch_mapping: Expert mapping for all_to_all_dispatch_metadata and moe_gpt.
+            Both ops use [D, E] format: mapping[d, e] = linearized device ID that owns
+            global expert e. Formula: e // experts_per_device (same for all d).
+            Shape: [total_devices, num_experts] uint16, DRAM.
+        dispatch_sparse: Pre-allocated sparse buffer output from dispatch
+            [ring_devices, total_tokens, hidden_size] bfloat16, DRAM (sharded per device)
+        dispatch_indices: Pre-allocated expert indices output from dispatch
+            HEIGHT_SHARDED L1, [total_tokens, selected_k] uint16 per device
+        dispatch_scores: Pre-allocated expert scores output from dispatch
+            HEIGHT_SHARDED L1, [total_tokens, selected_k] bfloat16 per device
+        dispatch_semaphore: Global semaphore for dispatch synchronization
+        combine_preallocated: Pre-allocated combine output tensor, DRAM
+            Shape: [experts_per_cluster, M, hidden_size] per device
+        combine_semaphore: Global semaphore for selective_reduce_combine
+        cluster_axis: Mesh axis for the dispatch ring (default: 0, ring along rows)
+        combine_worker_cores: List of CoreCoord for selective_reduce_combine workers
+        combine_mux_cores: CoreRangeSet for selective_reduce_combine mux cores
+        combine_token_parallel_core_dim: Token-parallel core dimension (default: 4)
+        combine_data_parallel_core_dim: Data-parallel core dimension (default: 4)
+        num_links: Number of fabric links for all ops (default: 4)
+    """
+
+    # Weight tensors in moe_gpt format
+    tt_w0_w1: object  # ttnn.Tensor
+    tt_w2: object  # ttnn.Tensor
+
+    # Routing mapping tensor for dispatch (DRAM)
+    # Shape [total_devices, experts_per_ring] uint16, DRAM.
+    # Uses ring-local expert IDs: mapping[d, e] = (e // E) * mesh_cols + (d % mesh_cols)
+    tt_dispatch_mapping: object  # ttnn.Tensor
+
+    # Routing mapping tensor for moe_gpt (L1)
+    # Same data as tt_dispatch_mapping but in L1 memory (required by moe_gpt kernel).
+    tt_moe_gpt_mapping: object  # ttnn.Tensor
+
+    # Pre-allocated dispatch output tensors
+    dispatch_sparse: object  # ttnn.Tensor, DRAM
+    dispatch_indices: object  # ttnn.Tensor, HEIGHT_SHARDED L1
+    dispatch_scores: object  # ttnn.Tensor, HEIGHT_SHARDED L1
+    dispatch_semaphore: object  # ttnn.GlobalSemaphore
+
+    # Pre-allocated combine output tensor
+    combine_preallocated: object  # ttnn.Tensor, DRAM
+    combine_semaphore: object  # ttnn.GlobalSemaphore
+
+    # Core topology parameters
+    cluster_axis: int = 0
+    combine_worker_cores: object = None  # List[ttnn.CoreCoord], 16 cores
+    combine_mux_cores: object = None  # ttnn.CoreRangeSet
+    combine_token_parallel_core_dim: int = 4
+    combine_data_parallel_core_dim: int = 4
+    num_links: int = 4
+
+
 def create_expert_mapping_tensors(
     num_devices: int,
-    num_experts_per_device: int,
+    num_experts_global: int,
     mesh_device,
-    cluster_axis: Optional[int] = None,
-    mesh_shape: tuple[int, int] = None,
+    memory_config: ttnn.MemoryConfig = ttnn.DRAM_MEMORY_CONFIG,
+    new_format: bool = False,
+    return_torch: bool = False,
+    cluster_axis: int = 0,
 ) -> ttnn.Tensor:
-    """Create expert-to-device mapping tensors for all_to_all operations.
+    """Create expert-to-device mapping tensors for all_to_all operations."""
+    num_experts_per_device = num_experts_global // num_devices
+    if new_format:
+        mesh_rows, mesh_cols = mesh_device.shape
+        num_replicated_devices = mesh_cols if cluster_axis == 0 else mesh_rows
+        experts_per_cluster = num_experts_global // num_replicated_devices
+        mapping = gen_expert_mapping(
+            num_devices,
+            num_replicated_devices,
+            cluster_axis,
+            num_experts_global,
+            experts_per_cluster,
+            num_experts_per_device,
+        )
+    else:
+        mapping = (
+            torch.eye(num_devices, dtype=torch.int32)
+            .repeat_interleave(num_experts_per_device, dim=0)
+            .unsqueeze(0)
+            .unsqueeze(0)
+        )
 
-    Args:
-        num_devices: Total number of devices
-        num_experts_per_device: Experts per device
-        mesh_device: TTNN mesh device
-
-    Returns:
-        Mapping tensor [1, 1, num_experts, num_devices]
-    """
-    # Create identity matrix showing which device owns which expert
-    # Shape: [num_experts, num_devices] where mapping[e, d] = 1 if expert e is on device d
-    mapping = (
-        torch.eye(num_devices, dtype=torch.int32)
-        .repeat_interleave(num_experts_per_device, dim=0)
-        .unsqueeze(0)
-        .unsqueeze(0)
-    )
+    if return_torch:
+        return mapping
 
     return ttnn.from_torch(
         mapping,
         device=mesh_device,
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
         dtype=ttnn.uint16,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        memory_config=memory_config,
         layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
