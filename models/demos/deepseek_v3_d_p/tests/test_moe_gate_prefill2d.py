@@ -147,7 +147,7 @@ def test_forward_pass(
     torch_input = torch.randn(config.max_seq_len, config.dim, dtype=torch.bfloat16)
 
     torch_weight = torch.randn(reference_model.weight.data.shape, dtype=torch.bfloat16).T
-    torch_bias = torch.randn(reference_model.bias.data.shape, dtype=torch.bfloat16)
+    torch_bias = torch.randn(reference_model.bias.data.shape, dtype=torch.bfloat16) * 100
     reference_model.weight.data = torch_weight
     reference_model.bias.data = torch_bias
 
