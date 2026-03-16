@@ -115,7 +115,8 @@ foreach(_xtensor_target xtl xtensor xtensor-blas)
             set_target_properties(
                 ${_xtensor_target}
                 PROPERTIES
-                    INTERFACE_SYSTEM_INCLUDE_DIRECTORIES "${_incs}"
+                    INTERFACE_SYSTEM_INCLUDE_DIRECTORIES
+                        "${_incs}"
             )
         endif()
     endif()
