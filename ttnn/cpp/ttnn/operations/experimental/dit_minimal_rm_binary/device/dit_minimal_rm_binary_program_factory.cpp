@@ -141,6 +141,8 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
     // --- Per-core runtime args ---
     uint32_t start_tile = 0;
 
+    std::cout << "output page size = " << output.buffer()->page_size() << std::endl;
+
     auto assign_rt_args = [&](const CoreRangeSet& group, uint32_t tile_count) {
         if (tile_count == 0) {
             return;

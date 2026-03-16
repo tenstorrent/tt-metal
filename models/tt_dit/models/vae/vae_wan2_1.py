@@ -15,7 +15,6 @@ from models.common.utility_functions import is_blackhole
 from ...layers.linear import Linear
 from ...layers.module import Module, ModuleList, Parameter
 from ...layers.normalization import RMSNorm
-from ...layers.rm_binary_eltwise import rm_binary_eltwise
 from ...parallel.config import VaeHWParallelConfig
 from ...parallel.manager import CCLManager
 from ...utils.conv3d import _ntuple, aligned_channels, count_convs, get_conv3d_config, prepare_conv3d_weights
@@ -585,10 +584,12 @@ class WanResidualBlock(Module):
             x_conv_BTHWC = self.conv2(x_BTHWC, logical_h)
 
         # Add residual (row-major path to avoid tilize+add+untilize)
-        h_rm_BTHWC = ttnn.to_layout(h_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
-        residual_rm_BTHWC = rm_binary_eltwise(h_rm_BTHWC, x_conv_BTHWC, op="add")
-        x_tile_BTHWC = ttnn.to_layout(residual_rm_BTHWC, ttnn.TILE_LAYOUT)
-        return x_tile_BTHWC
+
+        print(f"h_tile_BTHWC.padded_shape: {h_tile_BTHWC.padded_shape}")
+        print(f"x_conv_BTHWC.padded_shape: {x_conv_BTHWC.padded_shape}")
+
+        residual_rm_BTHWC = ttnn.experimental.dit_minimal_rm_binary(h_tile_BTHWC, x_conv_BTHWC, op="add")
+        return residual_rm_BTHWC
 
 
 class WanMidBlock(Module):
@@ -652,11 +653,13 @@ class WanMidBlock(Module):
         feat_idx: list[int] = [0],
     ) -> ttnn.Tensor:
         assert x_BTHWC.layout == ttnn.TILE_LAYOUT, f"WanMidBlock expects TILE input, got {x_BTHWC.layout}"
-        x_res_BTHWC = self.resnets[0](x_BTHWC, logical_h, feat_cache, feat_idx)
-        x_BTHWC = x_res_BTHWC
+        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        x_BTHWC = self.resnets[0](x_BTHWC, logical_h, feat_cache, feat_idx)
         for i in range(len(self.attentions)):
-            x_attn_BTHWC = self.attentions[i](x_BTHWC, logical_h)
-            x_BTHWC = self.resnets[i + 1](x_attn_BTHWC, logical_h, feat_cache, feat_idx)
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
+            x_BTHWC = self.attentions[i](x_BTHWC, logical_h)
+            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+            x_BTHWC = self.resnets[i + 1](x_BTHWC, logical_h, feat_cache, feat_idx)
         return x_BTHWC
 
 
@@ -1030,13 +1033,11 @@ class WanUpBlock(Module):
         feat_cache: list[ttnn.Tensor] | None = None,
         feat_idx: list[int] = [0],
     ) -> tuple[ttnn.Tensor, int]:
+        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
         for resnet in self.resnets:
-            x_res_BTHWC = resnet(x_BTHWC, logical_h, feat_cache, feat_idx)
-            x_BTHWC = x_res_BTHWC
+            x_BTHWC = resnet(x_BTHWC, logical_h, feat_cache, feat_idx)
         if self.upsamplers is not None:
-            x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
-            x_upsampled_BTHWC, logical_h = self.upsamplers(x_BTHWC, logical_h, feat_cache, feat_idx)
-            x_BTHWC = ttnn.to_layout(x_upsampled_BTHWC, ttnn.TILE_LAYOUT)
+            x_BTHWC, logical_h = self.upsamplers(x_BTHWC, logical_h, feat_cache, feat_idx)
         return x_BTHWC, logical_h
 
 
@@ -1183,6 +1184,7 @@ class WanDecoder3d(Module):
             x_BTHWC, logical_h = up_block(x_BTHWC, logical_h, feat_cache, feat_idx)
 
         ## head
+        x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
         x_norm_tile_BTHWC = self.norm_out(x_BTHWC)
         x_BTHWC = ttnn.to_layout(x_norm_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
@@ -1489,8 +1491,10 @@ class WanEncoder3D(Module):
                 x_BTHWC, logical_h = down_block(x_BTHWC, logical_h, feat_cache, feat_idx)
                 x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
             elif isinstance(down_block, WanResidualBlock):
+                x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
                 x_BTHWC = down_block(x_BTHWC, logical_h, feat_cache, feat_idx)
             elif isinstance(down_block, WanAttentionBlock):
+                x_BTHWC = ttnn.to_layout(x_BTHWC, ttnn.TILE_LAYOUT)
                 x_BTHWC = down_block(x_BTHWC, logical_h)
             else:
                 raise ValueError(f"Unsupported downblock type: {type(down_block)}")
