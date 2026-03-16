@@ -5,9 +5,9 @@
 #include "device/nlp_kv_cache_load_slice_device_operation.hpp"
 #include "nlp_kv_cache_load_slice.hpp"
 
-namespace ttnn::operations::experimental::transformer {
+namespace ttnn::experimental {
 
-ttnn::Tensor NLPKVCacheLoadSliceOperation::invoke(
+ttnn::Tensor nlp_kv_cache_load_slice(
     const Tensor& input_tensor,
     const uint32_t seq_len_start,
     const uint32_t seq_len_end,
@@ -17,4 +17,4 @@ ttnn::Tensor NLPKVCacheLoadSliceOperation::invoke(
         input_tensor, seq_len_start, seq_len_end, memory_config, optional_output_tensor);
 }
 
-}  // namespace ttnn::operations::experimental::transformer
+}  // namespace ttnn::experimental

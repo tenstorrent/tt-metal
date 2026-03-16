@@ -17,7 +17,7 @@ struct BatchNormOperation {
 
         DataType input_dtype;
         std::optional<DataType> dtype;
-        tt::stl::hash::hash_t to_hash() const;
+        ttsl::hash::hash_t to_hash() const;
         DataType get_dtype() const;
     };
 
@@ -61,7 +61,7 @@ struct BatchNormOperation {
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
     static spec_return_value_t compute_output_specs(const operation_attributes_t&, const tensor_args_t&);
     static tensor_return_value_t create_output_tensors(const operation_attributes_t&, const tensor_args_t&);
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 }  // namespace ttnn::operations::normalization
 

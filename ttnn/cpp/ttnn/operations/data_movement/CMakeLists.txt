@@ -1,7 +1,7 @@
 add_library(ttnn_op_data_movement ${LIB_TYPE})
 add_library(TTNN::Ops::DataMovement ALIAS ttnn_op_data_movement)
 
-target_precompile_headers(ttnn_op_data_movement REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_data_movement TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_data_movement)
 set_target_properties(
     ttnn_op_data_movement
