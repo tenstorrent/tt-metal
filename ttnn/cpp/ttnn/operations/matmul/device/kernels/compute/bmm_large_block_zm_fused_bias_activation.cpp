@@ -88,6 +88,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
     uint32_t out_subblock_h,
     uint32_t in0_block_w) {
     // Reconfigure input
+    reconfig_data_format_srca<false, true>(mm_partials_cb_id);
     copy_tile_to_dst_init_short_with_dt(in1_cb_id, mm_partials_cb_id);
     cb_wait_front(mm_partials_cb_id, out_subblock_num_tiles);
 
@@ -97,6 +98,7 @@ FORCE_INLINE void reload_from_cb_to_dst(
 
     cb_pop_front(mm_partials_cb_id, out_subblock_num_tiles);
     // Reconfigure srcA back
+    reconfig_data_format_srca<false, true>(in1_cb_id);
     mm_block_init_short_with_dt(
         in0_cb_id, in1_cb_id, mm_partials_cb_id, in1_transpose_tile, out_subblock_w, out_subblock_h, in0_block_w);
 }
