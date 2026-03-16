@@ -12,7 +12,9 @@ from loguru import logger
 import ttnn
 from models.demos.deepseek_v3.reference.modeling_deepseek import MoEGate as ReferenceMoEGate
 from models.demos.deepseek_v3.tests.pytest_utils import DEFAULT_PREFILL_SEQ_LEN
-from models.demos.deepseek_v3.tt.blaze_moe_gate import BlazeMoeGate as MoEGate
+
+# from models.demos.deepseek_v3.tt.blaze_moe_gate import BlazeMoeGate as MoEGate
+from models.demos.deepseek_v3.tt.moe_gate import MoEGate
 from models.demos.deepseek_v3.utils.config_helpers import sub_state_dict
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.test_utils import (
@@ -211,12 +213,6 @@ def test_forward_pass(
     passing, pcc_message = comp_pcc(reference_topk_weights, tt_topk_weights_torch, topk_weights_pcc_required)
 
     logger.info(f"TopK experts weights PCC: {pcc_message}")
-
-    assert torch.equal(reference_topk_indices, torch.load(f"ref_indices_{mode}.pt"))
-    assert torch.equal(reference_topk_weights, torch.load(f"ref_weights_{mode}.pt"))
-
-    torch.save(tt_topk_weights_torch, f"new_indices_{mode}.pt")
-    torch.save(tt_topk_indices_torch, f"new_weights_{mode}.pt")
 
     assert (
         passing
