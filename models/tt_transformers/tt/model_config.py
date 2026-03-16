@@ -2888,6 +2888,11 @@ class ModelArgs:
         if not self.is_multimodal:
             return AutoModelForCausalLM
 
+        if "Mistral-Small-3.1-24B-Instruct-2503" in self.model_name:
+            from transformers import Mistral3ForConditionalGeneration
+
+            return Mistral3ForConditionalGeneration
+
         for model_cls in (AutoModelForVision2Seq, AutoModelForImageTextToText):
             if type(self.hf_config) in model_cls._model_mapping:
                 return model_cls

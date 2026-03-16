@@ -14,6 +14,11 @@ from vllm.model_executor.models.gemma3_mm import (
     Gemma3ProcessingInfo,
 )
 from vllm.model_executor.models.interfaces import SupportsMultiModal
+from vllm.model_executor.models.mistral3 import (
+    Mistral3DummyInputsBuilder,
+    Mistral3MultiModalProcessor,
+    Mistral3ProcessingInfo,
+)
 from vllm.multimodal import MULTIMODAL_REGISTRY
 from vllm.multimodal.inputs import MultiModalDataDict
 from vllm.multimodal.profiling import BaseDummyInputsBuilder
@@ -384,6 +389,133 @@ class MistralForCausalLM(Generator):
 
     def decode_forward(self, *args, **kwargs):
         return super().decode_forward(*args, **kwargs)
+
+    def allocate_kv_cache(self, *args, **kwargs):
+        return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)
+
+
+@MULTIMODAL_REGISTRY.register_processor(
+    Mistral3MultiModalProcessor,
+    info=Mistral3ProcessingInfo,
+    dummy_inputs=Mistral3DummyInputsBuilder,
+)
+class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.MISTRAL_IMAGE_TOKEN_ID = self.model_args[0].image_token_index
+        self.max_gen_len = self.model_args[0].max_seq_len - 1
+
+    @classmethod
+    def initialize_vllm_model(
+        cls,
+        hf_config,
+        mesh_device,
+        max_batch_size,
+        max_seq_len=131072,
+        n_layers=None,
+        tt_data_parallel=1,
+        optimizations: str = "performance",
+    ):
+        from models.tt_transformers.demo.simple_vision_demo import create_multimodal_model
+
+        submesh_devices = create_submeshes(mesh_device, tt_data_parallel)
+
+        model_args = []
+        model = []
+        state_dict = None
+
+        for submesh in submesh_devices:
+            model_args_i, model_i, state_dict = create_multimodal_model(
+                mesh_device=submesh,
+                max_batch_size=max_batch_size // tt_data_parallel,
+                max_seq_len=max_seq_len,
+                use_paged_kv_cache=True,
+                checkpoint=state_dict,
+            )
+
+            if n_layers is not None:
+                model_args_i.n_layers = n_layers
+
+            model_args.append(model_args_i)
+            model.append(model_i)
+
+        return cls(model, model_args, mesh_device)
+
+    @property
+    def cache_path(self):
+        return self.model_args[0].model_cache_path
+
+    @property
+    def max_cross_attn_tokens(self):
+        if hasattr(self.model_args[0], "vision_max_num_chunks") and hasattr(self.model_args[0], "vision_chunk_ntok"):
+            return self.model_args[0].vision_max_num_chunks * nearest_32(self.model_args[0].vision_chunk_ntok)
+        return 1024
+
+    def prefill_forward(
+        self,
+        tokens: torch.Tensor = None,
+        page_table: torch.Tensor = None,
+        kv_cache=None,
+        prompt_lens=None,
+        images: Union[List[Image], List[List[Image]]] = None,
+        cross_page_table: torch.Tensor = None,
+        pixel_values=None,
+        **kwargs,
+    ):
+        if pixel_values is not None and images is None:
+            images = pixel_values
+
+        if images is None or (isinstance(images, list) and all(img is None for img in images)):
+            return super().prefill_forward_text(
+                tokens=tokens,
+                page_table=page_table,
+                kv_cache=kv_cache,
+                prompt_lens=prompt_lens,
+                **kwargs,
+            )
+
+        batch = tokens.shape[0]
+
+        vision_images = []
+        vision_masks = []
+        total_lens = []
+
+        for user_id in range(batch):
+            image = images[user_id]
+
+            if isinstance(image, list):
+                if len(image) > 1:
+                    logger.warning(
+                        f"Mistral 24B currently supports only 1 image per prompt, got {len(image)}. Using first image."
+                    )
+                image = image[0] if image is not None else None
+
+            vision_images.append([image] if image is not None else None)
+
+            prompt_tokens = [int(tokens[user_id, i]) for i in range(prompt_lens[user_id])]
+
+            if image is not None:
+                vision_masks.append(create_vision_mask(prompt_tokens, self.MISTRAL_IMAGE_TOKEN_ID))
+            else:
+                vision_masks.append(None)
+
+            total_lens.append(prompt_lens[user_id] + self.max_gen_len)
+
+        return super().prefill_forward(
+            vision_images,
+            vision_masks,
+            tokens,
+            None,
+            total_lens,
+            prompt_lens,
+            page_table=page_table,
+            kv_cache=kv_cache,
+            cross_page_table=cross_page_table,
+            **kwargs,
+        )
+
+    def decode_forward(self, *args, **kwargs):
+        return super().decode_forward_text(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
         return allocate_vllm_kv_cache(*args, **kwargs, dp_model=self.model, tt_cache_path=self.cache_path)

@@ -145,26 +145,37 @@ def create_multimodal_model(
     from models.tt_transformers.tt.multimodal.llama_vision_model import CrossAttentionTransformer
 
     tt_model_args = ModelArgs(mesh_device, max_batch_size=max_batch_size)
-    assert tt_model_args.is_llama_vision(), "This model is multimodal"
+    assert tt_model_args.is_multimodal, "This model is multimodal"
 
-    # limit length or we'll run out of space
     tt_model_args.max_seq_len = max_seq_len
     if tt_model_args.is_90b:
         assert tt_model_args.device_name == "T3K", "90B model only supported on T3K right now"
-        # for 90B model on T3K, use bfp8 and performance optimizations or the model won't fit in memory
         dtype = ttnn.bfloat8_b
         logger.info("Setting dtype to bfloat8_b for 90B model on T3K to fit model in memory")
 
     if checkpoint is None:
         checkpoint = tt_model_args.load_state_dict()
-    model = CrossAttentionTransformer(
-        mesh_device,
-        state_dict=checkpoint,
-        weight_cache_path=tt_model_args.weight_cache_path(dtype),
-        dtype=dtype,
-        configuration=tt_model_args,
-        use_paged_kv_cache=use_paged_kv_cache,
-    )
+
+    if tt_model_args.base_model_name == "Mistral-Small-3.1-24B":
+        from models.tt_transformers.tt.multimodal.mistral_24b.mistral_e2e_model import MistralTransformer
+
+        model = MistralTransformer(
+            mesh_device=mesh_device,
+            state_dict=checkpoint,
+            weight_cache_path=tt_model_args.weight_cache_path(ttnn.bfloat8_b),
+            dtype=ttnn.bfloat8_b,
+            args=tt_model_args,
+            use_paged_kv_cache=use_paged_kv_cache,
+        )
+    else:
+        model = CrossAttentionTransformer(
+            mesh_device,
+            state_dict=checkpoint,
+            weight_cache_path=tt_model_args.weight_cache_path(dtype),
+            dtype=dtype,
+            configuration=tt_model_args,
+            use_paged_kv_cache=use_paged_kv_cache,
+        )
     return tt_model_args, model, checkpoint
 
 
