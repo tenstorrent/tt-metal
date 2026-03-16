@@ -279,6 +279,14 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         self.vae_scale_factor_spatial = self.vae.config.scale_factor_spatial if getattr(self, "vae", None) else 8
         self.video_processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
 
+        # Precompute VAE latent normalization constants (avoids recreating every call)
+        self._vae_latents_mean = torch.tensor(self.vae.config.latents_mean, dtype=self.vae.dtype).view(
+            1, self.vae.config.z_dim, 1, 1, 1
+        )
+        self._vae_latents_std = torch.tensor(self.vae.config.latents_std, dtype=self.vae.dtype).view(
+            1, self.vae.config.z_dim, 1, 1, 1
+        )
+
     @staticmethod
     def create_pipeline(
         mesh_device,
@@ -965,6 +973,9 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         self._current_timestep = None
 
+        if profiler:
+            profiler.start("vae", profiler_iteration)
+
         # Postprocess spatial output
         latents = current_model.postprocess_spatial_output_host(
             permuted_latent, F=latent_frames, H=latent_height, W=latent_width, N=patchified_seqlen
@@ -972,15 +983,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
 
         if not output_type == "latent":
             latents = latents.to(self.vae.dtype)
-            latents_mean = (
-                torch.tensor(self.vae.config.latents_mean)
-                .view(1, self.vae.config.z_dim, 1, 1, 1)
-                .to(latents.device, latents.dtype)
-            )
-            latents_std = 1.0 / torch.tensor(self.vae.config.latents_std).view(1, self.vae.config.z_dim, 1, 1, 1).to(
-                latents.device, latents.dtype
-            )
-            latents = latents / latents_std + latents_mean
+            latents = latents * self._vae_latents_std + self._vae_latents_mean
 
             # VAE on device
             tt_latents_BTHWC = latents.permute(0, 2, 3, 4, 1)
@@ -998,9 +1001,8 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 },
                 dtype=self.tt_vae.dtype,
             )
-            with profiler("vae", profiler_iteration) if profiler else nullcontext():
-                self._prepare_vae()
-                tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h)
+            self._prepare_vae()
+            tt_video_BCTHW, new_logical_h = self.tt_vae(tt_latents_BTHWC, logical_h)
 
             concat_dims = [None, None]
             concat_dims[self.vae_parallel_config.height_parallel.mesh_axis] = 3
@@ -1008,9 +1010,15 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             video_torch = self.vae_ccl_manager.device_to_host(tt_video_BCTHW, concat_dims)
             video_torch = video_torch[:, :, :, :new_logical_h, :]
 
-            video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
+            if output_type == "np":
+                video = (video_torch * 0.5 + 0.5).clamp(0, 1).permute(0, 2, 3, 4, 1).float().numpy()
+            else:
+                video = self.video_processor.postprocess_video(video_torch, output_type=output_type)
         else:
             video = latents
+
+        if profiler:
+            profiler.end("vae", profiler_iteration)
 
         # Offload all models
         # self.maybe_free_model_hooks()
