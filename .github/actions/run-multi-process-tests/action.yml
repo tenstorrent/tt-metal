@@ -5,6 +5,9 @@ runs:
   steps:
     - name: Run Multi-Process tests
       shell: bash
+      env:
+        LD_LIBRARY_PATH: /work/build/lib
+        TT_METAL_HOME: /work
       run: |
         python3 tests/tt_metal/tt_fabric/utils/generate_rank_bindings.py
         tt-run --mpi-args "--allow-run-as-root" --rank-binding 4x4_multi_big_mesh_rank_binding.yaml ./build/test/tt_metal/perf_microbenchmark/routing/test_tt_fabric --test_config tests/tt_metal/tt_metal/perf_microbenchmark/routing/test_dual_big_mesh_fabric_2d_sanity.yaml
