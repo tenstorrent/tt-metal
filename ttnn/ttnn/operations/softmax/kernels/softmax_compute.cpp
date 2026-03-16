@@ -22,6 +22,17 @@ void MAIN {
     constexpr uint32_t R = get_compile_time_arg_val(6);             // tiles per work unit
     constexpr uint32_t numeric_stable = get_compile_time_arg_val(7);
     constexpr uint32_t num_work_units = get_compile_time_arg_val(8);
+    constexpr uint32_t is_dim_h = get_compile_time_arg_val(9);  // 1 if dim=-2, 0 if dim=-1
+
+    // Dimension-dependent constants
+    // dim=-1: REDUCE_ROW, block row(R), broadcast COL, binary shape (1, R)
+    // dim=-2: REDUCE_COL, block col(R), broadcast ROW, binary shape (R, 1)
+    constexpr auto reduce_dim = is_dim_h ? ReduceDim::REDUCE_COL : ReduceDim::REDUCE_ROW;
+    constexpr auto bcast_dim = is_dim_h ? compute_kernel_lib::BroadcastDim::ROW : compute_kernel_lib::BroadcastDim::COL;
+    constexpr auto reduce_block = is_dim_h ? compute_kernel_lib::ReduceInputBlockShape::col(R)
+                                           : compute_kernel_lib::ReduceInputBlockShape::row(R);
+    constexpr auto binary_block = is_dim_h ? compute_kernel_lib::BinaryInputBlockShape::of(R, 1)
+                                           : compute_kernel_lib::BinaryInputBlockShape::of(1, R);
 
     // Post-ops
     auto exp_post_op = [](uint32_t dst_idx) {
@@ -44,50 +55,45 @@ void MAIN {
         if constexpr (numeric_stable == 1) {
             // ===== STABLE MODE: 4-phase softmax =====
 
-            // Phase 1: max = reduce_max(input) along row
-            // cb_input: R tiles pushed by reader, WaitUpfrontNoPop keeps them for Phase 2
+            // Phase 1: max = reduce(input) along reduction dim
             compute_kernel_lib::reduce<
                 PoolType::MAX,
-                ReduceDim::REDUCE_ROW,
+                reduce_dim,
                 compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
-                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(
-                cb_input, cb_scaler, cb_max, compute_kernel_lib::ReduceInputBlockShape::row(R));
+                compute_kernel_lib::ReduceDataFormatReconfigMode::NONE>(cb_input, cb_scaler, cb_max, reduce_block);
 
-            // Phase 2: exp(input - max) with COL broadcast
-            // cb_input: still has R tiles (NoWaitNoPop), cb_max: 1 tile (WaitAndPopPerTile)
+            // Phase 2: exp(input - max) with broadcast
             compute_kernel_lib::sub<
-                compute_kernel_lib::BroadcastDim::COL,
+                bcast_dim,
                 compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
                 compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
                 compute_kernel_lib::BinaryOutputPolicy::PerTile,
                 compute_kernel_lib::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(
-                cb_input, cb_max, cb_exp, compute_kernel_lib::BinaryInputBlockShape::of(1, R), exp_post_op);
+                cb_input, cb_max, cb_exp, binary_block, exp_post_op);
             cb_pop_front(cb_input, R);  // manual pop -- NoWaitNoPop on A
 
-            // Phase 3: recip_sum = 1 / sum(exp) along row
-            // cb_exp: R tiles (WaitUpfrontNoPop keeps them for Phase 4)
+            // Phase 3: recip_sum = 1 / sum(exp) along reduction dim
             compute_kernel_lib::reduce<
                 PoolType::SUM,
-                ReduceDim::REDUCE_ROW,
+                reduce_dim,
                 compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
                 compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT>(
                 cb_exp,
                 cb_scaler,
                 cb_recip_sum,
-                compute_kernel_lib::ReduceInputBlockShape::row(R),
+                reduce_block,
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::NoAccumulation{},
                 recip_post_op);
 
-            // Phase 4: output = exp * (1/sum) with COL broadcast
-            // cb_exp: still has R tiles (NoWaitNoPop), cb_recip_sum: 1 tile (WaitAndPopPerTile)
+            // Phase 4: output = exp * (1/sum) with broadcast
             compute_kernel_lib::mul<
-                compute_kernel_lib::BroadcastDim::COL,
+                bcast_dim,
                 compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
                 compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
                 compute_kernel_lib::BinaryOutputPolicy::PerTile,
                 compute_kernel_lib::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(
-                cb_exp, cb_recip_sum, cb_out, compute_kernel_lib::BinaryInputBlockShape::of(1, R));
+                cb_exp, cb_recip_sum, cb_out, binary_block);
             cb_pop_front(cb_exp, R);  // manual pop -- NoWaitNoPop on A
 
         } else {
@@ -98,28 +104,28 @@ void MAIN {
                 compute_kernel_lib::CopyInputPolicy::WaitAndPop,
                 compute_kernel_lib::CopyDataFormatReconfig::NONE>(cb_input, cb_exp, R, exp_post_op);
 
-            // Phase 3: recip_sum = 1 / sum(exp) along row
+            // Phase 3: recip_sum = 1 / sum(exp) along reduction dim
             compute_kernel_lib::reduce<
                 PoolType::SUM,
-                ReduceDim::REDUCE_ROW,
+                reduce_dim,
                 compute_kernel_lib::ReduceInputPolicy::WaitUpfrontNoPop,
                 compute_kernel_lib::ReduceDataFormatReconfigMode::INPUT_AND_OUTPUT>(
                 cb_exp,
                 cb_scaler,
                 cb_recip_sum,
-                compute_kernel_lib::ReduceInputBlockShape::row(R),
+                reduce_block,
                 compute_kernel_lib::ReduceInputMemoryLayout::contiguous(),
                 compute_kernel_lib::NoAccumulation{},
                 recip_post_op);
 
-            // Phase 4: output = exp * (1/sum) with COL broadcast
+            // Phase 4: output = exp * (1/sum) with broadcast
             compute_kernel_lib::mul<
-                compute_kernel_lib::BroadcastDim::COL,
+                bcast_dim,
                 compute_kernel_lib::BinaryInputPolicy::NoWaitNoPop,
                 compute_kernel_lib::BinaryInputPolicy::WaitAndPopPerTile,
                 compute_kernel_lib::BinaryOutputPolicy::PerTile,
                 compute_kernel_lib::BinaryDataFormatReconfig::INPUT_AND_OUTPUT>(
-                cb_exp, cb_recip_sum, cb_out, compute_kernel_lib::BinaryInputBlockShape::of(1, R));
+                cb_exp, cb_recip_sum, cb_out, binary_block);
             cb_pop_front(cb_exp, R);  // manual pop -- NoWaitNoPop on A
         }
     }

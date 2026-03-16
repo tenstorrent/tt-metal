@@ -158,7 +158,7 @@ def create_program_descriptor(
     reader_ct_args = [CB_INPUT, CB_SCALER, R, is_dim_h, Wt]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
 
-    # Compute CT args: [cb_input, cb_scaler, cb_out, cb_max, cb_exp, cb_recip_sum, R, numeric_stable, num_work_units]
+    # Compute CT args: [cb_input, cb_scaler, cb_out, cb_max, cb_exp, cb_recip_sum, R, numeric_stable, num_work_units, is_dim_h]
     compute_ct_args = [
         CB_INPUT,
         CB_SCALER,
@@ -169,6 +169,7 @@ def create_program_descriptor(
         R,
         1 if numeric_stable else 0,
         total_work_units,
+        is_dim_h,
     ]
 
     # Writer CT args: [cb_out, R, is_dim_h, Wt] + TensorAccessorArgs(output)
