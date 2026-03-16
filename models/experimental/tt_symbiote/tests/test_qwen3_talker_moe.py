@@ -58,12 +58,20 @@ def test_qwen3_talker_moe_ttnn_matches_torch(mesh_device):
     with torch.no_grad():
         hf_out = hf_block(x)
 
+    # HF MoE block returns (hidden_states, router_logits); use hidden_states for comparison.
+    if isinstance(hf_out, tuple):
+        hf_out = hf_out[0]
+
     # Create TTNN implementation from the same HF block.
     ttnn_block = TTNNQwen3TalkerMoE.from_torch(hf_block)
     set_device(ttnn_block, mesh_device)
 
     with torch.no_grad():
         ttnn_out = ttnn_block(x)
+
+    # TTNN may return a tuple as well; use first element for comparison.
+    if isinstance(ttnn_out, tuple):
+        ttnn_out = ttnn_out[0]
 
     # Sanity check: shapes must match.
     assert hf_out.shape == ttnn_out.shape
