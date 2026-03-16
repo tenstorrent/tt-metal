@@ -25,10 +25,13 @@ def set_seed(seed: int = 42):
 
 
 def get_tt_metal_home() -> str:
-    """Get the TT-Metal root directory.
+    """Return TT-Metal runtime root from the environment.
 
     Returns:
-        Path to TT-Metal runtime root.
+        Value of TT_METAL_RUNTIME_ROOT.
+
+    Raises:
+        RuntimeError: If TT_METAL_RUNTIME_ROOT is not set.
     """
     runtime_root = os.environ.get("TT_METAL_RUNTIME_ROOT")
     if runtime_root:
