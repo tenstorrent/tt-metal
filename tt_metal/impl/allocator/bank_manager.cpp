@@ -155,7 +155,7 @@ BankManager::BankManager(
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
 
     // Initialize all allocators; sets up allocator-dependent members
-    // Expect the alignment provided to by compatible with the DRAM alignment
+    // Expect the alignment provided to be compatible with the DRAM alignment for L1<->DRAM data transfers
     TT_ASSERT(dram_alignment_bytes % alignment_bytes == 0);
     this->init_allocators(size_bytes, dram_alignment_bytes, alloc_offset);
 }
@@ -178,7 +178,7 @@ BankManager::BankManager(
     validate_num_banks(bank_id_to_bank_offset_.size(), buffer_type_, disable_interleaved);
 
     // Initialize all allocators; sets up allocator-dependent members
-    // Expect the alignment provided to by compatible with the DRAM alignment
+    // Expect the alignment provided to be compatible with the DRAM alignment for L1<->DRAM data transfers
     TT_ASSERT(dram_alignment_bytes % alignment_bytes == 0);
     this->init_allocators(size_bytes, dram_alignment_bytes, alloc_offset);
 }

@@ -125,17 +125,19 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
         allocatable_l1_size,
         interleaved_address_limit,
         config_->l1_alignment,
+        config_->dram_alignment,
         config_->l1_unreserved_base,
         config_->disable_interleaved);
     log_debug(
         tt::LogMetal,
         "Configured partition params: worker_l1_size:0x{:X}, "
-        "l1_unreserved_base:0x{:X}, l1_small_size:0x{:X}, disable_interleaved:{}, l1_alignment:{}",
+        "l1_unreserved_base:0x{:X}, l1_small_size:0x{:X}, disable_interleaved:{}, l1_alignment:{}, dram_alignment:{}",
         config_->worker_l1_size,
         config_->l1_unreserved_base,
         config_->l1_small_size,
         config_->disable_interleaved,
-        config_->l1_alignment);
+        config_->l1_alignment,
+        config_->dram_alignment);
 
     uint64_t small_interleaved_address_limit = config_->worker_l1_size - config_->l1_small_size;
     uint64_t small_alloc_offset = config_->l1_unreserved_base + allocatable_l1_size;
@@ -158,6 +160,7 @@ void AllocatorImpl::init_compute_and_storage_l1_bank_manager() {
         config_->l1_small_size,
         small_interleaved_address_limit,
         config_->l1_alignment,
+        config_->dram_alignment,
         small_alloc_offset,
         config_->disable_interleaved);
 }
