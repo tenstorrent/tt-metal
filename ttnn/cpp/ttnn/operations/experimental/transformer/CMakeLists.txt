@@ -1,7 +1,7 @@
 add_library(ttnn_op_experimental_transformer ${LIB_TYPE})
 add_library(TTNN::Ops::Experimental::Transformer ALIAS ttnn_op_experimental_transformer)
 
-target_precompile_headers(ttnn_op_experimental_transformer REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_experimental_transformer TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_experimental_transformer)
 set_target_properties(
     ttnn_op_experimental_transformer
@@ -56,6 +56,7 @@ target_sources(
         all_reduce_create_qkv_heads/all_reduce_create_qkv_heads.cpp
         all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_device_operation.cpp
         all_reduce_create_qkv_heads/device/all_reduce_create_qkv_heads_program_factory.cpp
+        concatenate_heads/concatenate_heads.cpp
         concatenate_heads/device/concatenate_heads_device_operation.cpp
         concatenate_heads/device/concatenate_heads_program_factory.cpp
         create_qkv_heads/create_qkv_heads.cpp
@@ -124,6 +125,7 @@ target_sources(
         rotate_half/device/rotate_half_device_operation.cpp
         rotate_half/device/rotate_half_program_factory.cpp
         rotate_half/rotate_half.cpp
+        split_query_key_value_and_split_heads/split_query_key_value_and_split_heads.cpp
         split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_device_operation.cpp
         split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_program_factory.cpp
         split_query_key_value_and_split_heads/device/split_query_key_value_and_split_heads_sharded_program_factory.cpp

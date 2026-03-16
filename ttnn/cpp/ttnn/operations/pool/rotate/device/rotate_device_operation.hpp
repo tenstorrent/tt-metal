@@ -96,7 +96,7 @@ struct RotateDeviceOperation {
         const std::string& interpolation_mode,
         const std::optional<MemoryConfig>& memory_config);
 
-    static tt::stl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
+    static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
 }  // namespace ttnn::operations::rotate

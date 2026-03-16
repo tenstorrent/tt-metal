@@ -14,14 +14,14 @@
 #include "ttnn/tensor/types.hpp"
 #include "padded_slice.hpp"
 
-namespace ttnn::operations::experimental {
+namespace ttnn::experimental {
 
 template <typename T>
-ttnn::Tensor PaddedSliceOperation::invoke(
+ttnn::Tensor padded_slice(
     const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const T> begins,
-    tt::stl::Span<const T> ends,
-    tt::stl::Span<const T> step,
+    ttsl::Span<const T> begins,
+    ttsl::Span<const T> ends,
+    ttsl::Span<const T> step,
     const MemoryConfig& memory_config,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& /*pad_value*/) {
@@ -80,8 +80,8 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     // Wrap indices and adjust begins, ends, and step
     for (size_t i = 0; i < begins.size(); ++i) {
         if constexpr (std::is_signed_v<T>) {
-            modified_begins[i] = data_movement::wrap_index(begins[i], input_shape[i]);
-            modified_ends[i] = data_movement::wrap_index(ends[i], input_shape[i]);
+            modified_begins[i] = operations::data_movement::wrap_index(begins[i], input_shape[i]);
+            modified_ends[i] = operations::data_movement::wrap_index(ends[i], input_shape[i]);
             modified_step[i] = static_cast<uint32_t>(step[i]);
         } else {
             modified_begins[i] = begins[i];
@@ -150,22 +150,22 @@ ttnn::Tensor PaddedSliceOperation::invoke(
     return res;
 }
 
-template ttnn::Tensor PaddedSliceOperation::invoke<int>(
+template ttnn::Tensor padded_slice<int>(
     const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const int> begins,
-    tt::stl::Span<const int> ends,
-    tt::stl::Span<const int> step,
+    ttsl::Span<const int> begins,
+    ttsl::Span<const int> ends,
+    ttsl::Span<const int> step,
     const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
-template ttnn::Tensor PaddedSliceOperation::invoke<uint32_t>(
+template ttnn::Tensor padded_slice<uint32_t>(
     const ttnn::Tensor& input_tensor,
-    tt::stl::Span<const uint32_t> begins,
-    tt::stl::Span<const uint32_t> ends,
-    tt::stl::Span<const uint32_t> step,
+    ttsl::Span<const uint32_t> begins,
+    ttsl::Span<const uint32_t> ends,
+    ttsl::Span<const uint32_t> step,
     const MemoryConfig& memory_config_arg,
     const std::optional<Tensor>& optional_output_tensor,
     const std::optional<float>& pad_value);
 
-}  // namespace ttnn::operations::experimental
+}  // namespace ttnn::experimental
