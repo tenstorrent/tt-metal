@@ -1,0 +1,149 @@
+{
+  "op_name": "rms_norm",
+  "op_path": "ttnn/ttnn/operations/rms_norm",
+  "spec_path": "ttnn/ttnn/operations/rms_norm/op_design.md",
+  "layout": [
+    "TILE_LAYOUT",
+    "ROW_MAJOR_LAYOUT"
+  ],
+  "current_stage_index": 0,
+  "last_passing_commit": null,
+  "stages": [
+    {
+      "name": "data_pipeline",
+      "description": "Reader/writer data pipeline with tilize/untilize. Identity passthrough: output equals input.",
+      "kernel_files": [
+        "reader_rms_norm.cpp",
+        "compute_rms_norm.cpp",
+        "writer_rms_norm.cpp"
+      ],
+      "test_file": "test_stage_data_pipeline.py",
+      "reference_body": "golden = input_tensor.clone()",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.01
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "import torch",
+      "extra_args": "",
+      "extra_setup": "# No gamma for this stage\n",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "square_reduce",
+      "description": "Add square and reduce_row phases. Output is mean(x^2) per row with reduced output shape.",
+      "kernel_files": [
+        "reader_rms_norm.cpp",
+        "compute_rms_norm.cpp",
+        "writer_rms_norm.cpp"
+      ],
+      "test_file": "test_stage_square_reduce.py",
+      "reference_body": "golden = (input_tensor ** 2).mean(dim=-1, keepdim=True)",
+      "tolerance": {
+        "rtol": 0.02,
+        "atol": 0.1
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "import torch",
+      "extra_args": "",
+      "extra_setup": "# No gamma for this stage\n",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "list(shape[:-1]) + [32]",
+      "compare_slice": "[:,:,:,0:1]",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "rms_normalize",
+      "description": "Add eps+rsqrt phase, re-read input, broadcast multiply to normalize. Full-shape output without gamma.",
+      "kernel_files": [
+        "reader_rms_norm.cpp",
+        "compute_rms_norm.cpp",
+        "writer_rms_norm.cpp"
+      ],
+      "test_file": "test_stage_rms_normalize.py",
+      "reference_body": "golden = input_tensor / torch.sqrt((input_tensor ** 2).mean(dim=-1, keepdim=True) + 1e-6)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "import torch",
+      "extra_args": "",
+      "extra_setup": "# No gamma for this stage\n",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "gamma_scale",
+      "description": "Add gamma reading, tilize, and multiply. Full RMSNorm operation with optional gamma scaling.",
+      "kernel_files": [
+        "reader_rms_norm.cpp",
+        "compute_rms_norm.cpp",
+        "writer_rms_norm.cpp"
+      ],
+      "test_file": "test_stage_gamma_scale.py",
+      "reference_body": "golden = (input_tensor / torch.sqrt((input_tensor ** 2).mean(dim=-1, keepdim=True) + 1e-6)) * gamma_tensor",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "import torch",
+      "extra_args": "",
+      "extra_setup": "gamma_tensor = torch.randn(1, 1, 1, shape[-1])\n",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
