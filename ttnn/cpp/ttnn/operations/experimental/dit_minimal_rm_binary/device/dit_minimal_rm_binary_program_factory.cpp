@@ -52,13 +52,11 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
     const uint32_t row_size_bytes = last_dim * dtype_bytes;
 
     const uint64_t num_elements_total = input_a.physical_volume();
-    const uint32_t num_full_sticks = static_cast<uint32_t>(num_elements_total / STICK_SIZE);
-    const uint32_t last_chunk_bytes = static_cast<uint32_t>(num_elements_total % STICK_SIZE) * dtype_bytes;
-    const uint32_t total_tiles = num_full_sticks + (last_chunk_bytes > 0 ? 1 : 0);
+    const uint32_t total_rows = static_cast<uint32_t>(num_elements_total / last_dim);
 
     auto grid = device->compute_with_storage_grid_size();
-    auto [num_cores, all_cores, core_group_1, core_group_2, tiles_per_cg1, tiles_per_cg2] =
-        split_work_to_cores(grid, total_tiles);
+    auto [num_cores, all_cores, core_group_1, core_group_2, rows_per_cg1, rows_per_cg2] =
+        split_work_to_cores(grid, total_rows);
 
     // --- Circular buffers (double-buffered: 2 pages each) ---
     const tt::DataFormat cb_data_format = datatype_to_dataformat_converter(input_a.dtype());
@@ -139,12 +137,10 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
         });
 
     // --- Per-core runtime args ---
-    uint32_t start_tile = 0;
+    uint32_t start_row = 0;
 
-    std::cout << "output page size = " << output.buffer()->page_size() << std::endl;
-
-    auto assign_rt_args = [&](const CoreRangeSet& group, uint32_t tile_count) {
-        if (tile_count == 0) {
+    auto assign_rt_args = [&](const CoreRangeSet& group, uint32_t row_count) {
+        if (row_count == 0) {
             return;
         }
         for (const auto& core_range : group.ranges()) {
@@ -152,18 +148,10 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
                 for (auto x = core_range.start_coord.x; x <= core_range.end_coord.x; ++x) {
                     CoreCoord core{x, y};
 
-                    const uint32_t start_element = start_tile * STICK_SIZE;
-                    const uint32_t core_start_row = start_element / last_dim;
-                    const uint32_t core_start_off = (start_element % last_dim) * dtype_bytes;
-                    const uint32_t end_tile = start_tile + tile_count;
-                    uint32_t core_num_full, core_last_chunk;
-                    if (last_chunk_bytes > 0 && end_tile == total_tiles) {
-                        core_num_full = tile_count - 1;
-                        core_last_chunk = last_chunk_bytes;
-                    } else {
-                        core_num_full = tile_count;
-                        core_last_chunk = 0;
-                    }
+                    const uint32_t core_total_bytes = row_count * row_size_bytes;
+                    const uint32_t core_num_full_sticks = core_total_bytes / stick_size_bytes;
+                    const uint32_t core_last_chunk_bytes = core_total_bytes % stick_size_bytes;
+                    const uint32_t core_total_tiles = core_num_full_sticks + (core_last_chunk_bytes > 0 ? 1 : 0);
 
                     SetRuntimeArgs(
                         program,
@@ -171,10 +159,9 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
                         core,
                         {src_a_buffer->address(),
                          src_b_buffer->address(),
-                         core_num_full,
-                         core_start_row,
-                         core_start_off,
-                         core_last_chunk,
+                         core_num_full_sticks,
+                         start_row,
+                         core_last_chunk_bytes,
                          row_size_bytes});
 
                     SetRuntimeArgs(
@@ -182,22 +169,21 @@ DitMinimalRmBinaryProgramFactory::cached_program_t DitMinimalRmBinaryProgramFact
                         writer_kernel_id,
                         core,
                         {dst_buffer->address(),
-                         core_num_full,
-                         core_start_row,
-                         core_start_off,
-                         core_last_chunk,
+                         core_num_full_sticks,
+                         start_row,
+                         core_last_chunk_bytes,
                          row_size_bytes});
 
-                    SetRuntimeArgs(program, compute_kernel_id, core, {tile_count});
+                    SetRuntimeArgs(program, compute_kernel_id, core, {core_total_tiles});
 
-                    start_tile += tile_count;
+                    start_row += row_count;
                 }
             }
         }
     };
 
-    assign_rt_args(core_group_1, tiles_per_cg1);
-    assign_rt_args(core_group_2, tiles_per_cg2);
+    assign_rt_args(core_group_1, rows_per_cg1);
+    assign_rt_args(core_group_2, rows_per_cg2);
 
     return cached_program_t{std::move(program), {reader_kernel_id, writer_kernel_id, compute_kernel_id, all_cores}};
 }
