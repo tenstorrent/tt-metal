@@ -10,8 +10,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn {
-namespace experimental {
+namespace ttnn::experimental {
 
 ttnn::Tensor neighbor_pad_async(
     const ttnn::Tensor& input_tensor,
@@ -29,5 +28,4 @@ ttnn::Tensor neighbor_pad_async(
     const std::optional<std::vector<uint32_t>>& secondary_mesh_shape = std::nullopt,
     const std::optional<ttnn::Tensor>& persistent_output_buffer = std::nullopt);
 
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental

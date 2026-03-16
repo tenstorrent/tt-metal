@@ -10,8 +10,7 @@
 #include "ttnn/operations/eltwise/unary/common/unary_op_utils.hpp"
 #include "ttnn/distributed/api.hpp"
 
-namespace ttnn {
-namespace experimental {
+namespace ttnn::experimental {
 
 std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
     const ttnn::Tensor& input_tensor,
@@ -33,5 +32,4 @@ std::vector<ttnn::Tensor> strided_all_gather_minimal_matmul_async(
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
     std::optional<bool> read_local_slice_from_input = std::nullopt);
 
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental

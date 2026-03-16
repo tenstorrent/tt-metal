@@ -9,8 +9,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn {
-namespace experimental {
+namespace ttnn::experimental {
 
 ttnn::Tensor slice_reshard_async(
     const ttnn::Tensor& input_tensor,
@@ -24,5 +23,4 @@ ttnn::Tensor slice_reshard_async(
     const std::optional<MemoryConfig>& memory_config = std::nullopt,
     std::optional<ttnn::ccl::Topology> topology = std::nullopt);
 
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental

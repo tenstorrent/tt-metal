@@ -9,8 +9,7 @@
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
-namespace ttnn {
-namespace experimental {
+namespace ttnn::expermental {
 
 ttnn::Tensor llama_reduce_scatter(
     const ttnn::Tensor& input_tensor,
@@ -25,6 +24,4 @@ ttnn::Tensor llama_reduce_scatter(
     tt::tt_fabric::Topology topology = tt::tt_fabric::Topology::Linear,
     bool use_noc1_only = false);
 
-}  // namespace experimental
-
-}  // namespace ttnn
+}  // namespace ttnn::expermental

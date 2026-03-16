@@ -10,8 +10,7 @@
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn {
-namespace experimental {
+namespace ttnn::experimental {
 
 ttnn::Tensor strided_all_gather_async(
     const ttnn::Tensor& input_tensor,
@@ -29,5 +28,4 @@ ttnn::Tensor strided_all_gather_async(
     std::optional<uint32_t> mm_block_ht = std::nullopt,
     std::optional<uint32_t> mm_block_wt = std::nullopt);
 
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental

@@ -8,8 +8,7 @@
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn {
-namespace experimental {
+namespace ttnn::experimental {
 
 ttnn::Tensor reduce_scatter_minimal_async(
     const ttnn::Tensor& input_tensor,
@@ -28,5 +27,4 @@ ttnn::Tensor reduce_scatter_minimal_async(
     std::optional<uint32_t> num_buffers_per_channel = std::nullopt,
     std::optional<ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental

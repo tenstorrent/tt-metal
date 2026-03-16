@@ -8,8 +8,7 @@
 #include "ttnn/operations/experimental/ccl/llama_reduce_scatter_matmul/device/rs_matmul_op.hpp"
 #include "ttnn/distributed/api.hpp"
 
-namespace ttnn {
-namespace experimental {
+namespace ttnn::experimental {
 
 std::vector<ttnn::Tensor> llama_rs_matmul(
     const ttnn::Tensor& input_tensor,               // mm0 used
@@ -40,5 +39,4 @@ std::vector<ttnn::Tensor> llama_rs_matmul(
     const std::optional<Tensor>& optional_output_tensor = std::nullopt,         // mm11 std::nullopt
     bool use_noc1_only = false);
 
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental

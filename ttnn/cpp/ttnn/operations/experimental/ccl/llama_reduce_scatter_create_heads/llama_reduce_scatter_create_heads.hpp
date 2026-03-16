@@ -8,8 +8,7 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include <tt-metalium/sub_device_types.hpp>
 
-namespace ttnn {
-namespace experimental {
+namespace ttnn::experimental {
 
 std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> llama_rs_create_heads(
     const ttnn::Tensor& input_tensor,
@@ -28,6 +27,4 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> llama_rs_create_heads(
     bool use_noc1_only = false,
     bool use_optimal_ccl_for_llama = false);
 
-}  // namespace experimental
-
-}  // namespace ttnn
+}  // namespace ttnn::experimental
