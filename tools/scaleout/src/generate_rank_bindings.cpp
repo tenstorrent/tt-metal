@@ -76,9 +76,12 @@ PhysicalSystemDescriptor run_psd_discovery() {
  * Otherwise, search in order:
  * 1. /data/scaleout_configs/<cluster_name>/<cluster_name>_physical_grouping_descriptor.textproto
  * 2. TT_METAL_HOME/tests/tt_metal/tt_fabric/physical_groupings/<cluster_name>_physical_grouping_descriptor.textproto
- * 3. Default: tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto
+ * 3. Architecture/cluster-type specific default:
+ * tests/tt_metal/tt_fabric/physical_groupings/<arch>_<cluster_type>_physical_grouping_descriptor.textproto
+ * 4. Generic default: tests/tt_metal/tt_fabric/physical_groupings/default_physical_grouping_descriptor.textproto
  *
  * Cluster name is obtained from TT_CLUSTER_NAME environment variable.
+ * Architecture and cluster type are obtained from MetalContext.
  */
 PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& pgd_path = std::nullopt) {
     // Check for explicit PGD path from argument first
@@ -136,10 +139,31 @@ PhysicalGroupingDescriptor find_and_load_pgd(const std::optional<std::string>& p
         search_paths.push_back(home_path);
     }
 
-    // Path 3: Default fallback
-    std::filesystem::path default_path = std::filesystem::path(tt_metal_home) / "tests" / "tt_metal" / "tt_fabric" /
-                                         "physical_groupings" / "default_physical_grouping_descriptor.textproto";
-    search_paths.push_back(default_path);
+    // Path 3: Architecture/cluster-type specific default and generic default fallback
+    // Get cluster type and architecture from MetalContext and select appropriate PGD file
+    std::string arch_cluster_filename;
+
+    // Try to get cluster type and architecture, but always fall back to default
+    auto& context = tt::tt_metal::MetalContext::instance();
+    const auto& cluster = context.get_cluster();
+    tt::tt_metal::ClusterType cluster_type = cluster.get_cluster_type();
+    tt::ARCH arch = cluster.arch();
+
+    // Hardcoded if-else if statement for cluster type and architecture combinations
+    if (cluster_type == tt::tt_metal::ClusterType::GALAXY && arch == tt::ARCH::WORMHOLE_B0) {
+        arch_cluster_filename = "wh_galaxy_physical_grouping_descriptor.textproto";
+    } else if (cluster_type == tt::tt_metal::ClusterType::BLACKHOLE_GALAXY && arch == tt::ARCH::BLACKHOLE) {
+        arch_cluster_filename = "bh_galaxy_physical_grouping_descriptor.textproto";
+    } else {
+        arch_cluster_filename = "default_physical_grouping_descriptor.textproto";
+    }
+
+    // If we found a specific file, add it to search paths (checked before default)
+    std::filesystem::path arch_cluster_path = std::filesystem::path(tt_metal_home) / "tests" / "tt_metal" /
+                                              "tt_fabric" / "physical_groupings" / arch_cluster_filename;
+    search_paths.push_back(arch_cluster_path);
+    log_info(
+        tt::LogFabric, "Will check for architecture/cluster-type specific default: {}", arch_cluster_path.string());
 
     // Try each path in order, but require explicit match (don't just take first existing)
     for (const auto& path : search_paths) {
