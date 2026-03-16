@@ -17,6 +17,7 @@ import os
 import torch
 import pytest
 from typing import List, Tuple
+from loguru import logger
 import ttnn
 from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import comp_pcc
 
@@ -652,6 +653,10 @@ def test_ring_joint_sdpa_profile_device(device, ring_size: int, ring_index: int)
     1. Op executes without errors
     2. Output matches PyTorch reference (PCC > 0.99)
     """
+    import time
+
+    t0 = time.time()
+    logger.info(f"Running test_ring_joint_sdpa_profile_device: ring_size={ring_size}, ring_index={ring_index}")
     # Config
     b, nh, d = 1, 8, 64
     seq_len = 128 * ring_size  # Total sequence length
@@ -691,9 +696,11 @@ def test_ring_joint_sdpa_profile_device(device, ring_size: int, ring_index: int)
     V_gathered = build_gathered_kv_buffer(V_full, ring_index, ring_size, chunk_size)
 
     # Compute expected output via PyTorch reference
+    logger.info(f"  [{time.time()-t0:.2f}s] Computing reference...")
     expected = compute_causal_balanced_reference(Q_full, K_full, V_full, ring_index, ring_size)
 
     # Move tensors to device
+    logger.info(f"  [{time.time()-t0:.2f}s] Moving tensors to device...")
     memory_config = ttnn.DRAM_MEMORY_CONFIG
     dtype = ttnn.bfloat16
 
@@ -708,6 +715,7 @@ def test_ring_joint_sdpa_profile_device(device, ring_size: int, ring_index: int)
     )
 
     # Call the profiling op
+    logger.info(f"  [{time.time()-t0:.2f}s] Calling ring_joint_sdpa_profile...")
     tt_output, _, tt_lse = ttnn.transformer.ring_joint_sdpa_profile(
         tt_Q,
         tt_K,
@@ -724,11 +732,13 @@ def test_ring_joint_sdpa_profile_device(device, ring_size: int, ring_index: int)
     )
 
     # Convert back to torch and compare
+    logger.info(f"  [{time.time()-t0:.2f}s] Converting output to torch...")
     output = ttnn.to_torch(tt_output)
     output = output[:, :, :local_seq_len, :]  # Remove any tile padding
 
     # Compare with expected (PCC > 0.99)
     passing, pcc_val = comp_pcc(expected, output, 0.99)
+    logger.info(f"  [{time.time()-t0:.2f}s] PCC: {pcc_val}")
     assert passing, f"PCC {pcc_val} is below threshold 0.99 for ring_size={ring_size}, ring_index={ring_index}"
 
 
@@ -747,6 +757,7 @@ def test_ring_joint_sdpa_profile_ring_sizes(device, ring_size: int, ring_index_r
     This validates the ProfileRingIndexer logic handles all ring topologies.
     """
     ring_index = int(ring_index_ratio * (ring_size - 1))
+    logger.info(f"Running test_ring_joint_sdpa_profile_ring_sizes: ring_size={ring_size}, ring_index={ring_index}")
 
     # Config - use fixed parameters, scale seq_len with ring_size
     b, nh, d = 1, 8, 64
@@ -826,6 +837,7 @@ def test_ring_joint_sdpa_profile_ring_sizes(device, ring_size: int, ring_index_r
 
     # Compare with expected (PCC > 0.99)
     passing, pcc_val = comp_pcc(expected, output, 0.99)
+    logger.info(f"PCC: {pcc_val}")
     assert passing, f"PCC {pcc_val} < 0.99 for ring_size={ring_size}, ring_index={ring_index}"
 
 
@@ -846,6 +858,7 @@ def test_ring_joint_sdpa_profile_chunk_sizes(device, q_chunk_size: int, k_chunk_
     """
     ring_size = 4
     ring_index = 0
+    logger.info(f"Running test_ring_joint_sdpa_profile_chunk_sizes: q_chunk={q_chunk_size}, k_chunk={k_chunk_size}")
 
     # Config - seq_len must be divisible by 2*ring_size*max(q_chunk, k_chunk)
     b, nh, d = 1, 8, 64
@@ -923,6 +936,7 @@ def test_ring_joint_sdpa_profile_chunk_sizes(device, q_chunk_size: int, k_chunk_
 
     # Compare with expected (PCC > 0.99)
     passing, pcc_val = comp_pcc(expected, output, 0.99)
+    logger.info(f"PCC: {pcc_val}")
     assert passing, f"PCC {pcc_val} < 0.99 for q_chunk={q_chunk_size}, k_chunk={k_chunk_size}"
 
 
@@ -936,6 +950,7 @@ def test_ring_joint_sdpa_profile_seq_lengths(device, seq_len_per_device: int):
     """
     ring_size = 4
     ring_index = 0
+    logger.info(f"Running test_ring_joint_sdpa_profile_seq_lengths: seq_len_per_device={seq_len_per_device}")
 
     # Config
     b, nh, d = 1, 8, 64
@@ -1014,6 +1029,7 @@ def test_ring_joint_sdpa_profile_seq_lengths(device, seq_len_per_device: int):
 
     # Compare with expected (PCC > 0.99)
     passing, pcc_val = comp_pcc(expected, output, 0.99)
+    logger.info(f"PCC: {pcc_val}")
     assert passing, f"PCC {pcc_val} < 0.99 for seq_len_per_device={seq_len_per_device}"
 
 
@@ -1055,6 +1071,9 @@ def test_profile_ring_joint_sdpa_production_scale(
     d_qk, d_v = 576, 128  # Q/K dim=576, V dim=128
     ring_size = 32
     local_seq = total_seq // ring_size
+    logger.info(
+        f"Running test_profile_ring_joint_sdpa_production_scale: ring_index={ring_index}, total_seq={total_seq}, q_chunk={q_chunk_size}, k_chunk={k_chunk_size}"
+    )
 
     # Program config - use device's actual grid size
     program_config = ttnn.SDPAProgramConfig(
@@ -1117,17 +1136,17 @@ def test_profile_ring_joint_sdpa_production_scale(
         # Success - verify and log
         assert tt_output is not None
         assert tt_lse is not None
-        print(
+        logger.info(
             f"PASS: ring_index={ring_index}, total_seq={total_seq}, local_seq={local_seq}, q_chunk={q_chunk_size}, k_chunk={k_chunk_size}"
         )
-        print(f"  Q: {list(Q_local.shape)} -> tt_Q: {tt_Q.shape}")
-        print(f"  K_gathered: {list(K_gathered.shape)} -> tt_K_gathered: {tt_K_gathered.shape}")
-        print(f"  Output: {tt_output.shape}")
+        logger.info(f"  Q: {list(Q_local.shape)} -> tt_Q: {tt_Q.shape}")
+        logger.info(f"  K_gathered: {list(K_gathered.shape)} -> tt_K_gathered: {tt_K_gathered.shape}")
+        logger.info(f"  Output: {tt_output.shape}")
 
     except RuntimeError as e:
         if "beyond max L1 size" in str(e):
             # Expected OOM for large chunk sizes - skip
-            print(f"OOM: ring_index={ring_index}, q_chunk={q_chunk_size}, k_chunk={k_chunk_size}")
+            logger.warning(f"OOM: ring_index={ring_index}, q_chunk={q_chunk_size}, k_chunk={k_chunk_size}")
             pytest.skip(f"L1 OOM: q={q_chunk_size}, k={k_chunk_size}")
         else:
             raise
