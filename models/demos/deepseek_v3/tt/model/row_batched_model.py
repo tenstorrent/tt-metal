@@ -186,6 +186,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     DecoderBlock2D.create_shared_state(
                         hf_config,
                         mesh_device,
+                        get_fabric_config(),
                     )
                 ],
             ),
@@ -196,6 +197,7 @@ class RowBatchedModel(SharedStateAddOn, AbstractModule):
                     MoEDecoderBlock2D.create_shared_state(
                         hf_config,
                         mesh_device,
+                        get_fabric_config(),
                     )
                 ],
             ),
