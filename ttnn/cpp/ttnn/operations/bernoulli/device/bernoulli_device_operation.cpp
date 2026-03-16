@@ -6,6 +6,15 @@
 #include "ttnn/device_operation.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
+#include <ctime>
+#include <random>
+
+namespace {
+std::mt19937 rng(std::time(nullptr));
+std::uniform_int_distribution<uint32_t> dist(1, 1 << 20);
+uint32_t get_random_seed() { return dist(rng); }
+}  // namespace
+
 namespace ttnn::operations::bernoulli {
 
 void BernoulliDeviceOperation::validate_inputs(
@@ -61,13 +70,6 @@ BernoulliDeviceOperation::tensor_return_value_t BernoulliDeviceOperation::create
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.input.device());
 }
 
-ttsl::hash::hash_t BernoulliDeviceOperation::compute_program_hash(
-    const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
-    auto cached_operation_attributes = operation_attributes;
-    cached_operation_attributes.seed = 0;
-    return ttsl::hash::hash_objects_with_default_seed(cached_operation_attributes, tensor_args);
-}
-
 }  // namespace ttnn::operations::bernoulli
 
 namespace ttnn::prim {
@@ -81,8 +83,10 @@ ttnn::operations::bernoulli::BernoulliDeviceOperation::tensor_return_value_t ber
     using OperationType = ttnn::operations::bernoulli::BernoulliDeviceOperation;
     TT_FATAL(input.device() != nullptr, "Bernoulli: Input tensor needs to be on device");
 
+    uint32_t actual_seed = seed != 0 ? seed : get_random_seed();
+
     auto operation_attributes = OperationType::operation_attributes_t{
-        seed,
+        actual_seed,
         dtype.value_or(DataType::FLOAT32),
         memory_config.value_or(input.memory_config()),
         init_device_compute_kernel_config(input.device()->arch(), compute_kernel_config, MathFidelity::HiFi4)};
