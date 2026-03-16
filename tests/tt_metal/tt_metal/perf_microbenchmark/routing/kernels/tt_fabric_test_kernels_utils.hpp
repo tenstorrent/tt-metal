@@ -1027,6 +1027,14 @@ struct SenderKernelTrafficConfig {
 
     bool has_packets_to_send() const { return num_packets_processed < metadata.num_packets; }
 
+    FORCE_INLINE void setup_credit_update_noc_state(const WorkerToFabricEdmSender& adapter, uint8_t noc) {
+        auto packed_val = pack_value_for_inc_on_write_stream_reg_write(-1);
+        const uint64_t noc_sem_addr =
+            get_noc_addr(adapter.edm_noc_x, adapter.edm_noc_y, adapter.edm_buffer_remote_free_slots_update_addr, noc);
+        noc_inline_dw_write_set_state<false /*posted*/, true /*set_val*/>(
+            noc_sem_addr, packed_val, 0xf, adapter.sync_noc_cmd_buf, noc);
+    }
+
     template <bool BENCHMARK_MODE>
     FORCE_INLINE void send_packets_stateful(const uint32_t num_packets, const uint32_t num_warmup) {
         ASSERT(connection_ptr_ != nullptr);
@@ -1039,7 +1047,7 @@ struct SenderKernelTrafficConfig {
             this->template send_one_packet<BENCHMARK_MODE, false>();
         }
 
-        fabric_tests::detail::setup_credit_update_noc_state(*conn, get_fabric_worker_noc());
+        setup_credit_update_noc_state(*conn, get_fabric_worker_noc());
 
         // Phase 2: Steady state — credit-only sends with stateful NOC
         for (uint32_t pkt = warmup_end; pkt < num_packets; pkt++) {
@@ -1066,8 +1074,7 @@ struct SenderKernelTrafficConfig {
             if (num_packets_processed < conn->num_buffers_per_channel) {
                 conn->send_payload_flush_non_blocking_from_address((uint32_t)packet_header, sizeof(PACKET_HEADER_TYPE));
             } else {
-                conn->advance_buffer_slot_write_index();
-                conn->update_edm_buffer_free_slots<STATEFUL_NOC>();
+                fabric_detail::update_credits_and_slots<STATEFUL_NOC>(conn);
             }
         } else {
             connection_manager_->wait_for_empty_write_slot<BENCHMARK_MODE>(connection_ptr_, connection_idx_);
