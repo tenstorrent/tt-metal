@@ -117,7 +117,7 @@ jobs:
               "arch": "arch-wormhole_b0",
               "mesh-device": "T3K",
               "tt-llama-text-ver": "tt_transformers",
-              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"sample_on_device_mode\": \"all\"}",
+              "override-tt-config": "{\"fabric_config\": \"FABRIC_1D\", \"sample_on_device_mode\": \"all\", \"trace_region_size\": 65000000}",
               "structured-output": true,
               "sampling-tests": true,
               "multimodal": false,

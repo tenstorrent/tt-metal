@@ -82,8 +82,8 @@ def get_supported_trace_region_size(request, mesh_device):
         "Llama-3.1-8B": {
             "N150": 25000000,
             "N300": 38000000,
-            "T3K": 50000000,
-            "TG": 50000000,
+            "T3K": 65000000,  # Increased from 50MB: trace needs ~59MB on T3K (see #39832)
+            "TG": 65000000,
         },
         "Llama-3.3-70B": {
             "T3K": 30000000,
