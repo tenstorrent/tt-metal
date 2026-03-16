@@ -896,6 +896,7 @@ def test_linear_on_subdevice_variable_start_row(device, m_size, k_size, n_size, 
             test_name=test_name,
             csv_filename="test_linear_numeric_results.csv",
             test_params=None,
+            k=k_size,
         )
         assert_with_pcc(torch_output, output, 0.999)
     finally:
@@ -955,5 +956,6 @@ def test_linear_bias_cb_estimation_with_large_n_small_k(device, batch_size, seq_
         test_name=test_name,
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     assert_with_pcc(torch_output, output, 0.99)

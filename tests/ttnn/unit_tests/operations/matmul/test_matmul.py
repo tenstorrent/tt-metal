@@ -1075,6 +1075,7 @@ def run_matmul_2d_tiny_tile(
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_tiny_tile")
@@ -1245,6 +1246,7 @@ def run_matmul_1d_tiny_tile(
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_tiny_tile")
@@ -1466,6 +1468,7 @@ def run_matmul_1d_multiple_output_blocks_per_core(
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_tiny_tile")
@@ -1979,6 +1982,7 @@ def test_tutorial_matmul(device):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_tutorial_matmul")
@@ -2013,6 +2017,7 @@ def test_tutorial_matmul_inputs_and_output_in_l1_memory(device):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_tutorial_matmul_inputs_and_output_in_l1_memory")
@@ -2050,6 +2055,7 @@ def test_tutorial_matmul_with_inputs_and_output_in_l1_memory_and_user_specified_
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(
@@ -2198,6 +2204,7 @@ def test_sharded_matmul(
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_sharded_matmul")
@@ -2416,6 +2423,7 @@ def test_matmul_with_transpose_a_or_b(device, n_size, c, m, k, n, transpose_a, t
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     # assert_with_pcc(torch_output_tensor, output, 0.999)
@@ -2622,6 +2630,7 @@ def test_matmul_with_transpose_and_configs(device, b, s, m, k, n, transpose_a, t
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_transpose_and_configs")
@@ -2838,6 +2847,7 @@ def test_matmul_in0_in1_bias_sharded(
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=K,
     )
 
     # assert_matmul_accuracy(matmul_output, tt_mm_out, "test_matmul_in0_in1_bias_sharded")
@@ -3010,6 +3020,7 @@ def test_optional_output_argument(device, n_size, c, m, k, n):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     ttnn.matmul(input_tensor_a, input_tensor_b, optional_output_tensor=optional_output_tensor)
@@ -3023,6 +3034,7 @@ def test_optional_output_argument(device, n_size, c, m, k, n):
         test_name=test_name_opt,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     assert len(output.shape) == len(torch_output_tensor.shape) == len(optional_output_tensor.shape)

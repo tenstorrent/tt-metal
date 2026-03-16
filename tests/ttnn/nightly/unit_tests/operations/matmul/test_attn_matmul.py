@@ -112,7 +112,7 @@ def test_attn_matmul_fp32(num_loops, in_dtype, device):
 
             # Extract K from input shapes: input_shape_a = [q_len, q_heads, batch, K], input_shape_b = [batch, kv_heads, K, seq_len]
             K = input_shape_a[-1]
-            test_name = f"test_attn_matmul[num_loops={num_loops},in0_dtype={in0_dtype},in1_dtype={in1_dtype},out_dtype={out_dtype},input_shape_a={input_shape_a},input_shape_b={input_shape_b}]"
+            test_name = f"test_attn_matmul_fp32[num_loops={num_loops},in_dtype={in_dtype},input_shape_a={input_shape_a},input_shape_b={input_shape_b}]"
             collect_and_dump_numeric_metrics(
                 golden_output_tensor,
                 tt_output_tensor,
