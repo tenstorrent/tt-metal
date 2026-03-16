@@ -236,6 +236,9 @@ struct CompileTimeArgsContext {
     // Welford-specific
     float eps = 0.0f;
     uint32_t per_core_recip_lut_size = 0;
+
+    // Tile dimensions
+    uint32_t tile_width = 32;
 };
 
 // Result of building compile-time args

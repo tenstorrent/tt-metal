@@ -27,6 +27,7 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/global_semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/buffers/semaphore.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/blockfloat_common.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat2.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat4.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat8.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/data_format/bfloat16.cpp
@@ -108,4 +109,6 @@ set(IMPL_SRC
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/spec/memory_config/memory_config.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/distributed_tensor_configs.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/tensor/topology/tensor_topology.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/mesh_tensor.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/tensor/host_tensor.cpp
 )

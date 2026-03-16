@@ -55,33 +55,33 @@ tt::tt_metal::distributed::MeshShape from_flatbuffer(const flatbuffer::MeshShape
 tt::tt_metal::HostBuffer create_host_buffer_from_bytes(
     uint64_t size_bytes,
     const TensorSpec& spec,
-    tt::stl::Span<std::byte> data,
+    ttsl::Span<std::byte> data,
     const tt::tt_metal::MemoryPin& memory_pin) {
     switch (spec.data_type()) {
         case tt::tt_metal::DataType::UINT32:
         case tt::tt_metal::DataType::BFLOAT8_B:
         case tt::tt_metal::DataType::BFLOAT4_B: {
-            tt::stl::Span<uint32_t> typed_span(reinterpret_cast<uint32_t*>(data.data()), size_bytes / sizeof(uint32_t));
+            ttsl::Span<uint32_t> typed_span(reinterpret_cast<uint32_t*>(data.data()), size_bytes / sizeof(uint32_t));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
         case tt::tt_metal::DataType::INT32: {
-            tt::stl::Span<int32_t> typed_span(reinterpret_cast<int32_t*>(data.data()), size_bytes / sizeof(int32_t));
+            ttsl::Span<int32_t> typed_span(reinterpret_cast<int32_t*>(data.data()), size_bytes / sizeof(int32_t));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
         case tt::tt_metal::DataType::UINT8: {
-            tt::stl::Span<uint8_t> typed_span(reinterpret_cast<uint8_t*>(data.data()), size_bytes / sizeof(uint8_t));
+            ttsl::Span<uint8_t> typed_span(reinterpret_cast<uint8_t*>(data.data()), size_bytes / sizeof(uint8_t));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
         case tt::tt_metal::DataType::UINT16: {
-            tt::stl::Span<uint16_t> typed_span(reinterpret_cast<uint16_t*>(data.data()), size_bytes / sizeof(uint16_t));
+            ttsl::Span<uint16_t> typed_span(reinterpret_cast<uint16_t*>(data.data()), size_bytes / sizeof(uint16_t));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
         case tt::tt_metal::DataType::FLOAT32: {
-            tt::stl::Span<float> typed_span(reinterpret_cast<float*>(data.data()), size_bytes / sizeof(float));
+            ttsl::Span<float> typed_span(reinterpret_cast<float*>(data.data()), size_bytes / sizeof(float));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
         case tt::tt_metal::DataType::BFLOAT16: {
-            tt::stl::Span<bfloat16> typed_span(reinterpret_cast<bfloat16*>(data.data()), size_bytes / sizeof(bfloat16));
+            ttsl::Span<bfloat16> typed_span(reinterpret_cast<bfloat16*>(data.data()), size_bytes / sizeof(bfloat16));
             return tt::tt_metal::HostBuffer(typed_span, memory_pin);
         }
         case tt::tt_metal::DataType::INVALID: TT_THROW("Unsupported DataType");
@@ -212,7 +212,7 @@ flatbuffers::Offset<ttnn::flatbuffer::Tensor> to_flatbuffer(
 
 Tensor from_flatbuffer(
     const ttnn::flatbuffer::Tensor* fb_tensor,
-    tt::stl::Span<std::byte> tensor_data,
+    ttsl::Span<std::byte> tensor_data,
     const tt::tt_metal::MemoryPin& memory_pin) {
     auto spec = ttnn::from_flatbuffer(fb_tensor->tensor_spec());
 
@@ -231,7 +231,7 @@ Tensor from_flatbuffer(
         const uint64_t size = inline_storage->size();
 
         tt::tt_metal::HostBuffer host_buffer = create_host_buffer_from_bytes(
-            size, spec, tt::stl::Span<std::byte>(tensor_data.data() + offset, size), memory_pin);
+            size, spec, ttsl::Span<std::byte>(tensor_data.data() + offset, size), memory_pin);
 
         TT_FATAL(shard->mesh_coordinate() != nullptr, "Mesh coordinate is required for each shard");
         const auto coord = from_flatbuffer(shard->mesh_coordinate());

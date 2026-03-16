@@ -1,6 +1,8 @@
 // SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC
 //
 // SPDX-License-Identifier: Apache-2.0
+#pragma once
+
 #include <tuple>
 
 #include "tt_metal/fabric/hw/inc/tt_fabric_api.h"
@@ -253,7 +255,11 @@ inline void close_direction_connections(
     }
 }
 
-template <size_t Size, uint8_t MuxNumBuffersPerChannel, size_t TerminationSignalAddress, size_t NumMuxWorkers = 0>
+template <
+    size_t Size,
+    uint8_t MuxNumBuffersPerChannel,
+    size_t TerminationSignalAddress,
+    size_t NumMuxWorkersPerLink = 0>
 inline void close_direction_connections(
     const std::array<bool, Size>& directions,
     std::array<WorkerToFabricMuxSender<MuxNumBuffersPerChannel>, Size>& connections,
@@ -272,12 +278,8 @@ inline void close_direction_connections(
                 MuxConnectionBaseArgs::increment(arg_idx);
             }
         }
-        for (uint32_t i = 0; i < NumMuxWorkers; ++i) {
+        for (uint32_t i = 0; i < NumMuxWorkersPerLink; ++i) {
             MuxTerminationArgs<TerminationSignalAddress> args(arg_idx);
-
-            // DPRINT << "CLOSING MUX CORE: " << (uint32_t)args.fabric_mux_x << ", " << (uint32_t)args.fabric_mux_y
-            //                    << "\n";
-
             tt::tt_fabric::fabric_endpoint_terminate(
                 args.fabric_mux_x, args.fabric_mux_y, args.fabric_mux_termination_signal_address);
 
