@@ -7,6 +7,7 @@ On-device penalties module with persistent buffers, mirroring TTSampling.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from typing import Any, List, Optional
 
@@ -93,6 +94,19 @@ class TTPenalties(LightweightModule):
         self.vocab_size = padded_vocab_size if padded_vocab_size is not None else args.vocab_size
         num_devices = max(mesh_device.shape[-1], mesh_device.shape[-2])
         self.num_devices = num_devices
+
+        # Ensure per-device vocab slice boundaries are tile-aligned (multiple of TILE_WIDTH=32).
+        # When vocab_size // num_devices is not divisible by 32, ttnn.slice fails because it
+        # requires slice_start to be tile-aligned on tilized tensors.
+        # Example: qwen3-32b vocab_size=151936, num_devices=8 → vocab_per_dev=18992, 18992%32=16 ≠ 0.
+        # Fix: pad vocab_size up so that vocab_per_dev_padded * num_devices covers the full vocab
+        # with tile-aligned per-device boundaries. The extra positions are always 0 in scatter_add
+        # (no valid token IDs map there), so they have no effect on penalty values.
+        _TILE_WIDTH = 32
+        _vocab_per_dev = self.vocab_size // self.num_devices
+        _vocab_per_dev_padded = math.ceil(_vocab_per_dev / _TILE_WIDTH) * _TILE_WIDTH
+        if _vocab_per_dev_padded != _vocab_per_dev:
+            self.vocab_size = _vocab_per_dev_padded * self.num_devices
 
         self.sub_core_grids = getattr(args, "sub_core_grids", None)
         self._op_kwargs = {"sub_core_grids": self.sub_core_grids} if self.sub_core_grids else {}
