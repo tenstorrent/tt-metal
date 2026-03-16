@@ -140,6 +140,20 @@ class ResBlock(Module):
             768: {
                 8: 4,  # 28 padded up to 32, divided by 8
                 4: 7,  # 28/4
+                2: 8,
+                1: 8,
+            },
+            512: {
+                8: 5,
+                4: 8,
+                2: 8,
+                1: 8,
+            },
+            256: {
+                8: 7,
+                4: 8,
+                2: 8,
+                1: 8,
             },
         }
         self.num_out_blocks_map = {
@@ -166,8 +180,8 @@ class ResBlock(Module):
 
         grid_size_x = mesh_device.core_grid.x
         grid_size_y = (
-            self.core_grid_y_map[768][self.parallel_config.time_parallel.factor]
-            if in_channels == 768
+            self.core_grid_y_map[in_channels][self.parallel_config.time_parallel.factor]
+            if in_channels in (768, 512, 256)
             else mesh_device.core_grid.y
         )
         self.grid_size = ttnn.CoreGrid(y=grid_size_y, x=grid_size_x)
@@ -344,8 +358,6 @@ class ResBlock(Module):
                 padding_left=1,
                 padding_right=1,
                 padding_mode="replicate",
-                secondary_cluster_axis=1,
-                secondary_mesh_shape=(self.parallel_config.h_parallel.factor, self.parallel_config.w_parallel.factor),
             )
             if self.parallel_config.h_parallel.factor > 1:
                 x_NTHWC = vae_neighbor_pad(
@@ -356,11 +368,6 @@ class ResBlock(Module):
                     padding_left=1,
                     padding_right=1,
                     padding_mode="replicate",
-                    secondary_cluster_axis=0,
-                    secondary_mesh_shape=(
-                        self.parallel_config.h_parallel.factor,
-                        self.parallel_config.w_parallel.factor,
-                    ),
                 )
             x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
         elif self.parallel_config.h_parallel.factor > 1:
@@ -420,8 +427,6 @@ class ResBlock(Module):
                 padding_left=1,
                 padding_right=1,
                 padding_mode="replicate",
-                secondary_cluster_axis=1,
-                secondary_mesh_shape=(self.parallel_config.h_parallel.factor, self.parallel_config.w_parallel.factor),
             )
             if self.parallel_config.h_parallel.factor > 1:
                 x_NTHWC = vae_neighbor_pad(
@@ -432,11 +437,6 @@ class ResBlock(Module):
                     padding_left=1,
                     padding_right=1,
                     padding_mode="replicate",
-                    secondary_cluster_axis=0,
-                    secondary_mesh_shape=(
-                        self.parallel_config.h_parallel.factor,
-                        self.parallel_config.w_parallel.factor,
-                    ),
                 )
             x_NTHWC = ttnn.unsqueeze(x_NTHWC, 0)
         elif self.parallel_config.h_parallel.factor > 1:
