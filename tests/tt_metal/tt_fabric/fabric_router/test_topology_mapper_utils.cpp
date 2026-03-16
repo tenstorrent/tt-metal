@@ -1816,6 +1816,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ImpossibleIntraMeshConstr
 
     // Build hierarchical physical graph from flat graph
     std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    mesh_groupings.reserve(kNumMeshes);
     for (size_t mesh_idx = 0; mesh_idx < kNumMeshes; ++mesh_idx) {
         mesh_groupings.push_back(std::unordered_set<tt::tt_metal::AsicID>(
             physical_asics_by_mesh[mesh_idx].begin(), physical_asics_by_mesh[mesh_idx].end()));
@@ -2260,6 +2261,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
 
     // Build hierarchical physical graph from flat graph
     std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    mesh_groupings.reserve(kNumPhysicalMeshes);
     for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
         mesh_groupings.push_back(std::unordered_set<tt::tt_metal::AsicID>(
             physical_asics_by_mesh[mesh_idx].begin(), physical_asics_by_mesh[mesh_idx].end()));
@@ -2441,6 +2443,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
 
     // Build hierarchical physical graph from flat graph
     std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    mesh_groupings.reserve(kNumPhysicalMeshes);
     for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
         mesh_groupings.push_back(std::unordered_set<tt::tt_metal::AsicID>(
             physical_asics_by_mesh[mesh_idx].begin(), physical_asics_by_mesh[mesh_idx].end()));
@@ -2622,6 +2625,7 @@ TEST_F(TopologyMapperUtilsTest, MapMultiMeshToPhysical_ThreeLogicalFivePhysical_
 
     // Build hierarchical physical graph from flat graph
     std::vector<std::unordered_set<tt::tt_metal::AsicID>> mesh_groupings;
+    mesh_groupings.reserve(kNumPhysicalMeshes);
     for (size_t mesh_idx = 0; mesh_idx < kNumPhysicalMeshes; ++mesh_idx) {
         mesh_groupings.push_back(std::unordered_set<tt::tt_metal::AsicID>(
             physical_asics_by_mesh[mesh_idx].begin(), physical_asics_by_mesh[mesh_idx].end()));

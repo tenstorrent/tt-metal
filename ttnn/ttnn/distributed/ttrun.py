@@ -1386,6 +1386,34 @@ def new_mode_flow(
     if verbose:
         logger.info(f"{TT_RUN_PREFIX} Phase 1 output directory: {output_dir}")
 
+    # Apply default multihost MPI args to Phase 1 (same as Phase 2) unless --bare
+    phase1_mpi_args: Optional[List[str]] = None
+    if tcp_interface and not bare:
+        validate_network_interface(tcp_interface, verbose=verbose)
+    if not bare:
+        multihost_args = [
+            "--mca",
+            "btl",
+            "self,tcp",
+            "--mca",
+            "btl_tcp_if_exclude",
+            "docker0,lo",
+        ]
+        if tcp_interface:
+            multihost_args = [
+                "--mca",
+                "btl",
+                "self,tcp",
+                "--mca",
+                "btl_tcp_if_include",
+                tcp_interface,
+            ]
+        phase1_mpi_args = multihost_args + (mpi_args or [])
+        if verbose:
+            logger.info(f"{TT_RUN_PREFIX} Phase 1 using multihost MPI args: {' '.join(multihost_args)}")
+    else:
+        phase1_mpi_args = mpi_args
+
     # Phase 1: Run generate_rank_bindings
     try:
         rank_bindings_path, rankfile_path = run_phase1_generate_rank_bindings(
@@ -1395,7 +1423,7 @@ def new_mode_flow(
             subprocess_run=subprocess.run,
             sleep_secs=5,
             mock_rank_to_desc=mock_rank_to_desc,
-            mpi_args=mpi_args,
+            mpi_args=phase1_mpi_args,
         )
     except (FileNotFoundError, RuntimeError) as e:
         raise click.ClickException(f"Phase 1 (generate_rank_bindings) failed: {e}")
