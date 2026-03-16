@@ -6,16 +6,16 @@
 
 #include "ttnn/operations/experimental/ccl/matmul_reduce_scatter_async/device/matmul_reduce_scatter_async_device_operation.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-std::vector<ttnn::Tensor> ExecuteMatmulReduceScatterAsync::invoke(
+std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     const ttnn::Tensor& input_tensor,
     const ttnn::Tensor& weight_tensor,
     ttnn::Tensor& persistent_intermediate_buffer,
     ttnn::Tensor& persistent_output_buffer,
     const uint32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    const CoreCoord reduce_scatter_core_grid_offset,
+    const tt::tt_metal::CoreCoord reduce_scatter_core_grid_offset,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const std::optional<const Tensor>& bias,
     const uint32_t num_links,
@@ -58,4 +58,4 @@ std::vector<ttnn::Tensor> ExecuteMatmulReduceScatterAsync::invoke(
     return {output_tensors.mm, output_tensors.reduce_scatter};
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

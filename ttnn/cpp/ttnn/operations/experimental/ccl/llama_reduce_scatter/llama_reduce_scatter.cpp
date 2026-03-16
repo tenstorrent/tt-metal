@@ -6,9 +6,9 @@
 #include "device/llama_reduce_scatter_device_operation.hpp"
 #include <tt-metalium/sub_device.hpp>
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
+ttnn::Tensor llama_reduce_scatter(
     const ttnn::Tensor& input_tensor,
     ttnn::Tensor& intermediate_packet_buffer,
     const int32_t dim,
@@ -39,4 +39,4 @@ ttnn::Tensor ExecuteLlamaReduceScatter::invoke(
         use_noc1_only);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

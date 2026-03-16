@@ -11,9 +11,10 @@
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/global_semaphore.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteAllGatherAsync::invoke(
+// Overload with sub-core grids
+ttnn::Tensor all_gather_async(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -65,7 +66,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         /*mesh_device*/ nullptr);
 }
 
-ttnn::Tensor ExecuteAllGatherAsync::invoke(
+// Overload with persistent buffer
+ttnn::Tensor all_gather_async(
     const ttnn::Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const int32_t dim,
@@ -117,7 +119,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         /*mesh_device*/ nullptr);
 }
 
-std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
+// Overload with multi-device input
+std::vector<ttnn::Tensor> all_gather_async(
     const std::vector<ttnn::Tensor>& input_tensors,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const int32_t dim,
@@ -177,7 +180,8 @@ std::vector<ttnn::Tensor> ExecuteAllGatherAsync::invoke(
     return output_tensors;
 }
 
-ttnn::Tensor ExecuteAllGatherAsync::invoke(
+// Overload with mesh device
+ttnn::Tensor all_gather_async(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
@@ -229,7 +233,8 @@ ttnn::Tensor ExecuteAllGatherAsync::invoke(
         &mesh_device);
 }
 
-ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
+// Reversed: overload with sub-core grids
+ttnn::Tensor all_gather_async_reversed(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
@@ -282,7 +287,8 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
         /*mesh_device*/ nullptr);  // reverse_order=true for reversed API
 }
 
-ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
+// Reversed: overload with persistent buffer
+ttnn::Tensor all_gather_async_reversed(
     const ttnn::Tensor& input_tensor,
     const std::optional<ttnn::Tensor>& persistent_output_buffer,
     const int32_t dim,
@@ -333,7 +339,8 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
         /*mesh_device*/ nullptr);  // reverse_order=true for reversed API
 }
 
-ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
+// Reversed: overload with mesh device
+ttnn::Tensor all_gather_async_reversed(
     const ttnn::Tensor& input_tensor,
     const int32_t dim,
     const uint32_t cluster_axis,
@@ -384,4 +391,4 @@ ttnn::Tensor ExecuteAllGatherAsyncReversed::invoke(
         &mesh_device);  // reverse_order=true for reversed API
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

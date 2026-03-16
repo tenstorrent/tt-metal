@@ -7,13 +7,13 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/experimental/ccl/all_to_all_async_generic/device/all_to_all_async_generic_device_operation.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteAllToAllAsyncGeneric::invoke(
+ttnn::Tensor all_to_all_async_generic(
     const ttnn::Tensor& input_tensor,
-    const std::optional<Tensor>& persistent_output_buffer,
     int32_t in_dim,
     int32_t out_dim,
+    const std::optional<Tensor>& persistent_output_buffer,
     std::optional<uint32_t> num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     std::optional<ttnn::ccl::Topology> topology,
@@ -36,4 +36,4 @@ ttnn::Tensor ExecuteAllToAllAsyncGeneric::invoke(
         cluster_axis);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

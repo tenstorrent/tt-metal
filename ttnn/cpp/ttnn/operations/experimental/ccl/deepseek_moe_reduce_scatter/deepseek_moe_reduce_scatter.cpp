@@ -12,9 +12,9 @@
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
 
-namespace ttnn::operations::experimental::ccl {
+namespace ttnn::experimental {
 
-ttnn::Tensor ExecuteDeepseekMoEReduceScatter::invoke(
+ttnn::Tensor deepseek_moe_reduce_scatter(
     const std::vector<ttnn::Tensor>& input_tensors,
     const tt::tt_metal::MemoryConfig& output_memory_config,
     int32_t dim,
@@ -40,4 +40,4 @@ ttnn::Tensor ExecuteDeepseekMoEReduceScatter::invoke(
     return result.at(8);
 }
 
-}  // namespace ttnn::operations::experimental::ccl
+}  // namespace ttnn::experimental

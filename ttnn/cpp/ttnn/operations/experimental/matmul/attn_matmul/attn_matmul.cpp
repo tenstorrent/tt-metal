@@ -8,13 +8,13 @@
 #include "ttnn/device.hpp"
 #include <utility>
 
-namespace ttnn::operations::experimental::matmul {
+namespace ttnn::experimental {
 
-ttnn::Tensor AttnMatmulOperation::invoke(
+ttnn::Tensor attn_matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const CoreCoord& compute_with_storage_grid_size,
-    std::optional<const DataType> dtype,
+    std::optional<const DataType> output_dtype,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config,
     const std::optional<MemoryConfig>& memory_config,
     std::optional<Tensor> optional_output_tensor) {
@@ -22,7 +22,7 @@ ttnn::Tensor AttnMatmulOperation::invoke(
         input_tensor_a,
         input_tensor_b,
         compute_with_storage_grid_size,
-        dtype,
+        output_dtype,
         compute_kernel_config,
         memory_config,
         std::nullopt,  // num_tokens
@@ -31,7 +31,7 @@ ttnn::Tensor AttnMatmulOperation::invoke(
 }
 
 // TODO: Should we support option to read directly from cache (with optional transpose_hw)?
-ttnn::Tensor AttnMatmulFromCacheOperation::invoke(
+ttnn::Tensor attn_matmul_from_cache(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const uint32_t num_tokens,
@@ -58,4 +58,4 @@ ttnn::Tensor AttnMatmulFromCacheOperation::invoke(
         std::move(optional_output_tensor));
 }
 
-}  // namespace ttnn::operations::experimental::matmul
+}  // namespace ttnn::experimental

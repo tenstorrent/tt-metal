@@ -5,29 +5,19 @@
 #pragma once
 
 #include "device/nlp_create_qkv_heads_device_operation.hpp"
-#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/tensor/tensor.hpp"
+#include "ttnn/types.hpp"
 
-namespace ttnn {
-namespace operations::experimental::transformer {
+namespace ttnn::experimental {
 
-struct NlpCreateHeadsOperation {
-    static std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> invoke(
-        const Tensor& input_tensor_q,
-        const std::optional<Tensor>& input_tensor_kv,
-        uint32_t num_q_heads,
-        std::optional<uint32_t> num_kv_heads,
-        bool transpose_k_heads,
-        const std::optional<MemoryConfig>& memory_config,
-        const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors = std::nullopt);
-};
-}  // namespace operations::experimental::transformer
+std::tuple<Tensor, Tensor, Tensor> nlp_create_qkv_heads(
+    const Tensor& input_tensor_q,
+    const std::optional<Tensor>& input_tensor_kv,
+    uint32_t num_q_heads,
+    std::optional<uint32_t> num_kv_heads,
+    bool transpose_k_heads,
+    const std::optional<MemoryConfig>& memory_config,
+    const std::optional<std::vector<std::optional<Tensor>>>& optional_output_tensors = std::nullopt);
 
-namespace experimental {
-
-constexpr auto nlp_create_qkv_heads = ttnn::register_operation<
-    "ttnn::experimental::nlp_create_qkv_heads",
-    ttnn::operations::experimental::transformer::NlpCreateHeadsOperation>();
-
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental

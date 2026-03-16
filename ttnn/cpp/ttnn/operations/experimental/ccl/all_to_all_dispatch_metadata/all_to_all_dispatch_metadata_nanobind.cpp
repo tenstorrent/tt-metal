@@ -12,8 +12,9 @@
 #include <nanobind/stl/array.h>
 #include <nanobind/stl/optional.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "all_to_all_dispatch_metadata.hpp"
+#include <tt-metalium/core_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric_edm_types.hpp>
 
 namespace ttnn::operations::experimental::ccl {
@@ -40,6 +41,44 @@ void bind_all_to_all_dispatch_metadata_enums(nb::module_& mod) {
             WorkerMode::MUX_PAYLOAD_SPLIT,
             "Workers on same link split token payload (not yet implemented)");
 }
+
+namespace {
+
+std::array<ttnn::Tensor, 3> all_to_all_dispatch_metadata_wrapper(
+    const ttnn::Tensor& input_tensor,
+    const ttnn::Tensor& expert_indices_tensor,
+    const ttnn::Tensor& expert_scores_tensor,
+    const ttnn::Tensor& expert_mapping_tensor,
+    const std::optional<uint32_t> cluster_axis,
+    const std::optional<std::array<ttnn::Tensor, 3>>& output_tensors,
+    const std::optional<uint32_t> num_links,
+    const std::optional<std::array<uint32_t, 2>>& drain_sync_tilizer_core,
+    WorkerMode worker_mode,
+    DispatchAlgorithm dispatch_algorithm,
+    const std::optional<CoreRangeSet>& worker_core_range_set,
+    const std::optional<CoreRangeSet>& mux_core_range_set,
+    const std::optional<GlobalSemaphore>& cross_device_semaphore) {
+    std::optional<CoreCoord> drain_core = std::nullopt;
+    if (drain_sync_tilizer_core.has_value()) {
+        drain_core = CoreCoord(drain_sync_tilizer_core->at(0), drain_sync_tilizer_core->at(1));
+    }
+    return ttnn::experimental::all_to_all_dispatch_metadata(
+        input_tensor,
+        expert_indices_tensor,
+        expert_scores_tensor,
+        expert_mapping_tensor,
+        cluster_axis,
+        output_tensors,
+        num_links,
+        drain_core,
+        worker_mode,
+        dispatch_algorithm,
+        worker_core_range_set,
+        mux_core_range_set,
+        cross_device_semaphore);
+}
+
+}  // namespace
 
 void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
     // Bind the enums first
@@ -93,45 +132,11 @@ void bind_all_to_all_dispatch_metadata(nb::module_& mod) {
                             dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_MCAST_SHORTEST_PATH)
         )doc";
 
-    using OperationType = decltype(ttnn::experimental::all_to_all_dispatch_metadata);
-    ttnn::bind_registered_operation(
+    ttnn::bind_function<"all_to_all_dispatch_metadata", "ttnn.experimental.">(
         mod,
-        ttnn::experimental::all_to_all_dispatch_metadata,
         doc,
-        ttnn::nanobind_overload_t{
-            [](const OperationType& self,
-               const ttnn::Tensor& input_tensor,
-               const ttnn::Tensor& expert_indices_tensor,
-               const ttnn::Tensor& expert_scores_tensor,
-               const ttnn::Tensor& expert_mapping_tensor,
-               const std::optional<uint32_t> cluster_axis,
-               const std::optional<std::array<ttnn::Tensor, 3>>& output_tensors,
-               const std::optional<uint32_t> num_links,
-               const std::optional<std::array<uint32_t, 2>>& drain_sync_tilizer_core,
-               WorkerMode worker_mode,
-               DispatchAlgorithm dispatch_algorithm,
-               const std::optional<CoreRangeSet>& worker_core_range_set,
-               const std::optional<CoreRangeSet>& mux_core_range_set,
-               const std::optional<GlobalSemaphore>& cross_device_semaphore) /*-> std::array*/ {
-                std::optional<CoreCoord> drain_core = std::nullopt;
-                if (drain_sync_tilizer_core.has_value()) {
-                    drain_core = CoreCoord(drain_sync_tilizer_core->at(0), drain_sync_tilizer_core->at(1));
-                }
-                return self(
-                    input_tensor,
-                    expert_indices_tensor,
-                    expert_scores_tensor,
-                    expert_mapping_tensor,
-                    cluster_axis,
-                    output_tensors,
-                    num_links,
-                    drain_core,
-                    worker_mode,
-                    dispatch_algorithm,
-                    worker_core_range_set,
-                    mux_core_range_set,
-                    cross_device_semaphore);
-            },
+        ttnn::overload_t{
+            all_to_all_dispatch_metadata_wrapper,
             nb::arg("input_tensor").noconvert(),
             nb::arg("expert_indices_tensor").noconvert(),
             nb::arg("expert_scores_tensor").noconvert(),

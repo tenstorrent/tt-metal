@@ -8,9 +8,9 @@
 #include "ttnn/operations/normalization/layernorm/device/layernorm_device_operation.hpp"
 #include "ttnn/device.hpp"
 
-namespace ttnn::operations::normalization {
+namespace ttnn {
 
-ttnn::Tensor ExecuteLayerNormPreAllGather::invoke(
+ttnn::Tensor layer_norm_pre_all_gather(
     const ttnn::Tensor& input_tensor,
     const DataType dtype,
     const std::optional<const ttnn::Tensor>& residual_input_tensor,
@@ -46,4 +46,4 @@ ttnn::Tensor ExecuteLayerNormPreAllGather::invoke(
         std::nullopt);  // use_2d_core_grid
 }
 
-}  // namespace ttnn::operations::normalization
+}  // namespace ttnn
