@@ -92,6 +92,40 @@ uint32_t increment_arg_idx(uint32_t& arg_idx, uint32_t num_args = 1) {
     return old_arg_idx;
 }
 
+// Variant of master_sync_slaves that signals all destination cores with a single NOC multicast
+// increment instead of N individual unicasts. The bounding box (x_start/y_start/x_end/y_end)
+// must cover exactly the set of cores to signal, with no gaps (tight rectangle).
+// The sender core must not be inside the bounding box (no loopback support on noc_semaphore_inc_multicast).
+FORCE_INLINE void master_sync_slaves_mcast(
+    const uint32_t num_workers_to_sync,
+    const uint32_t* worker_noc_coords,
+    const uint32_t worker_sync_sem_addr,
+    const uint32_t num_dests,
+    const uint32_t mcast_x_start,
+    const uint32_t mcast_y_start,
+    const uint32_t mcast_x_end,
+    const uint32_t mcast_y_end,
+    const uint32_t fused_op_sem_addr) {
+    volatile tt_l1_ptr uint32_t* master_l1_semaphore_addr;
+    if (num_workers_to_sync > 1) {
+        master_l1_semaphore_addr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(worker_sync_sem_addr);
+        noc_semaphore_wait(master_l1_semaphore_addr, num_workers_to_sync - 1);
+    }
+
+    uint64_t mcast_addr =
+        get_noc_multicast_addr(mcast_x_start, mcast_y_start, mcast_x_end, mcast_y_end, fused_op_sem_addr);
+    noc_semaphore_inc_multicast(mcast_addr, 1, num_dests);
+
+    if (num_workers_to_sync > 1) {
+        noc_semaphore_set(master_l1_semaphore_addr, 0);
+        for (uint32_t i = 1; i < num_workers_to_sync; i++) {
+            uint64_t remote_slave_l1_sem_addr =
+                get_noc_addr(worker_noc_coords[i * 2], worker_noc_coords[i * 2 + 1], worker_sync_sem_addr);
+            noc_semaphore_inc(remote_slave_l1_sem_addr, 1);
+        }
+    }
+}
+
 // Used to signal an operation that it can start processing data, resulting in overlapping
 struct OpSignaler {
     uint32_t num_workers_to_sync = 0;
@@ -146,6 +180,107 @@ struct OpSignaler {
                 this->mcast_signal_op_cores,
 
                 fused_op_core_idx);
+        } else {
+            slave_sync_master(this->workers_noc_coords, this->worker_sync_sem_addr);
+        }
+    }
+};
+
+// Variant of OpSignaler for the MM->SRS fused signaling path.
+// Variant of OpSignaler for the MM->SRS fused signaling path.
+// Supports two signaling modes selected at runtime by a `use_mcast` flag:
+//   - use_mcast=1: single NOC multicast increment (requires RS cores to fill a
+//     tight rectangle; more efficient when the layout allows it)
+//   - use_mcast=0: individual unicast increments (fallback for non-rectangular layouts)
+//
+// RT arg layout (pushed by minimal_matmul_program_factory for the SRS path):
+//   [0]              num_workers_to_sync
+//   [1]              curr_worker_index
+//   [2]              worker_sync_sem_addr (semaphore id)
+//   [3..3+N*2-1]     worker noc coords (x,y) * num_workers_to_sync
+//   [3+N*2]          use_mcast (1=multicast, 0=unicast)
+//   [3+N*2+1]        num_signal_cores (num_dests for mcast; num unicast targets otherwise)
+//   if use_mcast=1:
+//     [3+N*2+2]      mcast_x_start
+//     [3+N*2+3]      mcast_y_start
+//     [3+N*2+4]      mcast_x_end
+//     [3+N*2+5]      mcast_y_end
+//   if use_mcast=0:
+//     [3+N*2+2 .. 3+N*2+1+M*2]  signal core noc coords (x,y) * num_signal_cores
+//   last:            signal_op_sem_addr (semaphore id)
+struct SrsOpSignaler {
+    uint32_t num_workers_to_sync = 0;
+    uint32_t* workers_noc_coords = nullptr;
+    uint32_t worker_sync_sem_addr = 0;
+
+    uint32_t use_mcast = 0;
+    uint32_t num_signal_cores = 0;
+    uint32_t mcast_x_start = 0;
+    uint32_t mcast_y_start = 0;
+    uint32_t mcast_x_end = 0;
+    uint32_t mcast_y_end = 0;
+    uint32_t* signal_cores_noc_coords = nullptr;
+    uint32_t signal_op_sem_addr = 0;
+
+    uint32_t curr_worker_is_master = 0;
+    bool initialized = false;
+
+    SrsOpSignaler() {}
+
+    SrsOpSignaler(uint32_t& rt_args_idx) {
+        this->num_workers_to_sync = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t curr_worker_index = get_arg_val<uint32_t>(rt_args_idx++);
+        this->worker_sync_sem_addr = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
+        this->workers_noc_coords =
+            (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_workers_to_sync * 2));
+
+        this->use_mcast = get_arg_val<uint32_t>(rt_args_idx++);
+        this->num_signal_cores = get_arg_val<uint32_t>(rt_args_idx++);
+        if (this->use_mcast) {
+            this->mcast_x_start = get_arg_val<uint32_t>(rt_args_idx++);
+            this->mcast_y_start = get_arg_val<uint32_t>(rt_args_idx++);
+            this->mcast_x_end = get_arg_val<uint32_t>(rt_args_idx++);
+            this->mcast_y_end = get_arg_val<uint32_t>(rt_args_idx++);
+        } else {
+            this->signal_cores_noc_coords =
+                (uint32_t*)get_arg_addr(increment_arg_idx(rt_args_idx, this->num_signal_cores * 2));
+        }
+        this->signal_op_sem_addr = get_semaphore(get_arg_val<uint32_t>(rt_args_idx++));
+
+        uint32_t master_x = this->workers_noc_coords[0];
+        uint32_t master_y = this->workers_noc_coords[1];
+        uint32_t curr_x = this->workers_noc_coords[curr_worker_index * 2];
+        uint32_t curr_y = this->workers_noc_coords[curr_worker_index * 2 + 1];
+        this->curr_worker_is_master = is_master(master_x, master_y, curr_x, curr_y);
+
+        this->initialized = true;
+    }
+
+    void synchronize_workers_and_signal_op() {
+        ASSERT(this->initialized);
+        if (this->curr_worker_is_master) {
+            if (this->use_mcast) {
+                master_sync_slaves_mcast(
+                    this->num_workers_to_sync,
+                    this->workers_noc_coords,
+                    this->worker_sync_sem_addr,
+                    this->num_signal_cores,
+                    this->mcast_x_start,
+                    this->mcast_y_start,
+                    this->mcast_x_end,
+                    this->mcast_y_end,
+                    this->signal_op_sem_addr);
+            } else {
+                master_sync_slaves(
+                    this->num_workers_to_sync,
+                    this->workers_noc_coords,
+                    this->worker_sync_sem_addr,
+                    this->num_signal_cores,
+                    this->signal_cores_noc_coords,
+                    this->signal_op_sem_addr,
+                    true,
+                    0);
+            }
         } else {
             slave_sync_master(this->workers_noc_coords, this->worker_sync_sem_addr);
         }

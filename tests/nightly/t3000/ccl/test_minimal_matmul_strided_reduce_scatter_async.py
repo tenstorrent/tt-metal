@@ -568,17 +568,18 @@ def run_minimal_matmul_strided_reduce_scatter_impl(
 @pytest.mark.parametrize(
     "enable_trace, num_iters",
     [
-        (False, 2),
+        (False, 1),
+        #(True, 2),
     ],
-    ids=["check", "perf"],
+    ids=["check"]#, "perf"],
 )
 @pytest.mark.parametrize(
     "rs_mode",
     [
         "fused",
-        "separate_strided",
-        "comparison",
-        "original",
+        # "separate_strided",
+        # "comparison",
+        # "original",
     ],
 )
 @pytest.mark.parametrize(

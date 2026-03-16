@@ -286,6 +286,14 @@ struct StridedReduceScatterFusedOpSignaler {
     std::vector<CoreCoord> fused_op_receiver_cores_noc;
     uint32_t fused_op_receiver_signal_semaphore = 0;
 
+    // Bounding box for multicast signaling (populated by init_strided_reduce_scatter).
+    // Only valid when is_rectangular == true.
+    bool is_rectangular = false;
+    uint32_t mcast_x_start = 0;
+    uint32_t mcast_y_start = 0;
+    uint32_t mcast_x_end = 0;
+    uint32_t mcast_y_end = 0;
+
     bool initialized = false;
 
     StridedReduceScatterFusedOpSignaler() = default;
