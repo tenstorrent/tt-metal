@@ -48,6 +48,8 @@ from models.demos.gpt_oss.tt.experts_throughput.weights import (
     _FUSED_PAD_CORES as PAD_CORES,
     _prepare_w0_w1_tensor as prepare_w0_w1_tensor,
     _prepare_w2_tensor as prepare_w2_tensor,
+    _prepare_w0_b0_w1_b1_tensor as prepare_w0_b0_w1_b1_tensor,
+    _prepare_w2_b2_tensor as prepare_w2_b2_tensor,
     _build_ring2cores as build_ring2cores,
 )
 from tests.ttnn.nightly.unit_tests.operations.experimental.test_moe_gpt_single_device import (
@@ -398,8 +400,15 @@ def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_
     dram_cores = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(num_cores)]
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in dram_cores])
 
+    # Create zero biases (1 tile row = 32 rows, padded)
+    torch_b0 = torch.zeros(1, E, 32, N, dtype=torch.bfloat16)
+    torch_b1 = torch.zeros(1, E, 32, N, dtype=torch.bfloat16)
+    torch_b2 = torch.zeros(1, E, 32, hidden_size, dtype=torch.bfloat16)
+    hidden_size_bias = hidden_size + 32  # K + 1 bias tile row
+    N_bias = N + 32
+
     tt_w0_w1 = ttnn.from_torch(
-        prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, hidden_size, N, ring2cores),
+        prepare_w0_b0_w1_b1_tensor(torch_w0, torch_b0, torch_w1, torch_b1, L, E, hidden_size, N, ring2cores),
         dtype=ttnn.bfloat4_b,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
@@ -408,21 +417,23 @@ def run_test_dispatch_compute(mesh_device, tokens_global, hidden_size, selected_
             ttnn.BufferType.DRAM,
             ttnn.ShardSpec(
                 dram_core_range_set,
-                (L * E * groups_per_core * hidden_size, 4 * ttnn.TILE_SIZE),
+                (L * E * groups_per_core * hidden_size_bias, 4 * ttnn.TILE_SIZE),
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         ),
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_w2 = ttnn.from_torch(
-        prepare_w2_tensor(torch_w2, L, E, N, hidden_size, ring2cores),
+        prepare_w2_b2_tensor(torch_w2, torch_b2, L, E, N, hidden_size, ring2cores),
         dtype=ttnn.bfloat4_b,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.DRAM,
-            ttnn.ShardSpec(dram_core_range_set, (L * E * 2 * N, 4 * ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(
+                dram_core_range_set, (L * E * 2 * N_bias, 4 * ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR
+            ),
         ),
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
@@ -738,8 +749,15 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
     dram_cores = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(num_cores)]
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in dram_cores])
 
+    # Create zero biases (1 tile row = 32 rows, padded)
+    torch_b0 = torch.zeros(1, E, 32, N, dtype=torch.bfloat16)
+    torch_b1 = torch.zeros(1, E, 32, N, dtype=torch.bfloat16)
+    torch_b2 = torch.zeros(1, E, 32, hidden_size, dtype=torch.bfloat16)
+    hidden_size_bias = hidden_size + 32  # K + 1 bias tile row
+    N_bias = N + 32
+
     tt_w0_w1 = ttnn.from_torch(
-        prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, hidden_size, N, ring2cores),
+        prepare_w0_b0_w1_b1_tensor(torch_w0, torch_b0, torch_w1, torch_b1, L, E, hidden_size, N, ring2cores),
         dtype=ttnn.bfloat4_b,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
@@ -748,21 +766,23 @@ def run_test_dispatch_compute_combine(mesh_device, tokens_global, hidden_size, s
             ttnn.BufferType.DRAM,
             ttnn.ShardSpec(
                 dram_core_range_set,
-                (L * E * groups_per_core * hidden_size, 4 * ttnn.TILE_SIZE),
+                (L * E * groups_per_core * hidden_size_bias, 4 * ttnn.TILE_SIZE),
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         ),
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_w2 = ttnn.from_torch(
-        prepare_w2_tensor(torch_w2, L, E, N, hidden_size, ring2cores),
+        prepare_w2_b2_tensor(torch_w2, torch_b2, L, E, N, hidden_size, ring2cores),
         dtype=ttnn.bfloat4_b,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.DRAM,
-            ttnn.ShardSpec(dram_core_range_set, (L * E * 2 * N, 4 * ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(
+                dram_core_range_set, (L * E * 2 * N_bias, 4 * ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR
+            ),
         ),
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
@@ -1195,14 +1215,16 @@ def run_test_moe_gpt_e2e(
     L = 1
 
     groups_per_core = MAX_W0_W1_TILES_PER_CORE // 2
-    w0_w1_shard_height = L * E * groups_per_core * K
+    K_bias = K + 32  # K + 1 bias tile row
+    N_bias = N + 32
+    w0_w1_shard_height = L * E * groups_per_core * K_bias
     w0_w1_shard_width = 4 * ttnn.TILE_SIZE
     w0_w1_shard_spec = ttnn.ShardSpec(
         dram_core_range_set, (w0_w1_shard_height, w0_w1_shard_width), ttnn.ShardOrientation.ROW_MAJOR
     )
     w0_w1_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.DRAM, w0_w1_shard_spec)
 
-    w2_shard_height = L * E * 2 * N
+    w2_shard_height = L * E * 2 * N_bias
     w2_shard_width = 4 * ttnn.TILE_SIZE
     w2_shard_spec = ttnn.ShardSpec(
         dram_core_range_set, (w2_shard_height, w2_shard_width), ttnn.ShardOrientation.ROW_MAJOR
@@ -1213,7 +1235,12 @@ def run_test_moe_gpt_e2e(
     torch_w1 = create_torch_w1(L, E, K, N)
     torch_w2 = create_torch_w2(L, E, N, K)
 
-    torch_w0_w1_reordered = prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, K, N, ring2cores)
+    # Create zero biases (1 tile row = 32 rows)
+    torch_b0 = torch.zeros(1, E, 32, N, dtype=torch.bfloat16)
+    torch_b1 = torch.zeros(1, E, 32, N, dtype=torch.bfloat16)
+    torch_b2 = torch.zeros(1, E, 32, K, dtype=torch.bfloat16)
+
+    torch_w0_w1_reordered = prepare_w0_b0_w1_b1_tensor(torch_w0, torch_b0, torch_w1, torch_b1, L, E, K, N, ring2cores)
     tt_w0_w1 = ttnn.from_torch(
         torch_w0_w1_reordered,
         dtype=w_dtype,
@@ -1223,7 +1250,7 @@ def run_test_moe_gpt_e2e(
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
 
-    torch_w2_reordered = prepare_w2_tensor(torch_w2, L, E, N, K, ring2cores)
+    torch_w2_reordered = prepare_w2_b2_tensor(torch_w2, torch_b2, L, E, N, K, ring2cores)
     tt_w2 = ttnn.from_torch(
         torch_w2_reordered,
         dtype=w_dtype,
@@ -1912,8 +1939,15 @@ def run_test_combine_isolation(mesh_device, tokens_global, hidden_size, selected
     dram_cores = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(num_cores)]
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in dram_cores])
 
+    # Create zero biases (1 tile row = 32 rows, padded)
+    torch_b0 = torch.zeros(1, E, 32, N, dtype=torch.bfloat16)
+    torch_b1 = torch.zeros(1, E, 32, N, dtype=torch.bfloat16)
+    torch_b2 = torch.zeros(1, E, 32, hidden_size, dtype=torch.bfloat16)
+    hidden_size_bias = hidden_size + 32  # K + 1 bias tile row
+    N_bias = N + 32
+
     tt_w0_w1 = ttnn.from_torch(
-        prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, hidden_size, N, ring2cores),
+        prepare_w0_b0_w1_b1_tensor(torch_w0, torch_b0, torch_w1, torch_b1, L, E, hidden_size, N, ring2cores),
         dtype=ttnn.bfloat4_b,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
@@ -1922,21 +1956,23 @@ def run_test_combine_isolation(mesh_device, tokens_global, hidden_size, selected
             ttnn.BufferType.DRAM,
             ttnn.ShardSpec(
                 dram_core_range_set,
-                (L * E * groups_per_core * hidden_size, 4 * ttnn.TILE_SIZE),
+                (L * E * groups_per_core * hidden_size_bias, 4 * ttnn.TILE_SIZE),
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         ),
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_w2 = ttnn.from_torch(
-        prepare_w2_tensor(torch_w2, L, E, N, hidden_size, ring2cores),
+        prepare_w2_b2_tensor(torch_w2, torch_b2, L, E, N, hidden_size, ring2cores),
         dtype=ttnn.bfloat4_b,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.DRAM,
-            ttnn.ShardSpec(dram_core_range_set, (L * E * 2 * N, 4 * ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(
+                dram_core_range_set, (L * E * 2 * N_bias, 4 * ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR
+            ),
         ),
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
@@ -2238,8 +2274,15 @@ def run_test_full_pipeline_multi_iter(
     dram_cores = [ttnn.CoreCoord(ring2cores[i][1], 0) for i in range(num_cores)]
     dram_core_range_set = ttnn.CoreRangeSet([ttnn.CoreRange(c, c) for c in dram_cores])
 
+    # Create zero biases (1 tile row = 32 rows, padded)
+    torch_b0 = torch.zeros(1, E, 32, N, dtype=torch.bfloat16)
+    torch_b1 = torch.zeros(1, E, 32, N, dtype=torch.bfloat16)
+    torch_b2 = torch.zeros(1, E, 32, hidden_size, dtype=torch.bfloat16)
+    hidden_size_bias = hidden_size + 32  # K + 1 bias tile row
+    N_bias = N + 32
+
     tt_w0_w1 = ttnn.from_torch(
-        prepare_w0_w1_tensor(torch_w0, torch_w1, L, E, hidden_size, N, ring2cores),
+        prepare_w0_b0_w1_b1_tensor(torch_w0, torch_b0, torch_w1, torch_b1, L, E, hidden_size, N, ring2cores),
         dtype=ttnn.bfloat4_b,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
@@ -2248,21 +2291,23 @@ def run_test_full_pipeline_multi_iter(
             ttnn.BufferType.DRAM,
             ttnn.ShardSpec(
                 dram_core_range_set,
-                (L * E * groups_per_core * hidden_size, 4 * ttnn.TILE_SIZE),
+                (L * E * groups_per_core * hidden_size_bias, 4 * ttnn.TILE_SIZE),
                 ttnn.ShardOrientation.ROW_MAJOR,
             ),
         ),
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
     tt_w2 = ttnn.from_torch(
-        prepare_w2_tensor(torch_w2, L, E, N, hidden_size, ring2cores),
+        prepare_w2_b2_tensor(torch_w2, torch_b2, L, E, N, hidden_size, ring2cores),
         dtype=ttnn.bfloat4_b,
         device=mesh_device,
         layout=ttnn.TILE_LAYOUT,
         memory_config=ttnn.MemoryConfig(
             ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
             ttnn.BufferType.DRAM,
-            ttnn.ShardSpec(dram_core_range_set, (L * E * 2 * N, 4 * ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR),
+            ttnn.ShardSpec(
+                dram_core_range_set, (L * E * 2 * N_bias, 4 * ttnn.TILE_SIZE), ttnn.ShardOrientation.ROW_MAJOR
+            ),
         ),
         mesh_mapper=ttnn.ReplicateTensorToMesh(mesh_device),
     )
