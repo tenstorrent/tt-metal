@@ -81,13 +81,11 @@ def test_mla_cache_chunking_equivalence():
 @torch.no_grad()
 def test_mla_deepseek_v3():
     """
-    Compare mla_attention_torch and mla_attention_tt from mla.py against the
-    HF DeepseekV3Attention module.
+    Compare mla_attention_torch against real HF DeepseekV3Attention
+    with real RoPE (nope+rope split) and real position_ids.
 
-    Adaptations to make architectures compatible:
+    Adaptations:
     - q_lora_rank=None → direct Q projection (no LoRA), matches our wq
-    - qk_rope_head_dim=0 → no RoPE dims, Q/K only have nope component
-    - qk_nope_head_dim = v_head_dim → uniform head_dim for K and V
     - kv_a_layernorm replaced with nn.Identity → no norm in KV latent path
     - kv_b_proj weight split into separate w_k_up and w_v_up
     """
@@ -95,24 +93,28 @@ def test_mla_deepseek_v3():
     from transformers import DeepseekV3Config
     from transformers.models.deepseek_v3.modeling_deepseek_v3 import (
         DeepseekV3DecoderLayer,
+        DeepseekV3RotaryEmbedding,
     )
 
-    head_dim = 8
+    nope_dim = 8
+    rope_dim = 4
+    v_head_dim = 8
     config = DeepseekV3Config(
         hidden_size=64,
         num_attention_heads=4,
         num_key_value_heads=4,
         q_lora_rank=None,
         kv_lora_rank=16,
-        qk_rope_head_dim=0,
-        qk_nope_head_dim=head_dim,
-        v_head_dim=head_dim,
+        qk_rope_head_dim=rope_dim,
+        qk_nope_head_dim=nope_dim,
+        v_head_dim=v_head_dim,
         intermediate_size=128,
         num_hidden_layers=2,
         first_k_dense_replace=2,
         attention_bias=False,
         rms_norm_eps=1e-6,
         max_position_embeddings=256,
+        rope_theta=10000.0,
         attn_implementation="eager",
     )
 
@@ -124,8 +126,9 @@ def test_mla_deepseek_v3():
     layer.eval()
     layer.self_attn.kv_a_layernorm = nn.Identity()
 
-    cos = torch.empty(b, seq_len, 0)
-    sin = torch.empty(b, seq_len, 0)
+    rotary = DeepseekV3RotaryEmbedding(config)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
+    cos, sin = rotary(x, position_ids)
 
     normed = rms_norm(x, layer.input_layernorm.weight.data, config.rms_norm_eps)
 
@@ -136,9 +139,9 @@ def test_mla_deepseek_v3():
     attn = layer.self_attn
     kv_b_w = attn.kv_b_proj.weight.data
     num_heads = config.num_attention_heads
-    kv_b_reshaped = kv_b_w.view(num_heads, head_dim + head_dim, config.kv_lora_rank)
-    w_k_up = kv_b_reshaped[:, :head_dim, :].reshape(num_heads * head_dim, config.kv_lora_rank)
-    w_v_up = kv_b_reshaped[:, head_dim:, :].reshape(num_heads * head_dim, config.kv_lora_rank)
+    kv_b_reshaped = kv_b_w.view(num_heads, nope_dim + v_head_dim, config.kv_lora_rank)
+    w_k_up = kv_b_reshaped[:, :nope_dim, :].reshape(num_heads * nope_dim, config.kv_lora_rank)
+    w_v_up = kv_b_reshaped[:, nope_dim:, :].reshape(num_heads * v_head_dim, config.kv_lora_rank)
 
     mla_kwargs = dict(
         wq=attn.q_proj.weight.data,
@@ -149,6 +152,9 @@ def test_mla_deepseek_v3():
         num_q_heads=config.num_attention_heads,
         num_kv_heads=config.num_key_value_heads,
         kv_latent_dim=config.kv_lora_rank,
+        position_embeddings=(cos, sin),
+        qk_rope_head_dim=rope_dim,
+        rope_interleave=True,
     )
 
     our_torch_out, _ = mla_attention_torch(normed, **mla_kwargs)
@@ -170,18 +176,21 @@ def test_mla_kimi_k25():
     from transformers import DeepseekV3Config
     from transformers.models.deepseek_v3.modeling_deepseek_v3 import (
         DeepseekV3DecoderLayer,
+        DeepseekV3RotaryEmbedding,
     )
 
-    head_dim = 8
+    nope_dim = 8
+    rope_dim = 4
+    v_head_dim = 8
     config = DeepseekV3Config(
         hidden_size=64,
         num_attention_heads=4,
         num_key_value_heads=4,
         q_lora_rank=None,
         kv_lora_rank=16,
-        qk_rope_head_dim=0,
-        qk_nope_head_dim=head_dim,
-        v_head_dim=head_dim,
+        qk_rope_head_dim=rope_dim,
+        qk_nope_head_dim=nope_dim,
+        v_head_dim=v_head_dim,
         intermediate_size=128,
         num_hidden_layers=2,
         first_k_dense_replace=2,
@@ -200,8 +209,9 @@ def test_mla_kimi_k25():
     layer.eval()
     layer.self_attn.kv_a_layernorm = nn.Identity()
 
-    cos = torch.empty(b, seq_len, 0)
-    sin = torch.empty(b, seq_len, 0)
+    rotary = DeepseekV3RotaryEmbedding(config)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
+    cos, sin = rotary(x, position_ids)
 
     normed = rms_norm(x, layer.input_layernorm.weight.data, config.rms_norm_eps)
     hf_attn_out, _ = layer.self_attn(
@@ -211,9 +221,9 @@ def test_mla_kimi_k25():
     attn = layer.self_attn
     kv_b_w = attn.kv_b_proj.weight.data
     num_heads = config.num_attention_heads
-    kv_b_reshaped = kv_b_w.view(num_heads, head_dim + head_dim, config.kv_lora_rank)
-    w_k_up = kv_b_reshaped[:, :head_dim, :].reshape(num_heads * head_dim, config.kv_lora_rank)
-    w_v_up = kv_b_reshaped[:, head_dim:, :].reshape(num_heads * head_dim, config.kv_lora_rank)
+    kv_b_reshaped = kv_b_w.view(num_heads, nope_dim + v_head_dim, config.kv_lora_rank)
+    w_k_up = kv_b_reshaped[:, :nope_dim, :].reshape(num_heads * nope_dim, config.kv_lora_rank)
+    w_v_up = kv_b_reshaped[:, nope_dim:, :].reshape(num_heads * v_head_dim, config.kv_lora_rank)
 
     mla_kwargs = dict(
         wq=attn.q_proj.weight.data,
@@ -224,6 +234,9 @@ def test_mla_kimi_k25():
         num_q_heads=config.num_attention_heads,
         num_kv_heads=config.num_key_value_heads,
         kv_latent_dim=config.kv_lora_rank,
+        position_embeddings=(cos, sin),
+        qk_rope_head_dim=rope_dim,
+        rope_interleave=True,
     )
 
     our_torch_out, _ = mla_attention_torch(normed, **mla_kwargs)

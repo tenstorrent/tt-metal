@@ -4,7 +4,7 @@ import math
 import torch
 import torch.nn.functional as F
 
-from helpers import repeat_kv
+from helpers import repeat_kv, apply_rotary_pos_emb, apply_rotary_pos_emb_glm4
 
 
 # ---------------------------------------------------------------------------
@@ -17,6 +17,8 @@ def gqa_attention_torch(
     wq, wk, wv, wo,
     num_q_heads,
     num_kv_heads,
+    position_embeddings=None,
+    rope_variant="standard",
     attention_mask=None,
     past_key_value=None,
     use_cache=False,
@@ -29,6 +31,8 @@ def gqa_attention_torch(
     wk: [num_kv_heads * head_dim, hidden]
     wv: [num_kv_heads * head_dim, hidden]
     wo: [hidden, num_q_heads * head_dim]
+    position_embeddings: None or (cos, sin) each [b, seq, rope_dim]
+    rope_variant: "standard" (Llama/Qwen) or "glm4" (interleaved, partial)
     attention_mask: None, bool [b,1,q,kv] (True=keep), or additive [b,1,q,kv]
     past_key_value: None or (past_k, past_v) each [b, kv_heads, past_seq, hd]
 
@@ -40,6 +44,13 @@ def gqa_attention_torch(
     q = F.linear(hidden_states, wq).view(b, q_seq, num_q_heads, head_dim).transpose(1, 2)
     k = F.linear(hidden_states, wk).view(b, q_seq, num_kv_heads, head_dim).transpose(1, 2)
     v = F.linear(hidden_states, wv).view(b, q_seq, num_kv_heads, head_dim).transpose(1, 2)
+
+    if position_embeddings is not None:
+        cos, sin = position_embeddings
+        if rope_variant == "glm4":
+            q, k = apply_rotary_pos_emb_glm4(q, k, cos, sin)
+        else:
+            q, k = apply_rotary_pos_emb(q, k, cos, sin)
 
     if past_key_value is not None:
         past_k, past_v = past_key_value

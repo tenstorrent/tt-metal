@@ -19,6 +19,75 @@ def assert_close(a, b, **kw):
     torch.testing.assert_close(a, b, **kw)
 
 
+def _rotate_half(x):
+    """Rotate half the hidden dims: [x1, x2] → [-x2, x1]."""
+    x1 = x[..., : x.shape[-1] // 2]
+    x2 = x[..., x.shape[-1] // 2 :]
+    return torch.cat((-x2, x1), dim=-1)
+
+
+def _rotate_half_interleaved(x):
+    """Interleaved rotation: pairs (even, odd) → (-odd, even)."""
+    x1 = x[..., 0::2]
+    x2 = x[..., 1::2]
+    return torch.stack((-x2, x1), dim=-1).flatten(-2)
+
+
+def apply_rotary_pos_emb(q, k, cos, sin):
+    """
+    Standard RoPE (Llama/Qwen/Mixtral pattern).
+
+    q, k: [b, heads, seq, head_dim]
+    cos, sin: [b, seq, head_dim]  (from RotaryEmbedding)
+
+    Applies rotation to ALL head_dim dimensions.
+    """
+    cos = cos.unsqueeze(1)  # [b, 1, seq, head_dim]
+    sin = sin.unsqueeze(1)
+    q_embed = (q * cos) + (_rotate_half(q) * sin)
+    k_embed = (k * cos) + (_rotate_half(k) * sin)
+    return q_embed, k_embed
+
+
+def apply_rotary_pos_emb_interleaved(q, k, cos, sin):
+    """
+    Interleaved RoPE (DeepSeek V3 pattern with rope_interleave=True).
+
+    Rearranges q/k dims from interleaved to paired layout before applying
+    standard rotate_half, matching HF's apply_rotary_pos_emb_interleave.
+    """
+    cos = cos.unsqueeze(1)
+    sin = sin.unsqueeze(1)
+    # Rearrange: [a, b, c, d] → [a, c, b, d] (deinterleave pairs)
+    b, h, s, d = q.shape
+    q = q.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
+    b, h, s, d = k.shape
+    k = k.view(b, h, s, d // 2, 2).transpose(4, 3).reshape(b, h, s, d)
+    q_embed = (q * cos) + (_rotate_half(q) * sin)
+    k_embed = (k * cos) + (_rotate_half(k) * sin)
+    return q_embed, k_embed
+
+
+def apply_rotary_pos_emb_glm4(q, k, cos, sin):
+    """
+    GLM-4 RoPE: interleaved rotation with partial rotary support.
+
+    cos/sin may be smaller than head_dim (partial_rotary_factor).
+    Unrotated dims are passed through unchanged.
+    """
+    cos = cos.unsqueeze(1)
+    sin = sin.unsqueeze(1)
+    # GLM4 uses interleaved cos/sin — take first half and repeat_interleave
+    cos = cos[..., : cos.shape[-1] // 2].repeat_interleave(2, dim=-1)
+    sin = sin[..., : sin.shape[-1] // 2].repeat_interleave(2, dim=-1)
+    rotary_dim = cos.shape[-1]
+    q_rot, q_pass = q[..., :rotary_dim], q[..., rotary_dim:]
+    k_rot, k_pass = k[..., :rotary_dim], k[..., rotary_dim:]
+    q_embed = (q_rot * cos) + (_rotate_half_interleaved(q_rot) * sin)
+    k_embed = (k_rot * cos) + (_rotate_half_interleaved(k_rot) * sin)
+    return torch.cat([q_embed, q_pass], dim=-1), torch.cat([k_embed, k_pass], dim=-1)
+
+
 def repeat_kv(x, n_rep):
     """Repeat KV heads to match Q heads. x: [b, kv_heads, seq, hd]"""
     if n_rep == 1:

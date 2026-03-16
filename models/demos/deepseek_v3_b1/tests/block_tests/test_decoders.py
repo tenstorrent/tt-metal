@@ -219,15 +219,14 @@ def _compose_deepseek_v3_forward(x, params, variant):
 
     # Input RMSNorm → MLA attention → residual
     normed = rms_norm(h, params["ln1_weight"], params["eps"])
-    attn_out, _ = mla_fn(
-        normed,
-        wq=params["wq"], w_kv_down=params["w_kv_down"],
-        w_k_up=params["w_k_up"], w_v_up=params["w_v_up"],
-        wo=params["wo"],
-        num_q_heads=params["num_q_heads"],
-        num_kv_heads=params["num_kv_heads"],
-        kv_latent_dim=params["kv_latent_dim"],
-    )
+    mla_kwargs = {k: params[k] for k in (
+        "wq", "w_kv_down", "w_k_up", "w_v_up", "wo",
+        "num_q_heads", "num_kv_heads", "kv_latent_dim",
+    )}
+    for k in ("position_embeddings", "qk_rope_head_dim", "rope_interleave"):
+        if k in params:
+            mla_kwargs[k] = params[k]
+    attn_out, _ = mla_fn(normed, **mla_kwargs)
     h = h + attn_out
 
     # Post-attention RMSNorm → FFN → residual
@@ -280,18 +279,21 @@ def test_deepseek_v3_decoder_from_primitives(variant):
     from transformers import DeepseekV3Config
     from transformers.models.deepseek_v3.modeling_deepseek_v3 import (
         DeepseekV3DecoderLayer,
+        DeepseekV3RotaryEmbedding,
     )
 
-    head_dim = 8
+    nope_dim = 8
+    rope_dim = 4
+    v_head_dim = 8
     config = DeepseekV3Config(
         hidden_size=64,
         num_attention_heads=4,
         num_key_value_heads=4,
         q_lora_rank=None,
         kv_lora_rank=16,
-        qk_rope_head_dim=0,
-        qk_nope_head_dim=head_dim,
-        v_head_dim=head_dim,
+        qk_rope_head_dim=rope_dim,
+        qk_nope_head_dim=nope_dim,
+        v_head_dim=v_head_dim,
         intermediate_size=128,
         moe_intermediate_size=32,
         n_routed_experts=4,
@@ -304,6 +306,7 @@ def test_deepseek_v3_decoder_from_primitives(variant):
         attention_bias=False,
         rms_norm_eps=1e-6,
         max_position_embeddings=256,
+        rope_theta=10000.0,
         attn_implementation="eager",
     )
 
@@ -311,8 +314,9 @@ def test_deepseek_v3_decoder_from_primitives(variant):
     b, seq_len = 1, 4
     x = torch.randn(b, seq_len, config.hidden_size)
     num_heads = config.num_attention_heads
-    cos = torch.empty(b, seq_len, 0)
-    sin = torch.empty(b, seq_len, 0)
+    rotary = DeepseekV3RotaryEmbedding(config)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
+    cos, sin = rotary(x, position_ids)
     label = variant
 
     for layer_idx in [0, 1]:
@@ -326,9 +330,9 @@ def test_deepseek_v3_decoder_from_primitives(variant):
         # 2) Collect params/weights
         attn = layer.self_attn
         kv_b_w = attn.kv_b_proj.weight.data
-        kv_b_reshaped = kv_b_w.view(num_heads, head_dim + head_dim, config.kv_lora_rank)
-        w_k_up = kv_b_reshaped[:, :head_dim, :].reshape(num_heads * head_dim, config.kv_lora_rank)
-        w_v_up = kv_b_reshaped[:, head_dim:, :].reshape(num_heads * head_dim, config.kv_lora_rank)
+        kv_b_reshaped = kv_b_w.view(num_heads, nope_dim + v_head_dim, config.kv_lora_rank)
+        w_k_up = kv_b_reshaped[:, :nope_dim, :].reshape(num_heads * nope_dim, config.kv_lora_rank)
+        w_v_up = kv_b_reshaped[:, nope_dim:, :].reshape(num_heads * v_head_dim, config.kv_lora_rank)
 
         is_dense = layer_idx < config.first_k_dense_replace
         params = dict(
@@ -342,6 +346,9 @@ def test_deepseek_v3_decoder_from_primitives(variant):
             num_q_heads=num_heads,
             num_kv_heads=config.num_key_value_heads,
             kv_latent_dim=config.kv_lora_rank,
+            position_embeddings=(cos, sin),
+            qk_rope_head_dim=rope_dim,
+            rope_interleave=True,
             is_dense=is_dense,
         )
 
@@ -375,7 +382,7 @@ def test_deepseek_v3_decoder_from_primitives(variant):
         h = _compose_deepseek_v3_forward(x, params, variant)
 
         # 4) Compare
-        assert_close(hf_out, h, atol=1e-4, rtol=1e-4), (
+        assert_close(hf_out, h, atol=1e-5, rtol=1e-5), (
             f"DeepSeek V3 ({label}): composed vs real HF "
             f"layer_idx={layer_idx} mismatch"
         )
@@ -393,13 +400,16 @@ def test_kimi_k25_decoder_from_primitives(variant):
     from transformers import DeepseekV3Config
     from transformers.models.deepseek_v3.modeling_deepseek_v3 import (
         DeepseekV3DecoderLayer,
+        DeepseekV3RotaryEmbedding,
     )
 
-    head_dim = 8
+    nope_dim = 8
+    rope_dim = 4
+    v_head_dim = 8
     config = DeepseekV3Config(
         hidden_size=64, num_attention_heads=4, num_key_value_heads=4,
-        q_lora_rank=None, kv_lora_rank=16, qk_rope_head_dim=0,
-        qk_nope_head_dim=head_dim, v_head_dim=head_dim,
+        q_lora_rank=None, kv_lora_rank=16, qk_rope_head_dim=rope_dim,
+        qk_nope_head_dim=nope_dim, v_head_dim=v_head_dim,
         intermediate_size=128, moe_intermediate_size=32,
         n_routed_experts=4, num_experts_per_tok=2,
         n_group=1, topk_group=1, routed_scaling_factor=2.827,
@@ -413,8 +423,9 @@ def test_kimi_k25_decoder_from_primitives(variant):
     b, seq_len = 1, 4
     x = torch.randn(b, seq_len, config.hidden_size)
     num_heads = config.num_attention_heads
-    cos = torch.empty(b, seq_len, 0)
-    sin = torch.empty(b, seq_len, 0)
+    rotary = DeepseekV3RotaryEmbedding(config)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
+    cos, sin = rotary(x, position_ids)
     label = variant
 
     for layer_idx in [0, 1]:
@@ -428,9 +439,9 @@ def test_kimi_k25_decoder_from_primitives(variant):
         # 2) Collect params
         attn = layer.self_attn
         kv_b_w = attn.kv_b_proj.weight.data
-        kv_b_reshaped = kv_b_w.view(num_heads, head_dim + head_dim, config.kv_lora_rank)
-        w_k_up = kv_b_reshaped[:, :head_dim, :].reshape(num_heads * head_dim, config.kv_lora_rank)
-        w_v_up = kv_b_reshaped[:, head_dim:, :].reshape(num_heads * head_dim, config.kv_lora_rank)
+        kv_b_reshaped = kv_b_w.view(num_heads, nope_dim + v_head_dim, config.kv_lora_rank)
+        w_k_up = kv_b_reshaped[:, :nope_dim, :].reshape(num_heads * nope_dim, config.kv_lora_rank)
+        w_v_up = kv_b_reshaped[:, nope_dim:, :].reshape(num_heads * v_head_dim, config.kv_lora_rank)
 
         is_dense = layer_idx < config.first_k_dense_replace
         params = dict(
@@ -444,6 +455,9 @@ def test_kimi_k25_decoder_from_primitives(variant):
             num_q_heads=num_heads,
             num_kv_heads=config.num_key_value_heads,
             kv_latent_dim=config.kv_lora_rank,
+            position_embeddings=(cos, sin),
+            qk_rope_head_dim=rope_dim,
+            rope_interleave=True,
             is_dense=is_dense,
         )
 
@@ -528,7 +542,7 @@ def test_glm4_decoder_from_primitives(variant):
     layer.eval()
 
     rotary = Glm4RotaryEmbedding(config)
-    position_ids = torch.zeros(b, seq_len, dtype=torch.long)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
     cos, sin = rotary(x, position_ids)
 
     # 1) HF reference
@@ -550,6 +564,8 @@ def test_glm4_decoder_from_primitives(variant):
             wv=attn.v_proj.weight.data, wo=attn.o_proj.weight.data,
             num_q_heads=config.num_attention_heads,
             num_kv_heads=config.num_key_value_heads,
+            position_embeddings=(cos, sin),
+            rope_variant="glm4",
         ),
         dense_gate=gate_up_w[:intermediate, :],
         dense_up=gate_up_w[intermediate:, :],
@@ -598,7 +614,7 @@ def test_gpt_oss_decoder_from_primitives(variant):
     layer.eval()
 
     rotary = MixtralRotaryEmbedding(config)
-    position_ids = torch.zeros(b, seq_len, dtype=torch.long)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
     cos, sin = rotary(x, position_ids)
 
     # 1) HF reference
@@ -618,6 +634,7 @@ def test_gpt_oss_decoder_from_primitives(variant):
             wv=attn.v_proj.weight.data, wo=attn.o_proj.weight.data,
             num_q_heads=config.num_attention_heads,
             num_kv_heads=config.num_key_value_heads,
+            position_embeddings=(cos, sin),
         ),
         moe_router=moe_mod.gate.weight.data,
         moe_w1=w1, moe_w2=w2, moe_w3=w3,
@@ -665,20 +682,24 @@ def _extract_mixtral_expert_weights(experts, ne):
     return w1, w2, w3
 
 
-def _collect_gqa_dense_params(layer, config):
+def _collect_gqa_dense_params(layer, config, position_embeddings=None, rope_variant="standard"):
     """Extract params dict from a Llama/Qwen-style GQA + dense SwiGLU layer."""
     attn = layer.self_attn
     mlp = layer.mlp
+    gqa_kwargs = dict(
+        wq=attn.q_proj.weight.data, wk=attn.k_proj.weight.data,
+        wv=attn.v_proj.weight.data, wo=attn.o_proj.weight.data,
+        num_q_heads=config.num_attention_heads,
+        num_kv_heads=config.num_key_value_heads,
+    )
+    if position_embeddings is not None:
+        gqa_kwargs["position_embeddings"] = position_embeddings
+        gqa_kwargs["rope_variant"] = rope_variant
     return dict(
         eps=config.rms_norm_eps,
         ln1_weight=layer.input_layernorm.weight.data,
         ln2_weight=layer.post_attention_layernorm.weight.data,
-        gqa_kwargs=dict(
-            wq=attn.q_proj.weight.data, wk=attn.k_proj.weight.data,
-            wv=attn.v_proj.weight.data, wo=attn.o_proj.weight.data,
-            num_q_heads=config.num_attention_heads,
-            num_kv_heads=config.num_key_value_heads,
-        ),
+        gqa_kwargs=gqa_kwargs,
         dense_gate=mlp.gate_proj.weight.data,
         dense_up=mlp.up_proj.weight.data,
         dense_down=mlp.down_proj.weight.data,
@@ -838,14 +859,14 @@ def test_llama_decoder_from_primitives(variant, model_name, config_overrides, se
     layer.eval()
 
     rotary = LlamaRotaryEmbedding(config)
-    position_ids = torch.zeros(b, seq_len, dtype=torch.long)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
     cos, sin = rotary(x, position_ids)
 
     # 1) HF reference
     hf_out = layer(x, position_embeddings=(cos, sin))
 
     # 2) Collect params
-    params = _collect_gqa_dense_params(layer, config)
+    params = _collect_gqa_dense_params(layer, config, position_embeddings=(cos, sin))
 
     # 3) Run composed forward
     h = _compose_gqa_dense_forward(x, params, variant)
@@ -882,7 +903,7 @@ def test_grok2_decoder_from_primitives(variant):
     layer.eval()
 
     rotary = MixtralRotaryEmbedding(config)
-    position_ids = torch.zeros(b, seq_len, dtype=torch.long)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
     cos, sin = rotary(x, position_ids)
 
     # 1) HF reference
@@ -901,6 +922,7 @@ def test_grok2_decoder_from_primitives(variant):
             wv=attn.v_proj.weight.data, wo=attn.o_proj.weight.data,
             num_q_heads=config.num_attention_heads,
             num_kv_heads=config.num_key_value_heads,
+            position_embeddings=(cos, sin),
         ),
         moe_router=moe_mod.gate.weight.data,
         moe_w1=w1, moe_w2=w2, moe_w3=w3,
@@ -1028,7 +1050,7 @@ def test_minimax_m25_decoder_from_primitives(variant):
     layer.eval()
 
     rotary = MiniMaxRotaryEmbedding(config)
-    position_ids = torch.zeros(b, seq_len, dtype=torch.long)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
     cos, sin = rotary(x, position_ids)
 
     # 1) HF reference
@@ -1047,6 +1069,7 @@ def test_minimax_m25_decoder_from_primitives(variant):
             wv=attn.v_proj.weight.data, wo=attn.o_proj.weight.data,
             num_q_heads=config.num_attention_heads,
             num_kv_heads=config.num_key_value_heads,
+            position_embeddings=(cos, sin),
         ),
         moe_router=moe_mod.gate.weight.data,
         moe_w1=w1, moe_w2=w2, moe_w3=w3,
@@ -1100,7 +1123,7 @@ def test_olmoe_decoder_from_primitives(variant):
     layer.self_attn.k_norm = nn.Identity()
 
     rotary = OlmoeRotaryEmbedding(config)
-    position_ids = torch.zeros(b, seq_len, dtype=torch.long)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
     cos, sin = rotary(x, position_ids)
 
     # 1) HF reference
@@ -1119,6 +1142,7 @@ def test_olmoe_decoder_from_primitives(variant):
             wv=attn.v_proj.weight.data, wo=attn.o_proj.weight.data,
             num_q_heads=config.num_attention_heads,
             num_kv_heads=config.num_key_value_heads,
+            position_embeddings=(cos, sin),
         ),
         moe_router=moe_mod.gate.weight.data,
         moe_w1=w1, moe_w2=w2, moe_w3=w3,
@@ -1148,7 +1172,6 @@ def test_qwen2_5_decoder_from_primitives(variant):
     Adaptations:
     - Qwen2 has hardcoded attention bias=True. Zero out all biases so
       F.linear(x, w, 0) == F.linear(x, w), matching our bias-free gqa functions.
-    - position_ids=0 → identity RoPE
     """
     from transformers import Qwen2Config
     from transformers.models.qwen2.modeling_qwen2 import (
@@ -1177,14 +1200,14 @@ def test_qwen2_5_decoder_from_primitives(variant):
     layer.self_attn.v_proj.bias.data.zero_()
 
     rotary = Qwen2RotaryEmbedding(config)
-    position_ids = torch.zeros(b, seq_len, dtype=torch.long)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
     cos, sin = rotary(x, position_ids)
 
     # 1) HF reference
     hf_out = layer(x, position_embeddings=(cos, sin))
 
     # 2) Collect params
-    params = _collect_gqa_dense_params(layer, config)
+    params = _collect_gqa_dense_params(layer, config, position_embeddings=(cos, sin))
 
     # 3) Run composed forward
     h = _compose_gqa_dense_forward(x, params, variant)
@@ -1238,7 +1261,7 @@ def test_qwen3moe_decoder_from_primitives(variant, model_name, config_overrides,
     layer.self_attn.k_norm = nn.Identity()
 
     rotary = Qwen3MoeRotaryEmbedding(config)
-    position_ids = torch.zeros(b, seq_len, dtype=torch.long)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
     cos, sin = rotary(x, position_ids)
 
     # 1) HF reference
@@ -1257,6 +1280,7 @@ def test_qwen3moe_decoder_from_primitives(variant, model_name, config_overrides,
             wv=attn.v_proj.weight.data, wo=attn.o_proj.weight.data,
             num_q_heads=config.num_attention_heads,
             num_kv_heads=config.num_key_value_heads,
+            position_embeddings=(cos, sin),
         ),
         moe_router=moe_mod.gate.weight.data,
         moe_w1=w1, moe_w2=w2, moe_w3=w3,
@@ -1285,7 +1309,6 @@ def test_qwen3_32b_decoder_from_primitives(variant):
 
     Adaptations:
     - QK norm monkey-patched to nn.Identity
-    - position_ids=0 → identity RoPE
     """
     import torch.nn as nn
     from transformers import Qwen3Config
@@ -1313,14 +1336,14 @@ def test_qwen3_32b_decoder_from_primitives(variant):
     layer.self_attn.k_norm = nn.Identity()
 
     rotary = Qwen3RotaryEmbedding(config)
-    position_ids = torch.zeros(b, seq_len, dtype=torch.long)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
     cos, sin = rotary(x, position_ids)
 
     # 1) HF reference
     hf_out = layer(x, position_embeddings=(cos, sin))
 
     # 2) Collect params
-    params = _collect_gqa_dense_params(layer, config)
+    params = _collect_gqa_dense_params(layer, config, position_embeddings=(cos, sin))
 
     # 3) Run composed forward
     h = _compose_gqa_dense_forward(x, params, variant)

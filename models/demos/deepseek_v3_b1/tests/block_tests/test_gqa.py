@@ -77,11 +77,7 @@ def test_gqa_cache_chunking_equivalence():
 def test_gqa_glm4():
     """
     Compare gqa_attention_torch and gqa_attention_tt from gqa.py against the
-    HF Glm4Attention module.
-
-    Adaptations:
-    - attention_bias=False (our functions don't support bias)
-    - position_ids=0 for all tokens → RoPE becomes identity (cos=1, sin=0)
+    real HF Glm4Attention module with real RoPE (GLM4 interleaved, partial).
     """
     from transformers import Glm4Config
     from transformers.models.glm4.modeling_glm4 import (
@@ -112,7 +108,7 @@ def test_gqa_glm4():
     layer.eval()
 
     rotary = Glm4RotaryEmbedding(config)
-    position_ids = torch.zeros(b, seq_len, dtype=torch.long)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
     cos, sin = rotary(x, position_ids)
 
     normed = rms_norm(x, layer.input_layernorm.weight.data, config.rms_norm_eps)
@@ -129,6 +125,8 @@ def test_gqa_glm4():
         wo=attn.o_proj.weight.data,
         num_q_heads=config.num_attention_heads,
         num_kv_heads=config.num_key_value_heads,
+        position_embeddings=(cos, sin),
+        rope_variant="glm4",
     )
 
     our_torch_out, _ = gqa_attention_torch(normed, **gqa_kwargs)
@@ -138,3 +136,65 @@ def test_gqa_glm4():
         "gqa_attention_torch vs HF GLM-4 attention mismatch"
     assert_close(hf_attn_out, our_tt_out, atol=1e-5, rtol=1e-5), \
         "gqa_attention_tt vs HF GLM-4 attention mismatch"
+
+
+@torch.no_grad()
+def test_gqa_llama():
+    """
+    Compare gqa_attention_torch against real HF LlamaAttention
+    with standard RoPE and real position_ids.
+    """
+    from transformers import LlamaConfig
+    from transformers.models.llama.modeling_llama import (
+        LlamaDecoderLayer,
+        LlamaRotaryEmbedding,
+    )
+
+    config = LlamaConfig(
+        hidden_size=64,
+        num_attention_heads=4,
+        num_key_value_heads=2,
+        head_dim=16,
+        intermediate_size=128,
+        rms_norm_eps=1e-6,
+        max_position_embeddings=256,
+        rope_theta=10000.0,
+        num_hidden_layers=2,
+        attn_implementation="eager",
+    )
+
+    seed_all(42)
+    b, seq_len = 1, 4
+    x = torch.randn(b, seq_len, config.hidden_size)
+
+    layer = LlamaDecoderLayer(config, layer_idx=0)
+    layer.eval()
+
+    rotary = LlamaRotaryEmbedding(config)
+    position_ids = torch.arange(seq_len, dtype=torch.long).unsqueeze(0)
+    cos, sin = rotary(x, position_ids)
+
+    normed = rms_norm(x, layer.input_layernorm.weight.data, config.rms_norm_eps)
+
+    hf_attn_out, _ = layer.self_attn(
+        normed, position_embeddings=(cos, sin), attention_mask=None,
+    )
+
+    attn = layer.self_attn
+    gqa_kwargs = dict(
+        wq=attn.q_proj.weight.data,
+        wk=attn.k_proj.weight.data,
+        wv=attn.v_proj.weight.data,
+        wo=attn.o_proj.weight.data,
+        num_q_heads=config.num_attention_heads,
+        num_kv_heads=config.num_key_value_heads,
+        position_embeddings=(cos, sin),
+    )
+
+    our_torch_out, _ = gqa_attention_torch(normed, **gqa_kwargs)
+    our_tt_out, _ = gqa_attention_tt(normed, **gqa_kwargs)
+
+    assert_close(hf_attn_out, our_torch_out, atol=1e-5, rtol=1e-5), \
+        "gqa_attention_torch vs HF Llama attention mismatch"
+    assert_close(hf_attn_out, our_tt_out, atol=1e-5, rtol=1e-5), \
+        "gqa_attention_tt vs HF Llama attention mismatch"
