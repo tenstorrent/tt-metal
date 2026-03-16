@@ -387,20 +387,25 @@ def validate_combine(layer_id, mesh_device, cluster_axis, tt_combine_output, com
 
     assert torch_combine_out.shape == output_ref[0].shape
     combine_all_passed = True
-    for t in range(torch_combine_out.shape[0]):
-        for k in range(torch_combine_out.shape[1]):
-            if output_data_map[layer_id, t, k].item() == 1:
-                val = torch_combine_out[t, k, :]
-                ref = output_ref[layer_id, t, k, :]
 
-                _, pcc_val = comp_pcc(ref, val)
-                allclose_passed = torch.allclose(ref, val, atol=600)
+    for k in range(torch_combine_out.shape[0]):
+        vals, refs = [], []
+        for t in range(torch_combine_out.shape[1]):
+            if output_data_map[layer_id, k, t].item() == 1:
+                vals.append(torch_combine_out[k, t, :])
+                refs.append(output_ref[layer_id, k, t, :])
 
-                if pcc_val < PCC_THRESHOLD or not allclose_passed:
-                    combine_all_passed = False
-                    logger.warning(
-                        f"Layer {layer_id},  {t=}, {k=} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}"
-                    )
+        vals = torch.stack(vals)
+        refs = torch.stack(refs)
+        _, pcc_val = comp_pcc(refs, vals)
+        allclose_passed = torch.allclose(refs, vals, atol=600)
+
+        if pcc_val < PCC_THRESHOLD or not allclose_passed:
+            combine_all_passed = False
+            logger.warning(f"Layer {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
+        else:
+            logger.info(f"Combine, layer: {layer_id}, k: {k} PCC={pcc_val:.6f}, AllClose passed: {allclose_passed}")
+
     return combine_all_passed
 
 
@@ -964,8 +969,6 @@ def compute_combine_golden(
                     output_data_map[l, k, gt] = 1
 
                     dense_token_index += 1
-    # TODO (AM) DEBUG
-    assert not (output_ref_tensor == 0).any()
 
     return output_ref_tensor, output_data_map
 
@@ -1033,15 +1036,11 @@ def create_sharded_memory_config(core_range_set, tensor_shape, dtype):
 @pytest.mark.parametrize("tokens_per_device", [32])  # Collapsed batch * seq_len
 @pytest.mark.parametrize("experts", [2 * 16])  # 32 experts for 16 devices = 2 experts per device
 @pytest.mark.parametrize(
-    "selected_experts_k, num_layers, num_iterations",
-    [(8, 5, 1)],
-    ids=["accuracy"]
-    # "selected_experts_k, num_layers, num_iterations", [(1, 1, 1), (8, 5, 1)], ids=["perf", "accuracy"]
+    "selected_experts_k, num_layers, num_iterations", [(1, 1, 1), (8, 5, 1)], ids=["perf", "accuracy"]
 )
 @pytest.mark.parametrize("N, hidden_size", [(2048, 7168)])
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
-@pytest.mark.parametrize("enable_trace", [False])
-# @pytest.mark.parametrize("enable_trace", [True, False])
+@pytest.mark.parametrize("enable_trace", [True, False])
 @pytest.mark.parametrize("output_height_shard_dim", [4])
 @pytest.mark.parametrize("output_width_shard_dim", [4])
 def test_moe_compute(
@@ -1570,6 +1569,7 @@ def test_moe_compute(
     logger.info(f"\nExpert Activation Verification: {'PASSED' if activation_all_passed else 'FAILED'}")
     logger.info(f"\nE-T Tensor Verification: {'PASSED' if e_t_all_passed else 'FAILED'}")
     logger.info(f"\nMatmul Output Tensor Verification: {'PASSED' if matmul_all_passed else 'FAILED'}")
+    logger.info(f"\nCombine Output Tensor Verification: {'PASSED' if combine_all_passed else 'FAILED'}")
 
     assert per_expert_tokens_all_passed, "Per expert total tokens tensor verification failed!"
     assert activation_all_passed, "Expert activation tensor verification failed!"
