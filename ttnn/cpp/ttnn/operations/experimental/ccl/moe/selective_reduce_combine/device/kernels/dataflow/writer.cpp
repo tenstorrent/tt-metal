@@ -125,7 +125,7 @@ void kernel_main() {
     volatile PACKET_HEADER_TYPE* packet_headers[3];
     for (uint8_t i = 0; i < 3; ++i) {
         cb_reserve_back(packet_header_cb_id, 1);
-        const uint32_t packet_header_addr = get_write_ptr(packet_header_cb_id);
+        const uint32_t packet_header_addr = get_read_ptr(packet_header_cb_id);
         packet_headers[i] = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
         cb_push_back(packet_header_cb_id, 1);
     }
@@ -147,7 +147,7 @@ void kernel_main() {
     }
 
     cb_wait_front(token_counts_cb_id, 1);
-    const uint32_t token_counts_l1_addr = get_write_ptr(token_counts_cb_id);
+    const uint32_t token_counts_l1_addr = get_read_ptr(token_counts_cb_id);
     auto* token_counts_l1_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(token_counts_l1_addr);
     uint32_t token_split_offsets[num_local_experts];
     uint32_t token_split_counts[num_local_experts];
@@ -160,7 +160,7 @@ void kernel_main() {
     cb_pop_front(token_counts_cb_id, 1);
 
     cb_reserve_back(data_cb_id, 1);
-    const uint32_t src_data_l1_base_addr = get_write_ptr(data_cb_id);
+    const uint32_t src_data_l1_base_addr = get_read_ptr(data_cb_id);
 
     cb_wait_front(dense_token_maps_cb_id, num_local_experts);
     const uint32_t dense_token_maps_l1_addr = get_write_ptr(dense_token_maps_cb_id);
