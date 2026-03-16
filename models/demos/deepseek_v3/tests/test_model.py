@@ -305,7 +305,7 @@ def run_test_forward_pass_dpmodel(
     decode_position_ids: int | None = None,
 ):
     if mode == "prefill":
-        assert batch_size_per_row == 1, "Prefill only supports a batch size of 1"
+        assert batch_size_per_row == USERS_PER_ROW, f"Prefill expects a full row batch of {USERS_PER_ROW}"
         batch_size = batch_size_per_row
     else:
         assert mode == "decode" and seq_len == 1, "Decode only supports a sequence length of 1"
@@ -447,7 +447,13 @@ def run_test_forward_pass_dpmodel(
         test_name="test_model",
         real_weights=True,
     )
-    model_config = get_model_config(RowBatchedModel, mode, hf_config_short, mesh_device)
+    model_config = get_model_config(
+        RowBatchedModel,
+        mode,
+        hf_config_short,
+        mesh_device,
+        batch_size_per_row=batch_size_per_row,
+    )
     model_state = RowBatchedModel.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_caches)
     model_shared_state = RowBatchedModel.create_shared_state(hf_config_short, mesh_device)
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
