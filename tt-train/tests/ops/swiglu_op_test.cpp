@@ -11,8 +11,20 @@
 #include "autograd/auto_context.hpp"
 #include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
+#include "metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.hpp"
 
-class SwiGLUOpTest : public ::testing::Test {
+class SwiGLUForwardTest : public ::testing::Test {
+protected:
+    static void SetUpTestSuite() {
+        ttml::autograd::ctx().open_device();
+    }
+
+    static void TearDownTestSuite() {
+        ttml::autograd::ctx().close_device();
+    }
+};
+
+class SwiGLUBackwardTest : public ::testing::Test {
 protected:
     static void SetUpTestSuite() {
         ttml::autograd::ctx().open_device();
@@ -208,6 +220,14 @@ void CompareOptimizedVsBaseline(const std::vector<uint32_t>& input_shape, const 
     core::parallel_generate<float>(
         w3_lin, [w13_std]() { return std::normal_distribution<float>(0.0f, w13_std); }, rng());
 
+    struct BackwardSnapshot {
+        xt::xarray<float> fwd;
+        xt::xarray<float> dx;
+        xt::xarray<float> dw1;
+        xt::xarray<float> dw2;
+        xt::xarray<float> dw3;
+    };
+
     // Canonical path: swiglu uses LinearLayer [H,D]/[D,H] weights directly.
     auto run_baseline = [&]() {
         auto x = autograd::create_tensor(core::from_xtensor(input_data, device));
@@ -225,8 +245,16 @@ void CompareOptimizedVsBaseline(const std::vector<uint32_t>& input_shape, const 
         out->backward();
 
         auto dx = core::to_xtensor(x->get_grad());
+        auto dw1 = core::to_xtensor(w1->get_grad());
+        auto dw2 = core::to_xtensor(w2->get_grad());
+        auto dw3 = core::to_xtensor(w3->get_grad());
         autograd::ctx().reset_graph();
-        return std::make_tuple(fwd, dx);
+        return BackwardSnapshot{
+            .fwd = std::move(fwd),
+            .dx = std::move(dx),
+            .dw1 = std::move(dw1),
+            .dw2 = std::move(dw2),
+            .dw3 = std::move(dw3)};
     };
 
     // Alias path: swiglu_optimized currently forwards to canonical swiglu.
@@ -246,115 +274,139 @@ void CompareOptimizedVsBaseline(const std::vector<uint32_t>& input_shape, const 
         out->backward();
 
         auto dx = core::to_xtensor(x->get_grad());
+        auto dw1 = core::to_xtensor(w1->get_grad());
+        auto dw2 = core::to_xtensor(w2->get_grad());
+        auto dw3 = core::to_xtensor(w3->get_grad());
         autograd::ctx().reset_graph();
-        return std::make_tuple(fwd, dx);
+        return BackwardSnapshot{
+            .fwd = std::move(fwd),
+            .dx = std::move(dx),
+            .dw1 = std::move(dw1),
+            .dw2 = std::move(dw2),
+            .dw3 = std::move(dw3)};
     };
 
-    auto [fwd_base, dx_base] = run_baseline();
-    auto [fwd_opt, dx_opt] = run_optimized();
+    auto base = run_baseline();
+    auto opt = run_optimized();
 
     const float tol = 1e-2f;
-    EXPECT_EQ(fwd_base.shape(), fwd_opt.shape());
+    EXPECT_EQ(base.fwd.shape(), opt.fwd.shape());
 
-    float fwd_err = relative_l2(fwd_opt, fwd_base);
+    float fwd_err = relative_l2(opt.fwd, base.fwd);
     EXPECT_LT(fwd_err, tol) << "Forward mismatch: rel L2 = " << fwd_err;
 
-    float dx_err = relative_l2(dx_opt, dx_base);
+    float dx_err = relative_l2(opt.dx, base.dx);
     EXPECT_LT(dx_err, tol) << "dL/dx mismatch: rel L2 = " << dx_err;
+
+    float dw1_err = relative_l2(opt.dw1, base.dw1);
+    EXPECT_LT(dw1_err, tol) << "dL/dW1 mismatch: rel L2 = " << dw1_err;
+
+    float dw2_err = relative_l2(opt.dw2, base.dw2);
+    EXPECT_LT(dw2_err, tol) << "dL/dW2 mismatch: rel L2 = " << dw2_err;
+
+    float dw3_err = relative_l2(opt.dw3, base.dw3);
+    EXPECT_LT(dw3_err, tol) << "dL/dW3 mismatch: rel L2 = " << dw3_err;
+}
+
+std::pair<xt::xarray<float>, xt::xarray<float>> swiglu_elemwise_bw_reference(
+    const xt::xarray<float>& linear1, const xt::xarray<float>& gate, const xt::xarray<float>& dL_dprod) {
+    auto sigmoid = 1.0f / (1.0f + xt::exp(-linear1));
+    auto swished = linear1 * sigmoid;
+
+    xt::xarray<float> dL_dgate = swished * dL_dprod;
+    auto dL_dswished = gate * dL_dprod;
+    auto silu_grad = sigmoid * (1.0f + linear1 * (1.0f - sigmoid));
+    xt::xarray<float> dL_dlinear1 = dL_dswished * silu_grad;
+
+    return {dL_dlinear1, dL_dgate};
+}
+
+void CompareSwiGLUElemwiseBwKernel(const std::vector<uint32_t>& shape) {
+    using namespace ttml;
+
+    auto& rng = autograd::ctx().get_generator();
+    auto* device = &autograd::ctx().get_device();
+
+    xt::xarray<float> linear1_data = xt::empty<float>(shape);
+    core::parallel_generate<float>(linear1_data, []() { return std::normal_distribution<float>(0.0f, 1.0f); }, rng());
+    xt::xarray<float> gate_data = xt::empty<float>(shape);
+    core::parallel_generate<float>(gate_data, []() { return std::normal_distribution<float>(0.0f, 1.0f); }, rng());
+    xt::xarray<float> dL_dprod_data = xt::empty<float>(shape);
+    core::parallel_generate<float>(dL_dprod_data, []() { return std::normal_distribution<float>(0.0f, 0.1f); }, rng());
+
+    auto [ref_dL_dlinear1, ref_dL_dgate] = swiglu_elemwise_bw_reference(linear1_data, gate_data, dL_dprod_data);
+
+    auto linear1_tt = core::from_xtensor(linear1_data, device);
+    auto gate_tt = core::from_xtensor(gate_data, device);
+    auto dL_dprod_tt = core::from_xtensor(dL_dprod_data, device);
+
+    auto result = metal::swiglu_elemwise_bw(linear1_tt, gate_tt, dL_dprod_tt);
+    auto kernel_dL_dlinear1 = core::to_xtensor(result.dL_dlinear1);
+    auto kernel_dL_dgate = core::to_xtensor(result.dL_dgate);
+
+    const float tol = 1e-2f;
+    float dl1_err = relative_l2(kernel_dL_dlinear1, ref_dL_dlinear1);
+    EXPECT_LT(dl1_err, tol) << "swiglu_elemwise_bw dL_dlinear1 mismatch: rel L2 = " << dl1_err;
+
+    float dg_err = relative_l2(kernel_dL_dgate, ref_dL_dgate);
+    EXPECT_LT(dg_err, tol) << "swiglu_elemwise_bw dL_dgate mismatch: rel L2 = " << dg_err;
 }
 
 }  // namespace
 
 // ============================================================================
-// Section 2: SwiGLU Kernel vs Reference Implementation Tests
-// ============================================================================
-// These tests compare the SwiGLU kernel implementation against
-// the reference implementation to ensure correctness.
-// Only tests where C and hidden_dim are divisible by 32 are included.
-//
-// TODO: Add tests for masking in C and H (mask_w, mask_hw) when implementation supports it
+// Section 2: SwiGLUForward tests
 // ============================================================================
 
-// 1. Basic single tile test: 1x1x32x32, hidden_dim=32
-TEST_F(SwiGLUOpTest, SwiGLU_Basic_1x1x32x32) {
+TEST_F(SwiGLUForwardTest, Basic_1x1x32x32) {
     CompareKernelVsReferenceWithShape({1, 1, 32, 32}, 32);
 }
-
-// 2. Multi-tile width test: 1x1x32x64, hidden_dim=64 (C > 32)
-TEST_F(SwiGLUOpTest, SwiGLU_MultiTile_1x1x32x64) {
+TEST_F(SwiGLUForwardTest, MultiTile_1x1x32x64) {
     CompareKernelVsReferenceWithShape({1, 1, 32, 64}, 64);
 }
-
-// 3. Multi-tile height test: 1x1x64x32, hidden_dim=32 (S > 32)
-TEST_F(SwiGLUOpTest, SwiGLU_MultiTile_1x1x64x32) {
+TEST_F(SwiGLUForwardTest, MultiTile_1x1x64x32) {
     CompareKernelVsReferenceWithShape({1, 1, 64, 32}, 32);
 }
-
-// 4. Multi-batch test: 8x1x32x32, hidden_dim=32 (B != 32)
-TEST_F(SwiGLUOpTest, SwiGLU_MultiBatch_8x1x32x32) {
+TEST_F(SwiGLUForwardTest, MultiBatch_8x1x32x32) {
     CompareKernelVsReferenceWithShape({8, 1, 32, 32}, 32);
 }
-
-// 5. Medium test: 2x1x32x128, hidden_dim=128
-TEST_F(SwiGLUOpTest, SwiGLU_Medium_2x1x32x128) {
+TEST_F(SwiGLUForwardTest, Medium_2x1x32x128) {
     CompareKernelVsReferenceWithShape({2, 1, 32, 128}, 128);
 }
-
-// 6. Large test: 4x1x64x256, hidden_dim=256
-TEST_F(SwiGLUOpTest, SwiGLU_Large_4x1x64x256) {
+TEST_F(SwiGLUForwardTest, Large_4x1x64x256) {
     CompareKernelVsReferenceWithShape({4, 1, 64, 256}, 256);
 }
 
-TEST_F(SwiGLUOpTest, SwiGLU_RepeatedRuns_NoHang) {
-    // Run an unbalanced-workload shape multiple times to guard against hangs.
-    // Reuse the validated reference harness to keep this test shape-focused.
+TEST_F(SwiGLUForwardTest, RepeatedRuns_NoHang) {
     for (int iteration = 0; iteration < 3; ++iteration) {
         CompareKernelVsReferenceWithShape({100, 1, 32, 64}, 128);
     }
 }
 
-// 7. Large test: 2x1x128x512, hidden_dim=512
-TEST_F(SwiGLUOpTest, SwiGLU_Large_2x1x128x512) {
+TEST_F(SwiGLUForwardTest, NIGHTLY_Large_2x1x128x512) {
     CompareKernelVsReferenceWithShape({2, 1, 128, 512}, 512);
 }
-
-// 8. Very large dimensions test: 1x1x1024x1024, hidden_dim=1024
-TEST_F(SwiGLUOpTest, NIGHTLY_SwiGLU_VeryLarge_1x1x1024x1024) {
+TEST_F(SwiGLUForwardTest, NIGHTLY_VeryLarge_1x1x1024x1024) {
     CompareKernelVsReferenceWithShape({1, 1, 1024, 1024}, 1024);
 }
-
-// 9. NanoLlama-like shape: 64x1x256x384, hidden_dim=1024
-TEST_F(SwiGLUOpTest, NIGHTLY_SwiGLU_NanoLlama_64x1x256x384) {
+TEST_F(SwiGLUForwardTest, NIGHTLY_NanoLlama_64x1x256x384) {
     CompareKernelVsReferenceWithShape({64, 1, 256, 384}, 1024);
 }
-
-// 9. Edge case: Unbalanced workload where some cores get more rows than others
-// This tests the padding synchronization mechanism in multicast.
-// 57 rows on a 56-core grid means 1 core gets 2 rows, 55 cores get 1 row.
-TEST_F(SwiGLUOpTest, SwiGLU_UnbalancedWorkload_57x1x32x32) {
+TEST_F(SwiGLUForwardTest, UnbalancedWorkload_57x1x32x32) {
     CompareKernelVsReferenceWithShape({57, 1, 32, 32}, 32);
 }
 
-// ============================================================================
-// Section 3: Shape Validation Tests
-// ============================================================================
-// These tests verify that invalid weight shapes are properly rejected.
-// Fused SwiGLU expects: W1[embed, hidden], W3[embed, hidden], W2[hidden, embed]
-// Using wrong layout (e.g., LinearLayer's [out, in]) should fail with clear error.
-// ============================================================================
-
-// 10. Shape validation: W1 has wrong layout [hidden, embed] instead of [embed, hidden]
-TEST_F(SwiGLUOpTest, SwiGLU_ShapeMismatch_W1WrongLayout) {
+// Shape validation tests.
+TEST_F(SwiGLUForwardTest, ShapeMismatch_W1WrongLayout) {
     using namespace ttml;
 
     const size_t embed_dim = 64;
     const size_t hidden_dim = 128;
 
-    // Input: [1, 1, 32, embed_dim]
     std::vector<size_t> input_shape = {1, 1, 32, embed_dim};
-    std::vector<size_t> w1_wrong_shape = {hidden_dim, embed_dim / 2};  // WRONG: in_features mismatch
-    std::vector<size_t> w2_shape = {embed_dim, hidden_dim};            // Correct: [D, H]
-    std::vector<size_t> w3_shape = {hidden_dim, embed_dim};            // Correct: [H, D]
+    std::vector<size_t> w1_wrong_shape = {hidden_dim, embed_dim / 2};
+    std::vector<size_t> w2_shape = {embed_dim, hidden_dim};
+    std::vector<size_t> w3_shape = {hidden_dim, embed_dim};
 
     xt::xarray<float> input_data = xt::ones<float>(input_shape);
     xt::xarray<float> w1_wrong = xt::ones<float>(w1_wrong_shape);
@@ -366,15 +418,12 @@ TEST_F(SwiGLUOpTest, SwiGLU_ShapeMismatch_W1WrongLayout) {
     auto w2 = autograd::create_tensor(core::from_xtensor(w2_data, &autograd::ctx().get_device()));
     auto w3 = autograd::create_tensor(core::from_xtensor(w3_data, &autograd::ctx().get_device()));
 
-    // Should throw due to matmul K mismatch in W1 projection.
-    // Capture stdout to suppress expected TT_FATAL critical log messages (tt-logger writes to stdout)
     testing::internal::CaptureStdout();
     EXPECT_THROW(ops::swiglu(input, w1, w2, w3), std::exception);
-    testing::internal::GetCapturedStdout();  // Discard captured output
+    testing::internal::GetCapturedStdout();
 }
 
-// 11. Shape mismatch: W3 doesn't match W1
-TEST_F(SwiGLUOpTest, SwiGLU_ShapeMismatch_W3DoesntMatchW1) {
+TEST_F(SwiGLUForwardTest, ShapeMismatch_W3DoesntMatchW1) {
     using namespace ttml;
 
     const size_t embed_dim = 64;
@@ -383,7 +432,7 @@ TEST_F(SwiGLUOpTest, SwiGLU_ShapeMismatch_W3DoesntMatchW1) {
     std::vector<size_t> input_shape = {1, 1, 32, embed_dim};
     std::vector<size_t> w1_shape = {hidden_dim, embed_dim};
     std::vector<size_t> w2_shape = {embed_dim, hidden_dim};
-    std::vector<size_t> w3_wrong_shape = {hidden_dim * 2, embed_dim};  // WRONG: different hidden
+    std::vector<size_t> w3_wrong_shape = {hidden_dim * 2, embed_dim};
 
     xt::xarray<float> input_data = xt::ones<float>(input_shape);
     xt::xarray<float> w1_data = xt::ones<float>(w1_shape);
@@ -395,15 +444,12 @@ TEST_F(SwiGLUOpTest, SwiGLU_ShapeMismatch_W3DoesntMatchW1) {
     auto w2 = autograd::create_tensor(core::from_xtensor(w2_data, &autograd::ctx().get_device()));
     auto w3 = autograd::create_tensor(core::from_xtensor(w3_wrong, &autograd::ctx().get_device()));
 
-    // Should throw due to elementwise shape mismatch after projections.
-    // Capture stdout to suppress expected TT_FATAL critical log messages (tt-logger writes to stdout)
     testing::internal::CaptureStdout();
     EXPECT_THROW(ops::swiglu(input, w1, w2, w3), std::exception);
-    testing::internal::GetCapturedStdout();  // Discard captured output
+    testing::internal::GetCapturedStdout();
 }
 
-// 12. Shape mismatch: W2 has wrong dimensions
-TEST_F(SwiGLUOpTest, SwiGLU_ShapeMismatch_W2WrongDimensions) {
+TEST_F(SwiGLUForwardTest, ShapeMismatch_W2WrongDimensions) {
     using namespace ttml;
 
     const size_t embed_dim = 64;
@@ -411,7 +457,7 @@ TEST_F(SwiGLUOpTest, SwiGLU_ShapeMismatch_W2WrongDimensions) {
 
     std::vector<size_t> input_shape = {1, 1, 32, embed_dim};
     std::vector<size_t> w1_shape = {hidden_dim, embed_dim};
-    std::vector<size_t> w2_wrong_shape = {hidden_dim};  // WRONG: rank-1 tensor
+    std::vector<size_t> w2_wrong_shape = {hidden_dim};
     std::vector<size_t> w3_shape = {hidden_dim, embed_dim};
 
     xt::xarray<float> input_data = xt::ones<float>(input_shape);
@@ -424,49 +470,74 @@ TEST_F(SwiGLUOpTest, SwiGLU_ShapeMismatch_W2WrongDimensions) {
     auto w2 = autograd::create_tensor(core::from_xtensor(w2_wrong, &autograd::ctx().get_device()));
     auto w3 = autograd::create_tensor(core::from_xtensor(w3_data, &autograd::ctx().get_device()));
 
-    // Should throw due to final projection matmul K mismatch.
-    // Capture stdout to suppress expected TT_FATAL critical log messages (tt-logger writes to stdout)
     testing::internal::CaptureStdout();
     EXPECT_THROW(ops::swiglu(input, w1, w2, w3), std::exception);
-    testing::internal::GetCapturedStdout();  // Discard captured output
+    testing::internal::GetCapturedStdout();
 }
 
-// ============================================================================
-// Section 3: swiglu_optimized vs swiglu accuracy comparison
-// ============================================================================
-// Compare forward outputs and all backward gradients (dx, dW1, dW2, dW3)
-// between the baseline and optimized implementations to verify they produce
-// numerically equivalent results.
-// ============================================================================
-
-TEST_F(SwiGLUOpTest, OptimizedAccuracy_1x1x32x32) {
+// Full backward equivalence (dx, dW1, dW2, dW3).
+TEST_F(SwiGLUForwardTest, BackwardAccuracy_1x1x32x32) {
     CompareOptimizedVsBaseline({1, 1, 32, 32}, 32);
 }
-
-TEST_F(SwiGLUOpTest, OptimizedAccuracy_1x1x32x64) {
+TEST_F(SwiGLUForwardTest, BackwardAccuracy_1x1x32x64) {
     CompareOptimizedVsBaseline({1, 1, 32, 64}, 64);
 }
-
-TEST_F(SwiGLUOpTest, OptimizedAccuracy_8x1x32x32) {
+TEST_F(SwiGLUForwardTest, BackwardAccuracy_8x1x32x32) {
     CompareOptimizedVsBaseline({8, 1, 32, 32}, 32);
 }
-
-TEST_F(SwiGLUOpTest, OptimizedAccuracy_2x1x32x128) {
+TEST_F(SwiGLUForwardTest, BackwardAccuracy_2x1x32x128) {
     CompareOptimizedVsBaseline({2, 1, 32, 128}, 128);
 }
-
-TEST_F(SwiGLUOpTest, OptimizedAccuracy_4x1x64x256) {
+TEST_F(SwiGLUForwardTest, BackwardAccuracy_4x1x64x256) {
     CompareOptimizedVsBaseline({4, 1, 64, 256}, 256);
 }
-
-TEST_F(SwiGLUOpTest, OptimizedAccuracy_2x1x128x512) {
+TEST_F(SwiGLUForwardTest, NIGHTLY_BackwardAccuracy_2x1x128x512) {
     CompareOptimizedVsBaseline({2, 1, 128, 512}, 512);
 }
-
-TEST_F(SwiGLUOpTest, NIGHTLY_OptimizedAccuracy_1x1x1024x1024) {
+TEST_F(SwiGLUForwardTest, NIGHTLY_BackwardAccuracy_1x1x1024x1024) {
     CompareOptimizedVsBaseline({1, 1, 1024, 1024}, 1024);
 }
-
-TEST_F(SwiGLUOpTest, NIGHTLY_OptimizedAccuracy_32x1x256x384) {
+TEST_F(SwiGLUForwardTest, NIGHTLY_BackwardAccuracy_32x1x256x384) {
     CompareOptimizedVsBaseline({32, 1, 256, 384}, 1024);
+}
+
+// ============================================================================
+// Section 3: SwiGLUBackward tests (fused elemwise BW kernel)
+// ============================================================================
+
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_Basic_1x1x32x32) {
+    CompareSwiGLUElemwiseBwKernel({1, 1, 32, 32});
+}
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_MultiTile_1x1x32x64) {
+    CompareSwiGLUElemwiseBwKernel({1, 1, 32, 64});
+}
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_MultiRow_1x1x64x32) {
+    CompareSwiGLUElemwiseBwKernel({1, 1, 64, 32});
+}
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_Batch_8x1x32x32) {
+    CompareSwiGLUElemwiseBwKernel({8, 1, 32, 32});
+}
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_Medium_2x1x32x128) {
+    CompareSwiGLUElemwiseBwKernel({2, 1, 32, 128});
+}
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_Large_4x1x64x256) {
+    CompareSwiGLUElemwiseBwKernel({4, 1, 64, 256});
+}
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_NonAligned_1x1x32x48) {
+    CompareSwiGLUElemwiseBwKernel({1, 1, 32, 48});
+}
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_NonAligned_2x1x32x96) {
+    CompareSwiGLUElemwiseBwKernel({2, 1, 32, 96});
+}
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_NonAligned_1x1x64x160) {
+    CompareSwiGLUElemwiseBwKernel({1, 1, 64, 160});
+}
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_NonAlignedH_1x1x48x64) {
+    CompareSwiGLUElemwiseBwKernel({1, 1, 48, 64});
+}
+TEST_F(SwiGLUBackwardTest, ElemwiseBw_NonAlignedH_4x1x96x128) {
+    CompareSwiGLUElemwiseBwKernel({4, 1, 96, 128});
+}
+TEST_F(SwiGLUBackwardTest, NIGHTLY_ElemwiseBw_VeryLarge_1x1x1024x1024) {
+    CompareSwiGLUElemwiseBwKernel({1, 1, 1024, 1024});
 }
