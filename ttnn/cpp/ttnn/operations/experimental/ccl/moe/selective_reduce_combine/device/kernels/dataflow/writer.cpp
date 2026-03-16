@@ -199,7 +199,6 @@ void kernel_main() {
 
     auto* compute_sync_semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(compute_sync_semaphore_addr);
     uint32_t compute_sync_semaphore_val = compute_cores_per_combine_core;
-    uint32_t compute_chunk_count = 0;
     bool needs_barrier = false;
     for (uint32_t e = 0; e < num_local_experts; ++e) {
         auto* expert_token_activations_ptr =
@@ -253,12 +252,8 @@ void kernel_main() {
                     alignment,
                     dest_token_segment_offset_bytes);
             }
-
-            if (++compute_chunk_count == token_chunk_size) {
-                compute_sync_semaphore_val += compute_cores_per_combine_core;
-                compute_chunk_count = 0;
-            }
         }
+        compute_sync_semaphore_val += compute_cores_per_combine_core;
     }
 
     noc_semaphore_set(compute_sync_semaphore_ptr, 0);
