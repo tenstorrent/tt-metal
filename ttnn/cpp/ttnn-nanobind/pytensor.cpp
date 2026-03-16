@@ -155,6 +155,7 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
     nb::detail::ndarray_handle* converted_tensor_handle = nanobind::detail::ndarray_import(
         py_tensor.cast(nb::rv_policy::automatic).ptr(), &config, true /*convert*/, nullptr /*cleanup*/);
 
+    TT_FATAL(converted_tensor_handle != nullptr, "parse_py_tensor: ndarray_import failed.");
     return {.contiguous_py_tensor = nb::ndarray<nb::array_api>(converted_tensor_handle), .data_type = data_type};
 }
 
@@ -260,7 +261,6 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
 // The returned buffer will be in logical view.
 RowMajorHostBuffer convert_to_row_major_host_buffer(
     const Tensor& tt_tensor, const ttnn::distributed::MeshToTensor& mesh_composer) {
-    //
     auto dispatch_to_concrete = [&mesh_composer]<typename T>(const Tensor& tt_tensor) {
         auto [data, shape] = mesh_composer.compose<T>(tt_tensor);
         ttsl::Span<const uint32_t> shape_view = shape.view();
@@ -638,7 +638,9 @@ void pytensor_module(nb::module_& mod) {
                std::optional<ttnn::QueueId> cq_id,
                std::optional<float> pad_value,
                const distributed::TensorToMesh* mesh_mapper,
-               bool col_tilize) {
+               bool preserve_nan_values,
+               bool col_tilize,
+               bool fast_approx) {
                 auto py_tensor_dtype = dlpack_tensor.dtype();
 
                 // handle bool types by changing them to uint8
@@ -670,7 +672,9 @@ void pytensor_module(nb::module_& mod) {
                     cq_id,
                     mesh_mapper,
                     pad_value,
-                    col_tilize));
+                    preserve_nan_values,
+                    col_tilize,
+                    fast_approx));
             },
             nb::arg("tensor").noconvert(false),
             nb::arg("data_type") = nb::none(),
@@ -681,7 +685,10 @@ void pytensor_module(nb::module_& mod) {
             nb::arg("cq_id") = nb::none(),
             nb::arg("pad_value") = nb::none(),
             nb::arg("mesh_mapper") = nullptr,
+            nb::arg("preserve_nan_values") = false,  // TODO: Remove preserve_nan_values argument after
+                                                     // https://github.com/tenstorrent/tt-metal/issues/31406
             nb::arg("col_tilize") = false,
+            nb::arg("fast_approx") = false,
             nb::keep_alive<1, 4>(),  // test: matches other k_a
             nb::rv_policy::move,
             R"doc(
@@ -1244,7 +1251,6 @@ void pytensor_module(nb::module_& mod) {
             "to_torch",
             [](const Tensor& self, const ttnn::distributed::MeshToTensor* mesh_composer) -> nb::ndarray<nb::pytorch> {
                 using namespace CMAKE_UNIQUE_NAMESPACE;
-
                 auto buffer = mesh_composer ? convert_to_row_major_host_buffer(self, *mesh_composer)
                                             : convert_to_row_major_host_buffer(self, /*padded_output=*/false);
                 return convert_tt_tensor_to_framework_tensor<nb::pytorch>(buffer);
