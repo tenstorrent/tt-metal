@@ -1,0 +1,45 @@
+---
+description: Create deterministic CI maintenance issues from repeated workflow failures in tt-metal.
+alwaysApply: false
+---
+
+# Create CI Maintenance Tickets
+
+Use this rule when asked to create CI maintenance issues for `tenstorrent/tt-metal`.
+
+## Inputs
+
+- Candidate failures from `.auto_triage/output/ci_ticketing/create_tickets/failing_jobs.json`.
+- Existing open issues in `tenstorrent/tt-metal` (especially label `glean CI maintenance`).
+
+## Execution Model
+
+- Use direct `gh` / `gh api` commands for all GitHub operations.
+- Do not script bulk issue creation. Create each issue with an explicit `gh issue create` command.
+- Never assign newly created issues directly to developers.
+- Always add label `glean CI maintenance`.
+
+## Required Flow
+
+1. Build candidate jobs from `.auto_triage/output/ci_ticketing/create_tickets/failing_jobs.json`.
+2. Deduplicate against open issues with `glean CI maintenance`.
+3. Validate each candidate from logs using `gh api`.
+4. Create issues only for deterministic failures that repeat across the latest 3 runs on `main`.
+5. Enforce user-requested create cap strictly (for example, "create up to N issues").
+
+## Output Files
+
+- `.auto_triage/output/ci_ticketing/create_tickets/created_issues.jsonl`
+- `.auto_triage/output/ci_ticketing/create_tickets/created_tickets_report.json`
+
+## Issue Template Requirements
+
+Each issue should include:
+
+- Workflow name
+- Job name
+- Failing test path(s)
+- Most recent failing job URL
+- All failing job instance URLs (last 3)
+- Error excerpt
+- Reproduction hint (`pytest <failing_test_path> -v`)
