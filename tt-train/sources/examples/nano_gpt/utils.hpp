@@ -10,6 +10,7 @@
 #include <fstream>
 #include <iostream>
 #include <sstream>
+#include <stdexcept>
 #include <string>
 
 #include "autograd/tensor.hpp"
@@ -26,8 +27,7 @@
 // Expand ${TT_METAL_RUNTIME_ROOT} in a config path string.
 // Training YAML configs use ${TT_METAL_RUNTIME_ROOT}/tt-train/... so paths are
 // absolute and binaries work regardless of the current working directory.
-// TT_METAL_RUNTIME_ROOT is optional: if unset, the value is inferred from the
-// compile-time CONFIGS_FOLDER (tt-metal root = parent of tt-train source).
+// Fail fast when the placeholder is used without TT_METAL_RUNTIME_ROOT.
 inline std::string expand_config_path(const std::string &path) {
     static const std::string kPlaceholder = "${TT_METAL_RUNTIME_ROOT}";
     auto pos = path.find(kPlaceholder);
@@ -35,18 +35,14 @@ inline std::string expand_config_path(const std::string &path) {
         return path;
     }
 
-    std::string tt_metal_root;
     const char *env = std::getenv("TT_METAL_RUNTIME_ROOT");
-    if (env != nullptr) {
-        tt_metal_root = env;
-    } else {
-        // CONFIGS_FOLDER is <tt-train-source>/configs (set by CMake).
-        // tt-metal root is one level above the tt-train source directory.
-        tt_metal_root = std::filesystem::path(CONFIGS_FOLDER).parent_path().parent_path().string();
+    if (env == nullptr) {
+        throw std::runtime_error(
+            "TT_METAL_RUNTIME_ROOT is not set, but model_config path uses ${TT_METAL_RUNTIME_ROOT}: " + path);
     }
 
     std::string result = path;
-    result.replace(pos, kPlaceholder.length(), tt_metal_root);
+    result.replace(pos, kPlaceholder.length(), env);
     return std::filesystem::path(result).lexically_normal().string();
 }
 
