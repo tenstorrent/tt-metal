@@ -25,17 +25,18 @@ def set_seed(seed: int = 42):
 
 
 def get_tt_metal_home() -> str:
-    """Get the TT-Metal home directory.
+    """Get the TT-Metal root directory.
 
     Returns:
-        Path to TT-Metal home directory
+        Path to TT-Metal runtime root.
     """
-    tt_metal_home = (
-        os.environ["TT_METAL_HOME"]
-        if "TT_METAL_HOME" in os.environ
-        else os.path.expanduser("~/.tt-metal")
+    runtime_root = os.environ.get("TT_METAL_RUNTIME_ROOT")
+    if runtime_root:
+        return runtime_root
+    raise RuntimeError(
+        "TT_METAL_RUNTIME_ROOT is not set. Please export TT_METAL_RUNTIME_ROOT "
+        "to the tt-metal repository root before running training utilities."
     )
-    return tt_metal_home
 
 
 def round_up_to_tile(value: int, tile: int = 32) -> int:
