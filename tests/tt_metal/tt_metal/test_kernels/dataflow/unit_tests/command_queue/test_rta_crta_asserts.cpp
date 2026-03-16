@@ -5,10 +5,11 @@
 // Kernel for testing watcher RTA/CRTA bounds checking:
 // 1. Writes rta_count, crta_count, and all arg values to L1 for validation
 // 2. If MAX_RTA_IDX/MAX_CRTA_IDX defined: accesses that index to test bounds checking
-// Supports both DM (BRISC/NCRISC) and compute (TRISC0) kernels
+// Supports both DM (BRISC/NCRISC/DM0-7) and compute (TRISC0-3) kernels
 
 #ifndef COMPILE_FOR_TRISC
 #include "api/dataflow/dataflow_api.h"
+#include "internal/firmware_common.h"
 #else
 #include "api/compute/common.h"
 #endif
@@ -31,31 +32,44 @@ static FORCE_INLINE void write_args_to_l1(uint32_t l1_write_addr) {
 }
 
 #ifndef COMPILE_FOR_TRISC
-// Signal dispatcher completion before triggering assert (prevents Finish() hang)
-static FORCE_INLINE void signal_dispatcher_completion() {
-    tt_l1_ptr mailboxes_t* const mailboxes = (tt_l1_ptr mailboxes_t*)(MEM_MAILBOX_BASE);
-    uint64_t dispatch_addr = NOC_XY_ADDR(
-        NOC_X(mailboxes->go_messages[mailboxes->go_message_index].master_x),
-        NOC_Y(mailboxes->go_messages[mailboxes->go_message_index].master_y),
-        DISPATCH_MESSAGE_ADDR +
-            NOC_STREAM_REG_SPACE_SIZE * mailboxes->go_messages[mailboxes->go_message_index].dispatch_message_offset);
-    noc_fast_write_dw_inline<DM_DEDICATED_NOC>(
-        noc_index,
-        NCRISC_AT_CMD_BUF,
-        1 << REMOTE_DEST_BUF_WORDS_FREE_INC,
-        dispatch_addr,
-        0xF,
-        NOC_UNICAST_WRITE_VC,
-        false,
-        true);
-}
 
 void core_agnostic_main() {
+#if defined(COMPILE_FOR_DM)
+    uint32_t cpu_index = get_my_thread_id();
+
+#if defined(TEST_MULTI_DM_RTA)
+    // Multi-DM mode: sync barrier so all DMs hit the OOB access together,
+    // stress-testing watcher's first-writer-wins assert mechanism.
+    constexpr uint32_t num_dms = get_compile_time_arg_val(0);
+    constexpr uint32_t l1_sync_addr = get_compile_time_arg_val(1);
+    uint64_t* l1_ptr = reinterpret_cast<uint64_t*>(l1_sync_addr);
+    __atomic_add_fetch(l1_ptr, 1, __ATOMIC_RELAXED);
+    while (__atomic_load_n(l1_ptr, __ATOMIC_ACQUIRE) != num_dms) {
+    }
+#else
+    // Single DM test: only specified dm_id executes, others exit early
+    constexpr uint32_t dm_id = get_compile_time_arg_val(0);
+    if (cpu_index != dm_id) {
+        return;
+    }
+#endif
+#endif
+
     write_args_to_l1(get_write_ptr(tt::CBIndex::c_0));
 
 #if defined(MAX_RTA_IDX) || defined(MAX_CRTA_IDX)
-    // Signal completion to BRISC before triggering assert
-    signal_dispatcher_completion();
+    // Signal completion to dispatcher before assert hangs the kernel
+    volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
+
+    // SD signaling: IDLE_ERISC (all archs) and Quasar DM require RUN_MSG_DONE
+    // TODO: Remove COMPILE_FOR_DM once FD is enabled on Quasar
+#if defined(COMPILE_FOR_IDLE_ERISC) or defined(COMPILE_FOR_DM)
+    go_message_in->signal = RUN_MSG_DONE;
+#else
+    // FD: ACTIVE_ETH, BRISC, NCRISC notify dispatcher via NOC
+    uint64_t dispatch_addr = calculate_dispatch_addr(go_message_in);
+    notify_dispatch_core_done(dispatch_addr, noc_index);
+#endif
 #endif
 
 #ifdef MAX_RTA_IDX
@@ -76,11 +90,18 @@ void core_agnostic_main() {
         write_args_to_l1(get_compile_time_arg_val(0));
 
 #if defined(MAX_RTA_IDX) || defined(MAX_CRTA_IDX)
-        // Signal completion to TRISC before triggering assert
+        // Signal completion before triggering assert
+#if defined(ARCH_QUASAR)
+        // Quasar SD: signal via go_message
+        volatile tt_l1_ptr go_msg_t* go_message_in = GET_MAILBOX_ADDRESS_DEV(go_messages[0]);
+        go_message_in->signal = RUN_MSG_DONE;
+#else
+        // BH/WH: signal via subordinate sync
         volatile tt_l1_ptr mailboxes_t* mailbox = reinterpret_cast<volatile tt_l1_ptr mailboxes_t*>(MEM_MAILBOX_BASE);
         volatile tt_l1_ptr subordinate_map_t* sync =
             reinterpret_cast<volatile tt_l1_ptr subordinate_map_t*>(&mailbox->subordinate_sync);
         sync->trisc0 = RUN_SYNC_MSG_DONE;
+#endif
 #endif
 
 #ifdef MAX_RTA_IDX
