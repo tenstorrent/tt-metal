@@ -1502,7 +1502,7 @@ FORCE_INLINE void noc_async_write_shard(
 /**
  * Returns the local address of the semaphore with the given id.
  *
- * Return value: Local address of the semaphore (uint32_t)
+ * Return value: Local address of the semaphore (uintptr_t)
  *
  * | Argument                  | Description                | Type                     | Valid Range              | Required |
  * |---------------------------|----------------------------|--------------------------|--------------------------|----------|
@@ -1511,8 +1511,8 @@ FORCE_INLINE void noc_async_write_shard(
  */
 // clang-format on
 template <ProgrammableCoreType type = ProgrammableCoreType::TENSIX>
-FORCE_INLINE uint32_t get_semaphore(uint32_t semaphore_id) {
-    return (uint32_t)sem_l1_base[static_cast<int>(type)] + semaphore_id * L1_ALIGNMENT;
+FORCE_INLINE uintptr_t get_semaphore(uint32_t semaphore_id) {
+    return (uintptr_t)sem_l1_base[static_cast<int>(type)] + semaphore_id * L1_ALIGNMENT;
 }
 
 // clang-format off
