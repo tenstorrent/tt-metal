@@ -19,6 +19,10 @@ InheritParentConfig: true
 # bugprone-suspicious-stringview-data-usage: enchantum type_name / entries_generator
 #   returns compile-time string_views into null-terminated static storage, but
 #   clang-tidy cannot prove null-termination statically.
+# bugprone-unused-local-non-trivial-variable: unused _ captures in EXPECT_THROW
+#   lambdas in test files; will be cleaned up in a follow-up PR.
+# modernize-loop-convert: index-based loops in nanobind and test files;
+#   will be converted to range-based for in a follow-up PR.
 Checks: >
   -modernize-use-using,
   -modernize-type-traits,
@@ -27,6 +31,7 @@ Checks: >
   -modernize-use-std-numbers,
   -modernize-use-default-member-init,
   -modernize-concat-nested-namespaces,
+  -modernize-loop-convert,
   -cppcoreguidelines-prefer-member-initializer,
   -cppcoreguidelines-explicit-virtual-functions,
   -cppcoreguidelines-missing-std-forward,
@@ -54,6 +59,7 @@ Checks: >
   -bugprone-return-const-ref-from-parameter,
   -bugprone-unused-raii,
   -bugprone-suspicious-stringview-data-usage,
+  -bugprone-unused-local-non-trivial-variable,
   -misc-redundant-expression,
   -misc-unused-parameters,
   -misc-header-include-cycle,
