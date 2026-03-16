@@ -21,7 +21,7 @@ struct SubblockDecomp {
 #ifdef ARCH_BLACKHOLE
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
-// BH has ample code size headroom; let GCC clone (IPA-CP) without inlining.
+// BH has ample code size headroom; allow normal inlining and GCC IPA-CP cloning (no noinline/noclone).
 #define SDPA_NOINLINE
 #else
 // WH/T3000: Mochi leaves only ~12 KB headroom — prevent inlining and cloning.
@@ -1546,3 +1546,5 @@ void sdpa_ring_v2(
         cb_pop_front(cb_v_in, Sk_chunk_t * vDHt);
     }
 }
+
+#undef SDPA_NOINLINE
