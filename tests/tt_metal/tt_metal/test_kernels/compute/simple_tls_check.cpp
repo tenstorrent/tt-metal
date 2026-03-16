@@ -28,8 +28,6 @@ void kernel_main() {
     // Hardware thread index: DM 0-7, compute 8-23 (8 + neo_id*4 + trisc_id)
     const uint32_t hartid = NUM_DM_CORES + neo_id * NUM_TRISC_CORES + trisc_id;
 
-    DPRINT << "my_thread_id: " << my_thread_id << " num_threads: " << num_threads << ENDL();
-
     volatile uint32_t tt_l1_ptr* result =
         (volatile uint32_t tt_l1_ptr*)(l1_base + MEM_L1_UNCACHED_BASE + slot * TLS_CHECK_RESULT_SLOT_BYTES);
     result[TLS_CHECK_KERNEL_ID] = 1;  // single kernel

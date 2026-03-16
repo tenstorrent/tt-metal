@@ -484,11 +484,13 @@ KernelGroup::KernelGroup(
         }
         if (auto* qk = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(kernel.get())) {
             auto config = std::get<experimental::quasar::QuasarComputeConfig>(qk->config());
-            for (uint32_t engine_id = 0; engine_id < config.num_threads_per_cluster; engine_id++) {
-                uint32_t config_index =
-                    experimental::quasar::QUASAR_NUM_DM_CORES_PER_CLUSTER + engine_id;  // 8-11 for engines 0-3
-                kernel_config.num_sw_threads()[config_index] = config.num_threads_per_cluster;
-                kernel_config.kernel_thread_id()[config_index] = engine_id;
+            for (uint32_t thread_idx = 0; thread_idx < config.num_threads_per_cluster; thread_idx++) {
+                uint32_t processor_index = hal.get_processor_index(
+                    hal.get_programmable_core_type(programmable_core_type_index),
+                    HalProcessorClassType::COMPUTE,
+                    qk->get_kernel_processor_type(static_cast<int>(thread_idx)));
+                kernel_config.num_sw_threads()[processor_index] = config.num_threads_per_cluster;
+                kernel_config.kernel_thread_id()[processor_index] = thread_idx;
             }
         }
     }
