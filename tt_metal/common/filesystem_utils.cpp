@@ -188,26 +188,14 @@ bool safe_hard_link_or_copy(const std::filesystem::path& target, const std::file
         if (!ec) {
             return true;
         }
-        if (ec == std::errc::file_exists) {
-            std::filesystem::remove(link, ec);
-            if (ec && !is_not_found_error(ec)) {
-                log_warning(
-                    tt::LogMetal, "Failed to remove existing {} for hard_link: {}", link.string(), ec.message());
-                return false;
-            }
-            std::filesystem::create_hard_link(target, link, ec);
-            if (!ec) {
-                return true;
-            }
-        }
-        bool can_fallback = ec == std::errc::cross_device_link || ec == std::errc::not_supported ||
-                            ec == std::errc::operation_not_permitted;
-        if (can_fallback) {
-            ec.clear();
-            std::filesystem::copy_file(target, link, std::filesystem::copy_options::overwrite_existing, ec);
-            if (!ec) {
-                return true;
-            }
+        // Hard link failed -- fall back to copy unconditionally.  The old
+        // implementation always fell back to copy on any hard-link error and
+        // restricting the fallback to specific error codes caused regressions
+        // in environments where unexpected errno values are returned.
+        ec.clear();
+        std::filesystem::copy_file(target, link, std::filesystem::copy_options::overwrite_existing, ec);
+        if (!ec) {
+            return true;
         }
         log_warning(
             tt::LogMetal, "Failed to hard_link or copy {} to {}: {}", target.string(), link.string(), ec.message());
@@ -219,48 +207,35 @@ bool safe_hard_link_or_copy(const std::filesystem::path& target, const std::file
             return true;
         }
         if (ec == std::errc::file_exists) {
-            // Use safe_remove for ESTALE retry handling
             if (safe_remove(link)) {
                 continue;
             }
-            // safe_remove failed (already logged warning)
             return false;
         }
-        // Only fall back to copy for specific errors where hard link is expected to fail:
-        // - EXDEV: Cross-device link (target and link on different filesystems)
-        // - ENOTSUP: Operation not supported (filesystem doesn't support hard links)
-        // - EPERM: Operation not permitted (some security policies)
-        bool can_fallback_to_copy = ec == std::errc::cross_device_link || ec == std::errc::not_supported ||
-                                    ec == std::errc::operation_not_permitted;
-        if (!is_estale_error(ec) && can_fallback_to_copy) {
-            ec.clear();
-            std::filesystem::copy_file(target, link, std::filesystem::copy_options::overwrite_existing, ec);
-            if (!ec) {
-                return true;
+        if (is_estale_error(ec)) {
+            if (attempt < kMaxFsRetries - 1) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds((kFsRetryDelayMs * (attempt + 1)) + get_retry_jitter_ms()));
             }
-            if (!is_estale_error(ec)) {
-                log_warning(
-                    tt::LogMetal,
-                    "Failed to hard_link or copy {} to {}: {}",
-                    target.string(),
-                    link.string(),
-                    ec.message());
-                return false;
+            continue;
+        }
+        // Hard link failed for a non-transient reason -- fall back to copy
+        // unconditionally (matches pre-NFS-safety behavior).
+        ec.clear();
+        std::filesystem::copy_file(target, link, std::filesystem::copy_options::overwrite_existing, ec);
+        if (!ec) {
+            return true;
+        }
+        if (is_estale_error(ec)) {
+            if (attempt < kMaxFsRetries - 1) {
+                std::this_thread::sleep_for(
+                    std::chrono::milliseconds((kFsRetryDelayMs * (attempt + 1)) + get_retry_jitter_ms()));
             }
-        } else if (!is_estale_error(ec)) {
-            // Hard link failed for a reason that doesn't warrant copy fallback (e.g., permission denied)
-            log_warning(
-                tt::LogMetal,
-                "Failed to hard_link {} to {}: {} (copy fallback not attempted)",
-                target.string(),
-                link.string(),
-                ec.message());
-            return false;
+            continue;
         }
-        if (attempt < kMaxFsRetries - 1) {
-            std::this_thread::sleep_for(
-                std::chrono::milliseconds((kFsRetryDelayMs * (attempt + 1)) + get_retry_jitter_ms()));
-        }
+        log_warning(
+            tt::LogMetal, "Failed to hard_link or copy {} to {}: {}", target.string(), link.string(), ec.message());
+        return false;
     }
     log_warning(
         tt::LogMetal,
