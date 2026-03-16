@@ -93,7 +93,7 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
                            // cores have data on them and only activate those cores.
             ordered_cores_with_data = a.buffer()->buffer_distribution_spec().value().cores_with_data();
             has_ordered_cores_with_data = true;
-            compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(ordered_cores_with_data));
+            compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
 
             full_compute_core_range = compute_core_range;
         } else {

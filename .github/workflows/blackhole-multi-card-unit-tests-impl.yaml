@@ -28,6 +28,11 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
+      enable-llk-asserts:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK asserts"
 
 jobs:
   generate-matrix:
@@ -188,6 +193,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
         with:
