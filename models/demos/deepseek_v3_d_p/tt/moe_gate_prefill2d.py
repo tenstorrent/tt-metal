@@ -72,16 +72,21 @@ class MoEGatePrefill:
 
     def linear(self, x: ttnn.Tensor):
         return ttnn.matmul(
-            x, self.weight, compute_kernel_config=self.mm_compute_config, program_config=self.mm_program_config
+            x,
+            self.weight,
+            compute_kernel_config=self.mm_compute_config,
+            program_config=self.mm_program_config,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
         )
 
     def all_reduce(self, x: ttnn.Tensor):
-        return ttnn.all_reduce(
+        return ttnn.experimental.all_reduce_async(
             x,
             cluster_axis=self.ccl_config["TP_AXIS"],
-            num_links=self.ccl_config["NUM_LINKS"],
-            topology=ttnn.Topology.Linear,
+            mesh_device=self.mesh_device,
+            math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.L1_MEMORY_CONFIG,
+            topology=ttnn.Topology.Linear,
         )
 
     def get_onehot_expert_selection(self, global_expert_indices):
