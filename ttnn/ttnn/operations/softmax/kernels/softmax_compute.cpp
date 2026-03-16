@@ -9,4 +9,28 @@
 #include "api/compute/eltwise_unary/exp.h"
 #include "api/compute/eltwise_unary/recip.h"
 
-void kernel_main() {}
+namespace NAMESPACE {
+
+void MAIN {
+    // --- Compile-time args ---
+    constexpr uint32_t cb_input = get_compile_time_arg_val(0);      // 0
+    constexpr uint32_t cb_scaler = get_compile_time_arg_val(1);     // 8
+    constexpr uint32_t cb_out = get_compile_time_arg_val(2);        // 16
+    constexpr uint32_t cb_max = get_compile_time_arg_val(3);        // 24
+    constexpr uint32_t cb_exp = get_compile_time_arg_val(4);        // 25
+    constexpr uint32_t cb_recip_sum = get_compile_time_arg_val(5);  // 26
+    constexpr uint32_t R = get_compile_time_arg_val(6);             // tiles per work unit
+    constexpr uint32_t numeric_stable = get_compile_time_arg_val(7);
+    constexpr uint32_t num_work_units = get_compile_time_arg_val(8);
+
+    // Stage 1: passthrough — just copy cb_input to cb_out
+    compute_kernel_hw_startup(cb_input, cb_scaler, cb_out);
+
+    for (uint32_t wu = 0; wu < num_work_units; ++wu) {
+        compute_kernel_lib::copy_tiles<
+            compute_kernel_lib::CopyInputPolicy::WaitAndPop,
+            compute_kernel_lib::CopyDataFormatReconfig::NONE>(cb_input, cb_out, R);
+    }
+}
+
+}  // namespace NAMESPACE
