@@ -40,12 +40,28 @@ private:
 struct DeviceStorage {
     DeviceStorage() = default;
 
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Constructs a DeviceStorage from a device memory
+
     // Constructs DeviceStorage with coords covering the full mesh device shape.
     explicit DeviceStorage(std::shared_ptr<distributed::MeshBuffer> mesh_buffer_);
 
     // Constructs DeviceStorage that is a view of the mesh_buffer_ at the given coords_
     DeviceStorage(
         std::shared_ptr<distributed::MeshBuffer> mesh_buffer_, std::vector<distributed::MeshCoordinate> coords_);
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Copys an existing DeviceStorage and share it's underlying device memory.
+
+    // Creates a copy of the DeviceStorage that shares the underlying device memory
+    DeviceStorage(const DeviceStorage&) = default;
+    DeviceStorage(DeviceStorage&&) noexcept = default;
+    DeviceStorage& operator=(const DeviceStorage&) = default;
+    DeviceStorage& operator=(DeviceStorage&&) noexcept = default;
+
+    // Creates a copy of the DeviceStorage that shares the underlying device memory,
+    // but with a different set of coords.
+    DeviceStorage(const DeviceStorage& other, std::vector<distributed::MeshCoordinate> coords);
 
     Buffer* get_buffer() const;
     const std::shared_ptr<distributed::MeshBuffer>& get_mesh_buffer() const;
