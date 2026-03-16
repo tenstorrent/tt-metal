@@ -656,7 +656,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         early_print_first_user: bool = True,
         repeat_batches: int = 1,
         pre_tokenized: List[List[int]] | None = None,
-        stop_at_eos: bool = False,
+        stop_at_eos: bool = True,
         on_user_finished=None,
     ) -> Tuple[List[List[int]], dict]:
         """Generate tokens for the given prompts using greedy decode by default.
@@ -667,10 +667,10 @@ class DeepseekGenerator(WarmupForwardMixin):
         repeat_batches: Number of times to repeat the prefill+decode pass. Only the
                         last pass's tokens are returned; timings aggregate.
 
-        stop_at_eos: If True and teacher_forcing is not enabled, stop recording output
-                     tokens for a user after EOS. When teacher_forcing is active,
-                     EOS-based early stopping is disabled and all teacher-forced tokens
-                     are recorded.
+        stop_at_eos: Defaults to True. When enabled and teacher_forcing is not
+                     active, stop recording output tokens for a user after EOS.
+                     When teacher_forcing is active, EOS-based early stopping is
+                     disabled and all teacher-forced tokens are recorded.
         on_user_finished: Optional callback with signature (user_index, output_tokens).
 
         Returns: (list of generated token id lists for the provided prompts (order preserved), statistics dictionary)

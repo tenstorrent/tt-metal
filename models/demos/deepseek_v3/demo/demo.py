@@ -163,7 +163,7 @@ def create_parser() -> argparse.ArgumentParser:
         "--stop-at-eos",
         dest="stop_at_eos",
         action="store_true",
-        help="Stop recording output tokens for a user after EOS.",
+        help="Stop recording output tokens for a user after EOS (default).",
     )
     p.add_argument(
         "--no-stop-at-eos",
@@ -171,7 +171,7 @@ def create_parser() -> argparse.ArgumentParser:
         action="store_false",
         help="Always record max-new-tokens even after EOS.",
     )
-    p.set_defaults(stop_at_eos=False)
+    p.set_defaults(stop_at_eos=True)
     return p
 
 
@@ -291,7 +291,7 @@ def run_demo(
     profile_decode: bool = False,
     sample_on_device: bool = False,
     force_recalculate: bool = False,
-    stop_at_eos: bool = False,
+    stop_at_eos: bool = True,
     checkpoint_jsonl: str | Path | None = None,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.

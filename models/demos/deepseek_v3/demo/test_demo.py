@@ -16,7 +16,7 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
 
 
 @pytest.mark.parametrize(
-    "max_prompts,repeat_batches,max_new_tokens,override_num_layers,enable_trace,artifact_name,profile_decode",
+    "max_prompts,repeat_batches,max_new_tokens,override_num_layers,enable_trace,artifact_name,profile_decode,stop_at_eos,expect_full_length",
     [
         pytest.param(
             56,
@@ -26,6 +26,8 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             False,
             None,
             False,
+            False,
+            True,
             id="tg_stress",
             marks=pytest.mark.requires_device(["TG"]),
         ),
@@ -36,6 +38,8 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             None,
             True,
             "dual_demo_full_results",
+            False,
+            None,
             False,
             id="dual_full_demo",
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(2400)],
@@ -48,6 +52,8 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             True,
             "dual_demo_stress_results",
             False,
+            False,
+            True,
             id="dual_stress_demo",
             marks=[pytest.mark.requires_device(["DUAL"]), pytest.mark.timeout(5400)],
         ),
@@ -58,6 +64,8 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             None,
             True,
             "quad_demo_full_results",
+            False,
+            None,
             False,
             id="quad_full_demo",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(3600)],
@@ -70,6 +78,8 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             True,
             "quad_demo_stress_results",
             False,
+            False,
+            True,
             id="quad_stress_demo",
             marks=[pytest.mark.requires_device(["QUAD"]), pytest.mark.timeout(5400)],
         ),
@@ -80,6 +90,8 @@ CACHE_DIR = Path(os.getenv("DEEPSEEK_V3_CACHE", "/mnt/MLPerf/tt_dnn-models/deeps
             5,
             True,
             None,
+            True,
+            False,
             True,
             id="profile_decode",
             marks=pytest.mark.timeout(1800),
@@ -94,6 +106,8 @@ def test_demo(
     enable_trace: bool,
     artifact_name: str,
     profile_decode: bool,
+    stop_at_eos: bool | None,
+    expect_full_length: bool,
     force_recalculate_weight_config: bool,
 ):
     """
@@ -129,11 +143,17 @@ def test_demo(
         run_kwargs["override_num_layers"] = override_num_layers
     if enable_trace:
         run_kwargs["enable_trace"] = True
+    if stop_at_eos is not None:
+        run_kwargs["stop_at_eos"] = stop_at_eos
 
     results = run_demo(**run_kwargs)
 
     # Check output
-    assert len(results["generations"][0]["tokens"]) == max_new_tokens
+    generated_lengths = [len(generation["tokens"]) for generation in results["generations"]]
+    if expect_full_length:
+        assert all(length == max_new_tokens for length in generated_lengths)
+    else:
+        assert all(length <= max_new_tokens for length in generated_lengths)
 
     # Save results to JSON for artifact upload (QUAD tests only)
     if artifact_name is not None:
