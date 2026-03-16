@@ -5,11 +5,14 @@
 """Python models package for ttml.
 
 This package provides Python implementations of models using ttml operations.
+C++ types are imported from _ttml.models and must be available before Python
+submodules that depend on them.
 """
 
+# Import C++ types first (needed by Python submodules)
+# Note: _ttml is a top-level module, not a subpackage of ttml
+import _ttml
 import sys
-
-from .. import _ttml
 
 # --- C++ enums and classes from _ttml.models ---
 from _ttml.models import (

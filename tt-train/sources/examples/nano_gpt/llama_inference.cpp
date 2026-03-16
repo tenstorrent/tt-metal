@@ -281,7 +281,7 @@ int main(int argc, char** argv) {
     CLI11_PARSE(app, argc, argv);
 
     // Use default LLaMA config path
-    std::string model_config_path = "./configs/model_configs/tinyllama.yaml";
+    std::string model_config_path = "./tt-train/configs/model_configs/tinyllama.yaml";
 
     fmt::print("\n{}\n", std::string(80, '='));
     fmt::print("LLaMA Inference {}\n", inference_config.use_kv_cache ? "with KV Cache" : "without KV Cache");
