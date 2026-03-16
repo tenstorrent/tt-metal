@@ -101,7 +101,7 @@ def test_forward_pass(
         torch_weight,
         device=mesh_device,
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
         mesh_mapper=ttnn.ShardTensor2dMesh(
             mesh_device,
@@ -128,7 +128,7 @@ def test_forward_pass(
         torch_bias.repeat(config.sp_dim).view(config.sp_dim, -1),
         device=mesh_device,
         dtype=ttnn.bfloat16,
-        memory_config=ttnn.L1_MEMORY_CONFIG,
+        memory_config=ttnn.DRAM_MEMORY_CONFIG,
         layout=ttnn.TILE_LAYOUT,
     )
 
