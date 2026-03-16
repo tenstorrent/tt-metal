@@ -163,7 +163,7 @@ PreprocessedPyTensor parse_py_tensor(nb::ndarray<nb::array_api> py_tensor, std::
 // `shape` and `data_type` information.
 struct RowMajorHostBuffer {
     static RowMajorHostBuffer create_padded(HostBuffer buffer, const ttnn::TensorSpec& tensor_spec) {
-        tt::stl::Span<const uint32_t> shape_view = tensor_spec.padded_shape().view();
+        ttsl::Span<const uint32_t> shape_view = tensor_spec.padded_shape().view();
         return RowMajorHostBuffer{
             .buffer = std::move(buffer),
             .shape = std::vector<uint32_t>(shape_view.begin(), shape_view.end()),
@@ -172,7 +172,7 @@ struct RowMajorHostBuffer {
     }
 
     static RowMajorHostBuffer create_logical(HostBuffer buffer, const ttnn::TensorSpec& tensor_spec) {
-        tt::stl::Span<const uint32_t> shape_view = tensor_spec.logical_shape().view();
+        ttsl::Span<const uint32_t> shape_view = tensor_spec.logical_shape().view();
         return RowMajorHostBuffer{
             .buffer = std::move(buffer),
             .shape = std::vector<uint32_t>(shape_view.begin(), shape_view.end()),
@@ -229,7 +229,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(const Tensor& tt_tensor, con
             case DataType::BFLOAT8_B:
             case DataType::BFLOAT4_B: {
                 const auto& tile = tensor_spec.tile();
-                tt::stl::Span<const std::uint32_t> uint32_data = host_buffer::get_as<std::uint32_t>(buffer);
+                ttsl::Span<const std::uint32_t> uint32_data = host_buffer::get_as<std::uint32_t>(buffer);
                 auto float_unpacked_data = tt_dtype == DataType::BFLOAT8_B
                                                ? unpack_bfp8_tiles_into_float_vec(
                                                      uint32_data, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
@@ -263,7 +263,7 @@ RowMajorHostBuffer convert_to_row_major_host_buffer(
     const Tensor& tt_tensor, const ttnn::distributed::MeshToTensor& mesh_composer) {
     auto dispatch_to_concrete = [&mesh_composer]<typename T>(const Tensor& tt_tensor) {
         auto [data, shape] = mesh_composer.compose<T>(tt_tensor);
-        tt::stl::Span<const uint32_t> shape_view = shape.view();
+        ttsl::Span<const uint32_t> shape_view = shape.view();
         return RowMajorHostBuffer{
             .buffer = HostBuffer(std::move(data)),
             .shape = std::vector<uint32_t>(shape_view.begin(), shape_view.end()),
@@ -331,7 +331,7 @@ auto parse_external_operation(
 
     // original impl had a bunch of no-ops. Reduce to minimum functionality.
     std::vector<Tensor> input_tensors;
-    tt::stl::reflection::Attributes attributes;
+    ttsl::reflection::Attributes attributes;
 
     auto operation = tt::tt_metal::operation::ExternalOperation{function_name, attributes};
     return std::make_tuple(operation, input_tensors);
@@ -346,7 +346,7 @@ HostBuffer convert_py_tensor_to_host_buffer(const nb::ndarray<nb::array_api>& py
         // while holding GIL.
         tt::tt_metal::MemoryPin pydata_pin(std::make_shared<nb::ndarray<nb::array_api>>(contiguous_py_tensor));
         T* typed_py_ptr = const_cast<T*>(static_cast<const T*>(contiguous_py_tensor.data()));
-        return HostBuffer(tt::stl::Span<T>(typed_py_ptr, contiguous_py_tensor.size()), pydata_pin);
+        return HostBuffer(ttsl::Span<T>(typed_py_ptr, contiguous_py_tensor.size()), pydata_pin);
     };
 
     auto to_host_buffer = [&to_host_buffer_impl,

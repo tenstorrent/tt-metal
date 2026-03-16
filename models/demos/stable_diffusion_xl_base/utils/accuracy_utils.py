@@ -13,10 +13,12 @@ from loguru import logger
 from models.common.utility_functions import profiler
 from models.demos.stable_diffusion_xl_base.utils.clip_encoder import CLIPEncoder
 from models.demos.stable_diffusion_xl_base.utils.clip_fid_ranges import (
+    STANDARD_DATASET_SIZES,
     accuracy_check_clip,
     accuracy_check_fid,
     get_appr_delta_metric,
     get_model_targets,
+    using_full_dataset,
 )
 from models.demos.stable_diffusion_xl_base.utils.fid_score import calculate_fid_score
 
@@ -177,6 +179,46 @@ def create_report_json(metadata, accuracy_metrics):
     }
 
     return report_json
+
+
+def accuracy_assert(metadata, accuracy_metrics):
+    model_name = metadata["model_name"]
+    num_prompts = metadata["num_prompts"]
+    clip_score = accuracy_metrics["average_clip_score"]
+    fid_score = accuracy_metrics.get("fid_score", None)
+
+    if num_prompts not in STANDARD_DATASET_SIZES:
+        logger.info(f"Skipping accuracy range check: {num_prompts} prompts is not a standard dataset size")
+        return
+
+    targets = get_model_targets(model_name)
+    using_full = using_full_dataset(model_name, num_prompts)
+    label = "full dataset" if using_full else f"{num_prompts} prompts"
+
+    clip_key = "clip_valid_range_full_dataset" if using_full else "clip_valid_range_100"
+    fid_key = "fid_valid_range_full_dataset" if using_full else "fid_valid_range_100"
+
+    clip_range = targets["accuracy"][clip_key]
+    fid_range = targets["accuracy"][fid_key] if fid_key in targets["accuracy"] else None
+
+    logger.info(f"Accuracy check | {model_name} | {label}")
+    logger.info(f"  CLIP valid range : {clip_range},  obtained: {clip_score:.6f}")
+    if fid_range:
+        logger.info(f"  FID  valid range : {fid_range},  obtained: {fid_score:.6f}")
+
+    failures = []
+
+    if not (clip_range[0] <= clip_score <= clip_range[1]):
+        dist = clip_range[0] - clip_score if clip_score < clip_range[0] else clip_score - clip_range[1]
+        logger.debug(f"  [FAIL] CLIP {clip_score:.6f} outside {clip_range}, distance from boundary: {dist:.6f}")
+        failures.append("CLIP out of valid range")
+
+    if fid_range and not (fid_range[0] <= fid_score <= fid_range[1]):
+        dist = fid_range[0] - fid_score if fid_score < fid_range[0] else fid_score - fid_range[1]
+        logger.debug(f"  [FAIL] FID  {fid_score:.6f} outside {fid_range}, distance from boundary: {dist:.6f}")
+        failures.append("FID out of valid range")
+
+    assert not failures, "Accuracy test FAILED: " + ", ".join(failures)
 
 
 def save_report_json(report_json, metadata):
