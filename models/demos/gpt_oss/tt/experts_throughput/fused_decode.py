@@ -222,8 +222,8 @@ def fused_decode_forward(
         data_parallel_core_dim=fused_config.combine_data_parallel_core_dim,
         worker_cores=fused_config.combine_worker_cores,
         mux_core_range_set=fused_config.combine_mux_cores,
-        # output_tensor=fused_config.combine_preallocated,
-        # optional_cross_device_semaphore=fused_config.combine_semaphore,
+        output_tensor=fused_config.combine_preallocated,
+        optional_cross_device_semaphore=fused_config.combine_semaphore,
     )
     ttnn.synchronize_device(mesh_device)
     logger.info("fused_decode: Step 3 sync done")
