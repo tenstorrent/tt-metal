@@ -846,7 +846,7 @@ class TestNewModeFlow:
         ), patch.object(
             ttrun_module, "find_generate_rank_bindings_executable"
         ):
-            result = runner.invoke(
+            runner.invoke(
                 main,
                 [
                     "--mesh-graph-descriptor",
@@ -941,6 +941,8 @@ class TestNewModeFlow:
                     "test",
                 ],
             )
+            assert result.exit_code == 0
+            assert not result.exception
 
             # Verify Phase 1 was called with mock_rank_to_desc
             assert mock_phase1.called
