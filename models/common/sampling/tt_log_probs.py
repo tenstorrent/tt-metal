@@ -24,17 +24,17 @@ class LogProbsResult:
     Contains logprobs and global indices for the gathered top-k tokens across all
     devices.  The sampled token is always part of the gathered top-k (it was selected
     from them by ttnn.sampling), so its logprob can be looked up by matching its
-    index in ``top_k_indices``.
+    index in ``topk_indices``.
 
     Attributes:
-        top_k_logprobs: Tensor of shape (1, 1, batch_size, num_gathered_topk)
+        topk_logprobs: Tensor of shape (1, 1, batch_size, num_gathered_topk)
             containing logprobs for the gathered top-k tokens.
-        top_k_indices: Tensor of shape (1, 1, batch_size, num_gathered_topk)
+        topk_indices: Tensor of shape (1, 1, batch_size, num_gathered_topk)
             containing global vocabulary indices for the gathered top-k tokens.
     """
 
-    top_k_logprobs: ttnn.Tensor
-    top_k_indices: ttnn.Tensor
+    topk_logprobs: ttnn.Tensor
+    topk_indices: ttnn.Tensor
 
 
 class LogProbsCalculator:
@@ -64,7 +64,7 @@ class LogProbsCalculator:
         # Per-user integer array tracking how many top logprobs each user requested (0-20)
         self.num_logprobs = [0] * batch_size
         # Flag: True when at least one user needs top-k logprobs (num_logprobs > 0)
-        self.top_k_logprobs_needed = False
+        self.topk_logprobs_needed = False
         self.cluster_shape = list(mesh_device.shape)
         self.sub_core_grids = sub_core_grids
         self.tt_ccl = tt_ccl
@@ -216,7 +216,7 @@ class LogProbsCalculator:
 
         # Recompute derived flags from the full arrays
         self.enable_log_probs = any(self.logprobs_enabled)
-        self.top_k_logprobs_needed = any(n > 0 for n in self.num_logprobs)
+        self.topk_logprobs_needed = any(n > 0 for n in self.num_logprobs)
 
     def _compute_global_stats(
         self,
@@ -391,7 +391,7 @@ class LogProbsCalculator:
 
         return self.output_tensor
 
-    def _calculate_top_k_log_probs_from_values(
+    def _calculate_topk_log_probs_from_values(
         self,
         topk_values: ttnn.Tensor,
     ):
@@ -422,23 +422,24 @@ class LogProbsCalculator:
         log_global_exp_sum_bcast = ttnn.to_layout(log_global_exp_sum_bcast, ttnn.TILE_LAYOUT, **self.common_args)
 
         # Apply log-softmax formula: logprob = logit - global_max - log(global_exp_sum)
-        top_k_logprobs = ttnn.subtract(topk_values, global_max_bcast, **self.common_args)
-        top_k_logprobs = ttnn.subtract(top_k_logprobs, log_global_exp_sum_bcast, **self.common_args)
+        topk_logprobs = ttnn.subtract(topk_values, global_max_bcast, **self.common_args)
+        topk_logprobs = ttnn.subtract(topk_logprobs, log_global_exp_sum_bcast, **self.common_args)
 
-        return top_k_logprobs
+        return topk_logprobs
 
-    def calculate_top_k_log_probs(
+    def calculate_topk_log_probs(
         self,
         logits_tensor: ttnn.Tensor,
         topk_values: ttnn.Tensor,
         topk_global_indices: ttnn.Tensor,
+        sub_core_grid_topk: ttnn.CoreRangeSet = None,
     ) -> LogProbsResult | None:
         """Calculate logprobs for the gathered top-k tokens in a single pass.
 
         The sampled token is always part of the gathered top-k (it was selected
         from them by ttnn.sampling), so there is no need to compute its logprob
         separately — the caller can look it up by matching its token ID in
-        ``top_k_indices``.
+        ``topk_indices``.
 
         Steps:
         1. Compute global statistics (max, sum-exp) from the full sharded logits.
@@ -449,9 +450,9 @@ class LogProbsCalculator:
             logits_tensor: Full logits tensor, sharded across devices.
                 Shape: (1, 1, batch_size, vocab_size_per_device) per device.
             topk_values: Gathered top-k values from all devices.
-                Shape: (1, 1, batch_size, num_devices * max_top_k). Raw logit values.
+                Shape: (1, 1, batch_size, num_devices * max_topk). Raw logit values.
             topk_global_indices: Global vocabulary indices for the gathered top-k tokens.
-                Shape: (1, 1, batch_size, num_devices * max_top_k). Int32.
+                Shape: (1, 1, batch_size, num_devices * max_topk). Int32.
 
         Returns:
             LogProbsResult with top-k logprobs and indices, or None if logprobs
@@ -467,6 +468,23 @@ class LogProbsCalculator:
         if logits_tensor.dtype == ttnn.bfloat8_b:
             logits_tensor = ttnn.typecast(logits_tensor, ttnn.bfloat16, **self.common_args)
 
+        # Narrow down 256 -> 32 topk values and indices.
+        # Cannot pass topk_global_indices as indices_tensor because global
+        # vocab indices exceed uint16 range (>65K). Instead, get positional
+        # indices and use gather to map back to global indices.
+        topk_values, topk_local_indices = ttnn.topk(
+            topk_values,
+            k=32,
+            dim=-1,
+            sub_core_grids=sub_core_grid_topk,
+        )
+
+        # ttnn.gather requires uint32 indices in TILE_LAYOUT
+        topk_local_indices = ttnn.typecast(topk_local_indices, ttnn.uint32, **self.common_args)
+        topk_local_indices = ttnn.to_layout(topk_local_indices, ttnn.ROW_MAJOR_LAYOUT, **self.common_args)
+        topk_local_indices = ttnn.to_layout(topk_local_indices, ttnn.TILE_LAYOUT, **self.common_args)
+        topk_indices = ttnn.gather(topk_global_indices, dim=-1, index=topk_local_indices, **self.common_args)
+
         # Compute global max and global sum-exp from full logits
         self._compute_global_stats(logits_tensor)
 
@@ -475,11 +493,11 @@ class LogProbsCalculator:
             topk_values = ttnn.typecast(topk_values, ttnn.bfloat16, **self.common_args)
 
         # Single-pass logprob computation for all gathered top-k tokens
-        top_k_logprobs = self._calculate_top_k_log_probs_from_values(topk_values)
+        topk_logprobs = self._calculate_topk_log_probs_from_values(topk_values)
 
         return LogProbsResult(
-            top_k_logprobs=top_k_logprobs,
-            top_k_indices=topk_global_indices,
+            topk_logprobs=topk_logprobs,
+            topk_indices=topk_indices,
         )
 
     def _build_mesh_composer(self):
@@ -516,7 +534,7 @@ class LogProbsCalculator:
            indices.
 
         Args:
-            log_probs_result: LogProbsResult from calculate_top_k_log_probs.
+            log_probs_result: LogProbsResult from calculate_topk_log_probs.
             sampled_token_ids: Host tensor of sampled token IDs, shape (batch_size,).
             num_logprobs_per_user: Per-user count of top logprobs to return (0-20).
                 If None, uses self.num_logprobs.
@@ -539,23 +557,17 @@ class LogProbsCalculator:
         mesh_composer = self._build_mesh_composer()
 
         # Transfer top-k logprobs and indices from device to host
-        top_k_logprobs_host = ttnn.to_torch(
-            log_probs_result.top_k_logprobs,
+        topk_logprobs_host = ttnn.to_torch(
+            log_probs_result.topk_logprobs,
             mesh_composer=mesh_composer,
         )
-        top_k_indices_host = ttnn.to_torch(
-            log_probs_result.top_k_indices,
+        topk_indices_host = ttnn.to_torch(
+            log_probs_result.topk_indices,
             mesh_composer=mesh_composer,
         )
         # Remove replicas from top-k logprobs and indices
-        top_k_logprobs_host = top_k_logprobs_host[0, 0, ...]
-        top_k_indices_host = top_k_indices_host[0, 0, ...]
-
-        # Sort each user's top-k by logprob descending (per-device chunks are
-        # sorted locally but not globally after all-gather concatenation)
-        sorted_order = torch.argsort(top_k_logprobs_host, dim=-1, descending=True)
-        top_k_logprobs_host = torch.gather(top_k_logprobs_host, -1, sorted_order).float()
-        top_k_indices_host = torch.gather(top_k_indices_host, -1, sorted_order)
+        topk_logprobs_host = topk_logprobs_host[0, 0, ...].float()
+        topk_indices_host = topk_indices_host[0, 0, ...].to(torch.int32)
 
         results: list[dict | None] = []
         for user_idx in range(self.batch_size):
@@ -564,8 +576,8 @@ class LogProbsCalculator:
                 continue
 
             sampled_id = int(sampled_token_ids[user_idx].item())
-            user_logprobs = top_k_logprobs_host[user_idx]
-            user_indices = top_k_indices_host[user_idx]
+            user_logprobs = topk_logprobs_host[user_idx]
+            user_indices = topk_indices_host[user_idx]
 
             # Extract sampled token logprob by matching its ID in the sorted top-k
             match_mask = user_indices == sampled_id
@@ -578,7 +590,6 @@ class LogProbsCalculator:
 
             # Truncate top logprobs to the user's requested count
             n = num_logprobs_per_user[user_idx] if user_idx < len(num_logprobs_per_user) else 0
-            n = min(n, K)
 
             results.append(
                 {

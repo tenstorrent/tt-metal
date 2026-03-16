@@ -343,7 +343,7 @@ def test_top_k_log_probs_on_galaxy(shape, mesh_device):
     )
 
     calc.set_log_probs_mode([True] * batch_size, num_logprobs=[5] * batch_size)
-    result = calc.calculate_top_k_log_probs(logits_tt, topk_values_tt, topk_indices_tt)
+    result = calc.calculate_topk_log_probs(logits_tt, topk_values_tt, topk_indices_tt)
 
     assert result is not None, "Expected LogProbsResult, got None"
     assert isinstance(result, LogProbsResult)
@@ -358,7 +358,7 @@ def test_top_k_log_probs_on_galaxy(shape, mesh_device):
         index=gathered_indices.squeeze(0).squeeze(0).long(),
     )
     composer = calc._build_mesh_composer()
-    topk_logprobs_host = ttnn.to_torch(result.top_k_logprobs, mesh_composer=composer)
+    topk_logprobs_host = ttnn.to_torch(result.topk_logprobs, mesh_composer=composer)
     topk_logprobs_host = topk_logprobs_host[0, 0, ...]
 
     passing, pcc = comp_pcc(expected_logprobs, topk_logprobs_host, pcc=0.99)
@@ -381,7 +381,7 @@ def test_top_k_log_probs_on_galaxy(shape, mesh_device):
 @pytest.mark.parametrize("device_params", [TG_DEVICE_PARAMS], indirect=True, ids=["tg"])
 @pytest.mark.parametrize("mesh_device", [TG_MESH_SHAPE], indirect=True)
 def test_top_k_log_probs_returns_none_when_not_needed(shape, mesh_device):
-    """calculate_top_k_log_probs returns None when disabled, and returns
+    """calculate_topk_log_probs returns None when disabled, and returns
     LogProbsResult with empty top_logprobs when num_logprobs=0."""
     _skip_if_not_galaxy(mesh_device)
     batch_size = shape[2]
@@ -397,13 +397,13 @@ def test_top_k_log_probs_returns_none_when_not_needed(shape, mesh_device):
 
     # Case 1: logprobs disabled entirely → returns None
     calc.set_log_probs_mode(False, num_logprobs=0)
-    result = calc.calculate_top_k_log_probs(logits_tt, topk_values_tt, topk_indices_tt)
+    result = calc.calculate_topk_log_probs(logits_tt, topk_values_tt, topk_indices_tt)
     assert result is None, "Expected None when logprobs disabled"
 
     # Case 2: logprobs enabled, num_logprobs=0 → returns result but host truncates to 0
     calc.set_log_probs_mode(True, num_logprobs=0)
-    assert not calc.top_k_logprobs_needed
-    result = calc.calculate_top_k_log_probs(logits_tt, topk_values_tt, topk_indices_tt)
+    assert not calc.topk_logprobs_needed
+    result = calc.calculate_topk_log_probs(logits_tt, topk_values_tt, topk_indices_tt)
     assert result is not None, "Expected LogProbsResult when logprobs enabled"
 
     sampled_ids = argmax_tensor.squeeze()
@@ -452,9 +452,9 @@ def test_per_user_logprobs_enabled(shape, mesh_device):
     calc.set_log_probs_mode(enable_log_probs, num_logprobs=num_logprobs_list)
 
     assert calc.enable_log_probs is True
-    assert calc.top_k_logprobs_needed is True
+    assert calc.topk_logprobs_needed is True
 
-    result = calc.calculate_top_k_log_probs(logits_tt, topk_values_tt, topk_indices_tt)
+    result = calc.calculate_topk_log_probs(logits_tt, topk_values_tt, topk_indices_tt)
     assert result is not None
 
     sampled_ids = argmax_tensor.squeeze()
@@ -507,7 +507,7 @@ def test_transfer_logprobs_to_host_response_format(shape, mesh_device):
     num_logprobs_list = [(i % MAX_TOP_LOGPROBS) + 1 for i in range(batch_size)]
     calc.set_log_probs_mode([True] * batch_size, num_logprobs=num_logprobs_list)
 
-    result = calc.calculate_top_k_log_probs(logits_tt, topk_values_tt, topk_indices_tt)
+    result = calc.calculate_topk_log_probs(logits_tt, topk_values_tt, topk_indices_tt)
     assert result is not None
 
     host_results = calc.transfer_logprobs_to_host(result, argmax_tensor.squeeze())
@@ -557,11 +557,11 @@ def test_set_log_probs_mode_validation(shape, mesh_device):
     calc.set_log_probs_mode(True)
     assert calc.enable_log_probs is True
     assert all(calc.logprobs_enabled)
-    assert not calc.top_k_logprobs_needed
+    assert not calc.topk_logprobs_needed
 
     # scalar True, scalar num_logprobs=5
     calc.set_log_probs_mode(True, num_logprobs=5)
-    assert calc.top_k_logprobs_needed is True
+    assert calc.topk_logprobs_needed is True
     assert all(n == 5 for n in calc.num_logprobs)
 
     # per-user mixed
@@ -569,19 +569,19 @@ def test_set_log_probs_mode_validation(shape, mesh_device):
     num_lp_list = [10, 0, 3] + [0] * (batch_size - 3)
     calc.set_log_probs_mode(enable_list, num_logprobs=num_lp_list)
     assert calc.enable_log_probs is True
-    assert calc.top_k_logprobs_needed is True
+    assert calc.topk_logprobs_needed is True
     assert calc.logprobs_enabled == enable_list
     assert calc.num_logprobs == num_lp_list
 
     # all disabled
     calc.set_log_probs_mode(False, num_logprobs=0)
     assert calc.enable_log_probs is False
-    assert not calc.top_k_logprobs_needed
+    assert not calc.topk_logprobs_needed
 
     # enable=True, num_logprobs=0 → no top-k needed
     calc.set_log_probs_mode(True, num_logprobs=0)
     assert calc.enable_log_probs is True
-    assert not calc.top_k_logprobs_needed
+    assert not calc.topk_logprobs_needed
 
     # empty_slots partial update
     calc.set_log_probs_mode(False, num_logprobs=0)
@@ -592,7 +592,7 @@ def test_set_log_probs_mode_validation(shape, mesh_device):
     assert calc.num_logprobs[2] == 10
     assert calc.num_logprobs[5] == 15
     assert calc.enable_log_probs is True
-    assert calc.top_k_logprobs_needed is True
+    assert calc.topk_logprobs_needed is True
 
     # empty_slots scalar broadcast
     calc.set_log_probs_mode(False, num_logprobs=0)
@@ -617,7 +617,7 @@ def test_top_k_logprobs_pcc_torch_vs_tt(shape, mesh_device):
 
     For every user in the batch:
     1. Computes log-softmax on host (PyTorch float16 to match bfloat16 precision).
-    2. Runs calculate_top_k_log_probs on device (bfloat16).
+    2. Runs calculate_topk_log_probs on device (bfloat16).
     3. Transfers results via transfer_logprobs_to_host.
     4. Checks sampled token logprob within absolute tolerance.
     5. Checks top logprobs PCC >= 0.97 with abs-error fallback for low-variance cases.
@@ -649,7 +649,7 @@ def test_top_k_logprobs_pcc_torch_vs_tt(shape, mesh_device):
 
     calc.set_log_probs_mode([True] * batch_size, num_logprobs=[requested_logprobs] * batch_size)
 
-    result = calc.calculate_top_k_log_probs(logits_tt, topk_values_tt, topk_indices_tt)
+    result = calc.calculate_topk_log_probs(logits_tt, topk_values_tt, topk_indices_tt)
     assert result is not None, "Expected LogProbsResult"
 
     sampled_ids = argmax_tensor.squeeze()

@@ -1105,27 +1105,20 @@ def test_demo_text(
 
                 tt_out_tok, tt_log_probs = tt_out_tok[0], tt_out_tok[1]
 
-                # If top-k logprobs were requested and returned as LogProbsResult,
-                # use transfer_logprobs_to_host to get structured per-user results.
-                if hasattr(tt_log_probs, "top_k_logprobs") and tt_log_probs is not None:
-                    lp_calculator = generator.model.sampling.tt_sampling.log_probs_calculator
-                    logprobs_results = lp_calculator.transfer_logprobs_to_host(
-                        tt_log_probs,
-                        tt_out_tok.squeeze(),
-                    )
-                    # Print top-k logprobs for first decode iteration only (to avoid spam)
-                    if iteration == 1 and print_outputs:
-                        for user_idx, lp_result in enumerate(logprobs_results):
-                            if lp_result is None:
-                                continue
-                            ret_tok = lp_result["returned_token"]
-                            top_lp = lp_result["top_logprobs"]
-                            logger.info(
-                                f"[User {user_idx}] sampled token={ret_tok['token_idx']} "
-                                f"logprob={ret_tok['logprob']:.4f} | "
-                                f"top-{len(top_lp['token_indices'])} logprobs: "
-                                f"{list(zip(top_lp['token_indices'][:5], [f'{lp:.4f}' for lp in top_lp['logprobs'][:5]]))}"
-                            )
+                # tt_log_probs is now a list[dict | None] from transfer_logprobs_to_host
+                # (converted in generator.process_decode_output_host).
+                if isinstance(tt_log_probs, list) and iteration == 1 and print_outputs:
+                    for user_idx, lp_result in enumerate(tt_log_probs):
+                        if lp_result is None:
+                            continue
+                        ret_tok = lp_result["returned_token"]
+                        top_lp = lp_result["top_logprobs"]
+                        logger.info(
+                            f"[User {user_idx}] sampled token={ret_tok['token_idx']} "
+                            f"logprob={ret_tok['logprob']:.4f} | "
+                            f"top-{len(top_lp['token_indices'])} logprobs: "
+                            f"{list(zip(top_lp['token_indices'][:5], [f'{lp:.4f}' for lp in top_lp['logprobs'][:5]]))}"
+                        )
 
                 out_tok = tt_out_tok if not teacher_forcing else ref_tokens[max_encoded_prompt_len + iteration + 1]
 

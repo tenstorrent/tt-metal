@@ -369,9 +369,15 @@ def format_sampling_params(sampling_params, max_batch_size):
 
     Returns a **new** SamplingParams — the input is never mutated.
     """
-    if not isinstance(sampling_params.temperature, List):
-        update_dict = {field.name: [getattr(sampling_params, field.name)] for field in fields(sampling_params)}
-        sampling_params = replace(sampling_params, **update_dict)
+    # Set all fields to list if not already
+    update_dict = {}
+    for field in fields(sampling_params):
+        value = getattr(sampling_params, field.name)
+        if not isinstance(value, List):
+            update_dict[field.name] = [value]
+        else:
+            update_dict[field.name] = value
+    sampling_params = replace(sampling_params, **update_dict)
 
     target_len = max_batch_size
     assert target_len % 32 == 0, f"Sampling batch size must be a multiple of 32, got {target_len}"

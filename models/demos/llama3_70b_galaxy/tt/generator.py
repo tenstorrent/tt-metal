@@ -24,6 +24,7 @@ from models.common.llama_models import (
 )
 
 from models.common.sampling import SamplingParams, format_sampling_params
+from models.common.sampling.tt_log_probs import LogProbsResult
 from models.common.warmup import WarmupForwardMixin
 
 
@@ -188,16 +189,17 @@ class Generator(WarmupForwardMixin):
         ), f"Prefix caching is not supported for llama3_70b_galaxy, got start_pos: {start_pos}"
 
         if self.prefill_warmup_completed is False:
-            self.prefill_warmup(
-                tokens,
-                page_table,
-                kv_cache,
-                prompt_lens,
-                enable_trace,
-                None,
-                empty_slots,
-                tt_out_logits_all_users,
-            )
+            pass
+            # self.prefill_warmup(
+            #     tokens,
+            #     page_table,
+            #     kv_cache,
+            #     prompt_lens,
+            #     enable_trace,
+            #     None,
+            #     empty_slots,
+            #     tt_out_logits_all_users,
+            # )
 
         return_logits = sampling_params is None
 
@@ -400,8 +402,12 @@ class Generator(WarmupForwardMixin):
 
             if tt_log_probs is not None:
                 tt_lp = tt_log_probs
-                log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_lp)[0])
-                prefill_log_probs = log_probs_torch[0, 0, 0, :][empty_slots]
+                # move log_probs to host
+                log_probs_torch = sampling_module.tt_sampling.log_probs_calculator.transfer_logprobs_to_host(
+                    tt_lp, sampled_tensor
+                )
+                # log_probs_torch = ttnn.to_torch(ttnn.get_device_tensors(tt_lp)[0])
+                prefill_log_probs = [log_probs_torch[i] for i in empty_slots]
 
         if return_logits:
             # TODO: the current solution runs the argmax even if we are returning logits
@@ -788,7 +794,13 @@ class Generator(WarmupForwardMixin):
                 tt_log_probs = tt_out[1]
                 tt_out = tt_out[0]
                 if tt_log_probs is not None:
-                    tt_log_probs_cpu = tt_log_probs.cpu()
+                    if isinstance(tt_log_probs, LogProbsResult):
+                        # Transfer top-k logprobs from device to host here
+                        sampled_tokens = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])[0, 0, 0, :]
+                        lp_calculator = self.model.sampling.tt_sampling.log_probs_calculator
+                        tt_log_probs_cpu = lp_calculator.transfer_logprobs_to_host(tt_log_probs, sampled_tokens)
+                    else:
+                        tt_log_probs_cpu = tt_log_probs.cpu()
 
             return tt_out.cpu(), tt_log_probs_cpu
 
@@ -801,7 +813,13 @@ class Generator(WarmupForwardMixin):
             tt_out = tt_out[0]
             tt_out = ttnn.to_torch(ttnn.get_device_tensors(tt_out)[0])
             if tt_log_probs is not None:
-                tt_log_probs = ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0])
+                if isinstance(tt_log_probs, LogProbsResult):
+                    # Top-k logprobs: transfer from device and build per-user dicts
+                    sampled_tokens = tt_out[0, 0, 0, :]  # (batch_size,)
+                    lp_calculator = self.model.sampling.tt_sampling.log_probs_calculator
+                    tt_log_probs = lp_calculator.transfer_logprobs_to_host(tt_log_probs, sampled_tokens)
+                else:
+                    tt_log_probs = ttnn.to_torch(ttnn.get_device_tensors(tt_log_probs)[0])
             else:
                 tt_log_probs = torch.ones(tt_out.shape)
         else:
@@ -811,10 +829,10 @@ class Generator(WarmupForwardMixin):
         # If so, convert from distributed TT tensor to consolidated torch tensor
         if tt_out.shape[-1] >= self.model.vocab_size // 8:
             ttnn.synchronize_device(self.mesh_device)
-            return tt_out[0, 0, :, : self.model.vocab_size].unsqueeze(1), tt_log_probs[0, 0, :, :]
+            return tt_out[0, 0, :, : self.model.vocab_size].unsqueeze(1), tt_log_probs
 
         # If not sharded (it is a sampled token), convert directly from device tensor to torch tensor
-        return tt_out[0, 0, 0, :], tt_log_probs[0, 0, 0, :]
+        return tt_out[0, 0, 0, :], tt_log_probs
 
     def chat_completion(
         self,

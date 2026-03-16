@@ -535,7 +535,7 @@ class TTSampling(LightweightModule):
         topk_global_indices = ttnn.add(
             self.tt_indices_device_offsets,
             topk_indices_gathered_int32_sharded,
-            dtype=ttnn.int32,
+            dtype=ttnn.uint32,
             memory_config=self.sampling_memory_config,
         )
 
@@ -573,10 +573,11 @@ class TTSampling(LightweightModule):
         # token is always part of the gathered top-k, so its logprob can be
         # looked up by the caller using its index in top_k_indices.
         if self.log_probs_calculator.enable_log_probs:
-            self.tt_log_probs = self.log_probs_calculator.calculate_top_k_log_probs(
+            self.tt_log_probs = self.log_probs_calculator.calculate_topk_log_probs(
                 logits_tensor=x,
                 topk_values=topk_values_gathered_bf16_interleaved,
-                topk_global_indices=topk_global_indices,
+                topk_global_indices=topk_global_indices_interleaved_untilised,
+                sub_core_grid_topk=self.sub_core_grid_topk,
             )
         else:
             self.tt_log_probs = None
