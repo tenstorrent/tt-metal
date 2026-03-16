@@ -1,0 +1,206 @@
+{
+  "op_name": "softmax",
+  "op_path": "ttnn/ttnn/operations/softmax",
+  "spec_path": "ttnn/ttnn/operations/softmax/op_design.md",
+  "layout": "TILE_LAYOUT",
+  "current_stage_index": 0,
+  "last_passing_commit": null,
+  "stages": [
+    {
+      "name": "passthrough",
+      "description": "Data pipeline: reader loads tiles, compute copies input to output, writer stores tiles",
+      "kernel_files": [
+        "reader.cpp",
+        "compute.cpp",
+        "writer.cpp"
+      ],
+      "test_file": "test_stage_passthrough.py",
+      "reference_body": "return input_tensor",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.01
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "exp_only",
+      "description": "Compute applies exp to each tile via copy_tiles with exp post-op",
+      "kernel_files": [
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_exp_only.py",
+      "reference_body": "return torch.exp(input_tensor)",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.05
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "softmax_w_stable",
+      "description": "Full softmax along dim=-1 with numeric_stable=True: max, sub+exp, sum+recip, mul",
+      "kernel_files": [
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_softmax_w_stable.py",
+      "reference_body": "return torch.softmax(input_tensor, dim=-1)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", dim=-1, numeric_stable=True",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "softmax_w_unstable",
+      "description": "Softmax along dim=-1 with numeric_stable=False: exp, sum+recip, mul (no max subtraction)",
+      "kernel_files": [
+        "compute.cpp"
+      ],
+      "test_file": "test_stage_softmax_w_unstable.py",
+      "reference_body": "return torch.softmax(input_tensor, dim=-1)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", dim=-1, numeric_stable=False",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "softmax_h_stable",
+      "description": "Full softmax along dim=-2 with numeric_stable=True: strided reader/writer, same compute",
+      "kernel_files": [
+        "reader.cpp",
+        "writer.cpp"
+      ],
+      "test_file": "test_stage_softmax_h_stable.py",
+      "reference_body": "return torch.softmax(input_tensor, dim=-2)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", dim=-2, numeric_stable=True",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "softmax_h_unstable",
+      "description": "Softmax along dim=-2 with numeric_stable=False: strided access, no max subtraction",
+      "kernel_files": [
+        "reader.cpp",
+        "writer.cpp"
+      ],
+      "test_file": "test_stage_softmax_h_unstable.py",
+      "reference_body": "return torch.softmax(input_tensor, dim=-2)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": ", dim=-2, numeric_stable=False",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
