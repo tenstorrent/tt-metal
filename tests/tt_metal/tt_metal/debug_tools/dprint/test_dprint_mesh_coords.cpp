@@ -169,7 +169,7 @@ void DPrintMeshCoordsFixture::ExtraSetUp() {
     // because ParseAllFeatureEnv resets them to defaults on re-initialization.
     MetalContext::instance().teardown();
     CMAKE_UNIQUE_NAMESPACE::ConfigureDPrintForCoord(
-        MetalContext::instance().rtoptions(), dprint_file_name, /*row=*/0, /*col=*/0);
+        MetalContext::instance().rtoptions(), dprint_file_name, target_coord.first, target_coord.second);
 }
 
 void DPrintMeshCoordsFixture::ExtraTearDown() { MetalContext::instance().teardown(); }
@@ -202,9 +202,7 @@ TEST_F(DPrintMeshCoordsFixture, TensixTestDprintMeshCoordsFiltersAllCoords) {
 
         if (i > 0) {
             DPrintMeshFixture::TearDown();
-            MetalContext::instance().teardown();
-            CMAKE_UNIQUE_NAMESPACE::ConfigureDPrintForCoord(
-                MetalContext::instance().rtoptions(), dprint_file_name, row, col);
+            this->target_coord = {row, col};  // set before SetUp so ExtraSetUp picks it up
             DPrintMeshFixture::SetUp();
         }
 
