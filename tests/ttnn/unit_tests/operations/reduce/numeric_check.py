@@ -146,6 +146,7 @@ def collect_and_dump_numeric_metrics(
     allclose_rtol=ALLCLOSE_RTOL,
     ulp_threshold=ULP_THRESHOLD,
     pcc_threshold=0.999,
+    k=None,
 ):
     """
     Collect all numeric accuracy metrics (PCC, Allclose, Frobenius, ULP) and dump to CSV.
@@ -333,6 +334,18 @@ def collect_and_dump_numeric_metrics(
                         "frobenius_cluster_summary",
                     ]
                 )
+                if k is not None:
+                    header.append("k")
+                    if k >= 1:
+                        header.extend(
+                            [
+                                "max_atol_div_k",
+                                "mean_atol_div_k",
+                                "max_rtol_div_k",
+                                "mean_rtol_div_k",
+                                "frobenius_value_div_k",
+                            ]
+                        )
                 writer.writerow(header)
 
             # Build data row
@@ -362,6 +375,18 @@ def collect_and_dump_numeric_metrics(
                     json.dumps(frob_cluster_summary, separators=(",", ":")),
                 ]
             )
+            if k is not None:
+                row.append(str(k))
+                if k >= 1:
+                    row.extend(
+                        [
+                            f"{max_atol / k:.6e}",
+                            f"{mean_atol / k:.6e}",
+                            f"{max_rtol / k:.6e}",
+                            f"{mean_rtol / k:.6e}",
+                            f"{frob_val / k:.6e}",
+                        ]
+                    )
             # print(row)
             writer.writerow(row)
 
