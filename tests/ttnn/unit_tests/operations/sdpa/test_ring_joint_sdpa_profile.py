@@ -1021,8 +1021,15 @@ def test_ring_joint_sdpa_profile_seq_lengths(device, seq_len_per_device: int):
 # ============================================================================
 
 
+@pytest.mark.parametrize(
+    "total_seq",
+    [
+        pytest.param(102400, id="100k"),
+        pytest.param(131072, id="128k"),
+    ],
+)
 @pytest.mark.parametrize("ring_index", list(range(32)))
-def test_ring_joint_sdpa_profile_production_scale(device, ring_index: int):
+def test_ring_joint_sdpa_profile_production_scale(device, ring_index: int, total_seq: int):
     """
     Profile ring_joint_sdpa with production-scale dimensions.
 
@@ -1031,19 +1038,18 @@ def test_ring_joint_sdpa_profile_production_scale(device, ring_index: int):
 
     Configuration:
     - GQA: 32 Q heads, 1 KV head (shared across Q heads)
-    - Q: [1, 32, 4096, 576] BFLOAT16
-    - K: [1, 1, 4096, 576] BFLOAT8_B
-    - V: [1, 32, 4096, 128] BFLOAT8_B
-    - ring_size=32, total_seq=131072
+    - Q: [1, 32, local_seq, 576] BFLOAT16
+    - K: [1, 1, local_seq, 576] BFLOAT8_B
+    - V: [1, 32, local_seq, 128] BFLOAT8_B
+    - ring_size=32
     - q_chunk_size=256, k_chunk_size=128
     """
     # Production config
     b = 1
     nh_q, nh_k, nh_v = 32, 1, 32  # GQA: 32 Q heads, 1 KV head
     d_qk, d_v = 576, 128  # Q/K dim=576, V dim=128
-    local_seq = 4096
     ring_size = 32
-    total_seq = local_seq * ring_size  # 131072
+    local_seq = total_seq // ring_size
 
     q_chunk_size = 256
     k_chunk_size = 128
@@ -1108,7 +1114,7 @@ def test_ring_joint_sdpa_profile_production_scale(device, ring_index: int):
     # Just verify it ran without error
     assert tt_output is not None
     assert tt_lse is not None
-    print(f"Profile completed for ring_index={ring_index}")
+    print(f"Profile completed for ring_index={ring_index}, total_seq={total_seq}, local_seq={local_seq}")
     print(f"  Q: {list(Q_local.shape)} -> tt_Q: {tt_Q.shape}")
     print(f"  K_gathered: {list(K_gathered.shape)} -> tt_K_gathered: {tt_K_gathered.shape}")
     print(f"  Output: {tt_output.shape}")
