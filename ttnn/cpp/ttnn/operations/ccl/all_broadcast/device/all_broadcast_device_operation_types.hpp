@@ -6,6 +6,7 @@
 
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 namespace ttnn::prim {
@@ -16,6 +17,8 @@ struct AllBroadcastParams {
     MemoryConfig output_mem_config;
     std::optional<uint32_t> cluster_axis;
     std::optional<tt::tt_metal::SubDeviceId> sub_device_id;
+    std::optional<tt::tt_metal::GlobalSemaphore> semaphore;
+    std::optional<tt::tt_metal::GlobalSemaphore> barrier_semaphore;
     tt::tt_fabric::Topology topology{};
 };
 
