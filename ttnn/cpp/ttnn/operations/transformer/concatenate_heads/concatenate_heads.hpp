@@ -6,8 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 
-namespace ttnn {
-namespace transformer {
+namespace ttnn::transformer {
 
 /**
  * @brief Takes in a tensor of shape [batch_size, num_heads, sequence_size, head_size],
@@ -18,5 +17,4 @@ ttnn::Tensor concatenate_heads(
     const Tensor& input_tensor,
     const std::optional<MemoryConfig>& memory_config = std::nullopt);
 
-}  // namespace transformer
-}  // namespace ttnn
+}  // namespace ttnn::transformer

@@ -8,8 +8,7 @@
 #include "ttnn/decorators.hpp"
 #include "ttnn/operations/transformer/sdpa_config.hpp"
 
-namespace ttnn {
-namespace transformer {
+namespace ttnn::transformer {
 
 /**
  * @brief Windowed scaled dot product attention.
@@ -27,6 +26,4 @@ ttnn::Tensor windowed_scaled_dot_product_attention(
     std::optional<operations::transformer::SDPAProgramConfig> program_config = std::nullopt,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt);
 
-}  // namespace transformer
-
-}  // namespace ttnn
+}  // namespace ttnn::transformer

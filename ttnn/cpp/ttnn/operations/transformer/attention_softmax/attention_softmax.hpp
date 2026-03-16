@@ -8,8 +8,7 @@
 
 #include "ttnn/operations/normalization/softmax/device/softmax_operation_types.hpp"
 
-namespace ttnn {
-namespace transformer {
+namespace ttnn::transformer {
 
 /**
  * @brief Divides input_tensor by the square root of head_size, adds attention_mask (optionally) and computes softmax.
@@ -37,6 +36,4 @@ ttnn::Tensor attention_softmax_(
     std::optional<bool> causal_mask = false,
     const std::optional<ttnn::MemoryConfig>& memory_config = std::nullopt);
 
-}  // namespace transformer
-
-}  // namespace ttnn
+}  // namespace ttnn::transformer

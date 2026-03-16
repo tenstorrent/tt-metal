@@ -6,8 +6,7 @@
 
 #include "ttnn/decorators.hpp"
 
-namespace ttnn {
-namespace transformer {
+namespace ttnn::transformer {
 
 /**
  * @brief Splits input_tensor of shape [batch_size, sequence_size, 3 * hidden_size] into 3 tensors (Query, Key, Value)
@@ -26,5 +25,4 @@ std::tuple<Tensor, Tensor, Tensor> split_query_key_value_and_split_heads(
     const std::optional<MemoryConfig>& memory_config,
     bool use_falcon7b_backend = false);
 
-}  // namespace transformer
-}  // namespace ttnn
+}  // namespace ttnn::transformer

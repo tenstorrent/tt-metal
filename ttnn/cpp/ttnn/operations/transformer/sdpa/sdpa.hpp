@@ -10,8 +10,7 @@
 #include "ttnn/operations/ccl/ccl_host_types.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
-namespace ttnn {
-namespace transformer {
+namespace ttnn::transformer {
 
 ttnn::Tensor scaled_dot_product_attention(
     const ttnn::Tensor& input_tensor_q,
@@ -126,6 +125,4 @@ ttnn::Tensor ring_distributed_scaled_dot_product_attention(
     const std::optional<ttnn::Tensor>& page_table = std::nullopt,
     std::optional<int64_t> chunk_start_idx = std::nullopt);
 
-}  // namespace transformer
-
-}  // namespace ttnn
+}  // namespace ttnn::transformer

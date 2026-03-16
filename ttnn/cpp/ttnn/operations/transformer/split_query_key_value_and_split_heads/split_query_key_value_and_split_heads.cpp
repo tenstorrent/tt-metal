@@ -12,9 +12,7 @@
 
 #include "ttnn/operations/experimental/reshape/view.hpp"
 
-namespace ttnn::operations::transformer {
-
-namespace detail {
+namespace ttnn::operations::transformer::detail {
 std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_split_heads(
     const std::tuple<Tensor, Tensor, Tensor>& outputs,
     const uint32_t sequence_size,
@@ -52,9 +50,7 @@ std::tuple<Tensor, Tensor, Tensor> reshape_outputs_of_split_query_key_value_and_
         ttnn::Shape({batch_size, num_kv_heads, sequence_size_padded, head_size_padded}));
     return {query, key, value};
 }
-}  // namespace detail
-
-}  // namespace ttnn::operations::transformer
+}  // namespace ttnn::operations::transformer::detail
 
 namespace ttnn::transformer {
 
