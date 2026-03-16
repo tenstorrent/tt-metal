@@ -32,17 +32,42 @@ def merge_csv_files():
 
     for csv_file in csv_files:
         try:
-            # Read CSV file - handle inconsistent column counts (old vs new format)
+            # Read CSV file manually to handle inconsistent column counts
             with open(csv_file, "r", encoding="utf-8") as f:
                 reader = csv.reader(f)
                 rows = list(reader)
+
                 if not rows:
                     continue
+
                 # Find max columns across all rows
                 max_cols = max(len(row) for row in rows)
-                # Pad header and rows to max_cols
-                header = rows[0] + [f"col_{i}" for i in range(len(rows[0]), max_cols)]
-                data_rows = [row + [None] * (max_cols - len(row)) for row in rows[1:]]
+
+                # Get header from first row
+                header = rows[0]
+
+                # If header has fewer columns than max, we need to extend it
+                # The new format adds: k, max_atol_div_k, mean_atol_div_k, max_rtol_div_k, mean_rtol_div_k, frobenius_value_div_k
+                if len(header) < max_cols:
+                    # Expected new columns (in order)
+                    new_cols = [
+                        "k",
+                        "max_atol_div_k",
+                        "mean_atol_div_k",
+                        "max_rtol_div_k",
+                        "mean_rtol_div_k",
+                        "frobenius_value_div_k",
+                    ]
+                    # Add missing columns to header
+                    num_missing = max_cols - len(header)
+                    header = header + new_cols[:num_missing]
+
+                # Pad all rows to max_cols
+                data_rows = []
+                for row in rows[1:]:
+                    padded_row = row + [None] * (max_cols - len(row))
+                    data_rows.append(padded_row[:max_cols])
+
                 df = pd.DataFrame(data_rows, columns=header[:max_cols])
 
             # Add source file column
@@ -59,7 +84,7 @@ def merge_csv_files():
         print("No data to merge.")
         return
 
-    # Concatenate all dataframes
+    # Concatenate all dataframes - pandas will align columns automatically
     merged_df = pd.concat(all_dataframes, ignore_index=True)
 
     # Write to output CSV
