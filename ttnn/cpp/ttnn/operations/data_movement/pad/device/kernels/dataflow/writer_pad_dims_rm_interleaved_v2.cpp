@@ -15,9 +15,8 @@ void kernel_main() {
     constexpr uint32_t stick_size_padded_aligned = get_compile_time_arg_val(2);
     constexpr uint32_t num_output_pages_in_row = get_compile_time_arg_val(3);
     constexpr uint32_t output_page_size = get_compile_time_arg_val(4);
-    constexpr uint32_t output_aligned_page_size = get_compile_time_arg_val(5);
-    constexpr uint32_t size_of_valid_data_in_last_output_page_in_row = get_compile_time_arg_val(6);
-    constexpr auto dst_args = TensorAccessorArgs<7>();
+    constexpr uint32_t size_of_valid_data_in_last_output_page_in_row = get_compile_time_arg_val(5);
+    constexpr auto dst_args = TensorAccessorArgs<6>();
 
     const auto s = TensorAccessor(dst_args, dst_addr);
 

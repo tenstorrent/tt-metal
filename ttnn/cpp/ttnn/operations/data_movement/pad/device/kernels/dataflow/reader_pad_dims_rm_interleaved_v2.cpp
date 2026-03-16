@@ -67,9 +67,8 @@ void kernel_main() {
 
     constexpr uint32_t num_input_pages_in_row = get_compile_time_arg_val(20);
     constexpr uint32_t input_page_size = get_compile_time_arg_val(21);
-    constexpr uint32_t input_aligned_page_size = get_compile_time_arg_val(22);
-    constexpr uint32_t size_of_valid_data_in_last_input_page_in_row = get_compile_time_arg_val(23);
-    constexpr auto src_args = TensorAccessorArgs<24>();
+    constexpr uint32_t size_of_valid_data_in_last_input_page_in_row = get_compile_time_arg_val(22);
+    constexpr auto src_args = TensorAccessorArgs<23>();
 
     uint32_t packed_pad_value = 0;
     uint32_t row_major_min_bytes = 0;

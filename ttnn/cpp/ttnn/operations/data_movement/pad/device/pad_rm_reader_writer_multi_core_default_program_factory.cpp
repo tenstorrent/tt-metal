@@ -147,7 +147,6 @@ PadRmReaderWriterMultiCoreDefaultProgramFactory::create(
     // Input page-based addressing
     uint32_t num_input_pages_in_row = 1;
     uint32_t input_page_size = a.buffer()->page_size();
-    uint32_t input_aligned_page_size = a.buffer()->aligned_page_size();
     uint32_t size_of_valid_data_in_last_input_page_in_row = a.buffer()->page_size();
     if (a.is_sharded()) {
         uint32_t shard_width =
@@ -159,7 +158,6 @@ PadRmReaderWriterMultiCoreDefaultProgramFactory::create(
     // Output page-based addressing
     uint32_t num_output_pages_in_row = 1;
     uint32_t output_page_size = output.buffer()->page_size();
-    uint32_t output_aligned_page_size = output.buffer()->aligned_page_size();
     uint32_t size_of_valid_data_in_last_output_page_in_row = output.buffer()->page_size();
     if (output.is_sharded()) {
         uint32_t output_shard_width = output.shard_spec().has_value() ? output.shard_spec().value().shape[1]
@@ -244,7 +242,6 @@ PadRmReaderWriterMultiCoreDefaultProgramFactory::create(
         (std::uint32_t)unaligned,
         (std::uint32_t)num_input_pages_in_row,
         (std::uint32_t)input_page_size,
-        (std::uint32_t)input_aligned_page_size,
         (std::uint32_t)size_of_valid_data_in_last_input_page_in_row};
     TensorAccessorArgs(*src0_buffer).append_to(reader_ct_args);
 
@@ -254,7 +251,6 @@ PadRmReaderWriterMultiCoreDefaultProgramFactory::create(
         (std::uint32_t)stick_size_padded_aligned,
         (std::uint32_t)num_output_pages_in_row,
         (std::uint32_t)output_page_size,
-        (std::uint32_t)output_aligned_page_size,
         (std::uint32_t)size_of_valid_data_in_last_output_page_in_row};
     TensorAccessorArgs(*dst_buffer).append_to(writer_ct_args);
 
