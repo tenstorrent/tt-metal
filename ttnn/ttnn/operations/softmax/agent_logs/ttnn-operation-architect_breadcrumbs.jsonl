@@ -8,3 +8,5 @@
 {"event":"helper_analysis","file":"copy_tile_helpers.hpp","applicable":true,"functions":["copy_tiles with exp post_op for computing exp(x-max)"],"ts":"2026-03-16T09:53:20+00:00"}
 {"event":"design_decision","phase":"overall","choice":"Streaming 3-pass approach for both dims","rationale":"Avoids L1 memory pressure. Read input 3 times from DRAM: once for max, once for exp-sum, once for normalize. Simpler CB layout, works for any tensor size.","ts":"2026-03-16T09:53:23+00:00"}
 {"event":"design_decision","phase":"tdd_stages","choice":"4 stages: data_pipeline, exp_passthrough, softmax_dim_w, softmax_dim_h","rationale":"Incremental build: pipeline first, then exp, then full dim=-1, then dim=-2. Each stage testable independently.","ts":"2026-03-16T09:56:31+00:00"}
+{"event":"action","type":"git_commit","message":"[ttnn-operation-architect] design: softmax","ts":"2026-03-16T09:57:28+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":[],"final_commit":"440dc4a847","ts":"2026-03-16T09:57:29+00:00"}
