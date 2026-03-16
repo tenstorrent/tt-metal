@@ -275,22 +275,28 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
 
     // Write 0 to all workers launch message read pointer. Need to do this since dispatch cores are written new on each
     // Device init. TODO: remove this once dispatch init moves to one-shot.
+    auto reset_launch_message_rd_ptr_virtual = [&](const CoreCoord& virtual_core,
+                                                   HalProgrammableCoreType programmable_core_type) {
+        uint64_t launch_msg_buffer_read_ptr_addr =
+            hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
+        uint32_t zero = 0;
+        cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), launch_msg_buffer_read_ptr_addr);
+    };
     auto reset_launch_message_rd_ptr = [&](const CoreCoord& logical_core, const CoreType& core_type) {
         CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(id_, logical_core, core_type);
         auto programmable_core_type = get_programmable_core_type(virtual_core);
-        uint64_t launch_msg_buffer_read_ptr_addr =
-            hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::LAUNCH_MSG_BUFFER_RD_PTR);
-        uint32_t zero = 0;
-        cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), launch_msg_buffer_read_ptr_addr);
+        reset_launch_message_rd_ptr_virtual(virtual_core, programmable_core_type);
     };
     auto reset_go_message_index = [&](const CoreCoord& logical_core, const CoreType& core_type) {
         CoreCoord virtual_core = cluster.get_virtual_coordinate_from_logical_coordinates(id_, logical_core, core_type);
         auto programmable_core_type = get_programmable_core_type(virtual_core);
-        uint32_t go_message_addr = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
+        uint64_t go_message_addr =
+            hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG);
         uint32_t zero = 0;
         cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_addr);
         cluster.l1_barrier(id_);
-        uint32_t go_message_index_addr = hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
+        uint64_t go_message_index_addr =
+            hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::GO_MSG_INDEX);
         cluster.write_core(&zero, sizeof(uint32_t), tt_cxy_pair(id_, virtual_core), go_message_index_addr);
     };
     std::optional<std::unique_lock<std::mutex>> watcher_lock;
@@ -315,6 +321,12 @@ void Device::init_command_queue_device_with_topology(DispatchTopology* topo) {
             continue;
         }
         reset_launch_message_rd_ptr(logical_core, CoreType::ETH);
+    }
+    if (MetalContext::instance().hal().has_programmable_core_type(HalProgrammableCoreType::DRAM)) {
+        for (const auto& dram_core : MetalContext::instance().get_cluster().get_soc_desc(id_).get_cores(
+                 CoreType::DRAM, CoordSystem::TRANSLATED)) {
+            reset_launch_message_rd_ptr_virtual({dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM);
+        }
     }
     if (watcher_lock) {
         watcher_lock.value().unlock();
