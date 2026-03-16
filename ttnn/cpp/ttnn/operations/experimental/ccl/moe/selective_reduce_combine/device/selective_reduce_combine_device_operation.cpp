@@ -9,6 +9,8 @@
 #include "selective_reduce_combine_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
 #include "cpp/ttnn/operations/data_movement/common/common.hpp"
+#include <tt-metalium/hal.hpp>
+#include <tt-metalium/tt_align.hpp>
 #include <tt-metalium/work_split.hpp>
 
 namespace ttnn::experimental::prim {
@@ -31,11 +33,11 @@ void SelectiveReduceCombineDeviceOperation::validate_on_program_cache_miss(
     const auto datum_size =
         tt::datum_size(tt::tt_metal::datatype_to_dataformat_converter(token_activations_tensor.dtype()));
 
-    const auto alignmnent = (token_activations_tensor.memory_config().buffer_type() == BufferType::L1)
-                                ? hal::get_l1_alignment()
-                                : hal::get_dram_alignment();
+    const auto alignment = (token_activations_tensor.memory_config().buffer_type() == BufferType::L1)
+                               ? tt::tt_metal::hal::get_l1_alignment()
+                               : tt::tt_metal::hal::get_dram_alignment();
     const uint32_t expected_activations_stride_elm =
-        tt::align((2 * experts_per_device + 1) * datum_size, alignmnent) / datum_size;
+        tt::align((2 * experts_per_device + 1) * datum_size, alignment) / datum_size;
 
     TT_FATAL(
         activations_stride_elm == expected_activations_stride_elm,
