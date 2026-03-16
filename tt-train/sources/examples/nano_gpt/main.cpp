@@ -342,7 +342,7 @@ int main(int argc, char **argv) {
     argv = app.ensure_utf8(argv);
 
     std::string training_config_name =
-        std::filesystem::current_path().string() + "/configs/training_configs/training_shakespeare_nanogpt.yaml";
+        std::string(CONFIGS_FOLDER) + "/training_configs/training_shakespeare_nanogpt.yaml";
     std::string multihost_config_name = "";
 
     std::string run_name = "";
@@ -365,6 +365,8 @@ int main(int argc, char **argv) {
     auto yaml_config = YAML::LoadFile(training_config_name);
 
     TrainingConfig training_config = parse_config(yaml_config);
+    training_config.model_config = expand_config_path(training_config.model_config);
+
     DeviceConfig device_config = parse_device_config(yaml_config);
     // Resolve model_config path relative to tt-train root (configs/training_configs/ -> configs/ -> tt-train)
     auto training_config_path = std::filesystem::path(training_config_name).parent_path();
@@ -543,7 +545,7 @@ int main(int argc, char **argv) {
                     const uint32_t BATCH_DIM = 0;
                     const uint32_t SEQUENCE_DIM_DATA = 3;
                     const uint32_t SEQUENCE_DIM_TARGETS = 1;
-                    tt::stl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> data_placements(
+                    ttsl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> data_placements(
                         mesh_device.shape().dims(), ttnn::distributed::MeshMapperConfig::Replicate{});
                     if (pctx.is_ddp_enabled()) {
                         data_placements[pctx.get_ddp_axis().value()] =
@@ -563,7 +565,7 @@ int main(int argc, char **argv) {
                             device,
                             ttnn::Layout::ROW_MAJOR,
                             data_mapper.get()));
-                    tt::stl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> targets_placements(
+                    ttsl::SmallVector<ttnn::distributed::MeshMapperConfig::Placement> targets_placements(
                         mesh_device.shape().dims(), ttnn::distributed::MeshMapperConfig::Replicate{});
                     if (pctx.is_ddp_enabled()) {
                         targets_placements[pctx.get_ddp_axis().value()] =

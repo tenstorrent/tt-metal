@@ -204,11 +204,13 @@ class Llama(AbstractModuleBase):
 
 
 # C++ Llama bindings from _ttml.models.llama
-from ..._ttml.models.llama import (
+from _ttml.models.llama import (
     CppLlama,
     CppLlamaConfig,
     create_cpp_llama_model,
 )
+
+from .safetensors_loader import load_from_safetensors
 
 __all__ = [
     # C++ bindings
@@ -219,4 +221,5 @@ __all__ = [
     "Llama",
     "LlamaConfig",
     "LlamaRopeScalingConfig",
+    "load_from_safetensors",
 ]

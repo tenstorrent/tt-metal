@@ -1077,7 +1077,7 @@ def test_unary_atanh_ttnn(input_shapes, torch_dtype, ttnn_dtype, low, high, devi
 )
 @pytest.mark.parametrize(
     "param",
-    (0.65, 7.7, 36.49, 58.6, 97.2),
+    (0.65, 7.7, 36, 58.6, 74, 97.2),
 )
 @pytest.mark.parametrize(
     "ttnn_function",
@@ -1393,7 +1393,9 @@ def test_unary_signbit_float_edge_case_ttnn(torch_dtype, ttnn_dtype, device):
     in_data = torch.tensor(
         [-0.0, 0.0, +0.0, -float("inf"), +float("inf"), +float("nan"), -float("nan")], dtype=torch_dtype
     )
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(
+        in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
+    )
 
     output_tensor = ttnn.signbit(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn.signbit)
@@ -1735,7 +1737,9 @@ def test_inf_nan_check(ttnn_op, torch_dtype, ttnn_dtype, device):
         [float("-inf"), float("inf"), float("nan"), 5.0, -5.0, 0.0, -0.0, 1e38, 1e-45, 3.4e38, -3.4e38],
         dtype=torch_dtype,
     )
-    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    input_tensor = ttnn.from_torch(
+        in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device, preserve_nan_values=True
+    )
 
     output_tensor = ttnn_op(input_tensor)
     golden_function = ttnn.get_golden_function(ttnn_op)
@@ -2144,3 +2148,27 @@ def test_unary_logical_not(device, torch_dtype, ttnn_dtype):
     golden_function = ttnn.get_golden_function(ttnn.logical_not)
     golden_tensor = golden_function(in_data, device=device)
     assert torch.equal(output_tensor, golden_tensor)
+
+
+@pytest.mark.parametrize("fast_and_approximate_mode", [True, False])
+@pytest.mark.parametrize(
+    "torch_dtype, ttnn_dtype",
+    [
+        (torch.bfloat16, ttnn.bfloat16),
+        (torch.float32, ttnn.float32),
+    ],
+)
+def test_unary_mish(torch_dtype, ttnn_dtype, fast_and_approximate_mode, device):
+    if is_blackhole() and fast_and_approximate_mode and torch_dtype == torch.float32:
+        pytest.skip("Skipping Mish fast/approximate fp32 test on Blackhole due to PCC failure (TODO: #39360)")
+    torch.manual_seed(0)
+    in_data = torch.empty((2, 32, 64), dtype=torch_dtype).uniform_(-20, 100)
+
+    input_tensor = ttnn.from_torch(in_data, dtype=ttnn_dtype, layout=ttnn.TILE_LAYOUT, device=device)
+    output_tensor = ttnn.mish(input_tensor, fast_and_approximate_mode=fast_and_approximate_mode)
+    output_tensor = ttnn.to_torch(output_tensor)
+
+    golden_function = ttnn.get_golden_function(ttnn.mish)
+    golden_tensor = golden_function(in_data)
+    golden_tensor = golden_tensor.to(output_tensor.dtype)
+    assert_allclose(golden_tensor, output_tensor, rtol=1e-05, atol=0.008)

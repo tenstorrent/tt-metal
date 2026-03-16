@@ -49,6 +49,7 @@
 // Defined at namespace scope (local classes cannot have static data members)
 struct Core {
     static constexpr bool is_input_core = get_named_compile_time_arg_val("is_input_core") == 1;
+    static constexpr bool is_full_mcast_grid_core = get_named_compile_time_arg_val("is_full_mcast_grid_core") == 1;
     static constexpr bool is_matmul_core = get_named_compile_time_arg_val("is_matmul_core") == 1;
     static constexpr bool is_matmul2_core = get_named_compile_time_arg_val("is_matmul2_core") == 1;
     // Qnope/Qrope core differentiation for interleaved Q head layout after matmul2
@@ -84,8 +85,6 @@ struct Core {
     static constexpr bool is_matmul4_core = get_named_compile_time_arg_val("is_matmul4_core") == 1;
     // Gather core (12, 9) - receives gather2, sends mcast3, receives gather3, CCL receiver
     static constexpr bool is_gather_receiver_core = get_named_compile_time_arg_val("is_gather_receiver_core") == 1;
-    // Mcast3 receiver grid (13x10 = 130 cores) - receives mcast3 data
-    static constexpr bool is_mcast3_receiver_core = get_named_compile_time_arg_val("is_mcast3_receiver_core") == 1;
     // Active matmul5 cores (112 cores: o_proj grid 12x8 + 8x2)
     static constexpr bool is_matmul5_core = get_named_compile_time_arg_val("is_matmul5_core") == 1;
     // CCL sender core (11, 9) - reads from gather core, sends via fabric
@@ -100,6 +99,12 @@ void kernel_main() {
     // Named compile-time args: rmsnorm reader, mcast receiver, matmul reader, gather sender
     // Runtime args: []
     // ============================================================================
+    constexpr uint32_t num_iterations = get_named_compile_time_arg_val("num_iterations");
+    constexpr uint32_t cb_config_l1_addr = get_named_compile_time_arg_val("reconfig_cb_config_l1_addr");
+    uint32_t tt_l1_ptr* cb_config = reinterpret_cast<uint32_t tt_l1_ptr*>(cb_config_l1_addr);
+    // This is needed at the start because mcast is getting the cb ptrs for src/dst addresses
+    unified_kernels::reconfig_cb_interfaces(cb_config);
+
     uint32_t per_core_rta_arg_idx = 0;
 #if defined(COMPILE_FOR_NCRISC)
     // CTArgs type aliases (required for Op templates)
@@ -138,8 +143,8 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_reduce_grid_end_x"),
         get_named_compile_time_arg_val("gather_reduce_grid_end_y"),
         get_named_compile_time_arg_val("gather_reduce_half_num_cores"),
-        get_named_compile_time_arg_val("gather_reduce_half0_cb_id"),
-        get_named_compile_time_arg_val("gather_reduce_half1_cb_id"),
+        get_named_compile_time_arg_val("gather_reduce_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_half_size_bytes"),
     };
 
     // RMSNorm2 reader args
@@ -151,7 +156,7 @@ void kernel_main() {
     // Mcast2 receiver args (for matmul2 cores to receive matmul2 input from input core)
     // Uses same semaphore as first mcast
     deepseek_b1_ops::Mcast::ReceiverArgs mcast2_args{
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"),
+        get_named_compile_time_arg_val("mcast2_data_receiver_semaphore_addr"),
         get_named_compile_time_arg_val("matmul2_in0"),
         get_named_compile_time_arg_val("mcast2_dst_num_pages"),
     };
@@ -308,7 +313,6 @@ void kernel_main() {
     };
 
     // Mcast3 receiver args
-    using Mcast3CTArgs = deepseek_b1_ops::Mcast::ReceiverCTArgs;
     deepseek_b1_ops::Mcast::ReceiverArgs mcast3_args{
         get_semaphore(get_named_compile_time_arg_val("mcast3_data_receiver_semaphore")),
         get_named_compile_time_arg_val("mcast3_dst_cb"),
@@ -437,9 +441,7 @@ void kernel_main() {
     // CCL Receiver NCRISC CTArgs (waits for remote data)
     // Note: skip_local_push=1 because gather3 already pushed to CB7 (gather3_dst_cb)
     using CCLReceiverReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<
-        get_named_compile_time_arg_val("ccl_receiver_packet_header_cb_id"),
         get_named_compile_time_arg_val("ccl_receiver_cb_in1"),
-        get_named_compile_time_arg_val("ccl_receiver_l1_alignment"),
         get_named_compile_time_arg_val("ccl_receiver_cb_in2"),
         get_named_compile_time_arg_val("ccl_receiver_remote_sender_noc_x"),
         get_named_compile_time_arg_val("ccl_receiver_remote_sender_noc_y"),
@@ -448,10 +450,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_receiver_has_residual"),
         get_named_compile_time_arg_val("ccl_receiver_skip_local_push")>;
 
-    // Dummy WriterCTArgs - not used by NCRISC but needed for Op template
-    using DummyWriterCTArgs = deepseek_b1_ops::AllReduceSender::WriterCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-    // Dummy ComputeCTArgs - not used by NCRISC but needed for Op template
-    using DummyComputeCTArgs = deepseek_b1_ops::AllReduceReceiver::ComputeCTArgs<0, 0, 0, 0, 0, 0, 0>;
     deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
     deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
 
@@ -478,7 +476,7 @@ void kernel_main() {
     using McastCTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
         get_named_compile_time_arg_val("mcast_num_cores"),
         get_named_compile_time_arg_val("mcast_is_part_of_receiver_grid"),
-        Core::is_input_core && Core::is_matmul2_core>;  // Always mcast to the main grid
+        Core::is_input_core && Core::is_full_mcast_grid_core>;  // loopback = false
 
     // RMSNorm writer args (BRISC is no-op)
     deepseek_b1_ops::RMSNorm::WriterArgs rmsnorm_args{};
@@ -519,8 +517,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("gather_reduce_noc1_num_senders"),
         get_named_compile_time_arg_val("gather_reduce_noc0_receiver_semaphore_addr"),
         get_named_compile_time_arg_val("gather_reduce_noc1_receiver_semaphore_addr"),
-        get_named_compile_time_arg_val("gather_reduce_half0_dst_cb"),
-        get_named_compile_time_arg_val("gather_reduce_half1_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_dst_cb"),
         get_named_compile_time_arg_val("gather_reduce_dst_num_tiles"),
     };
 
@@ -563,7 +560,7 @@ void kernel_main() {
         get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
         get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
         get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
-        get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"),
+        get_named_compile_time_arg_val("mcast2_data_receiver_semaphore_addr"),
         get_named_compile_time_arg_val("mcast2_data_size_bytes"),
         mcast2_src_cb,  // Wait for rmsnorm2_output_cb
         get_named_compile_time_arg_val("mcast2_src_num_pages"),
@@ -689,19 +686,14 @@ void kernel_main() {
     };
 
     // Mcast3 sender args
-    using Mcast3CTArgs = deepseek_b1_ops::Mcast::SenderCTArgs<
-        get_named_compile_time_arg_val("mcast3_num_cores"),
-        get_named_compile_time_arg_val("mcast3_is_part_of_receiver_grid") == 1,
-        false>;  // loopback = false
-
     constexpr uint32_t mcast3_src_cb = get_named_compile_time_arg_val("mcast3_src_cb");
     constexpr uint32_t mcast3_dst_cb = get_named_compile_time_arg_val("mcast3_dst_cb");
     deepseek_b1_ops::Mcast::SenderArgs mcast3_args{
-        get_named_compile_time_arg_val("mcast3_dest_noc_start_x"),
-        get_named_compile_time_arg_val("mcast3_dest_noc_start_y"),
-        get_named_compile_time_arg_val("mcast3_dest_noc_end_x"),
-        get_named_compile_time_arg_val("mcast3_dest_noc_end_y"),
-        get_named_compile_time_arg_val("mcast3_data_sender_semaphore_addr"),
+        get_named_compile_time_arg_val("mcast_dest_noc_start_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_start_y"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_x"),
+        get_named_compile_time_arg_val("mcast_dest_noc_end_y"),
+        get_named_compile_time_arg_val("mcast_data_sender_semaphore_addr"),
         get_semaphore(get_named_compile_time_arg_val("mcast3_data_receiver_semaphore")),
         get_named_compile_time_arg_val("mcast3_data_size_bytes"),
         mcast3_src_cb,
@@ -741,7 +733,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("sdpa_cb_local_ms"),
         get_named_compile_time_arg_val("sdpa_cb_r1_result_l"),
         get_named_compile_time_arg_val("sdpa_cb_r1_result_ms"),
-        get_named_compile_time_arg_val("sdpa_cb_packet_slot"),
         get_named_compile_time_arg_val("sdpa_l1_alignment"),
         get_named_compile_time_arg_val("sdpa_page_size_bytes"),
         get_named_compile_time_arg_val("sdpa_slot_size"),
@@ -807,9 +798,7 @@ void kernel_main() {
 
     // CCL Sender BRISC CTArgs (sends via fabric)
     using CCLSenderWriterCTArgs = deepseek_b1_ops::AllReduceSender::WriterCTArgs<
-        get_named_compile_time_arg_val("ccl_sender_packet_header_cb_id"),
         get_named_compile_time_arg_val("ccl_sender_packet_cb_id"),
-        get_named_compile_time_arg_val("ccl_sender_l1_alignment"),
         get_named_compile_time_arg_val("ccl_sender_input_num_tiles"),
         get_named_compile_time_arg_val("ccl_sender_page_size_bytes"),
         get_named_compile_time_arg_val("ccl_sender_payload_size_bytes"),
@@ -820,8 +809,6 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_sender_dst_num_hops"),
         get_named_compile_time_arg_val("ccl_sender_num_connections")>;
 
-    // Dummy ReaderCTArgs - not used by BRISC but needed for Op template
-    using DummyReaderCTArgs = deepseek_b1_ops::AllReduceSender::ReaderCTArgs<0, 0, 0, 0, 0>;
     deepseek_b1_ops::AllReduceSender::RTArgs ccl_sender_args{};
     if constexpr (Core::is_ccl_sender_core) {
         ccl_sender_args = {
@@ -891,8 +878,8 @@ void kernel_main() {
 
     // Gather reduce compute args
     deepseek_b1_ops::GatherReduce::ComputeArgs gather_reduce_args{
-        get_named_compile_time_arg_val("gather_reduce_half0_dst_cb"),
-        get_named_compile_time_arg_val("gather_reduce_half1_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_dst_cb"),
+        get_named_compile_time_arg_val("gather_reduce_out_cb"),
         get_named_compile_time_arg_val("gather_reduce_dst_num_tiles"),
     };
 
@@ -1067,7 +1054,6 @@ void kernel_main() {
     deepseek_b1_ops::Gather::ComputeArgs gather2_args{};
 
     // Mcast3 CTArgs (no-op)
-    using Mcast3CTArgs = deepseek_b1_ops::Mcast::ComputeCTArgs;
     deepseek_b1_ops::Mcast::ComputeArgs mcast3_args{};
 
     // Matmul5 CTArgs
@@ -1108,6 +1094,8 @@ void kernel_main() {
         sdpa_reduce_worker_args.r1_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         sdpa_reduce_worker_args.r2_neighbor_device_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
         sdpa_reduce_worker_args.r2_neighbor_r1_neighbor_idx = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        sdpa_reduce_worker_args.swap_r1_reduction_order = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
+        sdpa_reduce_worker_args.swap_r2_reduction_order = get_arg_val<uint32_t>(per_core_rta_arg_idx++);
     }
 
     using SdpaReduceForwarderCTArgs = deepseek_b1_ops::SdpaReduceForwarder::CTArgs<0, 0, 0>;
@@ -1119,76 +1107,75 @@ void kernel_main() {
         get_named_compile_time_arg_val("ccl_receiver_cb_in1"),
         get_named_compile_time_arg_val("ccl_receiver_cb_out0"),
         get_named_compile_time_arg_val("ccl_receiver_cb_residual"),
-        get_named_compile_time_arg_val("ccl_receiver_cb_temp"),
         get_named_compile_time_arg_val("ccl_receiver_has_residual"),
         get_named_compile_time_arg_val("ccl_receiver_num_tiles")>;
 
-    using DummyReaderCTArgs = deepseek_b1_ops::AllReduceReceiver::ReaderCTArgs<0, 0, 0, 0, 0, 0, 0, 0, 0, 0>;
-    // Dummy ReaderCTArgs - not used by TRISC but needed for Op template
     deepseek_b1_ops::AllReduceReceiver::RTArgs ccl_receiver_args{};
 
     deepseek_compute_kernel_init();
 #endif
 
+    // Setup all tensor-backed sharded buffers (marks pre-loaded tiles as ready)
+    auto setup_all_sharded_buffers = [&]() __attribute__((always_inline)) {
 #if defined(COMPILE_FOR_NCRISC)
-    // Setup sharded persistent buffers
-    if constexpr (Core::is_input_core) {
-        // Multi-device mode: NCRISC sets up gamma buffers while BRISC handles CCL
-        // RMSNorm gamma buffer
-        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
-        constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
-        constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
-        unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
+        if constexpr (Core::is_input_core) {
+            // Multi-device mode: NCRISC sets up gamma buffers while BRISC handles CCL
+            // RMSNorm gamma buffer
+            constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+            constexpr uint32_t rmsnorm_gamma_cb = get_named_compile_time_arg_val("rmsnorm_gamma_cb");
+            constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+            unified_kernels::setup_sharded_buffer(rmsnorm_gamma_cb, rmsnorm_num_tiles);
 
-        // RMSNorm2 gamma buffer (3 tiles of 16x32)
-        constexpr uint32_t rmsnorm2_gamma_cb = get_named_compile_time_arg_val("rmsnorm2_gamma_cb");
-        constexpr uint32_t rmsnorm2_num_tiles = get_named_compile_time_arg_val("rmsnorm2_num_tiles");
-        unified_kernels::setup_sharded_buffer(rmsnorm2_gamma_cb, rmsnorm2_num_tiles);
-    }
-    if constexpr (Core::is_qnope_core) {
-        // Matmul3 CB indices and parameters from named compile-time args
-        constexpr uint32_t matmul3_in1 = get_named_compile_time_arg_val("matmul3_in1");
-        constexpr uint32_t matmul3_k_num_tiles = get_named_compile_time_arg_val("matmul3_k_num_tiles");
-        constexpr uint32_t matmul3_out_w_per_core = get_named_compile_time_arg_val("matmul3_out_w_per_core");
+            // RMSNorm2 gamma buffer (3 tiles of 16x32)
+            constexpr uint32_t rmsnorm2_gamma_cb = get_named_compile_time_arg_val("rmsnorm2_gamma_cb");
+            constexpr uint32_t rmsnorm2_num_tiles = get_named_compile_time_arg_val("rmsnorm2_num_tiles");
+            unified_kernels::setup_sharded_buffer(rmsnorm2_gamma_cb, rmsnorm2_num_tiles);
+        }
+        if constexpr (Core::is_qnope_core) {
+            // Matmul3 CB indices and parameters from named compile-time args
+            constexpr uint32_t matmul3_in1 = get_named_compile_time_arg_val("matmul3_in1");
+            constexpr uint32_t matmul3_k_num_tiles = get_named_compile_time_arg_val("matmul3_k_num_tiles");
+            constexpr uint32_t matmul3_out_w_per_core = get_named_compile_time_arg_val("matmul3_out_w_per_core");
 
-        // Matmul3 weights (on Qnope cores, [128, 512] = 4 * 16 = 64 tiles per core)
-        unified_kernels::setup_sharded_buffer(matmul3_in1, matmul3_k_num_tiles * matmul3_out_w_per_core);
-    }
+            // Matmul3 weights (on Qnope cores, [128, 512] = 4 * 16 = 64 tiles per core)
+            unified_kernels::setup_sharded_buffer(matmul3_in1, matmul3_k_num_tiles * matmul3_out_w_per_core);
+        }
 
-    if constexpr (Core::is_qrope_core) {
-        constexpr uint32_t qrope_trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb");
-        unified_kernels::setup_sharded_buffer(qrope_trans_mat_cb, 1);
-    }
+        if constexpr (Core::is_qrope_core) {
+            constexpr uint32_t qrope_trans_mat_cb = get_named_compile_time_arg_val("qrope_trans_mat_cb");
+            unified_kernels::setup_sharded_buffer(qrope_trans_mat_cb, 1);
+        }
 
-    if constexpr (Core::is_kv_rmsnorm_core) {
-        // RMSNorm gamma (sharded weights)
-        constexpr uint32_t kv_rmsnorm_gamma_cb = get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb");
-        constexpr uint32_t kv_rmsnorm_num_tiles = get_named_compile_time_arg_val("kv_rmsnorm_num_tiles");
-        unified_kernels::setup_sharded_buffer(kv_rmsnorm_gamma_cb, kv_rmsnorm_num_tiles);
-    }
+        if constexpr (Core::is_kv_rmsnorm_core) {
+            // RMSNorm gamma (sharded weights)
+            constexpr uint32_t kv_rmsnorm_gamma_cb = get_named_compile_time_arg_val("kv_rmsnorm_gamma_cb");
+            constexpr uint32_t kv_rmsnorm_num_tiles = get_named_compile_time_arg_val("kv_rmsnorm_num_tiles");
+            unified_kernels::setup_sharded_buffer(kv_rmsnorm_gamma_cb, kv_rmsnorm_num_tiles);
+        }
 
-    if constexpr (Core::is_krope_core) {
-        constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
-        unified_kernels::setup_sharded_buffer(krope_trans_mat_cb, 1);
-    }
+        if constexpr (Core::is_krope_core) {
+            constexpr uint32_t krope_trans_mat_cb = get_named_compile_time_arg_val("krope_trans_mat_cb");
+            unified_kernels::setup_sharded_buffer(krope_trans_mat_cb, 1);
+        }
 
-    if constexpr (Core::is_matmul4_core) {
-        constexpr uint32_t matmul4_in1 = get_named_compile_time_arg_val("matmul4_in1");
-        constexpr uint32_t matmul4_k_num_tiles = get_named_compile_time_arg_val("matmul4_k_num_tiles");
-        constexpr uint32_t matmul4_out_w_per_core = get_named_compile_time_arg_val("matmul4_out_w_per_core");
-        unified_kernels::setup_sharded_buffer(matmul4_in1, matmul4_k_num_tiles * matmul4_out_w_per_core);
-    }
+        if constexpr (Core::is_matmul4_core) {
+            constexpr uint32_t matmul4_in1 = get_named_compile_time_arg_val("matmul4_in1");
+            constexpr uint32_t matmul4_k_num_tiles = get_named_compile_time_arg_val("matmul4_k_num_tiles");
+            constexpr uint32_t matmul4_out_w_per_core = get_named_compile_time_arg_val("matmul4_out_w_per_core");
+            unified_kernels::setup_sharded_buffer(matmul4_in1, matmul4_k_num_tiles * matmul4_out_w_per_core);
+        }
 
-    if constexpr (Core::is_matmul5_core) {
-        constexpr uint32_t matmul5_in1 = get_named_compile_time_arg_val("matmul5_in1");
-        constexpr uint32_t matmul5_k_num_tiles = get_named_compile_time_arg_val("matmul5_k_num_tiles");
-        constexpr uint32_t matmul5_out_w_per_core = get_named_compile_time_arg_val("matmul5_out_w_per_core");
-        unified_kernels::setup_sharded_buffer(matmul5_in1, matmul5_k_num_tiles * matmul5_out_w_per_core);
-    }
+        if constexpr (Core::is_matmul5_core) {
+            constexpr uint32_t matmul5_in1 = get_named_compile_time_arg_val("matmul5_in1");
+            constexpr uint32_t matmul5_k_num_tiles = get_named_compile_time_arg_val("matmul5_k_num_tiles");
+            constexpr uint32_t matmul5_out_w_per_core = get_named_compile_time_arg_val("matmul5_out_w_per_core");
+            unified_kernels::setup_sharded_buffer(matmul5_in1, matmul5_k_num_tiles * matmul5_out_w_per_core);
+        }
 #endif
+    };
 
 #if defined(COMPILE_FOR_BRISC)
-     uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(1);
+    uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(1);
 #elif defined(COMPILE_FOR_NCRISC)
     uint32_t cur_pos_addr = get_common_arg_val<uint32_t>(14);
 #elif defined(COMPILE_FOR_TRISC)
@@ -1201,7 +1188,8 @@ void kernel_main() {
     deepseek_b1_ops::Mcast::Op<
         McastCTArgs,
         Core::is_input_core,
-        Core::is_matmul2_core,
+        // Receive on the whole grid. This is used to block downstream ccls
+        Core::is_full_mcast_grid_core,
         Core::is_matmul_core || Core::is_dkv_matmul_core,
         true>
         mcast;
@@ -1210,42 +1198,43 @@ void kernel_main() {
         mcast.init(mcast_args);
     }
 
-    // ========================================================================
-    // CCL Broadcast (optional, skip if single-device mode)
-    // ========================================================================
-    if constexpr (!Core::skip_ccl) {
-        {
-            DeviceZoneScopedN("CCL_BROADCAST");
-            deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
-            bcast(bcast_args);
+    auto mla_body = [&]() __attribute__((always_inline)) {
+        // ========================================================================
+        // CCL Broadcast (optional, skip if single-device mode)
+        // ========================================================================
+        if constexpr (!Core::skip_ccl) {
+            {
+                DeviceZoneScopedN("CCL_BROADCAST");
+                deepseek_b1_ops::Broadcast::Op<BcastCTArgs, Core::is_input_core> bcast;
+                bcast(bcast_args);
+            }
         }
-    }
 
 #if defined(COMPILE_FOR_NCRISC)
-    if constexpr (Core::is_input_core) {
-        // Gamma CBs are already set up by NCRISC via setup_sharded_buffer
-        constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
-        constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
+        if constexpr (Core::is_input_core) {
+            // Gamma CBs are already set up by NCRISC via setup_sharded_buffer
+            constexpr uint32_t rmsnorm_input_cb = get_named_compile_time_arg_val("rmsnorm_input_cb");
+            constexpr uint32_t rmsnorm_num_tiles = get_named_compile_time_arg_val("rmsnorm_num_tiles");
 
-        cb_reserve_back(rmsnorm_input_cb, rmsnorm_num_tiles);
-        cb_push_back(rmsnorm_input_cb, rmsnorm_num_tiles);
-    }
+            cb_reserve_back(rmsnorm_input_cb, rmsnorm_num_tiles);
+            cb_push_back(rmsnorm_input_cb, rmsnorm_num_tiles);
+        }
 #endif
 
-    // SP position handling.
-    // Read the global position from L1 and decide whether this device has
-    // work / owns the current KV-cache slot. The normalized (device-local)
-    // local_cur_pos is used for kv cache update and flash mla.
-    volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cur_pos_addr);
-    uint32_t cur_pos = pos_ptr[0];
+        // SP position handling.
+        // Read the global position from L1 and decide whether this device has
+        // work / owns the current KV-cache slot. The normalized (device-local)
+        // local_cur_pos is used for kv cache update and flash mla.
+        volatile tt_l1_ptr uint32_t* pos_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(cur_pos_addr);
+        invalidate_l1_cache();
+        uint32_t cur_pos = pos_ptr[0];
 
-    // const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
-    //     cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
-    const bool skip_attention = false;
-    const bool skip_kv_cache_update = false;
-    const uint32_t local_cur_pos = cur_pos;
+        const auto [skip_attention, skip_kv_cache_update, local_cur_pos] = get_device_mla_work_assignment(
+            cur_pos, Core::kv_cache_sp_device_idx, Core::kv_cache_device_chunk_size, Core::kv_cache_num_sp_devices);
 
-    if (!skip_attention) {
+        using FlashMLAOp = deepseek_b1_ops::FlashMLADecode::Op<FlashMLACTArgs, Core::is_mla_core>;
+        // The first mcast is also used to synchronize downstream ccls, so must always run.
+        // Can revisit this later
         // ====================================================================
         // Input core: RMSNorm + Mcast send
         // ====================================================================
@@ -1260,315 +1249,346 @@ void kernel_main() {
             mcast(mcast_args);
         }
 
-        // ====================================================================
-        // Matmul operation
-        // ====================================================================
-        {
-            DeviceZoneScopedN("MATMUL");
-            deepseek_b1_ops::KNSlicedMatmul::Op<MatmulCTArgs, Core::is_matmul_core, false, false> matmul;
-            matmul(matmul_args);
-        }
-
-        // ====================================================================
-        // GatherReduce: matmul cores (senders) -> input core (receiver/reducer)
-        // ====================================================================
-        {
-            DeviceZoneScopedN("GATHER");
-            deepseek_b1_ops::GatherReduce::Op<Core::is_matmul_core, Core::is_input_core, Core::is_input_core, true>
-                gather_reduce;
-            gather_reduce(gather_reduce_args);
-        }
-
-        // ====================================================================
-        // RMSNorm2
-        // ====================================================================
-        {
-            DeviceZoneScopedN("RMSNORM2");
-            deepseek_b1_ops::RMSNorm::Op<RMSNorm2CTArgs, Core::is_input_core, true> rmsnorm2;
-            rmsnorm2(rmsnorm2_args);
-        }
-
-        // ====================================================================
-        // Mcast2: Broadcast rmsnorm2 output to matmul2 cores
-        // ====================================================================
-        {
-            DeviceZoneScopedN("MCAST2");
-            deepseek_b1_ops::Mcast::
-                Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, Core::is_matmul2_core, true>
-                    mcast2;
-            mcast2(mcast2_args);
-        }
-
-        // ====================================================================
-        // Matmul2
-        // ====================================================================
-        {
-            DeviceZoneScopedN("MATMUL2");
-            deepseek_b1_ops::Matmul::Op<Matmul2CTArgs, Core::is_matmul2_core, true, false> matmul2;
-            matmul2(matmul2_args);
-        }
-
-        {
-            DeviceZoneScopedN("Q_HEADS") static_assert(
-                !(Core::is_qnope_core && Core::is_qrope_core), "Core cannot be both QNOPE and QROPE");
-
-            // ================================================================
-            // Matmul3 (QNoPE)
-            // ================================================================
+        if (!skip_attention) {
+            // ====================================================================
+            // Matmul operation
+            // ====================================================================
             {
-                DeviceZoneScopedN("QNOPE/MATMUL3");
-                deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false> matmul3;
-                matmul3(matmul3_args);
+                DeviceZoneScopedN("MATMUL");
+                deepseek_b1_ops::KNSlicedMatmul::Op<MatmulCTArgs, Core::is_matmul_core, false, false> matmul;
+                matmul(matmul_args);
             }
 
-            // ================================================================
-            // RoPE (Qrope)
-            // ================================================================
+            // ====================================================================
+            // GatherReduce: matmul cores (senders) -> input core (receiver/reducer)
+            // ====================================================================
             {
-                DeviceZoneScopedN("QROPE");
-                deepseek_b1_ops::Rope::Op<QRopeCTArgs, Core::is_qrope_core> rope;
-                rope(qrope_args);
+                DeviceZoneScopedN("GATHER");
+                deepseek_b1_ops::GatherReduce::Op<Core::is_matmul_core, Core::is_input_core, Core::is_input_core, true>
+                    gather_reduce;
+                gather_reduce(gather_reduce_args);
             }
 
-            // ================================================================
-            // CreateQHeads
-            // ================================================================
+            // ====================================================================
+            // RMSNorm2
+            // ====================================================================
             {
-                DeviceZoneScopedN("CREATE_Q_HEADS");
-                constexpr bool is_create_q_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
-                deepseek_b1_ops::CreateQHeads::
-                    Op<CreateQHeadsCTArgs, is_create_q_heads_sender, Core::is_sdpa_input_core, false, true>
-                        create_q_heads;
-                create_q_heads(create_q_heads_args);
+                DeviceZoneScopedN("RMSNORM2");
+                deepseek_b1_ops::RMSNorm::Op<RMSNorm2CTArgs, Core::is_input_core, true> rmsnorm2;
+                rmsnorm2(rmsnorm2_args);
+            }
+
+            // ====================================================================
+            // Mcast2: Broadcast rmsnorm2 output to matmul2 cores
+            // ====================================================================
+            {
+                DeviceZoneScopedN("MCAST2");
+                deepseek_b1_ops::Mcast::
+                    Op<McastCTArgs, Core::is_input_core, Core::is_matmul2_core, Core::is_matmul2_core, true>
+                        mcast2;
+                mcast2(mcast2_args);
+            }
+
+            // ====================================================================
+            // Matmul2
+            // ====================================================================
+            {
+                DeviceZoneScopedN("MATMUL2");
+                deepseek_b1_ops::Matmul::Op<Matmul2CTArgs, Core::is_matmul2_core, true, false> matmul2;
+                matmul2(matmul2_args);
+            }
+
+            {
+                DeviceZoneScopedN("Q_HEADS") static_assert(
+                    !(Core::is_qnope_core && Core::is_qrope_core), "Core cannot be both QNOPE and QROPE");
+
+                // ================================================================
+                // Matmul3 (QNoPE)
+                // ================================================================
+                {
+                    DeviceZoneScopedN("QNOPE/MATMUL3");
+                    deepseek_b1_ops::Matmul::Op<Matmul3CTArgs, Core::is_qnope_core, true, false> matmul3;
+                    matmul3(matmul3_args);
+                }
+
+                // ================================================================
+                // RoPE (Qrope)
+                // ================================================================
+                {
+                    DeviceZoneScopedN("QROPE");
+                    deepseek_b1_ops::Rope::Op<QRopeCTArgs, Core::is_qrope_core> rope;
+                    rope(qrope_args);
+                }
+
+                // ================================================================
+                // CreateQHeads
+                // ================================================================
+                {
+                    DeviceZoneScopedN("CREATE_Q_HEADS");
+                    constexpr bool is_create_q_heads_sender = Core::is_qnope_core || Core::is_qrope_core;
+                    deepseek_b1_ops::CreateQHeads::
+                        Op<CreateQHeadsCTArgs, is_create_q_heads_sender, Core::is_sdpa_input_core, false, true>
+                            create_q_heads;
+                    create_q_heads(create_q_heads_args);
+                }
+            }
+
+            // ====================================================================
+            // KV Cache Branch
+            // Non-owning SP devices skip the entire branch and just signal the
+            // KV-cache-ready semaphore so FlashMLA can proceed.
+            // ====================================================================
+            deepseek_b1_ops::KVCacheUpdate::Op<Core::is_kv_rmsnorm_core, Core::is_krope_core> kv_cache_update;
+            kv_cache_update.set_local_cur_pos(kv_cache_update_args, local_cur_pos);
+            if (!skip_kv_cache_update) {
+                DeviceZoneScopedN("KV CACHE");
+                // ================================================================
+                // DKV Matmul: 9x2 grid, each core handles 1 head of 32 dim
+                // ================================================================
+                {
+                    DeviceZoneScopedN("DKV_MATMUL");
+                    // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
+                    deepseek_b1_ops::Matmul::Op<DKV_MatmulCTArgs, Core::is_dkv_matmul_core, false, false> dkv_matmul;
+                    dkv_matmul(dkv_matmul_args);
+                }
+
+                // ================================================================
+                // Gather: dkv matmul cores (senders) -> rmsnorm core (receiver)
+                // NCRISC sends from knope grid, BRISC receives on rmsnorm grid
+                // ================================================================
+                {
+                    DeviceZoneScopedN("DKV_GATHER");
+                    deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true> dkv_gather;
+                    dkv_gather(dkv_gather_args);
+                }
+
+                // ================================================================
+                // RMSNorm: Apply RMSNorm to the gathered data
+                // ================================================================
+                {
+                    DeviceZoneScopedN("KV_RMSNORM");
+                    deepseek_b1_ops::RMSNorm::Op<KV_RMSNormCTArgs, Core::is_kv_rmsnorm_core, true> kv_rmsnorm;
+                    kv_rmsnorm(kv_rmsnorm_args);
+                }
+
+                // ================================================================
+                // RoPE
+                // ================================================================
+                {
+                    DeviceZoneScopedN("K_ROPE");
+                    deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> krope;
+                    krope(krope_args);
+                }
+
+                // ================================================================
+                // KV Cache Update: Write results to DRAM interleaved tensor
+                // BRISC handles writing from output CBs to DRAM
+                // ================================================================
+                {
+                    DeviceZoneScopedN("KV_CACHE_UPDATE");
+                    kv_cache_update(kv_cache_update_args);
+                }
+            }
+            {
+                DeviceZoneScopedN("KV_CACHE_SIGNAL_READY");
+                kv_cache_update.signal_cache_ready(kv_cache_update_args);
+            }
+
+            // ====================================================================
+            // Flash MLA: Compute
+            // ====================================================================
+            {
+                DeviceZoneScopedN("FLASH_MLA");
+                FlashMLAOp flash_mla;
+                flash_mla.set_local_cur_pos(flash_mla_args, local_cur_pos);
+                flash_mla(flash_mla_args);
+            }
+        } else {
+            // This device has no sequence data (e.g. SP2/SP3 with seq_len = 2047 and per_device_chunk_size = 1024).
+            // Push dummy tiles into the hand-off CBs so SDPA reduce does not hang.
+            // TODO: Fuse the final SP reduce into Flash MLA and handle this internally,
+            // eliminating the need for this explicit dummy push.
+            if constexpr (Core::is_sdpa_worker_core) {
+                FlashMLAOp::push_dummy_sdpa_inputs();
             }
         }
 
-        // ====================================================================
-        // KV Cache Branch
-        // Non-owning SP devices skip the entire branch and just signal the
-        // KV-cache-ready semaphore so FlashMLA can proceed.
-        // ====================================================================
-        deepseek_b1_ops::KVCacheUpdate::Op<Core::is_kv_rmsnorm_core, Core::is_krope_core> kv_cache_update;
-        kv_cache_update.set_local_cur_pos(kv_cache_update_args, local_cur_pos);
-        if (!skip_kv_cache_update) {
-            DeviceZoneScopedN("KV CACHE");
-            // ================================================================
-            // DKV Matmul: 9x2 grid, each core handles 1 head of 32 dim
-            // ================================================================
-            {
-                DeviceZoneScopedN("DKV_MATMUL");
-                // pop_in0 = true (consumed), pop_in1 = false (weights are persistent)
-                deepseek_b1_ops::Matmul::Op<DKV_MatmulCTArgs, Core::is_dkv_matmul_core, false, false> dkv_matmul;
-                dkv_matmul(dkv_matmul_args);
-            }
-
-            // ================================================================
-            // Gather: dkv matmul cores (senders) -> rmsnorm core (receiver)
-            // NCRISC sends from knope grid, BRISC receives on rmsnorm grid
-            // ================================================================
-            {
-                DeviceZoneScopedN("DKV_GATHER");
-                deepseek_b1_ops::Gather::Op<Core::is_knope_core, Core::is_kv_rmsnorm_core, true> dkv_gather;
-                dkv_gather(dkv_gather_args);
-            }
-
-            // ================================================================
-            // RMSNorm: Apply RMSNorm to the gathered data
-            // ================================================================
-            {
-                DeviceZoneScopedN("KV_RMSNORM");
-                deepseek_b1_ops::RMSNorm::Op<KV_RMSNormCTArgs, Core::is_kv_rmsnorm_core, true> kv_rmsnorm;
-                kv_rmsnorm(kv_rmsnorm_args);
-            }
-
-            // ================================================================
-            // RoPE
-            // ================================================================
-            {
-                DeviceZoneScopedN("K_ROPE");
-                deepseek_b1_ops::Rope::Op<K_RopeCTArgs, Core::is_krope_core> krope;
-                krope(krope_args);
-            }
-
-            // ================================================================
-            // KV Cache Update: Write results to DRAM interleaved tensor
-            // BRISC handles writing from output CBs to DRAM
-            // ================================================================
-            {
-                DeviceZoneScopedN("KV_CACHE_UPDATE");
-                kv_cache_update(kv_cache_update_args);
-            }
-        }
-        {
-            DeviceZoneScopedN("KV_CACHE_SIGNAL_READY");
-            kv_cache_update.signal_cache_ready(kv_cache_update_args);
-        }
-
-        // ====================================================================
-        // Flash MLA: Compute
-        // ====================================================================
-        {
-            DeviceZoneScopedN("FLASH_MLA");
-            deepseek_b1_ops::FlashMLADecode::
-                Op<FlashMLACTArgs, Core::is_mla_core, Core::is_kv_rmsnorm_core || Core::is_krope_core>
-                    flash_mla;
-            flash_mla.set_local_cur_pos(flash_mla_args, local_cur_pos);
-            flash_mla(flash_mla_args);
-        }
-    }
-    {
         // ========================================================================
         // Post SDPA: Reduce-to-All + Matmul4 + Gather2 + Mcast3 + Matmul5 + Gather3 + CCL All-Reduce
         // ========================================================================
-            {
-                DeviceZoneScopedN("POST_SDPA");
-                if constexpr (Core::is_sdpa_worker_core) {
-                    deepseek_b1_ops::SdpaReduceWorker::Op<SdpaReduceWorkerCTArgs> sdpa_reduce_worker;
-                    sdpa_reduce_worker(sdpa_reduce_worker_args);
-                }
-                if constexpr (Core::is_sdpa_forwarder_core) {
-                    deepseek_b1_ops::SdpaReduceForwarder::Op<SdpaReduceForwarderCTArgs> sdpa_reduce_forwarder;
-                    sdpa_reduce_forwarder(sdpa_reduce_forwarder_args);
-                }
+        {
+            DeviceZoneScopedN("POST_SDPA");
+            if constexpr (Core::is_sdpa_worker_core) {
+                deepseek_b1_ops::SdpaReduceWorker::Op<SdpaReduceWorkerCTArgs> sdpa_reduce_worker;
+                sdpa_reduce_worker(sdpa_reduce_worker_args);
+            }
+            if constexpr (Core::is_sdpa_forwarder_core) {
+                deepseek_b1_ops::SdpaReduceForwarder::Op<SdpaReduceForwarderCTArgs> sdpa_reduce_forwarder;
+                // We need to make sure both riscs wait for the initial broadcast CCL to complete since
+                // reduce forwarder uses both riscs to send over fabric
+                // The first mcast syncs the ncrisc, so we need to also make sure brisc waits for the first mcast
 #if defined(COMPILE_FOR_NCRISC)
-                if constexpr (Core::is_matmul4_core) {
-                    constexpr uint32_t scatter_arrival_semaphore_id =
-                        get_named_compile_time_arg_val("scatter_arrival_semaphore_id");
-                    volatile tt_l1_ptr uint32_t* scatter_arrival_sem_addr =
-                        reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scatter_arrival_semaphore_id));
-                    noc_semaphore_wait(scatter_arrival_sem_addr, 1);
-                    noc_semaphore_set(scatter_arrival_sem_addr, 0);
-                    constexpr uint32_t matmul4_in0 = get_named_compile_time_arg_val("matmul4_in0");
-                    constexpr uint32_t matmul4_k_num_tiles = get_named_compile_time_arg_val("matmul4_k_num_tiles");
-                    unified_kernels::setup_sharded_buffer(matmul4_in0, matmul4_k_num_tiles);
-                }
+                volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
+                // Make sure the value is different from the mcasted value
+                // The wait below is for safety if this runs on the same core as another doing the same sync
+                // If that is the case we don't actually need to do another sync
+                noc_semaphore_wait(sync_sem, 0);
+                noc_semaphore_set(sync_sem, 2);
+#elif defined(COMPILE_FOR_BRISC)
+                volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                    get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
+                noc_semaphore_wait(sync_sem, 2);
+                noc_semaphore_set(sync_sem, 0);
 #endif
+                sdpa_reduce_forwarder(sdpa_reduce_forwarder_args);
             }
-            // ========================================================================
-            // Matmul4: [1, 512] x [512, 128] -> [1, 128] per core (kv_b2 grid)
-            // ========================================================================
-            {
-                DeviceZoneScopedN("MATMUL4");
-                deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
-                matmul4(matmul4_args);
+#if defined(COMPILE_FOR_NCRISC)
+            if constexpr (Core::is_matmul4_core) {
+                constexpr uint32_t scatter_arrival_semaphore_id =
+                    get_named_compile_time_arg_val("scatter_arrival_semaphore_id");
+                volatile tt_l1_ptr uint32_t* scatter_arrival_sem_addr =
+                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(scatter_arrival_semaphore_id));
+                noc_semaphore_wait(scatter_arrival_sem_addr, 1);
+                noc_semaphore_set(scatter_arrival_sem_addr, 0);
+                constexpr uint32_t matmul4_in0 = get_named_compile_time_arg_val("matmul4_in0");
+                constexpr uint32_t matmul4_k_num_tiles = get_named_compile_time_arg_val("matmul4_k_num_tiles");
+                unified_kernels::setup_sharded_buffer(matmul4_in0, matmul4_k_num_tiles);
             }
+#endif
+        }
+        // ========================================================================
+        // Matmul4: [1, 512] x [512, 128] -> [1, 128] per core (kv_b2 grid)
+        // ========================================================================
+        {
+            DeviceZoneScopedN("MATMUL4");
+            deepseek_b1_ops::Matmul::Op<Matmul4CTArgs, Core::is_matmul4_core, true, false> matmul4;
+            matmul4(matmul4_args);
+        }
 
-            // ========================================================================
-            // Gather2: matmul4 cores (kv_b2 grid) -> gather core (12, 9)
-            // Collects [1, 128] * 64 = [1, 8192]
-            // ========================================================================
-            {
-                DeviceZoneScopedN("GATHER2");
-                deepseek_b1_ops::Gather::Op<Core::is_matmul4_core, Core::is_gather_receiver_core, true, true> gather2;
-                gather2(gather2_args);
-            }
+        // ========================================================================
+        // Gather2: matmul4 cores (kv_b2 grid) -> gather core (12, 9)
+        // Collects [1, 128] * 64 = [1, 8192]
+        // ========================================================================
+        {
+            DeviceZoneScopedN("GATHER2");
+            deepseek_b1_ops::Gather::Op<Core::is_matmul4_core, Core::is_gather_receiver_core, true, true> gather2;
+            gather2(gather2_args);
+        }
 
-            // ========================================================================
-            // Mcast3: gather core -> 13x10 mcast3 grid (130 cores)
-            // Broadcasts [1, 8192] to each core in mcast3 grid
-            // Source: gather2_dst_cb (CB 3), Destination: mcast3_dst_cb = matmul5_in0 (CB 4)
-            // Note: 18 inactive grid cores only do semaphore handshake; only matmul5 cores do full CB receive
-            // ========================================================================
-            constexpr bool is_mcast3_grid_core = Core::is_mcast3_receiver_core && !Core::is_gather_receiver_core;
-            deepseek_b1_ops::Mcast::
-                Op<Mcast3CTArgs, Core::is_gather_receiver_core, is_mcast3_grid_core, Core::is_matmul5_core, true>
-                    mcast3;
-            // mcast3.init(mcast3_args);
-            {
-                DeviceZoneScopedN("MCAST3");
-                mcast3(mcast3_args);
-            }
+        // ========================================================================
+        // Mcast3: gather core -> 13x10 mcast3 grid (130 cores)
+        // Broadcasts [1, 8192] to each core in mcast3 grid
+        // Source: gather2_dst_cb (CB 3), Destination: mcast3_dst_cb = matmul5_in0 (CB 4)
+        // Note: 18 inactive grid cores only do semaphore handshake; only matmul5 cores do full CB receive
+        // ========================================================================
+        deepseek_b1_ops::Mcast::
+            Op<McastCTArgs, Core::is_gather_receiver_core, Core::is_matmul5_core, Core::is_matmul5_core, true>
+                mcast3;
+        {
+            DeviceZoneScopedN("MCAST3");
+            mcast3(mcast3_args);
+        }
 
-            // ========================================================================
-            // Matmul5: [1, 8192] x [8192, 64] -> [1, 64] per core (112 active cores)
-            // Input: mcast3_dst_cb (CB 4), Weights: matmul5_in1 (CB 5), Output: matmul5_out (CB 6)
-            // Only runs on 112 active cores (is_matmul5_core=true), 18 inactive cores skip
-            // ========================================================================
-            {
-                DeviceZoneScopedN("MATMUL5");
-                // pop_in0 = true (mcast3 output consumed), pop_in1 = false (weights persistent)
-                deepseek_b1_ops::Matmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
-                matmul5(matmul5_args);
-            }
+        // ========================================================================
+        // Matmul5: [1, 8192] x [8192, 64] -> [1, 64] per core (112 active cores)
+        // Input: mcast3_dst_cb (CB 4), Weights: matmul5_in1 (CB 5), Output: matmul5_out (CB 6)
+        // Only runs on 112 active cores (is_matmul5_core=true), 18 inactive cores skip
+        // ========================================================================
+        {
+            DeviceZoneScopedN("MATMUL5");
+            // pop_in0 = true (mcast3 output consumed), pop_in1 = false (weights persistent)
+            deepseek_b1_ops::Matmul::Op<Matmul5CTArgs, Core::is_matmul5_core, true, false> matmul5;
+            matmul5(matmul5_args);
+        }
 
-            // ========================================================================
-            // Gather3: 112 active matmul5 cores -> gather core (12, 9)
-            // Collects [1, 64] * 112 = [1, 7168]
-            // ========================================================================
-            {
-                DeviceZoneScopedN("GATHER3");
-                deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_gather_receiver_core, true, true> gather3;
-                gather3(gather3_args);
-            }
+        // ========================================================================
+        // Gather3: 112 active matmul5 cores -> gather core (12, 9)
+        // Collects [1, 64] * 112 = [1, 7168]
+        // ========================================================================
+        {
+            DeviceZoneScopedN("GATHER3");
+            deepseek_b1_ops::Gather::Op<Core::is_matmul5_core, Core::is_gather_receiver_core, true, true> gather3;
+            gather3(gather3_args);
+        }
 
 #if defined(COMPILE_FOR_BRISC)
-            // Signal CCL sender that gather3 is complete (gather receiver only)
-            if constexpr (Core::is_gather_receiver_core && Core::is_ccl_receiver_core) {
-                static_assert(noc_mode == DM_DYNAMIC_NOC, "CCL signal must be sent on dynamic NOC");
-                constexpr uint8_t CCL_SIGNAL_NOC = 0;
-                constexpr uint32_t gather3_completion_semaphore_id =
-                    get_named_compile_time_arg_val("gather3_completion_semaphore_id");
-                constexpr uint32_t ccl_sender_noc_x = get_named_compile_time_arg_val("ccl_sender_noc_x");
-                constexpr uint32_t ccl_sender_noc_y = get_named_compile_time_arg_val("ccl_sender_noc_y");
-                uint64_t ccl_sender_semaphore_addr = get_noc_addr(
-                    ccl_sender_noc_x, ccl_sender_noc_y, get_semaphore(gather3_completion_semaphore_id), CCL_SIGNAL_NOC);
-                noc_semaphore_inc(ccl_sender_semaphore_addr, 1, CCL_SIGNAL_NOC);
-                noc_async_atomic_barrier(CCL_SIGNAL_NOC);
-            }
+        // Signal CCL sender that gather3 is complete (gather receiver only)
+        if constexpr (Core::is_gather_receiver_core && Core::is_ccl_receiver_core) {
+            static_assert(noc_mode == DM_DYNAMIC_NOC, "CCL signal must be sent on dynamic NOC");
+            constexpr uint8_t CCL_SIGNAL_NOC = 0;
+            constexpr uint32_t gather3_completion_semaphore_id =
+                get_named_compile_time_arg_val("gather3_completion_semaphore_id");
+            constexpr uint32_t ccl_sender_noc_x = get_named_compile_time_arg_val("ccl_sender_noc_x");
+            constexpr uint32_t ccl_sender_noc_y = get_named_compile_time_arg_val("ccl_sender_noc_y");
+            uint64_t ccl_sender_semaphore_addr = get_noc_addr(
+                ccl_sender_noc_x, ccl_sender_noc_y, get_semaphore(gather3_completion_semaphore_id), CCL_SIGNAL_NOC);
+            noc_semaphore_inc(ccl_sender_semaphore_addr, 1, CCL_SIGNAL_NOC);
+            noc_async_atomic_barrier(CCL_SIGNAL_NOC);
+        }
 #endif
 
-            // ========================================================================
-            // CCL All-Reduce: Exchange [1, 7168] between devices
-            // - CCL Sender (11, 9): Reads gather3 output from gather core, sends via fabric
-            // - CCL Receiver (12, 9): Receives remote data, performs reduction
+        // ========================================================================
+        // CCL All-Reduce: Exchange [1, 7168] between devices
+        // - CCL Sender (11, 9): Reads gather3 output from gather core, sends via fabric
+        // - CCL Receiver (12, 9): Receives remote data, performs reduction
 
-            // Note: skip_local_push=1 is set for CCLReceiverReaderCTArgs because
-            // gather3 already pushed to CB7 (gather3_dst_cb). The receiver just
-            // needs to wait for remote data and perform the reduction.
-            // ========================================================================
+        // Note: skip_local_push=1 is set for CCLReceiverReaderCTArgs because
+        // gather3 already pushed to CB7 (gather3_dst_cb). The receiver just
+        // needs to wait for remote data and perform the reduction.
+        // ========================================================================
+        if constexpr (Core::is_ccl_sender_core) {
+            DeviceZoneScopedN("CCL_SENDER_SEND");
 #if defined(COMPILE_FOR_NCRISC)
-            if constexpr (Core::is_ccl_sender_core) {
-                DeviceZoneScopedN("CCL_SENDER_READ");
+            // We need to make sure brisc waits for the initial broadcast CCL to complete before connecting
+            // to fabric. Alternative is to move brisc connection logic after the cb wait
+            // The first mcast syncs the ncrisc, so we need to also make sure brisc waits for the first mcast
+            volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
+            // Make sure the value is different from the mcasted value
+            // The wait below is for safety if this runs on the same core as another doing the same sync
+            // If that is the case we don't actually need to do another sync
+            noc_semaphore_wait(sync_sem, 0);
+            noc_semaphore_set(sync_sem, 2);
 
-                // Wait for gather3 to complete before reading from gather core
-                constexpr uint32_t gather3_completion_semaphore_id =
-                    get_named_compile_time_arg_val("ccl_sender_gather3_completion_semaphore_id");
-                volatile tt_l1_ptr uint32_t* gather3_completion_semaphore_addr =
-                    reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(gather3_completion_semaphore_id));
-                noc_semaphore_wait(gather3_completion_semaphore_addr, 1);
-                noc_semaphore_set(gather3_completion_semaphore_addr, 0);
+            // Wait for gather3 to complete before reading from gather core
+            constexpr uint32_t gather3_completion_semaphore_id =
+                get_named_compile_time_arg_val("ccl_sender_gather3_completion_semaphore_id");
+            volatile tt_l1_ptr uint32_t* gather3_completion_semaphore_addr =
+                reinterpret_cast<volatile tt_l1_ptr uint32_t*>(get_semaphore(gather3_completion_semaphore_id));
+            noc_semaphore_wait(gather3_completion_semaphore_addr, 1);
+            noc_semaphore_set(gather3_completion_semaphore_addr, 0);
 
-                deepseek_b1_ops::AllReduceSender::Op<CCLSenderReaderCTArgs, DummyWriterCTArgs> ccl_sender_reader;
-                ccl_sender_reader(ccl_sender_args);
-            }
-
-            if constexpr (Core::is_ccl_receiver_core) {
-                DeviceZoneScopedN("CCL_RECEIVER_WAIT");
-                // TODO: We're popping the RMSNorm input and then re-pushing it here as the residual
-                // Should avoid this and not pop in RMSNorm
-                deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverReaderCTArgs, DummyComputeCTArgs> ccl_receiver_reader;
-                ccl_receiver_reader(ccl_receiver_args);
-            }
-
+            deepseek_b1_ops::AllReduceSender::Op<CCLSenderReaderCTArgs> ccl_sender_reader;
+            ccl_sender_reader(ccl_sender_args);
 #elif defined(COMPILE_FOR_BRISC)
-            if constexpr (Core::is_ccl_sender_core) {
-                DeviceZoneScopedN("CCL_SENDER_SEND");
-
-                deepseek_b1_ops::AllReduceSender::Op<DummyReaderCTArgs, CCLSenderWriterCTArgs> ccl_sender_writer;
-                ccl_sender_writer(ccl_sender_args);
-            }
-            // CCL Receiver BRISC is no-op
-
-#elif defined(COMPILE_FOR_TRISC)
-            if constexpr (Core::is_ccl_receiver_core) {
-                DeviceZoneScopedN("CCL_RECEIVER_COMPUTE");
-
-                deepseek_b1_ops::AllReduceReceiver::Op<DummyReaderCTArgs, CCLReceiverComputeCTArgs>
-                    ccl_receiver_compute;
-                ccl_receiver_compute(ccl_receiver_args);
-            }
-            // CCL Sender TRISC is no-op
+            volatile tt_l1_ptr uint32_t* sync_sem = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(
+                get_named_compile_time_arg_val("mcast_data_receiver_semaphore_addr"));
+            noc_semaphore_wait(sync_sem, 2);
+            noc_semaphore_set(sync_sem, 0);
+            deepseek_b1_ops::AllReduceSender::Op<CCLSenderWriterCTArgs> ccl_sender_writer;
+            ccl_sender_writer(ccl_sender_args);
 #endif
+        }
+
+        if constexpr (Core::is_ccl_receiver_core) {
+            DeviceZoneScopedN("CCL_RECEIVER");
+#if defined(COMPILE_FOR_NCRISC)
+            // TODO: We're popping the RMSNorm input and then re-pushing it here as the residual
+            // Should avoid this and not pop in RMSNorm
+            deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverReaderCTArgs> ccl_receiver_reader;
+            ccl_receiver_reader(ccl_receiver_args);
+#elif defined(COMPILE_FOR_TRISC)
+            deepseek_b1_ops::AllReduceReceiver::Op<CCLReceiverComputeCTArgs> ccl_receiver_compute;
+            ccl_receiver_compute(ccl_receiver_args);
+#endif
+        }
+    };
+
+    for (uint32_t i = 0; i < num_iterations; i++) {
+        unified_kernels::reconfig_cb_interfaces(cb_config);
+        setup_all_sharded_buffers();
+        mla_body();
     }
 
     // ====================================================================

@@ -35,7 +35,7 @@ CoreCoord choose_additional_core(
         CoreCoord(2, 5),
         CoreCoord(3, 5),
         CoreCoord(6, 5),
-        CoreCoord(7, 5),
+        CoreCoord(0, 5),
     };
 
     // try optimal core first

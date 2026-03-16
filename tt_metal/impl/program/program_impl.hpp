@@ -17,7 +17,6 @@
 #include "program_device_map.hpp"        // ProgramTransferInfo
 #include "impl/buffers/semaphore.hpp"
 #include "tt-metalium/sub_device_types.hpp"
-#include "tt_metal.hpp"
 #include "tt_metal/impl/dataflow_buffer/dataflow_buffer_impl.hpp"
 
 #include <umd/device/types/core_coordinates.hpp>        // CoreType
@@ -375,6 +374,7 @@ private:
         dataflow_buffer_by_id_;
     tt::tt_metal::experimental::dfb::detail::TileCounterAllocator tile_counter_allocator_;
     tt::tt_metal::experimental::dfb::detail::RemapperIndexAllocator remapper_index_allocator_;
+    tt::tt_metal::experimental::dfb::detail::TxnIdAllocator txn_id_allocator_;
     std::unordered_map<CoreCoord, uint8_t> per_core_num_dfbs_;
     std::vector<CircularBufferAllocator> dfb_allocators_;
 
@@ -401,7 +401,7 @@ private:
     void finalize_single_dfb_config(
         std::shared_ptr<tt::tt_metal::experimental::dfb::detail::DataflowBufferImpl>& dfb,
         const CoreCoord& core,
-        bool use_remapper);
+        bool core_has_remapper);
 
     CBHandle add_circular_buffer_(const std::shared_ptr<CircularBufferImpl>& circular_buffer);
 

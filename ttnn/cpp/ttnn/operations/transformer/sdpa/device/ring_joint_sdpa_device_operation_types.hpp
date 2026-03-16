@@ -51,7 +51,7 @@ struct RingJointSDPAParams {
         ccl_core_grid_offset(ccl_core_grid_offset) {}
 
     auto attributes() const {
-        using tt::stl::reflection::Attribute;
+        using ttsl::reflection::Attribute;
         std::vector<std::tuple<std::string, Attribute>> attrs;
         attrs.emplace_back("joint_strategy", joint_strategy);
         attrs.emplace_back("logical_n", logical_n);
@@ -84,16 +84,15 @@ struct RingJointSDPAInputs {
     Tensor gathered_v;
 };
 
-struct RingJointSDPAResult {
-    Tensor output;
-    Tensor joint_output;
-    Tensor lse_output;
-};
+// Index constants for RingJointSDPAResult vector
+constexpr size_t RING_JOINT_SDPA_OUTPUT_IDX = 0;
+constexpr size_t RING_JOINT_SDPA_JOINT_OUTPUT_IDX = 1;
+constexpr size_t RING_JOINT_SDPA_STATS_OUTPUT_IDX = 2;
 
-struct RingJointSDPAResultSpec {
-    TensorSpec output;
-    TensorSpec joint_output;
-    TensorSpec lse_output;
-};
+// RingJointSDPAResult is a vector of 3 tensors: [output, joint_output, stats_output]
+using RingJointSDPAResult = Tensors;
+
+// RingJointSDPAResultSpec is a vector of 3 TensorSpecs: [output, joint_output, stats_output]
+using RingJointSDPAResultSpec = std::vector<TensorSpec>;
 
 }  // namespace ttnn::prim

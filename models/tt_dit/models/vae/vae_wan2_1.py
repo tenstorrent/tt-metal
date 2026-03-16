@@ -155,6 +155,18 @@ class WanAttentionBlock(Module):
             x_BTHWC = x_BTHWC[:, :, :logical_h, :, :]
         B, T, H, W, C = x_BTHWC.shape
         x_TNC = ttnn.reshape(x_BTHWC, (B * T, H * W, C))
+
+        # Split T (batch) across all devices to reduce redundant SDPA compute.
+        # SDPA batch elements are independent, so they can be trivially partitioned.
+        total_devices = self.mesh_device.get_num_devices()
+        BT = B * T
+        split_t = total_devices > 1 and T > 1
+        if split_t:
+            padded_BT = ((BT + total_devices - 1) // total_devices) * total_devices
+            if padded_BT > BT:
+                x_TNC = ttnn.pad(x_TNC, [(0, padded_BT - BT), (0, 0), (0, 0)], value=0.0)
+            x_TNC = ttnn.mesh_partition(x_TNC, dim=0)
+
         x_TNC = ttnn.to_layout(x_TNC, ttnn.TILE_LAYOUT)
         x_TNC = self.norm(x_TNC, compute_kernel_config=self.hifi4_compute_kernel_config)
         default_block_size = (2, 2, 2) if x_TNC.dtype == ttnn.float32 else (8, 8, 8)
@@ -177,6 +189,14 @@ class WanAttentionBlock(Module):
         out_TND = self.proj(
             out_TNC, compute_kernel_config=self.mm_compute_kernel_config, default_block_size=default_block_size
         )
+
+        # Gather T back before layout conversion (all-gather requires TILE)
+        if split_t:
+            out_TND = self.ccl_manager.all_gather_persistent_buffer(out_TND, dim=0, mesh_axis=1)
+            out_TND = self.ccl_manager.all_gather_persistent_buffer(out_TND, dim=0, mesh_axis=0)
+            if padded_BT > BT:
+                out_TND = out_TND[:BT, :, :]
+
         out_TND = ttnn.to_layout(out_TND, ttnn.ROW_MAJOR_LAYOUT)
 
         if padded_h > logical_h:
@@ -340,6 +360,18 @@ class WanCausalConv3d(Module):
         # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
         # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
         # (shape[2] * factor < logical_h) which must NOT trigger masking.
+        # There is no post-conv masking to zero the padded rows which contain pad_value + conv_bias.
+        # Every operation between conv outputs is either:
+        # - RMSNorm — normalizes per-position over the C dimension only; padding rows' values do not affect valid rows' statistics
+        # - SiLU — element-wise; no spatial mixing
+        # - Residual add — element-wise; no spatial mixing
+        # - Linear (conv_shortcut) — per-position matmul over C; no spatial mixing
+        # - Attention — explicitly slices out padding rows before processing (WanAttentionBlock.forward slicing/padding
+        #   when padded_h > logical_h: x_BTHWC[:, :, :logical_h, :, :]), then re-pads with zeros
+        # The next conv's pre-mask then zeros out the accumulated padding values before the conv kernel sees them.
+        # WARNING: If the normalization is ever changed from RMSNorm to GroupNorm or certain LayerNorm configurations
+        #   (which normalize across spatial dimensions), the post-conv mask would become necessary again to prevent
+        #   padding from contaminating normalization statistics.
         if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
@@ -395,12 +427,6 @@ class WanCausalConv3d(Module):
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
-        # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
-        # (shape[2] * factor < logical_h) which must NOT trigger masking.
-        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
-            mask = self.get_cached_mask(x_BTHWC, logical_h)
-            x_BTHWC = ttnn.mul(x_BTHWC, mask)
         return x_BTHWC
 
 
@@ -736,9 +762,22 @@ class WanConv2d(Module):
 
     def forward(self, x_BTHWC: ttnn.Tensor, logical_h: int) -> ttnn.Tensor:
         assert x_BTHWC.layout == ttnn.ROW_MAJOR_LAYOUT, f"WanConv2d expects ROW_MAJOR input, got {x_BTHWC.layout}"
+
         # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
         # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
         # (shape[2] * factor < logical_h) which must NOT trigger masking.
+        # There is no post-conv masking to zero the padded rows which contain pad_value + conv_bias.
+        # Every operation between conv outputs is either:
+        # - RMSNorm — normalizes per-position over the C dimension only; padding rows' values do not affect valid rows' statistics
+        # - SiLU — element-wise; no spatial mixing
+        # - Residual add — element-wise; no spatial mixing
+        # - Linear (conv_shortcut) — per-position matmul over C; no spatial mixing
+        # - Attention — explicitly slices out padding rows before processing (WanAttentionBlock.forward slicing/padding
+        #   when padded_h > logical_h: x_BTHWC[:, :, :logical_h, :, :]), then re-pads with zeros
+        # The next conv's pre-mask then zeros out the accumulated padding values before the conv kernel sees them.
+        # WARNING: If the normalization is ever changed from RMSNorm to GroupNorm or certain LayerNorm configurations
+        #   (which normalize across spatial dimensions), the post-conv mask would become necessary again to prevent
+        #   padding from contaminating normalization statistics.
         if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
             mask = self.get_cached_mask(x_BTHWC, logical_h)
             x_BTHWC = ttnn.mul(x_BTHWC, mask)
@@ -794,12 +833,6 @@ class WanConv2d(Module):
             compute_kernel_config=self.compute_kernel_config,
         )
 
-        # Use > (not !=) to only mask when there are EXCESS padding rows (decoder upsample
-        # amplifies mesh_partition padding). The encoder's 1::2 downsampling creates a deficit
-        # (shape[2] * factor < logical_h) which must NOT trigger masking.
-        if x_BTHWC.shape[2] * self.parallel_config.height_parallel.factor > logical_h:
-            mask = self.get_cached_mask(x_BTHWC, logical_h)
-            x_BTHWC = ttnn.mul(x_BTHWC, mask)
         return x_BTHWC
 
 
