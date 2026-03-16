@@ -90,29 +90,10 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         num_shards = num_shards_height * num_input_blocks_across_width;
         if (num_compute_cores >
             num_shards) {  // If the user specified more compute cores than there are data, we need to figure out which
-                           // cores have data on them and only activate those cores. To do this, we use information
-                           // encoded in the buffer distribution spec.
-            if (a.buffer()->buffer_distribution_spec().has_value()) {  // If the tensor also has an nd_shard_spec, then
-                                                                       // it has a bufferdistributionspec. Use it.
-                auto buffer_dist_spec = a.buffer()->buffer_distribution_spec().value();
-                ordered_cores_with_data = buffer_dist_spec.cores_with_data();
-                has_ordered_cores_with_data = true;
-                compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(buffer_dist_spec.cores_with_data()));
-            } else {  // If the tensor does not have an nd_shard_spec, then we need to create a bufferdistributionspec
-                      // from the shard_spec.
-                auto buffer_dist_spec = BufferDistributionSpec::from_shard_spec(
-                    a.padded_shape(),
-                    Shape({input_shard_height, input_shard_width}),
-                    a.tensor_spec().tile().get_tile_shape(),
-                    input_shard_spec.grid,
-                    input_shard_spec.orientation,
-                    a.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED
-                        ? ShardDistributionStrategy::GRID_2D
-                        : ShardDistributionStrategy::ROUND_ROBIN_1D);
-                ordered_cores_with_data = buffer_dist_spec.cores_with_data();
-                has_ordered_cores_with_data = true;
-                compute_core_range = CoreRangeSet(tt::stl::Span<const CoreCoord>(buffer_dist_spec.cores_with_data()));
-            }
+                           // cores have data on them and only activate those cores.
+            ordered_cores_with_data = a.buffer()->buffer_distribution_spec().value().cores_with_data();
+            has_ordered_cores_with_data = true;
+            compute_core_range = CoreRangeSet(ttsl::Span<const CoreCoord>(ordered_cores_with_data));
 
             full_compute_core_range = compute_core_range;
         } else {
@@ -190,7 +171,8 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
         tensor_width;  // In height-sharded and interleaved cases, the output page is the entire tensor row
     uint32_t output_num_blocks_across_width = 1;
     if (output.memory_config().memory_layout() == TensorMemoryLayout::WIDTH_SHARDED ||
-        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED) {
+        output.memory_config().memory_layout() == TensorMemoryLayout::BLOCK_SHARDED ||
+        output.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED) {
         if (output.shard_spec().has_value()) {
             output_page_width = output.shard_spec().value().shape[1];
         } else {

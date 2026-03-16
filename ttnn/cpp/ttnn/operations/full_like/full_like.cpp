@@ -6,9 +6,9 @@
 
 #include "ttnn/operations/full/device/full_device_operation.hpp"
 
-namespace ttnn::operations::full_like {
+namespace ttnn {
 
-Tensor FullLike::invoke(
+Tensor moreh_full_like(
     const Tensor& input,
     const std::variant<float, int> fill_value,
     const std::optional<DataType>& dtype,
@@ -25,4 +25,4 @@ Tensor FullLike::invoke(
         memory_config.value_or(input.memory_config()));
 }
 
-}  // namespace ttnn::operations::full_like
+}  // namespace ttnn

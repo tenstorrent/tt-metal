@@ -35,6 +35,7 @@
 #include <tt-metalium/mesh_coord.hpp>
 #include <tt-metalium/experimental/fabric/fabric.hpp>
 #include <tt-metalium/experimental/fabric/mesh_graph.hpp>
+#include "context/metal_env_accessor.hpp"
 #include "impl/context/metal_context.hpp"
 #include "tt_metal/fabric/erisc_datamover_builder.hpp"
 #include "tt_metal/fabric/fabric_builder_context.hpp"
@@ -168,7 +169,8 @@ void verify_capture_roundtrip(const std::vector<EthCoreCaptureResult>& pre_expor
     }
 
     // Run the real exporter (writes to {logs_dir}/generated/reports/channel_trimming_capture.yaml)
-    export_channel_trimming_capture();
+    auto env = tt::tt_metal::MetalEnvAccessor(tt::tt_metal::MetalContext::instance().get_env());
+    tt::tt_fabric::export_channel_trimming_capture(env.impl());
 
     // Determine the output path
     const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
@@ -483,7 +485,7 @@ protected:
             should_skip_ = true;
             return;
         }
-        if (tt::tt_metal::GetNumAvailableDevices() < 4) {
+        if (tt::tt_metal::GetNumAvailableDevices() != 4) {
             should_skip_ = true;
             return;
         }
@@ -1296,7 +1298,8 @@ protected:
         BaseFabricFixture::DoSetUpTestSuite(tt::tt_fabric::FabricConfig::FABRIC_1D);
 
         // Export capture data (even if zero — that's a valid baseline)
-        export_channel_trimming_capture();
+        auto env = tt::tt_metal::MetalEnvAccessor(tt::tt_metal::MetalContext::instance().get_env());
+        tt::tt_fabric::export_channel_trimming_capture(env.impl());
         capture_yaml_path_ =
             std::filesystem::path(rtoptions.get_logs_dir()) / "generated" / "reports" / "channel_trimming_capture.yaml";
 

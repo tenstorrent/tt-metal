@@ -35,8 +35,9 @@ const std::string golden_output =
     R"(Test Debug Print: ERISC
 Basic Types:
 101-1.618@0.122559
-e5551234569123456789
+1015551234569123456789
 -17-343-44444-5123456789
+10
 Pointer:
 123
 456
