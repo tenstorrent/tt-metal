@@ -28,7 +28,7 @@ Tensor where_impl(
     const MemoryConfig& memory_config,
     const std::optional<Tensor>& output) {
     log_debug(tt::LogOp, "Where Legacy");
-    using FusedActivations = tt::stl::Span<const unary::EltwiseUnaryWithParam>;
+    using FusedActivations = ttsl::Span<const unary::EltwiseUnaryWithParam>;
     constexpr auto dtype = std::nullopt;
     const auto get_multiplied = [&](const Tensor& condition, const auto& value) -> Tensor {
         return ttnn::multiply(
