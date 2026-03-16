@@ -16,12 +16,13 @@ training_config:
     # orthogonalization — excluded until per-head splitting is supported.
     adamw_modules: [tok_emb, fc, kv_linear]
     muon:
-      lr: 0.02
+      lr: 0.001
       momentum: 0.95
       ns_steps: 5
     adamw:
-      lr: 0.0003
+      lr: 0.00003
       weight_decay: 0.01
+      stochastic_rounding: true
 
 device_config:
   enable_ddp: false

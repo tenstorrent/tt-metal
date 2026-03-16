@@ -15,13 +15,13 @@ struct MuonConfig {
     int ns_steps{5};
 };
 
-class Muon : public OptimizerBase {
+class MuonComposite : public OptimizerBase {
 public:
     [[nodiscard]] std::string get_name() const override {
-        return "Muon";
+        return "MuonComposite";
     }
 
-    explicit Muon(ttml::serialization::NamedParameters parameters, const MuonConfig& config);
+    explicit MuonComposite(ttml::serialization::NamedParameters parameters, const MuonConfig& config);
 
     void zero_grad() override;
 

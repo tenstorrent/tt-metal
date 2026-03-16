@@ -86,8 +86,8 @@ OptimizerRegistry::OptimizerRegistry() {
                 .nesterov = config["nesterov"].as<bool>(false)});
     });
 
-    register_optimizer("Muon", [](const YAML::Node& config, serialization::NamedParameters params) {
-        return std::make_unique<Muon>(
+    register_optimizer("MuonComposite", [](const YAML::Node& config, serialization::NamedParameters params) {
+        return std::make_unique<MuonComposite>(
             std::move(params),
             MuonConfig{
                 .lr = config["lr"].as<float>(1e-3F),

@@ -60,7 +60,7 @@ class MuonWithAdamW(ttml.optimizers.OptimizerBase):
                 adamw_params[name] = tensor
 
         # Create sub-optimizers
-        self._muon = ttml.optimizers.Muon(
+        self._muon = ttml.optimizers.MuonComposite(
             muon_params,
             ttml.optimizers.MuonConfig.make(
                 lr=muon_cfg.get("lr", 0.02),

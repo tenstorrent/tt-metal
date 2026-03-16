@@ -78,7 +78,7 @@ void py_module_types(nb::module_& m) {
     nb::class_<AdamW, OptimizerBase>(m, "AdamW");
     nb::class_<AdamWFullPrecision, OptimizerBase>(m, "AdamWFullPrecision");
     nb::class_<MuonConfig>(m, "MuonConfig");
-    nb::class_<Muon, OptimizerBase>(m, "Muon");
+    nb::class_<MuonComposite, OptimizerBase>(m, "MuonComposite");
     nb::class_<NoOp, OptimizerBase>(m, "NoOp");
     nb::class_<RemoteOptimizer, OptimizerBase>(m, "RemoteOptimizer");
 }
@@ -271,7 +271,7 @@ void py_module(nb::module_& m) {
     }
 
     {
-        auto py_muon = static_cast<nb::class_<Muon, OptimizerBase>>(m.attr("Muon"));
+        auto py_muon = static_cast<nb::class_<MuonComposite, OptimizerBase>>(m.attr("MuonComposite"));
         py_muon.def(
             nb::init<serialization::NamedParameters, const MuonConfig&>(), nb::arg("parameters"), nb::arg("config"));
     }

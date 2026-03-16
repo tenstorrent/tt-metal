@@ -15,7 +15,7 @@
 
 namespace ttml::optimizers {
 
-Muon::Muon(ttml::serialization::NamedParameters parameters, const MuonConfig& config) :
+MuonComposite::MuonComposite(ttml::serialization::NamedParameters parameters, const MuonConfig& config) :
     OptimizerBase(std::move(parameters)), m_config(config) {
     for (const auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad()) {
@@ -28,7 +28,7 @@ Muon::Muon(ttml::serialization::NamedParameters parameters, const MuonConfig& co
     }
 }
 
-void Muon::zero_grad() {
+void MuonComposite::zero_grad() {
     for (auto& [name, tensor_ptr] : m_parameters) {
         if (tensor_ptr->get_requires_grad() && tensor_ptr->is_grad_initialized()) {
             tensor_ptr->set_grad(core::zeros_like(tensor_ptr->get_value()));
@@ -36,7 +36,7 @@ void Muon::zero_grad() {
     }
 }
 
-void Muon::step() {
+void MuonComposite::step() {
     if (core::debug::Debug::enable_print_tensor_stats()) {
         print_stats();
     }
@@ -67,23 +67,23 @@ void Muon::step() {
     m_steps++;
 }
 
-serialization::StateDict Muon::get_state_dict() const {
+serialization::StateDict MuonComposite::get_state_dict() const {
     serialization::StateDict dict;
     dict["momentum_buffer"] = m_momentum_buffer;
     dict["steps"] = m_steps;
     return dict;
 }
 
-void Muon::set_state_dict(const serialization::StateDict& dict) {
+void MuonComposite::set_state_dict(const serialization::StateDict& dict) {
     m_momentum_buffer = std::get<serialization::NamedParameters>(dict.at("momentum_buffer"));
     m_steps = serialization::get_value_type<size_t>(dict, "steps");
 }
 
-size_t Muon::get_steps() const {
+size_t MuonComposite::get_steps() const {
     return m_steps;
 }
 
-void Muon::set_steps(size_t steps) {
+void MuonComposite::set_steps(size_t steps) {
     this->m_steps = steps;
 }
 

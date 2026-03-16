@@ -657,7 +657,9 @@ def sample_greedy(
                     last_logits = ttml.autograd.Tensor(filtered_logits_ttnn, False)
 
             # Use ttml sampling operation
-            sampled_tensor = ttml.ops.sample.sample_op(last_logits, temperature, seed, None)  # logits_padding_mask
+            sampled_tensor = ttml.ops.sample.sample_op(
+                last_logits, temperature, seed, None
+            )  # logits_padding_mask
 
             # Extract the sampled token ID directly using .item() - avoids NumPy conversion
             next_id = int(sampled_tensor.get_value().item())
@@ -1092,6 +1094,7 @@ def main():
     except FileNotFoundError as e:
         print(f"Warning: Config file not found: {e}")
         print("Using default configs")
+        yaml_config = {}
         training_config = TrainingConfig()
         model_config = ModelConfig()
 
