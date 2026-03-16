@@ -307,7 +307,7 @@ def run_test_FalconCausalLM_end_to_end(
     "llm_mode, batch, seq_len, kv_cache_len, expected_compile_time, expected_inference_time, num_layers, model_config_str",
     (
         ("prefill", 1, 32, 0, 62, 0.11 + 0.02, 60, "BFLOAT8_B-DRAM"),
-        ("prefill", 1, 128, 0, 60, 0.12 + 0.03, 60, "BFLOAT8_B-DRAM"),
+        ("prefill", 1, 128, 0, 60, 0.11 + 0.03, 60, "BFLOAT8_B-DRAM"),
         ("prefill", 1, 2048, 0, 60, 0.67 + 0.05, 60, "BFLOAT8_B-DRAM"),
         ("prefill", 1, 32, 0, 60, 0.11 + 0.02, 60, "BFLOAT16-DRAM"),
         ("prefill", 1, 128, 0, 60, 0.11 + 0.02, 60, "BFLOAT16-DRAM"),
