@@ -34,7 +34,7 @@ def test_hang_generates_junit_xml():
     existing = set(REPORT_DIR.glob("hang_report_*.xml")) if REPORT_DIR.exists() else set()
 
     hang_report_cmd = f"python3 {HANG_REPORT_SCRIPT}"
-    triage_cmd = f"python3 {TRIAGE_SCRIPT} --disable-progress --skip-version-check"
+    triage_cmd = f"python3 {TRIAGE_SCRIPT} --disable-progress --skip-version-check --triage-summary-path=generated/triage_summary.txt"
     dispatch_cmd = f"{hang_report_cmd}; {triage_cmd} 1>&2; {hang_report_cmd} --update"
 
     result = subprocess.run(

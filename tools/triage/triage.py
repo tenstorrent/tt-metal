@@ -5,7 +5,7 @@
 
 """
 Usage:
-    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress]
+    triage [--initialize-with-noc1] [--remote-exalens] [--remote-server=<remote-server>] [--remote-port=<remote-port>] [--verbosity=<verbosity>] [--run=<script>]... [--skip-version-check] [--print-script-times] [-v ...] [--disable-colors] [--disable-progress] [--triage-summary-path=<path>]
 
 Options:
     --remote-exalens                 Connect to remote exalens server.
@@ -23,6 +23,7 @@ Options:
                                      Level 2 (-vv): Include internal debug fields (RD PTR, Base, Offset, Kernel XIP Path)
     --disable-colors                 Disable colored output. [default: False]
     --disable-progress               Disable progress bars. [default: False]
+    --triage-summary-path=<path>     Write a triage summary file to the given path (used by CI for hang reports).
 
 Description:
     Diagnoses Tenstorrent AI hardware by performing comprehensive health checks on ARC processors, NOC connectivity, L1 memory, and RISC-V cores.
@@ -862,9 +863,6 @@ class TTTriageError(Exception):
     pass
 
 
-TRIAGE_SUMMARY_PATH = "generated/triage_summary.txt"
-
-
 def _build_triage_summary(script_queue: list[TriageScript]) -> str:
     summary_lines = []
     for script in script_queue:
@@ -982,13 +980,15 @@ def main():
                 utils.INFO(f"Total execution time: {total_time:.2f}s")
         progress.remove_task(scripts_task)
 
-    try:
-        os.makedirs(os.path.dirname(TRIAGE_SUMMARY_PATH), exist_ok=True)
-        with open(TRIAGE_SUMMARY_PATH, "w") as f:
-            f.write(_build_triage_summary(script_queue))
-        utils.INFO(f"Triage summary written to {TRIAGE_SUMMARY_PATH}")
-    except Exception as e:
-        utils.WARN(f"Failed to write triage summary: {e}")
+    triage_summary_path = args["--triage-summary-path"]
+    if triage_summary_path:
+        try:
+            os.makedirs(os.path.dirname(triage_summary_path), exist_ok=True)
+            with open(triage_summary_path, "w") as f:
+                f.write(_build_triage_summary(script_queue))
+            utils.INFO(f"Triage summary written to {triage_summary_path}")
+        except Exception as e:
+            utils.WARN(f"Failed to write triage summary: {e}")
 
     # Remove nanobind leak check to avoid false positives on exit
     os._exit(0)
