@@ -358,7 +358,7 @@ class DeepseekGenerator(WarmupForwardMixin):
         # Clean up sampling trace state
         try:
             if hasattr(self, "sampling_generator") and self.sampling_generator is not None:
-                self.sampling_generator.cleanup()
+                self.sampling_generator.reset_trace()
         except Exception as e:
             logger.warning(f"Failed to reset sampling trace state: {e}")
 
