@@ -4,12 +4,12 @@
 
 // Writes 1024-element chunks from the output CB back to the DRAM destination.
 //
-// Mirrors reader.cpp: a (row, in_row_byte_offset) cursor advances across DRAM
-// rows so that chunks that span row boundaries are written correctly.
+// Mirrors reader.cpp: work is split on row boundaries so the cursor always
+// starts at byte offset 0 of the first assigned row.
 //
 // CT args: [STICK_SIZE_BYTES, TensorAccessorArgs_out...]
 // RT args: [dst_addr, num_full_sticks, start_row,
-//           start_in_row_offset_bytes, last_chunk_bytes, row_size_bytes]
+//           last_chunk_bytes, row_size_bytes]
 
 #include <cstdint>
 #include "api/dataflow/dataflow_api.h"
@@ -47,10 +47,11 @@ void kernel_main() {
 
     const uint32_t dst_addr = get_arg_val<uint32_t>(0);
     const uint32_t num_full_sticks = get_arg_val<uint32_t>(1);
-    uint32_t start_row = get_arg_val<uint32_t>(2);
-    uint32_t start_offset = get_arg_val<uint32_t>(3);
-    const uint32_t last_chunk_bytes = get_arg_val<uint32_t>(4);
-    const uint32_t row_size_bytes = get_arg_val<uint32_t>(5);
+    uint32_t current_row = get_arg_val<uint32_t>(2);
+    const uint32_t last_chunk_bytes = get_arg_val<uint32_t>(3);
+    const uint32_t row_size_bytes = get_arg_val<uint32_t>(4);
+
+    uint32_t current_offset = 0;
 
     constexpr auto cb_out = tt::CBIndex::c_2;
 
@@ -58,10 +59,6 @@ void kernel_main() {
     constexpr auto out_args = TensorAccessorArgs<1>();
     const auto out = TensorAccessor(out_args, dst_addr, row_size_bytes);
 
-    uint32_t current_row = start_row;
-    uint32_t current_offset = start_offset;
-
-    // Full 1024-element sticks.
     for (uint32_t i = 0; i < num_full_sticks; ++i) {
         cb_wait_front(cb_out, 1);
         write_chunk(out, current_row, current_offset, cb_out, STICK_SIZE_BYTES, row_size_bytes);
@@ -69,7 +66,6 @@ void kernel_main() {
         cb_pop_front(cb_out, 1);
     }
 
-    // Partial last chunk.
     if (last_chunk_bytes > 0) {
         cb_wait_front(cb_out, 1);
         write_chunk(out, current_row, current_offset, cb_out, last_chunk_bytes, row_size_bytes);
