@@ -89,11 +89,11 @@ class MultiHeadAttention:
             )
 
     def __call__(self, x: ttnn.Tensor, c: ttnn.Tensor) -> ttnn.Tensor:
-        q = self._project_qkv(self.linear_q(x), transpose_k=False)
-        k = self._project_qkv(self.linear_k(c), transpose_k=True)
-        v = self._project_qkv(self.linear_v(c), transpose_k=False)
+        q = self._project_qkv(self.linear_q(x))
+        k = self._project_qkv(self.linear_k(c))
+        v = self._project_qkv(self.linear_v(c))
         q_scaled = ttnn.mul(q, 1.0 / math.sqrt(self.k_channels), output_tensor=q)
-        scores = ttnn.matmul(q_scaled, k)
+        scores = ttnn.matmul(q_scaled, k, transpose_b=True)
         _, _, target_length, source_length = scores.shape
         if self.window_size is not None:
             if source_length != target_length:
@@ -119,13 +119,9 @@ class MultiHeadAttention:
         out_tt = self.linear_o(output)
         return out_tt
 
-    def _project_qkv(self, x: ttnn.Tensor, *, transpose_k: bool) -> ttnn.Tensor:
+    def _project_qkv(self, x: ttnn.Tensor) -> ttnn.Tensor:
         batch_size, length, channels = x.shape
         x = ttnn.reshape(x, (batch_size, length, self.n_heads, self.k_channels))
-
-        if transpose_k:
-            x_p = ttnn.permute(x, (0, 2, 3, 1))
-            return x_p
         x_p = ttnn.permute(x, (0, 2, 1, 3))
         return x_p
 
