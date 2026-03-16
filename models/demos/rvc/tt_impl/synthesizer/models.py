@@ -55,14 +55,22 @@ def _interpolate_1d(
     return y
 
 
-def _flip_last_dim(x: ttnn.Tensor) -> ttnn.Tensor:
-    channels = x.shape[-1]
-    slices = []
-    for i in range(channels):
-        s = ttnn.slice(x, (0, 0, channels - 1 - i), (x.shape[0], x.shape[1], channels - i))
-        slices.append(s)
-    y = ttnn.concat(slices, dim=-1)
-    return y
+def _flip_last_dim_ttnn(x: ttnn.Tensor) -> ttnn.Tensor:
+    if x.layout != ttnn.TILE_LAYOUT:
+        x = ttnn.to_layout(x, ttnn.TILE_LAYOUT)
+
+    reverse_index = ttnn.arange(
+        start=x.shape[-1] - 1,
+        end=-1,
+        step=-1,
+        dtype=ttnn.int32,
+        device=x.device(),
+        layout=ttnn.TILE_LAYOUT,
+    )
+    reverse_index = ttnn.reshape(reverse_index, shape=(1,) * (len(x.shape) - 1) + (x.shape[-1],))
+    reverse_index = ttnn.expand(reverse_index, tuple(x.shape))
+    reverse_index = ttnn.typecast(reverse_index, ttnn.uint32)
+    return ttnn.gather(x, dim=-1, index=reverse_index)
 
 
 class Embedding:
@@ -233,7 +241,7 @@ class ResidualCouplingBlock:
     def __call__(self, x: ttnn.Tensor, g: ttnn.Tensor | None = None) -> ttnn.Tensor:
         for flow in self.flows:
             x0 = x
-            x1 = _flip_last_dim(x0)
+            x1 = _flip_last_dim_ttnn(x0)
             x = flow(x1, g=g)
         return x
 
@@ -674,4 +682,5 @@ class SynthesizerTrnMsNSF_nono:
             * 0.66666
         )
         z = self.flow(z_p, g=g)
-        return self.dec(z, g=g)
+        out = self.dec(z, g=g)
+        return out

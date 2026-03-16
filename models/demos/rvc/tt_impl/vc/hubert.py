@@ -340,8 +340,8 @@ class PositionalConvEmbedding:
         batch_size = x.shape[0]
         input_length = x.shape[1]
         output_length = input_length + 2 * (self.kernel_size // 2) - self.kernel_size + 1
-        x = self.conv(x)
-        return x
+        out = self.conv(x)
+        return out
 
     def deallocate(self) -> None:
         self.conv.deallocate()
