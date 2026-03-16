@@ -11,10 +11,10 @@ namespace ttml::metal::ops::rmsnorm_fw::device {
 
 struct RMSNormForwardProgramFactory {
     struct shared_variables_t {
-        tt::tt_metal::KernelHandle rmsnorm_fw_reader_kernel_id;
-        tt::tt_metal::KernelHandle rmsnorm_fw_writer_kernel_id;
-        tt::tt_metal::KernelHandle rmsnorm_fw_kernel_group_1_id;
-        tt::tt_metal::KernelHandle rmsnorm_fw_kernel_group_2_id;
+        tt::tt_metal::KernelHandle rmsnorm_fw_reader_kernel_id = 0;
+        tt::tt_metal::KernelHandle rmsnorm_fw_writer_kernel_id = 0;
+        tt::tt_metal::KernelHandle rmsnorm_fw_kernel_group_1_id = 0;
+        tt::tt_metal::KernelHandle rmsnorm_fw_kernel_group_2_id = 0;
         tt::tt_metal::CoreRangeSet core_group_1;
         tt::tt_metal::CoreRangeSet core_group_2;
         uint32_t num_cores{};
