@@ -1,0 +1,2 @@
+{"event":"start","agent":"ttnn-self-reflection","operation":"softmax","details":"Starting self-reflection analysis for softmax pipeline run","ts":"2026-03-16T11:06:07+00:00"}
+{"event":"complete","agent":"ttnn-self-reflection","operation":"softmax","details":"Self-reflection report written to self_reflection.md. Pipeline-improvements.md updated with 3 new issues (#12, #13, #14). Overall: SUCCESS pipeline, 102m total, 100% helper compliance, key issues were CB sizing deadlock and binary_op_init_common hangs.","ts":"2026-03-16T11:11:18+00:00"}
