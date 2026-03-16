@@ -12,3 +12,5 @@
 {"event":"writing_analysis","details":"All research complete, writing batch_norm_analysis.md","ts":"2026-03-16T09:03:09+00:00"}
 {"event":"action","type":"file_write","details":"Wrote untilize_analysis.md with output_stage focus","ts":"2026-03-16T09:04:05+00:00"}
 {"event":"analysis_complete","details":"Wrote tilize_analysis.md with focus on input_stage patterns: reader kernel, CB sizing, stick-to-tile batching, core distribution","ts":"2026-03-16T09:04:15+00:00"}
+{"event":"analysis_complete","details":"batch_norm_analysis.md written with compute-core focus for layer_norm_rm reference","ts":"2026-03-16T09:06:41+00:00"}
+{"event":"committed","details":"Commit 6af4efe830 - batch_norm analysis for compute_core reference","ts":"2026-03-16T09:09:33+00:00"}
