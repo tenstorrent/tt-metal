@@ -28,6 +28,11 @@ on:
         description: 'Enable watcher'
         default: false
         type: boolean
+      enable-llk-asserts:
+        required: false
+        type: boolean
+        default: false
+        description: "Enable LLK asserts"
 
 jobs:
   generate-matrix:
@@ -93,8 +98,14 @@ jobs:
             timeout: 60
             test-type: slow
           - name: ring joint attention tests
-            cmd: pytest tests/nightly/blackhole/ccl/test_ring_joint_attention.py -svv
-            timeout: 30
+            cmd: |
+              pytest tests/nightly/blackhole/ccl/test_ring_joint_attention.py -svv
+              pytest tests/nightly/blackhole/ccl/test_ring_joint_sdpa.py -svv
+            timeout: 60
+            test-type: slow
+          - name: sdpa nightly tests
+            cmd: pytest tests/nightly/blackhole/sdpa/ -svv
+            timeout: 60
             test-type: slow
           - name: fabric infra unit tests
             cmd: |
@@ -182,6 +193,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
           enable-watcher: ${{ inputs.enable-watcher || false }}
+          enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
       - uses: tenstorrent/tt-metal/.github/actions/ensure-bh-links-online@main
         timeout-minutes: 10
         with:

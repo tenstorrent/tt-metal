@@ -16,7 +16,7 @@ import ttml
 from .linear import LinearLayer
 from .module_base import AbstractModuleBase, ModuleDict, ModuleList
 from .parameter import Parameter
-from .._ttml.modules import RunMode
+from _ttml.modules import RunMode
 
 
 @dataclass
