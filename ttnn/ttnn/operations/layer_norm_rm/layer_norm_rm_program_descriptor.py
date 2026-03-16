@@ -44,6 +44,15 @@ def float_to_packed_bf16(val: float) -> int:
     return (bf16 << 16) | bf16
 
 
+def float_to_uint32_bits(val: float) -> int:
+    """Convert float to its raw uint32_t bit representation.
+
+    Used to pass float values as uint32_t runtime args to device kernels.
+    The kernel can reconstruct the float using a union.
+    """
+    return struct.unpack("I", struct.pack("f", val))[0]
+
+
 def create_program_descriptor(
     input_tensor: ttnn.Tensor,
     output_tensor: ttnn.Tensor,
@@ -150,27 +159,29 @@ def create_program_descriptor(
     reader_ct_args = [Wt, Ht, has_gamma, has_beta]
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_tensor).get_compile_time_args())
     # Optional gamma tensor accessor (always occupy a slot)
+    # For interleaved tensors, TensorAccessorArgs produces 2 compile-time args
+    # (args_config + aligned_page_size). Use [0, 0] placeholder when absent.
     if has_gamma:
         reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
     else:
-        reader_ct_args.extend([0])
+        reader_ct_args.extend([0, 0])
     # Optional beta tensor accessor (always occupy a slot)
     if has_beta:
         reader_ct_args.extend(ttnn.TensorAccessorArgs(beta).get_compile_time_args())
     else:
-        reader_ct_args.extend([0])
+        reader_ct_args.extend([0, 0])
 
-    # Pack scaler and epsilon as bf16 pairs
-    scaler_packed = float_to_packed_bf16(1.0 / W)
-    eps_packed = float_to_packed_bf16(epsilon)
+    # Pass scaler and epsilon as raw float32 bit patterns
+    scaler_bits = float_to_uint32_bits(1.0 / W)
+    eps_bits = float_to_uint32_bits(epsilon)
 
     reader_rt_args = ttnn.RuntimeArgs()
     reader_rt_args[core.x][core.y] = [
         input_tensor.buffer_address(),
         gamma.buffer_address() if has_gamma else 0,
         beta.buffer_address() if has_beta else 0,
-        scaler_packed,
-        eps_packed,
+        scaler_bits,
+        eps_bits,
     ]
 
     reader_kernel = ttnn.KernelDescriptor(
