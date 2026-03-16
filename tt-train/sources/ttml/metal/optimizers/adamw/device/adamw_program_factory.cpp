@@ -241,7 +241,7 @@ AdamWProgramFactory::cached_program_t AdamWProgramFactory::create(
 
     // Use 1× block_size pipeline depth: benchmarks at tt-train/tests/benchmark/adamw_benchmark.cpp proved it to be the
     // best for BW utilization
-    uint32_t pipeline_depth = std::min(block_size, num_tiles_per_core_group_1);
+    uint32_t pipeline_depth = block_size;
 
     const uint32_t num_input_tiles = pipeline_depth;
     const uint32_t num_output_tiles = pipeline_depth;
