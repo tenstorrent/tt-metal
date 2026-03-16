@@ -52,9 +52,7 @@ struct AllReduceSender {
 
     // Writer CTArgs (BRISC)
     template <
-        uint32_t packetHeaderCbId,
         uint32_t packetCbId,
-        uint32_t alignment,
         uint32_t inputNumTiles,
         uint32_t pageSizeBytes,
         uint32_t payloadSizeBytes,
@@ -65,9 +63,7 @@ struct AllReduceSender {
         uint32_t dstNumHops,
         uint32_t numConnections>
     struct WriterCTArgs {
-        static constexpr uint32_t packet_header_cb_id = packetHeaderCbId;
         static constexpr uint32_t packet_cb_id = packetCbId;
-        static constexpr uint32_t l1_alignment = alignment;
         static constexpr uint32_t input_num_tiles = inputNumTiles;
         static constexpr uint32_t page_size_bytes = pageSizeBytes;
         static constexpr uint32_t payload_size_bytes = payloadSizeBytes;
@@ -107,7 +103,7 @@ struct AllReduceSender {
     // ReaderCT: compile-time args for NCRISC reader
     // WriterCT: compile-time args for BRISC writer
     // ========================================================================
-    template <typename ReaderCT, typename WriterCT>
+    template <typename CTArgs>
     class Op {
     public:
         void operator()(const RTArgs& args) { impl(args); }
@@ -118,53 +114,49 @@ struct AllReduceSender {
             // ================================================================
             // NCRISC (Reader) - reads local tensor data into CB
             // ================================================================
-            cb_reserve_back(ReaderCT::cb0_id, ReaderCT::num_tiles);
-            const uint32_t l1_write_addr = get_write_ptr(ReaderCT::cb0_id);
-            uint64_t base_src_addr = get_noc_addr(ReaderCT::core_noc_x, ReaderCT::core_noc_y, args.tensor_address);
-            noc_async_read(base_src_addr, l1_write_addr, ReaderCT::num_tiles * ReaderCT::tensor_page_size);
+            cb_reserve_back(CTArgs::cb0_id, CTArgs::num_tiles);
+            const uint32_t l1_write_addr = get_write_ptr(CTArgs::cb0_id);
+            uint64_t base_src_addr = get_noc_addr(CTArgs::core_noc_x, CTArgs::core_noc_y, args.tensor_address);
+            noc_async_read(base_src_addr, l1_write_addr, CTArgs::num_tiles * CTArgs::tensor_page_size);
             noc_async_read_barrier();
-            cb_push_back(ReaderCT::cb0_id, ReaderCT::num_tiles);
+            cb_push_back(CTArgs::cb0_id, CTArgs::num_tiles);
 
 #elif defined(COMPILE_FOR_BRISC)
             // ================================================================
             // BRISC (Writer) - sends data to remote device via fabric
             // ================================================================
-            constexpr size_t packet_header_size_bytes = sizeof(PACKET_HEADER_TYPE);
-
             tt::tt_fabric::RoutingPlaneConnectionManager fabric_connection;
 
             size_t fabric_args_start_index = size_t(args.fabric_args_start_index);
-            open_connections(fabric_connection, WriterCT::num_connections, fabric_args_start_index);
+            open_connections(fabric_connection, CTArgs::num_connections, fabric_args_start_index);
 
-            cb_reserve_back(WriterCT::packet_header_cb_id, 1);
-            uint32_t packet_header_addr = get_read_ptr(WriterCT::packet_header_cb_id);
-            cb_push_back(WriterCT::packet_header_cb_id, 1);
+            PacketHeaderPool::reset();
+            auto* packet_header_ptr = PacketHeaderPool::allocate_header(1);
 
-            auto* packet_header_ptr = reinterpret_cast<volatile PACKET_HEADER_TYPE*>(packet_header_addr);
             fabric_set_unicast_route(fabric_connection, packet_header_ptr, 0);
-            packet_header_ptr->to_chip_unicast(WriterCT::dst_num_hops);
+            packet_header_ptr->to_chip_unicast(CTArgs::dst_num_hops);
 
-            cb_wait_front(WriterCT::packet_cb_id, WriterCT::input_num_tiles);
-            uint32_t packet_base_addr = get_read_ptr(WriterCT::packet_cb_id);
+            cb_wait_front(CTArgs::packet_cb_id, CTArgs::input_num_tiles);
+            uint32_t packet_base_addr = get_read_ptr(CTArgs::packet_cb_id);
 
             const uint64_t dst_noc_addr =
-                get_noc_addr(WriterCT::data_noc_x, WriterCT::data_noc_y, args.receiver_base_address);
-            const uint64_t receive_sem_noc_addr = get_noc_addr(
-                WriterCT::remote_receiver_noc_x, WriterCT::remote_receiver_noc_y, args.receive_semaphore_addr);
+                get_noc_addr(CTArgs::data_noc_x, CTArgs::data_noc_y, args.receiver_base_address);
+            const uint64_t receive_sem_noc_addr =
+                get_noc_addr(CTArgs::remote_receiver_noc_x, CTArgs::remote_receiver_noc_y, args.receive_semaphore_addr);
 
             // Use fused packet API to send data + semaphore increment in a single packet
             packet_header_ptr->to_noc_fused_unicast_write_atomic_inc(
                 tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{dst_noc_addr, receive_sem_noc_addr, 1, true},
-                align(WriterCT::payload_size_bytes, WriterCT::l1_alignment));
+                align(CTArgs::payload_size_bytes, L1_ALIGNMENT));
 
             auto& connection = fabric_connection.get(0).sender;
             connection.wait_for_empty_write_slot();
             connection.send_payload_without_header_non_blocking_from_address(
-                packet_base_addr, WriterCT::payload_size_bytes);
+                packet_base_addr, CTArgs::payload_size_bytes);
             connection.send_payload_flush_blocking_from_address(
                 (uint32_t)packet_header_ptr, sizeof(PACKET_HEADER_TYPE));
 
-            cb_pop_front(WriterCT::packet_cb_id, WriterCT::input_num_tiles);
+            cb_pop_front(CTArgs::packet_cb_id, CTArgs::input_num_tiles);
 
             close_connections(fabric_connection);
 

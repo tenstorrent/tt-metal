@@ -32,9 +32,7 @@ CB Layout:
 - CB 8: ccl_sender_in (ccl sender core)
 - CB 9: ccl_remote_data (gather/receiver core - intermediate tensor)
 - CB 10: ccl_residual (gather/receiver core - optional)
-- CB 11: ccl_temp (gather/receiver core - for compute)
 - CB 12: ccl_output (gather/receiver core - final output)
-- CB 13: ccl_packet_header (sender + receiver cores)
 """
 
 
@@ -402,9 +400,7 @@ class PostSDPA:
         ccl_sender_in_cb = 52  # CCL sender reads gather3 output (sender core)
         ccl_remote_data_cb = 53  # CCL received remote data (receiver core)
         ccl_residual_cb = 54  # CCL residual (receiver core)
-        ccl_temp_cb = 55  # CCL temp for compute (receiver core)
         ccl_output_cb = 56  # CCL output (receiver core)
-        ccl_packet_header_cb = 57  # CCL packet headers (sender + receiver cores)
 
         # ========================================================================
         # Gather2 parameters: 64 cores -> [1, 8192]
@@ -427,21 +423,19 @@ class PostSDPA:
         # ========================================================================
         gather3_data_size_bytes = matmul5_out_w_per_core * tile_1x32_size
         gather3_src_num_pages = matmul5_out_w_per_core  # 2 pages per sender
-        gather3_dst_num_pages = num_matmul5_cores * matmul5_out_w_per_core  # 112 * 2 = 224 pages
+        gather3_dst_num_pages = num_matmul5_cores * matmul5_out_w_per_core // 32  # 112 * 2 / 32 = 7 pages
         gather3_noc0_num_senders = num_matmul5_cores
         gather3_noc1_num_senders = 0
 
         # ========================================================================
         # CCL parameters: [1, 7168] all-reduce
         # ========================================================================
-        # Using 1x32 tiles to match gather3 output format (for tile-compatible reduction)
-        # 7168 elements = 224 tiles of 1x32 (32 elements each)
-        ccl_num_tiles = gather3_dst_num_pages  # 224 tiles of 1x32
-        ccl_page_size_bytes = tile_1x32_size  # 1x32 tile size
-        ccl_num_pages = gather3_dst_num_pages  # 224 pages of 1x32
-        ccl_payload_size_bytes = ccl_num_pages * ccl_page_size_bytes  # 224 * 64 = 14336 bytes
-        ccl_packet_header_size_bytes = ttnn.get_tt_fabric_packet_header_size_bytes()
-        l1_alignment = 16
+        # Using 32x32 tiles to match gather3 output format (for tile-compatible reduction)
+        # 7168 elements = 7 tiles of 32x32 (1024 elements each)
+        ccl_num_tiles = gather3_dst_num_pages  # 7 tiles of 32x32
+        ccl_page_size_bytes = tile_32x32_size  # 32x32 tile size
+        ccl_num_pages = gather3_dst_num_pages  # 7 pages of 32x32
+        ccl_payload_size_bytes = ccl_num_pages * ccl_page_size_bytes  # 7 * 2048 = 14336 bytes
 
         has_residual = 1 if residual_tensor_mesh is not None else 0
 
@@ -569,7 +563,6 @@ class PostSDPA:
                     ("ccl_sender_gather3_completion_semaphore_id", gather3_completion_semaphore_id),
                     # CCL receiver (NCRISC waits for remote data)
                     ("ccl_receiver_cb_in1", ccl_remote_data_cb),
-                    ("ccl_receiver_l1_alignment", l1_alignment),
                     ("ccl_receiver_cb_in2", gather3_dst_cb),  # Local data from gather3
                     ("ccl_receiver_remote_sender_noc_x", ccl_sender_noc_core.x),
                     ("ccl_receiver_remote_sender_noc_y", ccl_sender_noc_core.y),
@@ -644,9 +637,7 @@ class PostSDPA:
                     ("ccl_sender_noc_x", ccl_sender_noc_core.x),
                     ("ccl_sender_noc_y", ccl_sender_noc_core.y),
                     # CCL sender (BRISC sends via fabric)
-                    ("ccl_sender_packet_header_cb_id", ccl_packet_header_cb),
                     ("ccl_sender_packet_cb_id", ccl_sender_in_cb),
-                    ("ccl_sender_l1_alignment", l1_alignment),
                     ("ccl_sender_input_num_tiles", ccl_num_pages),
                     ("ccl_sender_page_size_bytes", ccl_page_size_bytes),
                     ("ccl_sender_payload_size_bytes", ccl_payload_size_bytes),
@@ -673,7 +664,7 @@ class PostSDPA:
                             ("sdpa_l_chunk_size_bytes", sdpa_l_chunk_size_bytes),
                             ("sdpa_num_l_chunks", sdpa_num_l_chunks),
                             ("sdpa_tiles_per_l_chunk", sdpa_tiles_per_l_chunk),
-                            ("sdpa_l1_alignment", l1_alignment),
+                            ("sdpa_l1_alignment", sdpa_l1_alignment),
                             ("sdpa_page_size_bytes", sdpa_l_tile_size),
                             ("sdpa_slot_size", sdpa_fwd_slot_size),
                             # SDPA scatter params
@@ -712,7 +703,6 @@ class PostSDPA:
                     ("ccl_receiver_cb_in1", gather3_dst_cb),  # Local data
                     ("ccl_receiver_cb_out0", ccl_output_cb),
                     ("ccl_receiver_cb_residual", ccl_residual_cb),
-                    ("ccl_receiver_cb_temp", ccl_temp_cb),
                     ("ccl_receiver_has_residual", has_residual),
                     ("ccl_receiver_num_tiles", ccl_num_tiles),
                 ]
@@ -839,6 +829,14 @@ class PostSDPA:
                 gather3_dst_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                     gather3_dst_cb, gather3_output_tensor_device
                 )
+                gather3_dst_cb_descriptor.format_descriptors = [
+                    ttnn.CBFormatDescriptor(
+                        buffer_index=gather3_dst_cb,
+                        data_format=data_format,
+                        page_size=tile_32x32_size,
+                        tile=ttnn.TileDescriptor(TILE_32x32),
+                    )
+                ]
 
                 cb_list = [
                     matmul4_in0_cb_descriptor,
@@ -857,21 +855,21 @@ class PostSDPA:
                     ccl_sender_in_cb_format = ttnn.CBFormatDescriptor(
                         buffer_index=ccl_sender_in_cb,
                         data_format=data_format,
-                        page_size=tile_1x32_size,
-                        tile=matmul4_out_tile_descriptor,
+                        page_size=ccl_page_size_bytes,
+                        tile=ttnn.TileDescriptor(TILE_32x32),
                     )
                     if sdpa_kv_cache_buffer_device is not None:
                         ccl_sender_in_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                             ccl_sender_in_cb,
                             sdpa_kv_cache_buffer_device,
                             address_offset=running_address_offset,
-                            total_size=ccl_num_pages * tile_1x32_size,
+                            total_size=ccl_num_pages * ccl_page_size_bytes,
                         )
                         ccl_sender_in_cb_descriptor.format_descriptors = [ccl_sender_in_cb_format]
                         running_address_offset += ccl_sender_in_cb_descriptor.total_size
                     else:
                         ccl_sender_in_cb_descriptor = ttnn.CBDescriptor(
-                            total_size=ccl_num_pages * tile_1x32_size,
+                            total_size=ccl_num_pages * ccl_page_size_bytes,
                             core_ranges=ccl_sender_core_grid,
                             format_descriptors=[ccl_sender_in_cb_format],
                         )
@@ -883,6 +881,15 @@ class PostSDPA:
                         ccl_remote_data_cb, intermediate_tensor_device
                     )
                     ccl_remote_data_cb_descriptor.core_ranges = gather_core_grid
+                    ccl_remote_data_cb_descriptor.total_size = ccl_num_pages * ccl_page_size_bytes
+                    ccl_remote_data_cb_descriptor.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=ccl_remote_data_cb,
+                            data_format=data_format,
+                            page_size=ccl_page_size_bytes,
+                            tile=ttnn.TileDescriptor(TILE_32x32),
+                        )
+                    ]
                     cb_list.append(ccl_remote_data_cb_descriptor)
 
                     # CB 10: CCL residual (optional, from sharded tensor)
@@ -891,70 +898,33 @@ class PostSDPA:
                             ccl_residual_cb, residual_tensors_per_device[device_idx]
                         )
                         ccl_residual_cb_descriptor.core_ranges = gather_core_grid
-                        ccl_residual_cb_descriptor.total_size = ccl_num_tiles * tile_1x32_size
+                        ccl_residual_cb_descriptor.total_size = ccl_num_tiles * ccl_page_size_bytes
                         ccl_residual_cb_descriptor.format_descriptors = [
                             ttnn.CBFormatDescriptor(
                                 buffer_index=ccl_residual_cb,
                                 data_format=data_format,
-                                page_size=tile_1x32_size,
-                                tile=matmul4_out_tile_descriptor,  # 1x32 tiles to match gather3
+                                page_size=ccl_page_size_bytes,
+                                tile=ttnn.TileDescriptor(TILE_32x32),
                             )
                         ]
                         cb_list.append(ccl_residual_cb_descriptor)
-
-                        # CB 11: CCL temp scratch buffer (not backed by tensor)
-                        ccl_temp_cb_format = ttnn.CBFormatDescriptor(
-                            buffer_index=ccl_temp_cb,
-                            data_format=data_format,
-                            page_size=tile_1x32_size,
-                            tile=matmul4_out_tile_descriptor,
-                        )
-                        if sdpa_kv_cache_buffer_device is not None:
-                            ccl_temp_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                                ccl_temp_cb,
-                                sdpa_kv_cache_buffer_device,
-                                address_offset=running_address_offset,
-                                total_size=ccl_num_tiles * tile_1x32_size,
-                            )
-                            ccl_temp_cb_descriptor.format_descriptors = [ccl_temp_cb_format]
-                            running_address_offset += ccl_temp_cb_descriptor.total_size
-                        else:
-                            ccl_temp_cb_descriptor = ttnn.CBDescriptor(
-                                total_size=ccl_num_tiles * tile_1x32_size,
-                                core_ranges=gather_core_grid,
-                                format_descriptors=[ccl_temp_cb_format],
-                            )
-                        cb_list.append(ccl_temp_cb_descriptor)
 
                     # CB 12: CCL output (from sharded tensor)
                     ccl_output_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
                         ccl_output_cb, output_tensor_device
                     )
                     ccl_output_cb_descriptor.core_ranges = gather_core_grid
+                    ccl_output_cb_descriptor.total_size = ccl_num_pages * ccl_page_size_bytes
+                    ccl_output_cb_descriptor.format_descriptors = [
+                        ttnn.CBFormatDescriptor(
+                            buffer_index=ccl_output_cb,
+                            data_format=data_format,
+                            page_size=ccl_page_size_bytes,
+                            tile=ttnn.TileDescriptor(TILE_32x32),
+                        )
+                    ]
                     cb_list.append(ccl_output_cb_descriptor)
 
-                    # CB 13: CCL packet headers
-                    ccl_packet_header_cb_format = ttnn.CBFormatDescriptor(
-                        buffer_index=ccl_packet_header_cb,
-                        data_format=ttnn.uint32,
-                        page_size=ccl_packet_header_size_bytes,
-                    )
-                    if sdpa_kv_cache_buffer_device is not None:
-                        ccl_packet_header_cb_descriptor = ttnn.cb_descriptor_from_sharded_tensor(
-                            ccl_packet_header_cb,
-                            sdpa_kv_cache_buffer_device,
-                            address_offset=running_address_offset,
-                            total_size=2 * ccl_packet_header_size_bytes,
-                        )
-                        ccl_packet_header_cb_descriptor.format_descriptors = [ccl_packet_header_cb_format]
-                        running_address_offset += ccl_packet_header_cb_descriptor.total_size
-                    else:
-                        ccl_packet_header_cb_descriptor = ttnn.CBDescriptor(
-                            total_size=2 * ccl_packet_header_size_bytes,
-                            core_ranges=gather_core_grid.merge(ccl_sender_core_grid),
-                            format_descriptors=[ccl_packet_header_cb_format],
-                        )
-                    cb_list.append(ccl_packet_header_cb_descriptor)
                 # SDPA CBs (14-24): only when SDPA is enabled
                 if sdpa_enabled:
                     # Get per-device SDPA tensors
