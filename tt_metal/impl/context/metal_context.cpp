@@ -56,7 +56,7 @@
 #include <llrt/tt_cluster.hpp>
 #include <dispatch/dispatch_mem_map.hpp>
 
-                    namespace tt::tt_metal {
+namespace tt::tt_metal {
 
 // MetalContext destructor is private, so we can't use a unique_ptr to manage the instance.
 std::array<std::atomic<MetalContext*>, MAX_CONTEXT_COUNT> g_instances{};

@@ -1150,10 +1150,8 @@ bool isGalaxyMMIODevice(distributed::MeshDevice* mesh_device, IDevice* device) {
            device->is_mmio_capable();
 }
 
-bool useFastDispatch(distributed::MeshDevice* mesh_device, IDevice* device) {
-    return MetalContext::instance(extract_context_id(mesh_device, device))
-               .device_manager()
-               ->is_dispatch_firmware_active() &&
+bool useFastDispatch(distributed::MeshDevice* mesh_device, IDevice* device, ContextId context_id) {
+    return MetalContext::instance(context_id).device_manager()->is_dispatch_firmware_active() &&
            !isGalaxyMMIODevice(mesh_device, device);
 }
 
@@ -1173,7 +1171,7 @@ void writeToCoreControlBuffer(
     DeviceAddr control_vector_addr =
         profiler_msg_addr + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
                                 dev_msgs::profiler_msg_t::Field::control_vector);
-    if (useFastDispatch(mesh_device, device) && !force_slow_dispatch) {
+    if (useFastDispatch(mesh_device, device, context_id) && !force_slow_dispatch) {
         if (mesh_device) {
             distributed::FDMeshCommandQueue& mesh_cq =
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
@@ -1289,7 +1287,7 @@ void DeviceProfiler::readL1DataBufferForCore(
     std::vector<uint32_t>& core_l1_data_buffer,
     bool force_slow_dispatch) {
     ZoneScoped;
-    if (useFastDispatch(mesh_device, device) && !force_slow_dispatch) {
+    if (useFastDispatch(mesh_device, device, context_id) && !force_slow_dispatch) {
         issueFastDispatchReadFromL1DataBuffer(mesh_device, virtual_core, core_l1_data_buffer);
     } else {
         issueSlowDispatchReadFromL1DataBuffer(device, virtual_core, core_l1_data_buffer);
@@ -1318,7 +1316,7 @@ void DeviceProfiler::readControlBufferForCore(
     DeviceAddr control_vector_addr =
         profiler_msg + hal.get_dev_msgs_factory(core_type).offset_of<dev_msgs::profiler_msg_t>(
                            dev_msgs::profiler_msg_t::Field::control_vector);
-    if (useFastDispatch(mesh_device, device) && !force_slow_dispatch) {
+    if (useFastDispatch(mesh_device, device, context_id) && !force_slow_dispatch) {
         if (mesh_device) {
             distributed::FDMeshCommandQueue& mesh_cq =
                 dynamic_cast<distributed::FDMeshCommandQueue&>(mesh_device->mesh_command_queue());
@@ -1390,7 +1388,7 @@ void DeviceProfiler::resetControlBuffers(
 void DeviceProfiler::readProfilerBuffer(
     distributed::MeshDevice* mesh_device, IDevice* device, uint8_t active_dram_buffer_index, bool force_slow_dispatch) {
     ZoneScoped;
-    if (useFastDispatch(mesh_device, device) && !force_slow_dispatch) {
+    if (useFastDispatch(mesh_device, device, context_id) && !force_slow_dispatch) {
         issueFastDispatchReadFromProfilerBuffer(mesh_device, device, active_dram_buffer_index);
     } else {
         issueSlowDispatchReadFromProfilerBuffer(device, active_dram_buffer_index);
