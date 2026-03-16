@@ -310,6 +310,16 @@ class ImagePooling(LightweightModule):
         v = ttnn.permute(v, (0, 2, 1, 3))
         v = ttnn.typecast(v, dtype=ttnn.bfloat8_b)
 
+        sdpa_mask = attn_mask
+        if attn_mask is not None:
+            mask_shape = list(attn_mask.shape)
+            if len(mask_shape) == 4 and mask_shape[2] == 1 and num_queries > 1:
+                sdpa_mask = ttnn.repeat(
+                    attn_mask,
+                    (1, 1, num_queries, 1),
+                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
+                )
+
         # Scaled dot-product attention
         attn_output = ttnn.transformer.scaled_dot_product_attention(
             q,
@@ -317,9 +327,12 @@ class ImagePooling(LightweightModule):
             v,
             is_causal=False,
             scale=self.scale,
-            attn_mask=attn_mask,
+            attn_mask=sdpa_mask,
             compute_kernel_config=self.compute_kernel_config_hifi4,
         )
+
+        if sdpa_mask is not attn_mask and sdpa_mask is not None:
+            ttnn.deallocate(sdpa_mask)
 
         ttnn.deallocate(q)
         ttnn.deallocate(k)
