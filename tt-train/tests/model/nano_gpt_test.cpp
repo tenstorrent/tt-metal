@@ -462,7 +462,7 @@ void run_fused_swiglu_comparison(const FusedSwiGLUTestConfig &test_cfg) {
 
         auto adamw_params = ttml::optimizers::AdamWConfig();
         adamw_params.lr = config.learning_rate;
-        auto optimizer = std::make_shared<ttml::optimizers::MorehAdamW>(model->parameters(), adamw_params);
+        auto optimizer = std::make_shared<ttml::optimizers::AdamW>(model->parameters(), adamw_params);
 
         RunResult result;
         uint32_t step = 0;

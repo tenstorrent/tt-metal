@@ -213,12 +213,16 @@ void CompareOptimizedVsBaseline(const std::vector<uint32_t>& input_shape, const 
             xt::xarray<float>(xt::reshape_view(xt::transpose(w2_lin), {1U, 1U, hidden_dim, input_dim})), device));
         auto w3 = autograd::create_tensor(core::from_xtensor(
             xt::xarray<float>(xt::reshape_view(xt::transpose(w3_lin), {1U, 1U, input_dim, hidden_dim})), device));
+        x->set_requires_grad(true);
+        w1->set_requires_grad(true);
+        w2->set_requires_grad(true);
+        w3->set_requires_grad(true);
 
         auto out = ops::swiglu(x, w1, w2, w3);
+        auto fwd = core::to_xtensor(out->get_value());
         out->set_grad(core::ones_like(out->get_value()));
         out->backward();
 
-        auto fwd = core::to_xtensor(out->get_value());
         auto dx = core::to_xtensor(x->get_grad());
         autograd::ctx().reset_graph();
         return std::make_tuple(fwd, dx);
@@ -230,12 +234,16 @@ void CompareOptimizedVsBaseline(const std::vector<uint32_t>& input_shape, const 
         auto w1 = autograd::create_tensor(core::from_xtensor(w1_lin, device));
         auto w2 = autograd::create_tensor(core::from_xtensor(w2_lin, device));
         auto w3 = autograd::create_tensor(core::from_xtensor(w3_lin, device));
+        x->set_requires_grad(true);
+        w1->set_requires_grad(true);
+        w2->set_requires_grad(true);
+        w3->set_requires_grad(true);
 
         auto out = ops::swiglu_optimized(x, w1, w2, w3);
+        auto fwd = core::to_xtensor(out->get_value());
         out->set_grad(core::ones_like(out->get_value()));
         out->backward();
 
-        auto fwd = core::to_xtensor(out->get_value());
         auto dx = core::to_xtensor(x->get_grad());
         autograd::ctx().reset_graph();
         return std::make_tuple(fwd, dx);

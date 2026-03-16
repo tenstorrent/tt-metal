@@ -131,6 +131,7 @@ autograd::TensorPtr swiglu_optimized(
                                    w2,
                                    w3,
                                    out,
+                                   saved_input = tensor->get_value(),
                                    saved_linear1 = std::move(saved_linear1),
                                    saved_gate = std::move(saved_gate),
                                    saved_gated = std::move(saved_gated),
@@ -152,42 +153,32 @@ autograd::TensorPtr swiglu_optimized(
             auto dL_dW2 = ttnn_fixed::matmul(flatten_leading(dL_dout), flatten_leading(gated), true, false);
             w2->add_grad(dL_dW2.reshape(w2->get_value().logical_shape()));
         }
-        gated.deallocate();
-
         // dL/d(prod) = dL_dout @ w2 (no transpose — w2 is [D, H])
         auto dL_dprod = ttnn_fixed::matmul(dL_dout, w2->get_value());
-        dL_dout.deallocate();
 
         // Fused kernel: reads (linear1, gate, dL_dprod) once, produces (dL_dlinear1, dL_dgate)
-        auto [dL_dlinear1, dL_dgate] = ttml::metal::swiglu_grad(linear1, gate, dL_dprod, linear1);
-        gate.deallocate();
-        dL_dprod.deallocate();
+        auto [dL_dlinear1, dL_dgate] = ttml::metal::swiglu_grad(linear1, gate, dL_dprod);
 
         // Input grads: dL @ w (no transpose — w1,w3 are [H, D])
         auto dL_dtensor = ttnn_fixed::matmul(dL_dlinear1, w1->get_value());
         auto dL_dtensor_from_w3 = ttnn_fixed::matmul(dL_dgate, w3->get_value());
         ttnn::add_(dL_dtensor, dL_dtensor_from_w3);
-        dL_dtensor_from_w3.deallocate();
         tensor->add_grad(dL_dtensor);
-        dL_dtensor.deallocate();
 
         // W1 & W3 grads
-        auto flat_x = flatten_leading(tensor->get_value());
+        auto flat_x = flatten_leading(saved_input);
         {
             auto dL_dW1 = ttnn_fixed::matmul(flatten_leading(dL_dlinear1), flat_x, true, false);
             w1->add_grad(dL_dW1.reshape(w1->get_value().logical_shape()));
         }
-        dL_dlinear1.deallocate();
 
         {
             auto dL_dW3 = ttnn_fixed::matmul(flatten_leading(dL_dgate), flat_x, true, false);
             w3->add_grad(dL_dW3.reshape(w3->get_value().logical_shape()));
         }
-        dL_dgate.deallocate();
     };
 
-    auto links = autograd::get_links(tensor);
-    out->set_node(autograd::ctx().add_backward_node(std::move(grad), links));
+    out->set_node(autograd::add_backward_node(std::move(grad), out, tensor, w1, w2, w3));
 
     return out;
 }
