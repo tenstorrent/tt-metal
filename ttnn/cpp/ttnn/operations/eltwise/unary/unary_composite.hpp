@@ -173,8 +173,7 @@ inline Tensor clamp(
     std::optional<std::variant<float, int32_t>> max = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<Tensor>& output_tensor = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeClamp::invoke(
-        input_a, std::move(min), std::move(max), output_mem_config, output_tensor);
+    return operations::unary::ExecuteUnaryCompositeClamp::invoke(input_a, min, max, output_mem_config, output_tensor);
 }
 inline Tensor clamp(
     const Tensor& a,
