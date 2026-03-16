@@ -159,13 +159,18 @@ void kernel_main() {
     // Corners-only optimization for 2D H writers:
     // Only W-boundary sticks (corners) go to neighbor L1; non-corner sticks go directly to DRAM.
     // Phase 2 W reader only needs corners, so this is safe.
-    // pad2_left_sticks = left corners count (sticks W reader dir=0 needs from right side)
-    // pad2_right_sticks = right corners count (sticks W reader dir=1 needs from left side)
+    // Derivation: the output row is [pad2_left | W interior sticks | pad2_right].
+    // The factory sets stick_start_id = pad2_left (the W offset where interior data begins),
+    // num_sticks_per_halo_dim = W + pad2_left + pad2_right (full output row width),
+    // and num_sticks_to_read = W (interior width). So:
+    //   pad2_left_sticks  = stick_start_id = pad2_left
+    //   pad2_right_sticks = (W + pad2_left + pad2_right) - W - pad2_left = pad2_right
+    // These can be different (asymmetric W padding is supported).
     uint32_t pad2_left_sticks = 0;
     uint32_t pad2_right_sticks = 0;
     if constexpr (use_l1_intermediate && !is_w_fabric_writer) {
-        pad2_left_sticks = stick_start_id;  // = pad2_left (W offset in output row)
-        pad2_right_sticks = num_sticks_per_halo_dim - num_sticks_to_read - stick_start_id;  // = pad2_right
+        pad2_left_sticks = stick_start_id;
+        pad2_right_sticks = num_sticks_per_halo_dim - num_sticks_to_read - stick_start_id;
     }
 
     uint32_t outer_dim_offset = outer_dim_offset_start_id;
