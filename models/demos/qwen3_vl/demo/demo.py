@@ -430,7 +430,12 @@ def test_demo(
         image_embeds, deepstack_visual_embeds = (
             visual_model(inputs.pixel_values, grid_thw=inputs.image_grid_thw)
             if "pixel_values" in inputs
-            else (torch.tensor([], dtype=torch.bfloat16), None)
+            else (
+                ttnn.from_torch(
+                    torch.tensor([], dtype=torch.bfloat16), device=model_args.mesh_device, dtype=ttnn.bfloat16
+                ),
+                None,
+            )
         )
         # logger.info(f"image_embeds: {image_embeds.shape}")
         # logger.info(f"deepstack_visual_embeds: {len(deepstack_visual_embeds)}")
