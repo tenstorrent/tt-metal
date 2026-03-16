@@ -80,9 +80,6 @@ const CoreRangeSet& SubDeviceImpl::cores(HalProgrammableCoreType core_type) cons
 SubDevice::SubDevice(tt::stl::Span<const CoreRangeSet> cores) :
     pimpl_(std::make_unique<SubDeviceImpl>(nullptr, cores)) {}
 
-SubDevice::SubDevice(tt::tt_metal::MetalEnv& env, tt::stl::Span<const CoreRangeSet> cores) :
-    pimpl_(std::make_unique<SubDeviceImpl>(&MetalEnvAccessor(env).impl(), cores)) {}
-
 SubDevice::SubDevice(SubDeviceImpl&& impl) : pimpl_(std::make_unique<SubDeviceImpl>(std::move(impl))) {}
 
 SubDevice::SubDevice(const SubDevice& other) :

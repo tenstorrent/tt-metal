@@ -190,6 +190,9 @@ public:
     MeshDeviceImpl& operator=(MeshDeviceImpl&&) = delete;
 
     ContextId get_context_id() const { return context_id_; }
+    // The MeshDevice will call MetalContext::destroy_instance on close when this is set to true.
+    // This was added to cleanup the MetalContext after MeshDevice closes.
+    // It needs to be removed to enable https://github.com/tenstorrent/tt-metal/issues/21500.
     void set_destroy_metal_context_instance_on_close(bool destroy) {
         destroy_metal_context_instance_on_close_ = destroy;
     }

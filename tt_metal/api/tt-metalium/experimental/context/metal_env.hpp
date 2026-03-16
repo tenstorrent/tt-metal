@@ -9,6 +9,7 @@
 #include <umd/device/types/arch.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
 #include <tt-metalium/mesh_device.hpp>
+#include <tt-metalium/sub_device.hpp>
 #include <tt-metalium/system_mesh.hpp>
 
 namespace tt::tt_fabric {
@@ -130,7 +131,7 @@ public:
     /// MeshDevice instances to map logical coordinates to physical device IDs.
     distributed::SystemMesh& get_system_mesh();
 
-    // Create a MeshDevice which will operate on this MetalEnv
+    // Create a MeshDevice which will use this MetalEnv
     std::shared_ptr<distributed::MeshDevice> create_mesh_device(
         const distributed::MeshDeviceConfig& config,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
@@ -140,7 +141,7 @@ public:
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
-    // Create a unit mesh for the physical device ID which will operate on this MetalEnv
+    // Create a unit mesh for the physical device ID which will use this MetalEnv
     std::shared_ptr<distributed::MeshDevice> create_unit_mesh_device(
         int device_id,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
@@ -150,7 +151,7 @@ public:
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
 
-    // Create a unit mesh for each physical device ID in the list which will operate on this MetalEnv
+    // Create a unit mesh for each physical device ID in the list which will use this MetalEnv
     std::map<int, std::shared_ptr<distributed::MeshDevice>> create_unit_meshes(
         const std::vector<int>& device_ids,
         size_t l1_small_size = DEFAULT_L1_SMALL_SIZE,
@@ -159,6 +160,9 @@ public:
         const DispatchCoreConfig& dispatch_core_config = DispatchCoreConfig{},
         tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
         size_t worker_l1_size = DEFAULT_WORKER_L1_SIZE);
+
+    // Create a SubDevice that uses this MetalEnv
+    SubDevice create_sub_device(tt::stl::Span<const CoreRangeSet> cores);
 
 private:
     friend class MetalEnvAccessor;
