@@ -10,14 +10,6 @@
 
 #include <type_traits>
 
-// Bundles the subblock decomposition of active_Sk into full subblocks + remainder,
-// avoiding long parameter lists in sdpa_inner_loop_step.
-struct SubblockDecomp {
-    uint32_t num_full;   // number of full subblocks (active_Sk / qkt_subblock_w)
-    uint32_t remainder;  // leftover tiles (active_Sk % qkt_subblock_w)
-    bool has_partial;    // remainder > 0
-};
-
 #ifdef ARCH_BLACKHOLE
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
@@ -608,6 +600,20 @@ static SDPA_NOINLINE void apply_lightweight_mask_streaming(
 }
 
 /**
+ * Largest factor of n that is <= max_val.  Picks a QKT subblock width that
+ * evenly divides the active K-tile count on the last K-chunk, avoiding
+ * partial subblocks and enabling the split-drain path.
+ */
+constexpr uint32_t largest_factor_le(uint32_t n, uint32_t max_val) {
+    for (uint32_t f = max_val; f >= 2; --f) {
+        if (n % f == 0) {
+            return f;
+        }
+    }
+    return 1;
+}
+
+/**
  * One K-chunk iteration of the streaming SDPA algorithm (v2 — no row buffers).
  * Phase 1: Q@KT directly into cb_qkt_im with cb_push_back_hold_wr_ptr, in-place sub_exp.
  * Phase 2: Drain + QKT@V with SALAD corrections, streaming normalization on last K iter.
@@ -647,11 +653,9 @@ static void sdpa_inner_loop_step(
     const uint32_t lw_partial_tile_idx = 0,
     const uint32_t active_Sk = Sk_chunk_t,
     const bool reduce_trigger = false,
-    const SubblockDecomp kt_decomp = {
-        Sk_chunk_t / qkt_subblock_w, Sk_chunk_t % qkt_subblock_w, (Sk_chunk_t % qkt_subblock_w) > 0}) {
-    const uint32_t kt_num_full_subblocks = kt_decomp.num_full;
-    const uint32_t kt_remainder = kt_decomp.remainder;
-    const bool has_partial_subblock = kt_decomp.has_partial;
+    const uint32_t actual_sbw = qkt_subblock_w) {
+    // Callers guarantee active_Sk is evenly divisible by actual_sbw (via largest_factor_le).
+    const uint32_t kt_num_full_subblocks = active_Sk / actual_sbw;
     constexpr uint32_t in0_block_w = DHt;
     constexpr uint32_t q_num_subblocks = Sq_chunk_t / subblock_h;
     constexpr uint32_t q_subblock_num_tiles = subblock_h * in0_block_w;
@@ -687,7 +691,7 @@ static void sdpa_inner_loop_step(
     // All matmul output goes to cb_qkt_im at absolute offsets via pack_tile<true>.
     // cb_push_back_hold_wr_ptr makes each row visible to UNPACK without advancing wr_ptr.
 #ifdef ARCH_BLACKHOLE
-    PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, qkt_subblock_w)));
+    PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, actual_sbw)));
 #endif
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
         MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)");
@@ -699,9 +703,9 @@ static void sdpa_inner_loop_step(
         }
         kt_index_offset = 0;
 #ifdef ARCH_BLACKHOLE
-        mm_no_mop_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, subblock_h, in0_block_w);
+        mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, subblock_h, in0_block_w);
 #else
-        mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, subblock_h, in0_block_w);
+        mm_block_init_short(cb_q_in, cb_kt_in, true, actual_sbw, subblock_h, in0_block_w);
 #endif
         for (uint32_t kt_subblock = 0; kt_subblock < kt_num_full_subblocks; ++kt_subblock) {
             if (q_subblock > 0) {
@@ -715,13 +719,13 @@ static void sdpa_inner_loop_step(
                     cur.sum,
                     KT_stride,
                     prev_q_subblock,
-                    kt_subblock * qkt_subblock_w,
+                    kt_subblock * actual_sbw,
                     subblock_h,
-                    qkt_subblock_w);
+                    actual_sbw);
 #ifdef ARCH_BLACKHOLE
-                mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, subblock_h, in0_block_w);
+                mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, subblock_h, in0_block_w);
 #else
-                mm_block_init_short(cb_q_in, cb_kt_in, true, qkt_subblock_w, subblock_h, in0_block_w);
+                mm_block_init_short(cb_q_in, cb_kt_in, true, actual_sbw, subblock_h, in0_block_w);
 #endif
             }
             {
@@ -729,8 +733,7 @@ static void sdpa_inner_loop_step(
                 if constexpr (!uniform_unpack_format) {
                     reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
                 }
-                // Only the LAST full subblock posts the semaphore — one post per reduce,
-                // matching the single semaphore get in the UNPACK MOP split.
+                // The last subblock posts the semaphore — one post per reduce.
                 bool kt_trigger_reduce = reduce_trigger && (kt_subblock == kt_num_full_subblocks - 1);
                 blocked_matmul_and_pack<true, KT_stride, KT_stride, true /*blocked_pack*/>(
                     cb_q_in,
@@ -739,68 +742,13 @@ static void sdpa_inner_loop_step(
                     q_index_offset,
                     kt_index_offset,
                     q_subblock,
-                    kt_subblock * qkt_subblock_w,
-                    qkt_subblock_w,
+                    kt_subblock * actual_sbw,
+                    actual_sbw,
                     subblock_h,
                     in0_block_w,
                     0,
                     kt_trigger_reduce);
-                kt_index_offset += qkt_subblock_w;
-            }
-        }
-        // Partial last subblock: handles tile-level tail when active_Sk % qkt_subblock_w != 0.
-        if (has_partial_subblock) {
-            {
-#ifdef ARCH_BLACKHOLE
-                PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, kt_remainder)));
-#endif
-                if (q_subblock > 0) {
-                    uint32_t prev_q_subblock = q_subblock - 1;
-                    if constexpr (!uniform_unpack_format) {
-                        reconfig_data_format(cb_kt_in, cb_qkt_im, cb_q_in, cb_qkt_im);
-                    }
-                    sub_exp_block_bcast_cols<
-                        PROFILING_ENABLED,
-                        scale_fp32,
-                        true,
-                        VectorMode::RC,
-                        true /*blocked_pack*/>(
-                        cb_qkt_im,
-                        cur.max,
-                        cur.sum,
-                        KT_stride,
-                        prev_q_subblock,
-                        kt_num_full_subblocks * qkt_subblock_w,
-                        subblock_h,
-                        kt_remainder);
-                }
-                {
-                    MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Q@KT MM+Pack (partial)");
-#ifdef ARCH_BLACKHOLE
-                    mm_no_mop_init_short(cb_q_in, cb_kt_in, true, kt_remainder, subblock_h, in0_block_w);
-#else
-                    mm_block_init_short(cb_q_in, cb_kt_in, true, kt_remainder, subblock_h, in0_block_w);
-#endif
-                if constexpr (!uniform_unpack_format) {
-                    reconfig_data_format(cb_qkt_im, cb_kt_in, cb_qkt_im, cb_q_in);
-                }
-                // Partial subblock is always the last subblock — never trigger custom reduce sync.
-                // The reduce trigger mechanism is only for full subblocks.
-                constexpr bool partial_trigger_reduce = false;
-                blocked_matmul_and_pack<true, KT_stride, KT_stride, true /*blocked_pack*/>(
-                    cb_q_in,
-                    cb_kt_in,
-                    cb_qkt_im,
-                    q_index_offset,
-                    kt_index_offset,
-                    q_subblock,
-                    kt_num_full_subblocks * qkt_subblock_w,
-                    kt_remainder,
-                    subblock_h,
-                    in0_block_w,
-                    0,
-                    partial_trigger_reduce);
-                }
+                kt_index_offset += actual_sbw;
             }
         }
         // Restore float16b for mask/reduce after Q@KT.
@@ -851,7 +799,7 @@ static void sdpa_inner_loop_step(
                 reduce_trigger);
             cb_push_back(cur.max, subblock_h);
 #ifdef ARCH_BLACKHOLE
-            PACK((llk_pack_mop_config<false, false, false>(cur.max, qkt_subblock_w)));
+            PACK((llk_pack_mop_config<false, false, false>(cur.max, actual_sbw)));
 #endif
         }
 
@@ -878,11 +826,6 @@ static void sdpa_inner_loop_step(
     {
         const uint32_t qktv_subblock_h = subblock_h;
         constexpr uint32_t qktv_subblock_w = (vDHt < 4) ? vDHt : 4;
-        constexpr uint32_t qktv_in0_block_w = Sk_chunk_t;
-        // V matmul narrowed to sub_exp'd width. Tile-level when partial subblock is used,
-        // subblock-aligned otherwise (when partial was rounded up to avoid code size).
-        const uint32_t v_matmul_dim =
-            kt_num_full_subblocks * qkt_subblock_w + (has_partial_subblock ? kt_remainder : 0);
         const uint32_t qktv_q_num_subblocks = Sq_chunk_t / qktv_subblock_h;
         constexpr uint32_t qktv_v_num_subblocks = vDHt / qktv_subblock_w;
         constexpr uint32_t qktv_output_num_tiles = Sq_chunk_t * vDHt;
@@ -902,11 +845,11 @@ static void sdpa_inner_loop_step(
 #endif
         {
             MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)@V");
-            // subblock_h=1 with no partial subblock: split-drain (sub_exp interleaved with V matmul).
-            // subblock_h>1 or partial subblock: non-split drain (all sub_exp first, then full V matmul).
-            // Note: constexpr on subblock_h eliminates the dead branch; has_partial_subblock is runtime.
-            if (subblock_h == 1 && !has_partial_subblock) {
-                const uint32_t matmul_inner = qktv_in0_block_w / kt_num_full_subblocks;
+            // subblock_h=1: split-drain (sub_exp interleaved with V matmul).
+            // subblock_h>1: non-split drain (all sub_exp first, then full V matmul).
+            // Note: constexpr on subblock_h eliminates the dead branch at compile time.
+            if (subblock_h == 1) {
+                const uint32_t matmul_inner = actual_sbw;
                 for (uint32_t kt_sub = 0; kt_sub < kt_num_full_subblocks; ++kt_sub) {
                     sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, true>(
                         cb_qkt_im,
@@ -914,9 +857,9 @@ static void sdpa_inner_loop_step(
                         cur.sum,
                         KT_stride,
                         q_num_subblocks - 1,
-                        kt_sub * qkt_subblock_w,
+                        kt_sub * actual_sbw,
                         subblock_h,
-                        qkt_subblock_w);
+                        actual_sbw);
 
                     if (kt_sub == 0) {
                         cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
@@ -970,20 +913,9 @@ static void sdpa_inner_loop_step(
                         cur.sum,
                         KT_stride,
                         q_num_subblocks - 1,
-                        kt_sub * qkt_subblock_w,
+                        kt_sub * actual_sbw,
                         subblock_h,
-                        qkt_subblock_w);
-                }
-                if (has_partial_subblock) {
-                    sub_exp_block_bcast_cols<PROFILING_ENABLED, scale_fp32, true>(
-                        cb_qkt_im,
-                        cur.max,
-                        cur.sum,
-                        KT_stride,
-                        q_num_subblocks - 1,
-                        kt_num_full_subblocks * qkt_subblock_w,
-                        subblock_h,
-                        kt_remainder);
+                        actual_sbw);
                 }
 
                 cb_wait_front(cb_qkt_im, qktv_in0_wait_tiles);
@@ -995,9 +927,9 @@ static void sdpa_inner_loop_step(
                         reconfig_data_format(cur.out, cb_v_in, cur.out, cb_qkt_im);
                     }
 #ifdef ARCH_BLACKHOLE
-                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, v_matmul_dim);
+                    mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, active_Sk);
 #else
-                    mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, v_matmul_dim);
+                    mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, active_Sk);
 #endif
                     for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                         blocked_matmul_and_pack<false, vDHt, vDHt>(
@@ -1010,7 +942,7 @@ static void sdpa_inner_loop_step(
                             v_subblock * qktv_subblock_w,
                             qktv_subblock_w,
                             qktv_subblock_h,
-                            v_matmul_dim,
+                            active_Sk,
                             KT_stride);
                         v_index_offset += qktv_subblock_w;
                     }
@@ -1074,9 +1006,9 @@ static void sdpa_inner_loop_step(
                     reconfig_data_format(cur.out, cb_v_in, cur.out, cb_qkt_im);
                 }
 #ifdef ARCH_BLACKHOLE
-                mm_no_mop_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, v_matmul_dim);
+                mm_no_mop_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, active_Sk);
 #else
-                mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, v_matmul_dim);
+                mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, active_Sk);
 #endif
                 for (uint32_t v_subblock = 0; v_subblock < qktv_v_num_subblocks; ++v_subblock) {
                     blocked_matmul_and_pack<false, vDHt, vDHt>(
@@ -1089,7 +1021,7 @@ static void sdpa_inner_loop_step(
                         v_subblock * qktv_subblock_w,
                         qktv_subblock_w,
                         qktv_subblock_h,
-                        v_matmul_dim,
+                        active_Sk,
                         KT_stride);
                     v_index_offset += qktv_subblock_w;
                 }
@@ -1194,12 +1126,11 @@ void sdpa_standard_v2(
     const uint32_t cb_sum_A,
     const uint32_t cb_sum_B) {
     // Neginf tile is permanently fronted by the writer — wait once before any K-chunk loop.
-    constexpr uint32_t padded_k_tiles_v2 = (Sk_chunk_t - (Skt % Sk_chunk_t)) % Sk_chunk_t;
-    if constexpr (use_padded_mask && padded_k_tiles_v2 > 0) {
+    constexpr uint32_t padded_k_tiles_inner = (Sk_chunk_t - (Skt % Sk_chunk_t)) % Sk_chunk_t;
+    if constexpr (use_padded_mask && padded_k_tiles_inner > 0) {
         cb_wait_front(cb_mask_in, 1);
     }
 
-    constexpr uint32_t padded_k_tiles_inner = (Sk_chunk_t - (Skt % Sk_chunk_t)) % Sk_chunk_t;
     constexpr uint32_t last_chunk_Sk = Sk_chunk_t - padded_k_tiles_inner;
 
     for (uint32_t q = 0; q < q_chunks_per_core; q++) {
@@ -1207,24 +1138,28 @@ void sdpa_standard_v2(
         AccumulatorHalf cur = {cb_sum_B, cb_max_B, cb_out_im_B};
 
         // reduce_trigger enables early reduce start via semaphore signaling from packer to unpacker.
-        // All conditions are compile-time except the active_Sk == Sk_chunk_t guard (padded last chunk).
+        // The unpack MOP is split in half (block_ct_dim / 2), so active_Sk must be even,
+        // and we need >1 subblock so the semaphore fires before the reduce's second half.
         constexpr bool can_reduce_trigger =
             (Sk_chunk_t % qkt_subblock_w == 0) && (Sk_chunk_t / qkt_subblock_w > 1) && (Sk_chunk_t % 2 == 0);
 
-        // Subblock decomposition for the non-padded (common) case — compile-time constants.
-        constexpr SubblockDecomp full_decomp = {
-            Sk_chunk_t / qkt_subblock_w, Sk_chunk_t % qkt_subblock_w, (Sk_chunk_t % qkt_subblock_w) > 0};
+        // Pre-compute subblock width: compile-time for full chunks, hoisted for padded last chunk.
+        constexpr uint32_t full_sbw = qkt_subblock_w;
+        constexpr uint32_t padded_sbw = (last_chunk_Sk < Sk_chunk_t && last_chunk_Sk % qkt_subblock_w != 0)
+                                            ? largest_factor_le(last_chunk_Sk, qkt_subblock_w)
+                                            : qkt_subblock_w;
 
-        // Subblock decomposition for the padded last chunk (computed once, used at most once).
-        constexpr SubblockDecomp padded_decomp = {
-            last_chunk_Sk / qkt_subblock_w, last_chunk_Sk % qkt_subblock_w, (last_chunk_Sk % qkt_subblock_w) > 0};
+        // With largest_factor_le, padded chunks also have evenly-dividing subblocks,
+        // so reduce_trigger can be enabled when the same constraints hold for last_chunk_Sk.
+        constexpr bool can_reduce_trigger_padded = (padded_k_tiles_inner > 0) && (last_chunk_Sk % padded_sbw == 0) &&
+                                                   (last_chunk_Sk / padded_sbw > 1) && (last_chunk_Sk % 2 == 0);
 
         auto call_step = [&](auto profiling_tag,
                              bool is_last,
                              bool is_first,
                              uint32_t active_Sk,
                              bool reduce_trigger,
-                             const SubblockDecomp& decomp) {
+                             uint32_t sbw) {
             sdpa_inner_loop_step<
                 decltype(profiling_tag)::value,
                 Sq_chunk_t,
@@ -1258,7 +1193,7 @@ void sdpa_standard_v2(
                 0,      // lw_partial_tile_idx
                 active_Sk,
                 reduce_trigger,
-                decomp);
+                sbw);
         };
 
         for (uint32_t k_chunk = 0; k_chunk < k_num_chunks; k_chunk++) {
@@ -1267,14 +1202,14 @@ void sdpa_standard_v2(
 
             bool is_padded = is_last && padded_k_tiles_inner > 0;
             uint32_t chunk_active_Sk = is_padded ? last_chunk_Sk : Sk_chunk_t;
-            bool chunk_reduce_trigger = can_reduce_trigger && !is_padded;
+            bool chunk_reduce_trigger = is_padded ? can_reduce_trigger_padded : can_reduce_trigger;
             call_step(
                 std::false_type{},
                 is_last,
                 is_first,
                 chunk_active_Sk,
                 chunk_reduce_trigger,
-                is_padded ? padded_decomp : full_decomp);
+                is_padded ? padded_sbw : full_sbw);
 
             // Post-iteration cleanup
             if (!is_first) {
@@ -1380,9 +1315,19 @@ void sdpa_ring_v2(
     constexpr bool can_reduce_trigger =
         (Sk_chunk_t % qkt_subblock_w == 0) && (Sk_chunk_t / qkt_subblock_w > 1) && (Sk_chunk_t % 2 == 0);
 
-    // Subblock decomposition for the non-padded (common) case — compile-time constants.
-    constexpr SubblockDecomp full_decomp = {
-        Sk_chunk_t / qkt_subblock_w, Sk_chunk_t % qkt_subblock_w, (Sk_chunk_t % qkt_subblock_w) > 0};
+    // Subblock width for the non-padded (common) case — compile-time constant.
+    constexpr uint32_t full_sbw = qkt_subblock_w;
+
+    // Pre-compute subblock widths for each mask type (hoisted out of per-chunk loop).
+    const uint32_t global_n_sbw = lw_mask.global_n_padded_tiles
+                                      ? largest_factor_le(Sk_chunk_t - lw_mask.global_n_padded_tiles, qkt_subblock_w)
+                                      : full_sbw;
+    const uint32_t local_n_sbw = lw_mask.local_n_padded_tiles
+                                     ? largest_factor_le(Sk_chunk_t - lw_mask.local_n_padded_tiles, qkt_subblock_w)
+                                     : full_sbw;
+    const uint32_t joint_n_sbw = lw_mask.joint_n_padded_tiles
+                                     ? largest_factor_le(Sk_chunk_t - lw_mask.joint_n_padded_tiles, qkt_subblock_w)
+                                     : full_sbw;
 
     uint32_t KV_chunks_processed_in_iter = 0;
 
@@ -1450,22 +1395,19 @@ void sdpa_ring_v2(
 
             // Tile-level matmul skip for global_n, local_n, or joint_n padding.
             // Runtime reduce narrows to active_Sk; matmul/sub_exp/V also need narrowing.
+            // Also select pre-computed subblock width for this chunk's mask type.
             uint32_t active_Sk_param = Sk_chunk_t;
+            uint32_t chunk_sbw = full_sbw;
             if (is_global_n_mask_chunk) {
                 active_Sk_param = Sk_chunk_t - lw_mask.global_n_padded_tiles;
+                chunk_sbw = global_n_sbw;
             } else if (is_local_n_mask_chunk) {
                 active_Sk_param = Sk_chunk_t - lw_mask.local_n_padded_tiles;
+                chunk_sbw = local_n_sbw;
             } else if (is_joint_n_mask_chunk) {
                 active_Sk_param = Sk_chunk_t - lw_mask.joint_n_padded_tiles;
+                chunk_sbw = joint_n_sbw;
             }
-
-            // Subblock decomposition: use compile-time constants for non-padded chunks,
-            // runtime computation only for padded chunks.
-            bool is_padded_chunk = (active_Sk_param != Sk_chunk_t);
-            SubblockDecomp chunk_decomp =
-                is_padded_chunk
-                    ? SubblockDecomp{active_Sk_param / qkt_subblock_w, active_Sk_param % qkt_subblock_w, (active_Sk_param % qkt_subblock_w) > 0}
-                    : full_decomp;
 
             sdpa_inner_loop_step<
                 false,  // PROFILING_ENABLED
@@ -1500,7 +1442,7 @@ void sdpa_ring_v2(
                 lw_partial_tile_idx,
                 active_Sk_param,
                 can_reduce_trigger && (active_Sk_param == Sk_chunk_t),
-                chunk_decomp);
+                chunk_sbw);
 
             // Post-iteration cleanup: pop previous values and swap aliases
             if (!is_first) {
