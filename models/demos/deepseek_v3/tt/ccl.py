@@ -53,8 +53,7 @@ class CCL:
 
     def get_max_links(self, axis):
         """
-        Get the maximum number of links for the given axis based on the actual device topology.
-        T3K has 1 link, TG/Galaxy has 4 (axis 0) or 3 (axis 1).
+        Get the maximum number of links for the given axis.
         """
         return get_num_links(self.mesh_device, cluster_axis=axis)
 
