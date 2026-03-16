@@ -171,7 +171,7 @@ def test_forward_pass(
         MoE, mode, hf_config, mesh_device, device_params["fabric_config"], topk_fallback=topk_fallback
     )
     model_state = MoE.create_state(hf_config, mesh_device, ccl)
-    model_shared_state = MoE.create_shared_state(hf_config, mesh_device)
+    model_shared_state = MoE.create_shared_state(hf_config, mesh_device, device_params["fabric_config"])
     run_config = create_run_config(model_config, weight_config, model_state, model_shared_state)
 
     tt_input = ttnn.from_torch(

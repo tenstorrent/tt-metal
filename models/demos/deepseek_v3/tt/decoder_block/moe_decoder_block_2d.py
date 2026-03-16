@@ -88,10 +88,11 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
         cls,
         hf_config: PretrainedConfig,
         mesh_device: ttnn.MeshDevice,
+        fabric_config: ttnn.FabricConfig,
     ) -> ModelState:
         return {
             "shared_expert": {},
-            "moe": MoE.create_shared_state(hf_config, mesh_device),
+            "moe": MoE.create_shared_state(hf_config, mesh_device, fabric_config),
         }
 
     @classmethod
