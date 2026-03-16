@@ -13,6 +13,7 @@
 #ifdef ARCH_BLACKHOLE
 #include "api/compute/experimental/matmul_custom.h"
 #include "api/compute/experimental/sdpa_sub_custom.h"
+#include "api/compute/experimental/tile_move_copy_custom.h"
 #endif
 #include "tools/profiler/kernel_profiler.hpp"
 
@@ -155,9 +156,10 @@ void reduce_c_row_group(
 
     if (do_eltwise_max) {
         cb_wait_front(prev_cb, cumulative_prev_tiles);
-        sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
+        // sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
         for (uint32_t i = 0; i < GROUP_SIZE; i++) {
-            copy_tile(prev_cb, row_start + i, i);
+            // copy_tile(prev_cb, row_start + i, i);
+            copy_tile_custom(prev_cb, row_start + i, i);
         }
     }
 
@@ -170,7 +172,17 @@ void reduce_c_row_group(
         cb_wait_front(in0_cb, cumulative_input_tiles);
     }
 
+#ifdef ARCH_BLACKHOLE
+    if (!do_eltwise_max) {
+        reduce_block_max_row_init_runtime(reduce_cols, respect_trigger);
+    } else if (row_group_index == 0) {
+        reduce_block_max_row_reinit_short_runtime(reduce_cols, respect_trigger);
+    } else {
+        reduce_block_max_row_reinit_minimal_runtime(reduce_cols, respect_trigger);
+    }
+#else
     reduce_block_max_row_init_runtime(reduce_cols, respect_trigger);
+#endif
     for (uint32_t i = 0; i < GROUP_SIZE; i++) {
         const uint32_t input_tile_start = (row_start + i) * ROW_STRIDE;
         reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger);
@@ -697,7 +709,11 @@ static void sdpa_inner_loop_step(
         }
         kt_index_offset = 0;
 #ifdef ARCH_BLACKHOLE
-        mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, subblock_h, in0_block_w);
+        if (q_subblock == 0) {
+            mm_no_mop_init_short(cb_q_in, cb_kt_in, true, actual_sbw, subblock_h, in0_block_w);
+        } else {
+            mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, subblock_h, in0_block_w);
+        }
 #else
         mm_block_init_short(cb_q_in, cb_kt_in, true, actual_sbw, subblock_h, in0_block_w);
 #endif
@@ -717,7 +733,7 @@ static void sdpa_inner_loop_step(
                     subblock_h,
                     actual_sbw);
 #ifdef ARCH_BLACKHOLE
-                mm_no_mop_reinit_short(cb_q_in, cb_kt_in, true, actual_sbw, subblock_h, in0_block_w);
+                mm_no_mop_reinit_after_sub(cb_q_in, cb_kt_in, true, actual_sbw, subblock_h, in0_block_w);
 #else
                 mm_block_init_short(cb_q_in, cb_kt_in, true, actual_sbw, subblock_h, in0_block_w);
 #endif
@@ -870,7 +886,13 @@ static void sdpa_inner_loop_step(
                             reconfig_data_format(cur.out, cb_v_in, cur.out, cb_qkt_im);
                         }
 #ifdef ARCH_BLACKHOLE
-                        mm_no_mop_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
+                        if (kt_sub == 0) {
+                            mm_no_mop_reinit_short(
+                                cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
+                        } else {
+                            mm_no_mop_reinit_after_sub(
+                                cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
+                        }
 #else
                         mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, matmul_inner);
 #endif
@@ -1000,7 +1022,7 @@ static void sdpa_inner_loop_step(
                     reconfig_data_format(cur.out, cb_v_in, cur.out, cb_qkt_im);
                 }
 #ifdef ARCH_BLACKHOLE
-                mm_no_mop_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, active_Sk);
+                mm_no_mop_reinit_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, active_Sk);
 #else
                 mm_block_init_short(cb_qkt_im, cb_v_in, false, qktv_subblock_w, qktv_subblock_h, active_Sk);
 #endif
