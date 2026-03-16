@@ -37,7 +37,7 @@ ConcatProgramFactory::cached_program_t ConcatProgramFactory::create(
 
     constexpr bool rm_orientation = false;
     Buffer* const dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
     const auto& output_nd_shard_spec = output.nd_shard_spec();  // can be nullopt if no nd sharding
     const bool nd_sharded = output.memory_config().memory_layout() == TensorMemoryLayout::ND_SHARDED;
 
