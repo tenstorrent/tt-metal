@@ -35,7 +35,9 @@ constexpr auto logfile_path = "generated/noc_data/";
 void PrintNocData(noc_data_t noc_data, const std::string& file_name) {
     const auto& rtoptions = tt_metal::MetalContext::instance().rtoptions();
     std::filesystem::path output_dir(rtoptions.get_logs_dir() + logfile_path);
-    tt::filesystem::safe_create_directories(output_dir);
+    if (!tt::filesystem::safe_create_directories(output_dir)) {
+        log_warning(tt::LogMetal, "NocLogging: failed to create output directory {}", output_dir.string());
+    }
     std::string filename = rtoptions.get_logs_dir() + logfile_path + file_name;
     std::ofstream outfile(filename);
 

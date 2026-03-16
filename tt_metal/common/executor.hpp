@@ -7,6 +7,9 @@
 #ifdef __linux__
 #include <pthread.h>
 #endif
+#if __has_include(<sanitizer/lsan_interface.h>)
+#include <sanitizer/lsan_interface.h>
+#endif
 #include <taskflow/taskflow.hpp>
 #include <cstdio>
 #include <cstdlib>
@@ -54,6 +57,9 @@ inline Executor& GetExecutor() {
                 // fresh Executor.  Intentionally leak the old one -- its
                 // internal state (mutexes, threads) is invalid post-fork and
                 // destroying it would deadlock or crash.
+#ifdef __lsan_ignore_object
+                __lsan_ignore_object(exec);
+#endif
                 exec = new Executor(EXECUTOR_NTHREADS);
             });
         return e;

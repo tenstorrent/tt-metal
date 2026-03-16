@@ -82,14 +82,6 @@ bool safe_remove(const std::filesystem::path& path) {
         return false;
     }
     for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
-        bool is_dir = std::filesystem::is_directory(path, ec);
-        if (!ec && is_dir) {
-            return false;
-        }
-        if (ec && !is_estale_error(ec) && !is_not_found_error(ec)) {
-            log_warning(tt::LogMetal, "Failed to check if {} is directory: {}", path.string(), ec.message());
-            return false;
-        }
         std::filesystem::remove(path, ec);
         if (!ec) {
             return true;
@@ -565,6 +557,10 @@ std::vector<std::filesystem::directory_entry> safe_directory_entries(const std::
                 entries.push_back(*it);
             } catch (const std::filesystem::filesystem_error& e) {
                 log_debug(tt::LogMetal, "Skipping stale directory entry in {}: {}", path.string(), e.what());
+                if (is_estale_error(e.code())) {
+                    estale_during_iteration = true;
+                    break;
+                }
             }
             it.increment(ec);
             if (ec) {
@@ -660,10 +656,28 @@ size_t remove_empty_parent_directories(const std::filesystem::path& path) {
             break;
         }
 
-        // Try to remove the empty directory
+        // Try to remove the empty directory.
+        // Use std::filesystem::remove (not remove_all) so that if another process
+        // adds files between the is_empty check and this call, the remove fails
+        // with ENOTEMPTY instead of recursively deleting another process's files.
         if (nfs_safety_enabled()) {
-            if (!safe_remove_all(current)) {
-                break;  // Failed to remove, stop here
+            bool removed = false;
+            for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
+                std::filesystem::remove(current, ec);
+                if (!ec || is_not_found_error(ec)) {
+                    removed = true;
+                    break;
+                }
+                if (!is_estale_error(ec)) {
+                    break;
+                }
+                if (attempt < kMaxFsRetries - 1) {
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds((kFsRetryDelayMs * (attempt + 1)) + get_retry_jitter_ms()));
+                }
+            }
+            if (!removed) {
+                break;
             }
         } else {
             std::filesystem::remove(current, ec);

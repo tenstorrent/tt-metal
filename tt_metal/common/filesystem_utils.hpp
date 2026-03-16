@@ -160,6 +160,39 @@ bool retry_on_estale(Operation&& operation) {
     return false;
 }
 
+// ESTALE retry helper for C++ operations that report errors via std::error_code.
+// Use this instead of retry_on_estale when the operation uses std::filesystem or
+// C++ streams (which do not reliably set errno).
+//
+// The operation lambda receives a std::error_code& and should:
+// - Clear or ignore the incoming ec (it is pre-cleared before each attempt)
+// - Populate ec on failure (e.g. ec.assign(errno, std::system_category()))
+// - Return true on success, false on failure
+//
+// Returns true if operation eventually succeeded, false if all retries failed.
+// On failure, ec contains the error from the last attempt.
+template <typename Operation>
+bool retry_on_estale_ec(Operation&& operation, std::error_code& ec) {
+    ec.clear();
+    if (!nfs_safety_enabled()) {
+        return operation(ec);
+    }
+    for (int attempt = 0; attempt < kMaxFsRetries; ++attempt) {
+        ec.clear();
+        if (operation(ec)) {
+            return true;
+        }
+        if (!is_estale_error(ec)) {
+            break;
+        }
+        if (attempt < kMaxFsRetries - 1) {
+            std::this_thread::sleep_for(
+                std::chrono::milliseconds(kFsRetryDelayMs * (attempt + 1) + get_retry_jitter_ms()));
+        }
+    }
+    return false;
+}
+
 // Flush all pending writes on the filesystem containing `path` to stable storage.
 // On Linux, uses syncfs() scoped to that filesystem; elsewhere falls back to sync().
 // Call this at batch boundaries (e.g. after merging build artifacts) rather than
@@ -167,8 +200,9 @@ bool retry_on_estale(Operation&& operation) {
 void sync_filesystem(const std::filesystem::path& path);
 
 // Safe remove that ignores ENOENT and retries on ESTALE.
+// Works on both files and empty directories (mirrors std::filesystem::remove).
 // Does NOT sync -- call sync_filesystem() at the appropriate boundary.
-// Returns true if file was removed or didn't exist, false on other errors.
+// Returns true if the entry was removed or didn't exist, false on other errors.
 bool safe_remove(const std::filesystem::path& path);
 
 // Safe remove_all that retries on ESTALE and ENOTEMPTY (transient race conditions).

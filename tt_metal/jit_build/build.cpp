@@ -632,19 +632,23 @@ bool JitBuildState::build_state_matches(const std::filesystem::path& out_dir) co
     uint64_t stored_hash{};
     bool hash_matches = false;
 
-    bool success = tt::filesystem::retry_on_estale([&]() {
-        errno = 0;
-        std::ifstream file(hash_path);
-        if (!file.is_open()) {
-            return false;
-        }
-        file >> stored_hash;
-        if (file.fail()) {
-            return false;
-        }
-        hash_matches = (stored_hash == build_state_hash_);
-        return true;
-    });
+    std::error_code open_ec;
+    bool success = tt::filesystem::retry_on_estale_ec(
+        [&](std::error_code& ec) {
+            std::ifstream file(hash_path);
+            if (!file.is_open()) {
+                ec.assign(errno, std::system_category());
+                return false;
+            }
+            file >> stored_hash;
+            if (file.fail()) {
+                ec.assign(errno, std::system_category());
+                return false;
+            }
+            hash_matches = (stored_hash == build_state_hash_);
+            return true;
+        },
+        open_ec);
 
     if (!success) {
         log_info(

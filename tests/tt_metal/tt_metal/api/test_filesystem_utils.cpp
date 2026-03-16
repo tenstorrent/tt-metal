@@ -667,4 +667,89 @@ TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_HandlesDirWithFiles) {
     EXPECT_TRUE(std::filesystem::exists(dir_with_file));
 }
 
+// Tests with NFS safety mode enabled.
+// These exercise the retry-loop code paths (which succeed on first attempt
+// since no actual ESTALE occurs) to verify the NFS-safe wrappers don't
+// regress basic functionality when the mode is active.
+class FilesystemUtilsNfsSafetyTest : public FilesystemUtilsTest {
+protected:
+    void SetUp() override {
+        FilesystemUtilsTest::SetUp();
+        set_nfs_safety(true);
+    }
+    void TearDown() override {
+        set_nfs_safety(false);
+        FilesystemUtilsTest::TearDown();
+    }
+};
+
+TEST_F(FilesystemUtilsNfsSafetyTest, SafeCreateDirectories) {
+    auto dir = temp_dir_ / "nfs_test" / "nested" / "dir";
+    EXPECT_TRUE(safe_create_directories(dir));
+    EXPECT_TRUE(std::filesystem::is_directory(dir));
+    // Idempotent
+    EXPECT_TRUE(safe_create_directories(dir));
+}
+
+TEST_F(FilesystemUtilsNfsSafetyTest, SafeRemoveFile) {
+    auto file = create_test_file("nfs_remove_me.txt");
+    EXPECT_TRUE(safe_remove(file));
+    EXPECT_FALSE(std::filesystem::exists(file));
+    // Removing non-existent file succeeds
+    EXPECT_TRUE(safe_remove(file));
+}
+
+TEST_F(FilesystemUtilsNfsSafetyTest, SafeRemoveEmptyDirectory) {
+    auto dir = create_test_directory("nfs_empty_dir");
+    EXPECT_TRUE(safe_remove(dir));
+    EXPECT_FALSE(std::filesystem::exists(dir));
+}
+
+TEST_F(FilesystemUtilsNfsSafetyTest, SafeRename) {
+    auto src = create_test_file("nfs_src.txt", "data");
+    auto dst = temp_dir_ / "nfs_dst.txt";
+    EXPECT_TRUE(safe_rename(src, dst));
+    EXPECT_FALSE(std::filesystem::exists(src));
+    EXPECT_TRUE(std::filesystem::exists(dst));
+}
+
+TEST_F(FilesystemUtilsNfsSafetyTest, SafeExistsAndQueries) {
+    auto file = create_test_file("nfs_query.txt", "hello");
+    auto dir = create_test_directory("nfs_query_dir");
+
+    EXPECT_TRUE(safe_exists(file).value_or(false));
+    EXPECT_TRUE(safe_is_regular_file(file).value_or(false));
+    EXPECT_FALSE(safe_is_directory(file).value_or(true));
+    EXPECT_TRUE(safe_is_directory(dir).value_or(false));
+
+    auto size = safe_file_size(file);
+    ASSERT_TRUE(size.has_value());
+    EXPECT_EQ(size.value(), 5u);
+
+    auto mtime = safe_last_write_time(file);
+    EXPECT_TRUE(mtime.has_value());
+}
+
+TEST_F(FilesystemUtilsNfsSafetyTest, SafeDirectoryEntries) {
+    create_test_file("nfs_dir_a.txt");
+    create_test_file("nfs_dir_b.txt");
+    auto entries = safe_directory_entries(temp_dir_);
+    EXPECT_GE(entries.size(), 2u);
+}
+
+TEST_F(FilesystemUtilsNfsSafetyTest, SafeHardLinkOrCopy) {
+    auto target = create_test_file("nfs_link_target.txt", "link content");
+    auto link = temp_dir_ / "nfs_link.txt";
+    EXPECT_TRUE(safe_hard_link_or_copy(target, link));
+    EXPECT_TRUE(std::filesystem::exists(link));
+}
+
+TEST_F(FilesystemUtilsNfsSafetyTest, RemoveEmptyParentDirectories) {
+    auto deep = temp_dir_ / "nfs_a" / "nfs_b" / "nfs_c";
+    std::filesystem::create_directories(deep);
+    size_t removed = remove_empty_parent_directories(deep);
+    EXPECT_EQ(removed, 3u);
+    EXPECT_FALSE(std::filesystem::exists(temp_dir_ / "nfs_a"));
+}
+
 }  // namespace tt::filesystem::test

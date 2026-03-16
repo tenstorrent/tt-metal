@@ -171,12 +171,18 @@ void write_dependency_hashes(
         }
 
         uint64_t hash = 0;
-        bool success = tt::filesystem::retry_on_estale([&]() {
-            errno = 0;
-            std::ifstream dep_file(dep_path, std::ios::binary);
-            hash = hash_file_content(dep_file);
-            return !dep_file.fail() || dep_file.eof();
-        });
+        std::error_code ec;
+        bool success = tt::filesystem::retry_on_estale_ec(
+            [&](std::error_code& ec) {
+                std::ifstream dep_file(dep_path, std::ios::binary);
+                hash = hash_file_content(dep_file);
+                if (dep_file.fail() && !dep_file.eof()) {
+                    ec.assign(errno, std::system_category());
+                    return false;
+                }
+                return true;
+            },
+            ec);
 
         if (!success) {
             log_warning(tt::LogBuildKernels, "Cannot cache JIT build because {} cannot be read.", dep);
@@ -244,22 +250,33 @@ void write_dependency_hashes(
     dep_path.replace_extension(".d");
 
     std::ofstream hash_file;
-    bool opened = tt::filesystem::retry_on_estale([&]() {
-        errno = 0;
-        hash_file.open(hash_path);
-        return hash_file.is_open();
-    });
+    std::error_code open_ec;
+    bool opened = tt::filesystem::retry_on_estale_ec(
+        [&](std::error_code& ec) {
+            hash_file.open(hash_path);
+            if (!hash_file.is_open()) {
+                ec.assign(errno, std::system_category());
+                return false;
+            }
+            return true;
+        },
+        open_ec);
     if (!opened) {
         log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for writing.", hash_path);
         return;
     }
 
     std::ifstream dep_file;
-    opened = tt::filesystem::retry_on_estale([&]() {
-        errno = 0;
-        dep_file.open(dep_path);
-        return dep_file.is_open();
-    });
+    opened = tt::filesystem::retry_on_estale_ec(
+        [&](std::error_code& ec) {
+            dep_file.open(dep_path);
+            if (!dep_file.is_open()) {
+                ec.assign(errno, std::system_category());
+                return false;
+            }
+            return true;
+        },
+        open_ec);
     if (!opened) {
         log_warning(tt::LogBuildKernels, "Cannot cache JIT build, failed to open {} for reading.", dep_path);
         hash_file.setstate(std::ios::badbit);
@@ -314,20 +331,31 @@ bool dependencies_up_to_date(
         }
 
         std::ifstream dep_file;
-        tt::filesystem::retry_on_estale([&]() {
-            errno = 0;
-            dep_file.open(dep_path, std::ios::binary);
-            return dep_file.is_open();
-        });
+        std::error_code open_ec;
+        tt::filesystem::retry_on_estale_ec(
+            [&](std::error_code& ec) {
+                dep_file.open(dep_path, std::ios::binary);
+                if (!dep_file.is_open()) {
+                    ec.assign(errno, std::system_category());
+                    return false;
+                }
+                return true;
+            },
+            open_ec);
 
         // Legacy fallback: try path as-is from CWD if relative path didn't resolve above
         if (!dep_file.is_open() && dep_recorded.is_relative() && dep_path != dep_recorded) {
             fs::path cwd_path = dep_recorded;
-            tt::filesystem::retry_on_estale([&]() {
-                errno = 0;
-                dep_file.open(cwd_path, std::ios::binary);
-                return dep_file.is_open();
-            });
+            tt::filesystem::retry_on_estale_ec(
+                [&](std::error_code& ec) {
+                    dep_file.open(cwd_path, std::ios::binary);
+                    if (!dep_file.is_open()) {
+                        ec.assign(errno, std::system_category());
+                        return false;
+                    }
+                    return true;
+                },
+                open_ec);
             if (dep_file.is_open()) {
                 dep_path = cwd_path;
             }
@@ -368,11 +396,17 @@ bool dependencies_up_to_date(const std::filesystem::path& out_dir, const std::fi
     hash_path += ".dephash";
 
     std::ifstream hash_file;
-    tt::filesystem::retry_on_estale([&]() {
-        errno = 0;
-        hash_file.open(hash_path);
-        return hash_file.is_open();
-    });
+    std::error_code open_ec;
+    tt::filesystem::retry_on_estale_ec(
+        [&](std::error_code& ec) {
+            hash_file.open(hash_path);
+            if (!hash_file.is_open()) {
+                ec.assign(errno, std::system_category());
+                return false;
+            }
+            return true;
+        },
+        open_ec);
 
     if (!hash_file.is_open()) {
         log_debug(tt::LogBuildKernels, "Dependency hash file {} does not exist.", hash_path);

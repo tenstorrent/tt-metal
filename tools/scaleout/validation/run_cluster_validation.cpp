@@ -22,6 +22,7 @@
 #include <yaml-cpp/yaml.h>
 #include "protobuf/factory_system_descriptor.pb.h"
 #include <llrt/tt_cluster.hpp>
+#include "common/filesystem_utils.hpp"
 
 namespace tt::scaleout_tools {
 
@@ -79,7 +80,7 @@ std::filesystem::path generate_output_dir() {
     std::string dir_name = ss.str();
     const auto& rt_options = tt::tt_metal::MetalContext::instance().rtoptions();
     std::filesystem::path output_dir_path = rt_options.get_root_dir() + "cluster_validation_logs/" + dir_name;
-    std::filesystem::create_directories(output_dir_path);
+    tt::filesystem::safe_create_directories(output_dir_path);
     return output_dir_path;
 }
 

@@ -671,7 +671,9 @@ DPrintServer::Impl::Impl(llrt::RunTimeOptions& rtoptions) {
 
     // Set the output stream according to RTOptions, either a file name or stdout if none specified.
     std::filesystem::path output_dir(rtoptions.get_logs_dir() + logfile_path);
-    tt::filesystem::safe_create_directories(output_dir);
+    if (!tt::filesystem::safe_create_directories(output_dir)) {
+        log_warning(tt::LogMetal, "DPrint: failed to create output directory {}", output_dir.string());
+    }
     if (!file_name.empty() && !one_file_per_risc) {
         outfile_ = new ofstream(file_name);
     }

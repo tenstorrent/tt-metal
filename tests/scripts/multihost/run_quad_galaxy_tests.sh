@@ -145,6 +145,15 @@ _resolve_deepseekv3_cache() {
 # on all Galaxy hosts. This avoids clobbering unrelated jobs that happen to be
 # using Tenstorrent devices on the shared test systems.
 #
+# TT_MULTIHOST_CLEANUP_TAG (environment variable)
+#   A unique per-invocation tag used to identify processes belonging to this
+#   test run during cleanup. Set automatically by setup_dual_galaxy_env() and
+#   setup_quad_galaxy_env() as "${GITHUB_RUN_ID:-manual}-$(id -un)-$$".
+#   The tag is propagated to child MPI processes via `-x TT_MULTIHOST_CLEANUP_TAG`.
+#   During cleanup, _cleanup_multihost reads /proc/$pid/environ on each host
+#   and only kills processes whose TT_MULTIHOST_CLEANUP_TAG matches the
+#   current tag. This prevents cleanup from killing unrelated jobs.
+#
 # Usage: _cleanup_multihost <comma-separated-hosts> [true|false]
 #   $1 - hosts (required, comma-separated, e.g. "g05glx01,g05glx02")
 #   $2 - run tt-smi reset after cleanup (optional, default: false)
