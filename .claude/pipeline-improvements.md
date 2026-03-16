@@ -49,6 +49,16 @@ File-based IPC between two agents. If the architect's format drifts, the builder
 
 ---
 
+### 14. Architect does not account for TensorAccessorArgs claiming positional compile-time arg index 0
+**Status**: Proposed
+**Discovered**: matmul_sc pipeline run (2026-03-16)
+
+The architect specified CB indices in both named AND positional compile-time args, conflicting with `TensorAccessorArgs<0>()` which must start at positional index 0. This caused 2 compilation failures in TDD Stage 1.
+
+**Proposal**: Add a validation rule to the architect's design checklist: "When helpers use `TensorAccessorArgs<0>()`, positional compile-time args must start with TensorAccessorArgs -- no other values may precede them. CB indices must be passed only as named compile-time args." Also consider adding this as a static check in the builder.
+
+---
+
 ## Efficiency Issues
 
 ### 4. No fast path for simple operations
@@ -92,6 +102,26 @@ After Phase 3 (Build), nobody checks that the builder's CB allocation matches th
 
 ---
 
+### 12. Kernel writer TDD agent emits insufficient breadcrumbs
+**Status**: Proposed
+**Discovered**: matmul_sc pipeline run (2026-03-16)
+
+The kernel writer is the longest-running agent (~55% of pipeline wall time) but produced only a single breadcrumb entry (the start event). No stage progress, hypothesis, fix attempt, or completion events were recorded. This makes post-hoc analysis of the most critical pipeline phase impossible.
+
+**Proposal**: Enforce mandatory breadcrumb emission at: stage start, each test run (pass/fail with error classification), hypothesis formation, fix attempt, and stage completion. Consider adding a breadcrumb validation check to the auto-commit script that warns if the kernel writer session has fewer than N breadcrumbs per stage.
+
+---
+
+### 13. Failure parser does not capture shape details for shape_mismatch errors
+**Status**: Proposed
+**Discovered**: matmul_sc pipeline run (2026-03-16)
+
+When `.tdd_state.json` records a `shape_mismatch` classification, the `details` field is empty (`{}`). The failure parser should capture the actual vs expected shapes to accelerate debugging. In the matmul_sc run, 2 free retries in Stage 2 were shape mismatches with no diagnostic information.
+
+**Proposal**: Update the failure parser to extract actual/expected shapes from pytest output (e.g., `"details": {"actual_shape": [...], "expected_shape": [...]}`) when the classification is `shape_mismatch`.
+
+---
+
 ## Missing Capabilities
 
 ### 11. No incremental re-run capability
@@ -115,3 +145,6 @@ If Phase 4 Stage 2 fails and you fix something manually, there's no way to resum
 | 7 | Discovery keyword matching | | | |
 | 9 | No architect/builder cross-validation | | | |
 | 11 | No incremental re-run | | | |
+| 12 | Kernel writer breadcrumb logging | Low | Low | |
+| 13 | Failure parser shape details | Low | Low | |
+| 14 | TensorAccessorArgs positional arg conflict | Medium | Low | |
