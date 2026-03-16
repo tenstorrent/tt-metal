@@ -30,9 +30,6 @@ path that the ThroughputExperts class can route to when fused_config is provided
 
 from math import prod
 
-import torch
-from loguru import logger
-
 import ttnn
 
 from .config import FusedMoeGptConfig, ThroughputExpertConfig
@@ -87,78 +84,32 @@ def fused_decode_forward(
     # Reshape hidden_states to [M, 1, 1, H] for dispatch
     hidden_states = ttnn.reshape(hidden_states, (tokens_per_device, 1, 1, config.hidden_size))
 
-    # Format conversion: router outputs [M, K] uint16 TILE but dispatch needs
-    # [M, 1, 1, K] uint16 HEIGHT_SHARDED L1 ROW_MAJOR. Since ttnn.reshape doesn't
-    # support uint16, we read to host and re-upload. This is a temporary workaround
-    # until the router outputs the correct format directly.
-    # TODO: fix router (topk.py) to output [M, 1, 1, K] HEIGHT_SHARDED L1 ROW_MAJOR
-    mesh_rows, mesh_cols = mesh_device.shape
-    dev_idx_list = ttnn.get_device_tensors(topk_expert_indices)
-    dev_scores_list = ttnn.get_device_tensors(topk_expert_scores)
-    host_indices = [ttnn.to_torch(t).reshape(tokens_per_device, K_sel).int() for t in dev_idx_list]
-    host_scores = [ttnn.to_torch(t).reshape(tokens_per_device, K_sel) for t in dev_scores_list]
+    # Format conversion: router outputs [M, K] TILE DRAM, dispatch needs
+    # [M, 1, 1, K] ROW_MAJOR. All done on-device (no host round-trip),
+    # following the DeepSeek pattern (moe.py lines 393-395). This enables trace capture.
+    # Note: dispatch accepts DRAM interleaved ROW_MAJOR inputs — no L1 sharding needed.
 
+    # Save a copy of scores in DRAM for post-combine weighting before we deallocate.
+    # Convert TILE -> ROW_MAJOR and reshape [M, K] -> [M, 1, 1, K] on-device.
+    scores_rm = ttnn.to_layout(topk_expert_scores, ttnn.ROW_MAJOR_LAYOUT)
+    tt_scores_copy = ttnn.reshape(scores_rm, (tokens_per_device, 1, 1, K_sel))
+    ttnn.deallocate(scores_rm)
+
+    # Reshape indices for dispatch: [M, K] TILE -> [M, 1, 1, K] ROW_MAJOR DRAM
+    indices_rm = ttnn.to_layout(topk_expert_indices, ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(topk_expert_indices)
+    topk_expert_indices = ttnn.reshape(indices_rm, (tokens_per_device, 1, 1, K_sel))
+    ttnn.deallocate(indices_rm)
+
+    # Reshape scores for dispatch: same transformation
+    scores_dispatch_rm = ttnn.to_layout(topk_expert_scores, ttnn.ROW_MAJOR_LAYOUT)
     ttnn.deallocate(topk_expert_scores)
-
-    # Re-upload scores to DRAM interleaved for post-combine weighting.
-    # We already have host_scores from the host round-trip above.
-    # Shape: [M, 1, 1, K] per row, sharded across rows, replicated across cols.
-    scores_for_weight = torch.cat(
-        [
-            host_scores[row * mesh_cols].reshape(tokens_per_device, 1, 1, K_sel).to(torch.bfloat16)
-            for row in range(mesh_rows)
-        ]
-    )
-    tt_scores_copy = ttnn.from_torch(
-        scores_for_weight,
-        dtype=ttnn.bfloat16,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=(mesh_rows, mesh_cols)),
-    )
-
-    num_cores_y = min(8, tokens_per_device)
-    num_cores_x = (tokens_per_device + num_cores_y - 1) // num_cores_y
-    dispatch_shard_config = ttnn.MemoryConfig(
-        ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
-        ttnn.BufferType.L1,
-        ttnn.ShardSpec(
-            ttnn.CoreRangeSet({ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}),
-            [1, K_sel],
-            ttnn.ShardOrientation.ROW_MAJOR,
-        ),
-    )
-
-    idx_stacked = torch.cat(
-        [host_indices[row * mesh_cols].reshape(tokens_per_device, 1, 1, K_sel) for row in range(mesh_rows)]
-    )
-    scores_stacked = torch.cat(
-        [host_scores[row * mesh_cols].reshape(tokens_per_device, 1, 1, K_sel) for row in range(mesh_rows)]
-    )
-
-    topk_expert_indices = ttnn.from_torch(
-        idx_stacked.to(torch.int16),
-        dtype=ttnn.uint16,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=dispatch_shard_config,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=(mesh_rows, mesh_cols)),
-    )
-    topk_expert_scores = ttnn.from_torch(
-        scores_stacked.to(torch.bfloat16),
-        dtype=ttnn.bfloat16,
-        device=mesh_device,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
-        memory_config=dispatch_shard_config,
-        mesh_mapper=ttnn.ShardTensor2dMesh(mesh_device, dims=(0, None), mesh_shape=(mesh_rows, mesh_cols)),
-    )
+    topk_expert_scores = ttnn.reshape(scores_dispatch_rm, (tokens_per_device, 1, 1, K_sel))
+    ttnn.deallocate(scores_dispatch_rm)
 
     # ------------------------------------------------------------------
     # Step 1: all_to_all_dispatch_metadata
     # ------------------------------------------------------------------
-    logger.info("fused_decode: Step 1 - all_to_all_dispatch_metadata")
     (tt_sparse, tt_indices, tt_scores) = ttnn.experimental.all_to_all_dispatch_metadata(
         hidden_states,
         topk_expert_indices,
@@ -174,8 +125,6 @@ def fused_decode_forward(
         cross_device_semaphore=fused_config.dispatch_semaphore,
         dispatch_algorithm=ttnn.DispatchAlgorithm.SPARSE_UNICAST,
     )
-    ttnn.synchronize_device(mesh_device)
-    logger.info("fused_decode: Step 1 sync done")
     ttnn.deallocate(hidden_states)
 
     tt_sparse_l1 = ttnn.to_memory_config(tt_sparse, memory_config=ttnn.L1_MEMORY_CONFIG)
@@ -184,7 +133,6 @@ def fused_decode_forward(
     # ------------------------------------------------------------------
     # Step 2: moe_gpt (fused sparse compute)
     # ------------------------------------------------------------------
-    logger.info("fused_decode: Step 2 - moe_gpt")
     moe_gpt_outputs = ttnn.experimental.moe_gpt(
         tt_sparse_l1,
         expert_indices=tt_indices,
@@ -194,12 +142,9 @@ def fused_decode_forward(
         w2_tensor=fused_config.tt_w2,
         cluster_axis=cluster_axis,
     )
-    ttnn.synchronize_device(mesh_device)
-    logger.info("fused_decode: Step 2 sync done")
     ttnn.deallocate(tt_sparse_l1)
 
     # ------------------------------------------------------------------
-    logger.info("fused_decode: Step 3 - selective_reduce_combine")
     # Step 3: selective_reduce_combine
     # With the K-indexed fix (upstream #38542), the combine writer uses the
     # token_activations metadata to look up each token's K-index, so the
@@ -225,8 +170,6 @@ def fused_decode_forward(
         output_tensor=fused_config.combine_preallocated,
         optional_cross_device_semaphore=fused_config.combine_semaphore,
     )
-    ttnn.synchronize_device(mesh_device)
-    logger.info("fused_decode: Step 3 sync done")
 
     for i in range(4):  # output[3] and [4] share a buffer; deallocating [3] frees both
         ttnn.deallocate(moe_gpt_outputs[i])
@@ -242,7 +185,6 @@ def fused_decode_forward(
     # 4. Sum over K dim -> [1, 1, M, H]
     # 5. All-reduce across columns (cluster_axis=1)
     # ------------------------------------------------------------------
-    logger.info("fused_decode: Step 4 - post-processing (tilize, score weighting, sum, all_reduce)")
     tt_combine_tile = ttnn.to_layout(tt_combine_output, ttnn.TILE_LAYOUT)
     # Note: do NOT deallocate tt_combine_output — it aliases fused_config.combine_preallocated
     # which must persist across layers for program cache reuse.
@@ -261,7 +203,6 @@ def fused_decode_forward(
     tt_sum = ttnn.sum(tt_weighted, dim=0, keepdim=True)  # [1, 1, M, H]
     ttnn.deallocate(tt_weighted)
 
-    logger.info("fused_decode: Step 4d - all_reduce")
     tt_output = ttnn.all_reduce(
         tt_sum,
         num_links=1,
@@ -271,6 +212,4 @@ def fused_decode_forward(
     )
     ttnn.deallocate(tt_sum)
 
-    ttnn.synchronize_device(mesh_device)
-    logger.info("fused_decode: Done")
     return tt_output  # [1, 1, tokens_per_device, H]

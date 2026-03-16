@@ -124,10 +124,15 @@ def prepare_gpt_oss_generator_args(
     for submesh in submesh_devices:
         # Use GPT-OSS create_tt_model directly!
         use_throughput = mesh_device.shape[0] > 1 and global_batch_size > 1
-        logger.info(f"Creating GPT-OSS model for submesh {submesh} with throughput experts: {use_throughput}")
+        use_fused_experts = use_throughput
+        logger.info(
+            f"Creating GPT-OSS model for submesh {submesh} with throughput experts: {use_throughput}, fused: {use_fused_experts}"
+        )
+        num_layers_override = int(os.environ["GPT_OSS_NUM_LAYERS"]) if "GPT_OSS_NUM_LAYERS" in os.environ else None
         model_args_i, model_i, tt_kv_cache_i, state_dict = create_tt_model(
             submesh,
             max_batch_size=global_batch_size // data_parallel,
+            num_layers=num_layers_override,
             optimizations=optimizations,
             max_seq_len=max_seq_len,
             paged_attention_config=paged_attention_config,
@@ -136,6 +141,7 @@ def prepare_gpt_oss_generator_args(
             mesh_config=mesh_config,  # Pass mesh config for proper sharding
             users_row_sharded=users_row_sharded,
             use_throughput_experts=use_throughput,
+            use_fused_experts=use_throughput,
         )
         model_args.append(model_args_i)
         model.append(model_i)
