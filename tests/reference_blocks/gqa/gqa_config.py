@@ -10,7 +10,7 @@ a Grouped-Query Attention block, plus factory functions for each target model.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Optional
 
 

@@ -16,7 +16,6 @@ identical inputs and weights, their outputs can be compared.
 
 from __future__ import annotations
 
-import math
 from typing import Optional, Tuple
 
 import torch
@@ -251,6 +250,7 @@ class GQAReferenceSdpa(nn.Module):
         self.num_kv_groups = config.num_kv_groups
         self.scaling = config.effective_scaling
         self.rope_dim = int(config.head_dim * config.rope_partial_factor) if config.rope_partial_factor < 1.0 else None
+        self.attn_logit_softcapping = config.attn_logit_softcapping
 
         if use_pre_norm:
             self.pre_norm = RMSNorm(config.hidden_size, eps=config.rms_norm_eps)
@@ -268,6 +268,23 @@ class GQAReferenceSdpa(nn.Module):
         else:
             self.q_norm = None
             self.k_norm = None
+
+    def _manual_attention(
+        self,
+        q: torch.Tensor,
+        k: torch.Tensor,
+        v: torch.Tensor,
+        attention_mask: Optional[torch.Tensor],
+    ) -> torch.Tensor:
+        """Manual attention path used when softcapping is enabled
+        (F.scaled_dot_product_attention does not support softcapping)."""
+        attn_weights = torch.matmul(q, k.transpose(2, 3)) * self.scaling
+        if self.attn_logit_softcapping is not None:
+            attn_weights = softcap(attn_weights, self.attn_logit_softcapping)
+        if attention_mask is not None:
+            attn_weights = attn_weights + attention_mask
+        attn_weights = F.softmax(attn_weights, dim=-1, dtype=torch.float32).to(q.dtype)
+        return torch.matmul(attn_weights, v)
 
     def forward(
         self,
@@ -307,14 +324,16 @@ class GQAReferenceSdpa(nn.Module):
         k_expanded = repeat_kv(k, self.num_kv_groups)
         v_expanded = repeat_kv(v, self.num_kv_groups)
 
-        attn_output = F.scaled_dot_product_attention(
-            q,
-            k_expanded,
-            v_expanded,
-            attn_mask=attention_mask,
-            scale=self.scaling,
-            is_causal=(attention_mask is None and kv_cache is None),
-        )
+        if self.attn_logit_softcapping is not None:
+            attn_output = self._manual_attention(q, k_expanded, v_expanded, attention_mask)
+        else:
+            attn_output = F.scaled_dot_product_attention(
+                q,
+                k_expanded,
+                v_expanded,
+                attn_mask=attention_mask,
+                scale=self.scaling,
+            )
 
         attn_output = attn_output.transpose(1, 2).contiguous().reshape(bsz, seq_len, self.config.q_proj_size)
         output = self.o_proj(attn_output)

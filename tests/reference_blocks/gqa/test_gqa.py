@@ -21,7 +21,7 @@ Test categories
 
 from __future__ import annotations
 
-from typing import Optional, Tuple
+from typing import Optional
 
 import pytest
 import torch
@@ -51,7 +51,8 @@ _SEED = 42
 
 def _set_seed(seed: int = _SEED) -> None:
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def _build_causal_mask(seq_len: int, kv_len: Optional[int] = None, dtype: torch.dtype = torch.float32) -> torch.Tensor:
@@ -132,27 +133,32 @@ class TestGQAShapes:
     """Verify projection dimensions match the expected weight shapes from Ilia's table."""
 
     def test_q_proj_shape(self, model_config):
-        ref = GQAReference(model_config, use_pre_norm=False)
+        with torch.device("meta"):
+            ref = GQAReference(model_config, use_pre_norm=False)
         w = ref.q_proj.weight
         assert w.shape == (model_config.q_proj_size, model_config.hidden_size)
 
     def test_k_proj_shape(self, model_config):
-        ref = GQAReference(model_config, use_pre_norm=False)
+        with torch.device("meta"):
+            ref = GQAReference(model_config, use_pre_norm=False)
         w = ref.k_proj.weight
         assert w.shape == (model_config.kv_proj_size, model_config.hidden_size)
 
     def test_v_proj_shape(self, model_config):
-        ref = GQAReference(model_config, use_pre_norm=False)
+        with torch.device("meta"):
+            ref = GQAReference(model_config, use_pre_norm=False)
         w = ref.v_proj.weight
         assert w.shape == (model_config.kv_proj_size, model_config.hidden_size)
 
     def test_o_proj_shape(self, model_config):
-        ref = GQAReference(model_config, use_pre_norm=False)
+        with torch.device("meta"):
+            ref = GQAReference(model_config, use_pre_norm=False)
         w = ref.o_proj.weight
         assert w.shape == (model_config.hidden_size, model_config.q_proj_size)
 
     def test_bias_present_when_configured(self, model_config):
-        ref = GQAReference(model_config, use_pre_norm=False)
+        with torch.device("meta"):
+            ref = GQAReference(model_config, use_pre_norm=False)
         has_bias = ref.q_proj.bias is not None
         assert has_bias == model_config.attention_bias
 
@@ -588,6 +594,7 @@ class TestGQAPartialRope:
 class TestGQAFullSizeSmokeTest:
     """Single-token forward pass with real model dimensions (no data dependency)."""
 
+    @pytest.mark.slow
     @pytest.mark.parametrize("config", ALL_MODEL_CONFIGS, ids=MODEL_IDS)
     def test_single_token_decode(self, config):
         """A single token through the full-size GQA block should produce finite output."""
@@ -666,17 +673,17 @@ class TestGQAExactShapes:
     """Validate that configs produce the exact weight shapes from Ilia's shape table.
 
     Each tuple: (model_config, q_proj_shape, k_proj_shape, v_proj_shape, o_proj_shape)
-    where shapes are (out_features, in_features) matching the (d_model, proj_dim) convention.
+    Shapes follow PyTorch convention: (out_features, in_features).
     """
 
     EXPECTED_SHAPES = [
-        # glm_4_7_355b: q(5120,12288) k(5120,1024) v(5120,1024) o(12288,5120)
+        # glm_4_7_355b: q(12288, 5120) k(1024, 5120) v(1024, 5120) o(5120, 12288)
         (GLM_4_7_355B, (12288, 5120), (1024, 5120), (1024, 5120), (5120, 12288)),
-        # gpt_oss_120b: q(2880,4096) k(2880,512) v(2880,512) o(4096,2880)
+        # gpt_oss_120b: q(4096, 2880) k(512, 2880) v(512, 2880) o(2880, 4096)
         (GPT_OSS_120B, (4096, 2880), (512, 2880), (512, 2880), (2880, 4096)),
-        # llama_guard_4: q(5120,5120) k(5120,1024) v(5120,1024) o(5120,5120)
+        # llama_guard_4: q(5120, 5120) k(1024, 5120) v(1024, 5120) o(5120, 5120)
         (LLAMA_GUARD_4, (5120, 5120), (1024, 5120), (1024, 5120), (5120, 5120)),
-        # qwen3_235b: q(4096,8192) k(4096,512) v(4096,512) o(8192,4096)
+        # qwen3_235b: q(8192, 4096) k(512, 4096) v(512, 4096) o(4096, 8192)
         (QWEN3_235B, (8192, 4096), (512, 4096), (512, 4096), (4096, 8192)),
     ]
 
@@ -687,12 +694,14 @@ class TestGQAExactShapes:
     )
     def test_exact_weight_shapes(self, config, q_shape, k_shape, v_shape, o_shape):
         """Weight shapes must exactly match the shapes from models_shapes.txt."""
-        ref = GQAReference(config, use_pre_norm=False)
+        with torch.device("meta"):
+            ref = GQAReference(config, use_pre_norm=False)
         assert ref.q_proj.weight.shape == q_shape, f"q_proj: expected {q_shape}, got {ref.q_proj.weight.shape}"
         assert ref.k_proj.weight.shape == k_shape, f"k_proj: expected {k_shape}, got {ref.k_proj.weight.shape}"
         assert ref.v_proj.weight.shape == v_shape, f"v_proj: expected {v_shape}, got {ref.v_proj.weight.shape}"
         assert ref.o_proj.weight.shape == o_shape, f"o_proj: expected {o_shape}, got {ref.o_proj.weight.shape}"
 
+    @pytest.mark.slow
     @pytest.mark.parametrize(
         "config,q_shape,k_shape,v_shape,o_shape",
         EXPECTED_SHAPES,
