@@ -12,6 +12,7 @@
  */
 
 #include "ttnn/cpp/ttnn/kernel_lib/cb_helpers.hpp"
+#include "experimental/circular_buffer.h"
 
 namespace compute_kernel_lib {
 
@@ -173,9 +174,13 @@ ALWI void untilize(uint32_t num_blocks) {
     // UPFRONT WAITING (if requested)
     // =================================================================
 
+    // Construct experimental::CircularBuffer objects for sync operations
+    experimental::CircularBuffer in_cb(input_cb);
+    experimental::CircularBuffer out_cb(output_cb);
+
     if constexpr (wait_mode == untilize_config::WaitMode::WaitUpfront) {
         uint32_t total_tiles = block_width_tiles * num_blocks;
-        cb_wait_front(input_cb, total_tiles);
+        in_cb.wait_front(total_tiles);
     }
 
     // =================================================================
@@ -190,15 +195,15 @@ ALWI void untilize(uint32_t num_blocks) {
         // =============================================================
 
         for (uint32_t r = 0; r < num_blocks; ++r) {
-            cb_reserve_back(output_cb, block_width_tiles);
+            out_cb.reserve_back(block_width_tiles);
             for (uint32_t b = 0; b < num_sub_blocks; ++b) {
                 if constexpr (wait_mode == untilize_config::WaitMode::WaitBlock) {
-                    cb_wait_front(input_cb, sub_block_width);
+                    in_cb.wait_front(sub_block_width);
                 }
                 pack_untilize_block<sub_block_width, block_width_tiles>(input_cb, 1, output_cb, b);
-                cb_pop_front(input_cb, sub_block_width);
+                in_cb.pop_front(sub_block_width);
             }
-            cb_push_back(output_cb, block_width_tiles);
+            out_cb.push_back(block_width_tiles);
         }
 
     } else {
@@ -209,12 +214,12 @@ ALWI void untilize(uint32_t num_blocks) {
 
         for (uint32_t r = 0; r < num_blocks; ++r) {
             if constexpr (wait_mode == untilize_config::WaitMode::WaitBlock) {
-                cb_wait_front(input_cb, block_width_tiles);
+                in_cb.wait_front(block_width_tiles);
             }
-            cb_reserve_back(output_cb, block_width_tiles);
+            out_cb.reserve_back(block_width_tiles);
             pack_untilize_block<block_width_tiles, block_width_tiles>(input_cb, 1, output_cb, 0);
-            cb_pop_front(input_cb, block_width_tiles);
-            cb_push_back(output_cb, block_width_tiles);
+            in_cb.pop_front(block_width_tiles);
+            out_cb.push_back(block_width_tiles);
         }
     }
 
