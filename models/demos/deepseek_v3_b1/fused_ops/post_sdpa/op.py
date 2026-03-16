@@ -342,7 +342,6 @@ class PostSDPA:
             sdpa_cb_r1_result_l = 18
             sdpa_cb_r1_result_ms = 19
             sdpa_cb_l_out = 20
-            sdpa_cb_packet_slot = 21
 
             # SDPA forwarder parameters (using Type A/B worker split like original op)
             sdpa_num_workers = 8
@@ -668,7 +667,6 @@ class PostSDPA:
                             ("sdpa_cb_local_ms", sdpa_cb_local_ms),
                             ("sdpa_cb_r1_result_l", sdpa_cb_r1_result_l),
                             ("sdpa_cb_r1_result_ms", sdpa_cb_r1_result_ms),
-                            ("sdpa_cb_packet_slot", sdpa_cb_packet_slot),
                             ("sdpa_cb_l_out", sdpa_cb_l_out),
                             # SDPA tile/chunk sizes
                             ("sdpa_ms_tile_size_bytes", sdpa_ms_tile_size),
@@ -1029,20 +1027,6 @@ class PostSDPA:
                         sdpa_cb_l_out, sdpa_output_l_device
                     )
                     cb_list.append(sdpa_l_out_cb_descriptor)
-
-                    # CB 21: SDPA packet slot (for fabric packet headers)
-                    sdpa_packet_header_cb_size = 2 * ttnn.get_tt_fabric_packet_header_size_bytes()
-                    sdpa_packet_slot_cb_format = ttnn.CBFormatDescriptor(
-                        buffer_index=sdpa_cb_packet_slot,
-                        data_format=ttnn.uint32,
-                        page_size=sdpa_packet_header_cb_size,
-                    )
-                    sdpa_packet_slot_cb_descriptor = ttnn.CBDescriptor(
-                        total_size=sdpa_packet_header_cb_size,
-                        core_ranges=sdpa_worker_grid,
-                        format_descriptors=[sdpa_packet_slot_cb_format],
-                    )
-                    cb_list.append(sdpa_packet_slot_cb_descriptor)
 
                 # ========================================================================
                 # Semaphore descriptors
@@ -1438,6 +1422,14 @@ class PostSDPA:
                                     pos_r2_neighbor_idx - 1 + sdpa_num_ring_devices
                                 ) % sdpa_num_ring_devices
 
+                            # Deterministic reduction order based on device indices so all devices produce identical results.
+                            # R1: swap so lower device index is always arg1 ("worker")
+                            swap_r1_reduction_order = 1 if sdpa_ring_idx < pos_r1_neighbor_idx else 0
+                            # R2: swap so the R1 pair with lower min device index is always arg1 ("worker")
+                            r1_pair_min = min(sdpa_ring_idx, pos_r1_neighbor_idx)
+                            r2_pair_min = min(pos_r2_neighbor_idx, pos_r2_neighbor_r1_idx)
+                            swap_r2_reduction_order = 1 if r1_pair_min < r2_pair_min else 0
+
                             # TRISC args: pos_addr, device_idx, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
                             sdpa_worker_trisc_rt_args[worker_core.x][worker_core.y] = [
                                 sdpa_pos_addr,
@@ -1445,6 +1437,8 @@ class PostSDPA:
                                 pos_r1_neighbor_idx,
                                 pos_r2_neighbor_idx,
                                 pos_r2_neighbor_r1_idx,
+                                swap_r1_reduction_order,
+                                swap_r2_reduction_order,
                             ]
 
                             # Extend NCRISC args: pos_addr, r1_neighbor, r2_neighbor, r2_neighbor_r1_neighbor
