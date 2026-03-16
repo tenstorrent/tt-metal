@@ -9,11 +9,9 @@
 #include "ttnn/tensor/tensor.hpp"
 #include <tt-metalium/experimental/sockets/mesh_socket.hpp>
 
-namespace ttnn {
-namespace experimental {
+namespace ttnn::experimental {
 
 std::vector<ttnn::Tensor> send_async(
     const ttnn::Tensor& input_tensor, const tt::tt_metal::distributed::MeshSocket& mesh_socket);
 
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental

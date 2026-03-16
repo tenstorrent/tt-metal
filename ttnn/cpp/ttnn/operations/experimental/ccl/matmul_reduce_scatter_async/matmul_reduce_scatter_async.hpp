@@ -17,8 +17,7 @@
 #include "ttnn/operations/matmul/device/config/matmul_program_config_types.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-namespace experimental {
+namespace ttnn::experimental {
 
 std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     const ttnn::Tensor& input_tensor,
@@ -44,5 +43,4 @@ std::vector<ttnn::Tensor> matmul_reduce_scatter_async(
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     std::optional<const ttnn::CoreGrid> core_grid = std::nullopt);
 
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental

@@ -10,8 +10,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/types.hpp"
 
-namespace ttnn {
-namespace experimental {
+namespace ttnn::experimental {
 
 // TODO: Group attention matmul will support sharding, mcasting, and should be faster; we should make attn_matmul (ie.
 // KV heads = 1) a special case of group_attn_matmul and run the same op
@@ -24,5 +23,4 @@ Tensor group_attn_matmul(
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
     std::optional<Tensor> optional_output_tensor = std::nullopt);
 
-}  // namespace experimental
-}  // namespace ttnn
+}  // namespace ttnn::experimental
