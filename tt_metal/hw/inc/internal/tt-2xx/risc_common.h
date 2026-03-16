@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
+// SPDX-FileCopyrightText: © 2023 Tenstorrent Inc.
 //
 // SPDX-License-Identifier: Apache-2.0
 
@@ -167,9 +167,9 @@ inline __attribute__((always_inline)) void invalidate_l1_cache() {
 // =============================================================================
 //
 // Cache hierarchy (per DM core):
-//   L1 D$ : 4KB write-back, 64B lines, private per core
-//   L1 I$ : instruction cache, private per core
-//   L2    : 128KB write-back, 64B lines, inclusive, shared by 8 DM cores
+//   L1 D$ : 4KB write-back, 2-way, 64B lines, private per core
+//   L1 I$ : 4KB, 2-way, private per core
+//   L2    : 128KB write-back, 4-way, 64B lines, shared between DM cores
 //   TL1   : Tensix L1 (node memory), visible to host and other cores
 //
 // Data path: Core -> L1 D$ -> L2 -> TL1
@@ -191,21 +191,16 @@ inline __attribute__((always_inline)) void invalidate_l1_cache() {
 // -----------------------------------------------------------------------------
 // L1 Data Cache Operations
 // -----------------------------------------------------------------------------
-// Uses custom RISC-V instructions from SiFive/rocket-chip.
-// Instruction encoding: I-type with opcode=0x73, funct3=0, rd=x0
-//   CFLUSH.D.L1:   simm12 = -0x40 (0xFC0), flushes line to L2 + invalidates
-//   CDISCARD.D.L1: simm12 = -0x3E (0xFC2), invalidates line without writeback
-// If rs1=x0, operates on entire 4KB L1 D$.
+// Uses tt.cache.cflush.d.l1 and tt.cache.cdiscard.d.l1 instructions.
+// If rs1=x0, operates on entire L1 D$.
 
 // Flush L1 D$ line (or entire cache if addr=0) to L2.
 // Writes back dirty data to L2 and invalidates the line.
 inline __attribute__((always_inline)) void flush_l1_dcache(uintptr_t addr) {
     if (addr) {
-        // .insn i opcode, funct3, rd, rs1, simm12
-        __asm__ __volatile__(".insn i 0x73, 0, x0, %0, -0x40" :: "r"(addr) : "memory");
+        __asm__ __volatile__("tt.cache.cflush.d.l1 %0" :: "r"(addr) : "memory");
     } else {
-        // rs1=x0: flush entire L1 D$ (encoded as .word for x0 case)
-        __asm__ __volatile__(".word 0xfc000073" ::: "memory");
+        __asm__ __volatile__("tt.cache.cflush.d.l1 x0" ::: "memory");
     }
     __asm__ __volatile__("fence" ::: "memory");
 }
@@ -214,10 +209,9 @@ inline __attribute__((always_inline)) void flush_l1_dcache(uintptr_t addr) {
 // Discards dirty data - use only when data is known to be stale.
 inline __attribute__((always_inline)) void invalidate_l1_dcache(uintptr_t addr) {
     if (addr) {
-        __asm__ __volatile__(".insn i 0x73, 0, x0, %0, -0x3E" :: "r"(addr) : "memory");
+        __asm__ __volatile__("tt.cache.cdiscard.d.l1 %0" :: "r"(addr) : "memory");
     } else {
-        // rs1=x0: invalidate entire L1 D$
-        __asm__ __volatile__(".word 0xfc200073" ::: "memory");
+        __asm__ __volatile__("tt.cache.cdiscard.d.l1 x0" ::: "memory");
     }
     __asm__ __volatile__("fence" ::: "memory");
 }
@@ -246,6 +240,15 @@ inline __attribute__((always_inline)) void flush_l2_cache_line(uint32_t addr) {
     __asm__ __volatile__("fence" ::: "memory");
 }
 
+// Invalidate a single 64B cache line from L2 without writeback.
+// Discards dirty data - use only when data is known to be stale.
+inline __attribute__((always_inline)) void invalidate_l2_cache_line(uint32_t addr) {
+    __asm__ __volatile__("fence" ::: "memory");
+    volatile uint64_t* inv_reg = (volatile uint64_t*)L2_INVALIDATE_ADDR;
+    *inv_reg = (uint64_t)addr;
+    __asm__ __volatile__("fence" ::: "memory");
+}
+
 // Flush a range of addresses from L2 to TL1.
 // Flushes all cache lines covering [start_addr, start_addr + size).
 inline __attribute__((always_inline)) void flush_l2_cache_range(uint32_t start_addr, uint32_t size) {
@@ -257,22 +260,22 @@ inline __attribute__((always_inline)) void flush_l2_cache_range(uint32_t start_a
     }
 }
 
-// Flush entire L2 cache (128KB) to TL1.
-// Iterates FLUSH64 over all possible cache line addresses.
+// Flush entire L2 cache to TL1.
+// Iterates FLUSH64 over all cacheable TL1 addresses (4MB).
 inline void flush_l2_cache_full() {
     __asm__ __volatile__("fence" ::: "memory");
 
     volatile uint64_t* flush_reg = (volatile uint64_t*)L2_FLUSH_ADDR;
-    for (uint32_t addr = 0; addr < L2_CACHE_SIZE; addr += L2_CACHE_LINE_SIZE) {
+    for (uint32_t addr = 0; addr < MEMORY_PORT_CACHEABLE_MEM_PORT_MEM_SIZE; addr += L2_CACHE_LINE_SIZE) {
         *flush_reg = (uint64_t)addr;
     }
 
     __asm__ __volatile__("fence" ::: "memory");
 }
 
-// Coordinated L2 invalidation across all 8 DM cores.
+// Coordinated L2 invalidation across all DM cores.
 // Each core signals ready by writing its bit, then polls until HW clears register.
-// Call from all 8 cores, or write other cores' bits if only one core is active.
+// Call from all DM cores, or write other cores' bits if only one core is active.
 inline void invalidate_l2_cache(uint32_t hartid) {
     volatile uint64_t* inv_reg = (volatile uint64_t*)L2_FULL_INVALIDATE_ADDR;
     *inv_reg = (uint64_t)(1 << hartid);
@@ -291,7 +294,7 @@ inline void invalidate_l1_cache() {
 }
 
 // Invalidate entire cache hierarchy: L2 + L1 D$ + L1 I$.
-// Must be called from all 8 DM cores for proper synchronization.
+// Must be called from all DM cores for proper synchronization.
 // After return, all caches are cold and will fetch fresh data from TL1.
 inline void invalidate_cache_all(uint32_t hartid) {
     // 1. Coordinate L2 wipe across all cores

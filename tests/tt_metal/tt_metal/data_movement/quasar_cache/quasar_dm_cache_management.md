@@ -6,37 +6,38 @@
 ## Cache Hierarchy
 
 ```
-┌─────────────────────────────────────────────────────────────┐
-│                      Quasar DM Core                         │
-│  ┌─────────────────────────────────────────────────────────┐│
-│  │                    RV64 Core                            ││
-│  └─────────────────────────────────────────────────────────┘│
-│                    │                │                       │
-│                    ▼                ▼                       │
-│            ┌───────────┐    ┌───────────┐                   │
-│            │  L1 D$    │    │  L1 I$    │                   │
-│            │  4 KB (?) │    │   ? (?)   │                   │
-│            └─────┬─────┘    └───────────┘                   │
-│                  │                                          │
-│                  ▼                                          │
-│         ┌────────────────┐                                  │
-│         │      L2        │  ◄── 8 banks, 8 ways, 32 sets    │
-│         │    128 KB      │      64B cache line              │
-│         └────────┬───────┘                                  │
-└──────────────────┼──────────────────────────────────────────┘
-                   │
-                   ▼
-         ┌────────────────┐
-         │      TL1       │  (Tensix L1 / Shared Node SRAM)
-         │   Node Memory  │
-         └────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                            Quasar DM Cores (x8)                             │
+│                                                                             │
+│  ┌────────────┐  ┌────────────┐  ┌────────────┐            ┌────────────┐   │
+│  │ DM Core 0  │  │ DM Core 1  │  │ DM Core 2  │    ...     │ DM Core 7  │   │
+│  │            │  │            │  │            │            │            │   │
+│  │ L1D$ 4K 2W │  │ L1D$ 4K 2W │  │ L1D$ 4K 2W │            │ L1D$ 4K 2W │   │
+│  │ L1I$ 4K 2W │  │ L1I$ 4K 2W │  │ L1I$ 4K 2W │            │ L1I$ 4K 2W │   │
+│  └─────┬──────┘  └─────┬──────┘  └─────┬──────┘            └─────┬──────┘   │
+│        │               │               │                         │          │
+│        └───────────────┴───────────────┴────────── ... ──────────┘          │
+│                                   │                                         │
+│                                   ▼                                         │
+│                       ┌───────────────────┐                                 │
+│                       │   L2 (shared)     │  128 KB, 4-way associative      │
+│                       │                   │  64B cache line                 │
+│                       └─────────┬─────────┘                                 │
+└─────────────────────────────────┼───────────────────────────────────────────┘
+                                  │
+                                  ▼
+                       ┌───────────────────┐
+                       │       TL1         │  (Tensix L1 / Shared Node SRAM)
+                       │   Node Memory     │
+                       └───────────────────┘
 ```
 
 **Key points:**
-- L1 D$ is **inclusive** of L2 (flushing L1 writes to L2, not directly to TL1) — per code comments
-- L1 I$ is separate (instruction cache), size unknown
-- L2 is shared across 8 DM cores in a cluster (?) — per code comments
+- L1 D$: 4KB, 2-way, write-back, private per core
+- L1 I$: 4KB, 2-way, private per core
+- L2: 128KB, 4-way, write-back, shared between all 8 DM cores
 - TL1 is the backing memory visible to NoC/DMA
+- Address 0-4MB is cacheable, 4-8MB aliases to same range but uncached ("write around")
 
 ---
 
@@ -50,7 +51,8 @@
 | `flush_l2_cache_line(addr)` | Single 64B line | L2 → TL1 | Tested |
 | `flush_l2_cache_range(addr, size)` | Address range | L2 → TL1 (loops over lines) | Tested |
 | `flush_l2_cache_full()` | Entire 128KB | L2 → TL1 | Tested |
-| `invalidate_l2_cache(hartid)` | Entire 128KB | Discard L2 (requires all 8 cores?) | Not tested |
+| `invalidate_l2_cache_line(addr)` | Single 64B line | Discard L2 line (no writeback) | Tested |
+| `invalidate_l2_cache(hartid)` | Entire 128KB | Discard L2 (requires all DM cores?) | Not tested |
 
 ---
 
@@ -108,7 +110,7 @@ void invalidate_l1_icache();  // Uses FENCE.I instruction
 
 No flush exists — I$ is read-only from CPU perspective.
 
-**L1 I$ size:** Unknown
+**L1 I$ size:** 4KB
 
 ### L2 Cache
 
@@ -122,13 +124,17 @@ void flush_l2_cache_range(uint32_t start_addr, uint32_t size);
 // Entire 128KB cache
 void flush_l2_cache_full();
 
-// Invalidate - per code comments, requires coordination across all 8 DM cores
+// Invalidate single line (no writeback)
+void invalidate_l2_cache_line(uint32_t addr);
+
+// Invalidate entire L2 - requires coordination across all DM cores
 void invalidate_l2_cache(uint32_t hartid);
 ```
 
 **Implementation:** Memory-mapped registers in cache controller
 - `L2_FLUSH_ADDR`: Write address to flush that line
-- `L2_FULL_INVALIDATE_ADDR`: Bitmask register for core synchronization (?)
+- `L2_INVALIDATE_ADDR`: Write address to invalidate that line
+- `L2_FULL_INVALIDATE_ADDR`: Bitmask register for full cache invalidation
 
 ---
 
@@ -212,13 +218,13 @@ flush_l2_cache_line(0x20010);  // Flushes line containing 0x20010
 ```cpp
 // Only running on core 0
 invalidate_l2_cache(0);  // May deadlock or cause undefined behavior (?)
-// Per code comments, hardware waits for all 8 cores to signal
+// Per code comments, hardware waits for all DM cores to signal
 ```
 
 **Possible workaround (unverified):**
 ```cpp
 volatile uint64_t* inv_reg = (volatile uint64_t*)L2_FULL_INVALIDATE_ADDR;
-*inv_reg = 0xFF;  // Signal all 8 cores at once (?)
+*inv_reg = 0xFF;  // Signal all DM cores at once (?)
 while (*inv_reg != 0);
 ```
 
@@ -229,11 +235,8 @@ while (*inv_reg != 0);
 From `overlay_addresses.h` (verified):
 
 ```cpp
-#define L2_CACHE_LINE_SIZE  64      // bytes
-#define L2_CACHE_NUM_SETS   32
-#define L2_CACHE_NUM_WAYS   8
-#define L2_CACHE_NUM_BANKS  8
-#define L2_CACHE_SIZE       131072  // 128 KB (8 * 8 * 32 * 64)
+#define L2_CACHE_LINE_SIZE  64          // bytes
+#define L2_CACHE_SIZE       (128 * 1024) // 128 KB, 4-way associative
 ```
 
 L1 D$ size: 4 KB — per SiFive X280 documentation (?)
@@ -252,6 +255,7 @@ L1 D$ size: 4 KB — per SiFive X280 documentation (?)
 | `flush_l2_cache_line(addr)` | Yes | `QuasarL2CacheFlush.FlushLine` |
 | `flush_l2_cache_range(...)` | Yes | `QuasarL2CacheFlush.FlushRange` |
 | `flush_l2_cache_full()` | Yes | `QuasarL2CacheFlush.FlushFull` |
+| `invalidate_l2_cache_line(addr)` | Yes | `QuasarL2CacheFlush.InvalidateLine` |
 | `invalidate_l2_cache(hartid)` | No | — (requires multi-core coordination) |
 
 ---

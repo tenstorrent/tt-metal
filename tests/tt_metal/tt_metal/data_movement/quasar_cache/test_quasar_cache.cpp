@@ -25,10 +25,7 @@ bool should_skip_test() {
         return true;
     }
     char* env_var = std::getenv("TT_METAL_SIMULATOR");
-    if (env_var == nullptr) {
-        return true;
-    }
-    return false;
+    return env_var == nullptr;
 }
 
 // =============================================================================
@@ -39,7 +36,8 @@ struct L2FlushTestConfig {
     uint32_t base_addr;
     uint32_t num_words;
     uint32_t value;
-    uint32_t test_mode;  // 0=line, 1=range, 2=full
+    uint32_t test_mode;  // 0=flush_line, 1=flush_range, 2=flush_full, 3=invalidate_line
+    bool expect_new_values = true;  // true for flush tests, false for invalidate tests
 };
 
 bool run_l2_flush_test(
@@ -49,8 +47,10 @@ bool run_l2_flush_test(
     IDevice* device = mesh_device->get_devices()[0];
     constexpr CoreCoord core = {0, 0};
 
-    // Initialize memory to zero
-    std::vector<uint32_t> init_data(config.num_words, 0);
+    // For invalidate tests, pre-populate with known "old" values
+    // that should persist after invalidation (since invalidate doesn't write back)
+    uint32_t old_value = 0xDEADBEEF;
+    std::vector<uint32_t> init_data(config.num_words, config.expect_new_values ? 0 : old_value);
     tt_metal::detail::WriteToDeviceL1(device, core, config.base_addr, init_data);
 
     // Create program with Quasar DM kernel
@@ -81,7 +81,7 @@ bool run_l2_flush_test(
 
     bool pass = true;
     for (uint32_t i = 0; i < config.num_words; i++) {
-        uint32_t expected = config.value + i;
+        uint32_t expected = config.expect_new_values ? (config.value + i) : old_value;
         if (output_data[i] != expected) {
             log_error(tt::LogTest, "Mismatch at index {}: expected 0x{:08x}, got 0x{:08x}",
                       i, expected, output_data[i]);
@@ -202,6 +202,21 @@ TEST_F(QuasarL2CacheFlush, FlushFull) {
         .num_words = 64,
         .value = 0x55550000,
         .test_mode = 2  // full flush
+    };
+    EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(devices_[0], config));
+}
+
+TEST_F(QuasarL2CacheFlush, InvalidateLine) {
+    if (unit_tests::dm::quasar_cache::should_skip_test()) {
+        GTEST_SKIP() << "Test requires Quasar simulator";
+    }
+
+    unit_tests::dm::quasar_cache::L2FlushTestConfig config = {
+        .base_addr = 100 * 1024,
+        .num_words = 16,
+        .value = 0x99990000,
+        .test_mode = 3,  // invalidate line
+        .expect_new_values = false  // Invalidate doesn't write back, so old values should remain
     };
     EXPECT_TRUE(unit_tests::dm::quasar_cache::run_l2_flush_test(devices_[0], config));
 }
