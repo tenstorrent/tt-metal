@@ -65,7 +65,7 @@ public:
      * @param vc The virtual channel to use for the transaction (default is NOC_UNICAST_WRITE_VC).
      */
     void up(const Noc& noc, uint32_t noc_x, uint32_t noc_y, uint32_t value, uint8_t vc = NOC_UNICAST_WRITE_VC) {
-        const uintptr_t dest_noc_addr = get_noc_addr(noc_x, noc_y);
+        const uint64_t dest_noc_addr = get_noc_addr(noc_x, noc_y);
         noc_semaphore_inc(dest_noc_addr, value, noc.get_noc_id(), vc);
     }
 
@@ -136,7 +136,7 @@ public:
         uint32_t noc_y_end,
         uint32_t num_dests,
         bool linked = false) {
-        const uintptr_t multicast_addr =
+        const uint64_t multicast_addr =
             get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, noc.get_noc_id());
 #ifdef ARCH_QUASAR
         const uintptr_t local_l1_addr = local_l1_addr_ - MEM_L1_UNCACHED_BASE;
@@ -171,7 +171,7 @@ public:
         uint32_t noc_y_end,
         uint32_t value,
         uint32_t num_dests) {
-        const uintptr_t multicast_addr =
+        const uint64_t multicast_addr =
             get_noc_multicast_addr(noc_x_start, noc_y_start, noc_x_end, noc_y_end, noc.get_noc_id());
         noc_semaphore_inc_multicast(multicast_addr, value, num_dests, noc.get_noc_id());
     }
@@ -179,7 +179,7 @@ public:
 private:
     uintptr_t local_l1_addr_;
 
-    uintptr_t get_noc_multicast_addr(
+    uint64_t get_noc_multicast_addr(
         uint32_t noc_x_start, uint32_t noc_y_start, uint32_t noc_x_end, uint32_t noc_y_end, uint8_t noc) const {
 #ifdef ARCH_QUASAR
         return ::get_noc_multicast_addr(
@@ -189,7 +189,7 @@ private:
 #endif
     }
 
-    uintptr_t get_noc_addr(uint32_t noc_x, uint32_t noc_y) const {
+    uint64_t get_noc_addr(uint32_t noc_x, uint32_t noc_y) const {
 #ifdef ARCH_QUASAR
         return ::get_noc_addr(noc_x, noc_y, local_l1_addr_ - MEM_L1_UNCACHED_BASE);
 #else
