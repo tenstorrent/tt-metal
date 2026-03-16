@@ -95,13 +95,13 @@ def build_expanded_test_ids(expanded_cases):
         >>> expanded_cases = [
         ...     ("decode", 1, 32, None),
         ...     ("decode", 1, 32, 1024),
-        ...     ("prefill", 128, 1, None),
+        ...     ("prefill", 128, 32, None),
         ... ]
         >>> build_expanded_test_ids(expanded_cases)
         [
             "mode_decode_seq_1_batch_32_pos_random",
             "mode_decode_seq_1_batch_32_pos_1024",
-            "mode_prefill_seq_128_batch_1",
+            "mode_prefill_seq_128_batch_32",
         ]
     """
     expanded_ids = []
@@ -147,9 +147,9 @@ def get_base_test_cases(users_per_row, prefill_seq_len, include_decode_random_po
             - position_id max_seq_len - 1
         - Prefill cases:
           - when DEEPSEEK_MAX_SEQ_LEN_OVERRIDE is not set, includes one prefill case using
-            prefill_seq_len: ("prefill", prefill_seq_len, 1, None)
+            prefill_seq_len: ("prefill", prefill_seq_len, users_per_row, None)
           - when DEEPSEEK_MAX_SEQ_LEN_OVERRIDE is set, replaces the prefill list with a single case:
-            ("prefill", max_seq_len, 1, None)
+            ("prefill", max_seq_len, users_per_row, None)
 
     """
     base_cases = []
@@ -159,14 +159,14 @@ def get_base_test_cases(users_per_row, prefill_seq_len, include_decode_random_po
     max_seq_len_env = os.getenv("DEEPSEEK_MAX_SEQ_LEN_OVERRIDE")
     if max_seq_len_env is None:
         # If DEEPSEEK_MAX_SEQ_LEN_OVERRIDE is not set, use the default prefill sequence length.
-        base_cases += [("prefill", prefill_seq_len, 1, None)]
+        base_cases += [("prefill", prefill_seq_len, users_per_row, None)]
     else:
         # If DEEPSEEK_MAX_SEQ_LEN_OVERRIDE is set, use it to expand prefill and decode coverage.
         max_seq_len = int(max_seq_len_env)
         base_cases += [
             ("decode", 1, users_per_row, 0),  # decode position_id 0
             ("decode", 1, users_per_row, max_seq_len - 1),  # decode position_id max_seq_len - 1
-            ("prefill", max_seq_len, 1, None),  # prefill at max_seq_len
+            ("prefill", max_seq_len, users_per_row, None),  # prefill at max_seq_len
         ]
     return base_cases
 
