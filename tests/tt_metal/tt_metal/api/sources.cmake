@@ -37,6 +37,7 @@ set(UNIT_TESTS_API_SOURCES
     test_global_semaphores.cpp
     test_host_buffer.cpp
     test_kernel_compile_cache.cpp
+    test_jit_compile_deduper.cpp
     test_kernel_creation.cpp
     test_memory_pin.cpp
     test_noc.cpp
