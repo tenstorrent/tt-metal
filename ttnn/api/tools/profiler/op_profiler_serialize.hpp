@@ -78,7 +78,7 @@ struct OpProfileData {
 // ---------------------------------------------------------------------------
 std::string assemble_device_op_json(
     const OpProfileData& data,
-    tt::stl::hash::hash_t program_hash,
+    ttsl::hash::hash_t program_hash,
     ChipId device_id,
     bool program_cache_hit,
     const tt::tt_metal::Program& program);
@@ -86,7 +86,7 @@ std::string assemble_device_op_json(
 #if defined(TRACY_ENABLE)
 
 class thread_safe_cached_ops_map {
-    using OP_INFO_MAP = std::unordered_map<tt::stl::hash::hash_t, std::string>;
+    using OP_INFO_MAP = std::unordered_map<ttsl::hash::hash_t, std::string>;
     using DEVICE_OP_MAP = std::unordered_map<uint32_t, OP_INFO_MAP>;
 
 public:
@@ -174,7 +174,7 @@ private:
 inline RuntimeIDToOpName runtime_id_to_opname_{};
 
 class ProgramHashToOpName {
-    using KeyType = std::pair<ChipId, tt::stl::hash::hash_t>;
+    using KeyType = std::pair<ChipId, ttsl::hash::hash_t>;
 
 public:
     std::string find_if_exists(const KeyType& key) {
@@ -284,14 +284,14 @@ inline auto compute_program_hash(
                       const typename device_operation_t::tensor_args_t& tensor_args) {
                       {
                           device_operation_t::compute_program_hash(operation_attributes, tensor_args)
-                      } -> std::convertible_to<tt::stl::hash::hash_t>;
+                      } -> std::convertible_to<ttsl::hash::hash_t>;
                   }) {
         ZoneScopedN("Op profiler Compute custom program hash");
         return device_operation_t::compute_program_hash(operation_attributes, tensor_args);
     } else {
         ZoneScopedN("Op profiler Compute default program hash");
-        return tt::stl::hash::hash_objects_with_default_seed(
-            tt::stl::hash::type_hash<device_operation_t>, operation_attributes, tensor_args);
+        return ttsl::hash::hash_objects_with_default_seed(
+            ttsl::hash::type_hash<device_operation_t>, operation_attributes, tensor_args);
     }
 }
 
@@ -361,23 +361,23 @@ inline std::string op_meta_data_serialized_json(
 
         // Op name
         auto as_string = [](std::string_view v) -> std::string { return {v.data(), v.size()}; };
-        data.op_name = as_string(tt::stl::get_type_name<device_operation_t>());
+        data.op_name = as_string(ttsl::get_type_name<device_operation_t>());
         if constexpr (requires { device_operation_t::get_type_name(operation_attributes); }) {
             data.op_name = device_operation_t::get_type_name(operation_attributes);
         }
         std::replace(data.op_name.begin(), data.op_name.end(), ',', ';');
 
         // Attributes as string key-value pairs
-        for (auto&& [name, value] : tt::stl::reflection::get_attributes(operation_attributes)) {
+        for (auto&& [name, value] : ttsl::reflection::get_attributes(operation_attributes)) {
             data.attributes.emplace_back(fmt::format("{}", name), fmt::format("{}", value));
         }
 
         // Input tensors → TensorMeta (no JSON)
-        tt::stl::reflection::visit_object_of_type<Tensor>(
+        ttsl::reflection::visit_object_of_type<Tensor>(
             [&data](auto&& tensor) { data.input_tensors.push_back(make_tensor_meta(tensor)); }, tensor_args);
 
         // Output tensors → TensorMeta (no JSON)
-        tt::stl::reflection::visit_object_of_type<Tensor>(
+        ttsl::reflection::visit_object_of_type<Tensor>(
             [&data](auto&& tensor) { data.output_tensors.push_back(make_tensor_meta(tensor)); }, tensor_return_value);
 
         // Performance model — use if constexpr to avoid depending on OpPerformanceModel type

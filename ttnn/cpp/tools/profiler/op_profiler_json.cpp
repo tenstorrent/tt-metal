@@ -106,7 +106,7 @@ static json get_kernels_json(ChipId device_id, const Program& program) {
 
 std::string assemble_device_op_json(
     [[maybe_unused]] const OpProfileData& data,
-    [[maybe_unused]] tt::stl::hash::hash_t program_hash,
+    [[maybe_unused]] ttsl::hash::hash_t program_hash,
     [[maybe_unused]] ChipId device_id,
     [[maybe_unused]] bool program_cache_hit,
     [[maybe_unused]] const tt::tt_metal::Program& program) {
@@ -163,7 +163,7 @@ std::string assemble_device_op_json(
     if (cached_ops.find(device_id) == cached_ops.end()) {
         cached_ops.emplace(
             device_id,
-            (std::unordered_map<tt::stl::hash::hash_t, std::string>){{program_hash, short_str}});
+            (std::unordered_map<ttsl::hash::hash_t, std::string>){{program_hash, short_str}});
     } else {
         cached_ops.at(device_id).emplace(program_hash, short_str);
     }
