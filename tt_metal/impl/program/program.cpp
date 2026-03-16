@@ -13,7 +13,6 @@
 #include <ranges>
 #include <tt_align.hpp>
 #include <algorithm>
-#include <random>
 #include <array>
 #include <atomic>
 #include <bitset>
@@ -1527,57 +1526,107 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     std::vector<std::shared_future<void>> events;
 
-    std::random_device rd;
-    std::mt19937 rng(rd());
-    for (auto& kernels : kernels_) {
-        std::vector<KernelHandle> order;
-        order.reserve(kernels.size());
-        for (const auto& [id, k] : kernels) {
-            order.push_back(id);
+    auto schedule_kernel_compile = [&](const std::shared_ptr<Kernel>& kernel) {
+        validate_kernel_placement(force_slow_dispatch, kernel);
+        launch_build_step(
+            [kernel, device, this, &build_env] {
+                JitBuildOptions build_options(build_env.build_env);
+                kernel->set_build_options(build_options);
+                if (this->compiled_.empty()) {
+                    this->set_remote_circular_buffer_init(kernel);
+                }
+                this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
+                this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
+                this->set_dfb_data_fmt(kernel->logical_coreranges(), build_options);
+                this->set_dfb_tile_dims(kernel->logical_coreranges(), build_options);
+
+                auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
+
+                const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
+                kernel->set_full_name(kernel_path_suffix);
+                build_options.set_name(kernel_path_suffix);
+
+                if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() !=
+                    tt::TargetDevice::Mock) {
+                    kernel->register_kernel_elf_paths_with_watcher(*device);
+                }
+
+                bool is_mock = tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
+                               tt::TargetDevice::Mock;
+
+                jit_build_once(kernel_hash, [&] {
+                    if (!is_mock) {
+                        GenerateBinaries(device, build_options, kernel);
+                    } else {
+                        // Create empty stub binaries for mock devices
+                        std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
+                        kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
+                    }
+                });
+
+                Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
+            },
+            events);
+    };
+
+    const char* shard_idx_env = std::getenv("TT_METAL_COMPILE_SHARD_IDX");
+    const char* shard_count_env = std::getenv("TT_METAL_COMPILE_SHARD_COUNT");
+
+    std::optional<size_t> shard_idx;
+    std::optional<size_t> shard_count;
+    if (shard_idx_env != nullptr && shard_count_env != nullptr) {
+        char* shard_idx_end = nullptr;
+        char* shard_count_end = nullptr;
+        const long parsed_shard_idx = std::strtol(shard_idx_env, &shard_idx_end, 10);
+        const long parsed_shard_count = std::strtol(shard_count_env, &shard_count_end, 10);
+
+        const bool shard_idx_valid = shard_idx_end != shard_idx_env && shard_idx_end != nullptr &&
+                                     *shard_idx_end == '\0' && parsed_shard_idx >= 0;
+        const bool shard_count_valid = shard_count_end != shard_count_env && shard_count_end != nullptr &&
+                                       *shard_count_end == '\0' && parsed_shard_count > 0;
+        if (shard_idx_valid && shard_count_valid && parsed_shard_idx < parsed_shard_count) {
+            shard_idx = static_cast<size_t>(parsed_shard_idx);
+            shard_count = static_cast<size_t>(parsed_shard_count);
+            log_info(
+                tt::LogMetal,
+                "Compile sharding enabled for program {}: TT_METAL_COMPILE_SHARD_IDX={} "
+                "TT_METAL_COMPILE_SHARD_COUNT={}",
+                this->get_id(),
+                *shard_idx,
+                *shard_count);
         }
-        std::shuffle(order.begin(), order.end(), rng);
-        for (KernelHandle id : order) {
-            auto& kernel = kernels.at(id);
-            validate_kernel_placement(force_slow_dispatch, kernel);
-            launch_build_step(
-                [kernel, device, this, &build_env] {
-                    JitBuildOptions build_options(build_env.build_env);
-                    kernel->set_build_options(build_options);
-                    if (this->compiled_.empty()) {
-                        this->set_remote_circular_buffer_init(kernel);
-                    }
-                    this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
-                    this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
-                    this->set_dfb_data_fmt(kernel->logical_coreranges(), build_options);
-                    this->set_dfb_tile_dims(kernel->logical_coreranges(), build_options);
+    }
 
-                    auto kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
+    if (shard_idx.has_value() && shard_count.has_value()) {
+        std::vector<std::shared_ptr<Kernel>> ordered_kernels;
+        for (auto& kernels : kernels_) {
+            std::vector<KernelHandle> kernel_ids;
+            kernel_ids.reserve(kernels.size());
+            for (const auto& [id, _] : kernels) {
+                kernel_ids.push_back(id);
+            }
+            std::sort(kernel_ids.begin(), kernel_ids.end());
+            for (KernelHandle id : kernel_ids) {
+                ordered_kernels.push_back(kernels.at(id));
+            }
+        }
 
-                    const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
-                    kernel->set_full_name(kernel_path_suffix);
-                    build_options.set_name(kernel_path_suffix);
+        std::vector<std::vector<std::shared_ptr<Kernel>>> kernels_by_shard(*shard_count);
+        for (size_t i = 0; i < ordered_kernels.size(); ++i) {
+            kernels_by_shard[i % *shard_count].push_back(ordered_kernels[i]);
+        }
 
-                    if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() !=
-                        tt::TargetDevice::Mock) {
-                        kernel->register_kernel_elf_paths_with_watcher(*device);
-                    }
-
-                    bool is_mock = tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
-                                   tt::TargetDevice::Mock;
-
-                    jit_build_once(kernel_hash, [&] {
-                        if (!is_mock) {
-                            GenerateBinaries(device, build_options, kernel);
-                        } else {
-                            // Create empty stub binaries for mock devices
-                            std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
-                            kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
-                        }
-                    });
-
-                    Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
-                },
-                events);
+        for (size_t shard_offset = 0; shard_offset < *shard_count; ++shard_offset) {
+            const size_t shard = (*shard_idx + shard_offset) % *shard_count;
+            for (const auto& kernel : kernels_by_shard[shard]) {
+                schedule_kernel_compile(kernel);
+            }
+        }
+    } else {
+        for (auto& kernels : kernels_) {
+            for (auto& [id, kernel] : kernels) {
+                schedule_kernel_compile(kernel);
+            }
         }
     }
     sync_build_steps(events);
