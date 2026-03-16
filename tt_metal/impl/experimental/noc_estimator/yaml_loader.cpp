@@ -6,9 +6,7 @@
 #include <yaml-cpp/yaml.h>
 #include <iostream>
 
-namespace tt::tt_metal::noc_estimator::loader {
-
-using namespace common;
+namespace tt::tt_metal::experimental::noc_estimator {
 
 template <typename T>
 T get_or_default(const YAML::Node& node, const std::string& key, T default_value) {
@@ -30,7 +28,7 @@ LoadedData load_latency_data_from_yaml(const std::string& yaml_path) {
         const YAML::Node& entries = root["entries"];
         for (const auto& entry : entries) {
             const YAML::Node& key_node = entry["key"];
-            common::GroupKey key{
+            GroupKey key{
                 .mechanism = static_cast<NocMechanism>(get_or_default<int>(key_node, "mechanism", DEFAULT_MECHANISM)),
                 .pattern = static_cast<NocPattern>(get_or_default<int>(key_node, "pattern", DEFAULT_PATTERN)),
                 .memory = static_cast<MemoryType>(get_or_default<int>(key_node, "memory", DEFAULT_MEMORY)),
@@ -42,7 +40,7 @@ LoadedData load_latency_data_from_yaml(const std::string& yaml_path) {
                 .loopback = get_or_default<bool>(key_node, "loopback", DEFAULT_LOOPBACK),
                 .noc_index = get_or_default<uint32_t>(key_node, "noc_index", DEFAULT_NOC_INDEX)};
 
-            common::LatencyData latency_data;
+            LatencyData latency_data;
             latency_data.latencies = entry["latencies"].as<std::vector<double>>();
 
             result.entries[key] = latency_data;
@@ -59,4 +57,4 @@ LoadedData load_latency_data_from_yaml(const std::string& yaml_path) {
     return result;
 }
 
-}  // namespace tt::tt_metal::noc_estimator::loader
+}  // namespace tt::tt_metal::experimental::noc_estimator

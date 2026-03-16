@@ -7,7 +7,7 @@
 #include <limits>
 #include <set>
 
-namespace tt::tt_metal::noc_estimator::common {
+namespace tt::tt_metal::experimental::noc_estimator {
 
 // Quadratic interpolation for better accuracy when possible
 double interpolate_latency(const LatencyData& data, const std::vector<uint32_t>& sizes, uint32_t transaction_size) {
@@ -247,4 +247,4 @@ double find_with_relaxation(
     return 0.0;
 }
 
-}  // namespace tt::tt_metal::noc_estimator::common
+}  // namespace tt::tt_metal::experimental::noc_estimator
