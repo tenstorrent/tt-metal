@@ -95,8 +95,14 @@ class TopKRouter:
         self.top_k = hf_config.num_experts_per_tok
         self.num_experts = hf_config.num_local_experts
         self.hidden_dim = hf_config.hidden_size
+        if state_dict:
+            torch_weight = state_dict["weight"].transpose(0, 1)
+            torch_bias = state_dict["bias"].unsqueeze(0)
+        else:
+            torch_weight = None
+            torch_bias = None
         self.weight = ttnn.as_tensor(
-            state_dict["weight"].transpose(0, 1),
+            torch_weight,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
@@ -104,7 +110,7 @@ class TopKRouter:
             memory_config=ttnn.DRAM_MEMORY_CONFIG,
         )
         self.bias = ttnn.as_tensor(
-            state_dict["bias"].unsqueeze(0),
+            torch_bias,
             device=mesh_device,
             layout=ttnn.TILE_LAYOUT,
             dtype=ttnn.bfloat16,
