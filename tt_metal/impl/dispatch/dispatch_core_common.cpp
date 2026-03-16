@@ -18,6 +18,7 @@ DispatchCoreAxis DispatchCoreConfig::get_default_axis() {
     // resolve_dispatch_core_axis(arch, fabric_tensix_config) instead.
     // This remains for legacy external callers that go through get_dispatch_core_axis().
     // TODO: remove this once the header API can be updated.
+    // https://github.com/tenstorrent/tt-metal/issues/39974
     // We first check if the instance exists to avoid implicit creation of the default context with MetalEnv
     if (MetalContext::instance_exists(DEFAULT_CONTEXT_ID)) {
         if (MetalContext::instance().get_cluster().arch() == tt::ARCH::BLACKHOLE) {

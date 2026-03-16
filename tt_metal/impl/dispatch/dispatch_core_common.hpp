@@ -35,6 +35,7 @@ CoreType get_core_type_from_config(const DispatchCoreConfig& config);
 // Prefer this over DispatchCoreConfig::get_dispatch_core_axis() when the config's
 // axis_ may not be set, since the fallback get_default_axis() only checks the
 // DEFAULT context and fails for non-default contexts (e.g. mock devices).
+// TODO: https://github.com/tenstorrent/tt-metal/issues/39974
 DispatchCoreAxis resolve_dispatch_core_axis(tt::ARCH arch, tt_fabric::FabricTensixConfig fabric_tensix_config);
 
 // Helper functions to get the dispatch core config/type
