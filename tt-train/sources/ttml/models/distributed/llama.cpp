@@ -110,7 +110,13 @@ DistributedLlama::DistributedLlama(const LlamaConfig& config) {
     blocks.reserve(num_blocks);
     for (uint32_t block_idx = 0; block_idx < num_blocks; ++block_idx) {
         blocks.push_back(std::make_shared<modules::distributed::DistributedLlamaBlock>(
-            embedding_dim, num_heads, num_groups, m_rope_params, dropout_prob, intermediate_dim));
+            embedding_dim,
+            num_heads,
+            num_groups,
+            m_rope_params,
+            dropout_prob,
+            intermediate_dim,
+            config.use_fused_swiglu));
     }
     ln_fc = std::make_shared<ttml::modules::RMSNormLayer>(embedding_dim);
     if (use_tp) {

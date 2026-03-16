@@ -7,6 +7,7 @@
 #include <cstdint>
 #include <optional>
 
+#include "modules/linear_module.hpp"
 #include "modules/module_base.hpp"
 #include "ops/rope_op.hpp"
 
@@ -15,7 +16,10 @@ namespace ttml::modules::distributed {
 class DistributedLlamaMLP : public ModuleBase {
 public:
     DistributedLlamaMLP(
-        uint32_t embedding_size, float dropout_prob, std::optional<uint32_t> intermediate_dim = std::nullopt);
+        uint32_t embedding_size,
+        float dropout_prob,
+        std::optional<uint32_t> intermediate_dim = std::nullopt,
+        bool use_fused_swiglu = false);
     autograd::TensorPtr operator()(const autograd::TensorPtr& input) override;
 
 private:
@@ -23,6 +27,11 @@ private:
     std::shared_ptr<ModuleBase> m_w3;
     std::shared_ptr<ModuleBase> m_w2;
     std::shared_ptr<ModuleBase> m_dropout;
+    std::shared_ptr<ttml::modules::LinearLayer> m_w1_linear;
+    std::shared_ptr<ttml::modules::LinearLayer> m_w2_linear;
+    std::shared_ptr<ttml::modules::LinearLayer> m_w3_linear;
+    float m_dropout_prob = 0.0F;
+    bool m_use_fused = false;
 };
 
 class DistributedLlamaBlock : public ModuleBase {
@@ -33,7 +42,8 @@ public:
         uint32_t num_groups,
         const ops::RotaryEmbeddingParams& rope_params,
         float dropout_prob = 0.0F,
-        std::optional<uint32_t> intermediate_dim = std::nullopt);
+        std::optional<uint32_t> intermediate_dim = std::nullopt,
+        bool use_fused_swiglu = false);
 
     autograd::TensorPtr operator()(
         const autograd::TensorPtr& input, const std::optional<autograd::TensorPtr>& mask) override;

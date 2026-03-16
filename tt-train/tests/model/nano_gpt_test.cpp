@@ -406,6 +406,8 @@ void run_fused_swiglu_comparison(const FusedSwiGLUTestConfig &test_cfg) {
         config.transformer_config.max_sequence_length = test_cfg.max_sequence_length;
         config.transformer_config.intermediate_dim = test_cfg.intermediate_dim;
         config.transformer_config.runner_type = ttml::models::llama::RunnerType::MemoryEfficient;
+        // TODO(#swiglu-cleanup): remove this toggle and this A/B benchmark once fused SwiGLU is mandatory everywhere.
+        // Keep it for now to preserve baseline-vs-fused perf comparisons in CI/perf bring-up.
         config.transformer_config.use_fused_swiglu = use_fused;
         config.data_path = std::string(TEST_DATA_DIR) + "/shakespeare.txt";
 

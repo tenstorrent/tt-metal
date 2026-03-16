@@ -33,7 +33,6 @@ struct LlamaConfig {
     uint32_t max_sequence_length = 256U;
     RunnerType runner_type = RunnerType::Default;
     WeightTyingType weight_tying = WeightTyingType::Enabled;
-
     bool use_fused_swiglu = false;
 
     // RoPE NTK-aware scaling parameters
