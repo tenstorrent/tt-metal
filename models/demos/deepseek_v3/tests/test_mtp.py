@@ -5,20 +5,31 @@ from __future__ import annotations
 
 import os
 import time
+from dataclasses import fields, is_dataclass
 from pathlib import Path
+from typing import Any
 
 import pytest
 import torch
 from loguru import logger
+from transformers import AutoConfig
 
 import ttnn
+from models.demos.deepseek_v3.tt.ccl import CCL
 from models.demos.deepseek_v3.tt.decoder_block.decoder_block_2d import DecoderBlock2D
 from models.demos.deepseek_v3.tt.decoder_block.moe_decoder_block_2d import MoEDecoderBlock2D
 from models.demos.deepseek_v3.tt.embedding.embedding2d import Embedding2D
-from models.demos.deepseek_v3.tt.generator import DeepseekGenerator, _build_verify_alias_page_table_host
+from models.demos.deepseek_v3.tt.generator import MAX_SEQ_LEN, DeepseekGenerator, _build_verify_alias_page_table_host
 from models.demos.deepseek_v3.tt.lm_head1d import LMHead1D
-from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
+from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
+from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel, get_fabric_config
+from models.demos.deepseek_v3.tt.mtp import MTP2D
 from models.demos.deepseek_v3.tt.rms_norm.distributed_rms_norm import DistributedRMSNorm
+from models.demos.deepseek_v3.tt.rope import RotarySetup
+from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div
+from models.demos.deepseek_v3.utils.run_config import create_run_config
+from models.demos.deepseek_v3.utils.test_utils import load_state_dict
+from models.demos.deepseek_v3.utils.weight_config import _try_load_cached_config, get_weight_config
 
 DEFAULT_NUM_STEPS = 128
 GENERATE_REFERENCE = os.getenv("DEEPSEEK_V3_MTP_GENERATE_REFERENCE", "0") == "1"
@@ -106,23 +117,6 @@ def _run_reference_decode_replay_consistency(
     num_steps = int(os.getenv("DEEPSEEK_V3_MTP_REF_STEPS", str(DEFAULT_NUM_STEPS)))
     steps_to_check = min(int(os.getenv("DEEPSEEK_V3_MTP_VERIFY_STEPS", str(DEFAULT_VERIFY_STEPS))), num_steps)
     mesh = mesh_device
-    reference_path = _get_reference_path(mesh, num_steps)
-    if not reference_path.exists():
-        pytest.skip(
-            f"Missing MTP reference IO at {reference_path}. "
-            "Set DEEPSEEK_V3_MTP_GENERATE_REFERENCE=1 and run the reference generator test."
-        )
-
-    payload = torch.load(reference_path, map_location="cpu")
-    metadata = payload.get("metadata", {})
-    if tuple(metadata.get("mesh_shape", ())) != tuple(mesh.shape):
-        pytest.skip(
-            f"Reference IO mesh shape {metadata.get('mesh_shape')} does not match current mesh shape {tuple(mesh.shape)}."
-        )
-
-    next_tokens = payload["next_tokens"].to(torch.int32)
-    start_tokens = payload["start_tokens"].to(torch.long)
-    steps_to_check = min(steps_to_check, int(next_tokens.shape[0]))
 
     mtp_label = "on" if enable_mtp else "off"
     with _prepare_generator(
@@ -132,6 +126,14 @@ def _run_reference_decode_replay_consistency(
         force_recalculate=force_recalculate_weight_config,
         enable_mtp=enable_mtp,
     ) as gen:
+        payload, _reference_path = _load_reference_payload_for_generator(
+            gen,
+            num_steps,
+            context=f"MTP reference decode replay ({mtp_label})",
+        )
+        next_tokens = payload["next_tokens"].to(torch.int32)
+        start_tokens = payload["start_tokens"].to(torch.long)
+        steps_to_check = min(steps_to_check, int(next_tokens.shape[0]))
         _assert_reference_start_tokens(payload, gen, context=f"MTP reference decode replay ({mtp_label})")
 
         positions = torch.zeros((gen.batch_size,), dtype=torch.int32)
@@ -259,8 +261,8 @@ def test_mtp_reference_decode_replay_consistency_mtp_off(
     )
 
 
-def _get_reference_path(mesh_device: ttnn.MeshDevice, num_steps: int) -> Path:
-    return _get_reference_dir() / f"mtp_full_model_seq{num_steps}_mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}.pt"
+def _get_reference_path(num_steps: int) -> Path:
+    return _get_reference_dir() / f"mtp_full_model_seq{num_steps}.pt"
 
 
 def _get_start_token_id(hf_config) -> int:
@@ -275,7 +277,7 @@ def _get_start_token_id(hf_config) -> int:
     return int(bos_id) if bos_id is not None else 1
 
 
-def _assert_reference_start_tokens(payload: dict, gen: DeepseekGenerator, context: str) -> None:
+def _assert_reference_start_tokens(payload: dict, gen: Any, context: str) -> None:
     if "start_tokens" not in payload:
         return
     start_tokens = payload["start_tokens"].to(torch.long)
@@ -283,19 +285,124 @@ def _assert_reference_start_tokens(payload: dict, gen: DeepseekGenerator, contex
     expected_tokens = (torch.arange(gen.batch_size, dtype=torch.long) + expected_start_id) % gen.hf_config.vocab_size
 
     if start_tokens.shape != expected_tokens.shape or not torch.equal(start_tokens, expected_tokens):
-        mismatch_idx = (start_tokens != expected_tokens).nonzero(as_tuple=False).flatten()[:8]
         mismatch_preview = []
-        for idx in mismatch_idx.tolist():
-            mismatch_preview.append(
-                f"{idx}: ref={int(start_tokens[idx].item())} expected={int(expected_tokens[idx].item())}"
-            )
+        if start_tokens.shape == expected_tokens.shape:
+            mismatch_idx = (start_tokens != expected_tokens).nonzero(as_tuple=False).flatten()[:8]
+            for idx in mismatch_idx.tolist():
+                mismatch_preview.append(
+                    f"{idx}: ref={int(start_tokens[idx].item())} expected={int(expected_tokens[idx].item())}"
+                )
+            mismatch_count = int((start_tokens != expected_tokens).sum().item())
+        else:
+            preview_count = min(8, int(start_tokens.shape[0]), int(expected_tokens.shape[0]))
+            for idx in range(preview_count):
+                mismatch_preview.append(
+                    f"{idx}: ref={int(start_tokens[idx].item())} expected={int(expected_tokens[idx].item())}"
+                )
+            mismatch_count = abs(int(start_tokens.shape[0]) - int(expected_tokens.shape[0]))
         msg = (
             f"{context}: reference start_tokens do not match current generator ordering. "
             f"expected_start_id={expected_start_id} batch_size={gen.batch_size} "
-            f"mismatch_count={int((start_tokens != expected_tokens).sum().item())} "
+            f"ref_shape={tuple(start_tokens.shape)} expected_shape={tuple(expected_tokens.shape)} "
+            f"mismatch_count={mismatch_count} "
             f"mismatches={mismatch_preview}"
         )
         pytest.fail(msg)
+
+
+def _load_reference_payload(reference_path: Path) -> dict:
+    if not reference_path.exists():
+        pytest.skip(
+            f"Missing MTP reference IO at {reference_path}. "
+            "Set DEEPSEEK_V3_MTP_GENERATE_REFERENCE=1 and run the reference generator test."
+        )
+    return torch.load(reference_path, map_location="cpu")
+
+
+def _load_reference_payload_for_generator(
+    gen: Any,
+    num_steps: int,
+    context: str,
+) -> tuple[dict, Path]:
+    reference_path = _get_reference_path(num_steps)
+    payload = _load_reference_payload(reference_path)
+    metadata = dict(payload.get("metadata", {}))
+    hidden_states = payload["hidden_states"].to(torch.bfloat16)
+    next_tokens = payload["next_tokens"].to(torch.int32)
+    start_tokens = payload["start_tokens"].to(torch.long)
+
+    ref_batch = int(start_tokens.shape[0])
+    assert hidden_states.ndim == 3, (
+        f"{context}: expected reference hidden_states to have shape [num_steps, batch, hidden], "
+        f"got {tuple(hidden_states.shape)} from {reference_path}."
+    )
+    assert next_tokens.ndim == 2, (
+        f"{context}: expected reference next_tokens to have shape [num_steps, batch], "
+        f"got {tuple(next_tokens.shape)} from {reference_path}."
+    )
+    assert hidden_states.shape[0] == next_tokens.shape[0], (
+        f"{context}: hidden_states steps {hidden_states.shape[0]} do not match next_tokens steps "
+        f"{next_tokens.shape[0]} in {reference_path}."
+    )
+    assert hidden_states.shape[1] == ref_batch, (
+        f"{context}: hidden_states batch {hidden_states.shape[1]} does not match start_tokens batch {ref_batch} "
+        f"in {reference_path}."
+    )
+    assert next_tokens.shape[1] == ref_batch, (
+        f"{context}: next_tokens batch {next_tokens.shape[1]} does not match start_tokens batch {ref_batch} "
+        f"in {reference_path}."
+    )
+
+    if "batch_size" in metadata:
+        assert int(metadata["batch_size"]) == ref_batch, (
+            f"{context}: reference metadata batch_size={metadata['batch_size']} does not match tensor batch "
+            f"{ref_batch} in {reference_path}."
+        )
+    if "num_steps" in metadata:
+        assert int(metadata["num_steps"]) == int(hidden_states.shape[0]), (
+            f"{context}: reference metadata num_steps={metadata['num_steps']} does not match tensor steps "
+            f"{hidden_states.shape[0]} in {reference_path}."
+        )
+    if "hidden_size" in metadata:
+        assert int(metadata["hidden_size"]) == int(gen.hf_config.hidden_size), (
+            f"{context}: reference hidden_size={metadata['hidden_size']} does not match current model "
+            f"hidden_size={gen.hf_config.hidden_size} in {reference_path}."
+        )
+    if "vocab_size" in metadata:
+        assert int(metadata["vocab_size"]) == int(gen.hf_config.vocab_size), (
+            f"{context}: reference vocab_size={metadata['vocab_size']} does not match current model "
+            f"vocab_size={gen.hf_config.vocab_size} in {reference_path}."
+        )
+    if "start_token_id" in metadata:
+        expected_start_id = _get_start_token_id(gen.hf_config)
+        assert int(metadata["start_token_id"]) == expected_start_id, (
+            f"{context}: reference start_token_id={metadata['start_token_id']} does not match current model "
+            f"start_token_id={expected_start_id} in {reference_path}."
+        )
+    if "batch_size_per_row" in metadata:
+        assert int(metadata["batch_size_per_row"]) == int(gen.batch_size_per_row), (
+            f"{context}: reference batch_size_per_row={metadata['batch_size_per_row']} does not match current "
+            f"batch_size_per_row={gen.batch_size_per_row} in {reference_path}."
+        )
+
+    required_batch_rows = int(gen.batch_size // gen.batch_size_per_row)
+    assert ref_batch >= gen.batch_size, (
+        f"{context}: reference batch size {ref_batch} from {reference_path} is too small for the current "
+        f"generator batch size {gen.batch_size}. Regenerate the reference with at least {required_batch_rows} "
+        f"batch rows ({gen.batch_size} total batch). reference_mesh_shape={metadata.get('mesh_shape')}"
+    )
+
+    if ref_batch > gen.batch_size:
+        hidden_states = hidden_states[:, : gen.batch_size]
+        next_tokens = next_tokens[:, : gen.batch_size]
+        start_tokens = start_tokens[: gen.batch_size]
+
+    normalized_payload = dict(payload)
+    normalized_payload["metadata"] = metadata
+    normalized_payload["hidden_states"] = hidden_states
+    normalized_payload["next_tokens"] = next_tokens
+    normalized_payload["start_tokens"] = start_tokens
+    return normalized_payload, reference_path
 
 
 def _prepare_generator(
@@ -315,6 +422,220 @@ def _prepare_generator(
     gen._prepare_run_configs("prefill")
     gen._prepare_run_configs("decode")
     return gen
+
+
+def _deallocate_ttnn_tensors(
+    obj: Any, seen_objects: set[int] | None = None, seen_tensors: set[int] | None = None
+) -> None:
+    if obj is None:
+        return
+
+    if seen_objects is None:
+        seen_objects = set()
+    if seen_tensors is None:
+        seen_tensors = set()
+
+    if isinstance(obj, ttnn.Tensor):
+        tensor_id = id(obj)
+        if tensor_id not in seen_tensors:
+            try:
+                ttnn.deallocate(obj)
+            except Exception:
+                pass
+            seen_tensors.add(tensor_id)
+        return
+
+    object_id = id(obj)
+    if object_id in seen_objects:
+        return
+    seen_objects.add(object_id)
+
+    if isinstance(obj, dict):
+        for value in obj.values():
+            _deallocate_ttnn_tensors(value, seen_objects, seen_tensors)
+        return
+
+    if isinstance(obj, (list, tuple, set)):
+        for value in obj:
+            _deallocate_ttnn_tensors(value, seen_objects, seen_tensors)
+        return
+
+    if is_dataclass(obj):
+        for field in fields(obj):
+            _deallocate_ttnn_tensors(getattr(obj, field.name), seen_objects, seen_tensors)
+
+
+def _load_cached_mtp_weight_config(
+    cache_path: Path,
+    hf_config,
+    mesh_device: ttnn.MeshDevice,
+    force_recalculate: bool,
+) -> dict[str, Any] | None:
+    cache_subdir_name = f"{hf_config.num_hidden_layers}_layers_mtp"
+    weight_cache_path = cache_path / cache_subdir_name / f"mesh_{mesh_device.shape[0]}x{mesh_device.shape[1]}"
+    cached_weight_config = _try_load_cached_config(
+        weight_cache_path / "config.json",
+        weight_cache_path,
+        force_recalculate=force_recalculate,
+    )
+    if cached_weight_config is None:
+        return None
+
+    mtp_weight_config = cached_weight_config.get("mtp") if isinstance(cached_weight_config, dict) else None
+    if not isinstance(mtp_weight_config, dict) or not mtp_weight_config:
+        raise RuntimeError(
+            f"Cached weight config at {weight_cache_path} does not contain an MTP block. "
+            "Regenerate the DeepSeek MTP cache before running this test."
+        )
+    return mtp_weight_config
+
+
+class _MtpModuleRunner:
+    def __init__(
+        self,
+        mesh_device: ttnn.MeshDevice,
+        model_path: Path,
+        cache_path: Path,
+        force_recalculate: bool,
+    ) -> None:
+        self.mesh_device = mesh_device
+        self.model_path = Path(model_path)
+        self.cache_path = Path(cache_path)
+        self.force_recalculate = force_recalculate
+        self.enable_mtp = True
+
+        self.hf_config = AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
+        self.hf_config.max_seq_len = MAX_SEQ_LEN
+        if int(getattr(self.hf_config, "num_nextn_predict_layers", 0)) <= 0:
+            raise RuntimeError("MTP module runner requires a model config with num_nextn_predict_layers > 0.")
+
+        self.ccl = CCL(mesh_device)
+        self.dp_factor = int(mesh_device.shape[1])
+        self.batch_size_per_row = USERS_PER_ROW
+        self.batch_size = self.batch_size_per_row * int(mesh_device.shape[0])
+        self.paged_config = MLA2D.get_valid_paged_config(
+            self.hf_config.max_seq_len,
+            self.batch_size_per_row,
+            self.dp_factor,
+        )
+        self.rope_setup = RotarySetup(
+            device=self.mesh_device,
+            batch_size_per_row=self.batch_size_per_row,
+            hf_config=self.hf_config,
+        )
+
+        self._weight_ttnn_cache: dict[str, ttnn.Tensor] = {}
+        self.mtp_page_table_tt: ttnn.Tensor | None = None
+        self.mtp_page_table_host: torch.Tensor | None = None
+        self._mtp_state_dict = None
+        self.model_weight_config = _load_cached_mtp_weight_config(
+            cache_path=self.cache_path,
+            hf_config=self.hf_config,
+            mesh_device=self.mesh_device,
+            force_recalculate=self.force_recalculate,
+        )
+        if self.model_weight_config is None:
+            mtp_layer_idx = int(self.hf_config.num_hidden_layers)
+            self._mtp_state_dict = load_state_dict(self.model_path, f"model.layers.{mtp_layer_idx}")
+            if "eh_proj.weight" not in self._mtp_state_dict:
+                raise RuntimeError(
+                    f"Could not find MTP weights under model.layers.{mtp_layer_idx} in {self.model_path}."
+                )
+
+            cache_subdir_name = f"{self.hf_config.num_hidden_layers}_layers_mtp_module"
+            self.model_weight_config = get_weight_config(
+                ModuleClass=MTP2D,
+                hf_config=self.hf_config,
+                state_dicts=(self._mtp_state_dict,),
+                weight_cache_path=self.cache_path,
+                mesh_device=self.mesh_device,
+                force_recalculate=self.force_recalculate,
+                cache_subdir_name=cache_subdir_name,
+            )
+        self.model_state = MTP2D.create_state(
+            hf_config=self.hf_config,
+            paged_config=self.paged_config,
+            mesh_device=self.mesh_device,
+            ccl=self.ccl,
+        )
+        self.model_shared_state = MTP2D.create_shared_state(
+            hf_config=self.hf_config,
+            mesh_device=self.mesh_device,
+        )
+        self.model_decode_cfg = MTP2D.decode_model_config(
+            hf_config=self.hf_config,
+            mesh_device=self.mesh_device,
+            fabric_config=get_fabric_config(),
+        )
+        mtp_decode_run_config = create_run_config(
+            self.model_decode_cfg,
+            self.model_weight_config,
+            self.model_state,
+            self.model_shared_state,
+            cached_ttnn_weights=self._weight_ttnn_cache,
+        )
+        # Keep the same top-level shape as DeepseekGenerator.model_run_config_decode so existing helpers still work.
+        self.model_run_config_decode = {"mtp": mtp_decode_run_config}
+
+    def _get_mtp_page_table(self) -> ttnn.Tensor:
+        if self.mtp_page_table_tt is not None:
+            return self.mtp_page_table_tt
+
+        batch_per_shard = even_int_div(self.batch_size_per_row, self.dp_factor)
+        blocks_per_user = even_int_div(self.paged_config.max_num_blocks, batch_per_shard)
+        self.mtp_page_table_host = torch.arange(self.paged_config.max_num_blocks, dtype=torch.int32).reshape(
+            batch_per_shard,
+            blocks_per_user,
+        )
+        self.mtp_page_table_tt = MLA2D.create_page_table(
+            paged_config=self.paged_config,
+            mesh_device=self.mesh_device,
+            page_table=self.mtp_page_table_host,
+            batch_size=self.batch_size_per_row,
+        )
+        return self.mtp_page_table_tt
+
+    def cleanup_all(self) -> None:
+        seen_objects: set[int] = set()
+        seen_tensors: set[int] = set()
+
+        _deallocate_ttnn_tensors(self.model_run_config_decode, seen_objects, seen_tensors)
+        _deallocate_ttnn_tensors(self.model_state, seen_objects, seen_tensors)
+        _deallocate_ttnn_tensors(self.model_shared_state, seen_objects, seen_tensors)
+        _deallocate_ttnn_tensors(self.rope_setup.cos_matrix, seen_objects, seen_tensors)
+        _deallocate_ttnn_tensors(self.rope_setup.sin_matrix, seen_objects, seen_tensors)
+        _deallocate_ttnn_tensors(self.rope_setup.transformation_mat, seen_objects, seen_tensors)
+        _deallocate_ttnn_tensors(self.rope_setup.transformation_mat_prefill, seen_objects, seen_tensors)
+        _deallocate_ttnn_tensors(self.mtp_page_table_tt, seen_objects, seen_tensors)
+
+        self._weight_ttnn_cache.clear()
+        self.mtp_page_table_tt = None
+        self.mtp_page_table_host = None
+        if self._mtp_state_dict is not None and hasattr(self._mtp_state_dict, "close"):
+            try:
+                self._mtp_state_dict.close()
+            except Exception:
+                pass
+
+    def __enter__(self) -> "_MtpModuleRunner":
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> None:
+        self.cleanup_all()
+
+
+def _prepare_mtp_module_runner(
+    mesh_device: ttnn.MeshDevice,
+    model_path: Path,
+    cache_path: Path,
+    force_recalculate: bool,
+) -> _MtpModuleRunner:
+    return _MtpModuleRunner(
+        mesh_device=mesh_device,
+        model_path=model_path,
+        cache_path=cache_path,
+        force_recalculate=force_recalculate,
+    )
 
 
 def _tt_hidden_from_torch(
@@ -361,7 +682,7 @@ def _tt_positions_from_torch(
 
 
 def _run_mtp_step(
-    gen: DeepseekGenerator,
+    gen: Any,
     hidden: torch.Tensor,
     tokens: torch.Tensor,
     positions: torch.Tensor,
@@ -631,7 +952,7 @@ def _decode_step_layerwise_host(
 
 
 class _MtpTraceRunner:
-    def __init__(self, gen: DeepseekGenerator) -> None:
+    def __init__(self, gen: Any) -> None:
         self.gen = gen
         self.mesh_device = gen.mesh_device
         self.trace_id: int | None = None
@@ -806,7 +1127,7 @@ def test_generate_mtp_reference_io(
         pytest.skip("Need at least 2 steps to generate MTP reference IO.")
 
     mesh = mesh_device
-    reference_path = _get_reference_path(mesh, num_steps)
+    reference_path = _get_reference_path(num_steps)
     _get_reference_dir().mkdir(parents=True, exist_ok=True)
 
     with _prepare_generator(
@@ -904,41 +1225,28 @@ def test_mtp_accept_rate_and_perf(
     """Validate MTP-only predictor accept rate and throughput against reference IO."""
     num_steps = int(os.getenv("DEEPSEEK_V3_MTP_REF_STEPS", str(DEFAULT_NUM_STEPS)))
     mesh = mesh_device
-    reference_path = _get_reference_path(mesh, num_steps)
-    if not reference_path.exists():
-        pytest.skip(
-            f"Missing MTP reference IO at {reference_path}. "
-            "Set DEEPSEEK_V3_MTP_GENERATE_REFERENCE=1 and run the reference generator test."
-        )
 
-    payload = torch.load(reference_path, map_location="cpu")
-    metadata = payload.get("metadata", {})
-    if tuple(metadata.get("mesh_shape", ())) != tuple(mesh.shape):
-        pytest.skip(
-            f"Reference IO mesh shape {metadata.get('mesh_shape')} does not match current mesh shape {tuple(mesh.shape)}."
-        )
-
-    hidden_states = payload["hidden_states"].to(torch.bfloat16)
-    next_tokens = payload["next_tokens"].to(torch.int32)
-
-    if hidden_states.shape[0] < 2:
-        pytest.skip("Reference IO must contain at least 2 steps for MTP verification.")
-
-    with _prepare_generator(
+    with _prepare_mtp_module_runner(
         mesh_device=mesh,
         model_path=model_path,
         cache_path=cache_path,
         force_recalculate=force_recalculate_weight_config,
-        enable_mtp=True,
     ) as gen:
         if not gen.enable_mtp:
             pytest.skip("MTP is disabled for this configuration; skipping MTP module test.")
 
-        if hidden_states.shape[1] != gen.batch_size:
-            pytest.skip(
-                f"Reference IO batch size {hidden_states.shape[1]} does not match generator batch size {gen.batch_size}."
-            )
-        _assert_reference_start_tokens(payload, gen, context="MTP prefill priming")
+        payload, reference_path = _load_reference_payload_for_generator(
+            gen,
+            num_steps,
+            context="MTP accept rate and perf",
+        )
+        hidden_states = payload["hidden_states"].to(torch.bfloat16)
+        next_tokens = payload["next_tokens"].to(torch.int32)
+
+        if hidden_states.shape[0] < 2:
+            pytest.skip("Reference IO must contain at least 2 steps for MTP verification.")
+
+        _assert_reference_start_tokens(payload, gen, context="MTP accept rate and perf")
 
         total_matches = 0
         total_count = 0
@@ -1033,12 +1341,6 @@ def test_mtp_prefill_priming(
     """Validate prefill priming for MTP (user0) and post-prefill accept rate."""
     num_steps = int(os.getenv("DEEPSEEK_V3_MTP_REF_STEPS", str(DEFAULT_NUM_STEPS)))
     mesh = mesh_device
-    reference_path = _get_reference_path(mesh, num_steps)
-    if not reference_path.exists():
-        pytest.skip(
-            f"Missing MTP reference IO at {reference_path}. "
-            "Set DEEPSEEK_V3_MTP_GENERATE_REFERENCE=1 and run the reference generator test."
-        )
 
     prefill_seq_tile = ttnn.TILE_SIZE
     max_prompt_len = num_steps - 2
@@ -1055,17 +1357,6 @@ def test_mtp_prefill_priming(
             f"Could not choose a tile-aligned prefill prompt length <= {max_prompt_len} " f"(tile={prefill_seq_tile})."
         )
 
-    payload = torch.load(reference_path, map_location="cpu")
-    metadata = payload.get("metadata", {})
-    if tuple(metadata.get("mesh_shape", ())) != tuple(mesh.shape):
-        pytest.skip(
-            f"Reference IO mesh shape {metadata.get('mesh_shape')} does not match current mesh shape {tuple(mesh.shape)}."
-        )
-
-    hidden_states = payload["hidden_states"].to(torch.bfloat16)
-    next_tokens = payload["next_tokens"].to(torch.int32)
-    start_tokens = payload["start_tokens"].to(torch.long)
-
     with _prepare_generator(
         mesh_device=mesh,
         model_path=model_path,
@@ -1076,11 +1367,16 @@ def test_mtp_prefill_priming(
         if not gen.enable_mtp:
             pytest.skip("MTP is disabled for this configuration; skipping MTP prefill priming test.")
 
-        if hidden_states.shape[1] != gen.batch_size:
-            pytest.skip(
-                f"Reference IO batch size {hidden_states.shape[1]} does not match generator batch size {gen.batch_size}."
-            )
-        _assert_reference_start_tokens(payload, gen, context="MTP verify batching")
+        payload, _reference_path = _load_reference_payload_for_generator(
+            gen,
+            num_steps,
+            context="MTP prefill priming",
+        )
+        hidden_states = payload["hidden_states"].to(torch.bfloat16)
+        next_tokens = payload["next_tokens"].to(torch.int32)
+        start_tokens = payload["start_tokens"].to(torch.long)
+
+        _assert_reference_start_tokens(payload, gen, context="MTP prefill priming")
         logger.info(
             "MTP prefill priming prompt length: requested={} aligned={} tile={}",
             requested_prompt_len,
@@ -1176,23 +1472,6 @@ def test_mtp_verify_batching_aliasing(
     """Validate verify-lane batching + page-table aliasing invariance."""
     num_steps = int(os.getenv("DEEPSEEK_V3_MTP_REF_STEPS", str(DEFAULT_NUM_STEPS)))
     mesh = mesh_device
-    reference_path = _get_reference_path(mesh, num_steps)
-    if not reference_path.exists():
-        pytest.skip(
-            f"Missing MTP reference IO at {reference_path}. "
-            "Set DEEPSEEK_V3_MTP_GENERATE_REFERENCE=1 and run the reference generator test."
-        )
-
-    payload = torch.load(reference_path, map_location="cpu")
-    metadata = payload.get("metadata", {})
-    if tuple(metadata.get("mesh_shape", ())) != tuple(mesh.shape):
-        pytest.skip(
-            f"Reference IO mesh shape {metadata.get('mesh_shape')} does not match current mesh shape {tuple(mesh.shape)}."
-        )
-
-    hidden_states = payload["hidden_states"].to(torch.bfloat16)
-    next_tokens = payload["next_tokens"].to(torch.int32)
-    start_tokens = payload["start_tokens"].to(torch.int32)
 
     with _prepare_generator(
         mesh_device=mesh,
@@ -1204,10 +1483,15 @@ def test_mtp_verify_batching_aliasing(
         if not gen.enable_mtp:
             pytest.skip("MTP is disabled for this configuration; skipping verify-lane batching test.")
 
-        if hidden_states.shape[1] != gen.batch_size:
-            pytest.skip(
-                f"Reference IO batch size {hidden_states.shape[1]} does not match generator batch size {gen.batch_size}."
-            )
+        payload, _reference_path = _load_reference_payload_for_generator(
+            gen,
+            num_steps,
+            context="MTP verify batching aliasing",
+        )
+        hidden_states = payload["hidden_states"].to(torch.bfloat16)
+        next_tokens = payload["next_tokens"].to(torch.int32)
+        start_tokens = payload["start_tokens"].to(torch.int32)
+        _assert_reference_start_tokens(payload, gen, context="MTP verify batching aliasing")
 
         batch_size = gen.batch_size  # total batch across all mesh rows
         # Per-shard batch size (users per DP shard within a mesh row).
