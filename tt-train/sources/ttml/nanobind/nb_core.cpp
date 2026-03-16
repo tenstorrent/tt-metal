@@ -21,7 +21,7 @@
 #include "tt-metalium/distributed_context.hpp"
 #include "ttnn/distributed/create_socket.hpp"
 #include "ttnn/distributed/types.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/full_like/full_like.hpp"
 #include "ttnn/tensor/tensor.hpp"
 

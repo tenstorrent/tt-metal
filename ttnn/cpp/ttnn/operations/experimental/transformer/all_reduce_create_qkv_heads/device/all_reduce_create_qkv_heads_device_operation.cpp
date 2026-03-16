@@ -272,7 +272,7 @@ AllReduceCreateQkvHeadsDeviceOperation::create_output_tensors(
         .v = create_device_tensor(output_specs.v, device)};
 }
 
-tt::stl::hash::hash_t AllReduceCreateQkvHeadsDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t AllReduceCreateQkvHeadsDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     const auto& input_tensor = tensor_args.input_tensor;
     auto input_shape = input_tensor.padded_shape();

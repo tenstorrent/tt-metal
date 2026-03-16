@@ -52,6 +52,10 @@ thread_local uint32_t rta_count __attribute__((used));
 thread_local uint32_t crta_count __attribute__((used));
 #endif
 
+// Per-processor kernel thread info for Quasar (set from kernel_config before kernel runs)
+thread_local uint32_t num_sw_threads __attribute__((used));
+thread_local uint32_t my_thread_id __attribute__((used));
+
 // These arrays are stored in local memory of FW, but primarily used by the kernel which shares
 // FW symbols. Hence mark these as 'used' so that FW compiler doesn't optimize it out.
 uint16_t dram_bank_to_noc_xy[NUM_NOCS][NUM_DRAM_BANKS] __attribute__((used));
@@ -100,9 +104,11 @@ void deassert_trisc() {
     subordinate_sync->allNeo3 = RUN_SYNC_MSG_ALL_INIT;
     deassert_trisc_reset();
 }
-// Definition of the global DFB interface array (declared extern in dataflow_buffer_init.h)
+
 thread_local ::experimental::LocalDFBInterface g_dfb_interface[experimental::NUM_DFBS] __attribute__((used));
 RemapperAPI g_remapper_configurator __attribute__((used));
+
+volatile experimental::TxnDFBDescriptor experimental::g_txn_dfb_descriptor[32] __attribute__((used));
 
 void device_setup() {
     // instn_buf
@@ -305,6 +311,9 @@ extern "C" uint32_t _start1() {
                 uint32_t tt_l1_ptr* dfb_l1_base =
                     (uint32_t tt_l1_ptr*)(MEM_L1_UNCACHED_BASE + kernel_config_base +
                                           launch_msg_address->kernel_config.local_cb_offset);
+                for (uint32_t i = 0; i < MaxDMProcessorsPerCoreType; i++) {
+                    mailboxes->shared_globals_ready[i] = SHARED_GLOBALS_READY_WAIT;
+                }
                 start_subordinate_kernel_run_early(enables);
 
                 // Run the kernel
@@ -346,28 +355,6 @@ extern "C" uint32_t _start1() {
 
                 trigger_sync_register_init();
 
-                if constexpr (ASSERT_ENABLED) {
-                    if (noc_mode == DM_DYNAMIC_NOC) {
-                        WAYPOINT("NKFW");
-                        // Assert that no noc transactions are outstanding, to ensure that all reads and writes have
-                        // landed and the NOC interface is in a known idle state for the next kernel.
-                        for (int noc = 0; noc < NUM_NOCS; noc++) {
-                            ASSERT(ncrisc_dynamic_noc_reads_flushed(noc));
-                            ASSERT(ncrisc_dynamic_noc_nonposted_writes_sent(noc));
-                            ASSERT(ncrisc_dynamic_noc_nonposted_writes_flushed(noc));
-                            ASSERT(ncrisc_dynamic_noc_nonposted_atomics_flushed(noc));
-                            ASSERT(ncrisc_dynamic_noc_posted_writes_sent(noc));
-                        }
-                        WAYPOINT("NKFD");
-                    }
-                }
-
-#if defined(PROFILE_KERNEL)
-                if (noc_mode == DM_DYNAMIC_NOC) {
-                    // re-init for profiler to able to run barrier in dedicated noc mode
-                    noc_local_state_init(noc_index);
-                }
-#endif
                 // Need to ensure that Remapper state is cleared for next kernel launch
                 if (g_remapper_configurator.is_remapper_enabled()) {
                     g_remapper_configurator.clear_all_pairs();
