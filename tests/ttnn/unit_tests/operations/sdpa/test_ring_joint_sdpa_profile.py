@@ -1021,6 +1021,8 @@ def test_ring_joint_sdpa_profile_seq_lengths(device, seq_len_per_device: int):
 # ============================================================================
 
 
+@pytest.mark.parametrize("k_chunk_size", [128, 256])
+@pytest.mark.parametrize("q_chunk_size", [128, 256])
 @pytest.mark.parametrize(
     "total_seq",
     [
@@ -1029,7 +1031,9 @@ def test_ring_joint_sdpa_profile_seq_lengths(device, seq_len_per_device: int):
     ],
 )
 @pytest.mark.parametrize("ring_index", list(range(32)))
-def test_ring_joint_sdpa_profile_production_scale(device, ring_index: int, total_seq: int):
+def test_ring_joint_sdpa_profile_production_scale(
+    device, ring_index: int, total_seq: int, q_chunk_size: int, k_chunk_size: int
+):
     """
     Profile ring_joint_sdpa with production-scale dimensions.
 
@@ -1042,7 +1046,6 @@ def test_ring_joint_sdpa_profile_production_scale(device, ring_index: int, total
     - K: [1, 1, local_seq, 576] BFLOAT8_B
     - V: [1, 32, local_seq, 128] BFLOAT8_B
     - ring_size=32
-    - q_chunk_size=256, k_chunk_size=128
     """
     # Production config
     b = 1
@@ -1050,9 +1053,6 @@ def test_ring_joint_sdpa_profile_production_scale(device, ring_index: int, total
     d_qk, d_v = 576, 128  # Q/K dim=576, V dim=128
     ring_size = 32
     local_seq = total_seq // ring_size
-
-    q_chunk_size = 256
-    k_chunk_size = 128
 
     # Program config - use device's actual grid size
     program_config = ttnn.SDPAProgramConfig(
@@ -1114,7 +1114,9 @@ def test_ring_joint_sdpa_profile_production_scale(device, ring_index: int, total
     # Just verify it ran without error
     assert tt_output is not None
     assert tt_lse is not None
-    print(f"Profile completed for ring_index={ring_index}, total_seq={total_seq}, local_seq={local_seq}")
+    print(
+        f"Profile completed for ring_index={ring_index}, total_seq={total_seq}, local_seq={local_seq}, q_chunk={q_chunk_size}, k_chunk={k_chunk_size}"
+    )
     print(f"  Q: {list(Q_local.shape)} -> tt_Q: {tt_Q.shape}")
     print(f"  K_gathered: {list(K_gathered.shape)} -> tt_K_gathered: {tt_K_gathered.shape}")
     print(f"  Output: {tt_output.shape}")
