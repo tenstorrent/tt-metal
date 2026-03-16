@@ -329,9 +329,14 @@ def run_ring_joint_sdpa(
     sdpa_grid_override=None,
     ccl_offset_override=None,
     use_column_major_ccl=False,
+    ccl_worker_cores=None,
+    num_workers_per_link=5,
+    num_buffers_per_channel=48,
 ):
     full_compute_grid = submesh.compute_with_storage_grid_size()
-    sdpa_compute_grid = sdpa_grid_override if sdpa_grid_override is not None else (full_compute_grid.x, full_compute_grid.y - 1)
+    sdpa_compute_grid = (
+        sdpa_grid_override if sdpa_grid_override is not None else (full_compute_grid.x, full_compute_grid.y - 1)
+    )
     ccl_core_grid_offset = ccl_offset_override if ccl_offset_override is not None else (0, full_compute_grid.y - 1)
 
     # Basic CCL setup
@@ -491,6 +496,13 @@ def run_ring_joint_sdpa(
                 subdevice_id=worker_sub_device_id,
                 ccl_core_grid_offset=ccl_core_grid_offset,
                 **({"use_column_major_ccl": True} if use_column_major_ccl else {}),
+                **(
+                    {"ccl_worker_cores": [ttnn.CoreCoord(x, y) for x, y in ccl_worker_cores]}
+                    if ccl_worker_cores is not None
+                    else {}
+                ),
+                num_workers_per_link=num_workers_per_link,
+                num_buffers_per_channel=num_buffers_per_channel,
             )
             tt_out_list.append(tt_out)
             tt_joint_out_list.append(tt_joint_out)
@@ -581,6 +593,9 @@ def run_test_ring_joint_sdpa(
     dtype,
     pcc_threshold=0.994,
     max_mse=None,
+    ccl_worker_cores=None,
+    num_workers_per_link=5,
+    num_buffers_per_channel=48,
 ):
     b, nh, base_seq_len, joint_seq_len, d = model_input_shape
     rp_axis, rp_factor, up_axis, up_factor = parallel_config
@@ -620,6 +635,9 @@ def run_test_ring_joint_sdpa(
         skip_check,
         pcc_threshold,
         max_mse=max_mse,
+        ccl_worker_cores=ccl_worker_cores,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
     )
 
 
@@ -1074,6 +1092,7 @@ def test_ring_joint_sdpa_dit_bh_qb_ge(
         dtype,
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
+        ccl_worker_cores=[(11, 1), (11, 2)],
     )
 
 
@@ -1230,6 +1249,7 @@ def test_ring_joint_sdpa_dit_bh_glx(
         dtype,
         pcc_threshold=pcc_threshold,
         max_mse=max_mse,
+        ccl_worker_cores=[(11, 1), (11, 2), (11, 6), (11, 7)],
     )
 
 
@@ -1237,7 +1257,11 @@ def test_ring_joint_sdpa_dit_bh_glx(
     "device_params, all_gather_topology",
     [
         (
-            {"worker_l1_size": 1344544, "trace_region_size": 1000000, "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING},
+            {
+                "worker_l1_size": 1344544,
+                "trace_region_size": 1000000,
+                "fabric_config": ttnn.FabricConfig.FABRIC_1D_RING,
+            },
             ttnn.Topology.Ring,
         ),
     ],
@@ -1290,4 +1314,5 @@ def test_ring_joint_sdpa_dit_bh_glx_custom(
         sdpa_grid_override=(11, 10),
         ccl_offset_override=(11, 0),
         use_column_major_ccl=True,
+        ccl_worker_cores=[(11, 1), (11, 2), (11, 6), (11, 7)],
     )

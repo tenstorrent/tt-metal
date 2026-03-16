@@ -8,6 +8,10 @@
 #include "dataflow_common.hpp"
 #include "fused_op_receiver.hpp"
 
+#ifdef USE_MUX
+#include "tt_metal/fabric/hw/inc/tt_fabric_mux_interface.hpp"
+#endif
+
 // Eager-path reader: reads the previous ring iteration's normalized output and LSE from DRAM.
 // Used by the non-streaming (old sdpa_ring) path for sigmoid-based inter-iteration merging.
 // Pushes output tiles into cb_prev_out (c_7) and LSE tiles into cb_lse_in (c_6).
@@ -309,6 +313,15 @@ void kernel_main() {
     constexpr auto joint_out_args = TensorAccessorArgs<out_args.next_compile_time_args_offset()>();
     constexpr auto stats_args = TensorAccessorArgs<joint_out_args.next_compile_time_args_offset()>();
 
+#ifdef USE_MUX
+    constexpr uint32_t mux_ct_base = stats_args.next_compile_time_args_offset();
+    constexpr uint8_t fabric_mux_num_buffers_per_channel = get_compile_time_arg_val(mux_ct_base + 0);
+    constexpr size_t fabric_mux_channel_buffer_size_bytes = get_compile_time_arg_val(mux_ct_base + 1);
+    constexpr size_t fabric_mux_status_address = get_compile_time_arg_val(mux_ct_base + 2);
+    constexpr size_t fabric_mux_termination_signal_address = get_compile_time_arg_val(mux_ct_base + 3);
+    constexpr uint32_t num_mux_clients = get_compile_time_arg_val(mux_ct_base + 4);
+#endif
+
     uint32_t argidx = 0;
     const uint32_t out_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t joint_out_addr = get_arg_val<uint32_t>(argidx++);
@@ -319,6 +332,53 @@ void kernel_main() {
     RingSDPAOpReceiver fused_op_receiver = RingSDPAOpReceiver(
         false, /* wait_for_op_signal */
         argidx);
+
+#ifdef USE_MUX
+    // Parse fabric MUX client connection RT args (17 values).
+    // mux_connection_valid, is_termination_master, mux_x, mux_y,
+    // channel_base_address, connection_info_address, connection_handshake_address,
+    // flow_control_address, buffer_index_address, channel_credits_stream_id,
+    // 5 local semaphores, termination_master_noc_x, termination_master_noc_y
+    const bool mux_connection_valid = get_arg_val<uint32_t>(argidx++) == 1;
+    const bool is_termination_master = get_arg_val<uint32_t>(argidx++) == 1;
+    const uint8_t fabric_mux_x = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
+    const uint8_t fabric_mux_y = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
+    const uint32_t fabric_mux_channel_base_address = get_arg_val<uint32_t>(argidx++);
+    const uint32_t fabric_mux_connection_info_address = get_arg_val<uint32_t>(argidx++);
+    const uint32_t fabric_mux_connection_handshake_address = get_arg_val<uint32_t>(argidx++);
+    const uint32_t fabric_mux_flow_control_address = get_arg_val<uint32_t>(argidx++);
+    const uint32_t fabric_mux_buffer_index_address = get_arg_val<uint32_t>(argidx++);
+    const uint8_t fabric_mux_channel_id = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
+    const uint32_t termination_sync_sem_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    const uint32_t local_fabric_mux_status_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    const uint32_t local_flow_control_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    const uint32_t local_teardown_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    const uint32_t local_buffer_index_addr = get_semaphore(get_arg_val<uint32_t>(argidx++));
+    const uint8_t termination_master_noc_x = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
+    const uint8_t termination_master_noc_y = static_cast<uint8_t>(get_arg_val<uint32_t>(argidx++));
+
+    // Build connection object at outer scope (lifetime spans the ring loop and teardown).
+    auto mux_conn = tt::tt_fabric::build_connection_to_fabric_endpoint<fabric_mux_num_buffers_per_channel>(
+        fabric_mux_x,
+        fabric_mux_y,
+        fabric_mux_channel_id,
+        fabric_mux_num_buffers_per_channel,
+        fabric_mux_channel_buffer_size_bytes,
+        fabric_mux_channel_base_address,
+        fabric_mux_connection_info_address,
+        fabric_mux_connection_handshake_address,
+        fabric_mux_flow_control_address,
+        fabric_mux_buffer_index_address,
+        local_flow_control_addr,
+        local_teardown_addr,
+        local_buffer_index_addr);
+
+    if (mux_connection_valid) {
+        tt::tt_fabric::wait_for_fabric_endpoint_ready(
+            fabric_mux_x, fabric_mux_y, fabric_mux_status_address, local_fabric_mux_status_addr);
+        tt::tt_fabric::fabric_client_connect(mux_conn);
+    }
+#endif
 
     // c_6/c_17 carry softmax statistics between compute and writer for DRAM round-trips.
     // Aliased by role: cb_max_* for deferred norm, cb_lse_* for eager norm.
@@ -533,4 +593,20 @@ void kernel_main() {
             noc_async_write_barrier();  // Ensure writes of output and LSE complete before next iteration
         }
     }
+
+#ifdef USE_MUX
+    if (mux_connection_valid) {
+        tt::tt_fabric::fabric_client_disconnect(mux_conn);
+        if (is_termination_master) {
+            auto* termination_sync_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(termination_sync_sem_addr);
+            noc_semaphore_wait(termination_sync_ptr, num_mux_clients - 1);
+            tt::tt_fabric::fabric_endpoint_terminate(fabric_mux_x, fabric_mux_y, fabric_mux_termination_signal_address);
+        } else {
+            uint64_t dest_addr =
+                get_noc_addr(termination_master_noc_x, termination_master_noc_y, termination_sync_sem_addr);
+            noc_semaphore_inc(dest_addr, 1);
+            noc_async_atomic_barrier();
+        }
+    }
+#endif
 }

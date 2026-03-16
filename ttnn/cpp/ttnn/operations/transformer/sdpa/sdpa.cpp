@@ -224,7 +224,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
     const CoreCoord ccl_core_grid_offset,
     std::optional<float> scale,
     std::optional<DeviceComputeKernelConfig> compute_kernel_config,
-    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy) {
+    ttnn::ccl::CoreAllocationStrategy core_allocation_strategy,
+    std::optional<std::vector<CoreCoord>> ccl_worker_cores,
+    const uint32_t num_workers_per_link,
+    const uint32_t num_buffers_per_channel) {
     auto output_tensors = ttnn::prim::exp_ring_joint_scaled_dot_product_attention(
         input_tensor_q,
         input_tensor_k,  // AllGather input
@@ -247,7 +250,10 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> ExecuteExpRingJointAttentio
         subdevice_id,
         scale,
         compute_kernel_config,
-        core_allocation_strategy);
+        core_allocation_strategy,
+        std::move(ccl_worker_cores),
+        num_workers_per_link,
+        num_buffers_per_channel);
     return {
         output_tensors[prim::EXP_RING_JOINT_SDPA_OUTPUT_IDX],
         output_tensors[prim::EXP_RING_JOINT_SDPA_JOINT_OUTPUT_IDX],

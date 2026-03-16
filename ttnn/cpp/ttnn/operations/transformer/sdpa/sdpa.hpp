@@ -120,7 +120,10 @@ struct ExecuteExpRingJointAttention {
         CoreCoord ccl_core_grid_offset,
         std::optional<float> scale = std::nullopt,
         std::optional<DeviceComputeKernelConfig> compute_kernel_config = std::nullopt,
-        ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR);
+        ttnn::ccl::CoreAllocationStrategy core_allocation_strategy = ttnn::ccl::CoreAllocationStrategy::ROW_MAJOR,
+        std::optional<std::vector<CoreCoord>> ccl_worker_cores = std::nullopt,
+        uint32_t num_workers_per_link = 1,
+        uint32_t num_buffers_per_channel = 8);
 };
 
 struct ExecuteFlashMLAPrefill {
