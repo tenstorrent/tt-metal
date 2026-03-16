@@ -55,6 +55,7 @@ class SweepsConfig:
     run_contents: str | None = None
     arch_name: str | None = None
     main_proc_verbose: bool = False
+    trace_params: bool = False
 
 
 def create_config_from_args(args) -> SweepsConfig:
@@ -79,6 +80,7 @@ def create_config_from_args(args) -> SweepsConfig:
         keep_invalid=args.keep_invalid,
         summary=args.summary,
         main_proc_verbose=args.main_proc_verbose,
+        trace_params=args.trace_params,
     )
 
     # Validate and set ARCH_NAME
@@ -271,6 +273,15 @@ def device_context(test_module, output_queue):
 
 
 def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
+    # Enable operation tracing if --trace-params is set
+    if config.trace_params:
+        try:
+            import ttnn.operation_tracer
+
+            ttnn.operation_tracer._ENABLE_TRACE = True
+        except Exception as e:
+            logger.warning(f"Could not enable operation tracing: {e}")
+
     test_module = importlib.import_module("sweeps." + test_module_name)
     with device_context(test_module, output_queue) as (device, device_name):
         while True:
@@ -318,6 +329,63 @@ def run(test_module_name, input_queue, output_queue, config: SweepsConfig):
 MAX_RETRIES = 1
 
 
+def _create_main_proc_runner(module_name, input_queue, output_queue, config):
+    """Create a persistent runner for main process mode that keeps device open.
+
+    Returns (runner_function, cleanup_context) tuple.
+    The runner_function executes a single test vector.
+    The cleanup_context must be exited to close the device.
+    """
+    # Enable operation tracing if --trace-params is set
+    if config.trace_params:
+        try:
+            import ttnn.operation_tracer
+
+            ttnn.operation_tracer._ENABLE_TRACE = True
+            logger.info("Operation tracing enabled in main process mode")
+        except Exception as e:
+            logger.warning(f"Could not enable operation tracing: {e}")
+
+    test_module = importlib.import_module("sweeps." + module_name)
+
+    # Open device once and keep it open
+    device_gen = get_devices(test_module)
+    device, device_name = next(device_gen)
+    logger.info(f"Device opened: {device_name}")
+
+    def runner(test_vector):
+        """Execute a single test vector using the persistent device."""
+        try:
+            # Deserialize the test vector (same as subprocess mode)
+            test_vector = deserialize_vector_structured(test_vector)
+
+            if config.measure_perf_with_cache:
+                status, message, e2e_perf, device_perf, peak_memory = run_with_cache_comparison(
+                    test_module, test_vector, device, config
+                )
+            else:
+                status, message, e2e_perf, device_perf, peak_memory = run_single(
+                    test_module, test_vector, device, config
+                )
+            output_queue.put(
+                [
+                    status,
+                    message,
+                    e2e_perf,
+                    device_perf if config.measure_device_perf else None,
+                    peak_memory if config.measure_memory else None,
+                ]
+            )
+        except Exception as e:
+            if config.main_proc_verbose:
+                logger.exception(e)
+            status, message = False, str(e)
+            output_queue.put([status, message, None, None, None])
+
+    # Return runner function and device generator for cleanup
+    return runner, device_gen
+
+
 def _kill_child(p, timeout_before_rejoin):
     """Terminate/kill a child process gracefully then forcefully."""
     if p is None:
@@ -331,7 +399,9 @@ def _kill_child(p, timeout_before_rejoin):
         p.join()
 
 
-def _attempt_vector(test_vector, module_name, input_queue, output_queue, config, timeout, child_mode, p):
+def _attempt_vector(
+    test_vector, module_name, input_queue, output_queue, config, timeout, child_mode, p, main_proc_runner
+):
     """Send a single vector to the child process and collect the result.
 
     Returns (response_tuple, p) on success.
@@ -340,13 +410,12 @@ def _attempt_vector(test_vector, module_name, input_queue, output_queue, config,
     if child_mode and (p is None or not p.is_alive()):
         p = Process(target=run, args=(module_name, input_queue, output_queue, config))
         p.start()
-    input_queue.put(test_vector)
-    if p is None:
-        logger.info(
-            "Executing test on parent process for debug purposes because there is only one test vector. "
-            "Hang detection and handling is disabled."
-        )
-        run(module_name, input_queue, output_queue, config)
+
+    if p is None and main_proc_runner is not None:
+        main_proc_runner(test_vector)
+    else:
+        input_queue.put(test_vector)
+
     response = output_queue.get(block=True, timeout=timeout)
     return response, p
 
@@ -460,6 +529,7 @@ def _execute_vector_with_retry(
     child_mode,
     p,
     result,
+    main_proc_runner=None,
 ):
     """Execute a single test vector with up to MAX_RETRIES retries on timeout.
 
@@ -481,6 +551,7 @@ def _execute_vector_with_retry(
                 timeout,
                 child_mode,
                 p,
+                main_proc_runner,
             )
             _populate_result_from_response(result, response, config, suite_name, input_hash)
             result["_child_process"] = p
@@ -542,6 +613,13 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
     child_mode = not (config.dry_run or config.vector_id or config.main_proc_verbose)
     timeout_before_rejoin = 5
 
+    # For main process mode, create a persistent runner that keeps device open
+    main_proc_runner = None
+    main_proc_context = None
+    if not child_mode and not config.dry_run:
+        logger.info("Running in main process mode - device will remain open for all vectors in suite")
+        main_proc_runner, main_proc_context = _create_main_proc_runner(module_name, input_queue, output_queue, config)
+
     if child_mode:
         p = Process(target=run, args=(module_name, input_queue, output_queue, config))
         p.start()
@@ -591,6 +669,7 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
                     child_mode,
                     p,
                     result,
+                    main_proc_runner,
                 )
                 p = result.pop("_child_process", p)
                 abort_suite = result.pop("_abort_suite", False)
@@ -642,6 +721,14 @@ def execute_suite(test_vectors, pbar_manager, suite_name, module_name, header_in
 
     if p is not None:
         p.join()
+
+    # Cleanup main process context (close device)
+    if main_proc_context is not None:
+        try:
+            next(main_proc_context)
+        except StopIteration:
+            pass
+        logger.info("Device closed in main process mode")
 
     suite_pbar.close()
     return results, invalid_vectors_count
@@ -1009,6 +1096,13 @@ if __name__ == "__main__":
         action="store_true",
         required=False,
         help="Run tests in parent process (disables hang detection). Required for Tracy profiling and debugging. Prints test exceptions to stdout.",
+    )
+
+    parser.add_argument(
+        "--trace-params",
+        action="store_true",
+        required=False,
+        help="Enable tracing of operation parameters (serializes all ttnn operation inputs to files). Outputs to generated/ttnn/reports/operation_parameters/",
     )
 
     args = parser.parse_args(sys.argv[1:])

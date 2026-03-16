@@ -119,7 +119,7 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
             "Transformation matrix must have 3rd dim equal to TILE_HEIGHT");
         TT_FATAL(
             trans_mat.shard_spec()->shape[1] == TILE_WIDTH,
-            "Transformation matrix must have 4rd dim equal to TILE_WIDTH");
+            "Transformation matrix must have 4th dim equal to TILE_WIDTH");
     } else {  // Prefill mode validation
         TT_FATAL(
             input_tensor.memory_config().memory_layout() == TensorMemoryLayout::INTERLEAVED,
@@ -152,7 +152,7 @@ void RotaryEmbeddingLlamaDeviceOperation::validate_on_program_cache_miss(
             trans_mat.logical_shape()[-2] == TILE_HEIGHT,
             "Transformation matrix must have 3rd dim equal to TILE_HEIGHT");
         TT_FATAL(
-            trans_mat.logical_shape()[-1] == TILE_WIDTH, "Transformation matrix must have 4rd dim equal to TILE_WIDTH");
+            trans_mat.logical_shape()[-1] == TILE_WIDTH, "Transformation matrix must have 4th dim equal to TILE_WIDTH");
     }
 }
 
@@ -174,7 +174,7 @@ RotaryEmbeddingLlamaDeviceOperation::tensor_return_value_t RotaryEmbeddingLlamaD
         compute_output_specs(operation_attributes, tensor_args)[0], tensor_args.input_tensor.device());
 }
 
-tt::stl::hash::hash_t RotaryEmbeddingLlamaDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t RotaryEmbeddingLlamaDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     return tt::tt_metal::operation::hash_operation<RotaryEmbeddingLlamaDeviceOperation>(
         operation_attributes, tensor_args);

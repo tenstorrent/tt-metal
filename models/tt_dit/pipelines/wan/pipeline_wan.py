@@ -256,10 +256,16 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
         if self.dynamic_load:
             # setup models that cannot be loaded together with the corresponding model.
             # The module loading utility will take care of the necessary unloading.
-            # This is the best dynamic loading strategy across all supported device configurations.
             self.tt_umt5_encoder.set_unload_set(self.transformer_2)
-            self.transformer.set_unload_set(self.transformer_2)
-            self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder)
+            if ttnn.device.is_blackhole():
+                self.transformer.set_unload_set(self.transformer_2)
+                self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder)
+            else:
+                # WH T3K has tighter DRAM — include VAE in the unload chain so
+                # transformers and VAE never coexist in DRAM across pipeline runs.
+                self.transformer.set_unload_set(self.transformer_2, self.tt_vae)
+                self.transformer_2.set_unload_set(self.transformer, self.tt_umt5_encoder, self.tt_vae)
+                self.tt_vae.set_unload_set(self.transformer, self.transformer_2)
 
         # Cache warmup: Load in reverse order of use to ensure the earliest required models stay loaded before call.
         self._prepare_transformer2()
@@ -298,11 +304,11 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
                 "is_fsdp": True,
             }
             device_configs[(2, 2)] = device_configs[(1, 4)]
-            device_configs[(1, 8)] = {
-                "sp_axis": 0,
-                "tp_axis": 1,
+            device_configs[(2, 4)] = {
+                "sp_axis": 1,
+                "tp_axis": 0,
                 "num_links": 2,
-                "dynamic_load": False,
+                "dynamic_load": True,
                 "topology": ttnn.Topology.Linear,
                 "is_fsdp": False,
             }
@@ -388,6 +394,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             subfolder="transformer",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            is_fsdp=self.is_fsdp,
             get_torch_state_dict=lambda: self.torch_transformer.state_dict(),
         )
 
@@ -398,6 +405,7 @@ class WanPipeline(DiffusionPipeline, WanLoraLoaderMixin):
             subfolder="transformer_2",
             parallel_config=self.parallel_config,
             mesh_shape=tuple(self.mesh_device.shape),
+            is_fsdp=self.is_fsdp,
             get_torch_state_dict=lambda: self.torch_transformer_2.state_dict(),
         )
 

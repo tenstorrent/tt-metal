@@ -17,17 +17,22 @@
 
 #include <hostdevcommon/common_values.hpp>
 #include <hostdevcommon/kernel_structs.h>  // Not used here, but leaked to programming examples
-#include <tt-metalium/data_types.hpp>
 #include <tt-metalium/hal_types.hpp>
 #include <tt-metalium/sub_device_types.hpp>
 #include <tt-metalium/core_coord.hpp>
 
-#include <umd/device/types/cluster_descriptor_types.hpp>
+// UMD: re-exports tt::ARCH
+#include <umd/device/types/arch.hpp>
+#include <tt-metalium/device_types.hpp>
+// UMD: re-exports CoreType (used in IDevice::virtual_core_from_logical_core parameter).
 #include <umd/device/types/core_coordinates.hpp>
 
 #include <tt_stl/span.hpp>
 
 namespace tt::tt_metal {
+
+// Forward declaration
+enum NOC : uint8_t;
 
 namespace program_cache::detail {
 struct ProgramCache;
@@ -124,7 +129,7 @@ public:
 
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address() const = 0;
     virtual std::optional<DeviceAddr> lowest_occupied_compute_l1_address(
-        tt::stl::Span<const SubDeviceId> sub_device_ids) const = 0;
+        ttsl::Span<const SubDeviceId> sub_device_ids) const = 0;
 
     [[deprecated(
         "Storage-only cores do not exist. Cleanup code that calls this API.")]] virtual const std::set<CoreCoord>&
@@ -145,7 +150,7 @@ public:
         size_t l1_small_size,
         size_t trace_region_size,
         size_t worker_l1_size,
-        tt::stl::Span<const std::uint32_t> l1_bank_remap = {},
+        ttsl::Span<const std::uint32_t> l1_bank_remap = {},
         bool minimal = false) = 0;
     [[deprecated("This is an internal function. It will be removed.")]]
     virtual void init_command_queue_host() = 0;
@@ -160,7 +165,7 @@ public:
     // Puts device into reset
     virtual bool close() = 0;
 
-    // Program cache interface. Syncrhonize with worker worker threads before querying or
+    // Program cache interface. Synchronize with worker threads before querying or
     // modifying this structure, since worker threads use this for compiling ops
     virtual void enable_program_cache() = 0;
     virtual void clear_program_cache() = 0;
@@ -183,7 +188,7 @@ public:
     virtual SubDeviceManagerId get_active_sub_device_manager_id() const = 0;
     virtual SubDeviceManagerId get_default_sub_device_manager_id() const = 0;
     virtual SubDeviceManagerId create_sub_device_manager(
-        tt::stl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
+        ttsl::Span<const SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
     virtual SubDeviceManagerId create_sub_device_manager(
         std::initializer_list<SubDevice> sub_devices, DeviceAddr local_l1_size) = 0;
     virtual void remove_sub_device_manager(SubDeviceManagerId sub_device_manager_id) = 0;
@@ -192,7 +197,7 @@ public:
     virtual CoreCoord virtual_program_dispatch_core(uint8_t cq_id) const = 0;
     virtual const std::vector<SubDeviceId>& get_sub_device_ids() const = 0;
     virtual const std::vector<SubDeviceId>& get_sub_device_stall_group() const = 0;
-    virtual void set_sub_device_stall_group(tt::stl::Span<const SubDeviceId> sub_device_ids) = 0;
+    virtual void set_sub_device_stall_group(ttsl::Span<const SubDeviceId> sub_device_ids) = 0;
     virtual void reset_sub_device_stall_group() = 0;
     virtual uint32_t num_sub_devices() const = 0;
     virtual uint32_t num_virtual_eth_cores(SubDeviceId sub_device_id) = 0;

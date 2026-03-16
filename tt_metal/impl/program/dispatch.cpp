@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
+#include <tt_stl/fmt.hpp>
 #include "tt_metal/impl/program/dispatch.hpp"
 
 #include <mesh_workload.hpp>
@@ -180,16 +180,14 @@ uint32_t configure_rta_offsets_for_kernel_groups(
             kernel->set_runtime_args_count(kg->core_ranges, max_rtas[idx]);
             // Per-kernel check: Only set actual offset if this kernel has RTAs
             if (max_rtas[idx] > 0) {
+                TT_FATAL(
+                    rta_offset <= std::numeric_limits<uint16_t>::max(), "RTA offset {} overflows uint16_t", rta_offset);
                 for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
-                    uint32_t processor_index = hal.get_processor_index(
-                        kernel->get_kernel_programmable_core_type(),
-                        kernel->get_kernel_processor_class(),
-                        kernel->get_kernel_processor_type(i));
-                    TT_FATAL(
-                        rta_offset <= std::numeric_limits<uint16_t>::max(),
-                        "RTA offset {} overflows uint16_t",
-                        rta_offset);
-                    kg->launch_msg.view().kernel_config().rta_offset()[processor_index].rta_offset() = rta_offset;
+                    std::vector<uint32_t> processor_indices =
+                        kernel->get_processor_indices_for_binary(static_cast<int>(i));
+                    for (uint32_t processor_index : processor_indices) {
+                        kg->launch_msg.view().kernel_config().rta_offset()[processor_index].rta_offset() = rta_offset;
+                    }
                 }
             }
         }
@@ -241,17 +239,17 @@ uint32_t configure_crta_offsets_for_kernel_groups(
             const auto& kernel = kernels.at(kg->kernel_ids[idx]);
             // Per-kernel check: Only set actual offset if this kernel has CRTAs
             if (kg->crta_sizes[idx] > 0) {
+                TT_FATAL(
+                    kg->crta_offsets[idx] <= std::numeric_limits<uint16_t>::max(),
+                    "CRTA offset {} overflows uint16_t",
+                    kg->crta_offsets[idx]);
                 for (size_t i = 0; i < kernel->expected_num_binaries(); i++) {
-                    uint32_t processor_index = hal.get_processor_index(
-                        kernel->get_kernel_programmable_core_type(),
-                        kernel->get_kernel_processor_class(),
-                        kernel->get_kernel_processor_type(i));
-                    TT_FATAL(
-                        kg->crta_offsets[idx] <= std::numeric_limits<uint16_t>::max(),
-                        "CRTA offset {} overflows uint16_t",
-                        kg->crta_offsets[idx]);
-                    kg->launch_msg.view().kernel_config().rta_offset()[processor_index].crta_offset() =
-                        kg->crta_offsets[idx];
+                    std::vector<uint32_t> processor_indices =
+                        kernel->get_processor_indices_for_binary(static_cast<int>(i));
+                    for (uint32_t processor_index : processor_indices) {
+                        kg->launch_msg.view().kernel_config().rta_offset()[processor_index].crta_offset() =
+                            kg->crta_offsets[idx];
+                    }
                 }
             }
         }
@@ -374,16 +372,17 @@ uint32_t finalize_kernel_bins(
                 } else {
                     kernel_text_offset = binaries[i]->get_text_addr();
                 }
-                uint32_t processor_index = hal.get_processor_index(
-                    programmable_core_type, kernel->get_kernel_processor_class(), kernel->get_kernel_processor_type(i));
-                kg->kernel_text_offsets[processor_index] = kernel_text_offset;
-                kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
-                hal.set_iram_text_size(
-                    kg->launch_msg.view(),
-                    programmable_core_type,
-                    kernel->get_kernel_processor_class(),
-                    kernel->get_kernel_processor_type(i),
-                    binaries[i]->get_text_size());
+                std::vector<uint32_t> processor_indices = kernel->get_processor_indices_for_binary(static_cast<int>(i));
+                for (uint32_t processor_index : processor_indices) {
+                    kg->kernel_text_offsets[processor_index] = kernel_text_offset;
+                    kernel_config.kernel_text_offset()[processor_index] = kernel_text_offset;
+                    hal.set_iram_text_size(
+                        kg->launch_msg.view(),
+                        programmable_core_type,
+                        kernel->get_kernel_processor_class(),
+                        kernel->get_kernel_processor_type(i),
+                        binaries[i]->get_text_size());
+                }
             }
         }
         max_offset = std::max(offset, max_offset);
@@ -2287,7 +2286,7 @@ void update_program_dispatch_commands(
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
-    // where the number of active eth cores is heterogenous across devices.
+    // where the number of active eth cores is heterogeneous across devices.
     // Update the number of unicast txns to eth cores to match the minimum number of cores
     // across devices (specified by user)
     if (unicast_go_signal_update.first) {
@@ -2467,7 +2466,7 @@ void update_traced_program_dispatch_commands(
     cached_program_command_sequence.mcast_go_signal_cmd_ptr->wait_count = expected_num_workers_completed;
     // Update the number of unicast txns based on user provided parameter
     // This is required when a MeshWorkload uses ethernet cores on a set of devices
-    // where the number of active eth cores is heterogenous across devices.
+    // where the number of active eth cores is heterogeneous across devices.
     // Update the number of unicast txns to eth cores to match the minimum number of cores
     // across devices (specified by user)
     if (unicast_go_signal_update.first) {

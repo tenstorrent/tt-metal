@@ -2,7 +2,6 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include <tt_stl/reflection.hpp>
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -14,6 +13,7 @@
 #include <vector>
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 #include <circular_buffer_constants.h>  // For NUM_CIRCULAR_BUFFERS
 #include <core_coord.hpp>
 #include <fmt/base.h>
@@ -731,6 +731,9 @@ void WatcherDeviceReader::Core::DumpNocSanitizeStatus(int noc) const {
         case dev_msgs::DebugSanitizeCBOutOfBounds:
             error_msg = get_noc_target_str(reader_.device_id, programmable_core_type_, noc, san);
             error_msg += " (NOC transaction overflows a circular buffer).";
+            break;
+        case dev_msgs::DebugSanitizeWriteInProgress:
+            // Quasar: DM is atomically writing error metadata; ignore until complete
             break;
         default:
             error_msg = fmt::format(

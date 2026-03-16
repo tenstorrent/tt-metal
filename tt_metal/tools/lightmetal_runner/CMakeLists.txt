@@ -1,4 +1,6 @@
-add_executable(lightmetal_runner ${CMAKE_CURRENT_SOURCE_DIR}/lightmetal_runner.cpp)
+include(sources.cmake)
+
+add_executable(lightmetal_runner ${LIGHTMETAL_RUNNER_SOURCES})
 target_link_libraries(
     lightmetal_runner
     PRIVATE
@@ -12,7 +14,7 @@ target_include_directories(
         ${PROJECT_SOURCE_DIR}
         ${PROJECT_SOURCE_DIR}/tt_metal
         ${PROJECT_SOURCE_DIR}/tt_metal/common
-        ${CMAKE_CURRENT_SOURCE_DIR}
+        .
 )
 
 set_target_properties(
@@ -22,4 +24,4 @@ set_target_properties(
             ${PROJECT_BINARY_DIR}/tools
 )
 
-target_precompile_headers(lightmetal_runner REUSE_FROM TT::CommonPCH)
+tt_reuse_precompile_headers(lightmetal_runner TT::CommonPCH)

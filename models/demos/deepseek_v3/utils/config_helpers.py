@@ -14,8 +14,7 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
-from models.demos.deepseek_v3.utils.dequantize import dequantize_tensor
+from models.demos.deepseek_v3.utils.config_dataclass import DeepseekSamplingArgs, SavedWeight
 from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 
 # Constants
@@ -23,6 +22,32 @@ NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
 USERS_PER_ROW = 32
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
+MAX_TOP_K = 32
+
+
+def make_deepseek_sampling_args(
+    mesh_device,
+    vocab_size: int,
+    *,
+    max_top_k: int = MAX_TOP_K,
+    max_batch_size: int = USERS_PER_ROW,
+    sampling_all_gather_axis: int = 1,
+) -> DeepseekSamplingArgs:
+    cluster_shape = tuple(mesh_device.shape)
+    sampling_dp = int(cluster_shape[0])  # one sampling group per row
+    num_tp = int(cluster_shape[1])
+    per_device_vocab = int(math.ceil(vocab_size / num_tp))
+    padded_per_device_vocab = int(math.ceil(per_device_vocab / ttnn.TILE_SIZE) * ttnn.TILE_SIZE)
+    padded_vocab_size = padded_per_device_vocab * num_tp
+    return DeepseekSamplingArgs(
+        vocab_size=vocab_size,
+        padded_vocab_size=padded_vocab_size,
+        max_top_k=max_top_k,
+        max_batch_size=max_batch_size,
+        sampling_dp=sampling_dp,
+        cluster_shape=cluster_shape,
+        sampling_all_gather_axis=sampling_all_gather_axis,
+    )
 
 
 # Compute kernel configurations
@@ -52,6 +77,13 @@ COMPUTE_KERNEL_CONFIG_HIFI4 = ttnn.WormholeComputeKernelConfig(
     math_fidelity=ttnn.MathFidelity.HiFi4,
     math_approx_mode=False,
     fp32_dest_acc_en=True,
+    packer_l1_acc=True,
+)
+
+COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC = ttnn.WormholeComputeKernelConfig(
+    math_fidelity=ttnn.MathFidelity.HiFi4,
+    math_approx_mode=False,
+    fp32_dest_acc_en=False,
     packer_l1_acc=True,
 )
 
@@ -489,13 +521,28 @@ def base_model_name(hf_config):
     return model_name.split("B-")[0] + "B" if "B-" in model_name else model_name
 
 
-def dequantize(tensor: torch.Tensor, inv_scale: torch.Tensor, block_shape: Sequence[int]) -> torch.Tensor:
-    """Dequantize a pytorch tensor using the provided scale."""
-    assert tensor.ndim == inv_scale.ndim
-    assert len(block_shape) == tensor.ndim and all(
-        inv_scale.shape[i] * block_shape[i] >= tensor.shape[i] for i in range(tensor.ndim)
-    )
-    return dequantize_tensor(tensor, inv_scale, block_shape)
+def get_dequantized_tensor(
+    state_dict: dict[str, torch.Tensor],
+    key: str,
+    *,
+    dtype: torch.dtype = torch.bfloat16,
+) -> torch.Tensor:
+    """Load a tensor and reject quantized checkpoint formats in dequantized-only paths."""
+    tensor = state_dict[key]
+    scale_key = f"{key}_scale_inv"
+    if scale_key in state_dict:
+        raise TypeError(
+            f"Expected dequantized tensor '{key}', but found matching quantization scale '{scale_key}'. "
+            "Use a dequantized checkpoint or dequantize before conversion."
+        )
+    if tensor.dtype == torch.float8_e4m3fn:
+        raise TypeError(
+            f"Expected dequantized tensor '{key}', but found float8 data. "
+            "Use a dequantized checkpoint or dequantize before conversion."
+        )
+    if tensor.is_floating_point() and tensor.dtype != dtype:
+        return tensor.to(dtype)
+    return tensor
 
 
 def get_state_dicts(
@@ -631,16 +678,14 @@ def _memory_config_to_dict(memory_config: ttnn.MemoryConfig | None) -> dict[str,
 
 
 def _get_relative_cache_path(path: Path) -> str | None:
-    """Extract the relative cache path from an absolute path."""
-    if not path.is_absolute():
-        return str(path)
+    """Extract the cache-relative path after the ``mesh_<rows>x<cols>`` directory."""
     path_str = str(path)
     mesh_idx = path_str.find("mesh_")
     if mesh_idx == -1:
-        return None
+        return None if path.is_absolute() else path_str
     parts = path_str[mesh_idx:].split("/", 1)
     if len(parts) < 2:
-        return None
+        return None if path.is_absolute() else path_str
     return parts[1]
 
 
@@ -794,18 +839,11 @@ def shard_and_save(
     else:
         _append_cache_specs_record(record)
 
-    # Always convert absolute paths to relative paths for portability
-    # This ensures SavedWeight objects always have relative paths
-    if path.is_absolute():
-        path_str = str(path)
-        mesh_idx = path_str.find("mesh_")
-        if mesh_idx == -1:
-            raise ValueError(f"Expected 'mesh_' in path: {path}")
-        # Skip past "mesh_<rows>x<cols>/" to get relative path
-        parts = path_str[mesh_idx:].split("/", 1)
-        if len(parts) < 2:
-            raise ValueError(f"Invalid path structure after 'mesh_': {path}")
-        path = Path(parts[1])
+    # Always convert cache-root-prefixed paths to relative paths for portability.
+    relative_cache_path = _get_relative_cache_path(path)
+    if relative_cache_path is None:
+        raise ValueError(f"Expected path under a 'mesh_<rows>x<cols>' cache directory: {path}")
+    path = Path(relative_cache_path)
 
     return SavedWeight(path, memory_config)
 

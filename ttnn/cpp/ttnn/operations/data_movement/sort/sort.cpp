@@ -6,7 +6,7 @@
 #include "device/sort_device_operation.hpp"
 
 #include "ttnn/operations/core/core.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/data_movement/fill_pad/fill_pad.hpp"
 #include "ttnn/operations/data_movement/pad/pad.hpp"
 #include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
@@ -50,7 +50,7 @@ Tensor pre_sort_transform_tensor(
     // If dim is not last dimension transpose it
     const Tensor transposed_tensor = reduction_common::perform_transpose(input_tensor, is_dim_last_idx, dim, -1);
 
-    // If input is not rank 4 transorm it to 4D
+    // If input is not rank 4 transform it to 4D
     const Tensor transformed_tensor = reduction_common::transform_to_4d_tensor(transposed_tensor, is_rank_le_4d);
 
     // Fill implicit tile padding with the appropriate value

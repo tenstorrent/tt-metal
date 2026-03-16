@@ -15,6 +15,7 @@
 #include "internal/hw_thread.h"
 #include "api/debug/waypoint.h"
 #include "api/debug/dprint.h"
+#include "api/debug/device_print.h"
 #include "internal/debug/stack_usage.h"
 #include "api/debug/ring_buffer.h"
 #if defined(UCK_CHLKC_UNPACK) || defined(UCK_CHLKC_PACK)
@@ -83,7 +84,7 @@ constexpr bool cb_init_write = false;
 using namespace ckernel;
 
 void init_sync_registers() {
-    // TODO: check if this is needed with tranistion to DFBs
+    // TODO: check if this is needed with transition to DFBs
     // https://github.com/tenstorrent/tt-metal/issues/36889
     // volatile tt_reg_ptr uint* tiles_received_ptr;
     // volatile tt_reg_ptr uint* tiles_acked_ptr;
@@ -158,6 +159,7 @@ extern "C" uint32_t _start1() {
         auto stack_free = reinterpret_cast<uint32_t (*)()>(kernel_lma)();
         record_stack_usage(stack_free);
         WAYPOINT("D");
+        DEVICE_PRINT_KERNEL_FINISHED();
 
         // Signal completion
         DPRINT << "SIGNALING COMPLETION " << HEX() << (uint32_t)*trisc_run << DEC() << ENDL();

@@ -99,7 +99,7 @@ TilizeWithValPaddingSingleCoreFactory::cached_program_t TilizeWithValPaddingSing
     const uint32_t num_leftover_Y = input_y - (input_y / TILE_HEIGHT * TILE_HEIGHT);
 
     tt::tt_metal::Buffer* dst_buffer = output.buffer();
-    TT_ASSERT(dst_buffer != nullptr, "Output buffer should be allocated on device!");
+    TT_FATAL(dst_buffer != nullptr, "Output buffer should be allocated on device!");
 
     uint32_t src0_cb_index = 0;
     uint32_t num_input_tiles = num_tiles_per_block;
@@ -163,12 +163,18 @@ TilizeWithValPaddingSingleCoreFactory::cached_program_t TilizeWithValPaddingSing
     std::vector<uint32_t> compute_kernel_args = {
         uint32_t(num_tiles / num_tiles_per_block), uint32_t(num_tiles_per_block)};
 
+    std::vector<UnpackToDestMode> unpack_to_dest_mode(NUM_CIRCULAR_BUFFERS, UnpackToDestMode::Default);
+    if (fp32_llk_acc) {
+        unpack_to_dest_mode[tt::CBIndex::c_0] = UnpackToDestMode::UnpackToDestFp32;
+    }
+
     tt::tt_metal::CreateKernel(
         program,
         "ttnn/cpp/ttnn/kernel/compute/tilize.cpp",
         core,
         tt::tt_metal::ComputeConfig{
             .fp32_dest_acc_en = fp32_llk_acc,
+            .unpack_to_dest_mode = unpack_to_dest_mode,
             .compile_args = compute_kernel_args,
         });
 
