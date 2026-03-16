@@ -97,24 +97,19 @@ def test_gated_deltanet_recurrent(device):
             layout=ttnn.TILE_LAYOUT,
         )
 
-    # Conv weights
+    # Conv weights: for recurrent mode, keep on host (no device/memory_config)
+    # ttnn.conv1d handles device placement automatically
     ttnn_model.q_conv_weight = ttnn.from_torch(
         params["q_conv_weight"].to(torch.bfloat16),
-        device=device,
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
     ttnn_model.k_conv_weight = ttnn.from_torch(
         params["k_conv_weight"].to(torch.bfloat16),
-        device=device,
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
     ttnn_model.v_conv_weight = ttnn.from_torch(
         params["v_conv_weight"].to(torch.bfloat16),
-        device=device,
         dtype=ttnn.bfloat16,
-        layout=ttnn.ROW_MAJOR_LAYOUT,
     )
 
     # Conv biases
@@ -274,23 +269,27 @@ def test_gated_deltanet_chunked(device):
             layout=ttnn.TILE_LAYOUT,
         )
 
+    # Conv weights: use L1_MEMORY_CONFIG for chunked mode (matching non-tt-symbiote test)
     ttnn_model.q_conv_weight = ttnn.from_torch(
         params["q_conv_weight"].to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.k_conv_weight = ttnn.from_torch(
         params["k_conv_weight"].to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
     ttnn_model.v_conv_weight = ttnn.from_torch(
         params["v_conv_weight"].to(torch.bfloat16),
         device=device,
         dtype=ttnn.bfloat16,
         layout=ttnn.ROW_MAJOR_LAYOUT,
+        memory_config=ttnn.L1_MEMORY_CONFIG,
     )
 
     ttnn_model.q_conv_bias = (
