@@ -123,9 +123,9 @@ class TtRoutedExpert(LightweightModule):
             self.down_program_config = None
 
         total_experts = self.num_devices * experts_per_chip
-        logger.info(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
-        logger.info(f"emb_dim={emb_dim}, hidden_dim={hidden_dim}")
-        logger.info(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}, total_experts={total_experts}")
+        logger.debug(f"Initializing TtRoutedExpert with experts_per_chip={experts_per_chip}")
+        logger.debug(f"emb_dim={emb_dim}, hidden_dim={hidden_dim}")
+        logger.debug(f"Mesh shape: {mesh_device.shape}, num_devices={self.num_devices}, total_experts={total_experts}")
 
         # Store weights for each local expert
         # Each expert has (gate_proj, up_proj, down_proj)
@@ -142,7 +142,7 @@ class TtRoutedExpert(LightweightModule):
                 f"Expected {total_experts} expert weights (num_devices={self.num_devices} * "
                 f"experts_per_chip={experts_per_chip}), got {len(torch_weights)}"
             )
-            logger.info(f"Creating weights from provided torch tensors ({total_experts} experts)")
+            logger.debug(f"Creating weights from provided torch tensors ({total_experts} experts)")
             # Create per-device weights: for each local expert index, stack weights from all devices
             # then shard across devices so each device gets its own expert's weights
             for local_expert_idx in range(experts_per_chip):
@@ -174,7 +174,7 @@ class TtRoutedExpert(LightweightModule):
                     )
                 )
         else:
-            logger.info("Creating random weights (replicated across devices)")
+            logger.debug("Creating random weights (replicated across devices)")
             for i in range(experts_per_chip):
                 self.gate_projs.append(self._create_random_weight((emb_dim, hidden_dim), name=f"expert_{i}_gate"))
                 self.up_projs.append(self._create_random_weight((emb_dim, hidden_dim), name=f"expert_{i}_up"))
@@ -201,7 +201,7 @@ class TtRoutedExpert(LightweightModule):
         in_features, out_features = stacked.shape[1], stacked.shape[2]
         stacked = stacked.reshape(mesh_rows, mesh_cols, in_features, out_features)
 
-        logger.info(
+        logger.debug(
             f"Creating per-device weight {name}: "
             f"per-device HF shape {torch_weights_per_device[0].shape} -> "
             f"stacked shape {stacked.shape}"
@@ -244,7 +244,7 @@ class TtRoutedExpert(LightweightModule):
         # HuggingFace format is (out_features, in_features)
         # TTNN matmul expects (in_features, out_features) for x @ weight
         torch_weight_t = torch_weight.T.contiguous()
-        logger.info(f"Creating weight {name}: HF shape {torch_weight.shape} -> TTNN shape {torch_weight_t.shape}")
+        logger.debug(f"Creating weight {name}: HF shape {torch_weight.shape} -> TTNN shape {torch_weight_t.shape}")
 
         # Replicate on all devices (no sharding for routed expert weights)
         mesh_mapper = ttnn.ReplicateTensorToMesh(self.mesh_device)
@@ -270,7 +270,7 @@ class TtRoutedExpert(LightweightModule):
         Returns:
             Uninitialized TTNN tensor on device DRAM
         """
-        logger.info(f"Allocating uninitialized weight {name} with shape {shape} on device DRAM")
+        logger.debug(f"Allocating uninitialized weight {name} with shape {shape} on device DRAM")
 
         tt_weight = ttnn.allocate_tensor_on_device(
             ttnn.Shape(shape),
@@ -342,7 +342,7 @@ class TtRoutedExpert(LightweightModule):
         Returns:
             expert_outputs: Expert output tensor, same shape as dispatched_buffer
         """
-        logger.info(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
+        logger.debug(f"Forward pass: dispatched_buffer shape={dispatched_buffer.shape}")
 
         # Convert input to activations dtype if needed
         if dispatched_buffer.dtype != self.activations_dtype:
@@ -360,7 +360,7 @@ class TtRoutedExpert(LightweightModule):
             # Extract tokens for this expert
             # Shape: (max_tokens, emb_dim)
             tokens = dispatched_buffer[local_expert, :, :]
-            logger.info(f"Expert {local_expert}: input shape {tokens.shape}")
+            logger.debug(f"Expert {local_expert}: input shape {tokens.shape}")
 
             # Run FFN
             output = self._expert_ffn(
@@ -369,7 +369,7 @@ class TtRoutedExpert(LightweightModule):
                 self.up_projs[local_expert],
                 self.down_projs[local_expert],
             )
-            logger.info(f"Expert {local_expert}: output shape {output.shape}")
+            logger.debug(f"Expert {local_expert}: output shape {output.shape}")
 
             # Add expert dimension back
             # Shape: (1, max_tokens, emb_dim)
@@ -379,6 +379,6 @@ class TtRoutedExpert(LightweightModule):
         # Concatenate along expert dimension
         # Shape: (experts_per_chip, max_tokens, emb_dim)
         expert_outputs = ttnn.concat(expert_outputs_list, dim=0)
-        logger.info(f"Final expert_outputs shape: {expert_outputs.shape}")
+        logger.debug(f"Final expert_outputs shape: {expert_outputs.shape}")
 
         return expert_outputs

@@ -206,7 +206,7 @@ def test_ttnn_dispatch_combine(
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
-    logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
+    logger.debug(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
     ttnn.visualize_mesh_device(mesh_device)
 
     # Compute configuration constants (use dispatch_group_size for dispatch/combine parallelism)
@@ -220,7 +220,7 @@ def test_ttnn_dispatch_combine(
         f"{capacity_factor=} {use_predictable_data=} {max_dispatched_tokens_per_expert=}"
     )
 
-    logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
+    logger.debug(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
 
     # Generate test inputs
     # For 2D mesh, generate different weights per EP rank
@@ -234,7 +234,7 @@ def test_ttnn_dispatch_combine(
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             num_dispatch_groups=num_dispatch_groups,
         )
-        logger.info("Using PREDICTABLE test data for debugging")
+        logger.debug("Using PREDICTABLE test data for debugging")
     else:
         x, weights, indices = initialize_test_inputs(
             dispatch_group_size=dispatch_group_size,
@@ -246,7 +246,7 @@ def test_ttnn_dispatch_combine(
             seed=42,
             num_dispatch_groups=num_dispatch_groups,
         )
-        logger.info("Using RANDOM test data")
+        logger.debug("Using RANDOM test data")
 
     logger.debug(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
 
@@ -315,14 +315,14 @@ def test_ttnn_dispatch_combine(
     )
 
     # Run TTNN dispatch
-    logger.info("Running TTNN dispatch...")
+    logger.debug("Running TTNN dispatch...")
     tt_expert_offsets = TtDispatchModule.shard_expert_offsets(mesh_device, expert_offsets)
     tt_expert_dispatch_table = TtDispatchModule.shard_expert_dispatch_table(mesh_device, expert_dispatch_table, sp_axis)
     tt_dispatched_buffer, tt_metadata = tt_dispatch_module(
         tt_x, tt_weights, tt_indices, tt_expert_offsets, tt_expert_dispatch_table
     )
     ttnn.synchronize_device(mesh_device)
-    logger.info("Dispatch complete!")
+    logger.debug("Dispatch complete!")
 
     # --- Torch reference for verbose validation ---
     torch_dispatch_module = TorchDispatchModule(
@@ -380,9 +380,9 @@ def test_ttnn_dispatch_combine(
     )
 
     # Run TTNN combine
-    logger.info("Running TTNN combine...")
+    logger.debug("Running TTNN combine...")
     tt_output = tt_combine_module(tt_dispatched_buffer, tt_metadata, tt_expert_token_counts)
-    logger.info("Combine complete!")
+    logger.debug("Combine complete!")
 
     # Convert TTNN output back to torch
     mesh_composer = get_combine_output_mesh_composer(mesh_device)
@@ -441,4 +441,4 @@ def test_ttnn_dispatch_combine(
 
     result.assert_passed("Round-trip mismatch")
 
-    logger.info("✅ TTNN dispatch→combine round-trip matches input!")
+    logger.debug("✅ TTNN dispatch→combine round-trip matches input!")

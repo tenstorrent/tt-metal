@@ -252,7 +252,7 @@ def test_ttnn_dispatch(
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
-    logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
+    logger.debug(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
@@ -262,7 +262,7 @@ def test_ttnn_dispatch(
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
         seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
     )
-    logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
+    logger.debug(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
 
     # Initialize inputs using helper function
     # For 2D mesh, generate different weights per EP rank
@@ -276,7 +276,7 @@ def test_ttnn_dispatch(
             max_dispatched_tokens_per_expert=max_dispatched_tokens_per_expert,
             num_dispatch_groups=num_dispatch_groups,
         )
-        logger.info("Using PREDICTABLE test data for debugging")
+        logger.debug("Using PREDICTABLE test data for debugging")
     else:
         x, weights, indices = initialize_test_inputs(
             dispatch_group_size=dispatch_group_size,
@@ -288,7 +288,7 @@ def test_ttnn_dispatch(
             seed=42,
             num_dispatch_groups=num_dispatch_groups,
         )
-        logger.info("Using RANDOM test data")
+        logger.debug("Using RANDOM test data")
 
     logger.debug(f"Input shapes: {x.shape=}, {weights.shape=}, {indices.shape=}")
 
@@ -425,4 +425,4 @@ def test_ttnn_dispatch(
     assert (
         buffer_result.passed and metadata_result.passed
     ), f"Some slots did not match! buffer={buffer_result.passed} metadata={metadata_result.passed} Check logs for details."
-    logger.info("✅ TTNN dispatch operation matches torch reference!")
+    logger.debug("✅ TTNN dispatch operation matches torch reference!")

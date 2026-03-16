@@ -106,7 +106,7 @@ def create_expert_dispatch_table(
             chip_id = local_expert_id // experts_per_chip
             table[group, expert_id] = chip_id
 
-    logger.info(f"[create_expert_dispatch_table] OUTPUT: table.shape={table.shape}")
+    logger.debug(f"[create_expert_dispatch_table] OUTPUT: table.shape={table.shape}")
     return table
 
 
@@ -158,11 +158,11 @@ def get_gate_outputs(
         .to(torch.int32)
     )
     # expert_token_counts = expert_token_counts.permute(1, 0, 2)
-    logger.info(f"[get_gate_outputs] OUTPUT SHAPES:")
-    logger.info(f"  expert_counter.shape={expert_counter.shape}")
-    logger.info(f"  expert_offsets.shape={expert_offsets.shape}")
-    logger.info(f"  expert_token_counts.shape={expert_token_counts.shape}")
-    logger.info(f"  cum_sum.shape={cum_sum.shape}")
+    logger.debug(f"[get_gate_outputs] OUTPUT SHAPES:")
+    logger.debug(f"  expert_counter.shape={expert_counter.shape}")
+    logger.debug(f"  expert_offsets.shape={expert_offsets.shape}")
+    logger.debug(f"  expert_token_counts.shape={expert_token_counts.shape}")
+    logger.debug(f"  cum_sum.shape={cum_sum.shape}")
     return expert_offsets, expert_token_counts, cum_sum
 
 
@@ -242,7 +242,7 @@ def initialize_test_inputs(
                 for k in range(indices.shape[2]):
                     expert_activations[indices[c, t, k]] += 1
         checksum = expert_activations.sum().item()
-        logger.info(f"{expert_activations.shape=}")
+        logger.debug(f"{expert_activations.shape=}")
         assert (
             checksum == dispatch_group_size * seq_len_per_chip * num_experts_per_tok
         ), f"Expected checksum {dispatch_group_size * seq_len_per_chip * num_experts_per_tok}, got {checksum}"
@@ -250,10 +250,10 @@ def initialize_test_inputs(
             expert_activations.max().item() <= max_dispatched_tokens_per_expert
         ), f"Expected max activations per expert to be <= {max_dispatched_tokens_per_expert}, got {expert_activations.max().item()}"
 
-    logger.info(f"[initialize_test_inputs] OUTPUT SHAPES:")
-    logger.info(f"  x.shape={x.shape}")
-    logger.info(f"  weights.shape={weights.shape}")
-    logger.info(f"  indices.shape={indices.shape}")
+    logger.debug(f"[initialize_test_inputs] OUTPUT SHAPES:")
+    logger.debug(f"  x.shape={x.shape}")
+    logger.debug(f"  weights.shape={weights.shape}")
+    logger.debug(f"  indices.shape={indices.shape}")
     return x, weights, indices
 
 
@@ -325,10 +325,10 @@ def initialize_predictable_test_inputs(
                     )  # reverse order
                 expert_idx += 1
 
-    logger.info(f"[initialize_predictable_test_inputs] OUTPUT SHAPES:")
-    logger.info(f"  x.shape={x.shape}")
-    logger.info(f"  weights.shape={weights.shape}")
-    logger.info(f"  indices.shape={indices.shape}")
+    logger.debug(f"[initialize_predictable_test_inputs] OUTPUT SHAPES:")
+    logger.debug(f"  x.shape={x.shape}")
+    logger.debug(f"  weights.shape={weights.shape}")
+    logger.debug(f"  indices.shape={indices.shape}")
     return x, weights, indices
 
 

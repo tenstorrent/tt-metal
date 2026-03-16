@@ -124,12 +124,12 @@ class TtMinimalMoe(LightweightModule):
         self.num_links = num_links
         self.topology = topology
 
-        logger.info(f"Initializing TtMinimalMoe")
-        logger.info(f"  mesh_device.shape={mesh_device.shape}")
-        logger.info(f"  dispatch_group_size={dispatch_group_size}, num_dispatch_groups={num_dispatch_groups}")
-        logger.info(f"  experts_per_chip={experts_per_chip}, num_routed_experts={num_routed_experts}")
-        logger.info(f"  num_experts_per_tok={num_experts_per_tok}")
-        logger.info(f"  seq_len_per_chip={seq_len_per_chip}, emb_dim={emb_dim}, hidden_dim={hidden_dim}")
+        logger.debug(f"Initializing TtMinimalMoe")
+        logger.debug(f"  mesh_device.shape={mesh_device.shape}")
+        logger.debug(f"  dispatch_group_size={dispatch_group_size}, num_dispatch_groups={num_dispatch_groups}")
+        logger.debug(f"  experts_per_chip={experts_per_chip}, num_routed_experts={num_routed_experts}")
+        logger.debug(f"  num_experts_per_tok={num_experts_per_tok}")
+        logger.debug(f"  seq_len_per_chip={seq_len_per_chip}, emb_dim={emb_dim}, hidden_dim={hidden_dim}")
 
         # Initialize dispatch module
         self.dispatch_module = TtDispatchModule(
@@ -166,6 +166,7 @@ class TtMinimalMoe(LightweightModule):
             experts_per_chip=experts_per_chip,
             emb_dim=emb_dim,
             hidden_dim=hidden_dim,
+            max_tokens=max_dispatched_tokens_per_expert,
             torch_weights=routed_expert_weights,
             activations_dtype=activations_dtype,
             weights_dtype=weights_dtype,
@@ -194,7 +195,7 @@ class TtMinimalMoe(LightweightModule):
             topology=topology,
         )
 
-        logger.info("TtMinimalMoe initialization complete")
+        logger.debug("TtMinimalMoe initialization complete")
 
     def forward(
         self,
@@ -225,10 +226,10 @@ class TtMinimalMoe(LightweightModule):
             - final_output: MoE output with same sharding as input
             - intermediates: TtMoEIntermediates if return_intermediates=True, else None
         """
-        logger.info(f"[TtMinimalMoe.forward] INPUT SHAPES:")
-        logger.info(f"  x.shape={x.shape}")
-        logger.info(f"  weights.shape={weights.shape}")
-        logger.info(f"  indices.shape={indices.shape}")
+        logger.debug(f"[TtMinimalMoe.forward] INPUT SHAPES:")
+        logger.debug(f"  x.shape={x.shape}")
+        logger.debug(f"  weights.shape={weights.shape}")
+        logger.debug(f"  indices.shape={indices.shape}")
 
         # Initialize intermediates - None means not yet calculated
         dispatched_buffer = None
@@ -254,7 +255,7 @@ class TtMinimalMoe(LightweightModule):
             )
         else:
             x_full = x  # No TP sharding, x already has full emb_dim
-        logger.info(f"[TtMinimalMoe.forward] x_full (after all_gather) shape: {x_full.shape}")
+        logger.debug(f"[TtMinimalMoe.forward] x_full (after all_gather) shape: {x_full.shape}")
 
         # ========================================
         # Step 1: Shared expert (enabled)
@@ -262,10 +263,10 @@ class TtMinimalMoe(LightweightModule):
         # Shared expert expects replicated input (full emb_dim)
         # Convert x_full to TILE_LAYOUT for shared expert
         x_full_tiled = ttnn.to_layout(x_full, ttnn.TILE_LAYOUT)
-        logger.info(f"[TtMinimalMoe.forward] x_full_tiled shape: {x_full_tiled.shape}")
+        logger.debug(f"[TtMinimalMoe.forward] x_full_tiled shape: {x_full_tiled.shape}")
 
         shared_output = self.shared_expert(x_full_tiled)
-        logger.info(f"[TtMinimalMoe.forward] Shared expert output shape: {shared_output.shape}")
+        logger.debug(f"[TtMinimalMoe.forward] Shared expert output shape: {shared_output.shape}")
 
         # ========================================
         # Step 2: Dispatch (enabled)
@@ -279,7 +280,7 @@ class TtMinimalMoe(LightweightModule):
             tt_expert_offsets,
             tt_expert_dispatch_table,
         )
-        logger.info(
+        logger.debug(
             f"[TtMinimalMoe.forward] Dispatch output: buffer={dispatched_buffer.shape}, metadata={metadata.shape}"
         )
 
@@ -291,34 +292,34 @@ class TtMinimalMoe(LightweightModule):
         # Squeeze the first two dimensions
         dispatched_buffer_squeezed = ttnn.squeeze(dispatched_buffer, dim=0)
         dispatched_buffer_squeezed = ttnn.squeeze(dispatched_buffer_squeezed, dim=0)
-        logger.info(f"[TtMinimalMoe.forward] dispatched_buffer_squeezed shape: {dispatched_buffer_squeezed.shape}")
+        logger.debug(f"[TtMinimalMoe.forward] dispatched_buffer_squeezed shape: {dispatched_buffer_squeezed.shape}")
 
         # Convert dispatched_buffer to TILE_LAYOUT for routed experts
         dispatched_buffer_tiled = ttnn.to_layout(dispatched_buffer_squeezed, ttnn.TILE_LAYOUT)
-        logger.info(f"[TtMinimalMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
+        logger.debug(f"[TtMinimalMoe.forward] dispatched_buffer_tiled shape: {dispatched_buffer_tiled.shape}")
 
         expert_outputs = self.routed_expert(dispatched_buffer_tiled, tt_expert_token_counts)
-        logger.info(f"[TtMinimalMoe.forward] expert_outputs shape: {expert_outputs.shape}")
+        logger.debug(f"[TtMinimalMoe.forward] expert_outputs shape: {expert_outputs.shape}")
 
         # Add back the batch dimensions for combine
         # (experts_per_chip, max_tokens, emb_dim) -> (1, 1, experts_per_chip, max_tokens, emb_dim)
         expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
         expert_outputs = ttnn.unsqueeze(expert_outputs, dim=0)
-        logger.info(f"[TtMinimalMoe.forward] expert_outputs (unsqueezed) shape: {expert_outputs.shape}")
+        logger.debug(f"[TtMinimalMoe.forward] expert_outputs (unsqueezed) shape: {expert_outputs.shape}")
 
         # ========================================
         # Step 4: Combine (enabled)
         # ========================================
         # Combine expects ROW_MAJOR input
         expert_outputs_rm = ttnn.to_layout(expert_outputs, ttnn.ROW_MAJOR_LAYOUT)
-        logger.info(f"[TtMinimalMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape}")
+        logger.debug(f"[TtMinimalMoe.forward] expert_outputs_rm shape: {expert_outputs_rm.shape}")
 
         combined_output = self.combine_module(
             expert_outputs_rm,
             metadata,
             tt_expert_token_counts,
         )
-        logger.info(f"[TtMinimalMoe.forward] combined_output shape: {combined_output.shape}")
+        logger.debug(f"[TtMinimalMoe.forward] combined_output shape: {combined_output.shape}")
 
         # ========================================
         # Step 5: Reduce (sum over topk + reduce-scatter for TP sharding)
@@ -333,15 +334,15 @@ class TtMinimalMoe(LightweightModule):
         # 1. Sum over topk dimension (dim=3): (1, 1, 256, 4, 2048) -> (1, 1, 256, 2048)
         # 2. Reduce-scatter across TP axis: (1, 1, 256, 2048) -> (1, 1, 256, 512) per device
         combined_output_tiled = ttnn.to_layout(combined_output, ttnn.TILE_LAYOUT)
-        logger.info(f"[TtMinimalMoe.forward] combined_output_tiled shape: {combined_output_tiled.shape}")
+        logger.debug(f"[TtMinimalMoe.forward] combined_output_tiled shape: {combined_output_tiled.shape}")
 
         routed_output = self.reduce_module(combined_output_tiled)
-        logger.info(f"[TtMinimalMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
+        logger.debug(f"[TtMinimalMoe.forward] routed_output (after reduce) shape: {routed_output.shape}")
 
         # Remove extra batch dimensions to match shared_output shape
         # (1, 1, 256, 512) -> (1, 256, 512)
         routed_output = ttnn.squeeze(routed_output, dim=0)
-        logger.info(f"[TtMinimalMoe.forward] routed_output (squeezed) shape: {routed_output.shape}")
+        logger.debug(f"[TtMinimalMoe.forward] routed_output (squeezed) shape: {routed_output.shape}")
 
         # ========================================
         # Step 6: Final output
@@ -349,11 +350,11 @@ class TtMinimalMoe(LightweightModule):
         # final_output = routed_output + shared_output
         # Both should be in TILE_LAYOUT with shape (dispatch_group_size, seq_len_per_chip, hidden_dim)
         final_output = ttnn.add(routed_output, shared_output)
-        logger.info(f"[TtMinimalMoe.forward] final_output (tiled) shape: {final_output.shape}")
+        logger.debug(f"[TtMinimalMoe.forward] final_output (tiled) shape: {final_output.shape}")
 
         # Convert to ROW_MAJOR for output consistency
         final_output = ttnn.to_layout(final_output, ttnn.ROW_MAJOR_LAYOUT)
-        logger.info(f"[TtMinimalMoe.forward] Final output shape: {final_output.shape}")
+        logger.debug(f"[TtMinimalMoe.forward] Final output shape: {final_output.shape}")
 
         # Build intermediates if requested
         intermediates = None

@@ -93,7 +93,7 @@ class ValidationResult:
         """Log match statistics."""
         pct = 100.0 * self.matches / self.total if self.total > 0 else 0.0
         status = "✅" if self.passed else "❌"
-        logger.info(f"{status} {self.name}: {self.matches}/{self.total} ({pct:.2f}%)")
+        logger.debug(f"{status} {self.name}: {self.matches}/{self.total} ({pct:.2f}%)")
 
     def log_mismatches(self, limit: int = 10):
         """Log first N mismatches."""
@@ -380,12 +380,12 @@ def log_per_chip_statistics(
     num_experts_per_tok: int,
 ):
     """Log per-chip match statistics."""
-    logger.info("\nPer-chip statistics:")
+    logger.debug("\nPer-chip statistics:")
     for chip_id in range(dispatch_group_size):
         chip_mismatches = [m for m in mismatches if m[1] == chip_id]
         chip_total = seq_len_per_chip * num_experts_per_tok
         chip_matches = chip_total - len(chip_mismatches)
-        logger.info(f"  Chip {chip_id}: {chip_matches}/{chip_total} matches ({100.0*chip_matches/chip_total:.2f}%)")
+        logger.debug(f"  Chip {chip_id}: {chip_matches}/{chip_total} matches ({100.0*chip_matches/chip_total:.2f}%)")
 
 
 # Type for dispatch validation comparators
@@ -480,7 +480,7 @@ def validate_dispatch_data(
 
                 if match:
                     matches += 1
-                    logger.info(f"✅ {r} {name} {dst_chip_id=} {expert_id=} {count=}")
+                    logger.debug(f"✅ {r} {name} {dst_chip_id=} {expert_id=} {count=}")
                 else:
                     logger.error(f"❌ {r} {name} {dst_chip_id=} {expert_id=} {count=}")
                     mismatches.append((r, dst_chip_id, expert_id, error_detail or "mismatch"))
@@ -644,7 +644,7 @@ def validate_dispatch_metadata(
 
                 if metadata_match and coord_match and weight_match:
                     matches += 1
-                    logger.info(f"✅ {r} Metadata {dst_chip_id=} {expert_id=} {count=}")
+                    logger.debug(f"✅ {r} Metadata {dst_chip_id=} {expert_id=} {count=}")
                 else:
                     error_detail = f"metadata={metadata_match}, coord={coord_match}, weight={weight_match}"
                     logger.error(f"❌ {r} Metadata {dst_chip_id=} {expert_id=} {count=} ({error_detail})")

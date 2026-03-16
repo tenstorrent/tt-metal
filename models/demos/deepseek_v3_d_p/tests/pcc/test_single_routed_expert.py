@@ -80,8 +80,8 @@ def test_single_routed_expert(
 
     signpost(f"SingleRoutedExpert {num_tokens=} {emb_dim=} {hidden_dim=}")
 
-    logger.info(f"Testing single routed expert: {num_tokens=}, {emb_dim=}, {hidden_dim=}")
-    logger.info(f"Mesh: {mesh_device.shape}, num_devices={mesh_device.get_num_devices()}")
+    logger.debug(f"Testing single routed expert: {num_tokens=}, {emb_dim=}, {hidden_dim=}")
+    logger.debug(f"Mesh: {mesh_device.shape}, num_devices={mesh_device.get_num_devices()}")
 
     # Create random weights
     torch.manual_seed(42)
@@ -96,13 +96,13 @@ def test_single_routed_expert(
 
     # Create random input: (experts_per_chip, num_tokens, emb_dim)
     torch_input = torch.randn(experts_per_chip, num_tokens, emb_dim, dtype=torch.float32)
-    logger.info(f"Input shape: {torch_input.shape}")
+    logger.debug(f"Input shape: {torch_input.shape}")
 
     # Run torch reference
-    logger.info("Running torch reference...")
+    logger.debug("Running torch reference...")
     with torch.no_grad():
         torch_output = torch_expert(torch_input[0])  # Process first (only) expert's tokens
-    logger.info(f"Torch output shape: {torch_output.shape}")
+    logger.debug(f"Torch output shape: {torch_output.shape}")
 
     # Create TTNN input
     tt_input = ttnn.from_torch(
@@ -112,10 +112,10 @@ def test_single_routed_expert(
         device=mesh_device,
         dtype=ttnn.bfloat8_b,
     )
-    logger.info(f"TTNN input shape: {tt_input.shape}")
+    logger.debug(f"TTNN input shape: {tt_input.shape}")
 
     # Create TtRoutedExpert
-    logger.info("Creating TtRoutedExpert...")
+    logger.debug("Creating TtRoutedExpert...")
     tt_expert = TtRoutedExpert(
         mesh_device=mesh_device,
         experts_per_chip=experts_per_chip,
@@ -128,9 +128,9 @@ def test_single_routed_expert(
     )
 
     # Run TTNN forward
-    logger.info("Running TTNN forward...")
+    logger.debug("Running TTNN forward...")
     tt_output = tt_expert(tt_input)
-    logger.info(f"TTNN output shape: {tt_output.shape}")
+    logger.debug(f"TTNN output shape: {tt_output.shape}")
 
     # Convert back to torch for comparison
     tt_output_torch = ttnn.to_torch(
@@ -139,11 +139,11 @@ def test_single_routed_expert(
     )
     # Extract the single expert output: (experts_per_chip, num_tokens, emb_dim) -> (num_tokens, emb_dim)
     tt_output_single = tt_output_torch[0]
-    logger.info(f"TTNN output (torch) shape: {tt_output_single.shape}")
+    logger.debug(f"TTNN output (torch) shape: {tt_output_single.shape}")
 
     # Compare PCC
     _, pcc = comp_pcc(torch_output, tt_output_single)
-    logger.info(f"PCC: {pcc:.6f}")
+    logger.debug(f"PCC: {pcc:.6f}")
 
     # Validate
     pcc_threshold = 0.97
@@ -151,4 +151,4 @@ def test_single_routed_expert(
     assert not torch.isnan(tt_output_torch).any(), "Output contains NaN"
     assert not torch.isinf(tt_output_torch).any(), "Output contains Inf"
 
-    logger.info("Test PASSED!")
+    logger.debug("Test PASSED!")

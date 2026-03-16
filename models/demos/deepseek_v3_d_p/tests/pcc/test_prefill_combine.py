@@ -200,14 +200,14 @@ def test_ttnn_combine(
     num_devices = mesh_device.get_num_devices()
 
     # Log fabric config
-    logger.info(f"Fabric max payload size: {ttnn.get_tt_fabric_max_payload_size_bytes()}")
+    logger.debug(f"Fabric max payload size: {ttnn.get_tt_fabric_max_payload_size_bytes()}")
 
     mesh_config = extract_mesh_config(mesh_device)
     sp_axis = mesh_config.sp_axis
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
-    logger.info(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
+    logger.debug(f"Testing with {mesh_device.shape=}, {num_devices=} {dispatch_group_size=} {num_dispatch_groups=}")
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
@@ -219,7 +219,7 @@ def test_ttnn_combine(
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
         seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
     )
-    logger.info(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
+    logger.debug(f"{experts_per_chip=}, {metadata_len=}, {max_dispatched_tokens_per_expert=}")
 
     # Step 1: Generate initial inputs using torch
     # For 2D mesh, generate different weights per EP rank
@@ -233,7 +233,7 @@ def test_ttnn_combine(
             max_dispatched_tokens_per_expert,
             num_dispatch_groups=num_dispatch_groups,
         )
-        logger.info("Using PREDICTABLE test data for debugging")
+        logger.debug("Using PREDICTABLE test data for debugging")
     else:
         x, weights, indices = initialize_test_inputs(
             dispatch_group_size,
@@ -245,7 +245,7 @@ def test_ttnn_combine(
             seed=42,
             num_dispatch_groups=num_dispatch_groups,
         )
-        logger.info("Using RANDOM test data")
+        logger.debug("Using RANDOM test data")
 
     # Compute gate outputs before dispatch (same for all EP ranks since indices are shared)
     expert_offsets, expert_token_counts, _ = get_gate_outputs(
@@ -393,4 +393,4 @@ def test_ttnn_combine(
 
     result.assert_passed("Combine data mismatch")
 
-    logger.info("✅ TTNN combine operation matches torch reference!")
+    logger.debug("✅ TTNN combine operation matches torch reference!")

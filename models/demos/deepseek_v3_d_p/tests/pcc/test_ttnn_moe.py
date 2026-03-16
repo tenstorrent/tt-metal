@@ -174,11 +174,11 @@ def test_ttnn_moe(
     dispatch_group_size = mesh_config.dispatch_group_size
     num_dispatch_groups = mesh_config.num_dispatch_groups
 
-    logger.info(f"\n{'='*60}")
-    logger.info("TtMinimalMoe PCC Test")
-    logger.info(f"{'='*60}")
-    logger.info(f"mesh_shape={mesh_device.shape}, num_devices={num_devices}")
-    logger.info(f"dispatch_group_size={dispatch_group_size}, num_dispatch_groups={num_dispatch_groups}")
+    logger.debug(f"\n{'='*60}")
+    logger.debug("TtMinimalMoe PCC Test")
+    logger.debug(f"{'='*60}")
+    logger.debug(f"mesh_shape={mesh_device.shape}, num_devices={num_devices}")
+    logger.debug(f"dispatch_group_size={dispatch_group_size}, num_dispatch_groups={num_dispatch_groups}")
 
     signpost(
         f"TtMinimalMoe PCC test - mesh {mesh_device.shape}, seq_len={seq_len_per_chip}, "
@@ -189,15 +189,15 @@ def test_ttnn_moe(
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
         seq_len_per_chip, num_routed_experts, num_experts_per_tok, num_devices, dispatch_group_size, capacity_factor
     )
-    logger.info(f"experts_per_chip={experts_per_chip}, metadata_len={metadata_len}")
-    logger.info(f"max_dispatched_tokens_per_expert={max_dispatched_tokens_per_expert}")
+    logger.debug(f"experts_per_chip={experts_per_chip}, metadata_len={metadata_len}")
+    logger.debug(f"max_dispatched_tokens_per_expert={max_dispatched_tokens_per_expert}")
 
     total_experts = num_routed_experts
 
     # ========================================
     # Step 1: Create weights for both torch and TTNN
     # ========================================
-    logger.info("Creating expert weights...")
+    logger.debug("Creating expert weights...")
     all_routed_weights = create_torch_expert_weights(total_experts, emb_dim, hidden_dim, seed=42)
     shared_weights_torch, shared_weights_ttnn = create_shared_expert_weights(emb_dim, hidden_dim, seed=123)
 
@@ -208,7 +208,7 @@ def test_ttnn_moe(
     # ========================================
     # Step 2: Generate test inputs
     # ========================================
-    logger.info("Generating test inputs...")
+    logger.debug("Generating test inputs...")
     x, weights, indices = initialize_test_inputs(
         dispatch_group_size=dispatch_group_size,
         seq_len_per_chip=seq_len_per_chip,
@@ -219,7 +219,7 @@ def test_ttnn_moe(
         seed=42,
         num_dispatch_groups=num_dispatch_groups,
     )
-    logger.info(f"Input shapes: x={x.shape}, weights={weights.shape}, indices={indices.shape}")
+    logger.debug(f"Input shapes: x={x.shape}, weights={weights.shape}, indices={indices.shape}")
 
     # TODO: TTNN mul doesn't support broadcasting for split connection weight multiplication
     # Set weights=1 to bypass this issue and test the rest of the pipeline
@@ -246,7 +246,7 @@ def test_ttnn_moe(
     # ========================================
     # Step 3: Run TorchMinimalMoE reference with intermediates
     # ========================================
-    logger.info("Running TorchMinimalMoE reference...")
+    logger.debug("Running TorchMinimalMoE reference...")
     torch_moe = TorchMinimalMoE(
         dispatch_group_size=dispatch_group_size,
         experts_per_chip=experts_per_chip,
@@ -277,13 +277,13 @@ def test_ttnn_moe(
         expert_token_counts,
         return_intermediates=True,
     )
-    logger.info(f"Torch output shape: {torch_output.shape}")
-    logger.info(f"Torch output stats - min: {torch_output.min():.4f}, max: {torch_output.max():.4f}")
+    logger.debug(f"Torch output shape: {torch_output.shape}")
+    logger.debug(f"Torch output stats - min: {torch_output.min():.4f}, max: {torch_output.max():.4f}")
 
     # ========================================
     # Step 4: Create TTNN tensors
     # ========================================
-    logger.info("Creating TTNN tensors...")
+    logger.debug("Creating TTNN tensors...")
 
     # For 2D mesh: shard x along dispatch_group_size (dim 0) across axis 0 AND emb_dim (dim -1) across axis 1
     # This supports both dispatch (SP along axis 0) and shared expert (TP along axis 1)
@@ -296,7 +296,7 @@ def test_ttnn_moe(
     tt_x = ttnn.from_torch(
         x, mesh_mapper=mesh_mapper_2d_input, layout=ttnn.ROW_MAJOR_LAYOUT, device=mesh_device, dtype=ttnn.bfloat16
     )
-    logger.info(f"tt_x.shape: {tt_x.shape}")
+    logger.debug(f"tt_x.shape: {tt_x.shape}")
 
     # Weights and indices: shard on dispatch axis, replicate on TP axis
     mesh_mapper_sp_only = ttnn.ShardTensor2dMesh(
@@ -337,7 +337,7 @@ def test_ttnn_moe(
     # ========================================
     # Step 5: Create TtMinimalMoe and run forward
     # ========================================
-    logger.info("Creating TtMinimalMoe...")
+    logger.debug("Creating TtMinimalMoe...")
     tt_moe = TtMinimalMoe(
         mesh_device=mesh_device,
         dispatch_group_size=dispatch_group_size,
@@ -359,7 +359,7 @@ def test_ttnn_moe(
         weights_dtype=ttnn.bfloat4_b,
     )
 
-    logger.info("Running TtMinimalMoe forward pass...")
+    logger.debug("Running TtMinimalMoe forward pass...")
     tt_output, tt_intermediates = tt_moe(
         tt_x,
         tt_weights,
@@ -370,14 +370,14 @@ def test_ttnn_moe(
         return_intermediates=True,
     )
     ttnn.synchronize_device(mesh_device)
-    logger.info(f"TTNN output shape: {tt_output.shape}")
+    logger.debug(f"TTNN output shape: {tt_output.shape}")
 
     # ========================================
     # Step 6: Compare intermediates
     # ========================================
-    logger.info(f"\n{'='*60}")
-    logger.info("Comparing intermediate outputs...")
-    logger.info(f"{'='*60}")
+    logger.debug(f"\n{'='*60}")
+    logger.debug("Comparing intermediate outputs...")
+    logger.debug(f"{'='*60}")
 
     # Mesh composer for 2D sharded tensors (dim 0 across axis 0, dim -1 across axis 1)
     mesh_composer_2d = ttnn.ConcatMesh2dToTensor(
@@ -416,7 +416,7 @@ def test_ttnn_moe(
         #     logger.warning(f"[{name}] SKIPPED - Cannot convert to torch (need mesh_composer): {e}")
         #     continue
 
-        logger.info(f"[{name}] TTNN shape: {tt_torch.shape}, Torch shape: {torch_tensor.shape}")
+        logger.debug(f"[{name}] TTNN shape: {tt_torch.shape}, Torch shape: {torch_tensor.shape}")
 
         # Check shapes match
         if tt_torch.shape != torch_tensor.shape:
@@ -437,7 +437,7 @@ def test_ttnn_moe(
         # Compute PCC
         _, pcc = comp_pcc(torch_tensor.float(), tt_torch.float())
         if pcc >= threshold:
-            logger.info(f"[{name}] PASSED - PCC: {pcc:.6f} (threshold: {threshold})")
+            logger.debug(f"[{name}] PASSED - PCC: {pcc:.6f} (threshold: {threshold})")
         else:
             logger.error(f"[{name}] FAILED - PCC: {pcc:.6f} below threshold {threshold}")
             all_passed = False
@@ -445,15 +445,15 @@ def test_ttnn_moe(
     # # ========================================
     # # Step 7: Compare final output
     # # ========================================
-    # logger.info(f"\n{'='*60}")
-    # logger.info("Comparing final output...")
-    # logger.info(f"{'='*60}")
+    # logger.debug(f"\n{'='*60}")
+    # logger.debug("Comparing final output...")
+    # logger.debug(f"{'='*60}")
 
     # tt_output_torch = ttnn.to_torch(tt_output, mesh_composer=mesh_composer_2d, dtype=torch.bfloat16)
-    # logger.info(f"TTNN final output shape: {tt_output_torch.shape}")
-    # logger.info(f"Torch final output shape: {torch_output.shape}")
-    # logger.info(f"TTNN output stats - min: {tt_output_torch.min():.4f}, max: {tt_output_torch.max():.4f}")
-    # logger.info(f"Torch output stats - min: {torch_output.min():.4f}, max: {torch_output.max():.4f}")
+    # logger.debug(f"TTNN final output shape: {tt_output_torch.shape}")
+    # logger.debug(f"Torch final output shape: {torch_output.shape}")
+    # logger.debug(f"TTNN output stats - min: {tt_output_torch.min():.4f}, max: {tt_output_torch.max():.4f}")
+    # logger.debug(f"Torch output stats - min: {torch_output.min():.4f}, max: {torch_output.max():.4f}")
 
     # # Check for NaN/Inf
     # assert not torch.isnan(tt_output_torch).any(), "TTNN output contains NaN"
@@ -468,12 +468,12 @@ def test_ttnn_moe(
     # # Note: With only shared expert enabled, this won't match torch's full pipeline output
     # # The comparison will show the delta caused by missing routed expert path
     # _, final_pcc = comp_pcc(torch_output, tt_output_torch.float())
-    # logger.info(f"Final output PCC: {final_pcc:.6f}")
-    logger.info("Note: Final PCC expected to be low until full pipeline is enabled")
+    # logger.debug(f"Final output PCC: {final_pcc:.6f}")
+    logger.debug("Note: Final PCC expected to be low until full pipeline is enabled")
 
     # Assert intermediate checks passed
     assert all_passed, "One or more intermediate comparisons failed"
 
-    logger.info(f"\n{'='*60}")
-    logger.info("TtMinimalMoe PCC Test PASSED!")
-    logger.info(f"{'='*60}")
+    logger.debug(f"\n{'='*60}")
+    logger.debug("TtMinimalMoe PCC Test PASSED!")
+    logger.debug(f"{'='*60}")

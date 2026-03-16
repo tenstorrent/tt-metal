@@ -128,9 +128,9 @@ def test_ttnn_reduce(
     # Determine number of chips in the reduction axis
     num_reduce_chips = mesh_shape[cluster_axis]
 
-    logger.info(f"Testing reduce: {mesh_shape=}, {cluster_axis=}, {num_reduce_chips=}")
-    logger.info(f"Input shape per chip: [{seq_len}, {topk}, {hidden_dim}]")
-    logger.info(f"Expected output shape per chip: [{seq_len}, {hidden_dim // num_reduce_chips}]")
+    logger.debug(f"Testing reduce: {mesh_shape=}, {cluster_axis=}, {num_reduce_chips=}")
+    logger.debug(f"Input shape per chip: [{seq_len}, {topk}, {hidden_dim}]")
+    logger.debug(f"Expected output shape per chip: [{seq_len}, {hidden_dim // num_reduce_chips}]")
     ttnn.visualize_mesh_device(mesh_device)
 
     signpost(
@@ -147,7 +147,7 @@ def test_ttnn_reduce(
         sparsity=0.75,
         seed=42,
     )
-    logger.info(f"Created sparse combine output: {torch_combine_output.shape}")
+    logger.debug(f"Created sparse combine output: {torch_combine_output.shape}")
 
     # Compute reference output using torch
     torch_reduce = TorchReduceModule(
@@ -155,7 +155,7 @@ def test_ttnn_reduce(
         topk_dim=1,  # topk is dim 1 in [seq, topk, hidden]
     )
     torch_shards = torch_reduce(torch_combine_output)
-    logger.info(f"Torch reference output: {len(torch_shards)} shards of shape {torch_shards[0].shape}")
+    logger.debug(f"Torch reference output: {len(torch_shards)} shards of shape {torch_shards[0].shape}")
 
     # Convert to TTNN tensor distributed across mesh
     # For reduce_scatter, we need each chip to have its portion of the input
@@ -184,7 +184,7 @@ def test_ttnn_reduce(
         device=mesh_device,
         dtype=ttnn.bfloat16,
     )
-    logger.info(f"TTNN input shape: {tt_combine_output.shape}")
+    logger.debug(f"TTNN input shape: {tt_combine_output.shape}")
 
     # Run TTNN reduce
     # NOTE: TTNN adds a batch dim, so [seq, topk, hidden] becomes [1, seq, topk, hidden]
@@ -198,13 +198,13 @@ def test_ttnn_reduce(
     )
 
     tt_output = tt_reduce(tt_combine_output)
-    logger.info(f"TTNN output shape: {tt_output.shape}")
+    logger.debug(f"TTNN output shape: {tt_output.shape}")
 
     # Convert output back to torch for comparison
     # After reduce_scatter, each chip has [seq, hidden/num_reduce_chips]
     # Get individual device outputs and compare with corresponding torch shards
     device_tensors = ttnn.get_device_tensors(tt_output)
-    logger.info(f"Got {len(device_tensors)} device tensors")
+    logger.debug(f"Got {len(device_tensors)} device tensors")
 
     # For each chip in the reduction axis, compare its output with the corresponding torch shard
     all_passed = True
@@ -226,7 +226,7 @@ def test_ttnn_reduce(
         while tt_chip_output.dim() > torch_shard.dim():
             tt_chip_output = tt_chip_output.squeeze(0)
 
-        logger.info(f"Chip {chip_idx}: tt_shape={tt_chip_output.shape}, torch_shape={torch_shard.shape}")
+        logger.debug(f"Chip {chip_idx}: tt_shape={tt_chip_output.shape}, torch_shape={torch_shard.shape}")
 
         # Calculate PCC for this chip
         tt_flat = tt_chip_output.float().flatten()
@@ -240,7 +240,7 @@ def test_ttnn_reduce(
 
         pcc = torch.corrcoef(torch.stack([tt_flat, torch_flat]))[0, 1].item()
         min_pcc = min(min_pcc, pcc)
-        logger.info(f"Chip {chip_idx} PCC: {pcc:.6f}")
+        logger.debug(f"Chip {chip_idx} PCC: {pcc:.6f}")
 
         if pcc < 0.99:
             all_passed = False
@@ -248,4 +248,4 @@ def test_ttnn_reduce(
 
     # Assert overall PCC threshold
     assert all_passed, f"Min PCC {min_pcc:.6f} below threshold 0.99"
-    logger.info(f"TTNN reduce operation matches torch reference! (min PCC={min_pcc:.6f})")
+    logger.debug(f"TTNN reduce operation matches torch reference! (min PCC={min_pcc:.6f})")

@@ -66,8 +66,8 @@ def test_torch_dispatch_combine(
         dispatch_group_size=dispatch_group_size,
         num_dispatch_groups=1,
     )
-    logger.info(f"{expert_dispatch_table.shape=}")
-    logger.info(f"{expert_dispatch_table=}")
+    logger.debug(f"{expert_dispatch_table.shape=}")
+    logger.debug(f"{expert_dispatch_table=}")
 
     # Initialize dispatch and combine modules
     dispatch_module = TorchDispatchModule(
@@ -99,15 +99,15 @@ def test_torch_dispatch_combine(
     )
 
     # Forward pass through dispatch module
-    logger.info(f"{x.shape=}")
-    logger.info(f"{weights.shape=}")
-    logger.info(f"{indices.shape=}")
+    logger.debug(f"{x.shape=}")
+    logger.debug(f"{weights.shape=}")
+    logger.debug(f"{indices.shape=}")
     dispatched, metadata = dispatch_module(x, weights, indices, expert_offsets)
 
     torch.set_printoptions(profile="full")
-    logger.info(f"{expert_token_counts.shape=}")
-    logger.info(f"{metadata.shape=}")
-    logger.info(f"{dispatched.shape=}")
+    logger.debug(f"{expert_token_counts.shape=}")
+    logger.debug(f"{metadata.shape=}")
+    logger.debug(f"{dispatched.shape=}")
     torch.set_printoptions(profile="default")
 
     # Forward pass through combine module
@@ -116,10 +116,10 @@ def test_torch_dispatch_combine(
         metadata,
         expert_token_counts,
     )
-    logger.info(f"{y.shape=}")
+    logger.debug(f"{y.shape=}")
     y /= num_experts_per_tok  # since we are summing contributions from multiple experts, we need to average them
     y = y.sum(dim=2)  # sum contributions from multiple experts per token
-    logger.info(f"{y.shape=}")
+    logger.debug(f"{y.shape=}")
     assert torch.allclose(
         x, y, atol=1e-6
     ), f"Expected output to match input, but got max diff {torch.max(torch.abs(x-y)).item()}"
@@ -182,12 +182,12 @@ def test_visualize_validation_results_synthetic():
         validated_cells=metadata_validated,
     )
 
-    logger.info("\n=== Synthetic Validation Results Test ===")
-    logger.info("Expected pattern:")
-    logger.info("  DG0: ✅✅ (both pass)")
-    logger.info("  DG1: ❌❌ chip0, ✅❌ chip1 (buffer pass chip1, metadata fail both)")
-    logger.info("  DG2: ✅✅ chip0, ✅❌ chip1 (metadata fail chip1)")
-    logger.info("  DG3: ✅✅ chip0, ❌✅ chip1 (buffer fail chip1)")
+    logger.debug("\n=== Synthetic Validation Results Test ===")
+    logger.debug("Expected pattern:")
+    logger.debug("  DG0: ✅✅ (both pass)")
+    logger.debug("  DG1: ❌❌ chip0, ✅❌ chip1 (buffer pass chip1, metadata fail both)")
+    logger.debug("  DG2: ✅✅ chip0, ✅❌ chip1 (metadata fail chip1)")
+    logger.debug("  DG3: ✅✅ chip0, ❌✅ chip1 (buffer fail chip1)")
 
     log_validation_results(
         results=[buffer_result, metadata_result],

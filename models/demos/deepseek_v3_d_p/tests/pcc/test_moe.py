@@ -205,7 +205,9 @@ class TorchSplitConnectionModule(nn.Module):
 class MoEIntermediates:
     """Data structure holding intermediate values from MoE forward pass for debugging."""
 
-    dispatched_buffer: torch.Tensor  # (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_tokens, hidden_dim)
+    dispatched_buffer: (
+        torch.Tensor
+    )  # (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_tokens, hidden_dim)
     metadata: torch.Tensor  # (num_dispatch_groups, dispatch_group_size, experts_per_chip, max_tokens, metadata_len)
     expert_outputs: torch.Tensor  # Same shape as dispatched_buffer
     shared_output: torch.Tensor  # (dispatch_group_size, seq_len_per_chip, hidden_dim)
@@ -286,7 +288,7 @@ class TorchMinimalMoE(nn.Module):
 
         # Create routed and shared experts (with real weights if model_id provided)
         if model_id is not None and layer_idx is not None:
-            logger.info(f"Loading MoE weights from {model_id}, layer {layer_idx}")
+            logger.debug(f"Loading MoE weights from {model_id}, layer {layer_idx}")
             routed_weights, shared_weights = load_moe_weights_from_hf(model_id, layer_idx, num_routed_experts)
             self.routed_experts = nn.ModuleList([TorchExpert(hidden_dim, torch_weights=w) for w in routed_weights])
             shared_expert = TorchExpert(hidden_dim, torch_weights=shared_weights)
@@ -390,9 +392,9 @@ def test_moe(
     Validates that the unified module produces the same output as the step-by-step test
     and that intermediates are correctly captured.
     """
-    logger.info(f"\n{'='*60}")
-    logger.info("TorchMinimalMoE Module Test")
-    logger.info(f"{'='*60}\n")
+    logger.debug(f"\n{'='*60}")
+    logger.debug("TorchMinimalMoE Module Test")
+    logger.debug(f"{'='*60}\n")
 
     # Compute derived constants
     experts_per_chip, metadata_len, max_dispatched_tokens_per_expert = compute_constants(
@@ -446,30 +448,30 @@ def test_moe(
     )
 
     # Test without intermediates
-    logger.info("Testing forward pass without intermediates...")
+    logger.debug("Testing forward pass without intermediates...")
     final_output, intermediates = moe(
         x, weights, indices, expert_offsets, expert_token_counts, return_intermediates=False
     )
     assert intermediates is None, "Expected no intermediates when return_intermediates=False"
     assert final_output.shape == x.shape, f"Expected output shape {x.shape}, got {final_output.shape}"
-    logger.info(f"Output shape: {final_output.shape}")
-    logger.info(f"Output sum (abs): {final_output.abs().sum().item():.4f}")
+    logger.debug(f"Output shape: {final_output.shape}")
+    logger.debug(f"Output sum (abs): {final_output.abs().sum().item():.4f}")
 
     # Test with intermediates
-    logger.info("\nTesting forward pass with intermediates...")
+    logger.debug("\nTesting forward pass with intermediates...")
     final_output_2, intermediates = moe(
         x, weights, indices, expert_offsets, expert_token_counts, return_intermediates=True
     )
     assert intermediates is not None, "Expected intermediates when return_intermediates=True"
 
     # Verify intermediates shapes
-    logger.info("Intermediate shapes:")
-    logger.info(f"  dispatched_buffer: {intermediates.dispatched_buffer.shape}")
-    logger.info(f"  metadata: {intermediates.metadata.shape}")
-    logger.info(f"  expert_outputs: {intermediates.expert_outputs.shape}")
-    logger.info(f"  shared_output: {intermediates.shared_output.shape}")
-    logger.info(f"  combined_output: {intermediates.combined_output.shape}")
-    logger.info(f"  routed_output: {intermediates.routed_output.shape}")
+    logger.debug("Intermediate shapes:")
+    logger.debug(f"  dispatched_buffer: {intermediates.dispatched_buffer.shape}")
+    logger.debug(f"  metadata: {intermediates.metadata.shape}")
+    logger.debug(f"  expert_outputs: {intermediates.expert_outputs.shape}")
+    logger.debug(f"  shared_output: {intermediates.shared_output.shape}")
+    logger.debug(f"  combined_output: {intermediates.combined_output.shape}")
+    logger.debug(f"  routed_output: {intermediates.routed_output.shape}")
 
     # Verify shapes
     assert intermediates.dispatched_buffer.shape == (
@@ -497,9 +499,9 @@ def test_moe(
     assert not torch.isnan(final_output).any(), "Final output contains NaN values"
     assert not torch.isinf(final_output).any(), "Final output contains Inf values"
 
-    logger.info("\n" + "=" * 60)
-    logger.info("TorchMinimalMoE Module Test PASSED!")
-    logger.info("=" * 60)
+    logger.debug("\n" + "=" * 60)
+    logger.debug("TorchMinimalMoE Module Test PASSED!")
+    logger.debug("=" * 60)
 
 
 # DeepSeek V3/R1 dimensions (from HuggingFace config.json)
@@ -535,10 +537,10 @@ def test_moe_real_weights(
     2. Forward pass completes without errors
     3. Output contains no NaN/Inf values
     """
-    logger.info(f"\n{'='*60}")
-    logger.info(f"TorchMinimalMoE Real Weights Test")
-    logger.info(f"Model: {model_id}, Layer: {layer_idx}")
-    logger.info(f"{'='*60}\n")
+    logger.debug(f"\n{'='*60}")
+    logger.debug(f"TorchMinimalMoE Real Weights Test")
+    logger.debug(f"Model: {model_id}, Layer: {layer_idx}")
+    logger.debug(f"{'='*60}\n")
 
     # Use real DeepSeek V3 dimensions
     hidden_dim = DEEPSEEK_HIDDEN_SIZE
@@ -584,7 +586,7 @@ def test_moe_real_weights(
     )
 
     # Create MinimalMoE module with real weights
-    logger.info(f"Creating MoE with real weights from {model_id}...")
+    logger.debug(f"Creating MoE with real weights from {model_id}...")
     moe = TorchMinimalMoE(
         dispatch_group_size=dispatch_group_size,
         experts_per_chip=experts_per_chip,
@@ -600,21 +602,21 @@ def test_moe_real_weights(
     )
 
     # Log weight shapes from first routed expert
-    logger.info("Weight shapes (first routed expert):")
-    logger.info(f"  gate_proj: {moe.routed_experts[0].gate_proj.shape}")
-    logger.info(f"  up_proj: {moe.routed_experts[0].up_proj.shape}")
-    logger.info(f"  down_proj: {moe.routed_experts[0].down_proj.shape}")
+    logger.debug("Weight shapes (first routed expert):")
+    logger.debug(f"  gate_proj: {moe.routed_experts[0].gate_proj.shape}")
+    logger.debug(f"  up_proj: {moe.routed_experts[0].up_proj.shape}")
+    logger.debug(f"  down_proj: {moe.routed_experts[0].down_proj.shape}")
 
     # Run forward pass
-    logger.info("\nRunning forward pass...")
+    logger.debug("\nRunning forward pass...")
     final_output, intermediates = moe(
         x, weights, indices, expert_offsets, expert_token_counts, return_intermediates=True
     )
 
     # Verify output shape
     assert final_output.shape == x.shape, f"Expected output shape {x.shape}, got {final_output.shape}"
-    logger.info(f"Output shape: {final_output.shape}")
-    logger.info(
+    logger.debug(f"Output shape: {final_output.shape}")
+    logger.debug(
         f"Output stats - min: {final_output.min().item():.4f}, max: {final_output.max().item():.4f}, mean: {final_output.mean().item():.4f}"
     )
 
@@ -626,6 +628,6 @@ def test_moe_real_weights(
     assert not torch.isnan(intermediates.shared_output).any(), "Shared expert output contains NaN"
     assert not torch.isnan(intermediates.routed_output).any(), "Routed expert output contains NaN"
 
-    logger.info("\n" + "=" * 60)
-    logger.info("TorchMinimalMoE Real Weights Test PASSED!")
-    logger.info("=" * 60)
+    logger.debug("\n" + "=" * 60)
+    logger.debug("TorchMinimalMoE Real Weights Test PASSED!")
+    logger.debug("=" * 60)
