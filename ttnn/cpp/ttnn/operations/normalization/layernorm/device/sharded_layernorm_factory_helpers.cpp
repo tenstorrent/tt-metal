@@ -1191,16 +1191,6 @@ void add_cb_descriptors(
 CoreIndices CoreIndices::compute(uint32_t core_idx, const CoreCoord& core, const RuntimeArgsContext& ctx) {
     CoreIndices idx;
 
-    // Convert absolute core coordinates to grid-relative coordinates.
-    // Core ranges use absolute coordinates (e.g., cores 2,0-3,1 for a non-zero-based grid),
-    // but width_index/height_index must be relative to the grid start (0-based) for correct
-    // sender/receiver classification and tile offset calculations.
-    CoreCoord rel_core = core;
-    if (ctx.grid.grid_offset.has_value()) {
-        rel_core.x -= ctx.grid.grid_offset->x;
-        rel_core.y -= ctx.grid.grid_offset->y;
-    }
-
     if (ctx.grid.mcast_1d) {
         idx.height_index = 0;
         idx.width_index = core_idx;

@@ -82,7 +82,8 @@ void kernel_main() {
     experimental::CircularBuffer cb_ex2pe_obj(cb_ex2pe);
     experimental::CircularBuffer cb_fusion_obj(cb_fusion);
 
-    constexpr auto cb_in_rm = tt::CBIndex::c_27;  // input row-major (if row-major input, otherwise unused)
+    constexpr auto cb_in_rm =
+        get_named_compile_time_arg_val("cb_in_rm");  // input row-major (if row-major input, otherwise unused)
 
     constexpr int onetile = 1;
     constexpr int dst0 = 0;
@@ -340,7 +341,7 @@ void kernel_main() {
         cb_xmm_obj.pop_front(total_buffer_size);
 
 #ifdef UNTILIZE_OUT
-        constexpr auto cb_out_rm = tt::CBIndex::c_28;
+        constexpr auto cb_out_rm = get_named_compile_time_arg_val("cb_out_rm");
         untilize_all_blocks_from_cb<block_size>(cb_out, cb_out_rm, Wt);
 #endif
     }  // NCHt loop

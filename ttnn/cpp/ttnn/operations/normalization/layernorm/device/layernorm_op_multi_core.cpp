@@ -475,6 +475,10 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
         {"cb_fusion", tt::CBIndex::c_22},
         {"cb_x", tt::CBIndex::c_23},
         {"cb_xmm", tt::CBIndex::c_24},
+        {"cb_reciprocals", tt::CBIndex::c_25},
+        {"cb_accumulate", tt::CBIndex::c_26},
+        {"cb_in_rm", tt::CBIndex::c_27},
+        {"cb_out_rm", tt::CBIndex::c_28},
     };
 
     // Select reader kernel path

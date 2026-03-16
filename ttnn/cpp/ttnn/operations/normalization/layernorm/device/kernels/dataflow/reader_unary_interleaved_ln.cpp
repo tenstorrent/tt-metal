@@ -96,7 +96,7 @@ void kernel_main() {
     constexpr uint32_t elem_size_bytes = get_compile_time_arg_val(beta_args.next_compile_time_args_offset());
 
     constexpr uint32_t rm_row_stride_bytes = block_size * TILE_W * elem_size_bytes;
-    constexpr uint32_t cb_id_in_rm = tt::CBIndex::c_27;
+    constexpr uint32_t cb_id_in_rm = get_named_compile_time_arg_val("cb_in_rm");
 
     const uint32_t src0_page_bytes = W * elem_size_bytes;
 #else
