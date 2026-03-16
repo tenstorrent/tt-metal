@@ -7,7 +7,6 @@
 #include "autograd/tensor.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "modules/embedding_module.hpp"
-#include "modules/rms_norm_module.hpp"
 #include "ops/distributed/pipeline_parallel_comm_ops.hpp"
 #include "ops/rope_op.hpp"
 #include "ops/unary_ops.hpp"

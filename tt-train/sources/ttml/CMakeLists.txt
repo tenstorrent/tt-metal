@@ -37,14 +37,12 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/embedding_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/gpt_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/grouped_query_attention.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/layer_norm_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/linear_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/llama_block.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/module_base.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/multi_layer_perceptron.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/positional_embeddings.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/modules/rms_norm_module.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/rotary_embedding.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/modules/single_head_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/binary_ops.cpp
@@ -54,15 +52,12 @@ set(SOURCES
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/distributed/ring_attention_sdpa.hpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/dropout_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/embedding_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/layernorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/linear_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/losses.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/matmul_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/multi_head_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/reshape_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/rmsnorm_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/rope_op.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ops/softmax_backward_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/scaled_dot_product_attention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/swiglu_op.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ops/unary_ops.cpp

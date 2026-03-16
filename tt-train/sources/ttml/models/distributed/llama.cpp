@@ -10,7 +10,6 @@
 #include "modules/distributed/linear.hpp"
 #include "modules/embedding_module.hpp"
 #include "modules/linear_module.hpp"
-#include "modules/rms_norm_module.hpp"
 #include "ops/rope_op.hpp"
 #include "ops/unary_ops.hpp"
 

@@ -8,10 +8,8 @@
 
 #include "autograd/tensor.hpp"
 #include "modules/dropout_module.hpp"
-#include "modules/layer_norm_module.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/multi_head_attention.hpp"
-#include "modules/rms_norm_module.hpp"
 #include "modules/single_head_attention.hpp"
 
 namespace ttml::modules {

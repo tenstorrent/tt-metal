@@ -11,7 +11,6 @@
 #include "modules/distributed/multi_head_attention.hpp"
 #include "modules/dropout_module.hpp"
 #include "modules/gpt_block.hpp"
-#include "modules/layer_norm_module.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/multi_head_attention.hpp"
 

@@ -12,7 +12,6 @@
 #include "models/common/transformer_common.hpp"
 #include "modules/embedding_module.hpp"
 #include "modules/gpt_block.hpp"
-#include "modules/layer_norm_module.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/module_base.hpp"
 

@@ -18,13 +18,11 @@
 #include "ops/distributed/comm_ops.hpp"
 #include "ops/dropout_op.hpp"
 #include "ops/embedding_op.hpp"
-#include "ops/layernorm_op.hpp"
 #include "ops/linear_op.hpp"
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
 #include "ops/multi_head_utils.hpp"
 #include "ops/reshape_op.hpp"
-#include "ops/rmsnorm_op.hpp"
 #include "ops/rope_op.hpp"
 #include "ops/sampling_op.hpp"
 #include "ops/scaled_dot_product_attention.hpp"
@@ -40,7 +38,6 @@ void py_module_types(nb::module_& m) {
     m.def_submodule("distributed");
     m.def_submodule("dropout");
     m.def_submodule("embedding");
-    m.def_submodule("layernorm");
     m.def_submodule("linear");
     m.def_submodule("loss");
 
@@ -54,7 +51,6 @@ void py_module_types(nb::module_& m) {
     m.def_submodule("multi_head_utils");
     m.def_submodule("attention");
     m.def_submodule("reshape");
-    m.def_submodule("rmsnorm");
     m.def_submodule("sample");
     m.def_submodule("unary");
 }
@@ -151,18 +147,6 @@ void py_module(nb::module_& m) {
     {
         auto py_embedding = static_cast<nb::module_>(m.attr("embedding"));
         py_embedding.def("embedding", &ttml::ops::embedding_op, nb::arg("tensor"), nb::arg("weight"));
-    }
-
-    {
-        auto py_layernorm = static_cast<nb::module_>(m.attr("layernorm"));
-        py_layernorm.def(
-            "layernorm", &ttml::ops::layernorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("beta") = nb::none());
-        py_layernorm.def(
-            "composite_layernorm",
-            &ttml::ops::composite_layernorm,
-            nb::arg("tensor"),
-            nb::arg("gamma"),
-            nb::arg("beta") = nb::none());
     }
 
     {
@@ -350,17 +334,6 @@ void py_module(nb::module_& m) {
             },
             nb::arg("tensor"),
             nb::arg("shape"));
-    }
-
-    {
-        auto py_rmsnorm = static_cast<nb::module_>(m.attr("rmsnorm"));
-        py_rmsnorm.def("rmsnorm", &ttml::ops::rmsnorm, nb::arg("tensor"), nb::arg("gamma"), nb::arg("epsilon"));
-        py_rmsnorm.def(
-            "rmsnorm_composite",
-            &ttml::ops::rmsnorm_composite,
-            nb::arg("tensor"),
-            nb::arg("gamma"),
-            nb::arg("epsilon"));
     }
 
     {

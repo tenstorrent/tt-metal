@@ -12,7 +12,6 @@
 #include "modules/linear_module.hpp"
 #include "modules/llama_block.hpp"
 #include "modules/module_base.hpp"
-#include "modules/rms_norm_module.hpp"
 #include "ops/rope_op.hpp"
 #include "yaml-cpp/yaml.h"
 

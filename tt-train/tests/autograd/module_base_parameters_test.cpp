@@ -9,7 +9,6 @@
 
 #include "core/tt_tensor_utils.hpp"
 #include "modules/dropout_module.hpp"
-#include "modules/layer_norm_module.hpp"
 #include "modules/linear_module.hpp"
 #include "modules/module_base.hpp"
 #include "ops/unary_ops.hpp"
