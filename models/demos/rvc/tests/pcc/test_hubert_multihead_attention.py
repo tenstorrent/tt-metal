@@ -40,14 +40,18 @@ def test_hubert_multihead_attention(device):
     torch_output = torch_attn(torch_query)
 
     tt_query = ttnn.from_torch(
-        torch_query.to(torch.bfloat16),
+        torch_query.to(torch.bfloat16)
+        .permute(1, 0, 2)
+        .contiguous(),  # PyTorch uses (t, b, c) while ttnn uses (b, t, c)
         dtype=ttnn.bfloat16,
         layout=ttnn.TILE_LAYOUT,
         device=device,
     )
 
     tt_output = tt_attn(tt_query)
-    tt_output_torch = ttnn.to_torch(tt_output).to(torch.float32)
+    tt_output_torch = (
+        ttnn.to_torch(tt_output).to(torch.float32).permute(1, 0, 2).contiguous()
+    )  # Convert back to (t, b, c) for comparison with PyTorch output
 
     assert tuple(tt_output_torch.shape) == tuple(torch_output.shape)
     assert_with_pcc(torch_output, tt_output_torch, pcc=0.97)
