@@ -58,6 +58,7 @@ private:
 };
 
 struct DeviceStorage {
+    // Construct a DeviceStorage that is deallocated
     DeviceStorage() = default;
 
     ////////////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -83,27 +84,17 @@ struct DeviceStorage {
     // but with a different set of coords.
     DeviceStorage(const DeviceStorage& other, std::vector<distributed::MeshCoordinate> coords);
 
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Device Memory getters
+
+    // Get legacy single device buffer
     Buffer* get_buffer() const;
+
+    // Get mesh buffer that represents the device memory
     const distributed::MeshBuffer& get_mesh_buffer() const;
 
-    // Returns true if no other DeviceStorage or third party has a shared reference to the device memory (MeshBuffer).
-    bool is_sole_owner_of_device_memory() const;
-
-    void deallocate(bool force);
-
-    // Begin internal functions:
-    std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer_leak_ownership() const;
-    //
-    // These functions allows the use of the get_mesh_buffer as a view.
-    // These are considered internal functions and are not part of the public API.
-    // They will be replaced with a new initiative as described in: #38093
-    DeviceStorage(const DeviceStorage& owning_storage, std::shared_ptr<distributed::MeshBuffer> surface_buffer);
-    // End internal functions.
-
-    static constexpr auto attribute_names = std::forward_as_tuple();
-    auto attribute_values() const { return std::forward_as_tuple(); }
-
-    bool is_allocated() const;
+    // Get the device the device memory is allocated on
+    distributed::MeshDevice* get_device() const;
 
     // Returns the MeshDevice pointer if mesh_buffer exists, or nullptr otherwise.
     // Unlike get_device(), this does NOT throw when the buffer is deallocated.
@@ -118,13 +109,48 @@ struct DeviceStorage {
     // don't operate on deallocated tensors.
     distributed::MeshDevice* get_device_bypass_deallocate_check() const;
 
-    distributed::MeshDevice* get_device() const;
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // DeviceStorage as a view of the undelrying device memory at specific coordinates:
 
     // Returns true if the tensor spans across all devices in a mesh.
     bool is_uniform_storage() const;
 
     // Returns the coordinates the tensor spans across.
-    std::span<const distributed::MeshCoordinate> get_coords() const { return coords_; }
+    std::span<const distributed::MeshCoordinate> get_coords() const;
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Deallocation management
+
+    // Deallocate the underlying device memory.
+    // The underlying device memory could be shared by multiple instances of the DeviceStorage.
+    //
+    // If force is set, the underlying device memory will be deallocated irespective of the number of device storage
+    // owners. If force is not set, the underlying device memory will be deallocated only if "this" is the sole owner of
+    // the underlying device memory.
+    void deallocate(bool force);
+
+    // Returns true if no other DeviceStorage or third party has a shared reference to the device memory (MeshBuffer).
+    bool is_sole_owner_of_device_memory() const;
+
+    // Returns true if the underlying device memory is allocated.
+    bool is_allocated() const;
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Begin internal functions:
+    std::shared_ptr<distributed::MeshBuffer> get_mesh_buffer_leak_ownership() const;
+    //
+    // These functions allows the use of the get_mesh_buffer as a view.
+    // These are considered internal functions and are not part of the public API.
+    // They will be replaced with a new initiative as described in: #38093
+    DeviceStorage(const DeviceStorage& owning_storage, std::shared_ptr<distributed::MeshBuffer> surface_buffer);
+    // End internal functions.
+
+    ////////////////////////////////////////////////////////////////////////////////////////////////////////////
+    // Serialization
+
+    static constexpr auto attribute_names = std::forward_as_tuple();
+    auto attribute_values() const { return std::forward_as_tuple(); }
 
 private:
     std::vector<distributed::MeshCoordinate> coords_;
