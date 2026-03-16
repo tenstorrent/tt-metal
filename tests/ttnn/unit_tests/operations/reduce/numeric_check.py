@@ -25,7 +25,7 @@ ALLCLOSE_ATOL = 1e-08  # Absolute tolerance for allclose
 ALLCLOSE_RTOL = 1e-05  # Relative tolerance for allclose
 FROBENIUS_THRESHOLD = 0.01  # Threshold for relative Frobenius (1%)
 ULP_THRESHOLD = 10  # ULP threshold (not recommended for matmul)
-NEAR_ZERO_THRESHOLD = 0.0001
+NEAR_ZERO_THRESHOLD = 0.000001
 FROBENIUS_GRID_SPLITS = 4  # Split each dim into N pieces → NxN tile grid
 FROBENIUS_TOP_K = 5  # Report the K worst tiles
 # # Padding validation configuration
@@ -186,11 +186,10 @@ def collect_and_dump_numeric_metrics(
     # expected_allclose = expected_allclose[mask_nonzero]
     # actual_allclose = actual_allclose[mask_nonzero]
 
-    near_zero_threshold = NEAR_ZERO_THRESHOLD
-    non_near_zero_mask = torch.abs(expected_allclose) >= near_zero_threshold
-    if non_near_zero_mask.any():
-        expected_allclose = expected_allclose[non_near_zero_mask]
-        actual_allclose = actual_allclose[non_near_zero_mask]
+    # Mask out values less than NEAR_ZERO_THRESHOLD
+    non_near_zero_mask = torch.abs(expected_allclose) >= NEAR_ZERO_THRESHOLD
+    expected_allclose = expected_allclose[non_near_zero_mask]
+    actual_allclose = actual_allclose[non_near_zero_mask]
 
     if expected_allclose.numel() > 0 and actual_allclose.numel() > 0:
         allclose_passed, allclose_message = comp_allclose_custom(
@@ -234,15 +233,21 @@ def collect_and_dump_numeric_metrics(
     ulp_passed = False
 
     # Filter out positions where |expected| < ATOL (to avoid division by zero in ULP)
-    near_zero_threshold = NEAR_ZERO_THRESHOLD
-    non_near_zero_mask = torch.abs(expected) >= near_zero_threshold
+    # near_zero_threshold = NEAR_ZERO_THRESHOLD
     total_elems = expected.numel()
-    near_zero_count = (torch.abs(expected) < near_zero_threshold).sum().item()
+    non_near_zero_mask = torch.abs(expected) >= NEAR_ZERO_THRESHOLD
+    expected_non_near_zero = expected[non_near_zero_mask]
+    actual_non_near_zero = actual[non_near_zero_mask]
+
+    # expected_non_near_zero = expected[non_near_zero_mask]
+    # near_zero_count = (torch.abs(expected) < NEAR_ZERO_THRESHOLD).sum().item()
+    near_zero_count = (non_near_zero_mask == False).sum().item()
     near_zero_pct = (near_zero_count / total_elems * 100) if total_elems > 0 else 0
 
-    if non_near_zero_mask.any():
-        expected_non_near_zero = expected[non_near_zero_mask]
-        actual_non_near_zero = actual[non_near_zero_mask]
+    # if non_near_zero_mask.any():
+    if expected_non_near_zero.numel() > 0 and actual_non_near_zero.numel() > 0:
+        # expected_non_near_zero = expected[non_near_zero_mask]
+        # actual_non_near_zero = actual[non_near_zero_mask]
         ulp_passed, ulp_message = assert_with_ulp(
             expected_non_near_zero, actual_non_near_zero, ulp_threshold=ulp_threshold
         )
