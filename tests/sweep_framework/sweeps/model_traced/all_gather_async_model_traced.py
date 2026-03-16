@@ -3,6 +3,7 @@
 # SPDX-License-Identifier: Apache-2.0
 
 
+import re
 from math import prod
 from typing import Optional, Tuple
 
@@ -65,6 +66,31 @@ LEAD_MODEL_SHARD_SPECS = [
         valid_tensor_shapes=[[1, 8, 8, 128]],
     ),
 ]
+
+
+def _parse_shard_dims_from_placement(tensor_placement):
+    """Extract (dim0, dim1) for ShardTensor2dMesh from a traced tensor_placement dict.
+
+    ``placement`` may be a Python list of strings (runtime) or a single
+    string representation of that list (from JSON).  Examples::
+
+        ['PlacementShard(2)', 'PlacementShard(1)']   -> (2, 1)
+        ['PlacementReplicate', 'PlacementShard(3)']  -> (None, 3)
+
+    Returns None when the field cannot be parsed.
+    """
+    if not tensor_placement:
+        return None
+    placement = tensor_placement.get("placement", "")
+    if isinstance(placement, list):
+        placement = " ".join(str(p) for p in placement)
+    dims = []
+    for m in re.finditer(r"PlacementShard\((-?\d+)\)|PlacementReplicate", placement):
+        if m.group(1) is not None:
+            dims.append(int(m.group(1)))
+        else:
+            dims.append(None)
+    return tuple(dims) if len(dims) == 2 else None
 
 
 GENERALITY_PARAMETERS = {
@@ -231,6 +257,8 @@ def run(
     chunks_per_sync=None,
     num_workers_per_link=None,
     num_buffers_per_channel=None,
+    subdevice_id=None,
+    use_broadcast=None,
     *,
     device,  # unused
     **kwargs,
@@ -287,15 +315,15 @@ def run(
         if dim is None:
             raise ValueError("dim is required for all_gather_async")
 
-        # Normalize negative dim
-        if dim < 0:
-            dim = len(input_shape) + dim
+        # Resolve negative dim for internal calculations only; keep original
+        # dim value so the op call matches the model trace exactly.
+        effective_dim = dim if dim >= 0 else len(input_shape) + dim
 
         if cluster_axis is None:
             if mesh_shape[0] == 1 or mesh_shape[1] == 1:
                 cluster_axis = 0 if mesh_shape[0] > 1 else 1
             else:
-                cluster_axis = 1 if dim > 1 else 0
+                cluster_axis = 1 if effective_dim > 1 else 0
 
         if mesh_shape[0] == 1 or mesh_shape[1] == 1:
             fabric_config = ttnn.FabricConfig.FABRIC_1D
@@ -305,14 +333,38 @@ def run(
         replicate_dim = mesh_shape[cluster_axis]
         is_2d_mesh = mesh_shape[0] > 1 and mesh_shape[1] > 1
 
-        # input_shape is the per-device shape; the gathered output multiplies dim by replicate_dim
-        output_shape = list(input_shape)
-        output_shape[dim] = input_shape[dim] * replicate_dim
+        # Parse the model's actual tensor placement for 2D meshes so the
+        # sweep input matches the model's distribution exactly.
+        shard_dims = _parse_shard_dims_from_placement(input_a_tensor_placement) if is_2d_mesh else None
 
-        # Golden: random tensor of the full gathered output shape.
-        # We shard it along dim to distribute across devices, then all_gather reconstructs it.
-        torch_reference = torch.rand(output_shape).bfloat16()
-        torch_input = torch_reference
+        if shard_dims is not None:
+            # Build a global tensor whose shape accounts for sharding on
+            # ALL mesh axes.  input_shape is the per-device shape, so each
+            # sharded dim must be scaled by the number of devices on that axis.
+            global_shape = list(input_shape)
+            for axis_idx, sd in enumerate(shard_dims):
+                if sd is not None:
+                    esd = sd if sd >= 0 else len(input_shape) + sd
+                    global_shape[esd] *= mesh_shape[axis_idx]
+
+            torch_global = torch.rand(global_shape).bfloat16()
+
+            # Golden reference for device 0 after all_gather: the gather dim
+            # is fully present but non-gathered sharded dims remain split.
+            ref_slices = [slice(None)] * len(global_shape)
+            for axis_idx, sd in enumerate(shard_dims):
+                if sd is not None and axis_idx != cluster_axis:
+                    esd = sd if sd >= 0 else len(input_shape) + sd
+                    ref_slices[esd] = slice(0, input_shape[esd])
+
+            torch_reference = torch_global[tuple(ref_slices)]
+            torch_input = torch_global
+        else:
+            # 1D mesh or unparseable placement: shard only along gather dim.
+            output_shape = list(input_shape)
+            output_shape[effective_dim] = input_shape[effective_dim] * replicate_dim
+            torch_reference = torch.rand(output_shape).bfloat16()
+            torch_input = torch_reference
     else:
         # Original generality/lead_model format
         # Create reference output
@@ -333,18 +385,18 @@ def run(
 
         if is_model_traced:
             if is_2d_mesh:
-                # 2D mesh: shard along gather dim on cluster_axis, replicate on the other axis.
-                # This matches how _get_tensors works in test_minimal_all_gather_async.py.
-                if cluster_axis == 1:
-                    shard_dims = (None, dim)
+                if shard_dims is not None:
+                    mapper_dims = shard_dims
+                elif cluster_axis == 1:
+                    mapper_dims = (None, effective_dim)
                 else:
-                    shard_dims = (dim, None)
+                    mapper_dims = (effective_dim, None)
                 tt_input = ttnn.from_torch(
                     torch_input,
                     layout=layout,
                     dtype=input_dtype,
                     memory_config=input_memory_config,
-                    mesh_mapper=ShardTensor2dMesh(device, dims=shard_dims, mesh_shape=mesh_shape),
+                    mesh_mapper=ShardTensor2dMesh(device, dims=mapper_dims, mesh_shape=mesh_shape),
                     device=device,
                 )
             else:
@@ -353,7 +405,7 @@ def run(
                     layout=layout,
                     dtype=input_dtype,
                     memory_config=input_memory_config,
-                    mesh_mapper=ttnn.ShardTensorToMesh(device, dim=dim),
+                    mesh_mapper=ttnn.ShardTensorToMesh(device, dim=effective_dim),
                     device=device,
                 )
         else:
@@ -398,21 +450,51 @@ def run(
             try:
                 start_time = start_measuring_time()
 
-                tt_out_tensor = ttnn.experimental.all_gather_async(
-                    tt_input,
-                    persistent_output_buffer=persistent_output_buffer if persistent_output_buffer else None,
-                    dim=dim,
-                    multi_device_global_semaphore=ccl_semaphore_handles[i],
-                    num_links=num_links,
-                    memory_config=output_memory_config,
-                    topology=topology,
-                    subdevice_id=worker_sub_device_id,
-                    barrier_semaphore=barrier_semaphore_handles[i] if barrier_semaphore_handles else None,
-                    cluster_axis=cluster_axis,
-                    chunks_per_sync=chunks_per_sync,
-                    num_workers_per_link=num_workers_per_link,
-                    num_buffers_per_channel=num_buffers_per_channel,
-                )
+                if is_model_traced:
+                    # Build kwargs to match the model trace exactly: include
+                    # mesh_device, and only pass optional args that were
+                    # present (non-None) in the original model call.
+                    op_kwargs = {
+                        "dim": dim,
+                        "multi_device_global_semaphore": ccl_semaphore_handles[i],
+                        "num_links": num_links,
+                        "topology": topology,
+                        "cluster_axis": cluster_axis,
+                        "mesh_device": device,
+                    }
+                    if output_memory_config is not None:
+                        op_kwargs["memory_config"] = output_memory_config
+                    if barrier_semaphore_handles:
+                        op_kwargs["barrier_semaphore"] = barrier_semaphore_handles[i]
+                    if persistent_output_buffer is not None:
+                        op_kwargs["persistent_output_buffer"] = persistent_output_buffer
+                    if subdevice_id is not None:
+                        op_kwargs["subdevice_id"] = worker_sub_device_id
+                    if chunks_per_sync is not None:
+                        op_kwargs["chunks_per_sync"] = chunks_per_sync
+                    if num_workers_per_link is not None:
+                        op_kwargs["num_workers_per_link"] = num_workers_per_link
+                    if num_buffers_per_channel is not None:
+                        op_kwargs["num_buffers_per_channel"] = num_buffers_per_channel
+                    if use_broadcast is not None:
+                        op_kwargs["use_broadcast"] = use_broadcast
+                    tt_out_tensor = ttnn.experimental.all_gather_async(tt_input, **op_kwargs)
+                else:
+                    tt_out_tensor = ttnn.experimental.all_gather_async(
+                        tt_input,
+                        persistent_output_buffer=persistent_output_buffer if persistent_output_buffer else None,
+                        dim=dim,
+                        multi_device_global_semaphore=ccl_semaphore_handles[i],
+                        num_links=num_links,
+                        memory_config=output_memory_config,
+                        topology=topology,
+                        subdevice_id=worker_sub_device_id,
+                        barrier_semaphore=barrier_semaphore_handles[i] if barrier_semaphore_handles else None,
+                        cluster_axis=cluster_axis,
+                        chunks_per_sync=chunks_per_sync,
+                        num_workers_per_link=num_workers_per_link,
+                        num_buffers_per_channel=num_buffers_per_channel,
+                    )
 
                 ttnn.synchronize_device(device, sub_device_ids=sub_device_stall_group)
                 e2e_perf = stop_measuring_time(start_time)

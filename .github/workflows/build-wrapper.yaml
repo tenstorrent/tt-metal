@@ -101,8 +101,8 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       publish-artifact: false
       publish-package: false
-      skip-tt-train: true
-      tracy: false
+      skip-tt-train: false
+      tracy: true
       ref: ${{ inputs.ref }}
 
   # build job runs the matrix - either when called from merge-gate with pre-built tags,
@@ -141,8 +141,8 @@ jobs:
       enable-lto: ${{ matrix.config.enable-lto || false }}
       publish-artifact: false
       publish-package: false
-      skip-tt-train: true
-      tracy: false
+      skip-tt-train: false
+      tracy: true
       ref: ${{ inputs.ref }}
       # Pass pre-built docker image tags based on platform
       ci-build-docker-image: ${{

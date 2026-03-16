@@ -33,14 +33,14 @@ struct JointSDPAInputs {
     Tensor joint_v;
 };
 
-struct JointSDPAResult {
-    Tensor output;
-    Tensor joint_output;
-};
+// Index constants for JointSDPAResult vector
+constexpr size_t JOINT_SDPA_OUTPUT_IDX = 0;
+constexpr size_t JOINT_SDPA_JOINT_OUTPUT_IDX = 1;
 
-struct JointSDPAResultSpec {
-    TensorSpec output;
-    TensorSpec joint_output;
-};
+// JointSDPAResult is a vector of 2 tensors: [output, joint_output]
+using JointSDPAResult = Tensors;
+
+// JointSDPAResultSpec is a vector of 2 TensorSpecs: [output, joint_output]
+using JointSDPAResultSpec = std::vector<TensorSpec>;
 
 }  // namespace ttnn::prim

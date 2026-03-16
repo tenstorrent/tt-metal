@@ -11,7 +11,11 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.demos.deepseek_v3.tt.rms_norm.rms_norm_base import RMSNormBase
 from models.demos.deepseek_v3.utils.config_dataclass import FromWeightConfig, MeshDeviceStub, RMSNormConfig
-from models.demos.deepseek_v3.utils.config_helpers import COMPUTE_KERNEL_CONFIG_LOFI, get_state_dicts, shard_and_save
+from models.demos.deepseek_v3.utils.config_helpers import (
+    COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC,
+    get_state_dicts,
+    shard_and_save,
+)
 from models.demos.deepseek_v3.utils.run_config import (
     ModelDecodeConfig,
     ModelPrefillConfig,
@@ -55,7 +59,7 @@ class RMSNorm(RMSNormBase):
         return RMSNormConfig(
             epsilon=hf_config.rms_norm_eps,
             weight=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-            compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+            compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC,
         )
 
     @classmethod
@@ -63,7 +67,7 @@ class RMSNorm(RMSNormBase):
         return RMSNormConfig(
             epsilon=hf_config.rms_norm_eps,
             weight=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
-            compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+            compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI4_NOFP32_ACC,
         )
 
     @staticmethod
