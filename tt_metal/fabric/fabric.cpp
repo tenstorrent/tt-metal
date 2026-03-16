@@ -16,6 +16,7 @@
 #include <tt-metalium/program_descriptors.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>  // ChipId
 #include "tt_metal/fabric/builder/fabric_static_sized_channels_allocator.hpp"
+#include <algorithm>
 #include <optional>
 #include <vector>
 
@@ -272,6 +273,21 @@ std::vector<eth_chan_directions> get_neighbor_eth_directions(
         }
     }
     return directions;
+}
+
+bool are_fabric_neighbours(const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id) {
+    const auto& control_plane = tt::tt_metal::MetalContext::instance().get_control_plane();
+    auto direction = control_plane.get_forwarding_direction(src_fabric_node_id, dst_fabric_node_id);
+    if (!direction.has_value()) {
+        return false;
+    }
+    auto neighbors = control_plane.get_chip_neighbors(src_fabric_node_id, *direction);
+    auto it = neighbors.find(dst_fabric_node_id.mesh_id);
+    if (it == neighbors.end()) {
+        return false;
+    }
+    const auto& chip_ids = it->second;
+    return std::find(chip_ids.begin(), chip_ids.end(), dst_fabric_node_id.chip_id) != chip_ids.end();
 }
 
 // append runtime parameter for RoutingPlaneConnectionManager

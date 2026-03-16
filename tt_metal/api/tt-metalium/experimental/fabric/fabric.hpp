@@ -78,6 +78,8 @@ enum class FabricApiType : uint8_t {
 std::vector<eth_chan_directions> get_neighbor_eth_directions(
     const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
 
+bool are_fabric_neighbours(const FabricNodeId& src_fabric_node_id, const FabricNodeId& dst_fabric_node_id);
+
 // Appends connection manager RT args for one or more routes.
 // next_hop_nodes: vector of next-hop nodes, one per route.
 // connection_link_indices: optional per-route link indices; if empty, a valid link is auto-selected.
