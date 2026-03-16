@@ -105,4 +105,6 @@ bool DeviceStorage::is_uniform_storage() const {
     return coords_.size() == mesh_buffer->device()->num_devices();
 }
 
+std::span<const distributed::MeshCoordinate> DeviceStorage::get_coords() const { return coords_; }
+
 }  // namespace tt::tt_metal
