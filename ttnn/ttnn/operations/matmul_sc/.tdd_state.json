@@ -1,0 +1,165 @@
+{
+  "op_name": "matmul_sc",
+  "op_path": "ttnn/ttnn/operations/matmul_sc",
+  "spec_path": "ttnn/ttnn/operations/matmul_sc/op_design.md",
+  "layout": "TILE_LAYOUT",
+  "current_stage_index": 2,
+  "last_passing_commit": "3d30b0fb6117fddccc2170ce4a2827035d2c2bd8",
+  "stages": [
+    {
+      "name": "data_pipeline",
+      "description": "Reader reads A tiles into cb_in0, compute copies cb_in0 to cb_out (identity), writer writes cb_out to DRAM. Verifies data pipeline without matmul logic.",
+      "kernel_files": [
+        "kernels/matmul_sc_reader.cpp",
+        "kernels/matmul_sc_compute.cpp",
+        "kernels/matmul_sc_writer.cpp"
+      ],
+      "test_file": "test_stage_data_pipeline.py",
+      "reference_body": "input_a",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.01
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 64)",
+        "(1, 1, 32, 128)",
+        "(1, 1, 128, 128)"
+      ],
+      "extra_imports": "",
+      "extra_args": "input_b_tensor",
+      "extra_setup": "input_b = torch.randn(shape, dtype=torch.bfloat16)\ninput_b_tensor = ttnn.from_torch(input_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "list(shape)",
+      "dtype_parametrize": "",
+      "status": "passed",
+      "commit": "67bfe5cd9b6bbfe084909f4563e5b46a7948939a",
+      "attempts": 0,
+      "free_retries": 3,
+      "max_attempts": 6,
+      "failure_history": [
+        {
+          "classification": "compilation_error",
+          "summary": "Compilation error: tal/hw/firmware/src/tt-1xx/trisck.cc:13:\n/proj_sw/user_dev/wransom/tt-metal/ttnn/ttnn/operations/matmul_sc/kernels/matmul_sc_compute.cpp:14:10: fatal error: compute_kernel_api/common.h: No such file o",
+          "details": {
+            "error_snippet": "tal/hw/firmware/src/tt-1xx/trisck.cc:13:\n/proj_sw/user_dev/wransom/tt-metal/ttnn/ttnn/operations/matmul_sc/kernels/matmul_sc_compute.cpp:14:10: fatal error: compute_kernel_api/common.h: No such file or directory\n   14 | #include \"compute_kernel_api/common.h\"\n      |          ^~~~~~~~~~~~~~~~~~~~~~~~"
+          },
+          "suggested_action": "Check includes and template parameters. Verify kernel API signatures. Ensure compute_kernel_hw_startup() is called before helpers.",
+          "attempt": 0,
+          "free_retries": 1,
+          "cost": "FREE",
+          "stage": "data_pipeline",
+          "remaining_attempts": 6,
+          "remaining_free_retries": 9,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "compilation_error",
+          "summary": "Compilation error: ^\n/proj_sw/user_dev/wransom/tt-metal/tt_metal/hw/inc/api/compile_time_args.h:25:23: error: static assertion failed: Index out of range\n   25 |     static_assert(Idx < kernel_compile_time_args.size(), ",
+          "details": {
+            "error_snippet": "^\n/proj_sw/user_dev/wransom/tt-metal/tt_metal/hw/inc/api/compile_time_args.h:25:23: error: static assertion failed: Index out of range\n   25 |     static_assert(Idx < kernel_compile_time_args.size(), \"Index out of range\");\n      |"
+          },
+          "suggested_action": "Check includes and template parameters. Verify kernel API signatures. Ensure compute_kernel_hw_startup() is called before helpers.",
+          "attempt": 0,
+          "free_retries": 2,
+          "cost": "FREE",
+          "stage": "data_pipeline",
+          "remaining_attempts": 6,
+          "remaining_free_retries": 8,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "compilation_error",
+          "summary": "Compilation error: ^\n/proj_sw/user_dev/wransom/tt-metal/tt_metal/hw/inc/api/compile_time_args.h:25:23: error: static assertion failed: Index out of range\n   25 |     static_assert(Idx < kernel_compile_time_args.size(), ",
+          "details": {
+            "error_snippet": "^\n/proj_sw/user_dev/wransom/tt-metal/tt_metal/hw/inc/api/compile_time_args.h:25:23: error: static assertion failed: Index out of range\n   25 |     static_assert(Idx < kernel_compile_time_args.size(), \"Index out of range\");\n      |"
+          },
+          "suggested_action": "Check includes and template parameters. Verify kernel API signatures. Ensure compute_kernel_hw_startup() is called before helpers.",
+          "attempt": 0,
+          "free_retries": 3,
+          "cost": "FREE",
+          "stage": "data_pipeline",
+          "remaining_attempts": 6,
+          "remaining_free_retries": 7,
+          "budget_exhausted": false
+        }
+      ]
+    },
+    {
+      "name": "matmul_compute",
+      "description": "Full matmul C=AxB using all three helpers: read_matmul_tiles, matmul_1d, write_matmul_tiles.",
+      "kernel_files": [
+        "kernels/matmul_sc_reader.cpp",
+        "kernels/matmul_sc_compute.cpp",
+        "kernels/matmul_sc_writer.cpp"
+      ],
+      "test_file": "test_stage_matmul_compute.py",
+      "reference_body": "torch.matmul(input_a, input_b)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 128)",
+        "(1, 1, 128, 64)",
+        "(1, 1, 32, 256)"
+      ],
+      "extra_imports": "",
+      "extra_args": "input_b_tensor",
+      "extra_setup": "M, K = shape[-2], shape[-1]\nN = {\"(1, 1, 32, 32)\": 32, \"(1, 1, 64, 128)\": 64, \"(1, 1, 32, 128)\": 64, \"(1, 1, 128, 64)\": 128, \"(1, 1, 32, 256)\": 32}[str(shape)]\ninput_b = torch.randn(*shape[:-2], K, N, dtype=torch.bfloat16)\ninput_b_tensor = ttnn.from_torch(input_b, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device, memory_config=ttnn.DRAM_MEMORY_CONFIG)",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "list(input_b_tensor.shape)",
+      "dtype_parametrize": "",
+      "status": "passed",
+      "commit": "3d30b0fb6117fddccc2170ce4a2827035d2c2bd8",
+      "attempts": 0,
+      "free_retries": 3,
+      "max_attempts": 6,
+      "failure_history": [
+        {
+          "classification": "compilation_error",
+          "summary": "Compilation error: nel_lib::matmul_1d(uint32_t, uint32_t, uint32_t, uint32_t)':\n/proj_sw/user_dev/wransom/tt-metal/ttnn/cpp/ttnn/kernel_lib/matmul_1d_helpers.inl:37:17: error: there are no arguments to 'get_cb_num_pages",
+          "details": {
+            "error_snippet": "nel_lib::matmul_1d(uint32_t, uint32_t, uint32_t, uint32_t)':\n/proj_sw/user_dev/wransom/tt-metal/ttnn/cpp/ttnn/kernel_lib/matmul_1d_helpers.inl:37:17: error: there are no arguments to 'get_cb_num_pages' that depend on a template parameter, so a declaration of 'get_cb_num_pages' must be available [-Wt"
+          },
+          "suggested_action": "Check includes and template parameters. Verify kernel API signatures. Ensure compute_kernel_hw_startup() is called before helpers.",
+          "attempt": 0,
+          "free_retries": 1,
+          "cost": "FREE",
+          "stage": "matmul_compute",
+          "remaining_attempts": 6,
+          "remaining_free_retries": 9,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "shape_mismatch",
+          "summary": "Shape mismatch",
+          "details": {},
+          "suggested_action": "Verify output shape calculation in ProgramDescriptor. Check work distribution logic and per-core tile counts.",
+          "attempt": 0,
+          "free_retries": 2,
+          "cost": "FREE",
+          "stage": "matmul_compute",
+          "remaining_attempts": 6,
+          "remaining_free_retries": 8,
+          "budget_exhausted": false
+        },
+        {
+          "classification": "shape_mismatch",
+          "summary": "Shape mismatch",
+          "details": {},
+          "suggested_action": "Verify output shape calculation in ProgramDescriptor. Check work distribution logic and per-core tile counts.",
+          "attempt": 0,
+          "free_retries": 3,
+          "cost": "FREE",
+          "stage": "matmul_compute",
+          "remaining_attempts": 6,
+          "remaining_free_retries": 7,
+          "budget_exhausted": false
+        }
+      ]
+    }
+  ]
+}
