@@ -172,7 +172,7 @@ D2HSocket::D2HSocket(
     std::vector<uint32_t> config_data(config_buffer_->size() / sizeof(uint32_t), 0);
     config_data[0] = 0;
     config_data[1] = 1;
-    config_data[2] = data_addr_lo;
+    config_data[2] = 0;
     config_data[3] = bytes_sent_addr_lo;
     config_data[4] = data_addr_lo;
     config_data[5] = fifo_size_;

@@ -66,12 +66,12 @@ bool realtime_profiler_init() {
     // Layout: 8 words MD + 4 words ack + downstream encoding area
     // [12] = pcie_xy_enc, [13] = data_addr_hi, [14] = bytes_sent_addr_hi
     // [15] = l1_data_buffer_address, [16] = l1_data_buffer_size
-    // [2] = data_addr_lo (write_ptr)
+    // [4] = data_addr_lo (downstream_fifo_addr)
     tt_l1_ptr uint32_t* socket_config_words = reinterpret_cast<tt_l1_ptr uint32_t*>(socket_config_addr);
     realtime_profiler_pcie_xy_enc = socket_config_words[12];
     realtime_profiler_data_addr_hi = socket_config_words[13];
     realtime_profiler_l1_data_addr = socket_config_words[15];
-    uint32_t data_addr_lo = socket_config_words[2];  // Initial write_ptr = data buffer start
+    uint32_t data_addr_lo = socket_config_words[4];  // downstream_fifo_addr = data buffer start
 
     // Calculate page-aligned FIFO size
     realtime_profiler_fifo_page_aligned_size =
