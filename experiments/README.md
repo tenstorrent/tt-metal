@@ -166,6 +166,12 @@ TT_METAL_GTEST_ETH_DISPATCH=1 python \
   --max-new-tokens 4 --mesh-cols 4 --phase both \
   --enable-trace --trace-mode sampling
 
+# Trace-sampling, 1x8 mesh (8 devices, flat 1D)
+TT_METAL_GTEST_ETH_DISPATCH=1 python \
+  models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
+  --max-new-tokens 4 --mesh-cols 8 --phase both \
+  --enable-trace --trace-mode sampling
+
 # Trace-sampling, 2x4 mesh (8 devices, T3K physical topology — fastest)
 TT_METAL_GTEST_ETH_DISPATCH=1 python \
   models/demos/glm4_moe_lite/scripts/debug_run_full_tt_greedy.py \
@@ -313,8 +319,9 @@ Profiler output lands in `generated/profiler/reports/<name>/<timestamp>/`.
 | 7 | **Non-fused, trace-sampling** | **2x4** | **8** | **120.6 ms** | **8.3 tok/s** | **4.2x** |
 | 8 | Fused (3 flags), trace-sampling | 2x4 | 8 | 120.8 ms | 8.3 tok/s | 4.2x |
 | 9 | All-fused (4 flags), trace-sampling | 2x4 | 8 | 127.6 ms | 7.8 tok/s | 4.0x |
-| 10 | Fused (3 flags), trace-sampling | 1x8 | 8 | 124.7 ms | 8.0 tok/s | 4.0x |
-| 11 | All-fused (4 flags), trace-sampling | 1x8 | 8 | 130.8 ms | 7.6 tok/s | 3.9x |
+| 10 | Non-fused, trace-sampling | 1x8 | 8 | 124.5 ms | 8.0 tok/s | 4.1x |
+| 11 | Fused (3 flags), trace-sampling | 1x8 | 8 | 124.7 ms | 8.0 tok/s | 4.0x |
+| 12 | All-fused (4 flags), trace-sampling | 1x8 | 8 | 130.8 ms | 7.6 tok/s | 3.9x |
 
 **Row 7 is the fastest configuration.** Fused (3 flags) = KV_BRANCH + QKV_A + SHARED_GATE_UP. All-fused (4 flags) adds EXPERTS_GATE_UP.
 
@@ -322,11 +329,12 @@ Profiler output lands in `generated/profiler/reports/<name>/<timestamp>/`.
 
 | Configuration | 1x4 (4 dev) | 1x8 (8 dev) | 2x4 (8 dev) |
 | --- | --- | --- | --- |
-| **Non-fused** | 137.6 ms | — | **120.6 ms** |
+| **Non-fused** | 137.6 ms | 124.5 ms | **120.6 ms** |
 | **Fused (3 flags)** | 141.0 ms | 124.7 ms | **120.8 ms** |
 | **All-fused (4 flags)** | DRAM OOM | 130.8 ms | **127.6 ms** |
 
 - 2x4 is fastest for all fusion configs (matches T3K physical topology)
+- Non-fused is fastest or tied with fused (3 flags) across all topologies
 - EXPERTS_GATE_UP causes DRAM OOM on 1x4 but works on 8-device topologies (5-6% slower)
 - 1x8 is 3-4% slower than 2x4 across all configs
 
@@ -367,6 +375,14 @@ Profiler output lands in `generated/profiler/reports/<name>/<timestamp>/`.
 | **Steady-state decode latency** | 120.8 ms/token | 127.6 ms/token |
 | **Min / Max** | 120.7 / 120.9 ms | 127.0 / 128.2 ms |
 | **First token latency** | 12,697 ms | 4,212 ms |
+
+### Non-Fused Ops (1x8 mesh, 8 devices)
+
+| Metric | Trace-Sampling |
+| --- | --- |
+| **Steady-state decode latency** | **124.5 ms/token** |
+| **Decode throughput** | **~8.0 tok/s** |
+| **Min / Max latency** | 124.1 / 124.8 ms |
 
 ### Fused Ops (1x8 mesh, 8 devices)
 
@@ -451,7 +467,7 @@ The T3K has a physical 2×4 topology (2 rows × 4 columns = 8 Wormhole devices).
 | Mesh | Devices | Physical Match | Non-Fused Decode | Fused (3 flag) Decode | All-Fused Decode |
 | --- | --- | --- | --- | --- | --- |
 | 1x4 | 4 | Partial | 137.6 ms | 141.0 ms | DRAM OOM |
-| 1x8 | 8 | No (flat 1D) | — | 124.7 ms | 130.8 ms |
+| 1x8 | 8 | No (flat 1D) | 124.5 ms | 124.7 ms | 130.8 ms |
 | **2x4** | **8** | **Yes** | **120.6 ms** | **120.8 ms** | **127.6 ms** |
 
 The 2x4 mesh consistently outperforms 1x8 by 3-4% across all fusion configurations because it matches the physical interconnect topology. The 1x8 mesh forces a linear communication path that increases FillPad and AllGather overhead.
