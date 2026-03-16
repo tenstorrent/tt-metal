@@ -10,3 +10,6 @@
 {"event":"design_decision","phase":"cb_persistence","choice":"WaitUpfrontNoPop for reused CBs","rationale":"cb_tilized persists for reduce+sub, cb_centered persists for square+mul, cb_scaler/cb_eps persist for entire kernel","ts":"2026-03-16T09:14:52+00:00"}
 {"event":"design_decision","phase":"gamma_beta","choice":"Reader replicates 32 rows + compute tilize","rationale":"Gamma/beta are 1-row RM tensors; all 32 rows must have identical values for NONE-broadcast element-wise ops","ts":"2026-03-16T09:14:53+00:00"}
 {"event":"design_decision","phase":"rsqrt","choice":"add<SCALAR> with rsqrt post-op lambda","rationale":"Combines add(var,eps)+rsqrt into single DEST pass via binary_op post_op callback","ts":"2026-03-16T09:14:53+00:00"}
+{"event":"action","type":"git_commit","message":"[ttnn-operation-architect] design: layer_norm_rm","ts":"2026-03-16T09:16:11+00:00"}
+{"event":"result","type":"git_commit","success":true,"commit_sha":"aa12b88ef2","ts":"2026-03-16T09:16:11+00:00"}
+{"event":"complete","final_status":"SUCCESS","stages_completed":[],"final_commit":"aa12b88ef2","ts":"2026-03-16T09:16:11+00:00"}
