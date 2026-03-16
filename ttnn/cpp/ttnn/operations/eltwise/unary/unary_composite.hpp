@@ -165,7 +165,7 @@ inline Tensor clip(
     std::optional<Tensor> min = std::nullopt,
     std::optional<Tensor> max = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeClip::invoke(a, min, max, output_mem_config);
+    return operations::unary::ExecuteUnaryCompositeClip::invoke(a, std::move(min), std::move(max), output_mem_config);
 }
 inline Tensor clamp(
     const Tensor& input_a,
@@ -173,7 +173,8 @@ inline Tensor clamp(
     std::optional<std::variant<float, int32_t>> max = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<Tensor>& output_tensor = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeClamp::invoke(input_a, min, max, output_mem_config, output_tensor);
+    return operations::unary::ExecuteUnaryCompositeClamp::invoke(
+        input_a, std::move(min), std::move(max), output_mem_config, output_tensor);
 }
 inline Tensor clamp(
     const Tensor& a,
@@ -181,7 +182,8 @@ inline Tensor clamp(
     std::optional<Tensor> max = std::nullopt,
     const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
     const std::optional<Tensor>& output_tensor = std::nullopt) {
-    return operations::unary::ExecuteUnaryCompositeClamp::invoke(a, min, max, output_mem_config, output_tensor);
+    return operations::unary::ExecuteUnaryCompositeClamp::invoke(
+        a, std::move(min), std::move(max), output_mem_config, output_tensor);
 }
 inline Tensor glu(const Tensor& t, int32_t dim = -1, const std::optional<MemoryConfig>& m = std::nullopt) {
     return operations::unary::ExecuteUnaryCompositeOpWithDim<operations::unary::UnaryCompositeOpType::GLU>::invoke(
