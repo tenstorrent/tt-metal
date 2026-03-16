@@ -39,6 +39,9 @@ import ttnn
 # Token IDs are int32 over the socket; payload size per step is B * TOKEN_ID_BYTES.
 TOKEN_ID_BYTES: int = 4
 
+ACTIVATION_DIM = 7168
+ACTIVATION_PAGE_SIZE_BYTES = ACTIVATION_DIM * 2
+
 # Socket page_size must be PCIe-aligned (see h2d_socket.cpp). Must match demo stage TOKEN_PAGE_SIZE_BYTES (64).
 PCIE_PAGE_ALIGNMENT_BYTES: int = 64
 
@@ -55,8 +58,8 @@ def page_size_bytes(batch_size: int) -> int:
 
 def create_output_buffer(page_size_datums: int) -> ttnn.Tensor:
     """Allocate a host output tensor (1, page_size_datums) int32 for socket read_tensor."""
-    torch_output = torch.zeros(1, page_size_datums, dtype=torch.int32)
-    return ttnn.from_torch(torch_output, dtype=ttnn.uint32, layout=ttnn.ROW_MAJOR_LAYOUT)
+    torch_output = torch.zeros(1, page_size_datums, dtype=torch.float32)
+    return ttnn.from_torch(torch_output, dtype=ttnn.float32, layout=ttnn.ROW_MAJOR_LAYOUT)
 
 
 def to_padded_input(
@@ -97,7 +100,7 @@ class DeepSeekV3:
         self._write_fn = write_fn
         self._read_fn = read_fn
         self.batch_size = batch_size
-        payload_bytes: int = batch_size * TOKEN_ID_BYTES
+        payload_bytes: int = batch_size * ACTIVATION_PAGE_SIZE_BYTES
         logger.debug(f"Payload bytes: {payload_bytes} bytes")
         self._tensor_size_bytes: int = align_up(payload_bytes, PCIE_PAGE_ALIGNMENT_BYTES)
         self._page_size_datums: int = self._tensor_size_bytes // TOKEN_ID_BYTES
@@ -105,7 +108,13 @@ class DeepSeekV3:
         self._output_buffer: ttnn.Tensor = create_output_buffer(self._page_size_datums)
         logger.debug(f"Creating DeepSeekV3 model with batch size {batch_size}")
 
-    def prefill(self, prompt_tokens: list[ttnn.Tensor]) -> ttnn.Tensor:
+    def prefill(
+        self,
+        prompt_tokens: list[ttnn.Tensor],
+        reference_outputs: list[torch.Tensor] | None = None,
+        hf_model_path: str | None = None,
+        tokenizer=None,
+    ) -> ttnn.Tensor:
         """
         Prefill-by-decode: for i = 0..S-1, send input_ids = x[i], get logits
         (and device updates cache). Outputs for i < S-1 are discarded. Returns the
@@ -115,6 +124,12 @@ class DeepSeekV3:
             prompt_tokens: List of ttnn.Tensor, each already padded for the socket
                 (PCIe-aligned, size in bytes equal to page_size_bytes(batch_size)).
                 Caller is responsible for padding; use to_padded_input() if needed.
+            reference_outputs: Optional list of per-position reference hidden states
+                (each shape ``(hidden_size,)``, bf16) for validation. When provided,
+                each step's pipeline output is compared against the reference.
+            hf_model_path: When set, runs host-side LM head + argmax on each
+                position's hidden state to show what token the model would predict.
+            tokenizer: Optional tokenizer for decoding sampled token IDs to text.
 
         Returns:
             Last step output tensor; valid data is first batch_size elements (logits
@@ -124,10 +139,41 @@ class DeepSeekV3:
         if len(prompt_tokens) == 0:
             raise ValueError("Expected at least one prompt token")
 
+        if reference_outputs is not None and len(reference_outputs) != len(prompt_tokens):
+            raise ValueError(
+                f"reference_outputs length ({len(reference_outputs)}) must match "
+                f"prompt_tokens length ({len(prompt_tokens)})"
+            )
+
         last_output: ttnn.Tensor | None = None
-        for token in prompt_tokens:
+        for i, token in enumerate(prompt_tokens):
             self._write_fn(token)
             self._read_fn(self._output_buffer)
+            pipeline_out = ttnn.to_torch(self._output_buffer)
+            activation_bf16 = pipeline_out.view(torch.bfloat16)[:, :ACTIVATION_DIM]
+            magnitude = torch.norm(activation_bf16.float()).item()
+            logger.info(
+                "Position {} output: shape={}, mean={:.6f}, magnitude={:.6f}",
+                i,
+                pipeline_out.shape,
+                pipeline_out.float().mean(),
+                magnitude,
+            )
+
+            if reference_outputs is not None:
+                from models.demos.deepseek_v3_b1.demo.reference_validation import compare_hidden_states
+
+                compare_hidden_states(pipeline_out, reference_outputs[i], position_idx=i)
+
+            if hf_model_path is not None:
+                from models.demos.deepseek_v3_b1.demo.reference_validation import host_lm_head_sample
+
+                logger.info("Position {} LM head sample (pipeline):", i)
+                host_lm_head_sample(pipeline_out, hf_model_path, tokenizer=tokenizer)
+                if reference_outputs is not None:
+                    logger.info("Position {} LM head sample (reference):", i)
+                    host_lm_head_sample(reference_outputs[i], hf_model_path, tokenizer=tokenizer)
+
             last_output = self._output_buffer
             self._position += 1
         assert last_output is not None, "Last output tensor is None"

@@ -229,6 +229,8 @@ void kernel_main() {
             reinterpret_cast<volatile tt_l1_ptr uint32_t*>(receiver_socket.read_ptr);
         // Embedding CB is a scratch pad for now. We only read into the first slot of the CB.
         // TODO: Setup separate reader to pipeline reads.
+
+        DPRINT << "Got Token ID: " << *token_id_ptr << ENDL();
         uint32_t l1_write_addr = get_write_ptr(embedding_cb_index);
         uint64_t noc_addr = embedding_accessor.get_noc_addr(*token_id_ptr);
         noc_async_read(noc_addr, l1_write_addr, embedding_page_size);

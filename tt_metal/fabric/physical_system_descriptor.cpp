@@ -480,10 +480,11 @@ void PhysicalSystemDescriptor::exchange_metadata(bool issue_gather) {
                 Rank{static_cast<int>(rank)},
                 Tag{0});
             auto peer_desc = deserialize_physical_system_descriptor_from_bytes(serialized_peer_desc);
-            this->validate_eth_fw_versions(
-                peer_desc.get_ethernet_firmware_version(),
-                asic_descriptors_.begin()->second.host_name,
-                peer_desc.get_asic_descriptors().begin()->second.host_name);
+            // Temporrily disable since new SP4 has different eth FW versions across pods
+            // this->validate_eth_fw_versions(
+            //     peer_desc.get_ethernet_firmware_version(),
+            //     asic_descriptors_.begin()->second.host_name,
+            //     peer_desc.get_asic_descriptors().begin()->second.host_name);
             this->merge(std::move(peer_desc));
         }
     }

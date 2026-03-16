@@ -107,6 +107,24 @@ def create_parser() -> argparse.ArgumentParser:
         metavar="ID",
         help="Force all MoE stages to use this layer id (e.g. 3); default: use stage-dependent layer ids",
     )
+    parser.add_argument(
+        "--validate",
+        action="store_true",
+        default=False,
+        help="Run HF reference model on CPU and compare hidden states against pipeline output",
+    )
+    parser.add_argument(
+        "--hf-model-path",
+        type=Path,
+        default=None,
+        help="Path to HF model directory (safetensors). Defaults to DEEPSEEK_V3_HF_MODEL env var.",
+    )
+    parser.add_argument(
+        "--num-reference-layers",
+        type=int,
+        default=12,
+        help="Number of decoder layers in the reference model (must match pipeline depth, default: 12)",
+    )
     return parser
 
 
@@ -125,6 +143,9 @@ def run_demo(
     lm_head_persistent_mode: bool = True,
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
+    validate: bool = False,
+    hf_model_path: Path | None = None,
+    num_reference_layers: int = 12,
 ) -> None:
     """Run the pod pipeline. Requires 4, 16, or 64 distributed processes."""
     iterations = max_new_tokens
@@ -145,23 +166,63 @@ def run_demo(
         if my_mesh_id == 0:
             tokenizer = load_tokenizer(tokenizer_name_or_path)
             prompt_ids = tokenizer.encode(prompt, add_special_tokens=True)
-            logger.debug(f"Encoded prompt: {prompt_ids}")
+            logger.info("Encoded prompt ({} tokens): {}", len(prompt_ids), prompt_ids)
             if not prompt_ids:
                 prompt_ids = [tokenizer.bos_token_id if tokenizer.bos_token_id is not None else 0]
 
+            reference_outputs = None
+            if validate:
+                reference_outputs = _generate_reference(
+                    prompt_ids,
+                    hf_model_path=hf_model_path,
+                    num_layers=num_reference_layers,
+                    dense_layer_id_override=dense_layer_id_override,
+                    moe_layer_id_override=moe_layer_id_override,
+                )
+
             logger.info("Running inference on prompt with {} tokens", len(prompt_ids))
-            generated_tokens = model_pipeline.run_inference(
+            model_pipeline.run_inference(
                 prompt_token_ids=prompt_ids,
                 max_new_tokens=iterations,
                 eos_token_id=tokenizer.eos_token_id,
                 return_generated_tokens=True,
+                reference_outputs=reference_outputs,
+                hf_model_path=str(hf_model_path) if hf_model_path is not None else None,
+                tokenizer=tokenizer if validate else None,
             )
-            assert generated_tokens is not None
-            generated_text = tokenizer.decode(generated_tokens, skip_special_tokens=True)
-            logger.info("Output ({} tokens): {}", len(generated_tokens), generated_text)
 
         model_pipeline.barrier()
     logger.info("Pod pipeline complete")
+
+
+def _generate_reference(
+    prompt_ids: list[int],
+    *,
+    hf_model_path: Path | None,
+    num_layers: int,
+    dense_layer_id_override: int | None,
+    moe_layer_id_override: int | None,
+) -> list:
+    """Load the HF reference model on CPU and produce per-position hidden states."""
+    import torch
+
+    from models.demos.deepseek_v3_b1.demo.reference_validation import generate_reference_hidden_states
+
+    if hf_model_path is None:
+        raw = os.environ.get("DEEPSEEK_V3_HF_MODEL")
+        if not raw:
+            raise RuntimeError("--validate requires --hf-model-path or the DEEPSEEK_V3_HF_MODEL environment variable")
+        hf_model_path = Path(raw)
+
+    logger.info("Generating reference hidden states ({} layers) from {} ...", num_layers, hf_model_path)
+    torch.set_num_threads(max(1, os.cpu_count() or 1))
+    return generate_reference_hidden_states(
+        token_ids=prompt_ids,
+        hf_model_path=hf_model_path,
+        num_layers=num_layers,
+        dense_layer_id_override=dense_layer_id_override,
+        moe_layer_id_override=moe_layer_id_override,
+    )
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -179,6 +240,9 @@ def main(argv: list[str] | None = None) -> int:
         lm_head_persistent_mode=args.persistent_mode,
         dense_layer_id_override=args.dense_layer_id_override,
         moe_layer_id_override=args.moe_layer_id_override,
+        validate=args.validate,
+        hf_model_path=args.hf_model_path,
+        num_reference_layers=args.num_reference_layers,
     )
     print(file=sys.stdout, flush=True)
     return 0

@@ -69,7 +69,7 @@ def create_single_pod_pipeline_configuration(
     dense_layer_id_override: int | None = None,
     moe_layer_id_override: int | None = None,
 ) -> PipelineConfiguration:
-    """16-stage single-pod: Embed -> Dense(0,1,2) -> Decoder(3..12) -> LMHead -> Token fwd.
+    """16-stage single-pod: Embed -> Dense(0,1,2) -> Decoder(3..6) -> Passthrough(8..15).
 
     If dense_layer_id_override is set (e.g. 0), all dense stages use that layer id.
     If moe_layer_id_override is set (e.g. 3), all decoder stages use that layer id.
@@ -106,9 +106,8 @@ def create_single_pod_pipeline_configuration(
         1: _dense_stage(dense_ids[0]),
         2: _dense_stage(dense_ids[1]),
         3: _dense_stage(dense_ids[2]),
-        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 14)},
-        14: stage_14,
-        15: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
+        **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 8)},
+        **{i: lambda d: PassthroughStage(PassthroughPayload.ACTIVATION) for i in range(8, 16)},
     }
     return PipelineConfiguration(stage_factories)
 
@@ -159,8 +158,8 @@ def create_sp4_pipeline_configuration(
         2: _dense_stage(dense_ids[1]),
         3: _dense_stage(dense_ids[2]),
         **{i: _decoder_stage(moe_layer_id if moe_layer_id is not None else i - 1) for i in range(4, 62)},
-        62: stage_62,
-        63: lambda d: PassthroughStage(PassthroughPayload.TOKEN),
+        62: lambda d: PassthroughStage(PassthroughPayload.ACTIVATION),
+        63: lambda d: PassthroughStage(PassthroughPayload.ACTIVATION),
     }
     return PipelineConfiguration(stage_factories)
 
