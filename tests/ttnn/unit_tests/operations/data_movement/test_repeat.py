@@ -107,7 +107,8 @@ def test_pc_repeat(device, layout, shape, repeat_shape):
         torch_results.append(torch_tensor.repeat(repeat_shape))
         input_tensors.append(ttnn.from_torch(torch_tensor, layout=layout, device=device, dtype=ttnn.bfloat16))
     for i in range(num_iters):
-        output = ttnn.repeat(input_tensors[i], ttnn.Shape(repeat_shape))
+        with device.cache_entries_counter.measure():
+            output = ttnn.repeat(input_tensors[i], ttnn.Shape(repeat_shape))
         output = ttnn.to_torch(output)
         assert (
             output.shape == torch_results[i].shape
@@ -115,11 +116,9 @@ def test_pc_repeat(device, layout, shape, repeat_shape):
 
         assert_with_pcc(torch_results[i], output, 0.9999)
         if i == 0:
-            base_program_cache_entries = device.num_program_cache_entries()
+            base_count = device.cache_entries_counter.total
         else:
-            assert (
-                device.num_program_cache_entries() == base_program_cache_entries
-            ), "program cache entries differ on same configs"
+            assert device.cache_entries_counter.total == base_count, "program cache entries differ on same configs"
 
 
 # 17975 test cases
@@ -153,11 +152,10 @@ def test_pc_with_different_shapes_in_sequence(device):
         x = torch.zeros((4, 1, 32, 32), dtype=torch.bfloat16)
         x_tt = ttnn.from_torch(x, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-        base_program_cache_entries = device.num_program_cache_entries()
-        ttnn.repeat(y_tt, [4, 1, 1, 1])
-        assert (
-            device.num_program_cache_entries() == base_program_cache_entries
-        ), "program cache entries differ on same configs"
+        base_count = device.cache_entries_counter.total
+        with device.cache_entries_counter.measure():
+            ttnn.repeat(y_tt, [4, 1, 1, 1])
+        assert device.cache_entries_counter.total == base_count, "program cache entries differ on same configs"
         z_tt = ttnn.add(x_tt, y_tt)
         z_tt = x_tt + y_tt
 
@@ -176,12 +174,11 @@ def test_pc_with_different_shapes_in_sequence(device):
         y = torch.rand((1, 1, 256, 384), dtype=torch.bfloat16)
         y_tt = ttnn.from_torch(y, dtype=ttnn.bfloat16, layout=ttnn.TILE_LAYOUT, device=device)
 
-        base_program_cache_entries = device.num_program_cache_entries()
-        z_tt = ttnn.repeat(y_tt, ttnn.Shape([64, 1, 1, 1]))
+        base_count = device.cache_entries_counter.total
+        with device.cache_entries_counter.measure():
+            z_tt = ttnn.repeat(y_tt, ttnn.Shape([64, 1, 1, 1]))
 
-        assert (
-            device.num_program_cache_entries() == base_program_cache_entries
-        ), "program cache entries differ on same configs"
+        assert device.cache_entries_counter.total == base_count, "program cache entries differ on same configs"
 
         for i in range(64):
             z_torch = ttnn.to_torch(z_tt[i : i + 1])

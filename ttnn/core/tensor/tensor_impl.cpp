@@ -1435,7 +1435,6 @@ Tensor to_dtype(const Tensor& input_tensor, DataType dtype) {
     if (src_type == dtype) {
         return input_tensor;
     }
-
     TT_FATAL(is_cpu_tensor(input_tensor), "to_dtype(...) function only supports host tensors!");
 
     auto input_storage = detail::preprocess_storage(input_tensor.host_storage(), src_type);

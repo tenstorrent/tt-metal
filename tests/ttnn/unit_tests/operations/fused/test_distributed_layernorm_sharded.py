@@ -77,23 +77,24 @@ def create_tt_tensors(
         dtype=df,
     )
 
-    if not is_weight:
-        core_range = ttnn.CoreRange(
-            grid_offset, ttnn.CoreCoord(core_grid[0] + grid_offset.x - 1, core_grid[1] + grid_offset.y - 1)
-        )
-        tt_sharded_config = ttnn.create_sharded_memory_config(
-            shape=(32, input_width // (core_grid[0] * core_grid[1])),
-            core_grid=ttnn.CoreRangeSet(
-                {
-                    core_range,
-                }
-            ),
-            strategy=ttnn.ShardStrategy.WIDTH,
-            use_height_and_width_as_shard_shape=True,
-        )
-        tt_tensor = ttnn.to_memory_config(tt_tensor, memory_config=tt_sharded_config)
+    with device.cache_entries_counter.measure():
+        if not is_weight:
+            core_range = ttnn.CoreRange(
+                grid_offset, ttnn.CoreCoord(core_grid[0] + grid_offset.x - 1, core_grid[1] + grid_offset.y - 1)
+            )
+            tt_sharded_config = ttnn.create_sharded_memory_config(
+                shape=(32, input_width // (core_grid[0] * core_grid[1])),
+                core_grid=ttnn.CoreRangeSet(
+                    {
+                        core_range,
+                    }
+                ),
+                strategy=ttnn.ShardStrategy.WIDTH,
+                use_height_and_width_as_shard_shape=True,
+            )
+            tt_tensor = ttnn.to_memory_config(tt_tensor, memory_config=tt_sharded_config)
 
-    return tt_tensor
+        return tt_tensor
 
 
 def compute_pre_allgather_stats(tt_input_tensor, core_grid, input_width, is_rmsnorm, residual_input_tensor=None):
@@ -228,47 +229,49 @@ def run_pre_allgather_layernorm(
             torch_input_chunks[d] = torch_input_chunks[d] + torch_residual_input_chunks[d]
         else:
             tt_residual_input_tensor = None
-        tt_pre_allgather_output = compute_pre_allgather_stats(
-            tt_input_tensor, core_grid, input_width, is_rmsnorm, tt_residual_input_tensor
-        )
-        tt_pre_allgather_torch = ttnn.to_torch(tt_pre_allgather_output).to(torch.bfloat16)
-        if fuse_residual:
-            tt_residual_add_output = ttnn.to_torch(tt_input_tensor).to(torch.bfloat16)
-            does_pass, pcc_residual_add = comp_pcc(
-                torch_input_chunks[d], tt_residual_add_output, pcc=min_pcc_residual_add
+
+        with device.cache_entries_counter.measure():
+            tt_pre_allgather_output = compute_pre_allgather_stats(
+                tt_input_tensor, core_grid, input_width, is_rmsnorm, tt_residual_input_tensor
             )
-            assert (
-                does_pass
-            ), f"PCC of residual add test failed: {pcc_residual_add} (threshold : {min_pcc_residual_add})"
+            tt_pre_allgather_torch = ttnn.to_torch(tt_pre_allgather_output).to(torch.bfloat16)
+            if fuse_residual:
+                tt_residual_add_output = ttnn.to_torch(tt_input_tensor).to(torch.bfloat16)
+                does_pass, pcc_residual_add = comp_pcc(
+                    torch_input_chunks[d], tt_residual_add_output, pcc=min_pcc_residual_add
+                )
+                assert (
+                    does_pass
+                ), f"PCC of residual add test failed: {pcc_residual_add} (threshold : {min_pcc_residual_add})"
 
-        if is_rmsnorm:
-            tt_ex2 = tt_pre_allgather_torch[..., :1]
-            torch_ex2 = torch.mean(torch_input_chunks[d] ** 2, dim=-1, keepdim=True)
-            _, pcc_ex2 = comp_pcc(tt_ex2, torch_ex2, pcc=min_pcc_ex2)
-            atol_delta_ex2 = torch.max(torch.abs(torch_ex2 - tt_ex2)).item()
-            assert pcc_ex2 >= min_pcc_ex2, f"PCC of E(x^2) test failed: {pcc_ex2} (threshold: {min_pcc_ex2})"
-            assert torch.allclose(
-                tt_ex2, torch_ex2, atol=max_atol_ex2
-            ), f"E(x^2) mismatch for device {d} (atol: {atol_delta_ex2})"
-        else:
-            tt_ex = tt_pre_allgather_torch[..., :1]
-            tt_ex2 = tt_pre_allgather_torch[..., 32:33]
-            torch_ex = torch.mean(torch_input_chunks[d], dim=-1, keepdim=True)
-            torch_ex2 = torch.mean(torch_input_chunks[d] ** 2, dim=-1, keepdim=True)
-            _, pcc_ex = comp_pcc(tt_ex, torch_ex, pcc=min_pcc_ex)
-            _, pcc_ex2 = comp_pcc(tt_ex2, torch_ex2, pcc=min_pcc_ex2)
-            atol_delta_ex = torch.max(torch.abs(torch_ex - tt_ex)).item()
-            atol_delta_ex2 = torch.max(torch.abs(torch_ex2 - tt_ex2)).item()
-            assert pcc_ex >= min_pcc_ex, f"PCC of E(x) test failed: {pcc_ex} (threshold: {min_pcc_ex})"
-            assert pcc_ex2 >= min_pcc_ex2, f"PCC of E(x^2) test failed: {pcc_ex2} (threshold: {min_pcc_ex2})"
-            assert torch.allclose(
-                tt_ex, torch_ex, atol=max_atol_ex
-            ), f"E(x) mismatch for device {d} (atol: {atol_delta_ex})"
-            assert torch.allclose(
-                tt_ex2, torch_ex2, atol=max_atol_ex2
-            ), f"E(x^2) mismatch for device {d} (atol: {atol_delta_ex2})"
+            if is_rmsnorm:
+                tt_ex2 = tt_pre_allgather_torch[..., :1]
+                torch_ex2 = torch.mean(torch_input_chunks[d] ** 2, dim=-1, keepdim=True)
+                _, pcc_ex2 = comp_pcc(tt_ex2, torch_ex2, pcc=min_pcc_ex2)
+                atol_delta_ex2 = torch.max(torch.abs(torch_ex2 - tt_ex2)).item()
+                assert pcc_ex2 >= min_pcc_ex2, f"PCC of E(x^2) test failed: {pcc_ex2} (threshold: {min_pcc_ex2})"
+                assert torch.allclose(
+                    tt_ex2, torch_ex2, atol=max_atol_ex2
+                ), f"E(x^2) mismatch for device {d} (atol: {atol_delta_ex2})"
+            else:
+                tt_ex = tt_pre_allgather_torch[..., :1]
+                tt_ex2 = tt_pre_allgather_torch[..., 32:33]
+                torch_ex = torch.mean(torch_input_chunks[d], dim=-1, keepdim=True)
+                torch_ex2 = torch.mean(torch_input_chunks[d] ** 2, dim=-1, keepdim=True)
+                _, pcc_ex = comp_pcc(tt_ex, torch_ex, pcc=min_pcc_ex)
+                _, pcc_ex2 = comp_pcc(tt_ex2, torch_ex2, pcc=min_pcc_ex2)
+                atol_delta_ex = torch.max(torch.abs(torch_ex - tt_ex)).item()
+                atol_delta_ex2 = torch.max(torch.abs(torch_ex2 - tt_ex2)).item()
+                assert pcc_ex >= min_pcc_ex, f"PCC of E(x) test failed: {pcc_ex} (threshold: {min_pcc_ex})"
+                assert pcc_ex2 >= min_pcc_ex2, f"PCC of E(x^2) test failed: {pcc_ex2} (threshold: {min_pcc_ex2})"
+                assert torch.allclose(
+                    tt_ex, torch_ex, atol=max_atol_ex
+                ), f"E(x) mismatch for device {d} (atol: {atol_delta_ex})"
+                assert torch.allclose(
+                    tt_ex2, torch_ex2, atol=max_atol_ex2
+                ), f"E(x^2) mismatch for device {d} (atol: {atol_delta_ex2})"
 
-    assert device.num_program_cache_entries() == 2, "Program cache not working as expected"
+    assert device.cache_entries_counter.total == 2, "Program cache not working as expected"
     logger.info("Pre-allgather layernorm test passed for all devices")
 
 

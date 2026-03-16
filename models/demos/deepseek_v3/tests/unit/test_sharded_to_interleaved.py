@@ -57,7 +57,7 @@ def test_sharded_to_interleaved(mesh_device, shape, shard_type, cores, out_mem_c
             ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(cores[0] - 1, cores[1] - 1)),
         }
     )
-    padded_shape = shape
+    padded_shape = list(shape)
     if layout == ttnn.TILE_LAYOUT:
         padded_shape[-1] = ttnn.core.roundup(padded_shape[-1], ttnn.TILE_SIZE)
         padded_shape[-2] = ttnn.core.roundup(padded_shape[-2], ttnn.TILE_SIZE)
@@ -84,6 +84,7 @@ def test_sharded_to_interleaved(mesh_device, shape, shard_type, cores, out_mem_c
         return ttnn.sharded_to_interleaved(tt_input, out_mem_config)
 
     def check_op(tt_output):
+        tt_output = tt_output[tuple(slice(s) for s in shape)]
         assert_with_pcc(torch_output, tt_output, 0.9999)
 
     run_test(mesh_device, run_op, check_op, enable_trace)
