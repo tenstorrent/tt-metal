@@ -484,7 +484,8 @@ KernelGroup::KernelGroup(
         }
         if (auto* qk = dynamic_cast<experimental::quasar::QuasarComputeKernel*>(kernel.get())) {
             auto config = std::get<experimental::quasar::QuasarComputeConfig>(qk->config());
-            for (uint32_t thread_idx = 0; thread_idx < config.num_threads_per_cluster; thread_idx++) {
+            const auto& compute_cores = qk->get_compute_processors();
+            for (uint32_t thread_idx = 0; thread_idx < compute_cores.size(); thread_idx++) {
                 uint32_t processor_index = hal.get_processor_index(
                     hal.get_programmable_core_type(programmable_core_type_index),
                     HalProcessorClassType::COMPUTE,

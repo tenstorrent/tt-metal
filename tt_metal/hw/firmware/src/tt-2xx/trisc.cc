@@ -23,7 +23,7 @@
 #endif
 #include "tt-metalium/circular_buffer_constants.h"
 #include "api/kernel_thread_globals.h"
-#include "hw_thread.h"
+
 // clang-format on
 
 #if defined(PROFILE_KERNEL)
