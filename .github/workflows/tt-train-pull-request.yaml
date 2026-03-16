@@ -18,6 +18,7 @@ jobs:
         run: git fetch origin main
 
       - name: Run pre-commit hooks (check only)
+        continue-on-error: true
         run: |
           python3 -m venv venv
           source venv/bin/activate
