@@ -634,7 +634,7 @@ inline void _init_typecast_int32_to_fp16b_()
     TTI_SFPMAD(0, p_sfpu::LCONST_1, 0, 13, 4); // SFPMAD_MOD1_INDIRECT_VA
 
     // InstructionTemplate[2]
-    TTI_SFP_STOCH_RND(0, 0, 0, 0, 14, 1); // SFPSTOCHRND_MOD1_FP32_TO_FP16B
+    TTI_SFP_STOCH_RND(0, 0, 0, 0, 14, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
 
     // Macro 0: [v]
     {
@@ -689,7 +689,7 @@ inline void _init_typecast_uint16_to_fp16b_()
     TTI_SFPCAST(0, 12, 0);
 
     // InstructionTemplate[1]
-    TTI_SFP_STOCH_RND(0, 0, 0, 0, 13, 1); // SFPSTOCHRND_MOD1_FP32_TO_FP16B
+    TTI_SFP_STOCH_RND(0, 0, 0, 0, 13, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
 
     // Macro 0
     {
@@ -721,7 +721,7 @@ inline void _init_typecast_uint32_to_fp16b_()
     TTI_SFPMAD(0, p_sfpu::LCONST_1, 0, 13, 4); // SFPMAD_MOD1_INDIRECT_VA
 
     // InstructionTemplate[2]
-    TTI_SFP_STOCH_RND(0, 0, 0, 0, 14, 1); // SFPSTOCHRND_MOD1_FP32_TO_FP16B
+    TTI_SFP_STOCH_RND(0, 0, 0, 0, 14, sfpi::SFPSTOCHRND_MOD1_FP32_TO_FP16B);
 
     // Macro 0
     {
@@ -820,7 +820,7 @@ inline void _init_typecast_int32_to_uint16_()
     TTI_SFPSWAP(0, p_sfpu::LCONST_0, 12, 0xf); // L[VD] = max(0, L[VD])
 
     // InstructionTemplate[1]
-    TTI_SFP_STOCH_RND(0, 0, 0, 0, 13, 6); // SFPSTOCHRND_MOD1_FP32_TO_UINT16
+    TTI_SFP_STOCH_RND(0, 0, 0, 0, 13, sfpi::SFPSTOCHRND_MOD1_FP32_TO_UINT16);
 
     // Macro 0
     {
