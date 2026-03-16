@@ -458,6 +458,23 @@ class AllToAllDispatchMetadataConfig(OpConfigBase):
             preallocated_dispatch_output_expert_scores,
         )
 
+    @classmethod
+    def get_metadata_sharded_memory_config(cls, users_per_row: int, num_experts_per_tok: int):
+        num_cores_y = min(8, users_per_row)
+        num_cores_x = (users_per_row + num_cores_y - 1) // num_cores_y
+
+        return ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.HEIGHT_SHARDED,
+            ttnn.BufferType.L1,
+            ttnn.ShardSpec(
+                ttnn.CoreRangeSet(
+                    {ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.CoreCoord(num_cores_x - 1, num_cores_y - 1))}
+                ),
+                [1, num_experts_per_tok],
+                ttnn.ShardOrientation.ROW_MAJOR,
+            ),
+        )
+
     cluster_axis: int | None = None
     num_links: int | None = 4
     worker_mode: ttnn.WorkerMode
