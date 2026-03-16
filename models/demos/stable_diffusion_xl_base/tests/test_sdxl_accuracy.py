@@ -189,6 +189,14 @@ def test_accuracy_sdxl(
 
     accuracy_metrics = calculate_accuracy_metrics(images, prompts, coco_statistics_path)
 
+    # Additional accuracy calculation on first 100 samples for CI testing
+    if num_prompts >= 100:
+        logger.info("Calculating accuracy metrics on first 100 samples for CI testing...")
+        accuracy_metrics_100 = calculate_accuracy_metrics(images[:100], prompts[:100], coco_statistics_path)
+        logger.info(
+            f"Accuracy metrics (100 samples): CLIP={accuracy_metrics_100['average_clip_score']:.4f}, FID={accuracy_metrics_100['fid_score']:.4f}"
+        )
+
     model_name = (
         ("sdxl-base-refiner" if use_refiner else "sdxl")
         + f"-{image_resolution[0]}"

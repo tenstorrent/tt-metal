@@ -172,6 +172,14 @@ def test_accuracy_sdxl_lora(
 
     accuracy_metrics = calculate_accuracy_metrics(images, prompts, coco_statistics_path)
 
+    # Additional accuracy calculation on first 100 samples for CI testing
+    if num_prompts >= 100:
+        logger.info("Calculating accuracy metrics on first 100 samples for CI testing...")
+        accuracy_metrics_100 = calculate_accuracy_metrics(images[:100], prompts[:100], coco_statistics_path)
+        logger.info(
+            f"Accuracy metrics (100 samples): CLIP={accuracy_metrics_100['average_clip_score']:.4f}, FID={accuracy_metrics_100['fid_score']:.4f}"
+        )
+
     model_name = f"sdxl-lora-{image_resolution[0]}" + ("-tp" if use_cfg_parallel else "")
     metadata = {
         "model_name": model_name,
