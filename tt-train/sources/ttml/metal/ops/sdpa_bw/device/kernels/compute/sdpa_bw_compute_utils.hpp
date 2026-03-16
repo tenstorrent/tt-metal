@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <api/debug/dprint.h>
 #include <api/compute/reg_api.h>
 

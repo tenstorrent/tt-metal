@@ -208,7 +208,7 @@ Tensor quantize(
         TT_FATAL(optional_output_tensor->dtype() == c_dtype, "Quantize only supports int32 outputs for now");
     }
 
-    constexpr tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
+    constexpr ttsl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
 
     const bool is_per_channel = axis.has_value();
     if (is_per_channel) {
@@ -239,7 +239,7 @@ Tensor quantize(
     }
 
     return std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [&](const float scale, const int32_t zero_point) {
                 const std::array post_activation{operations::unary::EltwiseUnaryWithParam{
                     operations::unary::UnaryOpType::ZERO_POINT, static_cast<float>(zero_point)}};
@@ -342,7 +342,7 @@ Tensor requantize(
         TT_FATAL(optional_output_tensor->dtype() == c_dtype, "Requantize only supports int32 outputs for now");
     }
 
-    constexpr tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
+    constexpr ttsl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
 
     const bool has_axis = axis.has_value();
 
@@ -439,7 +439,7 @@ Tensor requantize(
     }
 
     return std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             // Enable fast path for all scalar scales & zero-points, fallback to composite ops otherwise.
             [&](const float in_scale,
                 const int32_t in_zero_point,
@@ -500,7 +500,7 @@ Tensor dequantize(
         c_dtype == DataType::FLOAT32 || c_dtype == DataType::BFLOAT16,
         "Dequantize only supports bf16/f32 outputs for now");
 
-    constexpr tt::stl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
+    constexpr ttsl::Span<const operations::unary::EltwiseUnaryWithParam> none{};
 
     const bool is_per_channel = axis.has_value();
     if (is_per_channel) {
@@ -540,7 +540,7 @@ Tensor dequantize(
     }
 
     return std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [&](const float scale, const int32_t zero_point) {
                 // LLK dequant kernel does addition, so we need to negate zero_point
                 const std::array post_activation{operations::unary::EltwiseUnaryWithParam{
