@@ -13,3 +13,4 @@
 {"event":"test_run","test":"test_layer_norm_rm_runs[minimal]","result":"PASS","ts":"2026-03-16T09:31:58+00:00"}
 {"event":"hang_debug","symptom":"device hang on second test run","diagnosis":"Linter keeps adding implementation to reader stub, causing CB deadlock with empty compute","ts":"2026-03-16T09:35:49+00:00"}
 {"event":"recovery","hypothesis_id":"H1","action":"Removed bad tensor_accessor.hpp include, added generate_bcast_scalar.hpp","file":"reader_layer_norm_rm.cpp","ts":"2026-03-16T09:37:56+00:00"}
+{"event":"test_run","test":"test_layer_norm_rm.py (full suite)","result":"PASS","details":"12/12 tests passed in 5.66s","ts":"2026-03-16T09:40:08+00:00"}
