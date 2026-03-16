@@ -53,6 +53,8 @@ void kernel_main() {
     const uint32_t num_sticks_to_read = get_arg_val<uint32_t>(arg_idx++);
     const uint32_t num_sticks_per_halo_dim = get_arg_val<uint32_t>(arg_idx++);
     size_t h_neighbor_sem = get_arg_val<uint32_t>(arg_idx++);
+    // Number of corner sticks per pad row in L1 recv buffer (= pad2_left + pad2_right for 2D corners-only)
+    const uint32_t num_l1_recv_sticks_per_row = get_arg_val<uint32_t>(arg_idx++);
 
     uint32_t read_size = stick_size;
     const auto src_accessor = TensorAccessor(src_ct_args, input_tensor_address, stick_size);
@@ -135,7 +137,9 @@ void kernel_main() {
                 noc_semaphore_wait_min(reinterpret_cast<volatile tt_l1_ptr uint32_t*>(h_neighbor_sem), od + 1);
 
                 for (uint32_t pad_id = 0; pad_id < padding; pad_id++) {
-                    for (uint32_t iter = 0; iter < num_sticks_to_read; iter++) {
+                    // Use num_l1_recv_sticks_per_row (corners-only count) instead of
+                    // num_sticks_to_read (full row width) for the L1 recv path.
+                    for (uint32_t iter = 0; iter < num_l1_recv_sticks_per_row; iter++) {
                         cb_reserve_back(cb_output_id, 1);
                         uint32_t dst_l1_addr = get_write_ptr(cb_output_id);
                         noc_async_read(get_noc_addr(recv_buf_addr + buf_offset), dst_l1_addr, stick_size);
