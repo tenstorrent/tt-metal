@@ -13,7 +13,8 @@ import pytest
 
 import ttnn
 from models.common.utility_functions import is_blackhole, is_wormhole_b0
-
+from loguru import logger
+from tests.scripts.common import get_updated_device_params
 
 def pytest_configure(config):
     """Register custom markers."""
@@ -69,3 +70,61 @@ def pytest_collection_modifyitems(config, items):
 
         if skip_reason:
             item.add_marker(pytest.mark.skip(reason=skip_reason))
+
+
+CLUSTER_TO_MESH_SHAPE = {
+    ttnn.cluster.ClusterType.BLACKHOLE_GALAXY: ttnn.MeshShape(8, 4),
+    ttnn.cluster.ClusterType.P150_X8: ttnn.MeshShape(4, 2),
+    ttnn.cluster.ClusterType.P150_X4: ttnn.MeshShape(2, 2),
+}
+
+
+def _open_mesh(device_params, mesh_shape=None):
+    """Open a 2D mesh device, auto-detecting shape from cluster type if not specified."""
+    updated_params = get_updated_device_params(device_params or {})
+    fabric_config = updated_params.pop("fabric_config", None)
+    if fabric_config and fabric_config != ttnn.FabricConfig.DISABLED:
+        ttnn.set_fabric_config(fabric_config)
+
+    if mesh_shape is None:
+        cluster_type = ttnn.cluster.get_cluster_type()
+        if cluster_type not in CLUSTER_TO_MESH_SHAPE:
+            raise ValueError(
+                f"Unsupported cluster type {cluster_type}, " f"expected one of {list(CLUSTER_TO_MESH_SHAPE.keys())}"
+            )
+        mesh_shape = CLUSTER_TO_MESH_SHAPE[cluster_type]
+
+    updated_params.setdefault("mesh_shape", mesh_shape)
+    mesh = ttnn.open_mesh_device(**updated_params)
+    logger.debug(f"Opened mesh device: shape={mesh.shape}, devices={mesh.get_num_devices()}")
+    return mesh, fabric_config
+
+
+@pytest.fixture(scope="function")
+def mesh_device(request, device_params):
+    """
+    2D mesh device fixture for Blackhole-based DeepSeek prefill tests.
+
+    Supports indirect parametrization with a (rows, cols) tuple to override
+    the auto-detected mesh shape::
+
+        @pytest.mark.parametrize("mesh_device", [(2, 1)], indirect=True)
+        def test_something(mesh_device): ...
+
+    Without indirect params, auto-detects from cluster type:
+        BLACKHOLE_GALAXY -> (8, 4)
+        P150_X8          -> (4, 2)
+        P150_X4          -> (2, 2)
+    """
+    shape_override = getattr(request, "param", None)
+    if shape_override is not None:
+        mesh_shape = ttnn.MeshShape(*shape_override)
+    else:
+        mesh_shape = None
+
+    mesh, fabric_config = _open_mesh(device_params, mesh_shape)
+    yield mesh
+
+    ttnn.close_mesh_device(mesh)
+    if fabric_config and fabric_config != ttnn.FabricConfig.DISABLED:
+        ttnn.set_fabric_config(ttnn.FabricConfig.DISABLED)
