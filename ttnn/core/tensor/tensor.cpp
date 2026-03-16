@@ -131,7 +131,7 @@ void Tensor::deallocate_impl(bool force) {
     // GraphTracker::instance().track_function_start("Tensor::deallocate", *this, force);
     if (can_deallocate(tensor_attributes, force)) {
         std::visit(
-            tt::stl::overloaded{
+            ttsl::overloaded{
                 [](HostStorage&) {},
                 [this, force, &can_deallocate](DeviceStorage& storage) {
                     if (can_deallocate(storage.get_root_mesh_buffer(), force)) {
@@ -152,7 +152,7 @@ std::uint64_t Tensor::next_tensor_id() { return tensor_id_counter.fetch_add(1, s
 
 template <typename T>
 Tensor Tensor::from_span(
-    tt::stl::Span<const T> buffer,
+    ttsl::Span<const T> buffer,
     const TensorSpec& spec,
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
@@ -162,7 +162,7 @@ Tensor Tensor::from_span(
 
 template <typename T>
 Tensor Tensor::from_borrowed_data(
-    tt::stl::Span<T> buffer,
+    ttsl::Span<T> buffer,
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile) {
@@ -194,7 +194,7 @@ Tensor Tensor::from_vector(
     auto host_buffer =
         logical_matches_physical(buffer_spec)
             ? HostBuffer(std::move(buffer))
-            : HostBuffer(tensor_impl::encode_tensor_data(tt::stl::make_const_span(buffer), spec, pad_value));
+            : HostBuffer(tensor_impl::encode_tensor_data(ttsl::make_const_span(buffer), spec, pad_value));
     auto res = Tensor(std::move(host_buffer), buffer_spec);
     // Convert to datatype from original spec
     res = to_dtype(res, spec.data_type());
@@ -218,7 +218,7 @@ std::vector<float> Tensor::to_vector<float>(std::optional<tt::tt_metal::QueueId>
             if (logical_matches_physical(cpu_tensor.tensor_spec())) {
                 return physical_data;
             }
-            return tensor_impl::decode_tensor_data(tt::stl::make_const_span(physical_data), cpu_tensor.tensor_spec());
+            return tensor_impl::decode_tensor_data(ttsl::make_const_span(physical_data), cpu_tensor.tensor_spec());
         }
         case DataType::FLOAT32: {
             auto buffer = host_buffer::get_as<const float>(cpu_tensor);
@@ -232,7 +232,7 @@ std::vector<float> Tensor::to_vector<float>(std::optional<tt::tt_metal::QueueId>
                 cpu_tensor.tensor_spec().data_type() == DataType::BFLOAT8_B
                     ? unpack_bfp8_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile)
                     : unpack_bfp4_tiles_into_float_vec(buffer, /*row_major_output=*/false, /*is_exp_a=*/false, tile);
-            return tensor_impl::decode_tensor_data(tt::stl::make_const_span(unpacked_data), cpu_tensor.tensor_spec());
+            return tensor_impl::decode_tensor_data(ttsl::make_const_span(unpacked_data), cpu_tensor.tensor_spec());
         }
         default: {
             TT_THROW("Cannot convert tensor to vector for data type: {}", cpu_tensor.dtype());
@@ -257,68 +257,68 @@ std::vector<T> Tensor::to_vector(std::optional<tt::tt_metal::QueueId> cq_id) con
 
 // Instantiate explicitly for the supported types.
 template Tensor Tensor::from_span<bfloat16>(
-    tt::stl::Span<const bfloat16> buffer,
+    ttsl::Span<const bfloat16> buffer,
     const TensorSpec& spec,
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     bfloat16 pad_value);
 template Tensor Tensor::from_span<float>(
-    tt::stl::Span<const float> buffer,
+    ttsl::Span<const float> buffer,
     const TensorSpec& spec,
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     float pad_value);
 template Tensor Tensor::from_span<int32_t>(
-    tt::stl::Span<const int32_t> buffer,
+    ttsl::Span<const int32_t> buffer,
     const TensorSpec& spec,
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     int32_t pad_value);
 template Tensor Tensor::from_span<uint8_t>(
-    tt::stl::Span<const uint8_t> buffer,
+    ttsl::Span<const uint8_t> buffer,
     const TensorSpec& spec,
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     uint8_t pad_value);
 template Tensor Tensor::from_span<uint16_t>(
-    tt::stl::Span<const uint16_t> buffer,
+    ttsl::Span<const uint16_t> buffer,
     const TensorSpec& spec,
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     uint16_t pad_value);
 template Tensor Tensor::from_span<uint32_t>(
-    tt::stl::Span<const uint32_t> buffer,
+    ttsl::Span<const uint32_t> buffer,
     const TensorSpec& spec,
     distributed::MeshDevice* device,
     std::optional<tt::tt_metal::QueueId> cq_id,
     uint32_t pad_value);
 template Tensor Tensor::from_borrowed_data<float>(
-    tt::stl::Span<float> buffer,
+    ttsl::Span<float> buffer,
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<bfloat16>(
-    tt::stl::Span<bfloat16> buffer,
+    ttsl::Span<bfloat16> buffer,
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<int32_t>(
-    tt::stl::Span<int32_t> buffer,
+    ttsl::Span<int32_t> buffer,
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<uint8_t>(
-    tt::stl::Span<uint8_t> buffer,
+    ttsl::Span<uint8_t> buffer,
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<uint16_t>(
-    tt::stl::Span<uint16_t> buffer,
+    ttsl::Span<uint16_t> buffer,
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
 template Tensor Tensor::from_borrowed_data<uint32_t>(
-    tt::stl::Span<uint32_t> buffer,
+    ttsl::Span<uint32_t> buffer,
     const tt::tt_metal::Shape& shape,
     tt::tt_metal::MemoryPin buffer_pin,
     const std::optional<Tile>& tile);
@@ -441,7 +441,7 @@ Tensor Tensor::with_tensor_topology(TensorTopology tensor_topology) const {
 
 bool Tensor::is_allocated() const {
     auto output = std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [](const DeviceStorage& storage) { return storage.is_allocated(); },
             [](const HostStorage&) { return true; },
         },
@@ -451,7 +451,7 @@ bool Tensor::is_allocated() const {
 
 StorageType Tensor::storage_type() const {
     return std::visit(
-        tt::stl::overloaded{
+        ttsl::overloaded{
             [](const HostStorage&) { return StorageType::HOST; },
             [](const DeviceStorage&) { return StorageType::DEVICE; },
         },
@@ -602,7 +602,7 @@ const std::optional<NdShardSpec>& Tensor::nd_shard_spec() const { return this->m
 const TensorTopology& Tensor::tensor_topology() const { return this->tensor_attributes->get_tensor_topology(); }
 
 std::ostream& operator<<(std::ostream& os, const tt::tt_metal::Tensor& tensor) {
-    tt::stl::reflection::operator<<(os, tensor);
+    ttsl::reflection::operator<<(os, tensor);
     return os;
 }
 

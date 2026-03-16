@@ -5,6 +5,9 @@
 #include <stdint.h>
 
 #include "api/dataflow/dataflow_api.h"
+#include "experimental/noc.h"
+#include "experimental/circular_buffer.h"
+#include "experimental/tensor.h"
 
 void kernel_main() {
     uint32_t index = 0;
@@ -22,6 +25,10 @@ void kernel_main() {
     constexpr uint32_t onetile = 1;
 
     constexpr auto cb_id_dst = tt::CBIndex::c_2;
+
+    experimental::Noc noc;
+    experimental::CircularBuffer cb_dst(cb_id_dst);
+
 #if !DST_SHARDED
     constexpr auto dst_args = TensorAccessorArgs<0, 0>();
     const uint32_t dst_tile_bytes = get_tile_size(cb_id_dst);
@@ -59,11 +66,11 @@ void kernel_main() {
                              ++tw, ++num_tiles_written) {
 #if !DST_SHARDED
                             //  write a tile to dst, since the dst shape is full, the tile offset simply grows linearly
-                            cb_wait_front(cb_id_dst, onetile);
-                            uint32_t l1_read_addr = get_read_ptr(cb_id_dst);
-                            noc_async_write_page(dst_tile_offset + num_tiles_written, dst, l1_read_addr);
-                            noc_async_write_barrier();
-                            cb_pop_front(cb_id_dst, onetile);
+                            cb_dst.wait_front(onetile);
+                            noc.async_write(
+                                cb_dst, dst, dst_tile_bytes, {}, {.page_id = dst_tile_offset + num_tiles_written});
+                            noc.async_write_barrier();
+                            cb_dst.pop_front(onetile);
 #endif
                         }
                         if constexpr (has_sharding) {

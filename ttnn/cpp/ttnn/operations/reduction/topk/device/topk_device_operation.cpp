@@ -110,7 +110,6 @@ TopKDeviceOperation::program_factory_t TopKDeviceOperation::select_program_facto
     if (multicore_supported) {
         return TopKMultiCoreProgramFactory{};
     }
-
     return TopKSingleCoreProgramFactory{};
 }
 

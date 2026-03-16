@@ -9,7 +9,7 @@
 #include "ttnn/operations/eltwise/ternary/ternary_composite.hpp"
 #include "ttnn/operations/eltwise/ternary/ternary.hpp"
 #include "ttnn/operations/eltwise/complex_unary/complex_unary.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 
 namespace ttnn::operations::complex_unary_backward {
 

@@ -15,20 +15,26 @@
 #include <cstdint>
 #include <filesystem>
 #include <map>
+#include <mutex>
 #include <set>
 #include <string>
 #include <unordered_set>
 #include <utility>
 #include <vector>
-#include "llrt/hal.hpp"
+#include "llrt/hal_proc_set.hpp"  // HalProcessorSet — internal, no full Hal singleton
 #include "core_coord.hpp"
 #include "dispatch_core_common.hpp"  // For DispatchCoreConfig
 #include "tt_target_device.hpp"
 #include <umd/device/types/xy_pair.hpp>
 #include <umd/device/types/core_coordinates.hpp>
 #include <tt-metalium/experimental/fabric/fabric_types.hpp>
-#include <tt-metalium/kernel_types.hpp>
 #include "tt_metal/hw/inc/hostdev/fabric_telemetry_msgs.h"
+
+// Forward declarations — full definitions not needed in this header
+namespace tt::tt_metal {
+class Hal;
+enum class KernelBuildOptLevel : uint8_t;
+}  // namespace tt::tt_metal
 
 namespace tt::tt_fabric {
 class ControlPlane;
@@ -324,6 +330,9 @@ class RunTimeOptions {
     // Disable use of pre-compiled firmware and fall back to JIT compilation.
     bool disable_precompiled_fw = false;
 
+    // Use new DEVICE_PRINT system instead of legacy DPRINT
+    bool use_device_print = false;
+
 public:
     RunTimeOptions();
     RunTimeOptions(const RunTimeOptions&) = delete;
@@ -456,8 +465,7 @@ public:
         feature_targets[feature].chip_ids = std::move(chip_ids);
     }
     // Directly set mesh coordinates for a feature; resolved to chip IDs by resolve_mesh_coords_to_chip_ids().
-    void set_feature_mesh_coords(
-        RunTimeDebugFeatures feature, std::vector<std::pair<uint32_t, uint32_t>> coords) {
+    void set_feature_mesh_coords(RunTimeDebugFeatures feature, std::vector<std::pair<uint32_t, uint32_t>> coords) {
         feature_targets[feature].mesh_coords = std::move(coords);
     }
     // An alternative to setting cores by range, a flag to enable all.
@@ -516,12 +524,13 @@ public:
     }
     std::string get_compile_hash_string() const {
         std::string compile_hash_str = fmt::format(
-            "{}_{}_{}_{}_{}",
+            "{}_{}_{}_{}_{}_{}",
             get_watcher_hash(),
             get_kernels_early_return(),
             get_erisc_iram_enabled(),
             get_enable_2_erisc_mode(),
-            get_disable_fabric_2_erisc_mode());
+            get_disable_fabric_2_erisc_mode(),
+            get_use_device_print());
         for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
             compile_hash_str += "_";
             compile_hash_str += get_feature_hash_string((llrt::RunTimeDebugFeatures)i);
@@ -726,13 +735,12 @@ public:
     bool get_disable_precompiled_fw() const { return disable_precompiled_fw; }
     void set_disable_precompiled_fw(bool disable) { disable_precompiled_fw = disable; }
 
+    bool get_use_device_print() const { return use_device_print; }
+    void set_use_device_print(bool use) { use_device_print = use; }
+
     // Parse all feature-specific environment variables, after hal is initialized.
     // (Needed because syntax of some env vars is arch-dependent.)
-    void ParseAllFeatureEnv(const tt_metal::Hal& hal) {
-        for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
-            ParseFeatureEnv((RunTimeDebugFeatures)i, hal);
-        }
-    }
+    void ParseAllFeatureEnv(const tt_metal::Hal& hal);
 
     // Resolve FabricNodeIds to physical chip IDs using the control plane.
     // This must be called after the control plane is initialized, since during

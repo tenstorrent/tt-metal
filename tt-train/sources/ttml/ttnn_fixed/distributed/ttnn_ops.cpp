@@ -15,7 +15,7 @@
 #include "tt-metalium/experimental/fabric/fabric.hpp"
 #include "ttnn/distributed/types.hpp"
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
-#include "ttnn/operations/creation.hpp"
+#include "ttnn/operations/creation/creation.hpp"
 #include "ttnn/operations/experimental/ccl/all_gather_async/all_gather_async.hpp"
 #include "ttnn/operations/experimental/ccl/all_reduce_async/all_reduce_async.hpp"
 #include "ttnn/operations/experimental/ccl/reduce_scatter_minimal_async/reduce_scatter_minimal_async.hpp"

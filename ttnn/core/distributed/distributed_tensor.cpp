@@ -48,7 +48,7 @@ auto get_remap_fn(DistributionMode distribution_mode, const MeshCoordinateRange*
 }
 
 // Increments `indices` in-place given `limits`, to support row-major order iteration.
-bool increment_indices(const tt::stl::SmallVector<int>& limits, tt::stl::SmallVector<int>& indices) {
+bool increment_indices(const ttsl::SmallVector<int>& limits, ttsl::SmallVector<int>& indices) {
     for (int i = static_cast<int>(indices.size()) - 1; i >= 0; --i) {
         if (++indices[i] < limits[i]) {
             return true;
@@ -87,7 +87,7 @@ TensorSpec compute_tensor_spec_for_shards(
 // - Otherwise, a copy of the data is created.
 template <typename T>
 tt::tt_metal::HostBuffer create_host_buffer_from_span(
-    tt::stl::Span<T> span, const tt::tt_metal::MemoryPin& buffer_pin, const TensorSpec& tensor_spec, T pad_value) {
+    ttsl::Span<T> span, const tt::tt_metal::MemoryPin& buffer_pin, const TensorSpec& tensor_spec, T pad_value) {
     if constexpr (!std::is_const_v<T>) {
         if (tensor_spec.layout() == tt::tt_metal::Layout::ROW_MAJOR &&
             tensor_spec.physical_shape() == tensor_spec.logical_2d_shape() &&
@@ -97,7 +97,7 @@ tt::tt_metal::HostBuffer create_host_buffer_from_span(
     }
 
     return tt::tt_metal::host_buffer::get_host_buffer(Tensor::from_span(
-        tt::stl::make_const_span(span),
+        ttsl::make_const_span(span),
         tensor_spec,
         /*device=*/nullptr,
         /*cq_id=*/std::nullopt,
@@ -148,7 +148,7 @@ public:
 
     template <typename T>
     Tensor operator()(
-        tt::stl::Span<T> span,
+        ttsl::Span<T> span,
         const Shape& shape,
         const tt::tt_metal::MemoryPin& buffer_pin,
         const tt::tt_metal::TensorLayout& layout,
@@ -158,10 +158,10 @@ public:
             span.size() == volume, "Current buffer size is {} different from shape volume {}", span.size(), volume);
 
         // Perform sharding, followed by replication.
-        tt::stl::SmallVector<size_t> shard_dims;
-        tt::stl::SmallVector<int> num_chunks_per_dim;
-        tt::stl::SmallVector<int> tensor_dims;
-        tt::stl::SmallVector<size_t> replicate_dims;
+        ttsl::SmallVector<size_t> shard_dims;
+        ttsl::SmallVector<int> num_chunks_per_dim;
+        ttsl::SmallVector<int> tensor_dims;
+        ttsl::SmallVector<size_t> replicate_dims;
         size_t sharded_mesh_size = 1;
         for (size_t mesh_dim_idx = 0; mesh_dim_idx < distribution_shape_.dims(); ++mesh_dim_idx) {
             const auto& placement = config_.placements[mesh_dim_idx];
@@ -214,9 +214,9 @@ public:
 
         // Distribute chunks to appropriate mesh coordinates.
         size_t chunk_idx = 0;
-        tt::stl::SmallVector<int> shard_indices(shard_dims.size(), 0);
+        ttsl::SmallVector<int> shard_indices(shard_dims.size(), 0);
         do {
-            tt::stl::SmallVector<uint32_t> mesh_coords(distribution_shape_.dims(), 0);
+            ttsl::SmallVector<uint32_t> mesh_coords(distribution_shape_.dims(), 0);
             for (size_t i = 0; i < shard_dims.size(); ++i) {
                 mesh_coords[shard_dims[i]] = shard_indices[i];
             }
@@ -227,7 +227,7 @@ public:
             chunk_idx++;
         } while (increment_indices(num_chunks_per_dim, shard_indices));
 
-        tt::stl::SmallVector<int> replicate_sizes;
+        ttsl::SmallVector<int> replicate_sizes;
         for (size_t replicate_mesh_dim : replicate_dims) {
             replicate_sizes.push_back(distribution_shape_[replicate_mesh_dim]);
         }
@@ -242,9 +242,9 @@ public:
                         return coord[replicate_mesh_dim] == 0;
                     });
                 if (xtensor_view.has_value() && replication_source) {
-                    tt::stl::SmallVector<int> replicate_indices(replicate_dims.size(), 0);
+                    ttsl::SmallVector<int> replicate_indices(replicate_dims.size(), 0);
                     do {
-                        tt::stl::SmallVector<uint32_t> mesh_coords(coord.coords().begin(), coord.coords().end());
+                        ttsl::SmallVector<uint32_t> mesh_coords(coord.coords().begin(), coord.coords().end());
                         for (size_t i = 0; i < replicate_dims.size(); ++i) {
                             mesh_coords[replicate_dims[i]] = replicate_indices[i];
                         }
@@ -264,7 +264,7 @@ private:
         const tt::tt_metal::TensorLayout& layout,
         T pad_value,
         const tt::tt_metal::MemoryPin& buffer_pin,
-        const tt::stl::SmallVector<int>& shard_dims) const {
+        const ttsl::SmallVector<int>& shard_dims) const {
         const TensorSpec shard_spec = compute_tensor_spec_for_shards(sharded_xtensor_views, layout);
 
         // Determine whether we can borrow directly from the source buffer instead of copying.
@@ -331,7 +331,7 @@ private:
                         auto& view = xtensor_view->get();
                         using U = std::remove_const_t<T>;
                         shard_tensor = Tensor::from_borrowed_data(
-                            tt::stl::Span<U>(const_cast<U*>(view.data() + view.data_offset()), view.size()),
+                            ttsl::Span<U>(const_cast<U*>(view.data() + view.data_offset()), view.size()),
                             shard_spec.logical_shape(),
                             buffer_pin);
                     } else {
@@ -420,7 +420,7 @@ public:
             xtensor_views.push_back(tt::tt_metal::experimental::xtensor::adapt(shard.view_as<const T>(), shard_shape));
         });
 
-        tt::stl::SmallVector<int> num_chunks;
+        ttsl::SmallVector<int> num_chunks;
         // Scalar (0-dim tensor)
         bool is_single_views = xtensor_views.size() == 1;
         if (!is_single_views) {
@@ -483,7 +483,7 @@ Tensor TensorToMesh::operator()(const Tensor& tensor) const { return (*impl_)(te
 
 template <typename T>
 Tensor TensorToMesh::operator()(
-    tt::stl::Span<T> buffer,
+    ttsl::Span<T> buffer,
     const ttnn::Shape& shape,
     const tt::tt_metal::MemoryPin& buffer_pin,
     const tt::tt_metal::TensorLayout& layout,
@@ -567,7 +567,7 @@ std::unique_ptr<TensorToMesh> shard_tensor_to_mesh_mapper(
         "Cluster axis {} is out of range for mesh device with {} dimensions",
         cluster_axis.value(),
         mesh_device.shape().dims());
-    tt::stl::SmallVector<MeshMapperConfig::Placement> placements(
+    ttsl::SmallVector<MeshMapperConfig::Placement> placements(
         mesh_device.shape().dims(), MeshMapperConfig::Replicate{});
     placements[cluster_axis.value()] = MeshMapperConfig::Shard{dim};
     return std::make_unique<TensorToMesh>(
@@ -605,7 +605,7 @@ Tensor distribute_tensor(
 
 template <typename T>
 Tensor create_distributed_tensor(
-    tt::stl::Span<T> buffer,
+    ttsl::Span<T> buffer,
     const ttnn::Shape& global_shape,
     const tt::tt_metal::MemoryPin& buffer_pin,
     const tt::tt_metal::TensorLayout& shard_layout,
@@ -622,7 +622,7 @@ Tensor create_distributed_tensor(
 
 template <typename T>
 Tensor create_distributed_tensor(
-    tt::stl::Span<const T> buffer,
+    ttsl::Span<const T> buffer,
     const ttnn::Shape& global_shape,
     const tt::tt_metal::TensorLayout& shard_layout,
     const TensorToMesh& mapper,
@@ -639,7 +639,7 @@ Tensor create_distributed_tensor(
 
 #define INSTANTIATE_CREATE_DISTRIBUTED_TENSOR(TYPE)                    \
     template Tensor create_distributed_tensor<TYPE>(                   \
-        tt::stl::Span<TYPE> buffer,                                    \
+        ttsl::Span<TYPE> buffer,                                    \
         const ttnn::Shape& global_shape,                               \
         const tt::tt_metal::MemoryPin& buffer_pin,                     \
         const tt::tt_metal::TensorLayout& shard_layout,                \
@@ -648,7 +648,7 @@ Tensor create_distributed_tensor(
         std::optional<ttnn::QueueId> cq_id,                            \
         TYPE pad_value);                                               \
     template Tensor create_distributed_tensor<TYPE>(                   \
-        tt::stl::Span<const TYPE> buffer,                              \
+        ttsl::Span<const TYPE> buffer,                              \
         const ttnn::Shape& global_shape,                               \
         const tt::tt_metal::TensorLayout& shard_layout,                \
         const TensorToMesh& mapper,                                    \

@@ -16,6 +16,7 @@ from models.demos.stable_diffusion_xl_base.tests.test_common import (
     SDXL_TRACE_REGION_SIZE,
 )
 from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
+    accuracy_assert,
     calculate_accuracy_metrics,
     check_clip_scores,
     create_report_json,
@@ -171,6 +172,7 @@ def test_accuracy_sdxl_inpaint(
     print(json.dumps(report_json, indent=4))
 
     check_clip_scores(model_name, evaluation_range, prompts, accuracy_metrics["clip_scores"])
+    accuracy_assert(metadata, accuracy_metrics)
 
 
 def get_dataset_for_inpainting_accuracy(n_prompts: int):

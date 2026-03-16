@@ -4,6 +4,10 @@
 
 #pragma once
 
+#if defined(USE_DEVICE_PRINT)
+#include "device_print.h"
+#endif
+
 #include "risc_common.h"
 
 /*
@@ -38,7 +42,7 @@
 #include "internal/debug/dprint_buffer.h"
 #include "waypoint.h"
 
-#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && !defined(USE_DEVICE_PRINT)
 #define DPRINT DebugPrinter()
 #else
 #define DPRINT \
@@ -317,7 +321,7 @@ const uint8_t* DebugPrintTypeAddr<char*>(char** val) {
 
 struct DebugPrinter {
     DebugPrinter() {
-#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF)
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && !defined(USE_DEVICE_PRINT)
         volatile tt_l1_ptr DebugPrintMemLayout* dprint_buffer = get_debug_print_buffer();
         if (dprint_buffer->aux.wpos == DEBUG_PRINT_SERVER_STARTING_MAGIC) {
             // Host debug print server writes this value
@@ -434,7 +438,7 @@ __attribute__((__noinline__)) void debug_print(DebugPrinter& dp, DebugPrintData 
 
 template <typename T>
 __attribute__((__noinline__)) DebugPrinter operator<<(DebugPrinter dp, T val) {
-#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && !defined(PROFILE_KERNEL)
+#if defined(DEBUG_PRINT_ENABLED) && !defined(FORCE_DPRINT_OFF) && !defined(USE_DEVICE_PRINT) && !defined(PROFILE_KERNEL)
     DebugPrintData data{
         .sz = DebugPrintTypeToSize<T>(val),  // includes terminating 0 for char*
         .data_ptr = DebugPrintTypeAddr<T>(&val),
