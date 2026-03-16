@@ -105,7 +105,7 @@ Tensor create_tt_tensor_from_host_data(
 
         return Tensor::from_span(
             ttsl::make_const_span(host_buffer.view_as<T>()),
-            tensor_spec,
+            TensorSpec(tensor_shape, dst_tensor_layout),
             nullptr,
             std::nullopt,
             static_cast<T>(pad_value));
