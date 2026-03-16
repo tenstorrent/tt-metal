@@ -21,6 +21,9 @@ ttnn::Tensor ExecuteDitRmsNormUnaryFused::invoke(
     const std::optional<ttnn::operations::unary::UnaryWithParam>& activation) {
     auto output_memory_config = memory_config.value_or(input_tensor.memory_config());
 
+    auto rank = input_tensor.logical_shape().size();
+    TT_FATAL(rank > 0 && input_tensor.logical_volume() >= 0, "Input tensor must have rank > 0 and logical volume >= 0");
+
     auto arch = input_tensor.storage_type() == StorageType::DEVICE ? input_tensor.device()->arch()
                                                                    : ttnn::GetDefaultDevice()->arch();
     const bool approx_mode = true;

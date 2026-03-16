@@ -524,8 +524,8 @@ class WanResidualBlock(Module):
             if self.conv_shortcut is not None
             else x_BTHWC
         )
-        x_norm_tile_BTHWC = self.norm1(x_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
-        x_BTHWC = ttnn.to_layout(x_norm_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
+        x_norm_silu_tile_BTHWC = self.norm1(x_BTHWC, compute_kernel_config=self.norm_compute_kernel_config)
+        x_BTHWC = ttnn.to_layout(x_norm_silu_tile_BTHWC, ttnn.ROW_MAJOR_LAYOUT)
 
         # Cached conv
         if feat_cache is not None:
