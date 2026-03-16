@@ -64,24 +64,21 @@ def _create_strict_lower_tril_ttnn(
     )
 
 
-def _get_matmul_program_config(M, N, K, grid_size=None):
-    """Get optimal program config for matrix multiplication."""
-    # This is a simplified version - in practice you'd want more sophisticated logic
-    if grid_size is None:
-        grid_size = (8, 8)
+def _create_triu_ones_ttnn(size: int, device: ttnn.Device, dtype=ttnn.float32, memory_config=None) -> ttnn.Tensor:
+    """Create upper triangular matrix of ones."""
+    triu = torch.triu(torch.ones(size, size, dtype=torch.float32))
+    return ttnn.from_torch(triu, device=device, dtype=dtype, layout=ttnn.TILE_LAYOUT, memory_config=memory_config)
 
-    # For large matrices, use larger grid
-    if M * N * K > 1024 * 1024:
-        return ttnn.MatmulMultiCoreReuseMultiCastProgramConfig(
-            compute_with_storage_grid_size=grid_size,
-            in0_block_w=4,
-            out_subblock_h=2,
-            out_subblock_w=2,
-            per_core_M=32,
-            per_core_N=32,
-            fuse_batch=True,
-            fused_activation=None,
-        )
+
+def _get_matmul_program_config(M, N, K, grid_size=None, fuse_batch=False):
+    """Get optimal program config for matrix multiplication.
+
+    Returns None to let TTNN auto-select the config, as manually specifying
+    program configs requires careful calculation of per_core_M, per_core_N,
+    and other parameters based on actual tensor dimensions and grid size.
+    """
+    # For now, return None to let TTNN handle program config selection automatically
+    # This avoids L1 memory allocation issues from incorrect config parameters
     return None
 
 
@@ -189,23 +186,6 @@ def fused_chunked_delta_rule_ttnn(
         output: [B, T, H, V] output tensor
         final_state: [B, H, K, V] final recurrent state
     """
-    # Convert to float32 for l2_norm to avoid precision issues with bfloat16
-    q_orig_dtype = q.dtype
-    k_orig_dtype = k.dtype
-    if q.dtype != ttnn.float32:
-        q = ttnn.typecast(q, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
-    if k.dtype != ttnn.float32:
-        k = ttnn.typecast(k, ttnn.float32, memory_config=ttnn.L1_MEMORY_CONFIG)
-
-    q = l2_norm_ttnn(q, dim=-1)
-    k = l2_norm_ttnn(k, dim=-1)
-
-    # Convert back to original dtype
-    if q_orig_dtype != ttnn.float32:
-        q = ttnn.typecast(q, q_orig_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
-    if k_orig_dtype != ttnn.float32:
-        k = ttnn.typecast(k, k_orig_dtype, memory_config=ttnn.L1_MEMORY_CONFIG)
-
     B = q.shape[0]
     T = q.shape[1]
     H = q.shape[2]
@@ -215,6 +195,10 @@ def fused_chunked_delta_rule_ttnn(
 
     if scale is None:
         scale = K**-0.5
+
+    # Apply L2 norm first (on original dtype), then transpose and cast to float32
+    q = l2_norm_ttnn(q, dim=-1)
+    k = l2_norm_ttnn(k, dim=-1)
 
     # Transpose and cast to float32
     q = ttnn.typecast(
@@ -363,7 +347,7 @@ def fused_chunked_delta_rule_ttnn(
     # missing compile-time arguments. The test suite handles this gracefully by catching
     # the exception and skipping problematic configurations.
     k_c_t = ttnn.transpose(k_c, 1, 2, memory_config=ttnn.L1_MEMORY_CONFIG)
-    prog_config_kk = _get_matmul_program_config(chunk_size, K, chunk_size, grid_size=None)
+    prog_config_kk = _get_matmul_program_config(chunk_size, K, chunk_size, grid_size=None, fuse_batch=False)
     if prog_config_kk:
         kk = ttnn.matmul(k_beta_c, k_c_t, program_config=prog_config_kk, memory_config=ttnn.L1_MEMORY_CONFIG)
     else:
@@ -382,7 +366,9 @@ def fused_chunked_delta_rule_ttnn(
     R = ttnn.add(M, eye, memory_config=ttnn.L1_MEMORY_CONFIG)
     P = ttnn.matmul(M, M, memory_config=ttnn.L1_MEMORY_CONFIG)
     num_steps = max(int(math.ceil(math.log2(max(chunk_size, 2)))) - 1, 0)
-    prog_config_woodbury = _get_matmul_program_config(chunk_size, chunk_size, chunk_size, grid_size=None)
+    prog_config_woodbury = _get_matmul_program_config(
+        chunk_size, chunk_size, chunk_size, grid_size=None, fuse_batch=False
+    )
     for _ in range(num_steps):
         if prog_config_woodbury:
             R = ttnn.add(
@@ -397,7 +383,7 @@ def fused_chunked_delta_rule_ttnn(
 
     attn = R
 
-    prog_config_vcorr = _get_matmul_program_config(chunk_size, chunk_size, V, grid_size=None)
+    prog_config_vcorr = _get_matmul_program_config(chunk_size, chunk_size, V, grid_size=None, fuse_batch=False)
     if prog_config_vcorr:
         v_corrected = ttnn.matmul(attn, v_beta_c, program_config=prog_config_vcorr, memory_config=ttnn.L1_MEMORY_CONFIG)
     else:
@@ -481,11 +467,11 @@ def fused_chunked_delta_rule_ttnn(
         )
 
     # Pre-compute program configs for all matmuls
-    prog_config_qk = _get_matmul_program_config(chunk_size, K, chunk_size, grid_size=None)
-    prog_config_vprime = _get_matmul_program_config(chunk_size, K, V, grid_size=None)
-    prog_config_o_inter = _get_matmul_program_config(chunk_size, K, V, grid_size=None)
-    prog_config_intra = _get_matmul_program_config(chunk_size, chunk_size, V, grid_size=None)
-    prog_config_state = _get_matmul_program_config(K, chunk_size, V, grid_size=None)
+    prog_config_qk = _get_matmul_program_config(chunk_size, K, chunk_size, grid_size=None, fuse_batch=False)
+    prog_config_vprime = _get_matmul_program_config(chunk_size, K, V, grid_size=None, fuse_batch=False)
+    prog_config_o_inter = _get_matmul_program_config(chunk_size, K, V, grid_size=None, fuse_batch=False)
+    prog_config_intra = _get_matmul_program_config(chunk_size, chunk_size, V, grid_size=None, fuse_batch=False)
+    prog_config_state = _get_matmul_program_config(K, chunk_size, V, grid_size=None, fuse_batch=False)
 
     outputs = []
     for i in range(num_chunks):
@@ -604,7 +590,6 @@ def fused_chunked_delta_rule_ttnn(
         outputs.append(ttnn.reshape(o_i, [BH, 1, chunk_size, V], memory_config=ttnn.L1_MEMORY_CONFIG))
 
         dl_i_exp = ttnn.exp(dl_i, memory_config=ttnn.L1_MEMORY_CONFIG)
-        dl_i_exp = ttnn.exp(dl_i, memory_config=ttnn.L1_MEMORY_CONFIG)
         S = ttnn.multiply(
             S,
             ttnn.reshape(dl_i_exp, [BH, 1, 1], memory_config=ttnn.L1_MEMORY_CONFIG),
@@ -643,7 +628,12 @@ def fused_chunked_delta_rule_ttnn(
             o = ttnn.slice(o, slice_start, slice_end, memory_config=ttnn.L1_MEMORY_CONFIG)
             o = ttnn.reshape(o, [BH, T, V], memory_config=ttnn.L1_MEMORY_CONFIG)
         else:
-            o = o[:, :T]
+            # Reshape to [BH, num_chunks * chunk_size, V] then slice to remove padding
+            o = ttnn.reshape(o, [BH, num_chunks * chunk_size, V], memory_config=ttnn.L1_MEMORY_CONFIG)
+            o_shape = _get_tensor_shape(o, use_padded=True)
+            slice_start = [0, 0, 0]
+            slice_end = [o_shape[0], min(T, o_shape[1]), o_shape[2]]
+            o = ttnn.slice(o, slice_start, slice_end, memory_config=ttnn.L1_MEMORY_CONFIG)
             o = ttnn.reshape(o, [BH, T, V], memory_config=ttnn.L1_MEMORY_CONFIG)
     else:
         o = ttnn.reshape(o, [BH, L, V], memory_config=ttnn.L1_MEMORY_CONFIG)
