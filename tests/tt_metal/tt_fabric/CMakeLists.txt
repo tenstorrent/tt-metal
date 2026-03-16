@@ -35,6 +35,7 @@ target_link_libraries(
         tt_metal
         test_common_libs
         yaml-cpp::yaml-cpp
+        spdlog::spdlog
 )
 
 target_include_directories(
