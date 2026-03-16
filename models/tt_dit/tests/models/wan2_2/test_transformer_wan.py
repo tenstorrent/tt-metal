@@ -19,7 +19,7 @@ from ....utils.check import assert_quality
 from ....utils.mochi import get_rot_transformation_mat, stack_cos_sin
 from ....utils.padding import pad_vision_seq_parallel
 from ....utils.tensor import bf16_tensor, bf16_tensor_2dshard, from_torch
-from ....utils.test import line_params, ring_params
+from ....utils.test import line_params, ring_params, ring_params_bh_wan2_2
 
 # ---------------------------------------------------------------------------
 # Wan2.2-T2V-14B model configuration
@@ -87,7 +87,7 @@ def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp,
         pytest.param((2, 4), (2, 4), 1, 0, 1, line_params, ttnn.Topology.Linear, True, id="2x4sp1tp0"),
         # WH (ring) on 4x8
         pytest.param((4, 8), (4, 8), 1, 0, 4, ring_params, ttnn.Topology.Ring, True, id="wh_4x8sp1tp0"),
-        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"),
+        pytest.param((4, 8), (4, 8), 1, 0, 2, ring_params_bh_wan2_2, ttnn.Topology.Ring, False, id="ring_bh_4x8sp1tp0"),
         pytest.param((4, 8), (4, 8), 1, 0, 2, line_params, ttnn.Topology.Linear, False, id="line_bh_4x8sp1tp0"),
     ],
     indirect=["mesh_device", "device_params"],
@@ -97,7 +97,7 @@ def _make_wan_transformer(*, mesh_device, ccl_manager, parallel_config, is_fsdp,
     [
         pytest.param(1, 31, 40, 80, 118, id="5b-720p"),
         pytest.param(1, 21, 60, 104, 118, id="14b-480p"),
-        pytest.param(1, 21, 90, 160, 118, id="14b-720p"),
+        pytest.param(1, 21, 90, 160, 512, id="14b-720p"),
     ],
 )
 def test_wan_transformer_block(
