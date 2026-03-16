@@ -5,7 +5,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
-from typing import Iterable, List, Tuple
+from typing import Iterable, List, NamedTuple, Tuple
 
 import torch
 from loguru import logger
@@ -86,6 +86,31 @@ def _strip_model_prefix(state_dict: dict[str, torch.Tensor]) -> dict[str, torch.
         else:
             out[k] = v
     return out
+
+
+class _MtpPromptLayout(NamedTuple):
+    use_mtp_path: bool
+    tokens_batched: torch.Tensor
+    lengths: torch.Tensor
+    prompt_user_ids: torch.Tensor | None
+    spec_user_ids: torch.Tensor | None
+
+
+class _MtpDecodeBootstrap(NamedTuple):
+    next_tokens: torch.Tensor
+    positions: torch.Tensor
+    spec_tokens: torch.Tensor | None
+    decode_page_tables: tuple[ttnn.Tensor, ...]
+
+
+class _MtpDecodeLoopResult(NamedTuple):
+    mtp_accept_rate: float
+    mtp_accepts: int
+    mtp_verifies: int
+    decode_step_idx: int
+    decode_forward_passes: int
+    decode_step_active_masks: List[List[bool]]
+    decode_step_user_tokens: List[List[int]]
 
 
 class DeepseekGenerator(WarmupForwardMixin):
@@ -1053,6 +1078,413 @@ class DeepseekGenerator(WarmupForwardMixin):
             lengths[i] = len_seq
         return out, lengths
 
+    def _configure_mtp_prompt_layout(
+        self,
+        tokens_batched: torch.Tensor,
+        lengths: torch.Tensor,
+        num_of_prompts: int,
+        max_new_tokens: int,
+        teacher_forcing,
+    ) -> _MtpPromptLayout:
+        num_of_users = tokens_batched.shape[0]
+        use_mtp_path = self.enable_mtp and teacher_forcing is None and max_new_tokens > 1 and not self.profile_decode
+        if use_mtp_path and 2 * num_of_prompts > num_of_users:
+            logger.warning(
+                f"MTP verify batching needs 2x prompt lanes ({2 * num_of_prompts}) but only {num_of_users} are available; "
+                "falling back to regular decode path."
+            )
+            use_mtp_path = False
+
+        prompt_user_ids: torch.Tensor | None = None
+        spec_user_ids: torch.Tensor | None = None
+        if use_mtp_path and num_of_prompts > 0:
+            prompts_per_row = self.batch_size_per_row // 2
+            max_prompts_per_batch = prompts_per_row * self.mesh_device.shape[0]
+            if num_of_prompts > max_prompts_per_batch:
+                logger.warning(
+                    f"MTP interleaved layout supports up to {max_prompts_per_batch} prompts, got {num_of_prompts}; "
+                    "falling back to regular decode path."
+                )
+                use_mtp_path = False
+            else:
+                prompt_user_ids_list: list[int] = []
+                spec_user_ids_list: list[int] = []
+                for i in range(num_of_prompts):
+                    row = i // prompts_per_row
+                    col = i % prompts_per_row
+                    base = row * self.batch_size_per_row
+                    prompt_uid = base + 2 * col
+                    spec_uid = prompt_uid + 1
+                    prompt_user_ids_list.append(prompt_uid)
+                    spec_user_ids_list.append(spec_uid)
+                prompt_user_ids = torch.tensor(prompt_user_ids_list, dtype=torch.long)
+                spec_user_ids = torch.tensor(spec_user_ids_list, dtype=torch.long)
+
+                tokens_batched_mtp = torch.zeros_like(tokens_batched)
+                lengths_mtp = torch.zeros_like(lengths)
+                tokens_batched_mtp[prompt_user_ids] = tokens_batched[:num_of_prompts]
+                lengths_mtp[prompt_user_ids] = lengths[:num_of_prompts]
+                tokens_batched = tokens_batched_mtp
+                lengths = lengths_mtp
+
+            if prompt_user_ids is not None and spec_user_ids is not None:
+                tokens_batched[spec_user_ids] = tokens_batched[prompt_user_ids]
+                lengths[spec_user_ids] = lengths[prompt_user_ids]
+
+        return _MtpPromptLayout(
+            use_mtp_path=use_mtp_path,
+            tokens_batched=tokens_batched,
+            lengths=lengths,
+            prompt_user_ids=prompt_user_ids,
+            spec_user_ids=spec_user_ids,
+        )
+
+    def _bootstrap_mtp_decode_state(
+        self,
+        last_logits: torch.Tensor,
+        lengths: torch.Tensor,
+        prefill_last_hidden: list[torch.Tensor | None] | None,
+        num_of_prompts: int,
+        num_of_users: int,
+        prompt_user_ids: torch.Tensor | None,
+        spec_user_ids: torch.Tensor | None,
+        temp_decode_page_tables: list[tuple[ttnn.Tensor, ...]],
+    ) -> _MtpDecodeBootstrap:
+        next_tokens_all = self._sample_greedy(last_logits)
+        next_tokens = torch.zeros_like(next_tokens_all)
+        if prompt_user_ids is not None:
+            next_tokens[prompt_user_ids] = next_tokens_all[prompt_user_ids]
+        else:
+            next_tokens = next_tokens_all
+
+        positions = lengths.clone()
+        use_interleaved = prompt_user_ids is not None and spec_user_ids is not None
+        verify_offset_default = self.batch_size_per_row // 2
+        verify_offset = verify_offset_default if use_interleaved else num_of_prompts
+        if not use_interleaved and (verify_offset < num_of_prompts or verify_offset + num_of_prompts > num_of_users):
+            raise RuntimeError(
+                f"Invalid verify offset {verify_offset} for num_prompts={num_of_prompts}, num_users={num_of_users}"
+            )
+
+        decode_page_tables = self._build_mtp_verify_page_tables(
+            num_prompts=num_of_prompts,
+            verify_offset=verify_offset,
+            interleaved=use_interleaved,
+        )
+        temp_decode_page_tables.append(decode_page_tables)
+
+        spec_tokens: torch.Tensor | None = None
+        if prefill_last_hidden is not None:
+            hidden_size = int(self.hf_config.hidden_size)
+            hidden_tail = torch.zeros((num_of_users, hidden_size), dtype=torch.bfloat16)
+            for i, last_hidden in enumerate(prefill_last_hidden):
+                if last_hidden is not None:
+                    hidden_tail[i] = last_hidden
+            positions_tail = lengths.clone()
+            bootstrap_mtp_traces = (
+                self.enable_trace and self._mtp_predict_trace_id is None and self._mtp_verify_trace_id is None
+            )
+            spec_logits = self._mtp_predict_logits(
+                hidden_states=hidden_tail,
+                tokens_step=next_tokens,
+                positions=positions_tail,
+                use_trace=not bootstrap_mtp_traces,
+            )
+            self.ccl.reset_sem_counters()
+            spec_all = self._sample_greedy(spec_logits)
+            if prompt_user_ids is not None:
+                spec_tokens = spec_all[prompt_user_ids]
+            else:
+                spec_tokens = spec_all[:num_of_prompts]
+
+            if bootstrap_mtp_traces:
+                mtp_page_table = self._get_mtp_page_table()
+                batched_tokens = next_tokens.clone()
+                batched_positions = positions.clone()
+                if use_interleaved and prompt_user_ids is not None and spec_user_ids is not None:
+                    batched_tokens[spec_user_ids] = spec_tokens
+                    batched_positions[spec_user_ids] = positions[prompt_user_ids] + 1
+                else:
+                    batched_tokens[verify_offset : verify_offset + num_of_prompts] = spec_tokens
+                    batched_positions[verify_offset : verify_offset + num_of_prompts] = positions[:num_of_prompts] + 1
+
+                self._ensure_mtp_predict_trace_buffers(hidden_tail, next_tokens, positions_tail, mtp_page_table)
+                self._ensure_mtp_verify_trace_buffers(batched_tokens, batched_positions, decode_page_tables)
+                self._capture_mtp_verify_trace(
+                    batched_tokens,
+                    batched_positions,
+                    batch_size_per_row=self.batch_size_per_row,
+                    page_tables=decode_page_tables,
+                    compile_run=True,
+                )
+                self._capture_mtp_predict_trace(
+                    hidden_tail,
+                    next_tokens,
+                    positions_tail,
+                    mtp_page_table,
+                    compile_run=False,
+                )
+
+        return _MtpDecodeBootstrap(
+            next_tokens=next_tokens,
+            positions=positions,
+            spec_tokens=spec_tokens,
+            decode_page_tables=decode_page_tables,
+        )
+
+    def _run_mtp_decode_loop(
+        self,
+        num_of_prompts: int,
+        num_of_users: int,
+        max_new_tokens: int,
+        prompt_user_ids: torch.Tensor | None,
+        spec_user_ids: torch.Tensor | None,
+        next_tokens: torch.Tensor,
+        positions: torch.Tensor,
+        spec_tokens: torch.Tensor | None,
+        decode_page_tables: tuple[ttnn.Tensor, ...] | None,
+        generations: List[List[int]],
+        finished: list[bool] | None,
+        stop_token_ids: set[int],
+        notify_finished,
+        profiler: BenchmarkProfiler,
+        token_trace: bool,
+        early_print_first_user: bool,
+    ) -> _MtpDecodeLoopResult:
+        use_interleaved = prompt_user_ids is not None and spec_user_ids is not None
+        verify_offset_default = self.batch_size_per_row // 2
+        verify_offset = verify_offset_default if use_interleaved else num_of_prompts
+        skip_accept_decode = True
+        generated_counts = torch.zeros((num_of_prompts,), dtype=torch.int32)
+        if num_of_prompts > 0:
+            generated_counts += 1
+
+        if spec_tokens is None:
+            raise RuntimeError("MTP spec tokens were not initialized; prefill hidden states missing.")
+        if decode_page_tables is None:
+            raise RuntimeError("MTP verify page tables were not initialized.")
+
+        total_accepts = 0
+        total_verifies = 0
+        skipped_decode_tokens = 0
+        accepted_committed_second_token = 0
+        decode_step_idx = 0
+        decode_forward_passes = 0
+        decode_step_active_masks: List[List[bool]] = []
+        decode_step_user_tokens: List[List[int]] = []
+
+        while any(
+            generated_counts[i] < max_new_tokens and (finished is None or not finished[i])
+            for i in range(num_of_prompts)
+        ):
+            step_active_mask = [
+                generated_counts[i] < max_new_tokens and (finished is None or not finished[i])
+                for i in range(num_of_prompts)
+            ]
+            step_user_tokens = [0 for _ in range(num_of_prompts)]
+            batched_tokens = next_tokens.clone()
+            batched_positions = positions.clone()
+            if use_interleaved and prompt_user_ids is not None and spec_user_ids is not None:
+                batched_tokens[spec_user_ids] = spec_tokens
+                batched_positions[spec_user_ids] = positions[prompt_user_ids] + 1
+            else:
+                batched_tokens[verify_offset : verify_offset + num_of_prompts] = spec_tokens
+                batched_positions[verify_offset : verify_offset + num_of_prompts] = positions[:num_of_prompts] + 1
+
+            logger.info(f"Decoding step {decode_step_idx} for {num_of_prompts} user(s)...")
+            trace_replay_step = (
+                self.enable_trace and self._mtp_verify_trace_id is not None and self._mtp_predict_trace_id is not None
+            )
+            profiler.start(f"decode_time_{decode_step_idx}")
+            if trace_replay_step:
+                profiler.start(f"trace_execution_{decode_step_idx}")
+            if self.enable_trace:
+                logits_2b, hidden_2b = self._mtp_verify_decode_traced(
+                    tokens_step=batched_tokens,
+                    positions=batched_positions,
+                    batch_size_per_row=self.batch_size_per_row,
+                    page_tables=decode_page_tables,
+                )
+            else:
+                logits_2b_tt, hidden_2b_tt = self._decode_step_tt(
+                    tokens_step=batched_tokens,
+                    positions=batched_positions,
+                    batch_size_per_row=self.batch_size_per_row,
+                    page_tables=decode_page_tables,
+                    return_hidden=True,
+                )
+                logits_2b = ttnn.to_torch(
+                    logits_2b_tt,
+                    mesh_composer=ttnn.ConcatMesh2dToTensor(
+                        self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
+                    ),
+                )
+                ttnn.deallocate(logits_2b_tt)
+            profiler.end(f"decode_time_{decode_step_idx}")
+            decode_step_idx += 1
+            decode_forward_passes += 1
+            self.ccl.reset_sem_counters()
+
+            logits_2b = logits_2b.squeeze(0).squeeze(0)
+            pred_all = self._sample_greedy(logits_2b)
+            if use_interleaved and prompt_user_ids is not None and spec_user_ids is not None:
+                pred_next = pred_all[prompt_user_ids]
+                pred_after_spec = pred_all[spec_user_ids]
+            else:
+                pred_next = pred_all[:num_of_prompts]
+                pred_after_spec = pred_all[verify_offset : verify_offset + num_of_prompts]
+            accepted_prompt_mask = torch.zeros((num_of_prompts,), dtype=torch.bool)
+
+            for i in range(num_of_prompts):
+                if not step_active_mask[i]:
+                    continue
+
+                next_value = int(pred_next[i].item())
+                total_verifies += 1
+                accepted = next_value == int(spec_tokens[i].item())
+                if use_interleaved and prompt_user_ids is not None:
+                    prompt_uid = int(prompt_user_ids[i].item())
+                else:
+                    prompt_uid = i
+                next_tokens[prompt_uid] = next_value
+                positions[prompt_uid] = positions[prompt_uid] + 1
+                generated_counts[i] += 1
+                if accepted:
+                    total_accepts += 1
+                if finished is not None and next_value in stop_token_ids:
+                    finished[i] = True
+                    notify_finished(i)
+                    continue
+
+                generations[i].append(next_value)
+                step_user_tokens[i] += 1
+                if token_trace:
+                    logger.info(f"TOKTRACE prompt={i} gen_idx={int(generated_counts[i].item())-1} token={next_value}")
+                if early_print_first_user and i == 0:
+                    if self.tokenizer is not None:
+                        print(self.tokenizer.decode(next_value, skip_special_tokens=True), end="", flush=True)
+                    else:
+                        print(f"{next_value} ", end="", flush=True)
+
+                if accepted and generated_counts[i] < max_new_tokens:
+                    if skip_accept_decode:
+                        accepted_committed_second_token += 1
+                        next_after_spec_value = int(pred_after_spec[i].item())
+                        next_tokens[prompt_uid] = next_after_spec_value
+                        positions[prompt_uid] = positions[prompt_uid] + 1
+                        generated_counts[i] += 1
+                        if finished is not None and next_after_spec_value in stop_token_ids:
+                            finished[i] = True
+                            notify_finished(i)
+                            continue
+                        generations[i].append(next_after_spec_value)
+                        step_user_tokens[i] += 1
+                        if token_trace:
+                            logger.info(
+                                f"TOKTRACE prompt={i} gen_idx={int(generated_counts[i].item())-1} token={next_after_spec_value}"
+                            )
+                        if early_print_first_user and i == 0:
+                            if self.tokenizer is not None:
+                                print(
+                                    self.tokenizer.decode(next_after_spec_value, skip_special_tokens=True),
+                                    end="",
+                                    flush=True,
+                                )
+                            else:
+                                print(f"{next_after_spec_value} ", end="", flush=True)
+                    if finished is None or not finished[i]:
+                        accepted_prompt_mask[i] = True
+
+            accepted_indices = [
+                i
+                for i in range(num_of_prompts)
+                if accepted_prompt_mask[i]
+                and generated_counts[i] < max_new_tokens
+                and (finished is None or not finished[i])
+            ]
+            if skip_accept_decode and accepted_indices:
+                skipped_decode_tokens += len(accepted_indices)
+
+            non_prompt_mask = torch.ones((num_of_users,), dtype=torch.bool)
+            if use_interleaved and prompt_user_ids is not None:
+                non_prompt_mask[prompt_user_ids] = False
+            else:
+                non_prompt_mask[:num_of_prompts] = False
+            next_tokens[non_prompt_mask] = pred_all[non_prompt_mask]
+            positions[non_prompt_mask] = positions[non_prompt_mask] + 1
+
+            tokens_for_spec = next_tokens.clone()
+            positions_for_spec = positions.clone()
+
+            hidden_for_spec = hidden_2b if self.enable_trace else hidden_2b_tt
+            if self.enable_trace or (skip_accept_decode and accepted_indices):
+                hidden_2b_host = hidden_2b if self.enable_trace else self._hidden_tt_to_host_for_mtp(hidden_2b_tt)
+                hidden_for_spec = hidden_2b_host.clone()
+                accept_mask = accepted_prompt_mask.to(torch.bool)
+                if use_interleaved and prompt_user_ids is not None and spec_user_ids is not None:
+                    max_idx = int(torch.max(spec_user_ids).item()) if spec_user_ids.numel() > 0 else -1
+                    if hidden_2b_host.shape[0] <= max_idx:
+                        raise RuntimeError(
+                            "Hidden batch smaller than max spec user id: " f"{hidden_2b_host.shape[0]} <= {max_idx}"
+                        )
+                    hidden_verify = hidden_2b_host[spec_user_ids]
+                    if accept_mask.any():
+                        accept_prompt_ids = prompt_user_ids[accept_mask]
+                        hidden_for_spec[accept_prompt_ids] = hidden_verify[accept_mask]
+                else:
+                    if hidden_2b_host.shape[0] < verify_offset + num_of_prompts:
+                        raise RuntimeError(
+                            "Hidden batch smaller than verify offset + num_prompts: "
+                            f"{hidden_2b_host.shape[0]} < {verify_offset + num_of_prompts}"
+                        )
+                    hidden_verify = hidden_2b_host[verify_offset : verify_offset + num_of_prompts]
+                    if accept_mask.any():
+                        hidden_for_spec[:num_of_prompts][accept_mask] = hidden_verify[accept_mask]
+
+            spec_logits_full = self._mtp_predict_logits(
+                hidden_states=hidden_for_spec,
+                tokens_step=tokens_for_spec,
+                positions=positions_for_spec,
+            )
+            self.ccl.reset_sem_counters()
+            spec_all = self._sample_greedy(spec_logits_full)
+            if not self.enable_trace:
+                ttnn.deallocate(hidden_2b_tt)
+            if trace_replay_step:
+                profiler.end(f"trace_execution_{decode_step_idx - 1}")
+                logger.info(
+                    f"Trace execution t/s/user @ token {decode_step_idx - 1}: "
+                    f"{1/profiler.get_duration(f'trace_execution_{decode_step_idx - 1}')}"
+                )
+
+            if use_interleaved and prompt_user_ids is not None:
+                spec_tokens = spec_all[prompt_user_ids]
+            else:
+                spec_tokens = spec_all[:num_of_prompts]
+            decode_step_active_masks.append(step_active_mask)
+            decode_step_user_tokens.append(step_user_tokens)
+
+        mtp_accept_rate = total_accepts / total_verifies if total_verifies > 0 else 0.0
+        if total_verifies > 0:
+            logger.info(f"MTP accept rate: {total_accepts}/{total_verifies} = {mtp_accept_rate:.3f}")
+            logger.info(
+                "MTP skip-path summary: skipped_decode_tokens={} "
+                "accepted_committed_second_token={}".format(
+                    skipped_decode_tokens,
+                    accepted_committed_second_token,
+                )
+            )
+
+        return _MtpDecodeLoopResult(
+            mtp_accept_rate=mtp_accept_rate,
+            mtp_accepts=total_accepts,
+            mtp_verifies=total_verifies,
+            decode_step_idx=decode_step_idx,
+            decode_forward_passes=decode_forward_passes,
+            decode_step_active_masks=decode_step_active_masks,
+            decode_step_user_tokens=decode_step_user_tokens,
+        )
+
     def generate(
         self,
         prompts: Iterable[str],
@@ -1121,53 +1553,21 @@ class DeepseekGenerator(WarmupForwardMixin):
         mtp_accept_rate = None
         mtp_accepts = None
         mtp_verifies = None
-        num_of_users = tokens_batched.shape[0]
         temp_decode_page_tables: list[tuple[ttnn.Tensor, ...]] = []
         token_trace = bool(int(os.getenv("DEEPSEEK_TOKEN_TRACE", "0")))
-        use_mtp_path = self.enable_mtp and teacher_forcing is None and max_new_tokens > 1 and not self.profile_decode
-        if use_mtp_path and 2 * num_of_prompts > num_of_users:
-            logger.warning(
-                f"MTP verify batching needs 2x prompt lanes ({2 * num_of_prompts}) but only {num_of_users} are available; "
-                "falling back to regular decode path."
-            )
-            use_mtp_path = False
-        prompt_user_ids: torch.Tensor | None = None
-        spec_user_ids: torch.Tensor | None = None
-        if use_mtp_path and num_of_prompts > 0:
-            prompts_per_row = self.batch_size_per_row // 2
-            max_prompts_per_batch = prompts_per_row * self.mesh_device.shape[0]
-            if num_of_prompts > max_prompts_per_batch:
-                logger.warning(
-                    f"MTP interleaved layout supports up to {max_prompts_per_batch} prompts, got {num_of_prompts}; "
-                    "falling back to regular decode path."
-                )
-                use_mtp_path = False
-            else:
-                prompt_user_ids_list: list[int] = []
-                spec_user_ids_list: list[int] = []
-                for i in range(num_of_prompts):
-                    row = i // prompts_per_row
-                    col = i % prompts_per_row
-                    base = row * self.batch_size_per_row
-                    prompt_uid = base + 2 * col
-                    spec_uid = prompt_uid + 1
-                    prompt_user_ids_list.append(prompt_uid)
-                    spec_user_ids_list.append(spec_uid)
-                prompt_user_ids = torch.tensor(prompt_user_ids_list, dtype=torch.long)
-                spec_user_ids = torch.tensor(spec_user_ids_list, dtype=torch.long)
-
-                tokens_batched_mtp = torch.zeros_like(tokens_batched)
-                lengths_mtp = torch.zeros_like(lengths)
-                tokens_batched_mtp[prompt_user_ids] = tokens_batched[:num_of_prompts]
-                lengths_mtp[prompt_user_ids] = lengths[:num_of_prompts]
-                tokens_batched = tokens_batched_mtp
-                lengths = lengths_mtp
-
-            # Prefill verify lanes with the same prompt contexts as active lanes so verify decode
-            # reads from matching caches instead of empty padded users.
-            if prompt_user_ids is not None and spec_user_ids is not None:
-                tokens_batched[spec_user_ids] = tokens_batched[prompt_user_ids]
-                lengths[spec_user_ids] = lengths[prompt_user_ids]
+        mtp_layout = self._configure_mtp_prompt_layout(
+            tokens_batched=tokens_batched,
+            lengths=lengths,
+            num_of_prompts=num_of_prompts,
+            max_new_tokens=max_new_tokens,
+            teacher_forcing=teacher_forcing,
+        )
+        use_mtp_path = mtp_layout.use_mtp_path
+        tokens_batched = mtp_layout.tokens_batched
+        lengths = mtp_layout.lengths
+        prompt_user_ids = mtp_layout.prompt_user_ids
+        spec_user_ids = mtp_layout.spec_user_ids
+        num_of_users = tokens_batched.shape[0]
 
         # Run one or more prefill+decode batches
         stop_token_ids = self._get_stop_token_ids() if stop_at_eos and teacher_forcing is None else set()
@@ -1307,97 +1707,33 @@ class DeepseekGenerator(WarmupForwardMixin):
                 # or from random IDs when profiling decode only.
                 if self.profile_decode:
                     next_tokens = next_tokens_override
+                    positions = lengths.clone()
                 else:
                     if use_mtp_path:
                         assert last_logits is not None
-                        next_tokens_all = self._sample_greedy(last_logits)
-                        next_tokens = torch.zeros_like(next_tokens_all)
-                        if prompt_user_ids is not None:
-                            next_tokens[prompt_user_ids] = next_tokens_all[prompt_user_ids]
-                        else:
-                            next_tokens = next_tokens_all
+                        mtp_bootstrap = self._bootstrap_mtp_decode_state(
+                            last_logits=last_logits,
+                            lengths=lengths,
+                            prefill_last_hidden=prefill_last_hidden,
+                            num_of_prompts=num_of_prompts,
+                            num_of_users=num_of_users,
+                            prompt_user_ids=prompt_user_ids,
+                            spec_user_ids=spec_user_ids,
+                            temp_decode_page_tables=temp_decode_page_tables,
+                        )
+                        next_tokens = mtp_bootstrap.next_tokens
+                        positions = mtp_bootstrap.positions
+                        spec_tokens = mtp_bootstrap.spec_tokens
+                        decode_page_tables = mtp_bootstrap.decode_page_tables
                     else:
                         assert prefill_tokens is not None
                         next_tokens = prefill_tokens
+                        positions = lengths.clone()
                 if teacher_forcing is not None:
                     # Record user-0 prediction for accuracy, but force teacher token for alignment.
                     tf_idx = int(prompt_user_ids[0].item()) if (prompt_user_ids is not None) else 0
                     forced0 = teacher_forcing.collect_predicted_tokens(int(next_tokens[tf_idx].item()))
                     next_tokens[tf_idx] = int(forced0)
-
-                # Positions for the first generated token are the prompt lengths
-                positions = lengths.clone()
-
-                spec_tokens = None
-                decode_page_tables = None
-                use_interleaved = prompt_user_ids is not None and spec_user_ids is not None
-                verify_offset_default = self.batch_size_per_row // 2
-                verify_offset = verify_offset_default if use_interleaved else num_of_prompts
-                if use_mtp_path:
-                    if not use_interleaved:
-                        if verify_offset < num_of_prompts or verify_offset + num_of_prompts > num_of_users:
-                            raise RuntimeError(
-                                f"Invalid verify offset {verify_offset} for "
-                                f"num_prompts={num_of_prompts}, num_users={num_of_users}"
-                            )
-                    decode_page_tables = self._build_mtp_verify_page_tables(
-                        num_prompts=num_of_prompts, verify_offset=verify_offset, interleaved=use_interleaved
-                    )
-                    temp_decode_page_tables.append(decode_page_tables)
-                if use_mtp_path and prefill_last_hidden is not None:
-                    hidden_size = int(self.hf_config.hidden_size)
-                    hidden_tail = torch.zeros((num_of_users, hidden_size), dtype=torch.bfloat16)
-                    for i, last_hidden in enumerate(prefill_last_hidden):
-                        if last_hidden is not None:
-                            hidden_tail[i] = last_hidden
-                    positions_tail = lengths.clone()
-                    bootstrap_mtp_traces = (
-                        self.enable_trace and self._mtp_predict_trace_id is None and self._mtp_verify_trace_id is None
-                    )
-                    spec_logits = self._mtp_predict_logits(
-                        hidden_states=hidden_tail,
-                        tokens_step=next_tokens,
-                        positions=positions_tail,
-                        use_trace=not bootstrap_mtp_traces,
-                    )
-                    self.ccl.reset_sem_counters()
-                    spec_all = self._sample_greedy(spec_logits)
-                    if prompt_user_ids is not None:
-                        spec_tokens = spec_all[prompt_user_ids]
-                    else:
-                        spec_tokens = spec_all[:num_of_prompts]
-
-                    if bootstrap_mtp_traces:
-                        if decode_page_tables is None:
-                            raise RuntimeError("MTP verify page tables were not initialized before trace bootstrap.")
-                        mtp_page_table = self._get_mtp_page_table()
-                        batched_tokens = next_tokens.clone()
-                        batched_positions = positions.clone()
-                        if use_interleaved and prompt_user_ids is not None and spec_user_ids is not None:
-                            batched_tokens[spec_user_ids] = spec_tokens
-                            batched_positions[spec_user_ids] = positions[prompt_user_ids] + 1
-                        else:
-                            batched_tokens[verify_offset : verify_offset + num_of_prompts] = spec_tokens
-                            batched_positions[verify_offset : verify_offset + num_of_prompts] = (
-                                positions[:num_of_prompts] + 1
-                            )
-
-                        self._ensure_mtp_predict_trace_buffers(hidden_tail, next_tokens, positions_tail, mtp_page_table)
-                        self._ensure_mtp_verify_trace_buffers(batched_tokens, batched_positions, decode_page_tables)
-                        self._capture_mtp_verify_trace(
-                            batched_tokens,
-                            batched_positions,
-                            batch_size_per_row=self.batch_size_per_row,
-                            page_tables=decode_page_tables,
-                            compile_run=True,
-                        )
-                        self._capture_mtp_predict_trace(
-                            hidden_tail,
-                            next_tokens,
-                            positions_tail,
-                            mtp_page_table,
-                            compile_run=False,
-                        )
 
                 # Record token 0
                 for i in range(num_of_prompts):
@@ -1423,246 +1759,31 @@ class DeepseekGenerator(WarmupForwardMixin):
                 decode_step_active_masks: List[List[bool]] = []
                 decode_step_user_tokens: List[List[int]] = []
                 if use_mtp_path:
-                    skip_accept_decode = True
-                    generated_counts = torch.zeros((num_of_prompts,), dtype=torch.int32)
-                    if num_of_prompts > 0:
-                        generated_counts += 1
-
-                    if spec_tokens is None:
-                        raise RuntimeError("MTP spec tokens were not initialized; prefill hidden states missing.")
-                    if decode_page_tables is None:
-                        raise RuntimeError("MTP verify page tables were not initialized.")
-                    total_accepts = 0
-                    total_verifies = 0
-                    skipped_decode_tokens = 0
-                    accepted_committed_second_token = 0
-
-                    while any(
-                        generated_counts[i] < max_new_tokens and (finished is None or not finished[i])
-                        for i in range(num_of_prompts)
-                    ):
-                        step_active_mask = [
-                            generated_counts[i] < max_new_tokens and (finished is None or not finished[i])
-                            for i in range(num_of_prompts)
-                        ]
-                        step_user_tokens = [0 for _ in range(num_of_prompts)]
-                        # Pack verification batch into available decode lanes:
-                        # [0:N) holds next-token verification, [N:2N) holds next-next-token verification.
-                        batched_tokens = next_tokens.clone()
-                        batched_positions = positions.clone()
-                        if use_interleaved and prompt_user_ids is not None and spec_user_ids is not None:
-                            batched_tokens[spec_user_ids] = spec_tokens
-                            batched_positions[spec_user_ids] = positions[prompt_user_ids] + 1
-                        else:
-                            batched_tokens[verify_offset : verify_offset + num_of_prompts] = spec_tokens
-                            batched_positions[verify_offset : verify_offset + num_of_prompts] = (
-                                positions[:num_of_prompts] + 1
-                            )
-
-                        logger.info(f"Decoding step {decode_step_idx} for {num_of_prompts} user(s)...")
-                        trace_replay_step = (
-                            self.enable_trace
-                            and self._mtp_verify_trace_id is not None
-                            and self._mtp_predict_trace_id is not None
-                        )
-                        profiler.start(f"decode_time_{decode_step_idx}")
-                        if trace_replay_step and profiler is not None:
-                            profiler.start(f"trace_execution_{decode_step_idx}")
-                        if self.enable_trace:
-                            logits_2b, hidden_2b = self._mtp_verify_decode_traced(
-                                tokens_step=batched_tokens,
-                                positions=batched_positions,
-                                batch_size_per_row=self.batch_size_per_row,
-                                page_tables=decode_page_tables,
-                            )
-                        else:
-                            logits_2b_tt, hidden_2b_tt = self._decode_step_tt(
-                                tokens_step=batched_tokens,
-                                positions=batched_positions,
-                                batch_size_per_row=self.batch_size_per_row,
-                                page_tables=decode_page_tables,
-                                return_hidden=True,
-                            )
-                            logits_2b = ttnn.to_torch(
-                                logits_2b_tt,
-                                mesh_composer=ttnn.ConcatMesh2dToTensor(
-                                    self.mesh_device, dims=(-2, -1), mesh_shape=self.mesh_device.shape
-                                ),
-                            )
-                            ttnn.deallocate(logits_2b_tt)
-                        profiler.end(f"decode_time_{decode_step_idx}")
-                        decode_step_idx += 1
-                        decode_forward_passes += 1
-                        self.ccl.reset_sem_counters()
-
-                        logits_2b = logits_2b.squeeze(0).squeeze(0)
-                        pred_all = self._sample_greedy(logits_2b)
-                        if use_interleaved and prompt_user_ids is not None and spec_user_ids is not None:
-                            pred_next = pred_all[prompt_user_ids]
-                            pred_after_spec = pred_all[spec_user_ids]
-                        else:
-                            pred_next = pred_all[:num_of_prompts]
-                            pred_after_spec = pred_all[verify_offset : verify_offset + num_of_prompts]
-                        positions_before = positions.clone()
-                        accepted_prompt_mask = torch.zeros((num_of_prompts,), dtype=torch.bool)
-
-                        for i in range(num_of_prompts):
-                            if not step_active_mask[i]:
-                                continue
-
-                            next_value = int(pred_next[i].item())
-                            total_verifies += 1
-                            accepted = next_value == int(spec_tokens[i].item())
-                            if use_interleaved and prompt_user_ids is not None:
-                                prompt_uid = int(prompt_user_ids[i].item())
-                            else:
-                                prompt_uid = i
-                            next_tokens[prompt_uid] = next_value
-                            positions[prompt_uid] = positions[prompt_uid] + 1
-                            generated_counts[i] += 1
-                            if accepted:
-                                total_accepts += 1
-                            if finished is not None and next_value in stop_token_ids:
-                                finished[i] = True
-                                notify_finished(i)
-                                continue
-
-                            generations[i].append(next_value)
-                            step_user_tokens[i] += 1
-                            if token_trace:
-                                logger.info(
-                                    f"TOKTRACE prompt={i} gen_idx={int(generated_counts[i].item())-1} token={next_value}"
-                                )
-                            if early_print_first_user and i == 0:
-                                if self.tokenizer is not None:
-                                    print(
-                                        self.tokenizer.decode(next_value, skip_special_tokens=True),
-                                        end="",
-                                        flush=True,
-                                    )
-                                else:
-                                    print(f"{next_value} ", end="", flush=True)
-
-                            if accepted and generated_counts[i] < max_new_tokens:
-                                if skip_accept_decode:
-                                    accepted_committed_second_token += 1
-                                    # True skip: commit the verified next-next token and advance positions by +2.
-                                    next_after_spec_value = int(pred_after_spec[i].item())
-                                    next_tokens[prompt_uid] = next_after_spec_value
-                                    positions[prompt_uid] = positions[prompt_uid] + 1
-                                    generated_counts[i] += 1
-                                    if finished is not None and next_after_spec_value in stop_token_ids:
-                                        finished[i] = True
-                                        notify_finished(i)
-                                        continue
-                                    generations[i].append(next_after_spec_value)
-                                    step_user_tokens[i] += 1
-                                    if token_trace:
-                                        logger.info(
-                                            f"TOKTRACE prompt={i} gen_idx={int(generated_counts[i].item())-1} "
-                                            f"token={next_after_spec_value}"
-                                        )
-                                    if early_print_first_user and i == 0:
-                                        if self.tokenizer is not None:
-                                            print(
-                                                self.tokenizer.decode(next_after_spec_value, skip_special_tokens=True),
-                                                end="",
-                                                flush=True,
-                                            )
-                                        else:
-                                            print(f"{next_after_spec_value} ", end="", flush=True)
-                                if finished is None or not finished[i]:
-                                    accepted_prompt_mask[i] = True
-
-                        accepted_indices = [
-                            i
-                            for i in range(num_of_prompts)
-                            if accepted_prompt_mask[i]
-                            and generated_counts[i] < max_new_tokens
-                            and (finished is None or not finished[i])
-                        ]
-                        if skip_accept_decode and accepted_indices:
-                            skipped_decode_tokens += len(accepted_indices)
-
-                        # Keep non-prompt lanes advancing to preserve tensor shapes.
-                        non_prompt_mask = torch.ones((num_of_users,), dtype=torch.bool)
-                        if use_interleaved and prompt_user_ids is not None:
-                            non_prompt_mask[prompt_user_ids] = False
-                        else:
-                            non_prompt_mask[:num_of_prompts] = False
-                        next_tokens[non_prompt_mask] = pred_all[non_prompt_mask]
-                        positions[non_prompt_mask] = positions[non_prompt_mask] + 1
-
-                        tokens_for_spec = next_tokens.clone()
-                        positions_for_spec = positions.clone()
-
-                        hidden_for_spec = hidden_2b if self.enable_trace else hidden_2b_tt
-                        if self.enable_trace or (skip_accept_decode and accepted_indices):
-                            # Select hidden[t] for rejects (prompt lane) and hidden[t+1] for accepts (verify lane).
-                            hidden_2b_host = (
-                                hidden_2b if self.enable_trace else self._hidden_tt_to_host_for_mtp(hidden_2b_tt)
-                            )
-                            hidden_for_spec = hidden_2b_host.clone()
-                            accept_mask = accepted_prompt_mask.to(torch.bool)
-                            if use_interleaved and prompt_user_ids is not None and spec_user_ids is not None:
-                                max_idx = int(torch.max(spec_user_ids).item()) if spec_user_ids.numel() > 0 else -1
-                                if hidden_2b_host.shape[0] <= max_idx:
-                                    raise RuntimeError(
-                                        "Hidden batch smaller than max spec user id: "
-                                        f"{hidden_2b_host.shape[0]} <= {max_idx}"
-                                    )
-                                hidden_verify = hidden_2b_host[spec_user_ids]
-                                if accept_mask.any():
-                                    accept_prompt_ids = prompt_user_ids[accept_mask]
-                                    hidden_for_spec[accept_prompt_ids] = hidden_verify[accept_mask]
-                            else:
-                                if hidden_2b_host.shape[0] < verify_offset + num_of_prompts:
-                                    raise RuntimeError(
-                                        "Hidden batch smaller than verify offset + num_prompts: "
-                                        f"{hidden_2b_host.shape[0]} < {verify_offset + num_of_prompts}"
-                                    )
-                                hidden_verify = hidden_2b_host[verify_offset : verify_offset + num_of_prompts]
-                                if accept_mask.any():
-                                    hidden_for_spec[:num_of_prompts][accept_mask] = hidden_verify[accept_mask]
-
-                        spec_logits_full = self._mtp_predict_logits(
-                            hidden_states=hidden_for_spec,
-                            tokens_step=tokens_for_spec,
-                            positions=positions_for_spec,
-                        )
-                        self.ccl.reset_sem_counters()
-                        spec_all = self._sample_greedy(spec_logits_full)
-                        if not self.enable_trace:
-                            ttnn.deallocate(hidden_2b_tt)
-                        if trace_replay_step and profiler is not None:
-                            profiler.end(f"trace_execution_{decode_step_idx - 1}")
-                            logger.info(
-                                f"Trace execution t/s/user @ token {decode_step_idx - 1}: "
-                                f"{1/profiler.get_duration(f'trace_execution_{decode_step_idx - 1}')}"
-                            )
-
-                        if use_interleaved and prompt_user_ids is not None:
-                            spec_tokens_next = spec_all[prompt_user_ids]
-                        else:
-                            spec_tokens_next = spec_all[:num_of_prompts]
-                        spec_tokens = spec_tokens_next
-                        decode_step_active_masks.append(step_active_mask)
-                        decode_step_user_tokens.append(step_user_tokens)
-
-                    mtp_accepts = total_accepts
-                    mtp_verifies = total_verifies
-                    if total_verifies > 0:
-                        mtp_accept_rate = total_accepts / total_verifies
-                        logger.info(f"MTP accept rate: {total_accepts}/{total_verifies} = {mtp_accept_rate:.3f}")
-                        logger.info(
-                            "MTP skip-path summary: skipped_decode_tokens={} "
-                            "accepted_committed_second_token={}".format(
-                                skipped_decode_tokens,
-                                accepted_committed_second_token,
-                            )
-                        )
-                    else:
-                        mtp_accept_rate = 0.0
+                    mtp_decode_result = self._run_mtp_decode_loop(
+                        num_of_prompts=num_of_prompts,
+                        num_of_users=num_of_users,
+                        max_new_tokens=max_new_tokens,
+                        prompt_user_ids=prompt_user_ids,
+                        spec_user_ids=spec_user_ids,
+                        next_tokens=next_tokens,
+                        positions=positions,
+                        spec_tokens=spec_tokens,
+                        decode_page_tables=decode_page_tables,
+                        generations=generations,
+                        finished=finished,
+                        stop_token_ids=stop_token_ids,
+                        notify_finished=notify_finished,
+                        profiler=profiler,
+                        token_trace=token_trace,
+                        early_print_first_user=early_print_first_user,
+                    )
+                    mtp_accept_rate = mtp_decode_result.mtp_accept_rate
+                    mtp_accepts = mtp_decode_result.mtp_accepts
+                    mtp_verifies = mtp_decode_result.mtp_verifies
+                    decode_step_idx = mtp_decode_result.decode_step_idx
+                    decode_forward_passes += mtp_decode_result.decode_forward_passes
+                    decode_step_active_masks = mtp_decode_result.decode_step_active_masks
+                    decode_step_user_tokens = mtp_decode_result.decode_step_user_tokens
                 else:
                     decode_steps = max_new_tokens - 1
                     for gen_idx in range(decode_steps):
@@ -1685,9 +1806,7 @@ class DeepseekGenerator(WarmupForwardMixin):
                         decode_forward_passes += 1
                         self.ccl.reset_sem_counters()
                         if self.sample_on_device:
-                            pred_tokens_device = self._sample_tokens_device(
-                                logits, enable_trace=self.enable_trace
-                            )
+                            pred_tokens_device = self._sample_tokens_device(logits, enable_trace=self.enable_trace)
                             pred_tokens = self._tokens_from_device(
                                 pred_tokens_device, self.mesh_device, batch_size_per_row=self.batch_size_per_row
                             )
@@ -1762,7 +1881,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         # We run (max_new_tokens - 1) decode calls (token 0 comes from prefill logits).
         if len(decode_times) > 1:
             total_decode_time = sum(decode_times[1:])  # Exclude iteration 0 (compile time)
-            total_generated_tokens = 0
             per_user_tokens = [0 for _ in range(num_of_prompts)]
             per_user_active_time = [0.0 for _ in range(num_of_prompts)]
 
@@ -1776,7 +1894,6 @@ class DeepseekGenerator(WarmupForwardMixin):
                 for i in range(num_of_prompts):
                     tokens_i = step_user_tokens[i] if i < len(step_user_tokens) else 0
                     per_user_tokens[i] += tokens_i
-                    total_generated_tokens += tokens_i
                     if i < len(step_active_mask) and step_active_mask[i]:
                         per_user_active_time[i] += step_time
 
