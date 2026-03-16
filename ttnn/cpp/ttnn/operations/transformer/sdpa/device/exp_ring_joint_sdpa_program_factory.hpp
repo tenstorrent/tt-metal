@@ -25,8 +25,6 @@ struct ExpRingJointSDPASharedVariables {
     tt::tt_metal::KernelHandle ccl_writer_forward_kernel_id{};
     tt::tt_metal::KernelHandle ccl_reader_backward_kernel_id{};
     tt::tt_metal::KernelHandle ccl_writer_backward_kernel_id{};
-    tt::tt_metal::KernelHandle ccl_mux_forward_kernel_id{};
-    tt::tt_metal::KernelHandle ccl_mux_backward_kernel_id{};
     std::vector<CoreCoord> ccl_worker_cores;
     uint32_t ccl_num_inputs = 0;
     uint32_t ccl_reader_sender_rt_offset = 0;
