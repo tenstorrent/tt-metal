@@ -127,12 +127,8 @@ void BuildCacheTelemetry::dump_metrics() const {
         double max_val = std::numeric_limits<double>::lowest();
         double sum = 0.0;
         for (double v : vals) {
-            if (v < min_val) {
-                min_val = v;
-            }
-            if (v > max_val) {
-                max_val = v;
-            }
+            min_val = std::min(v, min_val);
+            max_val = std::max(v, max_val);
             sum += v;
         }
         double mean_val = sum / static_cast<double>(vals.size());

@@ -915,7 +915,7 @@ void JitBuildState::merge_genfiles_to_cache(const JitBuildSettings* settings) co
     if (scratch_path_.empty() || !settings) {
         return;
     }
-    auto kernel_name = settings->get_full_kernel_name();
+    const auto& kernel_name = settings->get_full_kernel_name();
     fs::path scratch_genfiles_dir = this->scratch_path_ / kernel_name;
     fs::path nfs_genfiles_dir = this->out_path_ / kernel_name;
     if (!copy_genfiles_to_cache(scratch_genfiles_dir, nfs_genfiles_dir)) {

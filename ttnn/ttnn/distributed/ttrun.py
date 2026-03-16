@@ -1211,15 +1211,15 @@ def main(
             return
         try:
             os.killpg(proc.pid, signal.SIGTERM)
-        except OSError:
-            pass
+        except OSError as e:
+            logger.debug(f"{TT_RUN_PREFIX} Failed to SIGTERM process group {proc.pid}: {e}")
         try:
             proc.wait(timeout=10)
         except subprocess.TimeoutExpired:
             try:
                 os.killpg(proc.pid, signal.SIGKILL)
-            except OSError:
-                pass
+            except OSError as e:
+                logger.debug(f"{TT_RUN_PREFIX} Failed to SIGKILL process group {proc.pid}: {e}")
 
     atexit.register(_kill_process_group)
 
