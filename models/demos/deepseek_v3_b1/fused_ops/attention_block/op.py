@@ -236,6 +236,7 @@ class AttentionBlock:
         sdpa_scale_fp32=1.0,
         num_links=1,
         fabric_config=None,
+        broadcast_topology_override=None,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
         skip_ccl=False,
@@ -907,6 +908,7 @@ class AttentionBlock:
             bcast_cb_id=bcast_pkt_cb,
             num_links=num_links,
             fabric_config=fabric_config,
+            broadcast_topology_override=broadcast_topology_override,
         )
 
         # SDPA CB indices
@@ -3848,6 +3850,7 @@ class AttentionBlock:
         sdpa_scale_fp32=1.0,
         num_links=1,
         fabric_config=None,
+        broadcast_topology_override=None,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
         skip_ccl=False,
@@ -3895,6 +3898,7 @@ class AttentionBlock:
             sdpa_scale_fp32,
             num_links,
             fabric_config,
+            broadcast_topology_override,
             epsilon,
             fp32_dest_acc_en,
             skip_ccl,

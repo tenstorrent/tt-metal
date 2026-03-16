@@ -9,6 +9,8 @@ broadcasts data to all other devices in a mesh using a neighbor-exchange topolog
 """
 
 
+from dataclasses import dataclass
+
 import ttnn
 from models.demos.deepseek_v3_b1.micro_ops.host_io.utils import dtype_size
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import PerCoreRuntimeArgsDescriptor, UnifiedKernelDescriptor
@@ -52,6 +54,16 @@ def _schema_to_rt_list(schema, keys):
     return [schema[k] for k in keys]
 
 
+@dataclass(frozen=True)
+class BroadcastTopologyOverride:
+    torus_x: bool | None = None
+    torus_y: bool | None = None
+
+
+def make_broadcast_topology_override(*, torus_x: bool | None = None, torus_y: bool | None = None):
+    return BroadcastTopologyOverride(torus_x=torus_x, torus_y=torus_y)
+
+
 class BroadcastConfig:
     def __init__(
         self,
@@ -65,6 +77,7 @@ class BroadcastConfig:
         bcast_cb_id=None,
         num_links=1,
         fabric_config=None,
+        broadcast_topology_override=None,
     ):
         self.mesh_device = mesh_device
         self.input_tensor_mesh = input_tensor_mesh
@@ -80,7 +93,9 @@ class BroadcastConfig:
             raise ValueError("Expected explicit `bcast_cb_id`")
         self.bcast_cb_id = int(bcast_cb_id)
         self.num_links = int(num_links)
-        self.fabric_config = fabric_config
+        # When callers omit fabric_config, derive it from current global runtime state.
+        self.fabric_config = fabric_config if fabric_config is not None else ttnn.get_fabric_config()
+        self.broadcast_topology_override = broadcast_topology_override
         if self.num_links <= 0:
             raise ValueError("num_links must be greater than zero")
         if self.num_links > MAX_NUM_LINKS:
@@ -119,8 +134,18 @@ class BroadcastConfig:
         self._resolve_chunk_size(chunk_size_bytes)
         self._setup_fabric_rt_arg_count = None
         self._writer_tensor_address0_override = None
-        self._torus_x_enabled = fabric_config_enables_torus_x(self.fabric_config)
-        self._torus_y_enabled = fabric_config_enables_torus_y(self.fabric_config)
+        torus_x_override = None
+        torus_y_override = None
+        if self.broadcast_topology_override is not None:
+            torus_x_override = self.broadcast_topology_override.torus_x
+            torus_y_override = self.broadcast_topology_override.torus_y
+
+        self._torus_x_enabled = (
+            fabric_config_enables_torus_x(self.fabric_config) if torus_x_override is None else bool(torus_x_override)
+        )
+        self._torus_y_enabled = (
+            fabric_config_enables_torus_y(self.fabric_config) if torus_y_override is None else bool(torus_y_override)
+        )
         self._children_map = self._build_children_map()
         self._compute_topology_and_args()
         self.cb_ids = {"bcast_data": self.bcast_cb_id}
@@ -445,6 +470,7 @@ class DeepseekMinimalBroadcast:
         bcast_cb_id=None,
         num_links=1,
         fabric_config=None,
+        broadcast_topology_override=None,
     ):
         if bcast_cb_id is None:
             raise ValueError("Expected explicit `bcast_cb_id`")
@@ -469,6 +495,7 @@ class DeepseekMinimalBroadcast:
             bcast_cb_id=bcast_cb_id,
             num_links=num_links,
             fabric_config=fabric_config,
+            broadcast_topology_override=broadcast_topology_override,
         )
 
     @staticmethod
@@ -481,6 +508,7 @@ class DeepseekMinimalBroadcast:
         num_links=1,
         num_iterations=1,
         fabric_config=None,
+        broadcast_topology_override=None,
     ):
         """
         Execute broadcast operation using generic_op.
@@ -510,6 +538,7 @@ class DeepseekMinimalBroadcast:
             bcast_cb_id=0,
             num_links=num_links,
             fabric_config=fabric_config,
+            broadcast_topology_override=broadcast_topology_override,
         )
 
         # Create mesh program descriptor

@@ -55,6 +55,7 @@ class BroadcastRMSNorm:
         skip_ccl=False,
         socket=None,
         fabric_config=None,
+        broadcast_topology_override=None,
     ):
         """
         Execute fused Broadcast+RMSNorm operation.
@@ -119,6 +120,7 @@ class BroadcastRMSNorm:
             bcast_cb_id=bcast_cb_id,
             num_links=num_links,
             fabric_config=fabric_config,
+            broadcast_topology_override=broadcast_topology_override,
         )
 
         # Create mesh program descriptor

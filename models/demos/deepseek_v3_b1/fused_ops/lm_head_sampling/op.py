@@ -135,6 +135,7 @@ class LMHeadSampling:
         socket_input=None,
         socket_output=None,
         fabric_config=None,
+        broadcast_topology_override=None,
         persistent_mode=False,
         termination_semaphore=None,
         persistent_next_iter_semaphore=None,
@@ -340,6 +341,7 @@ class LMHeadSampling:
             bcast_cb_id=bcast_pkt_cb,
             num_links=bcast_num_links,
             fabric_config=fabric_config,
+            broadcast_topology_override=broadcast_topology_override,
         )
         # Create mesh program descriptor
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()
