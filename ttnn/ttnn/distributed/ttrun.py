@@ -330,6 +330,7 @@ def build_generate_rank_bindings_mpi_cmd(
     hosts: Optional[List[str]],
     output_dir: Path,
     mock_rank_to_desc: Optional[Dict[int, Path]] = None,
+    mpi_args: Optional[List[str]] = None,
 ) -> List[str]:
     """Build MPI command for running generate_rank_bindings.
 
@@ -341,6 +342,7 @@ def build_generate_rank_bindings_mpi_cmd(
         hosts: List of hostnames (for real cluster) or None (for mock)
         output_dir: Output directory for generated files
         mock_rank_to_desc: Optional dict mapping rank -> mock cluster descriptor path
+        mpi_args: Optional list of additional MPI arguments (e.g., ["--allow-run-as-root"])
 
     Returns:
         List of command-line arguments for mpirun
@@ -353,6 +355,10 @@ def build_generate_rank_bindings_mpi_cmd(
 
     # Always enable tagged output for easier debugging (prefixes output with rank info)
     cmd.extend(["--tag-output"])
+
+    # Add user-provided MPI args (e.g., --allow-run-as-root for Docker containers)
+    if mpi_args:
+        cmd.extend(mpi_args)
 
     if mock_rank_to_desc:
         # Mock cluster: all processes on localhost
@@ -413,6 +419,7 @@ def run_phase1_generate_rank_bindings(
     subprocess_run=subprocess.run,
     sleep_secs: int = 5,
     mock_rank_to_desc: Optional[Dict[int, Path]] = None,
+    mpi_args: Optional[List[str]] = None,
 ) -> tuple[Path, Path]:
     """Run Phase 1: generate_rank_bindings to produce rank_bindings.yaml and rankfile.
 
@@ -425,6 +432,7 @@ def run_phase1_generate_rank_bindings(
         subprocess_run: Subprocess run function (injectable for testing)
         sleep_secs: Seconds to sleep after Phase 1 for file sync (default 5)
         mock_rank_to_desc: Optional dict mapping rank -> mock cluster descriptor path
+        mpi_args: Optional list of additional MPI arguments (e.g., ["--allow-run-as-root"])
 
     Returns:
         Tuple of (rank_bindings.yaml path, rankfile path)
@@ -434,7 +442,7 @@ def run_phase1_generate_rank_bindings(
         RuntimeError: If Phase 1 fails or outputs are missing
     """
     executable = find_generate_rank_bindings_executable()
-    cmd = build_generate_rank_bindings_mpi_cmd(executable, mgd_path, hosts, output_dir, mock_rank_to_desc)
+    cmd = build_generate_rank_bindings_mpi_cmd(executable, mgd_path, hosts, output_dir, mock_rank_to_desc, mpi_args)
 
     logger.info(f"{TT_RUN_PREFIX} Phase 1: Running generate_rank_bindings...")
     logger.debug(f"{TT_RUN_PREFIX} Phase 1 command: {' '.join(cmd)}")
@@ -1388,6 +1396,7 @@ def new_mode_flow(
             subprocess_run=subprocess.run,
             sleep_secs=5,
             mock_rank_to_desc=mock_rank_to_desc,
+            mpi_args=mpi_args,
         )
     except (FileNotFoundError, RuntimeError) as e:
         raise click.ClickException(f"Phase 1 (generate_rank_bindings) failed: {e}")
