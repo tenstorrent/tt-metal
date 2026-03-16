@@ -1,4 +1,4 @@
-#!/bin/bash
+#!/usr/bin/env bash
 
 # Run this script when dev_msgs.h or fabric_telemetry_msgs.h changes.
 
