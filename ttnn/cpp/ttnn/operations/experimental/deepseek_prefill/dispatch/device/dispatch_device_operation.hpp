@@ -31,17 +31,17 @@ std::pair<std::array<uint32_t, 2>, std::array<uint32_t, 2>> get_cb_sizes(
 
 struct DispatchDeviceOperation {
     struct operation_attributes_t {
-        const uint32_t dispatch_group_size;
-        const uint32_t experts_per_chip;
-        const uint32_t num_routed_experts;
-        const uint32_t num_experts_per_tok;
-        const uint32_t metadata_len;
-        const uint32_t max_dispatched_tokens_per_expert;
-        const std::optional<uint32_t> axis;
-        const uint32_t num_links;
-        const tt::tt_fabric::Topology topology;
-        const MemoryConfig output_mem_config;
-        const CoreRangeSet worker_core_range_set;
+        uint32_t dispatch_group_size{};
+        uint32_t experts_per_chip{};
+        uint32_t num_routed_experts{};
+        uint32_t num_experts_per_tok{};
+        uint32_t metadata_len{};
+        uint32_t max_dispatched_tokens_per_expert{};
+        std::optional<uint32_t> axis{};
+        uint32_t num_links{};
+        tt::tt_fabric::Topology topology{};
+        MemoryConfig output_mem_config{};
+        CoreRangeSet worker_core_range_set{};
 
         static constexpr auto attribute_names = std::forward_as_tuple(
             "dispatch_group_size",
