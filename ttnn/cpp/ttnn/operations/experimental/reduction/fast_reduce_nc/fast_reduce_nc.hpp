@@ -11,7 +11,7 @@ namespace ttnn::experimental::reduction {
 
 ttnn::Tensor fast_reduce_nc(
     const ttnn::Tensor& input,
-    const ttnn::SmallVector<int32_t>& dims,
+    ttsl::Span<const int32_t> dims,
     const std::optional<const Tensor>& output,
     const ttnn::MemoryConfig& memory_config,
     std::optional<const ttnn::DeviceComputeKernelConfig> compute_kernel_config);
