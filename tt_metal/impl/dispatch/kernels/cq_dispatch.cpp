@@ -1028,12 +1028,8 @@ void process_go_signal_mcast_cmd() {
         uint64_t dst_noc_addr_multicast =
             get_noc_addr_helper(worker_mcast_grid, mcast_go_signal_addr + sizeof(uint32_t) * multicast_go_offset);
         uint32_t num_dests = num_worker_cores_to_mcast;
-        // Ensure the offset with respect to L1_ALIGNMENT is the same for the source and destination.
-        uint32_t storage_offset = multicast_go_offset % (L1_ALIGNMENT / sizeof(uint32_t));
-        aligned_go_signal_storage[storage_offset] = go_signal_value;
 
-        cq_noc_async_write_init_state<CQ_NOC_SNDL, true>(
-            (uint32_t)&aligned_go_signal_storage[storage_offset], dst_noc_addr_multicast, sizeof(uint32_t));
+        cq_noc_inline_dw_write_init_state<CQ_NOC_INLINE_NDVB, true>(dst_noc_addr_multicast, go_signal_value);
         noc_nonposted_writes_acked[noc_index] += num_dests;
 
         WAYPOINT("WCW");
@@ -1041,7 +1037,7 @@ void process_go_signal_mcast_cmd() {
             NOC_STREAM_READ_REG(stream, STREAM_REMOTE_DEST_BUF_SPACE_AVAILABLE_REG_INDEX), wait_count)) {
         }
         WAYPOINT("WCD");
-        cq_noc_async_write_with_state<CQ_NOC_sndl, CQ_NOC_wait>(0, 0, 0);
+        cq_noc_inline_dw_write_with_state<CQ_NOC_INLINE_ndvb, CQ_NOC_wait>(0, 0);
         noc_nonposted_writes_num_issued[noc_index] += 1;
     } else {
         WAYPOINT("WCW");
