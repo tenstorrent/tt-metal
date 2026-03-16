@@ -14,7 +14,13 @@ from loguru import logger
 import ttnn
 from models.common.sampling.sampling_params import SamplingParams
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
-from models.demos.deepseek_v3.utils.config_helpers import get_fabric_config
+from models.demos.deepseek_v3.utils.config_helpers import (
+    get_fabric_config,
+    DEFAULT_SAMPLING_TEMPERATURE,
+    DEFAULT_SAMPLING_TOP_K,
+    DEFAULT_SAMPLING_TOP_P,
+    USERS_PER_ROW,
+)
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
 
@@ -85,6 +91,16 @@ def _print_performance_metrics(results: dict) -> None:
         logger.info(f"Full demo runtime: {statistics['Full demo runtime']:.2f}s")
 
 
+def _print_model_params(results: dict) -> None:
+    """Print model parameters from model_params."""
+    if "model_params" in results and results["model_params"]:
+        logger.info("=== Model Parameters ===")
+        model_params = results["model_params"]
+        for key in sorted(model_params):
+            logger.info(f"{key}: {model_params[key]}")
+        logger.info("=====================")
+
+
 def create_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser("DeepSeek-V3 Demo on TT-NN")
     # Prompt is required for full-model mode, optional/ignored for --random-weights
@@ -121,9 +137,24 @@ def create_parser() -> argparse.ArgumentParser:
         help="Path to local HF DeepSeek-V3 model (safetensors)",
     )
     p.add_argument("--max-new-tokens", type=int, default=32, help="Number of tokens to generate")
-    p.add_argument("--temperature", type=float, default=1.0, help="Sampling temperature.")
-    p.add_argument("--top-k", type=int, default=1, help="Top-k value for sampling.")
-    p.add_argument("--top-p", type=float, default=1.0, help="Top-p value for sampling.")
+    p.add_argument(
+        "--sampling-temperature",
+        type=float,
+        default=DEFAULT_SAMPLING_TEMPERATURE,
+        help=f"Sampling temperature (default: {DEFAULT_SAMPLING_TEMPERATURE}).",
+    )
+    p.add_argument(
+        "--sampling-top-k",
+        type=int,
+        default=DEFAULT_SAMPLING_TOP_K,
+        help=f"Top-k value for sampling (default: {DEFAULT_SAMPLING_TOP_K}).",
+    )
+    p.add_argument(
+        "--sampling-top-p",
+        type=float,
+        default=DEFAULT_SAMPLING_TOP_P,
+        help=f"Top-p value for sampling (default: {DEFAULT_SAMPLING_TOP_P}).",
+    )
     p.add_argument("--cache-dir", type=str, required=True)
     # Random-weights mode options (reuse Model1D pipeline; single dense layer only)
     p.add_argument(
@@ -354,9 +385,9 @@ def run_demo(
     stop_at_eos: bool = True,
     checkpoint_jsonl: str | Path | None = None,
     enable_mtp: bool = False,
-    temperature: float = 1.0,
-    top_k: int = 1,
-    top_p: float = 0.0,
+    sampling_temperature: float = DEFAULT_SAMPLING_TEMPERATURE,
+    sampling_top_k: int = DEFAULT_SAMPLING_TOP_K,
+    sampling_top_p: float = DEFAULT_SAMPLING_TOP_P,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -372,20 +403,12 @@ def run_demo(
         raise SystemExit("Missing cache directory. Provide --cache-dir.")
     cache_dir = Path(cache_dir)
 
-    if temperature <= 0:
-        raise SystemExit("--sampling-temperature must be > 0 when --sampling is enabled.")
-    if not (0.0 < top_p <= 1.0):
+    if sampling_temperature <= 0:
+        raise SystemExit("--sampling-temperature must be > 0.")
+    if not (0.0 < sampling_top_p <= 1.0):
         raise SystemExit("--sampling-top-p must be in the interval (0, 1].")
-    if top_k < 0:
+    if sampling_top_k < 0:
         raise SystemExit("--sampling-top-k must be >= 0.")
-
-    sampling_params = SamplingParams(
-        temperature=temperature,
-        top_p=top_p,
-        top_k=top_k,
-    )
-
-    logger.info(f"Sampling parameters: {sampling_params.temperature}, {sampling_params.top_p}, {sampling_params.top_k}")
 
     # Validate model directory per mode
     validate_model_path(
@@ -434,6 +457,17 @@ def run_demo(
                 "Failed to load tokenizer from model path. Ensure the directory contains tokenizer files (e.g., tokenizer.model or tokenizer.json)."
             )
             raise
+
+    batch_size_per_row = USERS_PER_ROW
+    batch_size = batch_size_per_row * mesh_device.shape[0]
+
+    # Configure sampling
+    # sampling values of all users are assumed to be the same when initialized with run_demo function.
+    sampling_params = SamplingParams(
+        temperature=[sampling_temperature] * batch_size,
+        top_p=[sampling_top_p] * batch_size,
+        top_k=[sampling_top_k] * batch_size,
+    )
 
     gen = None
     try:
@@ -558,7 +592,7 @@ def run_demo(
                         if pre_tokenized_prompts is not None
                         else None
                     )
-                    batch_generations, batch_stats = gen.generate(
+                    batch_generations, batch_stats, model_params= gen.generate(
                         batch_prompts,
                         max_new_tokens=max_new_tokens,
                         teacher_forcing=token_acc,
@@ -640,7 +674,7 @@ def run_demo(
                 checkpoint_fh.flush()
                 os.fsync(checkpoint_fh.fileno())
 
-            return {"generations": results, "statistics": statistics}
+            return {"generations": results, "statistics": statistics, "model_params": model_params}
         finally:
             if checkpoint_fh is not None:
                 checkpoint_fh.close()
@@ -699,9 +733,9 @@ def main() -> None:
         profile_decode=args.profile_decode,
         sample_on_device=args.sample_on_device,
         force_recalculate=bool(args.force_recalculate),
-        temperature=args.temperature,
-        top_k=args.top_k,
-        top_p=args.top_p,
+        sampling_temperature=args.sampling_temperature,
+        sampling_top_k=args.sampling_top_k,
+        sampling_top_p=args.sampling_top_p,
         stop_at_eos=bool(args.stop_at_eos),
         checkpoint_jsonl=args.checkpoint_jsonl,
         enable_mtp=(args.mtp == "on"),
@@ -716,6 +750,7 @@ def main() -> None:
             prompts=args.prompts,
             generations=results["generations"],
             statistics=results.get("statistics", {}),
+            model_params=results.get("model_params", {}),
             random_weights=bool(args.random_weights),
         )
         if int(os.getenv("TT_MESH_HOST_RANK", "0")) == 0:
@@ -742,6 +777,9 @@ def main() -> None:
 
     # Print performance metrics if available
     _print_performance_metrics(results)
+
+    # Print model parameters if available
+    _print_model_params(results)
 
 
 if __name__ == "__main__":

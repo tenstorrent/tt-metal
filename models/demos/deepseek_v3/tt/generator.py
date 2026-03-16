@@ -20,7 +20,14 @@ from models.demos.deepseek_v3.tt.mla.mla2d import MLA2D
 from models.demos.deepseek_v3.tt.model.row_batched_model import RowBatchedModel
 from models.demos.deepseek_v3.tt.rope import RotarySetup
 from models.demos.deepseek_v3.utils.config_dataclass import KvCacheConfig
-from models.demos.deepseek_v3.utils.config_helpers import USERS_PER_ROW, even_int_div, make_deepseek_sampling_args
+from models.demos.deepseek_v3.utils.config_helpers import (
+    DEFAULT_SAMPLING_TEMPERATURE,
+    DEFAULT_SAMPLING_TOP_K,
+    DEFAULT_SAMPLING_TOP_P,
+    USERS_PER_ROW,
+    even_int_div,
+    make_deepseek_sampling_args,
+)
 from models.demos.deepseek_v3.utils.debug_utils import dump_ttnn_meminfo
 from models.demos.deepseek_v3.utils.run_config import create_run_config
 from models.demos.deepseek_v3.utils.weight_config import get_weight_config
@@ -158,13 +165,12 @@ class DeepseekGenerator(WarmupForwardMixin):
         profile_decode: bool = False,
         sample_on_device: bool = False,
         enable_mtp: bool = False,
-        sampling_params: SamplingParams = SamplingParams(temperature=1.0, top_p=0.0, top_k=1),
+        sampling_params: None = None,
     ) -> None:
         self.mesh_device = mesh_device
         self.model_path = str(model_path)
         self.cache_dir = cache_dir
-        self.sample_on_device = sample_on_device
-        self.sampling_params = sampling_params
+
         # Load HF config + tokenizer
         self.hf_config = (
             hf_config if hf_config is not None else AutoConfig.from_pretrained(self.model_path, trust_remote_code=True)
@@ -209,6 +215,16 @@ class DeepseekGenerator(WarmupForwardMixin):
         self.batch_size = self.batch_size_per_row * self.mesh_device.shape[0]
 
         # Configure sampling
+        self.sample_on_device = sample_on_device
+        self.sampling_params = (
+            sampling_params
+            if sampling_params is not None
+            else SamplingParams(
+                temperature=[DEFAULT_SAMPLING_TEMPERATURE] * self.batch_size,
+                top_p=[DEFAULT_SAMPLING_TOP_P] * self.batch_size,
+                top_k=[DEFAULT_SAMPLING_TOP_K] * self.batch_size,
+            )
+        )
         if self.sample_on_device:
             enable_internal_trace_sampling = enable_trace and self.sample_on_device
             self.sampling_args = make_deepseek_sampling_args(mesh_device, self.hf_config.vocab_size)
@@ -222,6 +238,14 @@ class DeepseekGenerator(WarmupForwardMixin):
             self._reset_sampling_state(self.sampling_params, self.batch_size, self.batch_size_per_row)
 
         logger.info(f"Sampling mode: {'device' if self.sample_on_device else 'host'}")
+        # sampling values of all users are assumed to be the same when initialized with generator constructor.
+        logger.info(
+            f"Sampling parameters: "
+            + f"temperature={self.sampling_params.temperature[0]}, "
+            + f"top_p={self.sampling_params.top_p[0]}, "
+            + f"top_k={self.sampling_params.top_k[0]}"
+        )
+
         # Weight cache to avoid loading weights multiple times
         self._weight_ttnn_cache: dict[str, ttnn.Tensor] = {}
         # Paged attention setup
@@ -1500,6 +1524,7 @@ class DeepseekGenerator(WarmupForwardMixin):
             sorted_probs = torch.softmax(sorted_scores, dim=-1)
             cumulative_probs = torch.cumsum(sorted_probs, dim=-1)
             remove_mask = cumulative_probs > self.sampling_params.top_p
+            remove_mask[..., 1:] = remove_mask[..., :-1].clone()
             remove_mask[..., 0] = False
             sorted_scores = sorted_scores.masked_fill(remove_mask, float("-inf"))
 
@@ -1537,7 +1562,6 @@ class DeepseekGenerator(WarmupForwardMixin):
         self,
         prompts: Iterable[str],
         max_new_tokens: int = 32,
-        sampling: SamplingParams | None = None,
         teacher_forcing=None,
         early_print_first_user: bool = True,
         repeat_batches: int = 1,
@@ -1620,6 +1644,14 @@ class DeepseekGenerator(WarmupForwardMixin):
         # Run one or more prefill+decode batches
         stop_token_ids = self._get_stop_token_ids() if stop_at_eos and teacher_forcing is None else set()
         for batch_idx in range(repeat_batches):
+            if self.sample_on_device:
+                # reset sampling state for each repeat batch, o/p tokens will be different for each repeat batch
+                assert self.sampling_params is not None, "sampling_params must be set when sampling on device"
+                self._reset_sampling_state(
+                    self.sampling_params,
+                    self.batch_size,
+                    self.batch_size_per_row,
+                )
             # Reset teacher-forcing state per batch.
             if teacher_forcing is not None:
                 teacher_forcing.reset()
@@ -1991,10 +2023,29 @@ class DeepseekGenerator(WarmupForwardMixin):
         if mtp_verifies is not None:
             statistics["mtp_verifies"] = mtp_verifies
 
+            
+        model_params = {
+            "mesh_device": f"{self.mesh_device.shape[0]}x{self.mesh_device.shape[1]}",
+            "model_path": str(self.model_path),
+            "cache_dir": str(self.cache_dir),
+            "batch_size": self.batch_size,
+            "repeat_batches": repeat_batches,
+            "enable_trace": self.enable_trace,
+            "sample_on_device": self.sample_on_device,
+            "num_hidden_layers": self.hf_config.num_hidden_layers,
+            "random_weights": self.random_weights,
+            "sampling": {
+                "temperature": self.sampling_params.temperature,
+                "top_k": self.sampling_params.top_k,
+                "top_p": self.sampling_params.top_p,
+            },
+        }
+        
         for page_tables in temp_decode_page_tables:
             self._release_page_table_tuple(page_tables)
 
-        return generations, statistics
+        return generations, statistics, model_params
+        
 
     def _encode_prompt(self, prompt: str) -> List[int]:
         # Use HF chat template if a tokenizer is provided; otherwise synthesize simple token ids
