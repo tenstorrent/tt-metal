@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include <cstdint>
 
 #include "api/compute/compute_kernel_api.h"

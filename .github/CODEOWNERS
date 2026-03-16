@@ -19,6 +19,7 @@ METALIUM_GUIDE.md @davorchap @tenstorrent/codeowner-bypass
 /infra/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 scripts/build_scripts/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 cmake/ @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
+third_party/CMakeLists.txt @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 scripts/detect_undocumented_ttnn_ops.py @tenstorrent/metalium-developers-external-experience @tenstorrent/codeowner-bypass
 
 # Testing scripts and infra
@@ -230,9 +231,9 @@ ttnn/cpp/ttnn/operations/embedding/ @tenstorrent/metalium-developers-ops-data-mo
 ttnn/cpp/ttnn/operations/embedding/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @TT-BrianLiu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/embedding_backward/ @tenstorrent/metalium-developers-ops-data-movement @TT-BrianLiu @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/embedding_backward/**/CMakeLists.txt @tenstorrent/metalium-developers-ops-data-movement @TT-BrianLiu @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
-ttnn/cpp/ttnn/operations/transformer/sdpa/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
-ttnn/cpp/ttnn/operations/transformer/sdpa_decode/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
-ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/ @gwangTT @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/transformer/sdpa/ @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/transformer/sdpa_decode/ @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
+ttnn/cpp/ttnn/operations/transformer/sdpa_windowed/ @gwangTT @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/paged_cache/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/paged_cache/**/CMakeLists.txt @tenstorrent/metallium-maintainers-llama-models @tenstorrent/metalium-developers-infra @tenstorrent/codeowner-bypass
 ttnn/cpp/ttnn/operations/experimental/transformer/nlp_concat_heads_decode/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
@@ -264,11 +265,11 @@ tests/ttnn/nightly/unit_tests/operations/matmul/ @tenstorrent/metalium-developer
 tests/ttnn/nightly/unit_tests/operations/fused/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/reduction/ @tenstorrent/metalium-developers-mmfusedreduce @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/transformers/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
-tests/ttnn/unit_tests/operations/sdpa/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
-tests/ttnn/nightly/unit_tests/operations/sdpa/ @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
+tests/ttnn/unit_tests/operations/sdpa/ @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
+tests/ttnn/nightly/unit_tests/operations/sdpa/ @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 tests/ttnn/nightly/unit_tests/operations/eltwise/ @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
 tests/nightly/t3000/ @tenstorrent/codeowner-bypass @tenstorrent/metalium-developers-ops-data-movement
-tests/nightly/t3000/ccl/test_ring_joint_attention.py @tenstorrent/metallium-maintainers-llama-models @tenstorrent/codeowner-bypass
+tests/nightly/t3000/ccl/test_ring_joint_attention.py @tenstorrent/metalium-developers-sdpa @tenstorrent/codeowner-bypass
 tests/nightly/tg/ @tenstorrent/codeowner-bypass @tenstorrent/metalium-developers-ops-data-movement
 tests/sweep_framework/sweeps @tenstorrent/codeowner-bypass @stevendae @cmaryanTT @ntarafdar @bbradelTT
 tests/sweep_framework/sweeps/eltwise/ @tenstorrent/metalium-developers-eltwise @tenstorrent/codeowner-bypass
@@ -360,9 +361,9 @@ models/demos/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorr
 models/demos/wormhole/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/demos/blackhole/sentence_bert @arginugaTT @tenstorrent/cse-developer-ttnn @tenstorrent/codeowner-bypass
 models/experimental/grok @yieldthought @uaydonat @tenstorrent/codeowner-bypass
-models/experimental/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT @tenstorrent/codeowner-bypass
+models/experimental/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT @arginugaTT @tenstorrent/codeowner-bypass
 models/experimental/petr/ @tenstorrent/cse-developer-ttnn @dvartaniansTT @sdawle-TT @tenstorrent/codeowner-bypass
-models/demos/multimodal/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT @tenstorrent/codeowner-bypass
+models/demos/multimodal/gemma3* @ppetrovicTT @handrewsTT @mtairum @rdraskicTT @arginugaTT @tenstorrent/codeowner-bypass
 models/demos/vision/classification/vit @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
 models/demos/vision/segmentation/segformer @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass
 models/demos/bge_large_en @arginugaTT @tenstorrent/cse-developer-ttnn @uaydonat @tenstorrent/codeowner-bypass

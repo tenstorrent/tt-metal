@@ -76,7 +76,7 @@ add_library(TTNN::Core ALIAS ttnn_core)
 TT_ENABLE_UNITY_BUILD(ttnn_core)
 
 target_compile_definitions(ttnn_core PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
-target_precompile_headers(ttnn_core REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_core TTNN::PCH)
 
 set(TENSOR_FLATBUFFER_SCHEMAS
     ${CMAKE_CURRENT_SOURCE_DIR}/core/tensor/flatbuffer/mesh_shape.fbs
@@ -475,6 +475,7 @@ list(
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/reports.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/tensor.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/types.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/bfp_utils.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/operations/copy.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn-nanobind/operations/core.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/cpp/ttnn/operations/creation/creation.hpp
@@ -503,7 +504,7 @@ add_library(TTNN::TTNN ALIAS ttnncpp)
 add_library(Metalium::TTNNCPP ALIAS ttnncpp) # backwards compatibility. FIXME: remove
 
 target_compile_definitions(ttnncpp PUBLIC "$<$<CXX_COMPILER_ID:GNU>:DISABLE_NAMESPACE_STATIC_ASSERT>")
-target_precompile_headers(ttnncpp REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnncpp TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnncpp)
 
 set_target_properties(
