@@ -104,7 +104,7 @@ def _get_selected_groups(groups_arg: str | None, groups: list[str]) -> list[str]
 _console = Console()
 
 
-def _print_signal_group_table(group_name: str, hex_value: str, debug_bus) -> None:
+def _print_signal_group_table(group_name: str, hex_value: str, debug_bus: DebugBusSignalStore) -> None:
     """Print one table per group: column 1 = group name (header), column 2 = Value (header).
     Rows: signal names and corresponding values when decoded; otherwise single row with raw hex.
     """
