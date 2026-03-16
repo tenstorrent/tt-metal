@@ -496,7 +496,7 @@ void WatcherDeviceReader::Dump(FILE* file) {
             auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
             auto pause_data = dev_msgs_factory.create<dev_msgs::debug_pause_msg_t>();
             uint64_t addr =
-                hal.get_dev_addr(programmable_core_type, HalL1MemAddrType::WATCHER) +
+                hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::WATCHER) +
                 dev_msgs_factory.offset_of<dev_msgs::watcher_msg_t>(dev_msgs::watcher_msg_t::Field::pause_status);
 
             // Clear only the one flag that we saved, in case another one was raised on device
