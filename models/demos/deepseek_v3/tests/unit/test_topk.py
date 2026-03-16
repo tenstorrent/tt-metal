@@ -22,9 +22,9 @@ SUB_CORE_GRIDS = ttnn.CoreRangeSet([ttnn.CoreRange(ttnn.CoreCoord(0, 0), ttnn.Co
 #   - topk_experts:              k=8,  shape (1, 1, 32, n_routed_experts=256)
 # Shapes with width < TOPK_MIN_WIDTH=64 are padded to 64 before the topk call (see MoEGate.forward).
 TOPK_SHAPE_K_PAIRS = [
-    ([1, 32, 8, 64], 2),  # topk_within_expert_groups: experts_per_group=32 padded to 64, k=2
-    ([1, 1, 32, 64], 4),  # topk_expert_groups: n_group=8 padded to 64, k=topk_group=4
-    ([1, 1, 32, 256], 8),  # topk_experts: n_routed_experts=256, k=num_experts_per_tok=8
+    pytest.param([1, 32, 8, 64], 2, id="topk_within_expert_groups"),  # experts_per_group=32 padded to 64, k=2
+    pytest.param([1, 1, 32, 64], 4, id="topk_expert_groups"),  # n_group=8 padded to 64, k=topk_group=4
+    pytest.param([1, 1, 32, 256], 8, id="topk_experts"),  # n_routed_experts=256, k=num_experts_per_tok=8
 ]
 
 
@@ -84,7 +84,7 @@ def test_topk_single_device(shape, k, dtype, device):
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("enable_trace", [False, True])
 @pytest.mark.parametrize(
-    "device_params", [{"trace_region_size": 10000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
+    "device_params", [{"trace_region_size": 16000, "fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True
 )
 def test_topk_mesh_device(mesh_device, shape, k, dtype, enable_trace, device_params):
     """
