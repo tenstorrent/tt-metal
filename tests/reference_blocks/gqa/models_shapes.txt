@@ -1,0 +1,208 @@
+Model: glm_4_7_355b_200k | Architecture: GQA + MoE | d_model: 5120
+
+=== Attention (GQA) ===
+  Op                             Weight Shape         Input Shape          Output Shape
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  Layer Input                    -                    -                    (1,5120)
+  Pre-attn RMSNorm               -                    (1,5120)             (1,5120)
+  Mesh-wide broadcast            -                    (1,5120)             (1,5120)
+  q_proj                         (5120,12288)         (1,5120)             (1,12288)
+  k_proj                         (5120,1024)          (1,5120)             (1,1024)
+  v_proj                         (5120,1024)          (1,5120)             (1,1024)
+  SDPA (fused)                   -                    -                    (1,12288)
+  KV update (1 tok)              -                    (1,1024)             -
+  o_proj                         (12288,5120)         (1,12288)            (1,5120)
+  Attn Residual Add              -                    (1,5120)             (1,5120)
+
+=== FFN (MoE) ===
+  Op                             Weight Shape         Input Shape          Output Shape
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  Pre-MoE RMSNorm                -                    (1,5120)             (1,5120)
+  router                         (5120,160)           (1,5120)             (1,160)
+  RouterGate (fused)             -                    (1,160)              (1,8)
+  shared_expert.w_gate           (5120,1536)          (1,5120)             (1,1536)
+  shared_expert.w_up             (5120,1536)          (1,5120)             (1,1536)
+  Shared Expert SiLU             -                    (1,1536)             (1,1536)
+  Shared Expert Gated×           -                    (1,1536)             (1,1536)
+  shared_expert.w_down           (1536,5120)          (1,1536)             (1,5120)
+  routed_expert.w_gate           (5120,1536)          (1,5120)             (1,1536)
+  routed_expert.w_up             (5120,1536)          (1,5120)             (1,1536)
+  Routed Expert SiLU (8x)        -                    (1,1536)             (1,1536)
+  Routed Expert Gated× (8x)      -                    (1,1536)             (1,1536)
+  routed_expert.w_down           (1536,5120)          (1,1536)             (1,5120)
+  EP reduce-to-one               -                    (1,5120)             (1,5120)
+  MoE Residual Add               -                    (1,5120)             (1,5120)
+
+Layer latency: 134.9 µs (Attention: 12.6 µs, FFN: 122.3 µs)
+Model: kimi_k25_0126_1t_256k | Architecture: MLA + MoE | d_model: 7168
+
+=== Attention (MLA) ===
+  Op                             Weight Shape         Input Shape          Output Shape
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  Layer Input                    -                    -                    (1,7168)
+  Pre-attn RMSNorm               -                    (1,7168)             (1,7168)
+  Mesh-wide broadcast            -                    (1,7168)             (1,7168)
+  wq_a                           (7168,1536)          (1,7168)             (1,1536)
+  wkv_a                          (7168,576)           (1,7168)             (1,576)
+  q_norm (RMSNorm)               -                    (1,1536)             (1,1536)
+  kv_norm (RMSNorm)              -                    (1,576)              (1,512)
+  wq_b                           (1536,12288)         (1,1536)             (1,12288)
+  wkv_b                          (512,16384)          (1,512)              (1,16384)
+  RoPE (64 dims)                 -                    (1,12288)            (1,4096)
+  NoPE (128 dims)                -                    (1,12288)            (1,8192)
+  SDPA (fused)                   -                    -                    (1,8192)
+  KV update (1 tok)              -                    (1,576)              -
+  wo                             (8192,7168)          (1,8192)             (1,7168)
+  Attn Residual Add              -                    (1,7168)             (1,7168)
+
+=== FFN (MoE) ===
+  Op                             Weight Shape         Input Shape          Output Shape
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  Pre-MoE RMSNorm                -                    (1,7168)             (1,7168)
+  router                         (7168,384)           (1,7168)             (1,384)
+  RouterGate (fused)             -                    (1,384)              (1,8)
+  shared_expert.w_gate           (7168,2048)          (1,7168)             (1,2048)
+  shared_expert.w_up             (7168,2048)          (1,7168)             (1,2048)
+  Shared Expert SiLU             -                    (1,2048)             (1,2048)
+  Shared Expert Gated×           -                    (1,2048)             (1,2048)
+  shared_expert.w_down           (2048,7168)          (1,2048)             (1,7168)
+  routed_expert.w_gate           (7168,2048)          (1,7168)             (1,2048)
+  routed_expert.w_up             (7168,2048)          (1,7168)             (1,2048)
+  Routed Expert SiLU (8x)        -                    (1,2048)             (1,2048)
+  Routed Expert Gated× (8x)      -                    (1,2048)             (1,2048)
+  routed_expert.w_down           (2048,7168)          (1,2048)             (1,7168)
+  EP reduce-to-one               -                    (1,7168)             (1,7168)
+  MoE Residual Add               -                    (1,7168)             (1,7168)
+
+Layer latency: 236.2 µs (Attention: 7.5 µs, FFN: 228.8 µs)
+Model: deepseek_v3 | Architecture: MLA + MoE | d_model: 7168
+
+=== Attention (MLA) ===
+  Op                             Weight Shape         Input Shape          Output Shape
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  Layer Input                    -                    -                    (1,7168)
+  Pre-attn RMSNorm               -                    (1,7168)             (1,7168)
+  Mesh-wide broadcast            -                    (1,7168)             (1,7168)
+  wq_a                           (7168,1536)          (1,7168)             (1,1536)
+  wkv_a                          (7168,576)           (1,7168)             (1,576)
+  q_norm (RMSNorm)               -                    (1,1536)             (1,1536)
+  kv_norm (RMSNorm)              -                    (1,576)              (1,512)
+  wq_b                           (1536,24576)         (1,1536)             (1,24576)
+  wkv_b                          (512,32768)          (1,512)              (1,32768)
+  RoPE (64 dims)                 -                    (1,24576)            (1,8192)
+  NoPE (128 dims)                -                    (1,24576)            (1,16384)
+  SDPA (fused)                   -                    -                    (1,16384)
+  KV update (1 tok)              -                    (1,576)              -
+  wo                             (16384,7168)         (1,16384)            (1,7168)
+  Attn Residual Add              -                    (1,7168)             (1,7168)
+
+=== FFN (MoE) ===
+  Op                             Weight Shape         Input Shape          Output Shape
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  Pre-MoE RMSNorm                -                    (1,7168)             (1,7168)
+  router                         (7168,256)           (1,7168)             (1,256)
+  RouterGate (fused)             -                    (1,256)              (1,8)
+  shared_expert.w_gate           (7168,2048)          (1,7168)             (1,2048)
+  shared_expert.w_up             (7168,2048)          (1,7168)             (1,2048)
+  Shared Expert SiLU             -                    (1,2048)             (1,2048)
+  Shared Expert Gated×           -                    (1,2048)             (1,2048)
+  shared_expert.w_down           (2048,7168)          (1,2048)             (1,7168)
+  routed_expert.w_gate           (7168,2048)          (1,7168)             (1,2048)
+  routed_expert.w_up             (7168,2048)          (1,7168)             (1,2048)
+  Routed Expert SiLU (8x)        -                    (1,2048)             (1,2048)
+  Routed Expert Gated× (8x)      -                    (1,2048)             (1,2048)
+  routed_expert.w_down           (2048,7168)          (1,2048)             (1,7168)
+  EP reduce-to-one               -                    (1,7168)             (1,7168)
+  MoE Residual Add               -                    (1,7168)             (1,7168)
+
+Layer latency: 555.3 µs (Attention: 366.6 µs, FFN: 188.7 µs)
+Model: gpt_oss_120b_128k | Architecture: GQA + MoE | d_model: 2880
+
+=== Attention (GQA) ===
+  Op                             Weight Shape         Input Shape          Output Shape
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  Layer Input                    -                    -                    (1,2880)
+  Pre-attn RMSNorm               -                    (1,2880)             (1,2880)
+  Mesh-wide broadcast            -                    (1,2880)             (1,2880)
+  q_proj                         (2880,4096)          (1,2880)             (1,4096)
+  k_proj                         (2880,512)           (1,2880)             (1,512)
+  v_proj                         (2880,512)           (1,2880)             (1,512)
+  SDPA (fused)                   -                    -                    (1,4096)
+  KV update (1 tok)              -                    (1,512)              -
+  o_proj                         (4096,2880)          (1,4096)             (1,2880)
+  Attn Residual Add              -                    (1,2880)             (1,2880)
+
+=== FFN (MoE) ===
+  Op                             Weight Shape         Input Shape          Output Shape
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  Pre-MoE RMSNorm                -                    (1,2880)             (1,2880)
+  router                         (2880,128)           (1,2880)             (1,128)
+  RouterGate (fused)             -                    (1,128)              (1,4)
+  routed_expert.w_gate           (2880,2880)          (1,2880)             (1,2880)
+  routed_expert.w_up             (2880,2880)          (1,2880)             (1,2880)
+  Routed Expert SiLU (4x)        -                    (1,2880)             (1,2880)
+  Routed Expert Gated× (4x)      -                    (1,2880)             (1,2880)
+  routed_expert.w_down           (2880,2880)          (1,2880)             (1,2880)
+  EP reduce-to-one               -                    (1,2880)             (1,2880)
+  MoE Residual Add               -                    (1,2880)             (1,2880)
+
+Layer latency: 69.8 µs (Attention: 5.4 µs, FFN: 64.5 µs)
+Model: llama_guard_4_12b_128k | Architecture: GQA + Dense | d_model: 5120
+
+=== Attention (GQA) ===
+  Op                             Weight Shape         Input Shape          Output Shape
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  Layer Input                    -                    -                    (1,5120)
+  Pre-attn RMSNorm               -                    (1,5120)             (1,5120)
+  Mesh-wide broadcast            -                    (1,5120)             (1,5120)
+  q_proj                         (5120,5120)          (1,5120)             (1,5120)
+  k_proj                         (5120,1024)          (1,5120)             (1,1024)
+  v_proj                         (5120,1024)          (1,5120)             (1,1024)
+  SDPA (fused)                   -                    -                    (1,5120)
+  KV update (1 tok)              -                    (1,1024)             -
+  o_proj                         (5120,5120)          (1,5120)             (1,5120)
+  Attn Residual Add              -                    (1,5120)             (1,5120)
+
+=== FFN (Dense) ===
+  Op                             Weight Shape         Input Shape          Output Shape
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  Pre-MLP RMSNorm                -                    (1,5120)             (1,5120)
+  dense_mlp.w_gate               (5120,8192)          (1,5120)             (1,8192)
+  dense_mlp.w_up                 (5120,8192)          (1,5120)             (1,8192)
+  Dense MLP SiLU                 -                    (1,8192)             (1,8192)
+  Dense MLP Gated×               -                    (1,8192)             (1,8192)
+  dense_mlp.w_down               (8192,5120)          (1,8192)             (1,5120)
+  MoE Residual Add               -                    (1,5120)             (1,5120)
+
+Layer latency: 89.3 µs (Attention: 8.0 µs, FFN: 81.3 µs)
+Model: qwen3_235b_a22b | Architecture: GQA + MoE | d_model: 4096
+
+=== Attention (GQA) ===
+  Op                             Weight Shape         Input Shape          Output Shape
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  Layer Input                    -                    -                    (1,4096)
+  Pre-attn RMSNorm               -                    (1,4096)             (1,4096)
+  Mesh-wide broadcast            -                    (1,4096)             (1,4096)
+  q_proj                         (4096,8192)          (1,4096)             (1,8192)
+  k_proj                         (4096,512)           (1,4096)             (1,512)
+  v_proj                         (4096,512)           (1,4096)             (1,512)
+  SDPA (fused)                   -                    -                    (1,8192)
+  KV update (1 tok)              -                    (1,512)              -
+  o_proj                         (8192,4096)          (1,8192)             (1,4096)
+  Attn Residual Add              -                    (1,4096)             (1,4096)
+
+=== FFN (MoE) ===
+  Op                             Weight Shape         Input Shape          Output Shape
+  ──────────────────────────────────────────────────────────────────────────────────────────────
+  Pre-MoE RMSNorm                -                    (1,4096)             (1,4096)
+  router                         (4096,128)           (1,4096)             (1,128)
+  RouterGate (fused)             -                    (1,128)              (1,8)
+  routed_expert.w_gate           (4096,1536)          (1,4096)             (1,1536)
+  routed_expert.w_up             (4096,1536)          (1,4096)             (1,1536)
+  Routed Expert SiLU (8x)        -                    (1,1536)             (1,1536)
+  Routed Expert Gated× (8x)      -                    (1,1536)             (1,1536)
+  routed_expert.w_down           (1536,4096)          (1,1536)             (1,4096)
+  EP reduce-to-one               -                    (1,4096)             (1,4096)
+  MoE Residual Add               -                    (1,4096)             (1,4096)
+
+Layer latency: 104.6 µs (Attention: 6.5 µs, FFN: 98.1 µs)
