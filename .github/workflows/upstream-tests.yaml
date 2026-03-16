@@ -384,7 +384,8 @@ jobs:
       - cloud-virtual-machine
       # Targeting cloud machines with pipeline-functional per now per
       # https://github.com/tenstorrent/tt-metal/issues/21738#issuecomment-2925788342
-      - pipeline-functional
+      # Run P100 on baremetal to try and workaround https://github.com/tenstorrent/tt-umd/issues/1582
+      - ${{ matrix.bh-card == 'P100' && 'pipeline-perf' || 'pipeline-functional' }}
     steps:
       - name: Run image
         timeout-minutes: 40
