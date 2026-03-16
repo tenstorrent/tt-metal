@@ -12,22 +12,18 @@ CB layout:
   cb_out = 16  : C tiles (2 pages, double-buffer)
 
 Single core: (0, 0)
+
+IMPORTANT: CB indices are hardcoded in kernels (not passed as compile-time args)
+because the dataflow helpers use TensorAccessorArgs<0>() which must start at
+positional compile-time arg index 0.
 """
 
 from pathlib import Path
 import ttnn
 
-# Kernel files live in the kernels/ subdirectory (paths relative to tt-metal base)
+# Kernel files live in the kernels/ subdirectory
 _OP_DIR = Path(__file__).parent
 _KERNEL_DIR = _OP_DIR / "kernels"
-
-# Relative path prefix from tt-metal root for kernel source paths
-_TT_METAL_ROOT = Path(__file__).parent.parent.parent.parent.parent  # ttnn/ttnn/operations/matmul_sc -> tt-metal
-
-# CB indices
-CB_IN0 = 0
-CB_IN1 = 1
-CB_OUT = 16
 
 
 def create_program_descriptor(
@@ -64,39 +60,36 @@ def create_program_descriptor(
     core_grid = ttnn.CoreRangeSet([ttnn.CoreRange(core, core)])
 
     # ========== 3. CIRCULAR BUFFER DESCRIPTORS ==========
-    # cb_in0: A tiles (2 pages for double-buffering)
     cb_in0_descriptor = ttnn.CBDescriptor(
         total_size=2 * tile_size,
         core_ranges=core_grid,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
-                buffer_index=CB_IN0,
+                buffer_index=0,
                 data_format=ttnn.bfloat16,
                 page_size=tile_size,
             )
         ],
     )
 
-    # cb_in1: B tiles (2 pages for double-buffering)
     cb_in1_descriptor = ttnn.CBDescriptor(
         total_size=2 * tile_size,
         core_ranges=core_grid,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
-                buffer_index=CB_IN1,
+                buffer_index=1,
                 data_format=ttnn.bfloat16,
                 page_size=tile_size,
             )
         ],
     )
 
-    # cb_out: C tiles (2 pages for double-buffering)
     cb_out_descriptor = ttnn.CBDescriptor(
         total_size=2 * tile_size,
         core_ranges=core_grid,
         format_descriptors=[
             ttnn.CBFormatDescriptor(
-                buffer_index=CB_OUT,
+                buffer_index=16,
                 data_format=ttnn.bfloat16,
                 page_size=tile_size,
             )
@@ -109,9 +102,10 @@ def create_program_descriptor(
     kernel_source_writer = str(_KERNEL_DIR / "matmul_sc_writer.cpp")
 
     # --- Reader kernel ---
-    # Named compile-time args: cb_in0=0, cb_in1=1
-    # Positional compile-time args: TensorAccessorArgs(A) chained with TensorAccessorArgs(B)
-    reader_ct_args = [CB_IN0, CB_IN1]
+    # Compile-time args: TensorAccessorArgs(A) chained with TensorAccessorArgs(B)
+    # CB indices are hardcoded in the kernel, NOT in compile-time args.
+    # TensorAccessorArgs<0>() for A, TensorAccessorArgs<next>() for B.
+    reader_ct_args = []
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_a).get_compile_time_args())
     reader_ct_args.extend(ttnn.TensorAccessorArgs(input_b).get_compile_time_args())
 
@@ -134,9 +128,8 @@ def create_program_descriptor(
     )
 
     # --- Writer kernel ---
-    # Named compile-time args: cb_out=16
-    # Positional compile-time args: TensorAccessorArgs(C)
-    writer_ct_args = [CB_OUT]
+    # Compile-time args: TensorAccessorArgs(C) only (CB index hardcoded in kernel)
+    writer_ct_args = []
     writer_ct_args.extend(ttnn.TensorAccessorArgs(output_tensor).get_compile_time_args())
 
     writer_rt_args = ttnn.RuntimeArgs()
@@ -156,10 +149,7 @@ def create_program_descriptor(
     )
 
     # --- Compute kernel ---
-    # Named compile-time args: cb_in0=0, cb_in1=1, cb_out=16
-    # No positional compile-time args for compute
-    compute_ct_args = [CB_IN0, CB_IN1, CB_OUT]
-
+    # No compile-time args needed (CB indices hardcoded in kernel, no TensorAccessor)
     compute_rt_args = ttnn.RuntimeArgs()
     compute_rt_args[core.x][core.y] = [
         Mt,  # tile rows of C
@@ -171,7 +161,7 @@ def create_program_descriptor(
     compute_kernel = ttnn.KernelDescriptor(
         kernel_source=kernel_source_compute,
         core_ranges=core_grid,
-        compile_time_args=compute_ct_args,
+        compile_time_args=[],
         runtime_args=compute_rt_args,
         config=ttnn.ComputeConfigDescriptor(
             math_fidelity=ttnn.MathFidelity.HiFi4,
