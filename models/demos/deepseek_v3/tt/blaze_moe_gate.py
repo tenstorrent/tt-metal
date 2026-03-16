@@ -344,6 +344,7 @@ class BlazeMoeGate(AbstractModule):
             logits = cls.linear_fallback_op(x, **cfg["linear_fallback_config"], **cfg["gate_proj"])
         else:
             logits = ttnn.linear(x, **cfg["gate_proj"])
+        breakpoint()
         mesh_device = cfg["mesh_device"]
         num_experts = cfg["add_score_correction_bias"].input_tensor_b.shape[3]
         assert num_experts == 256, "num_experts should be 256"
@@ -392,6 +393,10 @@ class BlazeMoeGate(AbstractModule):
 
             # change the memory config of the logits
             cur_logits = ttnn.to_memory_config(cur_logits, memory_config=input_output_mem_config)
+            temp = ttnn.to_torch(
+                cur_logits,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, 0), mesh_shape=tuple(mesh_device.shape)),
+            )
 
             # create the output tensor, input indices and output indices
             ttnn_output_tensor = cfg["gate_routing"]["ttnn_output_tensor"]
