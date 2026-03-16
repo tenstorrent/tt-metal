@@ -15,6 +15,7 @@ from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
 from ttnn.model_preprocessing import preprocess_linear_weight
 from models.experimental.tt_symbiote.core.module import TTNNModule, run_on_devices, DeviceArch
 from models.experimental.tt_symbiote.modules.linear import (
+    TTNNLinear,
     TTNNLinearSilu,
     TTNNLinearLLamaIColShardedWRowSharded,
     TTNNLinearIColShardedWRowSharded,
@@ -544,6 +545,30 @@ class Glm4MoeMoE(torch.nn.Module):
         return hidden_states
 
 
+class Qwen3RouteTokenToExperts(nn.Module):
+    """Softmax-based routing for Qwen3-Coder-Next / Qwen3-Omni (vs sigmoid+bias for GLM/DeepSeek)."""
+
+    def __init__(self, top_k, norm_topk_prob, routed_scaling_factor, n_routed_experts):
+        super().__init__()
+        self.top_k = top_k
+        self.norm_topk_prob = norm_topk_prob
+        self.routed_scaling_factor = routed_scaling_factor
+        self.n_routed_experts = n_routed_experts
+        self.use_softmax = True
+        self.n_group = 1
+        self.topk_group = 1
+        self.register_buffer("e_score_correction_bias", torch.zeros(n_routed_experts, dtype=torch.float32))
+
+    def forward(self, router_logits):
+        probs = F.softmax(router_logits.to(torch.float32), dim=-1).to(router_logits.dtype)
+        _, topk_indices = torch.topk(probs, k=self.top_k, dim=-1, sorted=False)
+        topk_weights = probs.gather(1, topk_indices)
+        if self.norm_topk_prob:
+            topk_weights = topk_weights / (topk_weights.sum(dim=-1, keepdim=True) + 1e-20)
+        topk_weights = topk_weights * self.routed_scaling_factor
+        return topk_indices, topk_weights
+
+
 class TTNNGlm4MoeExpertLayers(TTNNModule):
     """TTNN module that handles expert layer execution."""
 
@@ -928,6 +953,7 @@ class TTNNMoERouterDecode(TTNNModule):
         self._scale_torch = torch.full((1, 1, 1, r.top_k), r.routed_scaling_factor, dtype=torch.bfloat16)
 
     def move_weights_to_device_impl(self):
+        self._use_softmax = getattr(self._fallback_torch_layer, "use_softmax", False)
         self._bias_dev = ttnn.to_device(
             ttnn.from_torch(self._bias_torch, dtype=ttnn.bfloat16, layout=ttnn.ROW_MAJOR_LAYOUT),
             self.device,
@@ -956,6 +982,33 @@ class TTNNMoERouterDecode(TTNNModule):
             ttnn.deallocate(logits)
         else:
             logits_f32 = logits
+
+        # Qwen3 / softmax path: no bias, no group selection (keep f32 for weights to match HF)
+        if getattr(self, "_use_softmax", False):
+            probs_f32 = ttnn.softmax(logits_f32, dim=-1)
+            ttnn.deallocate(logits_f32)
+            T = probs_f32.shape[2]
+            # Top-k indices from bf16 for speed; weights from f32 for precision
+            probs_bf16 = ttnn.typecast(probs_f32, ttnn.bfloat16)
+            _, topk_expert_idx = ttnn.topk(probs_bf16, k=r.top_k, dim=3, largest=True, sorted=False)
+            ttnn.deallocate(probs_bf16)
+            topk_weights = ttnn.gather(probs_f32, dim=3, index=topk_expert_idx)
+            ttnn.deallocate(probs_f32)
+            # Normalize weights (float32)
+            denom = ttnn.sum(topk_weights, dim=3, keepdim=True) + 1e-20
+            topk_weights = ttnn.div(topk_weights, denom)
+            ttnn.deallocate(denom)
+            # Scale (float32)
+            scale_rep = ttnn.repeat(self._scale_dev, ttnn.Shape((1, 1, T, 1)))
+            scale_bf16 = ttnn.to_layout(scale_rep, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+            scale_f32 = ttnn.typecast(scale_bf16, ttnn.float32)
+            ttnn.deallocate(scale_bf16)
+            topk_weights = ttnn.mul(topk_weights, scale_f32)
+            ttnn.deallocate(scale_f32)
+            topk_weights = ttnn.typecast(topk_weights, ttnn.bfloat16)
+            topk_expert_idx = ttnn.reshape(topk_expert_idx, ttnn.Shape((T, r.top_k)))
+            topk_weights = ttnn.reshape(topk_weights, ttnn.Shape((T, r.top_k)))
+            return topk_expert_idx, topk_weights
 
         scores_f32 = ttnn.sigmoid(logits_f32)
 
@@ -1711,6 +1764,163 @@ class TTNNBailingMoE(TTNNMoE):
         return adapted
 
 
+class TTNNQwen3MoE(TTNNMoE):
+    """
+    TTNN MoE for Qwen3-Coder-Next / Qwen3-Omni: softmax routing + gated shared expert.
+
+    Expects torch_moe with .gate (weight + optional bias), .experts (gate_up_proj, down_proj, config),
+    .shared_expert (MLP), .shared_expert_gate (Linear). Use from_torch for Coder-Next block;
+    use TTNNQwen3TalkerMoE.from_torch for Qwen3-Omni Talker block (adapts ModuleList experts).
+    """
+
+    @classmethod
+    def from_torch(cls, torch_moe):
+        adapted_config = cls._adapt_config(torch_moe.gate, torch_moe.experts)
+        module = cls(adapted_config)
+        module._fallback_torch_layer = torch_moe
+
+        zero_bias = torch.zeros(
+            torch_moe.gate.weight.shape[0],
+            device=torch_moe.gate.weight.device,
+            dtype=torch_moe.gate.weight.dtype,
+        )
+        module.gate = TTNNGlm4MoeTopkRouter.from_parameters(torch_moe.gate.weight, zero_bias)
+        # Replicated gate weight for routing on all-gathered (full) hidden: (hidden_size, num_experts)
+        module._gate_weight_torch = torch_moe.gate.weight.detach().T.contiguous().to(torch.bfloat16)
+        module.route_tokens_to_experts = TTNNMoERouterDecode.from_torch(
+            Qwen3RouteTokenToExperts(
+                top_k=adapted_config.num_experts_per_tok,
+                norm_topk_prob=adapted_config.norm_topk_prob,
+                routed_scaling_factor=adapted_config.routed_scaling_factor,
+                n_routed_experts=adapted_config.n_routed_experts,
+            )
+        )
+        experts_wrapper = cls._wrap_experts(torch_moe.experts, adapted_config)
+        module.experts = TTNNExperts.from_torch(experts_wrapper)
+        module.shared_experts = TTNNGlm4MoeMLP.from_torch(torch_moe.shared_expert)
+        module.shared_expert_gate = TTNNLinear.from_torch(torch_moe.shared_expert_gate)
+        return module
+
+    def preprocess_weights_impl(self):
+        # Keep gate weight on host until move_weights (need device for ReplicateTensorToMesh)
+        pass
+
+    def move_weights_to_device_impl(self):
+        # Replicate gate to all devices so routing uses full (hidden_size, num_experts)
+        self._gate_weight_tt = ttnn.from_torch(
+            self._gate_weight_torch,
+            device=self.device,
+            mesh_mapper=ttnn.ReplicateTensorToMesh(self.device),
+            dtype=ttnn.bfloat16,
+            layout=ttnn.TILE_LAYOUT,
+        )
+        self._gate_weight_torch = None
+
+    @run_on_devices(DeviceArch.T3K)
+    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
+        self.num_devices = self.device.get_num_devices()
+        self.num_dispatch_devices = self.device.shape[0]
+        self.num_experts_per_device = even_int_div(self.config.n_routed_experts, self.num_devices)
+        residual = x
+
+        # 1. All-gather to revert tensor parallelism
+        x = ttnn.experimental.all_gather_async(
+            x,
+            dim=-1,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            topology=ttnn.Topology.Linear,
+        )
+
+        # 2. Gate routing on full (all-gathered) hidden with replicated weight
+        if x.layout != ttnn.TILE_LAYOUT:
+            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
+        x_shape = list(x.shape)
+        T = 1
+        for d in x_shape[:-1]:
+            T *= d
+        H = x_shape[-1]
+        x_2d = ttnn.reshape(x, ttnn.Shape((T, H)))
+        router_logits = ttnn.linear(
+            x_2d,
+            self._gate_weight_tt,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
+        topk_experts_indices, topk_experts_weights = self.route_tokens_to_experts(router_logits)
+
+        # 3. Expert dispatch → compute → combine → weight
+        # Ensure x is 4D (batch, 1, seq, hidden) for TTNNExperts
+        x_full = x
+        if len(x.shape) == 3:
+            x = ttnn.reshape(x, ttnn.Shape((x.shape[0], 1, x.shape[1], x.shape[2])))
+        routed_output = self.experts(x, topk_experts_indices, topk_experts_weights)
+
+        # 4. Reduce-scatter (scale by 1/n_rs so sum then scatter matches single-device magnitude)
+        routed_out = routed_output.to_ttnn if hasattr(routed_output, "to_ttnn") else routed_output
+        n_rs = self.device.shape[1]
+        if n_rs > 1:
+            routed_out = ttnn.mul(routed_out, 1.0 / float(n_rs))
+        routed_output = ttnn.experimental.reduce_scatter_minimal_async(
+            routed_out,
+            persistent_output_buffers=None,
+            dim=3,
+            multi_device_global_semaphore=self.device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
+            barrier_semaphore=self.device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
+            num_links=1,
+            cluster_axis=1,
+            topology=ttnn.Topology.Ring,
+            chunks_per_sync=10,
+            num_workers_per_link=2,
+            num_buffers_per_channel=2,
+        )
+
+        # 5. Gated shared expert: sigmoid(gate(x_full)) * shared_expert(residual)
+        shared_output = self.shared_experts(residual)
+        gate_raw = self.shared_expert_gate(x_full)
+        gate_raw = gate_raw.to_ttnn if hasattr(gate_raw, "to_ttnn") else gate_raw
+        gate_val = ttnn.sigmoid(gate_raw)
+        shared_raw = shared_output.to_ttnn if hasattr(shared_output, "to_ttnn") else shared_output
+        gated_shared = ttnn.mul(gate_val, shared_raw)
+
+        output = ttnn.add(routed_output, gated_shared)
+        output = ttnn.squeeze(output, 1)
+        return output
+
+    @staticmethod
+    def _adapt_config(gate, experts):
+        class AdaptedConfig:
+            pass
+
+        config = AdaptedConfig()
+        config.hidden_size = getattr(gate, "hidden_dim", gate.weight.shape[1])
+        config.moe_intermediate_size = (
+            getattr(experts, "intermediate_dim", None)
+            or getattr(experts, "config", type("C", (), {"moe_intermediate_size": None})()).moe_intermediate_size
+        )
+        config.num_experts_per_tok = getattr(gate, "top_k", None)
+        config.n_routed_experts = getattr(gate, "num_experts", gate.weight.shape[0])
+        config.n_group = 1
+        config.topk_group = 1
+        config.routed_scaling_factor = 1.0
+        config.norm_topk_prob = getattr(gate, "norm_topk_prob", False)
+        config.hidden_act = getattr(experts, "act_fn", None) or "silu"
+        if config.num_experts_per_tok is None:
+            config.num_experts_per_tok = 8  # fallback
+        return config
+
+    @staticmethod
+    def _wrap_experts(qwen3_experts, config):
+        class ExpertsWrapper:
+            pass
+
+        w = ExpertsWrapper()
+        w.config = config
+        w.gate_up_proj = qwen3_experts.gate_up_proj
+        w.down_proj = qwen3_experts.down_proj
+        return w
+
+
 def _consolidate_talker_experts_from_module_list(experts_module_list, config):
     """Build gate_up_proj and down_proj from HF ModuleList of Qwen3OmniMoeTalkerTextMLP."""
     num_experts = len(experts_module_list)
@@ -1851,31 +2061,19 @@ class Qwen3OmniMoeTalkerTextMLPTTNN(TTNNModule):
         return x
 
 
-class TTNNQwen3TalkerMoE(TTNNModule):
+class TTNNQwen3TalkerMoE(TTNNQwen3MoE):
     """
-    Complete TTNN implementation of Qwen3-Omni talker text sparse MoE.
+    TTNN MoE for Qwen3-Omni talker text sparse MoE.
 
-    Forward pass (all on device):
-      1. all-gather to reconstruct full hidden dim
-      2. Gate routing: linear + softmax + top-k
-      3. Experts: all-to-all dispatch -> sparse_matmul -> combine
-      4. reduce-scatter routed output
-      5. Shared expert MLP (SwiGLU) on original sharded input
-      6. Shared expert gate: linear + sigmoid
-      7. Combine routed + gated shared
+    Reuses TTNNQwen3MoE (softmax routing + gated shared expert). from_torch adapts
+    Qwen3OmniMoeTalkerTextSparseMoeBlock: consolidates ModuleList experts into
+    gate_up_proj/down_proj and builds the interface TTNNQwen3MoE.from_torch expects.
     """
-
-    def __init__(self, config):
-        super().__init__()
-        self.config = config
-        self.hidden_size = config.hidden_size
-        self.n_routed_experts = config.n_routed_experts
-        self.num_experts_per_tok = config.num_experts_per_tok
 
     @classmethod
-    def from_torch(cls, torch_moe):
+    def from_torch(cls, talker_block):
         """Create from a PyTorch Qwen3OmniMoeTalkerTextSparseMoeBlock."""
-        qwen_config = getattr(torch_moe.shared_expert, "config", None)
+        qwen_config = getattr(talker_block.shared_expert, "config", None)
 
         class _Cfg:
             pass
@@ -1888,201 +2086,43 @@ class TTNNQwen3TalkerMoE(TTNNModule):
             cfg.n_routed_experts = qwen_config.num_experts
             cfg.norm_topk_prob = getattr(qwen_config, "norm_topk_prob", False)
             cfg.hidden_act = getattr(qwen_config, "hidden_act", "silu")
-            cfg.shared_expert_intermediate_size = getattr(
-                qwen_config,
-                "shared_expert_intermediate_size",
-                qwen_config.moe_intermediate_size,
-            )
-            cfg.num_experts = qwen_config.num_experts
-            # Optional CCL / collective config (defaults match current hardcoded behavior)
-            cfg.ccl_num_links = getattr(qwen_config, "ccl_num_links", 1)
-            cfg.ccl_all_gather_topology = getattr(qwen_config, "ccl_all_gather_topology", ttnn.Topology.Linear)
-            cfg.ccl_reduce_scatter_topology = getattr(qwen_config, "ccl_reduce_scatter_topology", ttnn.Topology.Ring)
-            cfg.ccl_chunks_per_sync = getattr(qwen_config, "ccl_chunks_per_sync", 10)
-            cfg.ccl_num_workers_per_link = getattr(qwen_config, "ccl_num_workers_per_link", 2)
-            cfg.ccl_num_buffers_per_channel = getattr(qwen_config, "ccl_num_buffers_per_channel", 2)
         else:
-            cfg.ccl_num_links = 1
-            cfg.ccl_all_gather_topology = ttnn.Topology.Linear
-            cfg.ccl_reduce_scatter_topology = ttnn.Topology.Ring
-            cfg.ccl_chunks_per_sync = 10
-            cfg.ccl_num_workers_per_link = 2
-            cfg.ccl_num_buffers_per_channel = 2
+            cfg.hidden_size = talker_block.gate.weight.shape[1]
+            cfg.moe_intermediate_size = getattr(talker_block.experts[0], "intermediate_size", None) or (
+                talker_block.experts[0].gate_proj.weight.shape[0] if talker_block.experts else 0
+            )
+            cfg.num_experts_per_tok = 8
+            cfg.n_routed_experts = talker_block.gate.weight.shape[0]
+            cfg.norm_topk_prob = False
+            cfg.hidden_act = "silu"
 
-        module = cls(cfg)
-        module._fallback_torch_layer = torch_moe
+        # Consolidated experts (gate_up_proj, down_proj, config) for TTNNQwen3MoE._wrap_experts
+        consolidated = _consolidate_talker_experts_from_module_list(talker_block.experts, cfg)
+        consolidated.intermediate_dim = cfg.moe_intermediate_size
 
-        module.experts = Qwen3OmniMoeTalkerTextExpertsTTNN.from_torch(torch_moe.experts, cfg)
-        module.shared_expert = Qwen3OmniMoeTalkerTextMLPTTNN.from_torch(torch_moe.shared_expert, cfg)
+        # Gate adapter: TTNNQwen3MoE._adapt_config expects .weight, .hidden_dim, .num_experts, .top_k, .norm_topk_prob
+        class _GateAdapter:
+            pass
 
-        # Router weight: (num_experts, hidden_size).T -> (hidden_size, num_experts)
-        module._gate_weight_torch = torch_moe.gate.weight.detach().T.contiguous().to(torch.bfloat16)
-        # Shared expert gate weight: (1, hidden_size).T -> (hidden_size, 1)
-        module._shared_gate_weight_torch = (
-            torch_moe.shared_expert_gate.weight.detach().T.contiguous().to(torch.bfloat16)
-        )
+        gate_adapter = _GateAdapter()
+        gate_adapter.weight = talker_block.gate.weight
+        gate_adapter.hidden_dim = cfg.hidden_size
+        gate_adapter.num_experts = cfg.n_routed_experts
+        gate_adapter.top_k = cfg.num_experts_per_tok
+        gate_adapter.norm_topk_prob = cfg.norm_topk_prob
 
+        # Fake torch_moe matching TTNNQwen3MoE.from_torch(torch_moe) interface
+        class _TalkerMoEAdapter:
+            pass
+
+        adapter = _TalkerMoEAdapter()
+        adapter.gate = gate_adapter
+        adapter.experts = consolidated
+        adapter.shared_expert = talker_block.shared_expert
+        adapter.shared_expert_gate = talker_block.shared_expert_gate
+
+        module = super().from_torch(adapter)
+        module._fallback_torch_layer = talker_block
+        # Use Talker experts with fitted sparse matmul configs for this architecture
+        module.experts = Qwen3OmniMoeTalkerTextExpertsTTNN.from_torch(consolidated, cfg)
         return module
-
-    def preprocess_weights_impl(self):
-        self._gate_weight_tt = ttnn.from_torch(
-            self._gate_weight_torch,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self._gate_weight_torch = None
-        self._shared_gate_weight_tt = ttnn.from_torch(
-            self._shared_gate_weight_torch,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-        )
-        self._shared_gate_weight_torch = None
-
-    def move_weights_to_device_impl(self):
-        self._gate_weight_tt = ttnn.to_device(self._gate_weight_tt, self.device)
-        self._shared_gate_weight_tt = ttnn.to_device(self._shared_gate_weight_tt, self.device)
-
-    @run_on_devices(DeviceArch.T3K)
-    def forward(self, x: ttnn.Tensor) -> ttnn.Tensor:
-        if x is None or not hasattr(x, "shape"):
-            raise ValueError("TTNNQwen3TalkerMoE.forward: input x must be a valid tensor.")
-        if len(x.shape) < 2:
-            raise ValueError(f"TTNNQwen3TalkerMoE.forward: input must be at least 2D; got shape {x.shape}.")
-
-        device_state = getattr(self, "device_state", None)
-        if device_state is None:
-            raise RuntimeError("TTNNQwen3TalkerMoE.forward: device_state is not set. Call set_device() before forward.")
-        if not hasattr(device_state, "ccl_manager") or device_state.ccl_manager is None:
-            raise RuntimeError(
-                "TTNNQwen3TalkerMoE.forward: device_state.ccl_manager is not available. "
-                "Required for all_gather/reduce_scatter on multi-device."
-            )
-
-        num_links = getattr(self.config, "ccl_num_links", 1)
-        ag_topology = getattr(self.config, "ccl_all_gather_topology", ttnn.Topology.Linear)
-        rs_topology = getattr(self.config, "ccl_reduce_scatter_topology", ttnn.Topology.Ring)
-        chunks_per_sync = getattr(self.config, "ccl_chunks_per_sync", 10)
-        num_workers = getattr(self.config, "ccl_num_workers_per_link", 2)
-        num_buffers = getattr(self.config, "ccl_num_buffers_per_channel", 2)
-
-        residual = x
-
-        try:
-            return self._forward_impl(
-                x,
-                residual,
-                device_state,
-                num_links,
-                ag_topology,
-                rs_topology,
-                chunks_per_sync,
-                num_workers,
-                num_buffers,
-            )
-        except Exception as e:
-            raise RuntimeError(f"TTNNQwen3TalkerMoE forward failed: {e}") from e
-
-    def _forward_impl(
-        self,
-        x,
-        residual,
-        device_state,
-        num_links,
-        ag_topology,
-        rs_topology,
-        chunks_per_sync,
-        num_workers,
-        num_buffers,
-    ):
-        # 1. All-gather to reconstruct full hidden dim from tensor-parallel shards
-        x = ttnn.experimental.all_gather_async(
-            x,
-            dim=-1,
-            multi_device_global_semaphore=device_state.ccl_manager.get_and_cycle_ag_semaphore_handles(1),
-            barrier_semaphore=device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=num_links,
-            topology=ag_topology,
-        )
-
-        if x.layout != ttnn.TILE_LAYOUT:
-            x = ttnn.to_layout(x, ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-
-        # Flatten to 2D for router and shared-gate projections
-        x_shape = list(x.shape)
-        T = 1
-        for d in x_shape[:-1]:
-            T *= d
-        H = x_shape[-1]
-        x_2d = ttnn.reshape(x, ttnn.Shape((T, H)))
-
-        # 2. Gate routing: linear -> softmax (float32) -> top-k
-        router_logits = ttnn.linear(
-            x_2d,
-            self._gate_weight_tt,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        logits_f32 = ttnn.typecast(router_logits, ttnn.float32)
-        ttnn.deallocate(router_logits)
-        probs = ttnn.softmax(logits_f32, dim=-1)
-        ttnn.deallocate(logits_f32)
-        probs_bf16 = ttnn.typecast(probs, ttnn.bfloat16)
-        ttnn.deallocate(probs)
-
-        top_values, top_indices = ttnn.topk(probs_bf16, k=self.num_experts_per_tok, dim=-1, sorted=True)
-        ttnn.deallocate(probs_bf16)
-
-        if self.config.norm_topk_prob:
-            denom = ttnn.sum(top_values, dim=-1, keepdim=True)
-            top_values = ttnn.div(top_values, denom)
-            ttnn.deallocate(denom)
-
-        top_indices = ttnn.reshape(top_indices, ttnn.Shape((T, self.num_experts_per_tok)))
-        top_values = ttnn.reshape(top_values, ttnn.Shape((T, self.num_experts_per_tok)))
-
-        # 3. Shared expert gate on full x (before reshape): sigmoid(x @ W_gate)
-        shared_gate_logits = ttnn.linear(
-            x_2d,
-            self._shared_gate_weight_tt,
-            memory_config=ttnn.DRAM_MEMORY_CONFIG,
-        )
-        shared_gate_val = ttnn.sigmoid(shared_gate_logits)
-        ttnn.deallocate(shared_gate_logits)
-
-        # 4. Reshape x to 4D for experts: (1, 1, T, H)
-        x = ttnn.reshape(x, ttnn.Shape((1, 1, T, H)))
-
-        # 5. Experts: dispatch -> sparse_matmul -> combine -> weight
-        routed_output = self.experts(x, top_indices, top_values)
-
-        # 6. Reduce-scatter routed output back to tensor-parallel shards
-        n_rs = self.device.shape[1]
-        routed_out = routed_output.to_ttnn if hasattr(routed_output, "to_ttnn") else routed_output
-        if n_rs > 1:
-            routed_out = ttnn.mul(routed_out, 1.0 / float(n_rs))
-        routed_output = ttnn.experimental.reduce_scatter_minimal_async(
-            routed_out,
-            persistent_output_buffers=None,
-            dim=3,
-            multi_device_global_semaphore=device_state.ccl_manager.get_and_cycle_rs_semaphore_handles(1),
-            barrier_semaphore=device_state.ccl_manager.get_and_cycle_barrier_semaphore_handle(1),
-            num_links=num_links,
-            cluster_axis=1,
-            topology=rs_topology,
-            chunks_per_sync=chunks_per_sync,
-            num_workers_per_link=num_workers,
-            num_buffers_per_channel=num_buffers,
-        )
-
-        # 7. Shared expert MLP on the original (sharded) input
-        shared_output = self.shared_expert(residual)
-        shared_out = shared_output.to_ttnn if hasattr(shared_output, "to_ttnn") else shared_output
-
-        # Apply shared expert gate (broadcast [T,1] * [T, H/n_rs])
-        gated_shared = ttnn.mul(shared_out, shared_gate_val)
-        ttnn.deallocate(shared_gate_val)
-
-        # 8. Combine routed + gated shared expert outputs
-        # routed_output: [1, 1, T, H/n_rs], squeeze experts dim -> [1, T, H/n_rs]
-        routed_output = ttnn.squeeze(routed_output, 1)
-        output = ttnn.add(routed_output, gated_shared)
-        return output
