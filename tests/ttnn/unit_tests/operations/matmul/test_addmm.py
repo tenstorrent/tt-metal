@@ -7,6 +7,7 @@ import torch
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
 
 pytestmark = pytest.mark.use_module_device
 
@@ -49,6 +50,14 @@ def test_addmm_square_matrices(device, dtype, matrix_size):
     if dtype == ttnn.bfloat8_b:
         target_pcc = 0.999
 
+    test_name = f"test_addmm_square_matrices[dtype={dtype},matrix_size={matrix_size}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_addmm_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
 
 
@@ -92,6 +101,14 @@ def test_addmm_with_alpha_beta(device, dtype, matrix_size, alpha, beta):
     if dtype == ttnn.bfloat8_b:
         target_pcc = 0.999
 
+    test_name = f"test_addmm_with_alpha_beta[dtype={dtype},matrix_size={matrix_size},alpha={alpha},beta={beta}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_addmm_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
 
 
@@ -148,6 +165,14 @@ def test_addmm_rectangular_matrices(device, dtype, matrix_dims):
     if dtype == ttnn.bfloat8_b:
         pcc = 0.999
 
+    test_name = f"test_addmm_rectangular_matrices[dtype={dtype},matrix_dims={matrix_dims}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_addmm_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
 
@@ -207,6 +232,14 @@ def test_vector_matrix_multiplication(device, dtype, size, case_type):
         target_pcc = 0.999
 
     # Assert the results match
+    test_name = f"test_vector_matrix_multiplication[dtype={dtype},size={size},case_type={case_type}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_addmm_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
 
 
@@ -264,6 +297,14 @@ def test_addmm_non_tile_multiple_dimensions(device, dtype, shape):
     if dtype == ttnn.bfloat8_b:
         target_pcc = 0.999
 
+    test_name = f"test_addmm_non_tile_multiple_dimensions[dtype={dtype},shape={shape}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor_torch,
+        test_name=test_name,
+        csv_filename="test_addmm_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor_torch, pcc=target_pcc)
 
 
@@ -477,6 +518,14 @@ def test_addmm_with_output_tensor_inplace_op(device, dtype):
     if dtype == ttnn.bfloat8_b:
         target_pcc = 0.999
 
+    test_name = f"test_addmm_with_output_tensor_inplace_op[dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_addmm_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
     assert_with_pcc(torch_output_tensor, out_tensor, pcc=target_pcc)
 
@@ -524,5 +573,13 @@ def test_addmm_with_output_tensor_inplace_op_with_different_dtype(device):
     output_tensor = ttnn.to_torch(output_tensor)
     out_tensor = ttnn.to_torch(out_tensor)
 
+    test_name = "test_addmm_with_output_tensor_inplace_op_with_different_dtype"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_addmm_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9999)
     assert_with_pcc(torch_output_tensor, out_tensor, pcc=0.9999)

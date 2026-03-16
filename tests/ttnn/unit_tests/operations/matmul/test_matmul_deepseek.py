@@ -13,6 +13,7 @@ import ttnn
 from tests.ttnn.unit_tests.operations.matmul.test_matmul import pad_to_dram_banks
 from models.common.utility_functions import comp_pcc, skip_for_blackhole
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
 
 
 def pad_batch_to_dram_banks(batch, num_dram_banks=12):
@@ -394,6 +395,14 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
 
     pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
     logger.info(pcc_message)
+    test_name = f"test_matmul_l1_dram_sharded[test_case={test_case},num_iters={num_iters}]"
+    collect_and_dump_numeric_metrics(
+        pt_out,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_matmul_deepseek_numeric_results.csv",
+        test_params=None,
+    )
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
 
@@ -615,6 +624,14 @@ def test_matmul_batched_dram_sharded(device, test_case):
 
     # Lower PCC threshold due to bfloat8_b weights (lower precision than bfloat16)
     pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
+    test_name = f"test_matmul_batched_dram_sharded[test_case={test_case}]"
+    collect_and_dump_numeric_metrics(
+        pt_out,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_matmul_deepseek_numeric_results.csv",
+        test_params=None,
+    )
     assert pcc_passed
 
 
@@ -742,6 +759,14 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
         # Slice off padding from output to get original dimensions [1, batch, m, n]
         output_tensor = output_tensor[:, :batch, :m, :n]
         pt_out = torch.matmul(in0_orig, in1_orig)
+        test_name = f"test_matmul_batched_dram_sharded_program_cache[batch={batch},m={m},k={k},n={n}]"
+        collect_and_dump_numeric_metrics(
+            pt_out,
+            output_tensor,
+            test_name=test_name,
+            csv_filename="test_matmul_deepseek_numeric_results.csv",
+            test_params=None,
+        )
         assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
         # Dummy tensor to change tensor allocation (tests program cache robustness)
@@ -1025,4 +1050,12 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
         pt_out = torch.matmul(in0_orig, in1_orig)
 
     pcc_passed, pcc_message = comp_pcc(pt_out, output_tensor, expected_pcc)
+    test_name = f"test_prefill_mm_interleaved_sharded[test_case={test_case},seq_len={seq_len}]"
+    collect_and_dump_numeric_metrics(
+        pt_out,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_matmul_deepseek_numeric_results.csv",
+        test_params=None,
+    )
     assert pcc_passed, f"PCC check failed: {pcc_message}"

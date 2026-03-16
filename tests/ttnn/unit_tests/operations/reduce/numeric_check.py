@@ -277,7 +277,7 @@ def collect_and_dump_numeric_metrics(
         # "frobenius_cluster_count": frob_cluster_count,
         # "frobenius_largest_cluster_value": largest_frob_cluster_value,
         # "frobenius_largest_cluster_error_share": largest_frob_cluster_error_share,
-        "frobenius_cluster_summary": frob_cluster_summary,
+        # "frobenius_cluster_summary": frob_cluster_summary,
         "ulp_passed": ulp_passed,
         "max_ulp": max_ulp,
         "avg_ulp": avg_ulp,
