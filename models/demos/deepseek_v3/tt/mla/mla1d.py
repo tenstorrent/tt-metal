@@ -2258,7 +2258,8 @@ class MLA1D(AbstractModule):
         # All_gather
         v_out = ttnn.to_memory_config(v_out, memory_config=ttnn.L1_MEMORY_CONFIG)
         v_out = ttnn.experimental.all_gather_async(v_out, **ccl.populate_all_gather_runtime_args(cfg["wo_ag_decode"]))
-        v_out = ttnn.tilize(v_out)
+        # Decode batch sizes smaller than a tile still need a tiled tensor for `wo`.
+        v_out = ttnn.tilize_with_zero_padding(v_out)
         # 1,1,32,16384 WIDTH sharded 2x8 [32,1024]
 
         return v_out
