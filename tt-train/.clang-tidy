@@ -14,6 +14,11 @@ InheritParentConfig: true
 #   Not a tt-train issue — remove once those headers are migrated to ttsl.
 # misc-confusable-identifiers: fires in xtensor headers; SYSTEM include marking
 #   suppresses compiler warnings but not clang-tidy checks.
+# bugprone-unused-raii: nanobind builder pattern — nb::class_<>() calls are
+#   intentionally unnamed; nanobind stores registrations internally. False positive.
+# bugprone-suspicious-stringview-data-usage: enchantum type_name / entries_generator
+#   returns compile-time string_views into null-terminated static storage, but
+#   clang-tidy cannot prove null-termination statically.
 Checks: >
   -modernize-use-using,
   -modernize-type-traits,
@@ -47,6 +52,8 @@ Checks: >
   -bugprone-macro-parentheses,
   -bugprone-forwarding-reference-overload,
   -bugprone-return-const-ref-from-parameter,
+  -bugprone-unused-raii,
+  -bugprone-suspicious-stringview-data-usage,
   -misc-redundant-expression,
   -misc-unused-parameters,
   -misc-header-include-cycle,
