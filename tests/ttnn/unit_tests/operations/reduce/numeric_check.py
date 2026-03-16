@@ -331,7 +331,7 @@ def collect_and_dump_numeric_metrics(
                         # "frobenius_cluster_count",
                         # "frobenius_largest_cluster_value",
                         # "frobenius_largest_cluster_error_share",
-                        "frobenius_cluster_summary",
+                        # "frobenius_cluster_summary",
                     ]
                 )
                 if k is not None:
@@ -372,7 +372,7 @@ def collect_and_dump_numeric_metrics(
                     # frob_cluster_count,
                     # f"{largest_frob_cluster_value:.6e}",
                     # f"{largest_frob_cluster_error_share:.6e}",
-                    json.dumps(frob_cluster_summary, separators=(",", ":")),
+                    # json.dumps(frob_cluster_summary, separators=(",", ":")),
                 ]
             )
             if k is not None:

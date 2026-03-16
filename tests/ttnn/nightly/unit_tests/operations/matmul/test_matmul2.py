@@ -13,6 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
 
 
 @pytest.mark.parametrize("batch", [16, 96])
@@ -106,6 +107,15 @@ def test_matmul_1d_in0_batched(
 
         tt_out = tt2torch_tensor(output_t)
         output_t.deallocate()
+        test_name = f"test_matmul_1d_in0_batched[batch={batch},in0_sharded={in0_sharded},out_sharded={out_sharded},M={M},N={N},activations_dtype={activations_dtype},weights_dtype={weights_dtype},num_loops={num_loops}]"
+        collect_and_dump_numeric_metrics(
+            pt_out,
+            tt_out,
+            test_name=test_name,
+            csv_filename="test_matmul2_nightly_numeric_results.csv",
+            test_params=None,
+            k=K,
+        )
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
         assert passing
@@ -429,6 +439,15 @@ def test_matmul_1d_fp32_input_output(
 
         tt_out = tt2torch_tensor(output_t)
 
+        test_name = f"test_matmul_1d_fp32_input_output[packer_l1_acc={packer_l1_acc},fp32_acc_mode={fp32_acc_mode},batch={batch},in0_sharded={in0_sharded},out_sharded={out_sharded},M={M},N={N},activations_dtype={activations_dtype},weights_dtype={weights_dtype},num_loops={num_loops}]"
+        collect_and_dump_numeric_metrics(
+            pt_out,
+            tt_out,
+            test_name=test_name,
+            csv_filename="test_matmul2_nightly_numeric_results.csv",
+            test_params=None,
+            k=K,
+        )
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
         assert passing
@@ -540,6 +559,15 @@ def test_matmul_no_mcast_fp32_input_output(
 
         tt_out = tt2torch_tensor(output_t)
 
+        test_name = f"test_matmul_no_mcast_fp32_input_output[packer_l1_acc={packer_l1_acc},fp32_acc_mode={fp32_acc_mode},in0_sharded={in0_sharded},in1_sharded={in1_sharded},out_sharded={out_sharded},B={B},H={H},M={M},K={K},N={N},out_subblock_h={out_subblock_h},out_subblock_w={out_subblock_w},activations_dtype={activations_dtype},num_loops={num_loops}]"
+        collect_and_dump_numeric_metrics(
+            pt_out,
+            tt_out,
+            test_name=test_name,
+            csv_filename="test_matmul2_nightly_numeric_results.csv",
+            test_params=None,
+            k=K,
+        )
         passing, output = comp_pcc(pt_out, tt_out)
         logger.info(output)
         assert passing

@@ -17,6 +17,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
 from tt_lib.utils import (
     pad_weight,
     tilize_to_list,
@@ -183,6 +184,15 @@ def run_test_matmul_in1_dram_sharded(
 
     tt_out = tt2torch_tensor(output_t)
 
+    test_name = f"run_test_matmul_in1_dram_sharded[in0_sharded={in0_sharded},out_sharded={out_sharded},in1_in_dram={in1_in_dram},M={M},K={K},N={N},fidelity={fidelity},packer_l1_acc={packer_l1_acc},has_bias={has_bias},activation={activation},grid_size={grid_size},in0_dtype={in0_dtype},in1_dtype={in1_dtype},out_dtype={out_dtype}]"
+    collect_and_dump_numeric_metrics(
+        pt_out,
+        tt_out,
+        test_name=test_name,
+        csv_filename="test_matmul_dram_sharded_nightly_numeric_results.csv",
+        test_params=None,
+        k=K,
+    )
     passing, output = comp_pcc(pt_out, tt_out)
     logger.info(output)
     assert passing

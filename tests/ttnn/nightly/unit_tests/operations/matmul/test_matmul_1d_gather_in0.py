@@ -13,6 +13,7 @@ from tests.tt_eager.python_api_testing.sweep_tests.comparison_funcs import (
     comp_equal,
     comp_pcc,
 )
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
 import random
 import math
 from tracy import signpost
@@ -365,6 +366,15 @@ def run_multi_core_matmul_1d(
         act_fnc = torch.nn.functional.silu if activation == ttnn.UnaryOpType.SILU else torch.nn.functional.relu
         pt_out = act_fnc(pt_out)
 
+    test_name = f"run_multi_core_matmul_1d[in0_dtype={in0_dtype},in1_dtype={in1_dtype},fidelity={fidelity},has_bias={has_bias},fp32_acc_mode={fp32_acc_mode},packer_l1_acc={packer_l1_acc},B={B},M={M},K={K},N={N},activation={activation},grid={grid},use_arbitrary_cores={use_arbitrary_cores},num_iters={num_iters},output_dtype={output_dtype},max_dst_tiles={max_dst_tiles},pcc_threshold={pcc_threshold},use_physical_to_logical_mapping={use_physical_to_logical_mapping},hop_grid={hop_grid},in1_is_dram_interleaved={in1_is_dram_interleaved},in1_is_in_dram={in1_is_in_dram},untilize_out={untilize_out}]"
+    collect_and_dump_numeric_metrics(
+        pt_out,
+        tt_out,
+        test_name=test_name,
+        csv_filename="test_matmul_1d_gather_in0_nightly_numeric_results.csv",
+        test_params=None,
+        k=K,
+    )
     passing, output = comp_pcc(pt_out, tt_out, pcc_threshold)
     logger.info(output)
 

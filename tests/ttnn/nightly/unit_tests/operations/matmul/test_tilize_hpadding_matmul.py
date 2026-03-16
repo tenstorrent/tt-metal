@@ -19,6 +19,7 @@ from models.common.utility_functions import (
     skip_for_blackhole,
 )
 import torch
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
 
 
 def run_tilize_matmul_test(M, K, N, device):
@@ -56,6 +57,15 @@ def run_tilize_matmul_test(M, K, N, device):
 
     ref_bmm = torch.matmul(A_padded.reshape(a_shape_padded[1:]), B.reshape(b_shape[1:]))
     ref_bmm = ref_bmm.reshape(output_shape)
+    test_name = f"run_tilize_matmul_test[M={M},K={K},N={N}]"
+    collect_and_dump_numeric_metrics(
+        ref_bmm,
+        pyt_got_back_rm,
+        test_name=test_name,
+        csv_filename="test_tilize_hpadding_matmul_nightly_numeric_results.csv",
+        test_params=None,
+        k=K,
+    )
     passing_pcc, output_pcc = comp_pcc(ref_bmm, pyt_got_back_rm, 0.99)
     logger.debug(f"Passing={passing_pcc}")
     logger.debug(f"Output pcc={output_pcc}")

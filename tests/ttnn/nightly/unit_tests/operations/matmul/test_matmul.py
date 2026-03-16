@@ -9,6 +9,7 @@ import math
 import ttnn
 
 from tests.ttnn.utils_for_testing import assert_with_pcc
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
 
 
 @pytest.mark.parametrize(
@@ -104,6 +105,15 @@ def test_sd_matmul(device, batch_size, channel_a, channel_b, m_size, k_size, n_s
         )
 
     output_tensor = ttnn.to_torch(output_tensor)
+    test_name = f"test_sd_matmul[batch_size={batch_size},channel_a={channel_a},channel_b={channel_b},m_size={m_size},k_size={k_size},n_size={n_size},has_bias={has_bias},dtype={dtype}]"
+    collect_and_dump_numeric_metrics(
+        torch_output_tensor,
+        output_tensor,
+        test_name=test_name,
+        csv_filename="test_matmul_nightly_numeric_results.csv",
+        test_params=None,
+        k=k_size,
+    )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=pcc)
 
 
@@ -188,4 +198,13 @@ def test_sdxl_matmul(
 
     if not perf_test_mode:
         output_tensor = ttnn.to_torch(output_tensor)
+        test_name = f"test_sdxl_matmul[core_grid={core_grid},M={M},K={K},N={N},in0_block_w={in0_block_w},out_subblock_h={out_subblock_h},out_subblock_w={out_subblock_w},per_core_M={per_core_M},per_core_N={per_core_N},has_gelu={has_gelu}]"
+        collect_and_dump_numeric_metrics(
+            torch_output_tensor,
+            output_tensor,
+            test_name=test_name,
+            csv_filename="test_matmul_nightly_numeric_results.csv",
+            test_params=None,
+            k=K,
+        )
         assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.999)

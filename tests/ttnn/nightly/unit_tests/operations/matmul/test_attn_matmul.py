@@ -9,6 +9,7 @@ import torch
 import ttnn
 from models.common.utility_functions import comp_pcc
 import ttnn
+from tests.ttnn.unit_tests.operations.reduce.numeric_check import collect_and_dump_numeric_metrics
 
 
 def generate_input_shapes():
@@ -59,6 +60,17 @@ def test_attn_matmul(num_loops, in0_dtype, in1_dtype, out_dtype, device):
             tt_output_tensor_on_device.deallocate()
             golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
 
+            # Extract K from input shapes: input_shape_a = [q_len, q_heads, batch, K], input_shape_b = [batch, kv_heads, K, seq_len]
+            K = input_shape_a[-1]
+            test_name = f"test_attn_matmul[num_loops={num_loops},in0_dtype={in0_dtype},in1_dtype={in1_dtype},out_dtype={out_dtype},input_shape_a={input_shape_a},input_shape_b={input_shape_b}]"
+            collect_and_dump_numeric_metrics(
+                golden_output_tensor,
+                tt_output_tensor,
+                test_name=test_name,
+                csv_filename="test_attn_matmul_nightly_numeric_results.csv",
+                test_params=None,
+                k=K,
+            )
             allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
             assert allclose, f"FAILED: {output}"
 
@@ -98,6 +110,17 @@ def test_attn_matmul_fp32(num_loops, in_dtype, device):
 
             golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
 
+            # Extract K from input shapes: input_shape_a = [q_len, q_heads, batch, K], input_shape_b = [batch, kv_heads, K, seq_len]
+            K = input_shape_a[-1]
+            test_name = f"test_attn_matmul[num_loops={num_loops},in0_dtype={in0_dtype},in1_dtype={in1_dtype},out_dtype={out_dtype},input_shape_a={input_shape_a},input_shape_b={input_shape_b}]"
+            collect_and_dump_numeric_metrics(
+                golden_output_tensor,
+                tt_output_tensor,
+                test_name=test_name,
+                csv_filename="test_attn_matmul_nightly_numeric_results.csv",
+                test_params=None,
+                k=K,
+            )
             allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
             assert allclose, f"FAILED: {output}"
 
@@ -129,6 +152,17 @@ def test_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, out_dty
 
             golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
 
+            # Extract K from input shapes: input_shape_a = [q_len, q_heads, batch, K], input_shape_b = [batch, kv_heads, K, seq_len]
+            K = input_shape_a[-1]
+            test_name = f"test_attn_matmul[num_loops={num_loops},in0_dtype={in0_dtype},in1_dtype={in1_dtype},out_dtype={out_dtype},input_shape_a={input_shape_a},input_shape_b={input_shape_b}]"
+            collect_and_dump_numeric_metrics(
+                golden_output_tensor,
+                tt_output_tensor,
+                test_name=test_name,
+                csv_filename="test_attn_matmul_nightly_numeric_results.csv",
+                test_params=None,
+                k=K,
+            )
             allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
             assert allclose, f"FAILED: {output}"
 
@@ -242,6 +276,15 @@ def test_group_attn_matmul(
         input_tensor_b = torch.repeat_interleave(input_tensor_b.to(torch.float), q_heads // kv_heads, dim=1)
         golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
 
+        test_name = f"test_group_attn_matmul[num_loops={num_loops},batch={batch},K={K},seq_len={seq_len},q_heads={q_heads},kv_heads={kv_heads},in0_sharded={in0_sharded},in1_sharded={in1_sharded},output_sharded={output_sharded},shard_orientation={shard_orientation}]"
+        collect_and_dump_numeric_metrics(
+            golden_output_tensor,
+            tt_output_tensor,
+            test_name=test_name,
+            csv_filename="test_attn_matmul_nightly_numeric_results.csv",
+            test_params=None,
+            k=K,
+        )
         allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
         assert allclose, f"FAILED: {output}"
 
@@ -325,6 +368,17 @@ def test_group_attn_matmul_with_program_cache(num_loops, in0_dtype, in1_dtype, o
             input_tensor_b = torch.repeat_interleave(input_tensor_b.to(torch.float), q_heads // kv_heads, dim=1)
             golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
 
+            # Extract K from input shapes: input_shape_a = [q_len, q_heads, batch, K], input_shape_b = [batch, kv_heads, K, seq_len]
+            K = input_shape_a[-1]
+            test_name = f"test_group_attn_matmul_with_program_cache[num_loops={num_loops},in0_dtype={in0_dtype},in1_dtype={in1_dtype},output_dtype={output_dtype},sharded={sharded},K={K},seq_len={seq_len},q_heads={q_heads},kv_heads={kv_heads}]"
+            collect_and_dump_numeric_metrics(
+                golden_output_tensor,
+                tt_output_tensor,
+                test_name=test_name,
+                csv_filename="test_attn_matmul_nightly_numeric_results.csv",
+                test_params=None,
+                k=K,
+            )
             allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
             assert allclose, f"FAILED: {output}"
 
@@ -447,5 +501,14 @@ def test_group_attn_matmul_fp32(
         input_tensor_b = torch.repeat_interleave(input_tensor_b.to(torch.float), q_heads // kv_heads, dim=1)
         golden_output_tensor = (input_tensor_a.transpose(0, 2) @ input_tensor_b).transpose(0, 2)
 
+        test_name = f"test_group_attn_matmul_fp32[num_loops={num_loops},batch={batch},K={K},seq_len={seq_len},q_heads={q_heads},kv_heads={kv_heads},in0_sharded={in0_sharded},in1_sharded={in1_sharded},output_sharded={output_sharded},shard_orientation={shard_orientation},in_dtype={in_dtype}]"
+        collect_and_dump_numeric_metrics(
+            golden_output_tensor,
+            tt_output_tensor,
+            test_name=test_name,
+            csv_filename="test_attn_matmul_nightly_numeric_results.csv",
+            test_params=None,
+            k=K,
+        )
         allclose, output = comp_pcc(tt_output_tensor, golden_output_tensor)
         assert allclose, f"FAILED: {output}"
