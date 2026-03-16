@@ -129,7 +129,6 @@ class MoE(SharedStateAddOn, AbstractModule):
         }
 
         # optimized ops (exclusive to quad with ring fabric) require preallocated tensors for all_to_all_dispatch_metadata
-        # TODO: (GR)
         if fabric_config == ttnn.FabricConfig.FABRIC_1D_RING and num_dispatch_device_rows == 16:
             batch = USERS_PER_ROW * mesh_device.shape[0]
             preallocated_all_to_all_dispatch_metadata_tensors = (
@@ -340,7 +339,6 @@ class MoE(SharedStateAddOn, AbstractModule):
             )
 
             # TODO: this is a temporary measure until we either a) uplift the optimized ops to support prefill shapes, or b) uplift prefill MMs to read from decode formatted weights
-            # set chunk size for prefill
             config["moe_chunk_size"] = USERS_PER_ROW
 
         return config
@@ -509,9 +507,8 @@ class MoE(SharedStateAddOn, AbstractModule):
             shape=(batch_size_per_device, 1, seq_len, cfg["hidden_size"]),
         )
 
+        # optimized ops are exclusive to quad with ring fabric
         if cfg["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING and cfg["num_dispatch_devices"] == 16:
-            ccl = cfg["ccl"]
-
             # NOTE: can move towards removing these TMs once optimized moe_gate is integrated
             topk_experts_indices_rm = ttnn.to_layout(
                 topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
@@ -530,98 +527,12 @@ class MoE(SharedStateAddOn, AbstractModule):
                 topk_experts_weights_rm, (2, 0, 1, 3), memory_config=ttnn.L1_MEMORY_CONFIG
             )
 
-            topk_experts_indices_rm_sharded = ttnn.to_memory_config(
-                topk_experts_indices_rm,
-                memory_config=cfg["quad_ring_all_to_all_dispatch_metadata_sharded_memory_config"],
-            )
-            topk_experts_weights_rm_sharded = ttnn.to_memory_config(
-                topk_experts_weights_rm,
-                memory_config=cfg["quad_ring_all_to_all_dispatch_metadata_sharded_memory_config"],
-            )
-
-            # NOTE: L1 sharded topk_experts_weights need to be deallocated before moe_compute,
-            # configure weights for post combine scaling prior to that deallocation, and store in DRAM
-            topk_experts_weights_for_scaling = ttnn.permute(
-                topk_experts_weights_rm, (3, 1, 0, 2), memory_config=ttnn.L1_MEMORY_CONFIG
-            )
-            topk_experts_weights_for_scaling = ttnn.to_layout(
-                topk_experts_weights_for_scaling, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
-            )
-
-            ttnn.deallocate(topk_experts_indices_rm)
-            ttnn.deallocate(topk_experts_weights_rm)
-
-            # NOTE: needs to run prior to all_to_all_dispatch_metadata
-            preallocated_combine_output = ttnn.moreh_full(**cfg["quad_ring_moreh_full"])
-
-            (
-                dispatch_output_sparse_buffer,
-                dispatch_output_expert_indices,
-                dispatch_output_expert_scores,
-            ) = ttnn.experimental.all_to_all_dispatch_metadata(
+            post_combine_output_tensor = cls._forward_moe_quad_ring_impl(
+                cfg,
                 x_rm,
-                topk_experts_indices_rm_sharded,
-                topk_experts_weights_rm_sharded,
-                cfg["expert_mapping_tensor"],
-                output_tensors=cfg["quad_ring_preallocated_all_to_all_dispatch_metadata_tensors"],
-                **ccl.populate_all_to_all_dispatch_metadata_args(cfg["quad_ring_all_to_all_dispatch_metadata"]),
+                topk_experts_indices_rm,
+                topk_experts_weights_rm,
             )
-
-            # deallocation required in order to free up L1 space for moe_compute
-            ttnn.deallocate(x_rm)
-            ttnn.deallocate(topk_experts_indices_rm_sharded)
-            ttnn.deallocate(topk_experts_weights_rm_sharded)
-
-            # NOTE: we are actively working on fusing moe_compute and selective_reduce_combine
-
-            w0_w1 = ()  # TODO: (GR)
-            w2 = ()  # TODO: (GR)
-            layer_id = 0  # TODO: (GR)
-            (
-                compute_output_token_counts,
-                compute_output_dense_expert_activation,
-                compute_ouput_dense_e_t,
-                _,  # tile layout output of selective tilize (same buffer as output)
-                compute_output,
-            ) = ttnn.experimental.moe_compute(
-                dispatch_output_sparse_buffer,
-                dispatch_output_expert_indices,
-                dispatch_output_expert_scores,
-                cfg["expert_mapping_tensor"],
-                w0_w1,
-                w2,
-                layer_id=layer_id,
-                **cfg["quad_ring_moe_compute"],
-            )
-
-            # NOTE: can't deallocate dispatch output tensors as they are preallocated and reused across layers
-
-            combine_output = ttnn.experimental.selective_reduce_combine(
-                compute_output,
-                compute_output_dense_expert_activation,
-                compute_ouput_dense_e_t,
-                compute_output_token_counts,
-                output_tensor=preallocated_combine_output,
-                **ccl.populate_selective_reduce_combine_args(cfg["quad_ring_selective_reduce_combine"]),
-            )
-
-            ttnn.deallocate(compute_output)
-            ttnn.deallocate(compute_output_dense_expert_activation)
-            ttnn.deallocate(compute_ouput_dense_e_t)
-            ttnn.deallocate(compute_output_token_counts)
-
-            combine_output = ttnn.to_layout(
-                combine_output,
-                layout=ttnn.TILE_LAYOUT,
-                memory_config=ttnn.L1_MEMORY_CONFIG,
-            )
-            combine_output = ttnn.unsqueeze(combine_output, dim=1)
-
-            post_combine_output_tensor = ttnn.mul(
-                combine_output, topk_experts_weights_for_scaling, **cfg["mul_experts_output_with_weights"]
-            )
-
-            ttnn.deallocate(combine_output)
         else:
             # Repeat + Permute Expert weights
             topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
@@ -703,9 +614,8 @@ class MoE(SharedStateAddOn, AbstractModule):
         chunk_size = min(batch_size_per_device, max(1, cfg.get("moe_chunk_size", batch_size_per_device)))
         output_chunks: list[ttnn.Tensor] = []
 
+        # optimized ops are exclusive to quad with ring fabric
         if cfg["fabric_config"] == ttnn.FabricConfig.FABRIC_1D_RING and cfg["num_dispatch_devices"] == 16:
-            ccl = cfg["ccl"]
-
             topk_experts_indices_rm = ttnn.to_layout(
                 topk_experts_indices, ttnn.ROW_MAJOR_LAYOUT, memory_config=ttnn.L1_MEMORY_CONFIG
             )
@@ -716,6 +626,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             ttnn.deallocate(topk_experts_indices)
             ttnn.deallocate(topk_experts_weights)
 
+            # NOTE: store in DRAM while chunking, as moe_compute requires just about all of L1
             topk_experts_indices_rm = ttnn.permute(
                 topk_experts_indices_rm, (2, 0, 1, 3), memory_config=ttnn.DRAM_MEMORY_CONFIG
             )
@@ -726,7 +637,7 @@ class MoE(SharedStateAddOn, AbstractModule):
             for batch_start in range(0, batch_size_per_device, chunk_size):
                 batch_end = min(batch_start + chunk_size, batch_size_per_device)
 
-                x_chunk = ttnn.slice(
+                x_rm_chunk = ttnn.slice(
                     x_rm,
                     [batch_start, 0, 0, 0],
                     [batch_end, 1, seq_len, cfg["hidden_size"]],
@@ -737,104 +648,20 @@ class MoE(SharedStateAddOn, AbstractModule):
                     [batch_start, 0, 0, 0],
                     [batch_end, 1, seq_len, cfg["num_experts_per_tok"]],
                 )
-                topk_experts_indices_rm_chunk_sharded = ttnn.to_memory_config(
-                    topk_experts_indices_rm_chunk,
-                    memory_config=cfg["quad_ring_all_to_all_dispatch_metadata_sharded_memory_config"],
-                )
 
                 topk_experts_weights_rm_chunk = ttnn.slice(
                     topk_experts_weights_rm,
                     [batch_start, 0, 0, 0],
                     [batch_end, 1, seq_len, cfg["num_experts_per_tok"]],
                 )
-                topk_expert_weights_rm_chunk_sharded = ttnn.to_memory_config(
+
+                post_combine_output_tensor = cls._forward_moe_quad_ring_impl(
+                    cfg,
+                    x_rm_chunk,
+                    topk_experts_indices_rm_chunk,
                     topk_experts_weights_rm_chunk,
-                    memory_config=cfg["quad_ring_all_to_all_dispatch_metadata_sharded_memory_config"],
                 )
-
-                # NOTE: L1 sharded topk_experts_weights need to be deallocated before moe_compute,
-                # configure weights for post combine scaling prior to that deallocation, and store in DRAM
-                topk_experts_weights_for_scaling_chunk = ttnn.permute(
-                    topk_experts_weights_rm_chunk, (3, 1, 0, 2), memory_config=ttnn.L1_MEMORY_CONFIG
-                )
-                topk_experts_weights_for_scaling_chunk = ttnn.to_layout(
-                    topk_experts_weights_for_scaling_chunk,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                )
-
-                ttnn.deallocate(topk_experts_indices_rm_chunk)
-                ttnn.deallocate(topk_experts_weights_rm_chunk)
-
-                # NOTE: needs to run prior to all_to_all_dispatch_metadata
-                preallocated_combine_output = ttnn.moreh_full(**cfg["quad_ring_moreh_full"])
-
-                (
-                    dispatch_output_sparse_buffer,
-                    dispatch_output_expert_indices,
-                    dispatch_output_expert_scores,
-                ) = ttnn.experimental.all_to_all_dispatch_metadata(
-                    x_chunk,
-                    topk_experts_indices_rm_chunk_sharded,
-                    topk_expert_weights_rm_chunk_sharded,
-                    cfg["expert_mapping_tensor"],
-                    output_tensors=cfg["quad_ring_preallocated_all_to_all_dispatch_metadata_tensors"],
-                    **ccl.populate_all_to_all_dispatch_metadata_args(cfg["quad_ring_all_to_all_dispatch_metadata"]),
-                )
-
-                # deallocation required in order to free up L1 space for moe_compute
-                ttnn.deallocate(x_chunk)
-                ttnn.deallocate(topk_experts_indices_rm_chunk_sharded)
-                ttnn.deallocate(topk_expert_weights_rm_chunk_sharded)
-
-                # NOTE: we are actively working on fusing moe_compute and selective_reduce_combine
-
-                w0_w1 = ()  # TODO: (GR)
-                w2 = ()  # TODO: (GR)
-                layer_id = 0  # TODO: (GR)
-                (
-                    compute_output_token_counts,
-                    compute_output_dense_expert_activation,
-                    compute_ouput_dense_e_t,
-                    _,  # tile layout output of selective tilize (same buffer as output)
-                    compute_output,
-                ) = ttnn.experimental.moe_compute(
-                    dispatch_output_sparse_buffer,
-                    dispatch_output_expert_indices,
-                    dispatch_output_expert_scores,
-                    cfg["expert_mapping_tensor"],
-                    w0_w1,
-                    w2,
-                    layer_id=layer_id,
-                    **cfg["quad_ring_moe_compute"],
-                )
-
-                # NOTE: can't deallocate dispatch output tensors as they are preallocated and reused across layers
-
-                combine_output = ttnn.experimental.selective_reduce_combine(
-                    compute_output,
-                    compute_output_dense_expert_activation,
-                    compute_ouput_dense_e_t,
-                    compute_output_token_counts,
-                    output_tensor=preallocated_combine_output,
-                    **ccl.populate_selective_reduce_combine_args(cfg["quad_ring_selective_reduce_combine"]),
-                )
-
-                ttnn.deallocate(compute_output)
-                ttnn.deallocate(compute_output_dense_expert_activation)
-                ttnn.deallocate(compute_ouput_dense_e_t)
-                ttnn.deallocate(compute_output_token_counts)
-
-                combine_output = ttnn.to_layout(
-                    combine_output,
-                    layout=ttnn.TILE_LAYOUT,
-                    memory_config=ttnn.L1_MEMORY_CONFIG,
-                )
-                combine_output = ttnn.unsqueeze(combine_output, dim=1)
-
-                post_combine_output_tensor = ttnn.mul(
-                    combine_output, topk_experts_weights_for_scaling_chunk, **cfg["mul_experts_output_with_weights"]
-                )
+                output_chunks.append(post_combine_output_tensor)
         else:
             # Repeat + Permute Expert weights
             topk_experts_weights = cls._fwd_repeat_permute_expert_weights(topk_experts_weights, cfg)
@@ -915,7 +742,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 )
                 ttnn.deallocate(topk_weights_chunk)
 
-            output_chunks.append(post_combine_output_tensor)
+                output_chunks.append(post_combine_output_tensor)
 
         if len(output_chunks) == 1:
             post_combine_output_tensor = output_chunks[0]
@@ -926,6 +753,110 @@ class MoE(SharedStateAddOn, AbstractModule):
 
         ttnn.deallocate(x_rm)
         ttnn.deallocate(topk_experts_indices_rm)
+        return post_combine_output_tensor
+
+    @classmethod
+    def _forward_moe_quad_ring_impl(
+        cls,
+        cfg: RunDecodeConfig | RunPrefillConfig,
+        x_rm: ttnn.Tensor,
+        topk_experts_indices_rm: ttnn.Tensor,
+        topk_experts_weights_rm: ttnn.Tensor,
+    ):
+        ccl = cfg["ccl"]
+
+        topk_experts_indices_rm_sharded = ttnn.to_memory_config(
+            topk_experts_indices_rm,
+            memory_config=cfg["quad_ring_all_to_all_dispatch_metadata_sharded_memory_config"],
+        )
+        topk_experts_weights_rm_sharded = ttnn.to_memory_config(
+            topk_experts_weights_rm,
+            memory_config=cfg["quad_ring_all_to_all_dispatch_metadata_sharded_memory_config"],
+        )
+
+        # NOTE: L1 sharded topk_experts_weights need to be deallocated before moe_compute,
+        # configure weights for post combine scaling prior to that deallocation, and store in DRAM
+        topk_experts_weights_for_scaling = ttnn.permute(
+            topk_experts_weights_rm, (3, 1, 0, 2), memory_config=ttnn.L1_MEMORY_CONFIG
+        )
+        topk_experts_weights_for_scaling = ttnn.to_layout(
+            topk_experts_weights_for_scaling, layout=ttnn.TILE_LAYOUT, memory_config=ttnn.DRAM_MEMORY_CONFIG
+        )
+
+        ttnn.deallocate(topk_experts_indices_rm)
+        ttnn.deallocate(topk_experts_weights_rm)
+
+        # NOTE: needs to run prior to all_to_all_dispatch_metadata
+        preallocated_combine_output = ttnn.moreh_full(**cfg["quad_ring_moreh_full"])
+
+        (
+            dispatch_output_sparse_buffer,
+            dispatch_output_expert_indices,
+            dispatch_output_expert_scores,
+        ) = ttnn.experimental.all_to_all_dispatch_metadata(
+            x_rm,
+            topk_experts_indices_rm_sharded,
+            topk_experts_weights_rm_sharded,
+            cfg["expert_mapping_tensor"],
+            output_tensors=cfg["quad_ring_preallocated_all_to_all_dispatch_metadata_tensors"],
+            **ccl.populate_all_to_all_dispatch_metadata_args(cfg["quad_ring_all_to_all_dispatch_metadata"]),
+        )
+
+        # deallocation required in order to free up L1 space for moe_compute
+        ttnn.deallocate(x_rm)
+        ttnn.deallocate(topk_experts_indices_rm_sharded)
+        ttnn.deallocate(topk_experts_weights_rm_sharded)
+
+        # NOTE: we are actively working on fusing moe_compute and selective_reduce_combine
+
+        w0_w1 = ()  # TODO: (GR)
+        w2 = ()  # TODO: (GR)
+        layer_id = 0  # TODO: (GR)
+        (
+            compute_output_token_counts,
+            compute_output_dense_expert_activation,
+            compute_ouput_dense_e_t,
+            _,  # tile layout output of selective tilize (same buffer as output)
+            compute_output,
+        ) = ttnn.experimental.moe_compute(
+            dispatch_output_sparse_buffer,
+            dispatch_output_expert_indices,
+            dispatch_output_expert_scores,
+            cfg["expert_mapping_tensor"],
+            w0_w1,
+            w2,
+            layer_id=layer_id,
+            **cfg["quad_ring_moe_compute"],
+        )
+
+        # NOTE: can't deallocate dispatch output tensors as they are preallocated and reused across layers
+
+        combine_output = ttnn.experimental.selective_reduce_combine(
+            compute_output,
+            compute_output_dense_expert_activation,
+            compute_ouput_dense_e_t,
+            compute_output_token_counts,
+            output_tensor=preallocated_combine_output,
+            **ccl.populate_selective_reduce_combine_args(cfg["quad_ring_selective_reduce_combine"]),
+        )
+
+        ttnn.deallocate(compute_output)
+        ttnn.deallocate(compute_output_dense_expert_activation)
+        ttnn.deallocate(compute_ouput_dense_e_t)
+        ttnn.deallocate(compute_output_token_counts)
+
+        combine_output = ttnn.to_layout(
+            combine_output,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.L1_MEMORY_CONFIG,
+        )
+        combine_output = ttnn.unsqueeze(combine_output, dim=1)
+
+        post_combine_output_tensor = ttnn.mul(
+            combine_output, topk_experts_weights_for_scaling, **cfg["mul_experts_output_with_weights"]
+        )
+
+        ttnn.deallocate(combine_output)
         return post_combine_output_tensor
 
     @classmethod
