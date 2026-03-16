@@ -19,6 +19,14 @@ from models.demos.deepseek_v3.utils.lazy_state_dict import LazyStateDict
 
 # Constants
 NORM_CATEGORIES = {"attention_norm", "mlp_norm", "q_norm", "k_norm"}
+QUAD_MESH_SHAPE = (16, 8)
+
+
+def is_quad_mesh(mesh_device: ttnn.Device) -> bool:
+    """Check whether the given mesh device has a QUAD configuration (16x8)."""
+    return tuple(mesh_device.shape) == QUAD_MESH_SHAPE
+
+
 USERS_PER_ROW = 32
 SEQ_LEN_CHUNK_SIZE = 1024  # NOTE: should be 512 for blackhole (in case of future bring-up)
 TOPK_MIN_WIDTH = 64  # Minimum width of the topk input tensor
