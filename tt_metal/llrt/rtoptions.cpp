@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "rtoptions.hpp"
+#include "llrt/hal.hpp"  // Hal — needed for ParseAllFeatureEnv, ParseFeatureEnv, ParseFeatureRiscvMask
 
 #include <algorithm>
 #include <cctype>
@@ -1542,6 +1543,12 @@ void RunTimeOptions::ParseFabricTelemetryEnv(const char* value) {
     }
 
     fabric_telemetry_settings = parsed_settings;
+}
+
+void RunTimeOptions::ParseAllFeatureEnv(const tt_metal::Hal& hal) {
+    for (int i = 0; i < RunTimeDebugFeatureCount; i++) {
+        ParseFeatureEnv((RunTimeDebugFeatures)i, hal);
+    }
 }
 
 void RunTimeOptions::ParseFeatureEnv(RunTimeDebugFeatures feature, const tt_metal::Hal& hal) {
