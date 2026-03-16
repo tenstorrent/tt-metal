@@ -125,6 +125,4 @@ class MuonWithAdamW(ttml.optimizers.OptimizerBase):
 
 
 def register():
-    ttml.optimizers.register_optimizer(
-        "MuonWithAdamW", lambda config, params: MuonWithAdamW(config, params)
-    )
+    ttml.optimizers.register_optimizer("MuonWithAdamW", MuonWithAdamW)
