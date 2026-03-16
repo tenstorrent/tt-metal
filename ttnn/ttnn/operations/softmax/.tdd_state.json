@@ -1,0 +1,144 @@
+{
+  "op_name": "softmax",
+  "op_path": "ttnn/ttnn/operations/softmax",
+  "spec_path": "ttnn/ttnn/operations/softmax/op_design.md",
+  "layout": "TILE_LAYOUT",
+  "current_stage_index": 0,
+  "last_passing_commit": null,
+  "stages": [
+    {
+      "name": "data_pipeline",
+      "description": "Reader/writer passthrough with compute identity copy. Establishes full data pipeline.",
+      "kernel_files": [
+        "ttnn/ttnn/operations/softmax/kernels/reader_softmax.cpp",
+        "ttnn/ttnn/operations/softmax/kernels/compute_softmax.cpp",
+        "ttnn/ttnn/operations/softmax/kernels/writer_softmax.cpp"
+      ],
+      "test_file": "test_stage_data_pipeline.py",
+      "reference_body": "input",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.01
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "exp_passthrough",
+      "description": "Compute applies exp to each input tile via copy_tiles with exp post_op. Single pass, no reduce.",
+      "kernel_files": [
+        "ttnn/ttnn/operations/softmax/kernels/compute_softmax.cpp"
+      ],
+      "test_file": "test_stage_exp_passthrough.py",
+      "reference_body": "torch.exp(input)",
+      "tolerance": {
+        "rtol": 0.01,
+        "atol": 0.05
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "softmax_dim_w",
+      "description": "Full softmax along dim=-1 (width). Implements 3-pass stable softmax: max, exp+sum+recip, normalize.",
+      "kernel_files": [
+        "ttnn/ttnn/operations/softmax/kernels/reader_softmax.cpp",
+        "ttnn/ttnn/operations/softmax/kernels/compute_softmax.cpp",
+        "ttnn/ttnn/operations/softmax/kernels/writer_softmax.cpp"
+      ],
+      "test_file": "test_stage_softmax_dim_w.py",
+      "reference_body": "torch.nn.functional.softmax(input, dim=-1)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 64, 128)",
+        "(1, 1, 32, 256)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "import torch.nn.functional as F",
+      "extra_args": "",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    },
+    {
+      "name": "softmax_dim_h",
+      "description": "Full softmax along dim=-2 (height). Implements 3-pass stable softmax with REDUCE_COL and ROW broadcast.",
+      "kernel_files": [
+        "ttnn/ttnn/operations/softmax/kernels/reader_softmax.cpp",
+        "ttnn/ttnn/operations/softmax/kernels/compute_softmax.cpp",
+        "ttnn/ttnn/operations/softmax/kernels/writer_softmax.cpp"
+      ],
+      "test_file": "test_stage_softmax_dim_h.py",
+      "reference_body": "torch.nn.functional.softmax(input, dim=-2)",
+      "tolerance": {
+        "rtol": 0.05,
+        "atol": 0.2
+      },
+      "shapes": [
+        "(1, 1, 32, 32)",
+        "(1, 1, 128, 32)",
+        "(1, 1, 256, 32)",
+        "(4, 2, 64, 64)"
+      ],
+      "extra_imports": "import torch.nn.functional as F",
+      "extra_args": "dim=-2",
+      "extra_setup": "",
+      "extra_ttnn_setup": "",
+      "output_shape_expr": "",
+      "compare_slice": "",
+      "dtype_parametrize": "",
+      "status": "pending",
+      "commit": null,
+      "attempts": 0,
+      "free_retries": 0,
+      "max_attempts": 6,
+      "failure_history": []
+    }
+  ]
+}
