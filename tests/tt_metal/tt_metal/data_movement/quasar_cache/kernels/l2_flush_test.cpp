@@ -2,8 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-// Kernel for testing L2 cache flush operations on Quasar DM cores.
-// Writes values to cacheable memory and flushes using various L2 flush functions.
+// Kernel for testing L2 cache operations on Quasar DM cores.
+// Writes values to cacheable memory and flushes/invalidates using various L2 functions.
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/debug/dprint.h"
@@ -12,7 +12,7 @@
 void kernel_main() {
     // Runtime args
     uint32_t base_addr = get_arg_val<uint32_t>(0);
-    uint32_t test_mode = get_arg_val<uint32_t>(1);  // 0=line, 1=range, 2=full
+    uint32_t test_mode = get_arg_val<uint32_t>(1);  // 0=flush_line, 1=flush_range, 2=flush_full, 3=invalidate_line
 
     // Common args
     uint32_t value = get_common_arg_val<uint32_t>(0);
@@ -28,7 +28,7 @@ void kernel_main() {
 
     DPRINT << "WRITES DONE" << ENDL();
 
-    // Flush based on test mode
+    // Flush/invalidate based on test mode
     switch (test_mode) {
         case 0:
             // Single line flush - flush each cache line individually
@@ -44,7 +44,14 @@ void kernel_main() {
             // Full cache flush
             flush_l2_cache_full();
             break;
+        case 3:
+            // Invalidate line - flush L1 to L2, then invalidate L2 (no writeback to TL1)
+            flush_l1_dcache(0);  // Flush L1 D$ to L2
+            for (uint32_t i = 0; i < num_words; i++) {
+                invalidate_l2_cache_line(base_addr + i * sizeof(uint32_t));
+            }
+            break;
     }
 
-    DPRINT << "FLUSH DONE" << ENDL();
+    DPRINT << "DONE" << ENDL();
 }

@@ -18,8 +18,7 @@
 // L2 Cache Controller Registers
 // =============================================================================
 //
-// L2 is a 128KB inclusive write-back cache shared by 8 DM cores.
-// Config register (0x04010000) encodes: 8 banks x 8 ways x 32 sets x 64B = 128KB
+// L2 is a 128KB, 4-way associative, write-back cache shared between 8 DM cores.
 //
 // Flush registers (DIFFERENT address encodings):
 //   - FLUSH64 (0x04010200): Takes raw byte address
@@ -27,20 +26,18 @@
 //
 // Full invalidation register (0x04010300):
 //   - Each core writes its bit (1 << hartid) to signal ready
-//   - HW starts wipe when all 8 bits are set
+//   - HW starts wipe when all core bits are set
 //   - HW clears register to 0 when complete
 //   - Cores poll until they read 0, then invalidate their own L1 caches
 //
 #define L2_FLUSH_ADDR (uint64_t)TT_CACHE_CONTROLLER_FLUSH64_REG_ADDR
 #define L2_FLUSH32_ADDR (uint64_t)TT_CACHE_CONTROLLER_FLUSH32_REG_ADDR  // NOTE: takes (addr >> 4)
+#define L2_INVALIDATE_ADDR (uint64_t)TT_CACHE_CONTROLLER_INVALIDATE64_REG_ADDR
 #define L2_FULL_INVALIDATE_ADDR (uint64_t)TT_CACHE_CONTROLLER_FULLINVALIDATE_REG_ADDR
 
-// L2 cache geometry (derived from TT_CACHE_CONTROLLER_CONFIGURATION_REG_DEFAULT = 0x06050808)
-#define L2_CACHE_LINE_SIZE 64                               // 2^6 bytes (LGBLOCKBYTES=6)
-#define L2_CACHE_NUM_SETS 32                                // 2^5 sets (LGSETS=5)
-#define L2_CACHE_NUM_WAYS 8                                 // WAYS field
-#define L2_CACHE_NUM_BANKS 8                                // BANKS field
-#define L2_CACHE_SIZE (L2_CACHE_NUM_BANKS * L2_CACHE_NUM_WAYS * L2_CACHE_NUM_SETS * L2_CACHE_LINE_SIZE)  // 128KB
+// L2 cache geometry: 128KB, 4-way associative, 64B lines
+#define L2_CACHE_LINE_SIZE 64
+#define L2_CACHE_SIZE (128 * 1024)
 
 #define WRITE_REG32(addr, val) ((*((volatile uint32_t*)(uintptr_t)(addr))) = (val))
 #define READ_REG32(addr) (*((volatile uint32_t*)(uintptr_t)(addr)))
