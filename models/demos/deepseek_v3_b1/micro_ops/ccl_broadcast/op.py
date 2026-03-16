@@ -345,7 +345,6 @@ class BroadcastConfig:
         return [
             ("bcast_data_cb_id", self.cb_ids["bcast_data"]),
             ("bcast_num_pages_to_read", self.num_pages_to_read),
-            ("bcast_is_sender", 1 if d["is_root"] else 0),
             ("bcast_tensor0_page_size", self.tensor0_page_size),
             ("bcast_num_neighbors", d["num_neighbors"]),
             ("bcast_num_links", self.num_links),
@@ -360,7 +359,7 @@ class BroadcastConfig:
         return [
             ("bcast_data_cb_id", self.cb_ids["bcast_data"]),
             ("bcast_num_pages_to_read", self.num_pages_to_read),
-            ("bcast_is_sender", 1 if d["is_root"] else 0),
+            ("bcast_is_root", 1 if d["is_root"] else 0),
             ("bcast_use_socket", 1 if self.uses_socket(coord) else 0),
         ]
 
@@ -469,6 +468,7 @@ class DeepseekMinimalBroadcast:
         chunk_size_bytes=None,
         bcast_cb_id=None,
         num_links=1,
+        *,
         fabric_config=None,
         broadcast_topology_override=None,
     ):
@@ -507,6 +507,7 @@ class DeepseekMinimalBroadcast:
         chunk_size_bytes=None,
         num_links=1,
         num_iterations=1,
+        *,
         fabric_config=None,
         broadcast_topology_override=None,
     ):
@@ -688,7 +689,6 @@ class BypassBroadcastConfig:
         return [
             ("bcast_data_cb_id", self.cb_ids["bcast_data"]),
             ("bcast_num_pages_to_read", self.num_pages_to_read),
-            ("bcast_is_sender", 1 if d["is_root"] else 0),
             ("bcast_tensor0_page_size", self.tensor0_page_size),
             ("bcast_num_neighbors", 0),
             ("bcast_num_links", 1),
@@ -703,7 +703,7 @@ class BypassBroadcastConfig:
         return [
             ("bcast_data_cb_id", self.cb_ids["bcast_data"]),
             ("bcast_num_pages_to_read", self.num_pages_to_read),
-            ("bcast_is_sender", 1 if d["is_root"] else 0),
+            ("bcast_is_root", 1 if d["is_root"] else 0),
             ("bcast_use_socket", 1 if self.uses_socket(coord) else 0),
         ]
 
@@ -717,7 +717,7 @@ class BypassBroadcastConfig:
         return [
             ("bcast_data_cb_id", int(target_cb)),
             ("bcast_num_pages_to_read", num_pages_to_read),
-            ("bcast_is_sender", 1 if d["is_root"] else 0),
+            ("bcast_is_root", 1 if d["is_root"] else 0),
             ("bcast_use_socket", 1 if self.uses_socket(coord) else 0),
         ]
 

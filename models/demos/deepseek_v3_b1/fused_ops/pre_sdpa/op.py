@@ -204,6 +204,7 @@ class PreSDPA:
         fp32_dest_acc_en=False,
         skip_ccl=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+        *,
         fabric_config=None,
         broadcast_topology_override=None,
     ):
@@ -2373,6 +2374,7 @@ class PreSDPA:
         fp32_dest_acc_en=False,
         skip_ccl=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
+        *,
         fabric_config=None,
         broadcast_topology_override=None,
     ):
@@ -2422,8 +2424,8 @@ class PreSDPA:
             fp32_dest_acc_en,
             skip_ccl,
             noc_mode,
-            fabric_config,
-            broadcast_topology_override,
+            fabric_config=fabric_config,
+            broadcast_topology_override=broadcast_topology_override,
         )
 
         mesh_program_descriptor = ttnn.MeshProgramDescriptor()

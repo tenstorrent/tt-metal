@@ -890,12 +890,12 @@ def test_attention_block(
             0,  # sdpa_cluster_axis
             1.0,  # sdpa_scale_fp32
             1,  # num_links
-            device_params["fabric_config"],
             epsilon,
             use_fp32,
             skip_ccl,
             noc_mode,
             num_iterations=num_internal_iterations,
+            fabric_config=device_params["fabric_config"],
         )
     ttnn.synchronize_device(submesh)
 

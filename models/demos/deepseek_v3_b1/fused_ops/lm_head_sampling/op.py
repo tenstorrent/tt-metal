@@ -134,11 +134,12 @@ class LMHeadSampling:
         skip_ccl=None,
         socket_input=None,
         socket_output=None,
-        fabric_config=None,
-        broadcast_topology_override=None,
         persistent_mode=False,
         termination_semaphore=None,
         persistent_next_iter_semaphore=None,
+        *,
+        fabric_config=None,
+        broadcast_topology_override=None,
     ):
         """
         Execute LM head sampling CCL broadcast + mcast + matmul operation using generic_op.

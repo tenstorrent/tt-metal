@@ -716,7 +716,7 @@ void kernel_main() {
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
         get_named_compile_time_arg_val("bcast_data_cb_id"),
         get_named_compile_time_arg_val("bcast_num_pages_to_read"),
-        get_named_compile_time_arg_val("bcast_is_sender"),
+        get_named_compile_time_arg_val("bcast_is_root"),
         get_named_compile_time_arg_val("bcast_use_socket")>;
 
     // CCL Broadcast reader runtime args (only populated when not skip_ccl)

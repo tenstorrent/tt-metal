@@ -235,13 +235,14 @@ class AttentionBlock:
         sdpa_cluster_axis=0,
         sdpa_scale_fp32=1.0,
         num_links=1,
-        fabric_config=None,
-        broadcast_topology_override=None,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
         skip_ccl=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         cb_id_context=None,
+        *,
+        fabric_config=None,
+        broadcast_topology_override=None,
     ):
         """
         Execute pre-SDPA fused operation using generic_op.
@@ -3849,13 +3850,14 @@ class AttentionBlock:
         sdpa_cluster_axis=0,
         sdpa_scale_fp32=1.0,
         num_links=1,
-        fabric_config=None,
-        broadcast_topology_override=None,
         epsilon=1e-6,
         fp32_dest_acc_en=False,
         skip_ccl=False,
         noc_mode=ttnn.NOC_MODE.DM_DYNAMIC_NOC,
         num_iterations=1,
+        *,
+        fabric_config=None,
+        broadcast_topology_override=None,
     ):
         cb_id_manager = CircularBufferIdManager()
         cb_id_context = cb_id_manager.create_context()
@@ -3897,13 +3899,13 @@ class AttentionBlock:
             sdpa_cluster_axis,
             sdpa_scale_fp32,
             num_links,
-            fabric_config,
-            broadcast_topology_override,
             epsilon,
             fp32_dest_acc_en,
             skip_ccl,
             noc_mode,
             cb_id_context,
+            fabric_config=fabric_config,
+            broadcast_topology_override=broadcast_topology_override,
         )
 
         io_tensors = []

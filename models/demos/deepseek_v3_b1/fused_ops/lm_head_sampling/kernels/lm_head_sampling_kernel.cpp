@@ -196,7 +196,7 @@ void kernel_main() {
     using BcastCTArgs = deepseek_b1_ops::Broadcast::ReaderCTArgs<
         get_named_compile_time_arg_val("bcast_data_cb_id"),
         get_named_compile_time_arg_val("bcast_num_pages_to_read"),
-        get_named_compile_time_arg_val("bcast_is_sender"),
+        get_named_compile_time_arg_val("bcast_is_root"),
         get_named_compile_time_arg_val("bcast_use_socket")>;
     deepseek_b1_ops::Broadcast::ReaderArgs bcast_args{
         get_common_arg_val<uint32_t>(brisc_rt_arg_idx++),  // socket_config_addr
@@ -323,8 +323,8 @@ void kernel_main() {
         // ====================================================================
 #if defined(COMPILE_FOR_BRISC) && !defined(SKIP_CCL)
         // Persistent-mode sender/input core waits for host signal before each iteration.
-        constexpr bool is_sender = get_named_compile_time_arg_val("bcast_is_sender") == 1;
-        if constexpr (Core::persistent_mode && is_sender && Core::is_input_core) {
+        constexpr bool is_root = get_named_compile_time_arg_val("bcast_is_root") == 1;
+        if constexpr (Core::persistent_mode && is_root && Core::is_input_core) {
             auto next_iteration_semaphore =
                 reinterpret_cast<volatile tt_l1_ptr uint32_t*>(persistent_next_iter_global_sem_addr);
             noc_semaphore_wait(next_iteration_semaphore, 1);

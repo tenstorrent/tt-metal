@@ -42,11 +42,11 @@ struct Broadcast {
     // ========================================================================
     // Runtime args structs - different layout per RISC
     // ========================================================================
-    template <uint32_t cb0Id, uint32_t NumPagesToRead, uint32_t isSender, uint32_t useSocket = 0>
+    template <uint32_t cb0Id, uint32_t NumPagesToRead, uint32_t isRoot, uint32_t useSocket = 0>
     struct ReaderCTArgs {
         static constexpr uint32_t cb0_id = cb0Id;
         static constexpr uint32_t num_pages_to_read = NumPagesToRead;
-        static constexpr uint32_t is_sender = isSender;
+        static constexpr bool is_root = isRoot != 0;
         static constexpr bool use_socket = useSocket != 0;
     };
 
@@ -111,7 +111,7 @@ struct Broadcast {
             // BRISC - bcast reader
             // ================================================================
             if constexpr (IsWorkerCore) {
-                if (CTArgs::is_sender) {
+                if (CTArgs::is_root) {
 #if defined(ENABLE_SOCKET_READER)
                     if constexpr (CTArgs::use_socket) {
                         static_assert(noc_mode == DM_DYNAMIC_NOC);
@@ -174,22 +174,22 @@ struct Broadcast {
                     sem_ptrs[link_idx] = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(args.sem_bank_addrs[link_idx]);
                 }
 
-                auto send_chunk =
-                    [&](uint32_t connection_idx,
-                        uint32_t link_idx,
-                        uint32_t src_base_addr,
-                        uint32_t chunk_idx,
-                        uint32_t size) {
-                        headers[connection_idx]->to_noc_fused_unicast_write_atomic_inc(
-                            tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
-                                dst_noc_base + chunk_idx * CTArgs::chunk_size_bytes, sem_nocs[link_idx], 1, false},
-                            size);
-                        connections[connection_idx].wait_for_empty_write_slot();
-                        connections[connection_idx].send_payload_without_header_non_blocking_from_address(
-                            src_base_addr + chunk_idx * CTArgs::chunk_size_bytes, size);
-                        connections[connection_idx].send_payload_flush_non_blocking_from_address(
-                            reinterpret_cast<uint32_t>(headers[connection_idx]), sizeof(PACKET_HEADER_TYPE));
-                    };
+                auto send_chunk = [&](uint32_t connection_idx,
+                                      uint32_t link_idx,
+                                      uint32_t src_base_addr,
+                                      uint32_t chunk_idx,
+                                      uint32_t size) {
+                    uint32_t chunk_offset = chunk_idx * CTArgs::chunk_size_bytes;
+                    headers[connection_idx]->to_noc_fused_unicast_write_atomic_inc(
+                        tt::tt_fabric::NocUnicastAtomicIncFusedCommandHeader{
+                            dst_noc_base + chunk_offset, sem_nocs[link_idx], 1, false},
+                        size);
+                    connections[connection_idx].wait_for_empty_write_slot();
+                    connections[connection_idx].send_payload_without_header_non_blocking_from_address(
+                        src_base_addr + chunk_offset, size);
+                    connections[connection_idx].send_payload_flush_non_blocking_from_address(
+                        reinterpret_cast<uint32_t>(headers[connection_idx]), sizeof(PACKET_HEADER_TYPE));
+                };
 
                 std::array<uint32_t, CTArgs::num_links> link_counters = {};
                 auto forward_chunks = [&](uint32_t src_base_addr, auto&& wait_for_link_chunk) {
@@ -211,13 +211,11 @@ struct Broadcast {
                         if (++current_link == CTArgs::num_links) {
                             current_link = 0;
                             // flush only when about to reuse a packet header
-                            noc_async_writes_flushed();
+                            if (CTArgs::num_neighbors > 0) {
+                                noc_async_writes_flushed();
+                            }
                         }
                     }
-
-                    // final flush to account for the last few chunks that may not have triggered a flush inside the
-                    // loop
-                    noc_async_writes_flushed();
                 };
 
                 // Roles:
@@ -254,7 +252,7 @@ struct Broadcast {
                     connections[i].close();
                 }
 
-                noc_async_write_barrier();
+                noc_async_full_barrier();
             }
 #elif defined(COMPILE_FOR_TRISC)
             // ================================================================

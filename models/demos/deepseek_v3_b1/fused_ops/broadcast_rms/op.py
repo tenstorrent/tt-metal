@@ -54,6 +54,7 @@ class BroadcastRMSNorm:
         rsqrt_fast_approx=False,
         skip_ccl=False,
         socket=None,
+        *,
         fabric_config=None,
         broadcast_topology_override=None,
     ):
