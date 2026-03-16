@@ -17,7 +17,7 @@ from models.demos.deepseek_v3.utils.config_dataclass import (
     MeshDeviceStub,
 )
 from models.demos.deepseek_v3.utils.config_helpers import (
-    COMPUTE_KERNEL_CONFIG_LOFI,
+    COMPUTE_KERNEL_CONFIG_HIFI2,
     SEQ_LEN_CHUNK_SIZE,
     even_int_div,
     get_dequantized_tensor,
@@ -75,7 +75,7 @@ class LMHead1D(AbstractModule):
                     weight_tensor,
                     shard_dims=(None, -1),
                     mesh_device=mesh_device,
-                    dtype=ttnn.bfloat4_b,
+                    dtype=ttnn.bfloat8_b,
                     layout=ttnn.TILE_LAYOUT,
                     memory_config=ttnn.DRAM_MEMORY_CONFIG,
                 )
@@ -90,7 +90,7 @@ class LMHead1D(AbstractModule):
             "linear": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.L1_MEMORY_CONFIG,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
             "all_gather": AllGatherAsyncConfig(
                 mesh_device=mesh_device,
@@ -110,7 +110,7 @@ class LMHead1D(AbstractModule):
             "linear": LinearConfig(
                 input_tensor_b=FromWeightConfig(MeshDeviceStub(mesh_device.shape)),
                 memory_config=ttnn.DRAM_MEMORY_CONFIG,
-                compute_kernel_config=COMPUTE_KERNEL_CONFIG_LOFI,
+                compute_kernel_config=COMPUTE_KERNEL_CONFIG_HIFI2,
             ),
             "all_gather": AllGatherAsyncConfig(
                 mesh_device=mesh_device,
