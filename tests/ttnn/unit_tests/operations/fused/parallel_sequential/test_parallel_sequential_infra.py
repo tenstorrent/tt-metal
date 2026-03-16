@@ -162,8 +162,14 @@ def _make_cb_mock(
     )
 
 
-# Monkeypatch _get_node_core_range for graph topology tests.
-_graph._get_node_core_range = lambda node: node.op.descriptor.kernels[0].core_ranges
+# Saved original so graph topology tests can monkeypatch safely via fixture.
+_REAL_GET_NODE_CORE_RANGE = _graph._get_node_core_range
+
+
+@pytest.fixture(autouse=False)
+def _mock_get_node_core_range(monkeypatch):
+    """Temporarily replace _get_node_core_range with a simplified version for mock ops."""
+    monkeypatch.setattr(_graph, "_get_node_core_range", lambda node: node.op.descriptor.kernels[0].core_ranges)
 
 
 # ---------------------------------------------------------------------------
@@ -720,6 +726,7 @@ class TestMustMatchDefines:
 # ---------------------------------------------------------------------------
 
 
+@pytest.mark.usefixtures("_mock_get_node_core_range")
 class TestOpGraphBuilder:
     """Tests for OpGraphBuilder: creation, single-node, build-twice, topology."""
 
@@ -910,6 +917,7 @@ class TestNarrowWideTopology:
                 assert not g.has_trailing_barrier
 
 
+@pytest.mark.usefixtures("_mock_get_node_core_range")
 class TestEffectiveLeafRange:
     """Tests for OpGraphBuilder._effective_leaf_range."""
 
