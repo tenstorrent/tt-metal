@@ -159,8 +159,8 @@ void py_module(nb::module_& m) {
             [](const Tensor& tensor) {
                 const tt::tt_metal::Shape& shape = tensor.get_shape();
                 nb::list ret;
-                for (const auto& dim : shape) {
-                    ret.append(dim);
+                for (auto it = shape.cbegin(); it != shape.cend(); ++it) {
+                    ret.append(*it);
                 }
                 return ret;
             },
