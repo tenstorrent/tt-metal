@@ -143,6 +143,7 @@ def test_linear_with_core_grid(
         test_name=test_name,
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     assert_with_pcc(torch_output_tensor, output_tensor, 0.999)
@@ -178,6 +179,7 @@ def test_wide_linear_with_argument_for_core_grid_set_to_device_grid(
         test_name=test_name,
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
@@ -225,6 +227,7 @@ def test_linear_with_compound_activation(device, batch_size, m_size, k_size, n_s
         test_name=test_name,
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
@@ -261,6 +264,7 @@ def test_linear_by_passing_in_1D_systolic_array_program_config(device, batch_siz
         test_name=test_name,
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
@@ -301,6 +305,7 @@ def test_linear_fp32_acc(device, m_size, k_size, n_size):
         test_name=test_name,
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
 
@@ -347,6 +352,7 @@ def test_bloom_ff2_linear(device):
         test_name=test_name,
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
+        k=4096,
     )
     assert ttnn.pearson_correlation_coefficient(torch_output, output) >= 0.9992
 
@@ -401,6 +407,7 @@ def test_linear_by_passing_in_1D_systolic_array_program_config_and_optional_outo
         test_name=test_name,
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.997)
     assert_with_pcc(torch_output_tensor, optional_output_tensor, 0.997)
@@ -442,6 +449,7 @@ def test_linear_with_fp32_dest_acc_and_bias(device):
         test_name=test_name,
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
+        k=384,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.99)
 
@@ -520,6 +528,7 @@ def test_resnet50_linear(device):
         test_name=test_name,
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
+        k=2048,
     )
     assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)
 
@@ -609,12 +618,14 @@ def test_vector_linear(device, shape_a, shape_b, shape_bias) -> tuple:
 
     # Check values with PCC
     test_name = f"test_vector_linear[shape_a={shape_a},shape_b={shape_b},shape_bias={shape_bias}]"
+    k_value = shape_a[-1] if len(shape_a) > 0 else None
     collect_and_dump_numeric_metrics(
         torch_result,
         ttnn_result_torch,
         test_name=test_name,
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
+        k=k_value,
     )
     assert_with_pcc(torch_result, ttnn_result_torch, 0.99)
 
@@ -744,6 +755,7 @@ def test_linear_yolov7(
         test_name=test_name,
         csv_filename="test_linear_numeric_results.csv",
         test_params=None,
+        k=512,
     )
     assert_with_pcc(torch_out_golden_tensor, torch_output_tensor[0, 0, :, :], pcc=0.99)
 
@@ -841,6 +853,7 @@ def test_linear_on_subdevice(device, m_size, k_size, n_size, use_bias, transpose
             test_name=test_name,
             csv_filename="test_linear_numeric_results.csv",
             test_params=None,
+            k=k_size,
         )
         assert_with_pcc(torch_output, output, 0.999)
     finally:

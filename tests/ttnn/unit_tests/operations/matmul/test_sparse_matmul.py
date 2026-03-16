@@ -114,6 +114,7 @@ def test_sparse_matmul_with_nnz(device, mkn, num_experts, num_batches, tile_h, t
             test_name=test_name,
             csv_filename="test_sparse_matmul_numeric_results.csv",
             test_params=None,
+            k=k,
         )
         assert_with_pcc(pt_out, output_tensor[b_i, s_i, 0, e_i, :, :], expected_pcc)
 

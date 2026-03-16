@@ -57,6 +57,7 @@ def test_addmm_square_matrices(device, dtype, matrix_size):
         test_name=test_name,
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
+        k=matrix_size,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
 
@@ -108,6 +109,7 @@ def test_addmm_with_alpha_beta(device, dtype, matrix_size, alpha, beta):
         test_name=test_name,
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
+        k=matrix_size,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
 
@@ -172,6 +174,7 @@ def test_addmm_rectangular_matrices(device, dtype, matrix_dims):
         test_name=test_name,
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
+        k=m,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc)
 
@@ -239,6 +242,7 @@ def test_vector_matrix_multiplication(device, dtype, size, case_type):
         test_name=test_name,
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
+        k=m,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
 
@@ -304,6 +308,7 @@ def test_addmm_non_tile_multiple_dimensions(device, dtype, shape):
         test_name=test_name,
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
+        k=m,
     )
     assert_with_pcc(torch_output_tensor, output_tensor_torch, pcc=target_pcc)
 
@@ -525,6 +530,7 @@ def test_addmm_with_output_tensor_inplace_op(device, dtype):
         test_name=test_name,
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
+        k=32,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=target_pcc)
     assert_with_pcc(torch_output_tensor, out_tensor, pcc=target_pcc)
@@ -580,6 +586,7 @@ def test_addmm_with_output_tensor_inplace_op_with_different_dtype(device):
         test_name=test_name,
         csv_filename="test_addmm_numeric_results.csv",
         test_params=None,
+        k=32,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9999)
     assert_with_pcc(torch_output_tensor, out_tensor, pcc=0.9999)

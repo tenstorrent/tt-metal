@@ -279,6 +279,7 @@ def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, til
         test_name=f"{test_name}_output",
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
     collect_and_dump_numeric_metrics(
         torch_output_tensor,
@@ -286,6 +287,7 @@ def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, til
         test_name=f"{test_name}_optional_output",
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
     collect_and_dump_numeric_metrics(
         output,
@@ -293,6 +295,7 @@ def test_optional_output_argument_with_tiny_tiles(device, n, c, m, k, n_out, til
         test_name=f"{test_name}_output_vs_optional",
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     # assert_with_pcc(torch_output_tensor, output, 0.999)
@@ -361,6 +364,7 @@ def test_pytorch_2_0_failed_cases(device, m, k, n):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     # assert_matmul_accuracy(z_t, z, "test_pytorch_2_0_failed_cases")
@@ -473,6 +477,7 @@ def test_matmul_reuse_config_sharded_fd_column(
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_reuse_config_sharded_fd_column")
@@ -585,6 +590,7 @@ def test_matmul_reuse_config_sharded_tiny_tile(
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k,
     )
 
     # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_reuse_config_sharded_tiny_tile")
@@ -744,6 +750,7 @@ def test_matmul_in1_dram_sharded_tiny_tile(
             test_name=test_name,
             csv_filename="test_matmul_numeric_results.csv",
             test_params=None,
+            k=k,
         )
 
         # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_in1_dram_sharded_tiny_tile")
@@ -885,6 +892,7 @@ def run_matmul_2d_multiple_output_blocks_per_core(
             test_name=test_name,
             csv_filename="test_matmul_numeric_results.csv",
             test_params=None,
+            k=k,
         )
 
         # assert_matmul_accuracy(pt_out, output_tensor, "test_matmul_2d_multiple_output_blocks_per_core")
@@ -1604,6 +1612,7 @@ def test_padded_2d_matmul(device, side, tile_count):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_padded_2d_matmul")
@@ -1746,6 +1755,7 @@ def test_matmul_with_matched_width_height(device, m_size, k_size, n_size):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_matched_width_height")
@@ -1791,6 +1801,7 @@ def test_matmul_with_matched_width_height_from_1D(device, k_size, n_size):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_matched_width_height_from_1D")
@@ -2223,6 +2234,7 @@ def test_matmul_with_core_grid(device, batch_size):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_matmul_with_core_grid")
@@ -2264,6 +2276,7 @@ def test_wide_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(
@@ -2307,6 +2320,7 @@ def test_tall_matmul_with_argument_for_core_grid_set_to_device_grid(device, batc
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(
@@ -2350,6 +2364,7 @@ def test_matmul_by_passing_in_1D_systolic_array_program_config(device, batch_siz
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(
@@ -2460,6 +2475,7 @@ def test_matmul_transpose_a_with_core_grid(device, m, k, n):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_matmul_transpose_a_with_core_grid")
@@ -2855,6 +2871,7 @@ def test_alternating_dst_sync_mode_matmul(device, M, K, N):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_alternating_dst_sync_mode_matmul")
     output_tensor = ttnn.to_torch(output2)
@@ -2865,6 +2882,7 @@ def test_alternating_dst_sync_mode_matmul(device, M, K, N):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_alternating_dst_sync_mode_matmul")
     output_tensor = ttnn.to_torch(output3)
@@ -2875,6 +2893,7 @@ def test_alternating_dst_sync_mode_matmul(device, M, K, N):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_alternating_dst_sync_mode_matmul")
 
@@ -2907,6 +2926,7 @@ def test_interleaved_input_sharded_output_matmul(device):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_interleaved_input_sharded_output_matmul")
 
@@ -2927,6 +2947,7 @@ def test_interleaved_input_sharded_output_matmul(device):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_interleaved_input_sharded_output_matmul")
 
@@ -2954,6 +2975,7 @@ def test_interleaved_input_sharded_output_matmul(device):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_interleaved_input_sharded_output_matmul")
 
@@ -3029,6 +3051,7 @@ def test_small_matmul_pcc(device):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_small_matmul_pcc")
@@ -3135,6 +3158,7 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_sharded_matmul_with_multiple_out_block_values")
 
@@ -3156,6 +3180,7 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_sharded_matmul_with_multiple_out_block_values")
 
@@ -3171,6 +3196,7 @@ def test_sharded_matmul_with_multiple_out_block_values(device, out_block_h, out_
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_sharded_matmul_with_multiple_out_block_values")
 
@@ -3506,6 +3532,7 @@ def test_matmul_activation_with_sharded_input(device):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output_tensor, "test_matmul_block_sharded_input_with_padding")

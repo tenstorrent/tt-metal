@@ -65,6 +65,7 @@ def test_ttnn_matmul(device, m_size, k_size, n_size):
         test_name=test_name,
         csv_filename="test_experimental_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     assert_with_pcc(torch_output_tensor, output_tensor)
 
@@ -164,6 +165,7 @@ def test_ttnn_linear(
         test_name=test_name,
         csv_filename="test_experimental_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, 0.9996)
 
@@ -250,6 +252,7 @@ def test_ttnn_matmul_dram_sharded(device, m_size, k_size, n_size):
         test_name=test_name,
         csv_filename="test_experimental_numeric_results.csv",
         test_params=None,
+        k=k_size,
     )
     assert_with_pcc(torch_output_tensor, output_tensor, pcc=0.9999)
 

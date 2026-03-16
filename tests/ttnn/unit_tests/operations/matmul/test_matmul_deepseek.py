@@ -402,6 +402,7 @@ def test_matmul_l1_dram_sharded(device, test_case, num_iters):
         test_name=test_name,
         csv_filename="test_matmul_deepseek_numeric_results.csv",
         test_params=None,
+        k=k,
     )
     assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
@@ -631,6 +632,7 @@ def test_matmul_batched_dram_sharded(device, test_case):
         test_name=test_name,
         csv_filename="test_matmul_deepseek_numeric_results.csv",
         test_params=None,
+        k=k,
     )
     assert pcc_passed
 
@@ -766,6 +768,7 @@ def test_matmul_batched_dram_sharded_program_cache(device, batch, m, k, n):
             test_name=test_name,
             csv_filename="test_matmul_deepseek_numeric_results.csv",
             test_params=None,
+            k=k,
         )
         assert_with_pcc(pt_out, output_tensor, expected_pcc)
 
@@ -1057,5 +1060,6 @@ def test_prefill_mm_interleaved_sharded(device, test_case, seq_len):
         test_name=test_name,
         csv_filename="test_matmul_deepseek_numeric_results.csv",
         test_params=None,
+        k=k,
     )
     assert pcc_passed, f"PCC check failed: {pcc_message}"
