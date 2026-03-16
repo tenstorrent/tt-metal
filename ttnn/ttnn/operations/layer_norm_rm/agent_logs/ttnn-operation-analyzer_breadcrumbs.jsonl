@@ -15,3 +15,4 @@
 {"event":"analysis_complete","details":"batch_norm_analysis.md written with compute-core focus for layer_norm_rm reference","ts":"2026-03-16T09:06:41+00:00"}
 {"event":"committed","details":"Commit 6af4efe830 - batch_norm analysis for compute_core reference","ts":"2026-03-16T09:09:33+00:00"}
 {"event":"commit_complete","details":"Committed tilize_analysis.md as eb26633f25 (with fd79bdb835). All sibling analyses restored.","ts":"2026-03-16T09:10:36+00:00"}
+{"event":"complete","final_status":"SUCCESS","details":"untilize output_stage analysis committed","commit":"746a1ea6b7","ts":"2026-03-16T09:12:25+00:00"}
