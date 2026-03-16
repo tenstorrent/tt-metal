@@ -12,9 +12,51 @@ import math
 from ttnn._ttnn.operations.normalization import (
     create_group_norm_input_mask,
     create_group_norm_input_negative_mask,
-    _compute_num_virtual_cols,
-    _find_expected_dram_grid,
 )
+
+try:
+    from ttnn._ttnn.operations.normalization import (
+        _compute_num_virtual_cols,
+        _find_expected_dram_grid,
+    )
+except ImportError:
+    # Older locally-built `_ttnn` extensions may predate the rebased Python API
+    # and omit these two group-norm helpers while still exposing the kernels.
+    # Keep the wrapper importable by mirroring the C++ logic here instead of
+    # requiring a full native rebuild just to run Python-side tests.
+    def _compute_num_virtual_cols(grid_x, num_groups, num_channels):
+        tile_size = ttnn.TILE_SIZE
+        num_virtual_cols = min(grid_x, num_groups)
+        while num_virtual_cols > 0 and (
+            ((num_channels // num_virtual_cols) % tile_size != 0) or (num_groups % num_virtual_cols != 0)
+        ):
+            num_virtual_cols -= 1
+        return num_virtual_cols
+
+    def _find_expected_dram_grid(max_x, max_y, num_channels, num_groups, input_nhw):
+        tile_size = ttnn.TILE_SIZE
+        input_height_tiles = math.ceil(input_nhw / tile_size)
+
+        for grid_x in range(max_x, 0, -1):
+            num_virtual_cols = _compute_num_virtual_cols(grid_x, num_groups, num_channels)
+            if num_virtual_cols == 0:
+                continue
+
+            rows_per_grid_y = grid_x // num_virtual_cols
+            if rows_per_grid_y == 0:
+                continue
+
+            max_grid_y = min(input_height_tiles // rows_per_grid_y, max_y)
+            for grid_y in range(max_grid_y, 0, -1):
+                num_virtual_rows = rows_per_grid_y * grid_y
+                if input_height_tiles % num_virtual_rows == 0:
+                    return ttnn.CoreGrid(x=grid_x, y=grid_y)
+
+        raise RuntimeError(
+            "Cannot find a valid DRAM group-norm grid for "
+            f"num_channels={num_channels}, num_groups={num_groups}, input_nhw={input_nhw}, "
+            f"max_grid=({max_x}, {max_y})"
+        )
 
 
 def find_closest_largest_divisor(num: int, start_divisor: int):
