@@ -358,6 +358,20 @@ class MoE(SharedStateAddOn, AbstractModule):
 
     @classmethod
     def forward_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig | RunPrefillConfig) -> ttnn.Tensor:
+        # Validate input dimensions
+        hidden_size = cfg["hidden_size"]
+        mesh_device = cfg.get("mesh_device")
+        tp_size = mesh_device.shape[1] if mesh_device else 1
+
+        x_dim = x.shape[-1]
+        expected_dims = [hidden_size, hidden_size // tp_size] if tp_size > 1 else [hidden_size]
+
+        if x_dim not in expected_dims:
+            raise ValueError(
+                f"MoE: Unexpected input dimension {x_dim}. Expected one of {expected_dims}. "
+                f"(hidden_size={hidden_size}, tp_size={tp_size})"
+            )
+
         seq_len = 1  # a2a dispatch and combine require DP=num_dispatch_devices, hence in prefill for bs=1, we interchange the seq_len with batch_size dimensions
         batch_size_per_device = x.shape[
             -2
