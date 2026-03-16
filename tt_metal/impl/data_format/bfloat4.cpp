@@ -21,8 +21,6 @@
 #include "tracy/Tracy.hpp"
 #include "tt_backend_api_types.hpp"
 
-constexpr int log2(int n) { return (n <= 1) ? 0 : std::bit_width(static_cast<unsigned>(n)) - 1; }
-
 template <typename T>
 std::vector<uint32_t> pack_as_bfp4_tiles(
     tt::stl::Span<const T> data, bool row_major_input, bool is_exp_a, const std::optional<tt::tt_metal::Tile>& tile) {
