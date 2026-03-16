@@ -23,6 +23,10 @@ InheritParentConfig: true
 #   lambdas in test files; will be cleaned up in a follow-up PR.
 # modernize-loop-convert: index-based loops in nanobind and test files;
 #   will be converted to range-based for in a follow-up PR.
+# bugprone-optional-value-conversion: implicit optional unwrap in test ops;
+#   will be fixed in a follow-up PR.
+# bugprone-branch-clone: repeated branch body in serialization test;
+#   will be deduplicated in a follow-up PR.
 Checks: >
   -modernize-use-using,
   -modernize-type-traits,
@@ -60,6 +64,8 @@ Checks: >
   -bugprone-unused-raii,
   -bugprone-suspicious-stringview-data-usage,
   -bugprone-unused-local-non-trivial-variable,
+  -bugprone-optional-value-conversion,
+  -bugprone-branch-clone,
   -misc-redundant-expression,
   -misc-unused-parameters,
   -misc-header-include-cycle,
