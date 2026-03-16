@@ -526,7 +526,7 @@ struct WorkerToFabricEdmSenderBase {
 private:
     template <bool STATEFUL_NOC>
     friend void detail::experimental::update_credits_and_slots(WorkerToFabricEdmSender*);
-    
+
     template <bool stateful_api = false, bool enable_deadlock_avoidance = false>
     FORCE_INLINE void update_edm_buffer_free_slots(uint8_t noc = get_fabric_worker_noc()) {
         if constexpr (stateful_api) {

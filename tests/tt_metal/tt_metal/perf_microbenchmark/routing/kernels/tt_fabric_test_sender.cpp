@@ -61,7 +61,7 @@ void kernel_main() {
     bool packets_left_to_send = true;
     uint64_t total_packets_sent = 0;
     uint32_t loop_count = 0;
-    
+
     auto send_packets_stateful = [&](){
         auto* traffic_config = sender_config->traffic_config_ptrs[0];
         auto* conn = static_cast<WorkerToFabricEdmSender*>(traffic_config->connection_ptr_);
