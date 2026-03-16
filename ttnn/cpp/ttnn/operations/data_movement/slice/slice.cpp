@@ -120,9 +120,6 @@ ttnn::Tensor SliceOperation::invoke(
         if (!no_step) {
             TT_FATAL(input.dtype() != DataType::BFLOAT8_B, "Strided slice is not supported for BFLOAT8 tensors");
         }
-        TT_FATAL(
-            input.dtype() != DataType::UINT16,
-            "This slice requires an implicit Tile->RM conversion and that is not currently supported for uint16");
         input = ttnn::to_layout(input, Layout::ROW_MAJOR, std::nullopt, memory_config);
     }
 
