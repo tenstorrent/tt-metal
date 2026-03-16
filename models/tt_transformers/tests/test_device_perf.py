@@ -10,7 +10,6 @@ from loguru import logger
 
 from models.perf.benchmarking_utils import BenchmarkData, BenchmarkProfiler
 from models.perf.device_perf_utils import run_device_perf
-from tools.tracy.common import PROFILER_DEFAULT_OP_SUPPORT_COUNT
 from models.tt_transformers.tests.test_utils import (
     merge_device_rows,
     print_dict,
@@ -18,6 +17,7 @@ from models.tt_transformers.tests.test_utils import (
     split_compile_and_trace,
     verify_value_within_margin,
 )
+from tools.tracy.common import PROFILER_DEFAULT_OP_SUPPORT_COUNT
 from tools.tracy.process_model_log import get_latest_ops_log_filename
 
 
