@@ -3,7 +3,7 @@
 
 #pragma once
 
-#include "api/compute/cb_helpers.hpp"
+#include "ttnn/cpp/ttnn/kernel_lib/cb_helpers.hpp"
 
 /**
  * @file matmul_1d_helpers.inl
