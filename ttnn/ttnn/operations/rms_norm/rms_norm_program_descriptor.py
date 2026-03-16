@@ -186,10 +186,10 @@ def create_program_descriptor(
         )
         cbs.append(cb3)
 
-    # --- c_4: cb_gamma (tilized gamma, 2 pages for streaming) ---
+    # --- c_4: cb_gamma (tilized gamma, Wt pages — tilize pushes full block) ---
     if has_gamma:
         cb4 = ttnn.CBDescriptor(
-            total_size=2 * tile_size,
+            total_size=Wt * tile_size,
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
@@ -291,9 +291,11 @@ def create_program_descriptor(
     cbs.append(cb25)
 
     # --- c_26: cb_norm (normalized output pre-gamma, only when gamma present) ---
+    # Needs Wt pages: Phase 6 (mul<COL>) pushes Wt tiles sequentially on compute RISC
+    # before Phase 7 (mul<ROW>) can start consuming.
     if has_gamma:
         cb26 = ttnn.CBDescriptor(
-            total_size=2 * tile_size,
+            total_size=Wt * tile_size,
             core_ranges=core_grid,
             format_descriptors=[
                 ttnn.CBFormatDescriptor(
@@ -320,7 +322,10 @@ def create_program_descriptor(
     if has_gamma:
         reader_ct_args.extend(ttnn.TensorAccessorArgs(gamma).get_compile_time_args())
     else:
-        reader_ct_args.append(0)  # placeholder for absent gamma
+        # TensorAccessorArgs for interleaved tensors uses 2 CT args (args_config + aligned_page_size).
+        # Append 2 zeros as placeholder so the kernel can unconditionally declare
+        # TensorAccessorArgs at the gamma offset without out-of-bounds CT arg reads.
+        reader_ct_args.extend([0, 0])
 
     # RT args: src_addr, gamma_addr, num_rows, Wt, num_sticks, num_tiles, packed_scaler, packed_eps
     reader_rt_args = ttnn.RuntimeArgs()

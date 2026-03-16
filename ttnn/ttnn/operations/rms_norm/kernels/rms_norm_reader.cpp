@@ -8,7 +8,7 @@
 //   Pass 1: push Wt input tiles to cb_in (RM: read sticks; TILE: read tiles)
 //   Pass 2: re-push same Wt tiles for normalization
 //   Startup: fill cb_scaler with 1/W, fill cb_eps with epsilon
-//   Optional: push gamma tiles per row (stage 4)
+//   Optional: push gamma sticks per row for tilize (stage 4)
 
 #include "api/dataflow/dataflow_api.h"
 #include "api/tensor/tensor_accessor.h"
@@ -17,6 +17,7 @@
 // CB indices
 constexpr uint32_t cb_in_rm = 0;
 constexpr uint32_t cb_in = 1;
+constexpr uint32_t cb_gamma_rm = 3;
 constexpr uint32_t cb_scaler = 8;
 constexpr uint32_t cb_eps = 9;
 
@@ -28,6 +29,10 @@ constexpr uint32_t gamma_stick_size = get_compile_time_arg_val(3);
 
 // TensorAccessor args for input start at CT index 4
 constexpr auto input_ta_args = TensorAccessorArgs<4>();
+
+// TensorAccessor args for gamma start after input's CT args
+// Declared unconditionally; used only when has_gamma=1
+[[maybe_unused]] constexpr auto gamma_ta_args = TensorAccessorArgs<input_ta_args.next_compile_time_args_offset()>();
 
 void kernel_main() {
     // Runtime args
@@ -91,6 +96,24 @@ void kernel_main() {
             }
             noc_async_read_barrier();
             cb_push_back(cb_in_rm, Wt);
+
+            // Gamma: read gamma sticks for this tile-row (gamma is always RM, shape 1,1,1,W)
+            // Gamma has only 1 stick (1 row). Replicate it 32 times to fill all
+            // 32 rows needed for tilize. Only row 0 matters for ROW broadcast mul,
+            // but tilize needs 32 sticks to form proper tiles.
+            if constexpr (has_gamma) {
+                const auto gamma_accessor = TensorAccessor(gamma_ta_args, gamma_addr, gamma_stick_size);
+                // Read the single gamma stick's NoC address once
+                uint64_t gamma_noc_addr = gamma_accessor.get_noc_addr(0);
+                cb_reserve_back(cb_gamma_rm, Wt);
+                l1_write_addr = get_write_ptr(cb_gamma_rm);
+                for (uint32_t s = 0; s < 32; ++s) {
+                    noc_async_read(gamma_noc_addr, l1_write_addr, gamma_stick_size);
+                    l1_write_addr += gamma_stick_size;
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_gamma_rm, Wt);
+            }
         }
     } else {
         // TILE input: read tiles directly to cb_in
@@ -120,6 +143,21 @@ void kernel_main() {
                 noc_async_read_barrier();
                 cb_push_back(cb_in, 1);
                 reread_tile_id++;
+            }
+
+            // Gamma: read gamma sticks for tilize (gamma is always RM, shape 1,1,1,W)
+            // Gamma has only 1 stick. Replicate it 32 times for tilize.
+            if constexpr (has_gamma) {
+                const auto gamma_accessor = TensorAccessor(gamma_ta_args, gamma_addr, gamma_stick_size);
+                uint64_t gamma_noc_addr = gamma_accessor.get_noc_addr(0);
+                cb_reserve_back(cb_gamma_rm, Wt);
+                uint32_t l1_write_addr = get_write_ptr(cb_gamma_rm);
+                for (uint32_t s = 0; s < 32; ++s) {
+                    noc_async_read(gamma_noc_addr, l1_write_addr, gamma_stick_size);
+                    l1_write_addr += gamma_stick_size;
+                }
+                noc_async_read_barrier();
+                cb_push_back(cb_gamma_rm, Wt);
             }
         }
     }
