@@ -519,10 +519,10 @@ void gather_mock_cluster_desc_paths(
     }
     std::string my_path(my_path_env);
     // Resolve to absolute path for consistent usage
-    try {
-        my_path = std::filesystem::absolute(std::filesystem::path(my_path)).string();
-    } catch (...) {
-        // Keep original if resolution fails - filesystem operations may fail on invalid paths
+    std::error_code ec;
+    auto resolved = std::filesystem::absolute(std::filesystem::path(my_path), ec);
+    if (!ec) {
+        my_path = resolved.string();
     }
 
     if (world_size == 1) {
