@@ -961,6 +961,7 @@ std::vector<tt_xy_pair> RingReduceScatterTensorSlicer::create_worker_slice_shape
             }
         }
 
+        TT_ASSERT(min_num_workers_per_row > 0);
         const uint32_t min_workers_row_min_cols_per_worker = tensor_slice_shape_in_tiles.x / min_num_workers_per_row;
         const uint32_t min_workers_row_max_col_worker_count = tensor_slice_shape_in_tiles.x % min_num_workers_per_row;
         const uint32_t min_workers_row_max_cols_per_worker = min_workers_row_max_col_worker_count != 0

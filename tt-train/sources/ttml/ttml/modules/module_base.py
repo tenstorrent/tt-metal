@@ -5,7 +5,7 @@
 """Python module base inheriting from C++ ModuleBase with auto-registration."""
 
 from typing import Any, Iterable, Iterator, Optional, Union, overload
-from .._ttml.modules import ModuleBase as CppModuleBase
+from _ttml.modules import ModuleBase as CppModuleBase
 from .parameter import Buffer, Parameter
 
 
