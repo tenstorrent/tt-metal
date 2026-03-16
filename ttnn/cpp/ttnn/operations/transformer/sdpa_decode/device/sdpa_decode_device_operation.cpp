@@ -372,30 +372,23 @@ TensorSpec SdpaDecodeDeviceOperation::compute_output_specs(
     }
     bool q_locally_available = false;
     uint32_t num_q_heads = q_shape_unpadded[2];
-
     if (input.is_sharded() && use_mla && operation_attributes.program_config.has_value()) {
         const uint32_t q_shard_height = input.memory_config().shard_spec()->shape[0];
         const uint32_t max_cores = operation_attributes.program_config->max_cores_per_head_batch;
         const uint32_t num_q_shards = input.memory_config().shard_spec()->grid.num_cores();
         const uint32_t num_groups = num_q_shards / max_cores;
         const uint32_t q_heads_parallel_factor = num_groups / B;
-
         q_locally_available = (q_shape[2] == B * q_shard_height * q_heads_parallel_factor * max_cores);
         if (q_locally_available) {
             num_q_heads = q_heads_parallel_factor * q_shard_height;
         }
     }
-
-    Layout output_layout = Layout::TILE;
+    Layout output_layout = input.layout() == Layout::ROW_MAJOR ? Layout::ROW_MAJOR : Layout::TILE;
     ttnn::Shape output_shape = input.logical_shape();
-    if (input.layout() == Layout::ROW_MAJOR) {
-        output_shape[2] = tt::round_up(num_q_heads, tt::constants::TILE_HEIGHT);
-        output_layout = Layout::ROW_MAJOR;
-    } else {
-        output_shape[1] = B;
-        output_shape[2] = tt::round_up(num_q_heads, tt::constants::TILE_HEIGHT);
-        output_layout = Layout::TILE;
-    }
+    output_shape[1] = B;
+    output_shape[2] = num_q_heads;
+
+    // Preserve logical head_dim by default; only override in MLA mode.
     if (use_mla) {
         output_shape[3] = operation_attributes.head_dim_v.value();
     }
@@ -408,7 +401,7 @@ Tensor SdpaDecodeDeviceOperation::create_output_tensors(
     return create_device_tensor(compute_output_specs(operation_attributes, tensor_args), tensor_args.q.device());
 }
 
-tt::stl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t SdpaDecodeDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     bool has_cur_pos = tensor_args.cur_pos_tensor.has_value();
     bool has_attn_mask = tensor_args.attn_mask.has_value();

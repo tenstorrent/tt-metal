@@ -39,6 +39,26 @@ MAX_LINE_PREVIEW = 200
 MAX_ERROR_PREVIEW = 100
 TIMELINE_ROW_SIZE = 25
 
+# Exit codes for specific failure types
+EXIT_CODE_HEALTHY = 0
+EXIT_CODE_UNHEALTHY_REPEATED = 1
+EXIT_CODE_UNHEALTHY_SCATTERED = 2
+EXIT_CODE_DRAM_FAILURE = 3
+EXIT_CODE_MISSING_CONNECTIONS = 4
+EXIT_CODE_EXTRA_CONNECTIONS = 5
+EXIT_CODE_MISSING_GLOBAL_CONNECTION = 6
+EXIT_CODE_FSD_ERROR = 7
+EXIT_CODE_MGD_ERROR = 8
+EXIT_CODE_WORKLOAD_TIMEOUT = 9
+EXIT_CODE_ARC_TIMEOUT = 10
+EXIT_CODE_AICLK_TIMEOUT = 11
+EXIT_CODE_NETWORK_ERROR = 12
+EXIT_CODE_INCONCLUSIVE = 50
+EXIT_CODE_INPUT_ERROR = 66
+
+# Threshold for repeated link failures (> 50% = same link failing repeatedly)
+REPEATED_LINK_THRESHOLD = 0.5
+
 
 class Colors:
     GREEN = "\033[0;32m"
@@ -90,6 +110,11 @@ CATEGORIES = {
         "BLUE",
         "Recovered connections",
     ),
+    "missing_global_connection": (
+        r"Global Connection.*is not found in the host connectivity graph",
+        "BLUE",
+        "Missing global connection",
+    ),
     "extra_connections": (
         r"extra port/cable connections|extra channel connections",
         "YELLOW",
@@ -101,16 +126,31 @@ CATEGORIES = {
         "YELLOW",
         "Workload timeout",
     ),
-    "dram_failure": (r"DRAM training failed|gddr issue", "RED", "DRAM training failures", True),
     "arc_timeout": (r"ARC.*[Tt]imeout|ARC message timed out", "YELLOW", "ARC timeout"),
     "aiclk_timeout": (
-        r"Waiting for AICLK value to settle failed on timeout",
+        r"Waiting for AICLK value to settle failed on timeout|Timeout.*waiting for physical cores|No ASIC ID found at hostname",
         "RED",
         "AICLK timeout",
     ),
-    # Connectivity issues
-    "mpi_error": (r"PRTE has lost communication|MPI_ABORT", "RED", "MPI error"),
-    "ssh_error": (r"Permission denied \(publickey\)", "YELLOW", "SSH error"),
+    "dram_failure": (r"DRAM training failed|gddr issue", "RED", "DRAM training failures", True),
+    # Connectivity issues - only explicit network errors, not generic MPI crashes
+    "mpi_error": (
+        r"Unable to connect to the peer.*Network is unreachable|btl_tcp_endpoint.*Unable to connect",
+        "RED",
+        "MPI error",
+    ),
+    "ssh_error": (
+        r"Permission denied \(publickey\)|ssh.*Connection refused|ssh.*Connection timed out",
+        "YELLOW",
+        "SSH error",
+    ),
+    # Configuration errors (FSD/MGD) - treated as connections mismatch
+    "fsd_error": (r"Hostname not found in FSD", "RED", "FSD configuration error"),
+    "mgd_error": (
+        r"Graph specified in MGD could not fit in the discovered physical topology",
+        "RED",
+        "MGD topology mismatch",
+    ),
 }
 
 
@@ -526,6 +566,8 @@ def print_summary(analyses: list[LogAnalysis], metrics: dict, show_files: bool =
         "aiclk_timeout",
         "mpi_error",
         "ssh_error",
+        "fsd_error",
+        "mgd_error",
         "inconclusive",
     ]
     for cat in display_order:
@@ -777,7 +819,7 @@ def _recommend_extra_connections(cats: dict, total: int, analyses: list[LogAnaly
     if not cats.get("extra_connections"):
         return []
     return [
-        f"- {Colors.YELLOW}Extra connections:{Colors.NC} Unexpected links found. Verify correct FSD file for your topology."
+        f"- {Colors.YELLOW}Extra connections:{Colors.NC} Additional links found that don't match FSD. Verify correct FSD file for your topology."
     ]
 
 
@@ -799,14 +841,6 @@ def _recommend_workload_timeout(cats: dict, total: int, analyses: list[LogAnalys
     return [msg]
 
 
-@register_recommendation("dram_failure")
-def _recommend_dram_failure(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
-    """Generate recommendations for DRAM failures."""
-    if not cats.get("dram_failure"):
-        return []
-    return [f"- {Colors.RED}DRAM training failures:{Colors.NC} Hardware issue. Report to Syseng."]
-
-
 @register_recommendation("arc_timeout")
 def _recommend_arc_timeout(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
     """Generate recommendations for ARC timeout."""
@@ -825,6 +859,14 @@ def _recommend_aiclk_timeout(cats: dict, total: int, analyses: list[LogAnalysis]
         f"- {Colors.RED}AICLK timeout:{Colors.NC} AICLK failed to settle ({count} occurrence(s)). "
         f"Could indicate bad Firmware or Hardware state. Escalate to Systems Engineering."
     ]
+
+
+@register_recommendation("dram_failure")
+def _recommend_dram_failure(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
+    """Generate recommendations for DRAM failures."""
+    if not cats.get("dram_failure"):
+        return []
+    return [f"- {Colors.RED}DRAM training failures:{Colors.NC} Hardware issue. Report to Syseng."]
 
 
 @register_recommendation("mpi_error")
@@ -959,6 +1001,10 @@ def print_timeline(analyses: list[LogAnalysis]) -> None:
             icons.append(("C", Colors.RED))
         elif "ssh_error" in a.categories:
             icons.append(("S", Colors.YELLOW))
+        elif "fsd_error" in a.categories:
+            icons.append(("F", Colors.RED))
+        elif "mgd_error" in a.categories:
+            icons.append(("G", Colors.RED))
         elif "missing_ports" in a.categories:
             icons.append(("○", Colors.BLUE))
         elif "missing_channels" in a.categories:
@@ -988,6 +1034,8 @@ def print_timeline(analyses: list[LogAnalysis]) -> None:
         f"{Colors.RED}C{Colors.NC}=aiclk "
         f"{Colors.RED}M{Colors.NC}=mpi "
         f"{Colors.YELLOW}S{Colors.NC}=ssh "
+        f"{Colors.RED}F{Colors.NC}=fsd "
+        f"{Colors.RED}G{Colors.NC}=mgd "
         f"{Colors.CYAN}?{Colors.NC}=inconclusive "
         f"{Colors.YELLOW}~{Colors.NC}=other\n"
     )
@@ -1190,44 +1238,194 @@ def generate_plots(analyses: list[LogAnalysis], output_dir: str) -> None:
     print()
 
 
-def validate_results(analyses: list[LogAnalysis], metrics: dict) -> tuple[str, int]:
-    """
-    Validate analysis results against expected thresholds.
+def analyze_unhealthy_link_pattern(analyses: list[LogAnalysis]) -> str | None:
+    """Analyze unhealthy link failure pattern to determine if repeated or scattered."""
+    link_stats, _ = aggregate_stats(analyses)
+    if not link_stats:
+        return None
 
-    Returns:
-        tuple of (exit_message, exit_code) where:
-            exit_message: Formatted string describing validation result
-            exit_code: 0 if cluster meets stability criteria, 1 otherwise
-    """
+    # Count how many runs had unhealthy links
+    unhealthy_runs = len([a for a in analyses if "unhealthy" in a.categories])
+    if unhealthy_runs == 0:
+        return None
+
+    # Find the link with the highest failure count
+    max_failure_count = max(stats["count"] for stats in link_stats.values())
+
+    # If any single link fails more than 50% of unhealthy runs, it's "repeated"
+    if max_failure_count / unhealthy_runs > REPEATED_LINK_THRESHOLD:
+        return "repeated"
+    else:
+        return "scattered"
+
+
+def count_validation_issues(analyses: list[LogAnalysis]) -> dict[str, dict]:
+    """Count frequency of each issue type across analyses."""
+    issue_counts = {}
+    total = len(analyses)
+
+    # Count DRAM failures
+    dram_count = len([a for a in analyses if "dram_failure" in a.categories])
+    if dram_count > 0:
+        issue_counts["dram_failure"] = {
+            "count": dram_count,
+            "exit_code": EXIT_CODE_DRAM_FAILURE,
+            "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} DRAM TRAINING FAILURES detected in {dram_count}/{total} runs.",
+            "priority": 1,
+        }
+
+    # Count unhealthy links (differentiate repeated vs scattered)
+    unhealthy_count = len([a for a in analyses if "unhealthy" in a.categories])
+    if unhealthy_count > 0:
+        pattern = analyze_unhealthy_link_pattern(analyses)
+        if pattern == "repeated":
+            issue_counts["unhealthy_repeated"] = {
+                "count": unhealthy_count,
+                "exit_code": EXIT_CODE_UNHEALTHY_REPEATED,
+                "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} UNHEALTHY LINKS (REPEATED) - same links failing repeatedly in {unhealthy_count}/{total} runs.",
+                "priority": 2,
+            }
+        else:  # scattered
+            issue_counts["unhealthy_scattered"] = {
+                "count": unhealthy_count,
+                "exit_code": EXIT_CODE_UNHEALTHY_SCATTERED,
+                "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} UNHEALTHY LINKS (SCATTERED) - failures scattered across different links in {unhealthy_count}/{total} runs.",
+                "priority": 3,
+            }
+
+    # Count missing connections (missing ports/channels)
+    missing_connections_count = len(
+        [a for a in analyses if "missing_ports" in a.categories or "missing_channels" in a.categories]
+    )
+    if missing_connections_count > 0:
+        issue_counts["missing_connections"] = {
+            "count": missing_connections_count,
+            "exit_code": EXIT_CODE_MISSING_CONNECTIONS,
+            "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} MISSING CONNECTIONS detected in {missing_connections_count}/{total} runs.",
+            "priority": 10,
+        }
+
+    # Count extra connections
+    extra_connections_count = len([a for a in analyses if "extra_connections" in a.categories])
+    if extra_connections_count > 0:
+        issue_counts["extra_connections"] = {
+            "count": extra_connections_count,
+            "exit_code": EXIT_CODE_EXTRA_CONNECTIONS,
+            "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} EXTRA CONNECTIONS detected in {extra_connections_count}/{total} runs.",
+            "priority": 4,
+        }
+
+    # Count missing global connection
+    missing_global_count = len([a for a in analyses if "missing_global_connection" in a.categories])
+    if missing_global_count > 0:
+        issue_counts["missing_global_connection"] = {
+            "count": missing_global_count,
+            "exit_code": EXIT_CODE_MISSING_GLOBAL_CONNECTION,
+            "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} MISSING GLOBAL CONNECTION detected in {missing_global_count}/{total} runs.",
+            "priority": 5,
+        }
+
+    # Count FSD errors
+    fsd_count = len([a for a in analyses if "fsd_error" in a.categories])
+    if fsd_count > 0:
+        issue_counts["fsd_error"] = {
+            "count": fsd_count,
+            "exit_code": EXIT_CODE_FSD_ERROR,
+            "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} FSD CONFIGURATION ERROR detected in {fsd_count}/{total} runs.",
+            "priority": 6,
+        }
+
+    # Count MGD errors
+    mgd_count = len([a for a in analyses if "mgd_error" in a.categories])
+    if mgd_count > 0:
+        issue_counts["mgd_error"] = {
+            "count": mgd_count,
+            "exit_code": EXIT_CODE_MGD_ERROR,
+            "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} MGD TOPOLOGY MISMATCH detected in {mgd_count}/{total} runs.",
+            "priority": 7,
+        }
+
+    # Count timeouts (split into separate codes for each timeout type)
+    workload_timeout_count = len([a for a in analyses if "workload_timeout" in a.categories])
+    if workload_timeout_count > 0:
+        issue_counts["workload_timeout"] = {
+            "count": workload_timeout_count,
+            "exit_code": EXIT_CODE_WORKLOAD_TIMEOUT,
+            "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} WORKLOAD TIMEOUT detected in {workload_timeout_count}/{total} runs.",
+            "priority": 8,
+        }
+
+    arc_timeout_count = len([a for a in analyses if "arc_timeout" in a.categories])
+    if arc_timeout_count > 0:
+        issue_counts["arc_timeout"] = {
+            "count": arc_timeout_count,
+            "exit_code": EXIT_CODE_ARC_TIMEOUT,
+            "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} ARC TIMEOUT detected in {arc_timeout_count}/{total} runs.",
+            "priority": 8,
+        }
+
+    aiclk_timeout_count = len([a for a in analyses if "aiclk_timeout" in a.categories])
+    if aiclk_timeout_count > 0:
+        issue_counts["aiclk_timeout"] = {
+            "count": aiclk_timeout_count,
+            "exit_code": EXIT_CODE_AICLK_TIMEOUT,
+            "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} AICLK TIMEOUT detected in {aiclk_timeout_count}/{total} runs.",
+            "priority": 8,
+        }
+
+    # Count network errors (combined MPI and SSH)
+    mpi_count = len([a for a in analyses if "mpi_error" in a.categories])
+    ssh_count = len([a for a in analyses if "ssh_error" in a.categories])
+    network_count = mpi_count + ssh_count
+    if network_count > 0:
+        issue_counts["network_error"] = {
+            "count": network_count,
+            "exit_code": EXIT_CODE_NETWORK_ERROR,
+            "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} NETWORK ERROR detected in {network_count}/{total} runs.",
+            "priority": 9,
+        }
+
+    # Count inconclusive
+    inconclusive_count = len([a for a in analyses if "inconclusive" in a.categories])
+    if inconclusive_count > 0:
+        issue_counts["inconclusive"] = {
+            "count": inconclusive_count,
+            "exit_code": EXIT_CODE_INCONCLUSIVE,
+            "message": f"{Colors.RED}VALIDATION FAILED:{Colors.NC} INCONCLUSIVE - unrecognized errors in {inconclusive_count}/{total} runs.",
+            "priority": 11,
+        }
+
+    return issue_counts
+
+
+def validate_results(analyses: list[LogAnalysis], metrics: dict) -> tuple[str, int]:
+    """Validate analysis results and return specific exit code based on detected issues."""
     if not analyses:
-        return (f"{Colors.RED}VALIDATION FAILED:{Colors.NC} No log files analyzed", 1)
+        return (f"{Colors.RED}VALIDATION FAILED:{Colors.NC} No log files analyzed", EXIT_CODE_INCONCLUSIVE)
 
     success_rate = metrics["success_rate"]
     timeout_rate = metrics["timeout_rate"]
 
-    # Determine exit code based on thresholds
-    exit_code = 0
-    messages = []
-
-    if success_rate < SUCCESS_RATE_STABLE:
-        messages.append(
-            f"{Colors.RED}VALIDATION FAILED:{Colors.NC} Success rate {success_rate:.1f}% is below threshold {SUCCESS_RATE_STABLE}%"
-        )
-        exit_code = 1
-
-    if timeout_rate >= TIMEOUT_ESCALATION_THRESHOLD:
-        messages.append(
-            f"{Colors.RED}VALIDATION FAILED:{Colors.NC} Timeout rate {timeout_rate:.1f}% exceeds threshold {TIMEOUT_ESCALATION_THRESHOLD}%"
-        )
-        exit_code = 1
-
-    if exit_code == 0:
+    # Check if validation passed according to original thresholds
+    if success_rate >= SUCCESS_RATE_STABLE and timeout_rate < TIMEOUT_ESCALATION_THRESHOLD:
         return (
-            f"{Colors.GREEN}VALIDATION PASSED:{Colors.NC} Cluster meets stability criteria (success: {success_rate:.1f}%, timeout: {timeout_rate:.1f}%)",
-            0,
+            f"{Colors.GREEN}VALIDATION PASSED:{Colors.NC} Cluster healthy with {success_rate:.1f}% success rate.",
+            EXIT_CODE_HEALTHY,
         )
 
-    return ("\n".join(messages), exit_code)
+    # Validation failed - count frequency of each issue type
+    issue_counts = count_validation_issues(analyses)
+
+    # Select the most frequent issue (use priority as tiebreaker)
+    if issue_counts:
+        most_frequent = max(issue_counts.values(), key=lambda x: (x["count"], -x["priority"]))
+        return (most_frequent["message"], most_frequent["exit_code"])
+
+    # Validation failed but no specific issue category detected
+    return (
+        f"{Colors.RED}VALIDATION FAILED:{Colors.NC} Success rate {success_rate:.1f}% below threshold {SUCCESS_RATE_STABLE}%.",
+        EXIT_CODE_INCONCLUSIVE,
+    )
 
 
 def main():
@@ -1251,12 +1449,12 @@ def main():
     log_dir = Path(args.directory)
     if not log_dir.is_dir():
         print(f"Error: {args.directory} not found", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CODE_INPUT_ERROR)
 
     log_files = sorted(log_dir.glob("*.log"))
     if not log_files:
         print(f"No .log files in {args.directory}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CODE_INPUT_ERROR)
 
     analyses = [analyze_log_file(str(f)) for f in log_files]
     metrics = calculate_metrics(analyses)

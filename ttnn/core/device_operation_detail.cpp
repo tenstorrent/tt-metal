@@ -48,7 +48,7 @@ static bool is_fully_replicated(const tt::tt_metal::Tensor& tensor) {
 }
 
 std::pair<
-    tt::stl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
+    ttsl::SmallVector<tt::tt_metal::distributed::MeshMapperConfig::Placement>,
     tt::tt_metal::distributed::MeshShape>
 compute_output_placements_and_shape(
     const std::vector<std::reference_wrapper<const tt::tt_metal::Tensor>>& tensors) {
@@ -79,8 +79,8 @@ compute_output_placements_and_shape(
         max_distribution_rank = first_tensor.tensor_topology().distribution_shape().dims();
     }
 
-    auto result_strides = tt::stl::SmallVector<uint32_t>(max_distribution_rank, 1);
-    auto result_placements = tt::stl::SmallVector<Placement>(max_distribution_rank, Replicate{});
+    auto result_strides = ttsl::SmallVector<uint32_t>(max_distribution_rank, 1);
+    auto result_placements = ttsl::SmallVector<Placement>(max_distribution_rank, Replicate{});
     std::unordered_map<int, int> shard_dim_to_distribution_dim;
     bool dim_mismatch = false;
 

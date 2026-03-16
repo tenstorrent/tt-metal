@@ -8,9 +8,9 @@
 #include "ttnn/device.hpp"
 #include <utility>
 
-namespace ttnn::operations::experimental::matmul {
+namespace ttnn::experimental {
 
-ttnn::Tensor GroupAttnMatmulOperation::invoke(
+ttnn::Tensor group_attn_matmul(
     const Tensor& input_tensor_a,
     const Tensor& input_tensor_b,
     const CoreCoord& compute_with_storage_grid_size,
@@ -57,4 +57,4 @@ ttnn::Tensor GroupAttnMatmulOperation::invoke(
         std::move(optional_output_tensor));
 }
 
-}  // namespace ttnn::operations::experimental::matmul
+}  // namespace ttnn::experimental

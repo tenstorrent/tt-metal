@@ -61,9 +61,17 @@ inline __attribute__((always_inline)) constexpr uint8_t get_counter_id(PackedTil
     | dfb_initializer_per_risc_t | risc 0
     | dfb_initializer_per_risc_t | risc 1
     ...
-    (24 + (44 * 12)) * 16 = 8320 bytes
+    (36 + (44 * 12)) * 16 = 8336 bytes
 */
-struct dfb_initializer_t {  // 24 bytes
+struct dfb_txn_id_descriptor_t {
+    uint8_t txn_ids[NUM_TXN_IDS];
+    uint8_t num_entries_to_process_threshold; // entries each txn ID tracks before posting/acking
+    uint8_t num_txn_ids;
+    uint8_t num_entries_per_txn_id;
+    uint8_t num_entries_per_txn_id_per_tc;
+} __attribute__((packed));
+
+struct dfb_initializer_t {  // 36 bytes
     uint32_t logical_id;
     uint32_t entry_size;
     uint32_t stride_in_entries;
@@ -73,11 +81,11 @@ struct dfb_initializer_t {  // 24 bytes
         uint16_t tensix_mask : 4;     // bits 8-11: Neo RISC mask
         uint16_t tensix_trisc_mask : 4;        // bits 12-15: indicates which triscs use the DFB (tensix producer uses trisc2 and tensix consumer can use trisc0 or trisc3)
     } risc_mask_bits;
+    // For DM-to-DM DFBs, producer and consumer would have different set of transaction ids
+    dfb_txn_id_descriptor_t producer_txn_descriptor;
+    dfb_txn_id_descriptor_t consumer_txn_descriptor;
     uint8_t num_producers;
-    uint8_t num_txn_ids;
-    uint8_t txn_ids[NUM_TXN_IDS];
-    uint8_t num_entries_per_txn_id;
-    uint8_t num_entries_per_txn_id_per_tc;
+    uint8_t padding[3];
 } __attribute__((packed));
 
 struct dfb_initializer_per_risc_t {  // 44 bytes
@@ -114,6 +122,9 @@ struct dfb_initializer_intra_tensix_t {  // 24 bytes
     uint8_t tensix_mask;
 } __attribute__((packed));
 
+
+// TODO: Put LocalDFBInterface into device only header so fields can be ifdef for trisc vs dm
+
 // Per–tile-counter slot
 struct DFBTCSlot {
     uint32_t rd_ptr;
@@ -148,8 +159,19 @@ struct LocalDFBInterface {
 
 } __attribute__((packed));
 
+// Holds metadata for transaction ID based ISR handling
+// It is used by the ISR to understand which tile counters need to update which credits (post/ack)
+struct TxnDFBDescriptor {
+    uint8_t num_counters;
+    PackedTileCounter tile_counters[MAX_NUM_TILE_COUNTERS_TO_RR];
+    union {
+        uint8_t tiles_to_post;
+        uint8_t tiles_to_ack;
+    } __attribute__((packed));
+};
+
 static_assert(sizeof(DFBTCSlot) == 17, "DFBTCSlot size is incorrect");
-static_assert(sizeof(dfb_initializer_t) == 24, "dfb_initializer_t size is incorrect");
+static_assert(sizeof(dfb_initializer_t) == 36, "dfb_initializer_t size is incorrect");
 static_assert(sizeof(dfb_initializer_per_risc_t) == 44, "dfb_initializer_per_risc_t size is incorrect");
 static_assert(sizeof(dfb_initializer_intra_tensix_t) == 24, "dfb_initializer_intra_tensix_t size is incorrect");
 static_assert(sizeof(LocalDFBInterface) == 103, "LocalDFBInterface size is incorrect");

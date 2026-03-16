@@ -1,7 +1,7 @@
 add_library(ttnn_op_data_movement ${LIB_TYPE})
 add_library(TTNN::Ops::DataMovement ALIAS ttnn_op_data_movement)
 
-target_precompile_headers(ttnn_op_data_movement REUSE_FROM TTNN::PCH)
+tt_reuse_precompile_headers(ttnn_op_data_movement TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_data_movement)
 set_target_properties(
     ttnn_op_data_movement
@@ -383,7 +383,6 @@ target_sources(
         fold/device/fold_device_op.cpp
         fold/device/fold_multi_core_dram_program_factory.cpp
         fold/device/fold_multi_core_program_factory.cpp
-        fold/device/fold_single_core_program_factory.cpp
         fold/fold.cpp
         indexed_fill/device/indexed_fill_device_operation.cpp
         indexed_fill/device/indexed_fill_program_factory.cpp

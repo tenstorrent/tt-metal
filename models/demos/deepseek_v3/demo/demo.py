@@ -13,12 +13,9 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3.tt.generator import DeepseekGenerator as DeepseekGeneratorDP
+from models.demos.deepseek_v3.tt.model.row_batched_model import get_fabric_config
 from models.demos.deepseek_v3.utils.hf_model_utils import load_tokenizer
 from models.demos.deepseek_v3.utils.test_utils import system_name_to_mesh_shape
-
-optimal_topology = (
-    ttnn.FabricConfig.FABRIC_1D_RING if (os.getenv("USE_TORUS_MODE") is not None) else ttnn.FabricConfig.FABRIC_1D
-)
 
 
 def _print_performance_metrics(results: dict) -> None:
@@ -110,10 +107,11 @@ def create_parser() -> argparse.ArgumentParser:
         help="Select generator implementation: default = bp (batch parallel).",
     )
     p.add_argument(
-        "--enable-trace",
-        action="store_true",
-        default=False,
-        help="Enable trace for decode forward pass",
+        "--disable-trace",
+        action="store_false",
+        dest="enable_trace",
+        default=True,
+        help="Disable trace for decode forward pass.",
     )
     p.add_argument(
         "--enable-mem-profile",
@@ -144,10 +142,19 @@ def create_parser() -> argparse.ArgumentParser:
         help="Profile decode performance: skip prefill (use random tokens), and run only first dense layer + first MoE layer during decode.",
     )
     p.add_argument(
-        "--sample-on-device",
+        "--sample-on-host",
+        action="store_false",
+        dest="sample_on_device",
+        default=True,
+        help="Disable on-device sampling and use host-side sampling.",
+    )
+    p.add_argument(
+        "--force-recalculate",
+        "--recalculate-weights",
+        dest="force_recalculate",
         action="store_true",
         default=False,
-        help="Enable on-device sampling (default: host-side sampling).",
+        help="Force regeneration of cached TTNN weight files and config.",
     )
     return p
 
@@ -260,13 +267,14 @@ def run_demo(
     tf_prompt_len: int | None = None,
     early_print_first_user: bool = True,
     generator: str = "bp",
-    enable_trace: bool = False,
+    enable_trace: bool = True,
     enable_mem_profile: bool = False,
     repeat_batches: int = 1,
     signpost: bool = False,
     prefill_max_tokens: int = None,
     profile_decode: bool = False,
-    sample_on_device: bool = False,
+    sample_on_device: bool = True,
+    force_recalculate: bool = False,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -294,7 +302,7 @@ def run_demo(
         raise ValueError("Environment variable $MESH_DEVICE is not set. Please set it to DUAL, QUAD, or TG.")
     mesh_shape = system_name_to_mesh_shape(requested_system_name.upper())
     logger.info(f"Selected MESH_DEVICE: '{requested_system_name}' - mesh shape will be set to: {mesh_shape}")
-    fabric_config = optimal_topology
+    fabric_config = get_fabric_config()
     logger.info(f"Setting fabric config to {fabric_config} for demo run")
     ttnn.set_fabric_config(fabric_config, ttnn.FabricReliabilityMode.RELAXED_INIT)
 
@@ -366,9 +374,12 @@ def run_demo(
                 enable_mem_profile=enable_mem_profile,
                 signpost=signpost,
                 prefill_max_tokens=prefill_max_tokens,
+                force_recalculate=force_recalculate,
                 profile_decode=profile_decode,
                 sample_on_device=sample_on_device,
             )
+        else:
+            raise ValueError(f"Unsupported generator: {generator}")
         # Build the prompt list
         pre_tokenized_prompts = None
         if random_weights:
@@ -472,6 +483,7 @@ def main() -> None:
         prefill_max_tokens=args.prefill_max_tokens,
         profile_decode=args.profile_decode,
         sample_on_device=args.sample_on_device,
+        force_recalculate=bool(args.force_recalculate),
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing
