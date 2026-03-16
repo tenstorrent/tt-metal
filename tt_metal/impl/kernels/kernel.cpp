@@ -279,6 +279,11 @@ void Kernel::process_include_paths(const std::function<void(const std::string& p
 }
 
 bool Kernel::binaries_exist_on_disk(const IDevice* device) const {
+    const uint64_t build_key = BuildEnvManager::get_instance().get_device_build_env(device->build_id()).build_key();
+    if (auto it = elf_paths_.find(build_key); it != elf_paths_.end()) {
+        return std::ranges::all_of(it->second, [](const std::string& path) { return std::filesystem::exists(path); });
+    }
+
     const uint32_t core_type =
         MetalContext::instance().hal().get_programmable_core_type_index(this->get_kernel_programmable_core_type());
     const uint32_t processor_class = enchantum::to_underlying(this->get_kernel_processor_class());
@@ -299,6 +304,11 @@ bool Kernel::binaries_exist_on_disk(const IDevice* device) const {
 }
 
 std::vector<std::string> Kernel::file_paths(IDevice& device) const {
+    const uint64_t build_key = BuildEnvManager::get_instance().get_device_build_env(device.build_id()).build_key();
+    if (auto it = elf_paths_.find(build_key); it != elf_paths_.end()) {
+        return it->second;
+    }
+
     std::vector<std::string> file_paths;
     const auto& hal = MetalContext::instance().hal();
     uint32_t core_type = hal.get_programmable_core_type_index(this->get_kernel_programmable_core_type());
@@ -705,6 +715,16 @@ void Kernel::set_binaries(uint64_t build_key, std::vector<const ll_api::memory*>
     } else {
         TT_ASSERT(pair.first->second == binaries);
     }
+}
+
+void Kernel::set_elf_paths(uint64_t build_key, std::vector<std::string> elf_paths) {
+    TT_FATAL(
+        elf_paths.size() == expected_num_binaries(),
+        "Expected {} ELF paths but got {} for kernel {}",
+        expected_num_binaries(),
+        elf_paths.size(),
+        this->name());
+    elf_paths_.insert_or_assign(build_key, std::move(elf_paths));
 }
 
 void DataMovementKernel::read_binaries(IDevice* device) {
