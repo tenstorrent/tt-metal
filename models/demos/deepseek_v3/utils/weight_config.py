@@ -87,6 +87,11 @@ def _try_load_cached_config(config_path: Path, weight_cache_path: Path, force_re
     """
     if force_recalculate:
         logger.info("Forcing recalculating weights")
+        if weight_cache_path.exists():
+            import shutil
+
+            logger.info(f"Deleting existing cache directory: {weight_cache_path}")
+            shutil.rmtree(weight_cache_path)
         return None
     if not config_path.exists():
         logger.info("Weight configuration file does not exist, forcing recalculating weights")
