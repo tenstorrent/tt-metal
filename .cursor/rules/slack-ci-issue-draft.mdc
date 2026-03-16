@@ -1,0 +1,40 @@
+---
+description: Draft Slack messages for pipelines channel to announce a filed CI issue and optional PR.
+alwaysApply: false
+---
+
+# Draft Slack Message for CI Issue
+
+Use this rule when drafting a Slack message to inform people about a filed CI maintenance issue (e.g. for a pipelines channel).
+
+## Structure
+
+1. **Heads-up line**
+   One sentence: deterministic CI failure descriptor + issue number.
+   Example: `Heads up on this deterministic CI failure for a llama3.3-70b test: #39837`
+
+2. **Context paragraph(s)**
+   - First sentence: workflow and job in plain language (e.g. "(Blackhole) Demo tests → llama3.3-70b batch-1 TP device perf prefill (layers=2) has been failing repeatedly on main.").
+   - Next: brief root-cause or area (e.g. device profiler buffer sizing, op_support_count, large seq len). Keep it short and actionable.
+
+3. **Failure excerpt**
+   Single line or short block: the actual error from the issue.
+   Prefix with `failure: ` if it's one line. Preserve the gist; trim long stack traces.
+
+4. **PR + review ask (optional)**
+   If the user provides a PR number or one is linked to the issue:
+   - "And here's an auto-generated PR trying to address it: #<number>"
+   - "Appreciate an extra set of eyes"
+
+5. **Mentions**
+   Suggest 2–4 people most relevant to the issue. Use issue body (workflow name, job name, failing path), labels, and `.github/CODEOWNERS` to pick owners (e.g. profiler/workflow owners, area owners). Output as display names or GitHub usernames; the user will convert to Slack @mentions (e.g. @Mark O'Connor).
+
+## Tone
+
+- Concise and factual. No fluff.
+- Suitable for a pipelines/engineering channel; assume readers know CI and GitHub.
+
+## Notes
+
+- User will copy-paste into Slack and may edit (PR number, mentions, wording). Output should be easy to copy as one block.
+- If no PR is provided or found, omit the PR line and optionally keep "Appreciate an extra set of eyes" with mentions only.
