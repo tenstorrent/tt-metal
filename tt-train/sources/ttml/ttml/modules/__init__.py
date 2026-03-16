@@ -15,16 +15,18 @@ from .module_base import AbstractModuleBase, ModuleDict, ModuleList
 from .parameter import Buffer, Parameter
 
 __all__ = [
+    # C++ bindings
+    "InferenceMode",
+    "ModuleBase",
+    "RunMode",
+    # Python classes
     "AbstractModuleBase",
     "Buffer",
-    "InferenceMode",
     "LinearLayer",
     "LoraConfig",
     "LoraLinear",
     "LoraModel",
-    "ModuleBase",
     "ModuleDict",
     "ModuleList",
     "Parameter",
-    "RunMode",
 ]
