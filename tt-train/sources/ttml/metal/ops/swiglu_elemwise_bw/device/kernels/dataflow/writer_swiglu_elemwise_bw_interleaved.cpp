@@ -24,8 +24,6 @@ void kernel_main() {
     const auto dL_dlinear1_gen = TensorAccessor(dL_dlinear1_args, dL_dlinear1_addr, tile_bytes);
     const auto dL_dgate_gen = TensorAccessor(dL_dgate_args, dL_dgate_addr, tile_bytes);
 
-    // Consume block-by-block matching compute's interleaved production order:
-    // compute produces [dL_dgate_block, dL_dlinear1_block] per block within each row
     uint32_t end_row = start_row + num_rows_to_process;
     for (uint32_t r = start_row; r < end_row; ++r) {
         for (uint32_t c = 0; c < Wt; c += block_size) {

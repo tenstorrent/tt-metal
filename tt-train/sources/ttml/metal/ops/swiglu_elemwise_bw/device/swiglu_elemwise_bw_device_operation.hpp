@@ -7,17 +7,17 @@
 #include <optional>
 
 #include "metal/ttnn_all_includes.hpp"
-#include "swiglu_grad_device_operation_types.hpp"
-#include "swiglu_grad_program_factory.hpp"
+#include "swiglu_elemwise_bw_device_operation_types.hpp"
+#include "swiglu_elemwise_bw_program_factory.hpp"
 
-namespace ttml::metal::ops::swiglu_grad::device {
+namespace ttml::metal::ops::swiglu_elemwise_bw::device {
 
-struct SwiGLUGradDeviceOperation {
-    using operation_attributes_t = ttml::metal::ops::swiglu_grad::device::operation_attributes_t;
-    using tensor_args_t = ttml::metal::ops::swiglu_grad::device::tensor_args_t;
-    using spec_return_value_t = ttml::metal::ops::swiglu_grad::device::spec_return_value_t;
-    using tensor_return_value_t = ttml::metal::ops::swiglu_grad::device::tensor_return_value_t;
-    using program_factory_t = std::variant<SwiGLUGradProgramFactory>;
+struct SwigluElemwiseBwDeviceOperation {
+    using operation_attributes_t = ttml::metal::ops::swiglu_elemwise_bw::device::operation_attributes_t;
+    using tensor_args_t = ttml::metal::ops::swiglu_elemwise_bw::device::tensor_args_t;
+    using spec_return_value_t = ttml::metal::ops::swiglu_elemwise_bw::device::spec_return_value_t;
+    using tensor_return_value_t = ttml::metal::ops::swiglu_elemwise_bw::device::tensor_return_value_t;
+    using program_factory_t = std::variant<SwigluElemwiseBwProgramFactory>;
 
     static void validate_on_program_cache_miss(const operation_attributes_t&, const tensor_args_t&);
 
@@ -27,11 +27,12 @@ struct SwiGLUGradDeviceOperation {
     static ttsl::hash::hash_t compute_program_hash(const operation_attributes_t&, const tensor_args_t&);
 };
 
-}  // namespace ttml::metal::ops::swiglu_grad::device
+}  // namespace ttml::metal::ops::swiglu_elemwise_bw::device
 
 namespace ttnn::prim {
 
-ttml::metal::ops::swiglu_grad::device::SwiGLUGradDeviceOperation::tensor_return_value_t ttml_swiglu_grad(
+ttml::metal::ops::swiglu_elemwise_bw::device::SwigluElemwiseBwDeviceOperation::tensor_return_value_t
+ttml_swiglu_elemwise_bw(
     const ttnn::Tensor& linear1,
     const ttnn::Tensor& gate,
     const ttnn::Tensor& dL_dprod,

@@ -2,37 +2,37 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "swiglu_grad_device_operation.hpp"
+#include "swiglu_elemwise_bw_device_operation.hpp"
 
 #include <enchantum/enchantum.hpp>
 
-#include "swiglu_grad_program_factory.hpp"
+#include "swiglu_elemwise_bw_program_factory.hpp"
 #include "ttnn/device_operation.hpp"
 
-namespace ttml::metal::ops::swiglu_grad::device {
+namespace ttml::metal::ops::swiglu_elemwise_bw::device {
 
-void SwiGLUGradDeviceOperation::validate_on_program_cache_miss(
+void SwigluElemwiseBwDeviceOperation::validate_on_program_cache_miss(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto check_tensor = [](const ttnn::Tensor& tensor, const std::string& name) {
         TT_FATAL(
             tensor.storage_type() == tt::tt_metal::StorageType::DEVICE,
-            "SwiGLUGrad requires {} on Device. Storage type: {}",
+            "SwigluElemwiseBw requires {} on Device. Storage type: {}",
             name,
             enchantum::to_string(tensor.storage_type()));
-        TT_FATAL(tensor.buffer() != nullptr, "SwiGLUGrad: {} buffer is null", name);
+        TT_FATAL(tensor.buffer() != nullptr, "SwigluElemwiseBw: {} buffer is null", name);
         TT_FATAL(
             tensor.layout() == tt::tt_metal::Layout::TILE,
-            "SwiGLUGrad requires TILE layout. {} layout: {}",
+            "SwigluElemwiseBw requires TILE layout. {} layout: {}",
             name,
             enchantum::to_string(tensor.layout()));
         TT_FATAL(
             tensor.dtype() == tt::tt_metal::DataType::BFLOAT16,
-            "SwiGLUGrad requires BFLOAT16. {} dtype: {}",
+            "SwigluElemwiseBw requires BFLOAT16. {} dtype: {}",
             name,
             enchantum::to_string(tensor.dtype()));
         TT_FATAL(
             tensor.memory_config().memory_layout() == ttnn::TensorMemoryLayout::INTERLEAVED,
-            "SwiGLUGrad requires INTERLEAVED. {} layout: {}",
+            "SwigluElemwiseBw requires INTERLEAVED. {} layout: {}",
             name,
             enchantum::to_string(tensor.memory_config().memory_layout()));
     };
@@ -48,7 +48,7 @@ void SwiGLUGradDeviceOperation::validate_on_program_cache_miss(
     }
 }
 
-spec_return_value_t SwiGLUGradDeviceOperation::compute_output_specs(
+spec_return_value_t SwigluElemwiseBwDeviceOperation::compute_output_specs(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto make_spec = [&](const std::optional<ttnn::Tensor>& prealloc) -> ttnn::TensorSpec {
         if (prealloc.has_value()) {
@@ -63,7 +63,7 @@ spec_return_value_t SwiGLUGradDeviceOperation::compute_output_specs(
     return {make_spec(tensor_args.preallocated_dL_dlinear1), make_spec(tensor_args.preallocated_dL_dgate)};
 }
 
-tensor_return_value_t SwiGLUGradDeviceOperation::create_output_tensors(
+tensor_return_value_t SwigluElemwiseBwDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     auto specs = compute_output_specs(args, tensor_args);
     auto* device = tensor_args.linear1.device();
@@ -76,23 +76,24 @@ tensor_return_value_t SwiGLUGradDeviceOperation::create_output_tensors(
     };
 }
 
-ttsl::hash::hash_t SwiGLUGradDeviceOperation::compute_program_hash(
+ttsl::hash::hash_t SwigluElemwiseBwDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    return tt::tt_metal::operation::hash_operation<SwiGLUGradDeviceOperation>(
+    return tt::tt_metal::operation::hash_operation<SwigluElemwiseBwDeviceOperation>(
         args, tensor_args.linear1.dtype(), tensor_args.linear1.logical_shape());
 }
 
-}  // namespace ttml::metal::ops::swiglu_grad::device
+}  // namespace ttml::metal::ops::swiglu_elemwise_bw::device
 
 namespace ttnn::prim {
 
-ttml::metal::ops::swiglu_grad::device::SwiGLUGradDeviceOperation::tensor_return_value_t ttml_swiglu_grad(
+ttml::metal::ops::swiglu_elemwise_bw::device::SwigluElemwiseBwDeviceOperation::tensor_return_value_t
+ttml_swiglu_elemwise_bw(
     const ttnn::Tensor& linear1,
     const ttnn::Tensor& gate,
     const ttnn::Tensor& dL_dprod,
     const std::optional<ttnn::Tensor>& preallocated_dL_dlinear1,
     const std::optional<ttnn::Tensor>& preallocated_dL_dgate) {
-    using Op = ttml::metal::ops::swiglu_grad::device::SwiGLUGradDeviceOperation;
+    using Op = ttml::metal::ops::swiglu_elemwise_bw::device::SwigluElemwiseBwDeviceOperation;
 
     auto tensor_args = Op::tensor_args_t{
         .linear1 = linear1,

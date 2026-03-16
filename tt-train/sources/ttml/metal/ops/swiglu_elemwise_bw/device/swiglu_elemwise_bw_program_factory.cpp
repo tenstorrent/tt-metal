@@ -2,7 +2,7 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "swiglu_grad_program_factory.hpp"
+#include "swiglu_elemwise_bw_program_factory.hpp"
 
 #include <cstdint>
 #include <enchantum/enchantum.hpp>
@@ -13,38 +13,34 @@
 namespace {
 
 constexpr auto kReaderKernelPath =
-    "tt-train/sources/ttml/metal/ops/swiglu_grad/device/kernels/dataflow/reader_swiglu_grad_interleaved.cpp";
+    "tt-train/sources/ttml/metal/ops/swiglu_elemwise_bw/device/kernels/dataflow/"
+    "reader_swiglu_elemwise_bw_interleaved.cpp";
 constexpr auto kWriterKernelPath =
-    "tt-train/sources/ttml/metal/ops/swiglu_grad/device/kernels/dataflow/writer_swiglu_grad_interleaved.cpp";
+    "tt-train/sources/ttml/metal/ops/swiglu_elemwise_bw/device/kernels/dataflow/"
+    "writer_swiglu_elemwise_bw_interleaved.cpp";
 constexpr auto kComputeKernelPath =
-    "tt-train/sources/ttml/metal/ops/swiglu_grad/device/kernels/compute/swiglu_grad_kernel.cpp";
+    "tt-train/sources/ttml/metal/ops/swiglu_elemwise_bw/device/kernels/compute/swiglu_elemwise_bw_kernel.cpp";
 
-// Reader buffer indices (runtime args order)
 constexpr uint32_t kLinear1BufferIdx = 0;
 constexpr uint32_t kGateBufferIdx = 1U;
 constexpr uint32_t kDLProdBufferIdx = 2U;
-
-// Writer buffer indices
 constexpr uint32_t kDLLinear1BufferIdx = 0;
 constexpr uint32_t kDLGateBufferIdx = 1U;
 
-// Input CBs
 constexpr auto kLinear1CbIndex = tt::CBIndex::c_0;
 constexpr auto kGateCbIndex = tt::CBIndex::c_1;
 constexpr auto kDLProdCbIndex = tt::CBIndex::c_2;
-// Output CBs
 constexpr auto kDLLinear1CbIndex = tt::CBIndex::c_3;
 constexpr auto kDLGateCbIndex = tt::CBIndex::c_4;
-// Intermediate CBs
 constexpr auto kSigmoidCbIndex = tt::CBIndex::c_5;
 constexpr auto kScratchCbIndex = tt::CBIndex::c_6;
 constexpr auto kSiluGradCbIndex = tt::CBIndex::c_7;
 
 }  // namespace
 
-namespace ttml::metal::ops::swiglu_grad::device {
+namespace ttml::metal::ops::swiglu_elemwise_bw::device {
 
-struct SwiGLUGradKernels {
+struct SwigluElemwiseBwKernels {
     tt::tt_metal::KernelHandle reader{};
     tt::tt_metal::KernelHandle writer{};
     tt::tt_metal::KernelHandle compute_group_1{};
@@ -53,7 +49,7 @@ struct SwiGLUGradKernels {
 
 void assign_per_core_runtime_args(
     tt::tt_metal::Program& program,
-    const SwiGLUGradKernels& kernels,
+    const SwigluElemwiseBwKernels& kernels,
     const tt::tt_metal::Buffer* linear1_buffer,
     const tt::tt_metal::Buffer* gate_buffer,
     const tt::tt_metal::Buffer* dL_dprod_buffer,
@@ -97,7 +93,7 @@ void assign_per_core_runtime_args(
     }
 }
 
-SwiGLUGradProgramFactory::cached_program_t SwiGLUGradProgramFactory::create(
+SwigluElemwiseBwProgramFactory::cached_program_t SwigluElemwiseBwProgramFactory::create(
     const operation_attributes_t& args, const tensor_args_t& tensor_args, tensor_return_value_t& output) {
     const auto& linear1 = tensor_args.linear1;
     const auto& gate = tensor_args.gate;
@@ -123,7 +119,6 @@ SwiGLUGradProgramFactory::cached_program_t SwiGLUGradProgramFactory::create(
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_g1, num_rows_g2] =
         tt::tt_metal::split_work_to_cores(grid_size, total_rows);
 
-    // Create circular buffers: 3 inputs + 2 outputs + 3 intermediates = 8 CBs
     const uint32_t twice_block = 2U * block_size;
     create_circular_buffer(program, all_cores, kLinear1CbIndex, data_format, tile_size_bytes, twice_block);
     create_circular_buffer(program, all_cores, kGateCbIndex, data_format, tile_size_bytes, twice_block);
@@ -140,22 +135,19 @@ SwiGLUGradProgramFactory::cached_program_t SwiGLUGradProgramFactory::create(
     auto* dL_dlinear1_buf = output.dL_dlinear1.buffer();
     auto* dL_dgate_buf = output.dL_dgate.buffer();
 
-    SwiGLUGradKernels kernels;
+    SwigluElemwiseBwKernels kernels;
 
-    // Reader
     std::vector<uint32_t> reader_ct_args{block_size, Wt};
     tt::tt_metal::TensorAccessorArgs(linear1_buf).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(gate_buf).append_to(reader_ct_args);
     tt::tt_metal::TensorAccessorArgs(dL_dprod_buf).append_to(reader_ct_args);
     kernels.reader = create_reader_kernel(program, all_cores, reader_ct_args, {}, kReaderKernelPath);
 
-    // Writer
     std::vector<uint32_t> writer_ct_args{block_size, Wt};
     tt::tt_metal::TensorAccessorArgs(dL_dlinear1_buf).append_to(writer_ct_args);
     tt::tt_metal::TensorAccessorArgs(dL_dgate_buf).append_to(writer_ct_args);
     kernels.writer = create_writer_kernel(program, all_cores, writer_ct_args, {}, kWriterKernelPath);
 
-    // Compute
     std::vector<uint32_t> compute_g1_args = {num_rows_g1, block_size, Wt};
     kernels.compute_group_1 =
         create_compute_kernel(program, core_group_1, compute_g1_args, {}, kComputeKernelPath, true);
@@ -193,7 +185,7 @@ SwiGLUGradProgramFactory::cached_program_t SwiGLUGradProgramFactory::create(
          num_cores_y}};
 }
 
-void SwiGLUGradProgramFactory::override_runtime_arguments(
+void SwigluElemwiseBwProgramFactory::override_runtime_arguments(
     cached_program_t& cached_program,
     const operation_attributes_t&,
     const tensor_args_t& tensor_args,
@@ -221,4 +213,4 @@ void SwiGLUGradProgramFactory::override_runtime_arguments(
     }
 }
 
-}  // namespace ttml::metal::ops::swiglu_grad::device
+}  // namespace ttml::metal::ops::swiglu_elemwise_bw::device

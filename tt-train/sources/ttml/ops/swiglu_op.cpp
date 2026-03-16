@@ -115,8 +115,8 @@ autograd::TensorPtr swiglu(
         auto dL_dprod = ttnn_fixed::matmul(dL_dout, w2->get_value());
         dL_dout.deallocate();
 
-        // Fused kernel: reads (linear1, gate, dL_dprod) once, produces (dL_dlinear1, dL_dgate)
-        auto [dL_dlinear1, dL_dgate] = ttml::metal::swiglu_grad(linear1, gate, dL_dprod, linear1);
+        // Fused elemwise BW kernel: reads (linear1, gate, dL_dprod) once, produces (dL_dlinear1, dL_dgate)
+        auto [dL_dlinear1, dL_dgate] = ttml::metal::swiglu_elemwise_bw(linear1, gate, dL_dprod, linear1);
         gate.deallocate();
         dL_dprod.deallocate();
 

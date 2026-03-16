@@ -8,12 +8,12 @@
 
 namespace ttml::metal {
 
-struct SwiGLUGradResult {
+struct SwigluElemwiseBwResult {
     ttnn::Tensor dL_dlinear1;
     ttnn::Tensor dL_dgate;
 };
 
-SwiGLUGradResult swiglu_grad(
+SwigluElemwiseBwResult swiglu_elemwise_bw(
     const ttnn::Tensor& linear1,
     const ttnn::Tensor& gate,
     const ttnn::Tensor& dL_dprod,

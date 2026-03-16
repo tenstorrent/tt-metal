@@ -9,7 +9,7 @@
 namespace ttml::ops {
 
 // Canonical SwiGLU: weights use LinearLayer convention [out_features, in_features].
-// Composite forward (ttnn matmul + fused silu*multiply), fused swiglu_grad kernel
+// Composite forward (ttnn matmul + fused silu*multiply), fused swiglu_elemwise_bw kernel
 // for backward, in-place ops, 3 saved tensors. Drop-in replacement for LlamaMLP.
 autograd::TensorPtr swiglu(
     const autograd::TensorPtr& tensor,

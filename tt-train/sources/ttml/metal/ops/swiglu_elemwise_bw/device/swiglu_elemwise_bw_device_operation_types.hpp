@@ -6,7 +6,7 @@
 
 #include "metal/ttnn_all_includes.hpp"
 
-namespace ttml::metal::ops::swiglu_grad::device {
+namespace ttml::metal::ops::swiglu_elemwise_bw::device {
 
 struct operation_attributes_t {};
 
@@ -25,4 +25,4 @@ struct tensor_return_value_t {
 
 using spec_return_value_t = std::vector<ttnn::TensorSpec>;
 
-}  // namespace ttml::metal::ops::swiglu_grad::device
+}  // namespace ttml::metal::ops::swiglu_elemwise_bw::device
