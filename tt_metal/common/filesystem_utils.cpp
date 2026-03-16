@@ -638,4 +638,45 @@ void wait_for_pending_sync() {
     }
 }
 
+size_t remove_empty_parent_directories(const std::filesystem::path& path) {
+    size_t removed_count = 0;
+    std::error_code ec;
+
+    std::filesystem::path current = path;
+    while (true) {
+        // Check if directory is empty
+        // A directory is considered empty if it has no entries other than . and ..
+        bool is_empty = std::filesystem::is_empty(current, ec);
+        if (ec || !is_empty) {
+            // Directory is not empty or error occurred - stop here
+            break;
+        }
+
+        // Get parent before removing
+        std::filesystem::path parent = current.parent_path();
+
+        // Don't remove if we're at the filesystem root (no parent)
+        if (parent.empty() || parent == current) {
+            break;
+        }
+
+        // Try to remove the empty directory
+        if (nfs_safety_enabled()) {
+            if (!safe_remove_all(current)) {
+                break;  // Failed to remove, stop here
+            }
+        } else {
+            std::filesystem::remove(current, ec);
+            if (ec) {
+                break;  // Failed to remove, stop here
+            }
+        }
+
+        ++removed_count;
+        current = parent;
+    }
+
+    return removed_count;
+}
+
 }  // namespace tt::filesystem

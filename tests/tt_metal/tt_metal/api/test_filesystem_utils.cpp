@@ -587,4 +587,84 @@ TEST_F(FilesystemUtilsTest, SyncFilesystem_HandlesNonExistentPath) {
     EXPECT_NO_THROW(sync_filesystem(non_existent));
 }
 
+// ============================================================================
+// remove_empty_parent_directories Tests
+// ============================================================================
+
+TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_RemovesEmptyDirs) {
+    // Create a nested structure: temp_dir_/a/b/c/d/
+    std::filesystem::path dir_a = create_test_directory("cleanup_a");
+    std::filesystem::path dir_b = dir_a / "b";
+    std::filesystem::path dir_c = dir_b / "c";
+    std::filesystem::path dir_d = dir_c / "d";
+    std::filesystem::create_directories(dir_d);
+
+    EXPECT_TRUE(std::filesystem::exists(dir_a));
+    EXPECT_TRUE(std::filesystem::exists(dir_b));
+    EXPECT_TRUE(std::filesystem::exists(dir_c));
+    EXPECT_TRUE(std::filesystem::exists(dir_d));
+
+    // Remove from the deepest level
+    size_t removed = remove_empty_parent_directories(dir_d);
+
+    // All directories should be removed (they were all empty)
+    EXPECT_EQ(removed, 4);
+    EXPECT_FALSE(std::filesystem::exists(dir_a));
+}
+
+TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_StopsAtNonEmpty) {
+    // Create a nested structure with a file at level b
+    std::filesystem::path dir_a = create_test_directory("cleanup_b");
+    std::filesystem::path dir_b = dir_a / "b";
+    std::filesystem::path dir_c = dir_b / "c";
+    std::filesystem::path dir_d = dir_c / "d";
+    std::filesystem::create_directories(dir_d);
+
+    // Add a file at level b (makes it non-empty)
+    create_test_file("cleanup_b/b/keep_file.txt", "preserve this");
+
+    // Remove from the deepest level
+    size_t removed = remove_empty_parent_directories(dir_d);
+
+    // Should remove c and d, but stop at b (has a file)
+    EXPECT_EQ(removed, 2);
+    EXPECT_TRUE(std::filesystem::exists(dir_a));  // Parent of b
+    EXPECT_TRUE(std::filesystem::exists(dir_b));  // Has the file
+    EXPECT_FALSE(std::filesystem::exists(dir_c));
+    EXPECT_FALSE(std::filesystem::exists(dir_d));
+}
+
+TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_HandlesNonExistentPath) {
+    // Test with a non-existent path - should not crash
+    std::filesystem::path non_existent = temp_dir_ / "does_not_exist" / "subdir";
+
+    size_t removed = remove_empty_parent_directories(non_existent);
+
+    // Nothing removed since path doesn't exist
+    EXPECT_EQ(removed, 0);
+}
+
+TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_HandlesSingleEmptyDir) {
+    // Test with a single empty directory
+    std::filesystem::path single_dir = create_test_directory("single_cleanup");
+
+    size_t removed = remove_empty_parent_directories(single_dir);
+
+    // Should remove the single directory
+    EXPECT_EQ(removed, 1);
+    EXPECT_FALSE(std::filesystem::exists(single_dir));
+}
+
+TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_HandlesDirWithFiles) {
+    // Test with a directory that has files - should not remove anything
+    std::filesystem::path dir_with_file = create_test_directory("with_file");
+    create_test_file("with_file/test.txt", "content");
+
+    size_t removed = remove_empty_parent_directories(dir_with_file);
+
+    // Nothing removed since directory has files
+    EXPECT_EQ(removed, 0);
+    EXPECT_TRUE(std::filesystem::exists(dir_with_file));
+}
+
 }  // namespace tt::filesystem::test

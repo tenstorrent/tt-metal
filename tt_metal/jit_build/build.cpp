@@ -1109,6 +1109,23 @@ void jit_build(const JitBuildState& build, const JitBuildSettings* settings) {
     tt::filesystem::wait_for_pending_sync();
     write_successful_jit_build_marker(build, settings, did_work);
 
+    // Clean up empty scratch directories after successful build.
+    // The JIT cache in NFS now contains all compiled artifacts, so scratch
+    // directories are no longer needed for persistence.
+    const auto& scratch_path = build.get_scratch_path();
+    if (!scratch_path.empty() && settings) {
+        fs::path kernel_scratch_dir = scratch_path / settings->get_full_kernel_name();
+        size_t removed = tt::filesystem::remove_empty_parent_directories(kernel_scratch_dir);
+        if (removed > 0) {
+            log_debug(
+                tt::LogBuildKernels,
+                "Cleaned up {} empty scratch director{} for kernel {}",
+                removed,
+                removed == 1 ? "y" : "ies",
+                settings->get_full_kernel_name());
+        }
+    }
+
     auto elapsed_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
     static auto& tok = BuildCacheTelemetry::inst().register_metric("jit_build");
     tok.record(elapsed_ms);

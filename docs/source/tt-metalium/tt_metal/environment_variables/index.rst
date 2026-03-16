@@ -119,3 +119,9 @@ Related behavior:
 
 - ``TT_METAL_CACHE`` remains shared across ranks/hosts to maximize cache reuse.
 - ``TT_METAL_LOGS_PATH`` is rank-scoped by ``tt-run`` unless explicitly overridden in rank-binding YAML.
+
+**Cleanup behavior:**
+
+After each kernel build completes successfully and its artifacts are merged to the shared NFS cache (``TT_METAL_CACHE``), empty scratch directories are automatically removed. This cleanup removes the per-kernel directories (e.g., ``<hostname>_rank_0/kernels/<kernel_name>/brisc/``) starting from the deepest level and stopping at the first non-empty directory.
+
+**Note:** If a process terminates abnormally (e.g., crash or kill signal), scratch directories may not be fully cleaned up. On typical Linux systems, ``/tmp`` contents are cleared on system reboot. For long-running production systems without regular reboots where abnormal termination occurs frequently, you may want to set up periodic cleanup (e.g., via ``tmpwatch``, ``systemd-tmpfiles``, or cron jobs) as a safety net.

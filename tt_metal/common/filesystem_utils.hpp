@@ -250,4 +250,16 @@ void async_sync_filesystem(const std::filesystem::path& path);
 // Block until any pending async_sync_filesystem() completes.
 void wait_for_pending_sync();
 
+// Remove empty directories from the given path, stopping at the first non-empty directory.
+// This is useful for cleaning up scratch directories after successful JIT builds.
+// Returns the number of directories removed.
+//
+// Example: if path is /tmp/tt-jit-build/123/kernels/my_kernel/brisc/
+// and only 'brisc' and 'my_kernel' are empty, removes those two directories
+// leaving /tmp/tt-jit-build/123/kernels/ intact.
+//
+// Safety: Only removes empty directories. Non-empty directories act as a barrier.
+// Does NOT remove the root of the path if it has no parent (path is at filesystem root).
+size_t remove_empty_parent_directories(const std::filesystem::path& path);
+
 }  // namespace tt::filesystem

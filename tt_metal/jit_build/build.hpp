@@ -211,6 +211,7 @@ public:
     void merge_genfiles_to_cache(const JitBuildSettings* settings) const;
 
     const std::filesystem::path& get_out_path() const { return this->out_path_; }
+    const std::filesystem::path& get_scratch_path() const { return this->scratch_path_; }
     const std::string& get_target_name() const { return this->target_name_; }
     const std::filesystem::path& get_target_full_path() const { return this->target_full_path_; }
     std::filesystem::path get_target_out_path(const std::string& kernel_name) const {
