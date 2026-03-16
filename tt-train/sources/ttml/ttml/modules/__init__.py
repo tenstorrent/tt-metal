@@ -5,6 +5,7 @@
 """Python modules package for ttml."""
 
 # C++ bindings from _ttml.modules
+# Use _ttml directly (compiled .so has no __path__, so .._ttml fails)
 from _ttml.modules import InferenceMode, ModuleBase, RunMode
 
 # Python implementations

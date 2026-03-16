@@ -6,12 +6,11 @@
 
 #include <utility>
 #include "device/create_qkv_heads_device_operation.hpp"
-#include "ttnn/operation.hpp"
 #include "ttnn/operations/core/core.hpp"
 
-namespace ttnn::operations::experimental::create_qkv_heads {
+namespace ttnn::experimental {
 
-std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsOperation::invoke(
+std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> create_qkv_heads(
     const Tensor& input_tensor,
     const uint32_t num_q_heads,
     const std::optional<uint32_t> num_kv_heads,
@@ -39,4 +38,4 @@ std::tuple<ttnn::Tensor, ttnn::Tensor, ttnn::Tensor> CreateQKVHeadsOperation::in
         input_tensor, num_q_heads, num_kv_heads_val, head_dim, transpose_k_heads, memory_config, preallocated_outputs);
 }
 
-}  // namespace ttnn::operations::experimental::create_qkv_heads
+}  // namespace ttnn::experimental

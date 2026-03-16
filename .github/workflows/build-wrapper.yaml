@@ -101,7 +101,7 @@ jobs:
       enable-lto: ${{ inputs.enable-lto || false }}
       publish-artifact: false
       publish-package: false
-      skip-tt-train: true
+      skip-tt-train: false
       tracy: true
       ref: ${{ inputs.ref }}
 
@@ -141,7 +141,7 @@ jobs:
       enable-lto: ${{ matrix.config.enable-lto || false }}
       publish-artifact: false
       publish-package: false
-      skip-tt-train: true
+      skip-tt-train: false
       tracy: true
       ref: ${{ inputs.ref }}
       # Pass pre-built docker image tags based on platform
