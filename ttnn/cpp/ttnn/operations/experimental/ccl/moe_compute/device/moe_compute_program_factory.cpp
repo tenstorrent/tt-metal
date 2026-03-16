@@ -1132,7 +1132,7 @@ MoEComputeMeshWorkloadFactory::create_at(
         .dense_token_counts_tensor = tilize_per_expert_total_tokens_output_tensor
         //.optional_output_tensor = std::nullopt,
     };
-    
+
     // 3 compute cores write output pages to each combine cores in a column of sharded output
     const uint32_t compute_cores_per_combine_core = matmul_core_range_set.num_cores() / output_width_shard_dim;
     auto selective_reduce_combine_artifacts = build_selective_reduce_combine_program_artifacts(

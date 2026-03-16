@@ -65,7 +65,8 @@ SelectiveReduceCombineProgramArtifacts build_selective_reduce_combine_program_ar
     const GlobalSemaphore& init_semaphore,
     const GlobalSemaphore& cross_device_semaphore,
     const uint32_t metadata_sync_semaphore_id,
-    const uint32_t compute_sync_semaphore_id);
+    const uint32_t compute_sync_semaphore_id,
+    const uint32_t compute_cores_per_combine_cores = 0);
 
 // Runtime argument override function
 void selective_reduce_combine_helper_override_runtime_arguments(
