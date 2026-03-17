@@ -59,11 +59,11 @@ Plans:
   2. Z-router VC2 mapping creates a sender-only channel at the last flat index that forwards to VC0's receiver channel (which on Z routers is VC1's receiver)
   3. StaticSizedChannelAllocator allocates L1 buffer space for VC2 sender and receiver channels when VC2 is enabled, and existing VC0/VC1 allocations are unaffected
   4. All existing regression tests pass unchanged
-**Plans**: TBD
+**Plans:** 2 plans
 
 Plans:
-- [ ] 03-01: TBD
-- [ ] 03-02: TBD
+- [ ] 03-01-PLAN.md — Add VC2 constants, initialize_vc2_mappings(), update query methods and compute_max_channel_counts
+- [ ] 03-02-PLAN.md — Add VC2 unit tests and full test suite verification
 
 ### Phase 4: Builder Wiring & Flow Control
 **Goal**: VC2 channels are fully wired through the builder pipeline -- FabricBuilderContext computes VC2 counts, EriscDatamoverBuilder connects VC2 senders to receivers, stream IDs 30/31 are assigned for VC2 flow control, and CT args account for VC2
