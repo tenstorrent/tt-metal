@@ -7,7 +7,7 @@
 #include "ckernel.h"
 #include "ckernel_defs.h"
 #include "sfpu/ckernel_sfpu_converter.h"
-#include "ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_exp.h"
 
 namespace ckernel::sfpu {
 
@@ -26,7 +26,7 @@ sfpi_inline sfpi::vFloat _sfpu_neg_exp_f32_(sfpi::vFloat val) {
 
     // Round z to nearest integer using round-to-nearest-even
     sfpi::vInt k_int;
-    sfpi::vFloat k = _sfpu_round_nearest_int32_(z, k_int);
+    sfpi::vFloat k = _sfpu_round_to_nearest_int32_(z, k_int);
 
     // Step 2: Cody-Waite range reduction
     // Compute r = x - k*ln(2) in extended precision

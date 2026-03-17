@@ -5,7 +5,7 @@
 #pragma once
 
 #include "ckernel.h"
-#include "ckernel_sfpu_exp.h"
+#include "sfpu/ckernel_sfpu_exp.h"
 
 namespace ckernel::sfpu {
 
@@ -25,8 +25,8 @@ inline void calculate_celu(uint32_t param0, uint32_t param1) {
         v_if(v < sfpi::vConst0) {
             // Compute exp(x / alpha)
             sfpi::vFloat exp_val =
-                _sfpu_exp_21f_<true>(v * alpha_recip);  // is_fp32_dest_acc_en set to true to avoid rounding as it has
-                                                        // to be done at the end of operation
+                _sfpu_exp_21f_bf16_<true>(v * alpha_recip);  // is_fp32_dest_acc_en set to true to avoid rounding as it
+                                                             // has to be done at the end of operation
 
             sfpi::vFloat result = alpha * (exp_val - sfpi::vConst1);
             if constexpr (!is_fp32_dest_acc_en) {

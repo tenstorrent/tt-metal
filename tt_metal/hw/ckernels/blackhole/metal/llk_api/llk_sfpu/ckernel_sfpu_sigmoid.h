@@ -21,9 +21,9 @@ sfpi_inline sfpi::vFloat _sfpu_sigmoid_(sfpi::vFloat x) {
     // If fp32 then use higher accuracy exp function
     // Otherwise, use exp_21f (~1 ULP on bfloat16)
     if constexpr (is_fp32_acc_to_dest_mode) {
-        exp_neg_x = _sfpu_exp_improved_<true>(-x);
+        exp_neg_x = _sfpu_exp_accurate_<true>(-x);
     } else {
-        exp_neg_x = _sfpu_exp_21f_<true>(-x);
+        exp_neg_x = _sfpu_exp_21f_bf16_<true>(-x);
     }
 
     sfpi::vFloat denominator = sfpi::vConst1 + exp_neg_x;
