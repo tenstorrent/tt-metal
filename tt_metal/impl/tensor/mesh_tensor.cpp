@@ -33,7 +33,22 @@ MeshTensor::~MeshTensor() = default;
 
 distributed::MeshBuffer& MeshTensor::mesh_buffer() const { return *mesh_buffer_invariant_breaking(); }
 
+std::shared_ptr<distributed::MeshBuffer> MeshTensor::mesh_buffer_invariant_breaking() const {
+    TT_ASSERT(impl != nullptr, "MeshTensor is in default constructed state.");
+    return impl->mesh_buffer();
+}
+
 distributed::MeshDevice& MeshTensor::device() const { return *mesh_buffer().device(); }
+
+const TensorSpec& MeshTensor::tensor_spec() const {
+    TT_ASSERT(impl != nullptr, "MeshTensor is in default constructed state.");
+    return impl->spec();
+}
+
+const TensorTopology& MeshTensor::tensor_topology() const {
+    TT_ASSERT(impl != nullptr, "MeshTensor is in default constructed state.");
+    return impl->topology();
+}
 
 DeviceAddr MeshTensor::address() const { return mesh_buffer().address(); }
 

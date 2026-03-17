@@ -66,7 +66,7 @@ public:
     /**
      * Move constructor with new spec and topology.
      * Moves the buffer from other and uses the provided spec/topology.
-     * This is meant for transition as TTNN-Tensor current has a two-step construction for HostTensor.
+     * This is meant for transition as TTNN-Tensor current has a two-step construction for MeshTensor.
      */
     MeshTensor(MeshTensor&& other, TensorSpec spec, TensorTopology topology);
 

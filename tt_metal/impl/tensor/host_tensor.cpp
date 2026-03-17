@@ -32,11 +32,14 @@ HostTensor::HostTensor(DistributedHostBuffer buffer, TensorSpec spec, TensorTopo
     impl(std::make_unique<HostTensorImpl>(std::move(buffer), std::move(spec), std::move(topology))) {}
 
 HostTensor::HostTensor(HostTensor&& other, TensorSpec spec, TensorTopology topology) :
-    impl(std::make_unique<HostTensorImpl>(other.impl->buffer(), std::move(spec), std::move(topology))) {}
+    impl(std::make_unique<HostTensorImpl>(std::move(other.impl)->buffer(), std::move(spec), std::move(topology))) {}
 
 HostTensor::HostTensor(const HostTensor& other) : impl(std::make_unique<HostTensorImpl>(*other.impl)) {}
 
 HostTensor& HostTensor::operator=(const HostTensor& other) {
+    if (this == &other) {
+        return *this;
+    }
     impl = std::make_unique<HostTensorImpl>(*other.impl);
     return *this;
 }
@@ -50,11 +53,20 @@ HostTensor& HostTensor::operator=(HostTensor&& other) noexcept {
 
 HostTensor::~HostTensor() = default;
 
-const TensorSpec& HostTensor::tensor_spec() const { return impl->spec(); }
+const TensorSpec& HostTensor::tensor_spec() const {
+    TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state.");
+    return impl->spec();
+}
 
-const TensorTopology& HostTensor::tensor_topology() const { return impl->topology(); }
+const TensorTopology& HostTensor::tensor_topology() const {
+    TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state.");
+    return impl->topology();
+}
 
-const DistributedHostBuffer& HostTensor::buffer() const { return impl->buffer(); }
+const DistributedHostBuffer& HostTensor::buffer() const {
+    TT_ASSERT(impl != nullptr, "HostTensor is in default constructed state.");
+    return impl->buffer();
+}
 
 DataType HostTensor::dtype() const { return tensor_spec().tensor_layout().get_data_type(); }
 
