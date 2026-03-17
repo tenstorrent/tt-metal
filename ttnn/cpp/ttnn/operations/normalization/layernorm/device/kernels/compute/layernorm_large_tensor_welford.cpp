@@ -42,7 +42,10 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     experimental::CircularBuffer cb_ex_obj(cb_ex);
     experimental::CircularBuffer cb_ex2_obj(cb_ex2);
 
-    // The number of valid rows in the last tile in width dimension
+    // The number of valid columns in the last tile in width dimension.
+    // Because the Welford's llk is given transposed data, skip some rows when
+    // we want to skip some columns from getting processed by layer_norm.
+    // When last tile is full the value is 0 and is not used because full update is done.
     constexpr uint32_t last_tile_rows = W % tile_width;
     constexpr bool is_last_tile_full = (last_tile_rows == 0);
 
@@ -107,15 +110,16 @@ void welford_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
             // Welford's needs transposed input tile
             transpose_wh_tile(cb_interm_pre_add, i, input_dst);
 
+            // Welford over this tile: include only valid elements, never padding.
             if constexpr (is_last_tile_full) {
                 // All tiles can go through the faster call which does 32 rows
                 welford_update<W>(input_dst, sample_idx, reciprocal_lut);
             } else {
-                // If it is the end tile, do it differently
+                // Last tile in width has padding; process only first last_tile_rows rows.
                 if ((block.start() + i) == (Wt - 1)) {
-                    welford_update<W>(input_dst, sample_idx, reciprocal_lut);
-                } else {
                     welford_update_rows<W>(input_dst, sample_idx, 0, last_tile_rows, reciprocal_lut);
+                } else {
+                    welford_update<W>(input_dst, sample_idx, reciprocal_lut);
                 }
             }
             sample_idx += tile_width;
@@ -172,7 +176,10 @@ template <
 void welford_no_fuse_pre_add(const std::array<uint32_t, W>& reciprocal_lut) {
     experimental::CircularBuffer cb_in_obj(cb_in);
 
-    // The number of valid rows in the last tile in width dimension
+    // The number of valid columns in the last tile in width dimension.
+    // Because the Welford's llk is given transposed data, skip some rows when
+    // we want to skip some columns from getting processed by layer_norm.
+    // When last tile is full the value is 0 and is not used because full update is done.
     constexpr uint32_t last_tile_rows = W % tile_width;
     constexpr bool is_last_tile_full = (last_tile_rows == 0);
 
