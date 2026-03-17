@@ -122,7 +122,6 @@ class MoE(SharedStateAddOn, AbstractModule):
 
         config = {
             "expert_mapping_tensor": expert_mapping_tensor,
-            "remap_topk_mask": remap_topk_mask,
             MESH_DEVICE_STATE_DICT_KEY: mesh_device,
         }
 
@@ -552,20 +551,8 @@ class MoE(SharedStateAddOn, AbstractModule):
                 all_to_all_dispatch_output_tensors, shape=(1, 1, batch_size * seq_len, cfg["hidden_size"])
             )
             post_all_to_all_dispatch_output = ttnn.to_layout(post_all_to_all_dispatch_output, ttnn.TILE_LAYOUT)
-            # repeat remap_topk_mask for the num_tokens known at runtime
 
-            remap_topk_mask = ttnn.repeat(
-                cfg["remap_topk_mask"], ttnn.Shape((1, batch_size_per_device, 1, 1))
-            )  # TODO: move to static path
-
-            _, sparsity_t = ttnn.moe_expert_token_remap(
-                remap_topk_mask,
-                cfg["expert_mapping_tensor"],
-                all_to_all_dispatch_metadata_tensors,
-                reduction_size=cfg["sparsity_block_size"],
-            )
-
-            experts_output = MoEExperts._forward(post_all_to_all_dispatch_output, sparsity_t, cfg["moe_experts"])
+            experts_output = MoEExperts._forward(post_all_to_all_dispatch_output, cfg["moe_experts"])
             ttnn.deallocate(post_all_to_all_dispatch_output)
 
             experts_output = ttnn.to_layout(experts_output, ttnn.ROW_MAJOR_LAYOUT)
@@ -714,7 +701,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 all_to_all_dispatch_output_tensors, all_to_all_dispatch_metadata_tensors = ttnn.all_to_all_dispatch(
                     x_chunk,
                     topk_indices_chunk,
-                    cfg["expert_mapping_tensors"],
+                    cfg["expert_mapping_tensor"],
                     **cfg["all_to_all_dispatch"],
                 )
                 ttnn.deallocate(x_chunk)
@@ -744,7 +731,7 @@ class MoE(SharedStateAddOn, AbstractModule):
                 all_to_all_combine_output_tensors = ttnn.all_to_all_combine(
                     experts_output,
                     all_to_all_dispatch_metadata_tensors,
-                    cfg["expert_mapping_tensors"],
+                    cfg["expert_mapping_tensor"],
                     **cfg["all_to_all_combine"],
                 )
                 ttnn.deallocate(experts_output)
