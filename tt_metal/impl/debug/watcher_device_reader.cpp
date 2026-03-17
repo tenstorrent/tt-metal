@@ -415,8 +415,10 @@ void WatcherDeviceReader::Dump(FILE* file) {
     // Dump DRAM cores (Blackhole only)
     {
         const auto& hal = MetalContext::instance().hal();
+        const auto& rtoptions = tt::tt_metal::MetalContext::instance().rtoptions();
         bool has_dram_fw = hal.has_programmable_core_type(HalProgrammableCoreType::DRAM);
-        if (has_dram_fw) {
+        if (has_dram_fw &&
+            rtoptions.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramWatcherMailboxRead)) {
             const auto& soc_d = tt::tt_metal::MetalContext::instance().get_cluster().get_soc_desc(device_id);
             for (const auto& dram_core : soc_d.get_cores(CoreType::DRAM, CoordSystem::TRANSLATED)) {
                 Core::Create(CoreCoord{dram_core.x, dram_core.y}, HalProgrammableCoreType::DRAM, *this, dump_data)
@@ -557,27 +559,13 @@ WatcherDeviceReader::Core WatcherDeviceReader::Core::Create(
     fprintf(reader.f, "%s: ", core_str.c_str());
 
     auto dev_msgs_factory = hal.get_dev_msgs_factory(programmable_core_type);
-    if (
-        programmable_core_type == HalProgrammableCoreType::DRAM &&
-        !rtoptions.should_run_blackhole_dram_init_case(tt::llrt::BlackholeDramInitCase::DramWatcherMailboxRead)) {
-        return Core(
-            virtual_coord,
-            programmable_core_type,
-            std::move(core_str),
-            {},
-            dev_msgs_factory,
-            reader,
-            dump_data);
-    }
-
-    uint64_t mailbox_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
-
     uint32_t mailbox_read_size =
         dev_msgs_factory.offset_of<dev_msgs::mailboxes_t>(dev_msgs::mailboxes_t::Field::watcher) +
         dev_msgs_factory.size_of<dev_msgs::watcher_msg_t>();
     // Watcher only reads the mailbox up to the end of the watcher struct.
     // Should be ok if we never access past that.
     std::vector<std::byte> l1_read_buf(mailbox_read_size);
+    uint64_t mailbox_addr = hal.get_dev_noc_addr(programmable_core_type, HalL1MemAddrType::MAILBOX);
     tt::tt_metal::MetalContext::instance().get_cluster().read_core(
         l1_read_buf.data(), l1_read_buf.size(), {static_cast<size_t>(reader.device_id), virtual_coord}, mailbox_addr);
     return Core(
