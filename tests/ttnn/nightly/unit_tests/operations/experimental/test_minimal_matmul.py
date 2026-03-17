@@ -495,6 +495,62 @@ def test_perf_table_sweep(device, M, K, N, fp32_acc, math_fidelity, dtype):
             )
 
 
+@pytest.mark.parametrize("MKN", [1024, 2048, 4096], ids=["1k", "2k", "4k"])
+def test_perf_mcast_configs(device, MKN):
+    """Performance test for HiFi2, bf16 inputs, fp32 accumulation, square matmuls."""
+    import time
+
+    M = K = N = MKN
+    M_block_size, K_block_size, N_block_size, subblock_h, subblock_w = 4, 4, 4, 2, 2
+
+    torch_input = torch.randn((M, K), dtype=torch.float32)
+    weight_input = torch.randn((K, N), dtype=torch.float32)
+    tt_input = ttnn.from_torch(torch_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+    tt_weight = ttnn.from_torch(weight_input, dtype=ttnn.bfloat16, device=device, layout=ttnn.TILE_LAYOUT)
+
+    compute_config = ttnn.init_device_compute_kernel_config(
+        device.arch(),
+        math_fidelity=ttnn.MathFidelity.HiFi2,
+        math_approx_mode=False,
+        fp32_dest_acc_en=True,
+        packer_l1_acc=True,
+    )
+    matmul_config = ttnn.MinimalMatmulConfig(
+        M_block_size=M_block_size,
+        K_block_size=K_block_size,
+        N_block_size=N_block_size,
+        subblock_h=subblock_h,
+        subblock_w=subblock_w,
+    )
+
+    # Warmup
+    for _ in range(3):
+        tt_out = ttnn.experimental.minimal_matmul(
+            tt_input, tt_weight, compute_kernel_config=compute_config, config=matmul_config
+        )
+        ttnn.synchronize_device(device)
+
+    # Timed runs
+    N_RUNS = 5
+    t0 = time.perf_counter()
+    for _ in range(N_RUNS):
+        tt_out = ttnn.experimental.minimal_matmul(
+            tt_input, tt_weight, compute_kernel_config=compute_config, config=matmul_config
+        )
+        ttnn.synchronize_device(device)
+    elapsed = (time.perf_counter() - t0) / N_RUNS
+
+    flops = 2 * M * K * N
+    tflops = flops / elapsed / 1e12
+    logger.info(f"MKN={MKN}: {elapsed * 1000:.2f} ms/iter, {tflops:.2f} TFLOPS")
+
+    # Accuracy check
+    tt_output_torch = ttnn.to_torch(tt_out)
+    torch_output = torch_input @ weight_input
+    pcc_passed, pcc_val = comp_pcc(torch_output, tt_output_torch)
+    assert pcc_val > 0.999_500, f"PCC {pcc_val} too low"
+
+
 def perf_model(M, K, N, core_count, fidelity_div):
     mm_flops = 2 * M * K * N
     core_flop_per_cycle = 2 * 8 * 16 * 16

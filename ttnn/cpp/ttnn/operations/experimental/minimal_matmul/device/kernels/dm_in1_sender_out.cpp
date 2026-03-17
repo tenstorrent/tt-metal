@@ -29,14 +29,16 @@ void kernel_main() {
     constexpr uint32_t is_injector_core = get_compile_time_arg_val(18);
     constexpr uint32_t N_chunks = get_compile_time_arg_val(19);
     constexpr uint32_t N_tiles_per_chunk = get_compile_time_arg_val(20);
+    constexpr uint32_t in1_mcast_num_dests = get_compile_time_arg_val(21);
 
     // Load input/output addresses and range parameters
     uint32_t argidx = 0;
     const uint32_t in1_addr = get_arg_val<uint32_t>(argidx++);
     const uint32_t in2_addr = get_arg_val<uint32_t>(argidx++);
-    const uint32_t is_sink_core = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in1_dest_noc_x = get_arg_val<uint32_t>(argidx++);
-    const uint32_t in1_dest_noc_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in1_mcast_start_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in1_mcast_start_y = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in1_mcast_end_x = get_arg_val<uint32_t>(argidx++);
+    const uint32_t in1_mcast_end_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_sender_noc_x = get_arg_val<uint32_t>(argidx++);
     const uint32_t in1_sender_noc_y = get_arg_val<uint32_t>(argidx++);
     const uint32_t M_start_tile = get_arg_val<uint32_t>(argidx++);
@@ -54,7 +56,7 @@ void kernel_main() {
     const uint32_t out_addr_rt_arg_idx = argidx;  // Output addresses start here (after ternary if present)
 
     // Tensor accessor for input tensor
-    constexpr auto in1_args = TensorAccessorArgs<21>();
+    constexpr auto in1_args = TensorAccessorArgs<22>();
     const auto in1_reader = TensorAccessor(in1_args, in1_addr, in1_tile_size);
 
     // Always create tuple of output accessors (size = N_chunks)
@@ -137,10 +139,9 @@ void kernel_main() {
     const uint64_t in1_sender_semaphore_noc_addr =
         get_noc_addr(in1_sender_noc_x, in1_sender_noc_y, in1_sender_semaphore_addr);
 
-    const uint64_t in1_receiver_semaphore_noc_addr =
-        get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, in1_receiver_semaphore_addr);
-
-    const uint64_t in1_unicast_data_base_addr = get_noc_addr(in1_dest_noc_x, in1_dest_noc_y, 0);
+    // Precompute multicast semaphore NOC address (injector multicasts VALID to all receivers)
+    const uint64_t in1_mcast_sem_noc_addr = get_noc_multicast_addr(
+        in1_mcast_start_x, in1_mcast_start_y, in1_mcast_end_x, in1_mcast_end_y, in1_receiver_semaphore_addr);
 
     constexpr uint32_t full_N_tiles_bytes = N_block_tiles * in1_tile_size;
 
@@ -231,26 +232,34 @@ void kernel_main() {
                 // This frees sender to start next read earlier
                 cb_push_back(cb_id_in1, in1_block_num_tiles);
 
-                if (!is_sink_core) {
-                    noc_semaphore_wait(in1_sender_semaphore_addr_ptr, 1);
-                    noc_semaphore_set(in1_sender_semaphore_addr_ptr, 0);
+                if constexpr (is_injector_core) {
+                    if constexpr (in1_mcast_num_dests > 0) {
+                        // Wait for all receivers to signal readiness
+                        noc_semaphore_wait(in1_sender_semaphore_addr_ptr, in1_mcast_num_dests);
+                        noc_semaphore_set(in1_sender_semaphore_addr_ptr, 0);
 
-                    /**
-                     * in1 is K_block_tiles x N_block_tiles. When N block is partial, we don't need to write the
-                     * padded tiles. For each tile in the K block, write only the non-padded N tiles. Use
-                     * `current_N_tiles_bytes`.
-                     */
-                    for (uint32_t i = 0; i < K_block_tiles; i++) {
-                        uint64_t in1_unicast_data_addr = in1_unicast_data_base_addr | in1_start_address;
-                        noc_async_write(in1_start_address, in1_unicast_data_addr, current_N_tiles_bytes);
-                        in1_start_address += full_N_tiles_bytes;
-                    }
+                        /**
+                         * in1 is K_block_tiles x N_block_tiles. When N block is partial, we don't need to write the
+                         * padded tiles. For each tile in the K block, write only the non-padded N tiles. Use
+                         * `current_N_tiles_bytes`.
+                         */
+                        uint32_t mcast_src_addr = in1_start_address;
+                        for (uint32_t i = 0; i < K_block_tiles; i++) {
+                            uint64_t in1_mcast_data_addr = get_noc_multicast_addr(
+                                in1_mcast_start_x, in1_mcast_start_y, in1_mcast_end_x, in1_mcast_end_y, mcast_src_addr);
+                            noc_async_write_multicast(
+                                mcast_src_addr, in1_mcast_data_addr, current_N_tiles_bytes, in1_mcast_num_dests);
+                            mcast_src_addr += full_N_tiles_bytes;
+                        }
 
 #ifdef ARCH_BLACKHOLE
-                    noc_async_writes_flushed();
+                        noc_async_writes_flushed();
 #endif
 
-                    noc_semaphore_set_remote(in1_valid_semaphore_addr, in1_receiver_semaphore_noc_addr);
+                        // Multicast VALID to in1_receiver_semaphore_addr on all receivers
+                        noc_semaphore_set_multicast(
+                            in1_valid_semaphore_addr, in1_mcast_sem_noc_addr, in1_mcast_num_dests);
+                    }
                 }
             }
 #ifdef FUSE_BIAS
