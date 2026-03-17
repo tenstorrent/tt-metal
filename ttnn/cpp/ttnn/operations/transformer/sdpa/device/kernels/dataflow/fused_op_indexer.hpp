@@ -17,12 +17,11 @@ struct RingSDPAOpIndexer {
     RingSDPAOpIndexer(uint32_t& rt_args_idx) {
         uint32_t ring_size = get_arg_val<uint32_t>(rt_args_idx++);
         uint32_t ring_index = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t forward_writes_expected = get_arg_val<uint32_t>(rt_args_idx++);
-        uint32_t backward_writes_expected = get_arg_val<uint32_t>(rt_args_idx++);
+        uint32_t direction = get_arg_val<uint32_t>(rt_args_idx++);
 
-        rt_args_idx += 2;  // Skip the semaphore addresses
+        rt_args_idx += 1;  // Skip the semaphore address
 
-        seq = RingIdSequencer(ring_index, ring_size, backward_writes_expected, forward_writes_expected);
+        seq = RingIdSequencer(ring_index, ring_size, direction);
         initialized = true;
     }
 

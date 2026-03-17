@@ -355,10 +355,10 @@ void kernel_main() {
         argidx);
 
 #ifdef USE_MUX
-    // push_ring_sdpa_fused_op_rt_args always appends 6 values (4 ring params + 2 semaphore IDs).
-    // The writer's RingSDPAOpReceiver reads only the 4 ring params (wait_for_op_signal=false),
-    // so skip the 2 trailing semaphore IDs before reading MUX args.
-    argidx += 2;
+    // push_ring_sdpa_fused_op_rt_args appends 4 values (ring_size, ring_index, direction, semaphore_id).
+    // The writer's RingSDPAOpReceiver reads only the 3 ring params (wait_for_op_signal=false),
+    // so skip the 1 trailing semaphore ID before reading MUX args.
+    argidx += 1;
 
     // Parse fabric MUX client connection RT args (17 values).
     // mux_connection_valid, is_termination_master, mux_x, mux_y,
