@@ -64,13 +64,15 @@ jobs:
         run: |
           ./build_metal.sh --build-tt-train --release --build-dir build
 
+      - name: Create build tarball
+        run: |
+          tar --zstd -cf tt-train-build.tar.zst -C /work build/lib build/tt-train
+
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ steps.set-artifact-name.outputs.name }}
-          path: |
-            /work/build/lib
-            /work/build/tt-train
+          path: /work/tt-train-build.tar.zst
           retention-days: 1
 
   run-tt-train-tests:
@@ -111,12 +113,11 @@ jobs:
         uses: actions/download-artifact@v4
         with:
           name: ${{ needs.build-tt-train.outputs.build-artifact-name }}
-          path: /work/build
+          path: /work
 
-      - name: Restore execute permissions
+      - name: Extract build tarball
         run: |
-          chmod +x /work/build/tt-train/tests/ttml_tests
-          find /work/build/lib -name "*.so*" -exec chmod +x {} \; 2>/dev/null || true
+          tar --zstd -xf /work/tt-train-build.tar.zst -C /work
 
       - name: tt-train tests
         run: |
