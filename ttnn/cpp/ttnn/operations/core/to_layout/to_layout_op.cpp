@@ -38,7 +38,8 @@ Tensor to_layout_impl(
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const float pad_value) {
     if (tensor_arg.layout() == layout) {
         if (dtype.has_value() and dtype.value() != tensor_arg.dtype()) {
             log_warning(
@@ -160,14 +161,14 @@ Tensor to_layout_impl(
                     {0, padded_output_shape[2] - output_shape[2]},
                     {0, padded_output_shape[3] - output_shape[3]}};
                 TT_FATAL(!sub_core_grids.has_value(), "Pad OP does not currently support sub core grid");
-                tensor = ttnn::pad(tensor, padding, 0, true, std::nullopt);
+                tensor = ttnn::pad(tensor, padding, pad_value, true, std::nullopt);
                 return ttnn::tilize(tensor, output_memory_config, dtype, use_multicore_tilize);
             } else {
                 PadValue pad_value_variant;
                 if (tensor.dtype() == ttnn::DataType::BFLOAT16 or tensor.dtype() == ttnn::DataType::FLOAT32) {
-                    pad_value_variant = 0.0f;
+                    pad_value_variant = pad_value;
                 } else {
-                    pad_value_variant = (uint32_t)0;
+                    pad_value_variant = (uint32_t)pad_value;
                 }
                 tensor = ttnn::tilize_with_val_padding(
                     tensor,
@@ -233,8 +234,9 @@ Tensor ToLayout::invoke(
     const ttnn::Layout layout,
     const std::optional<ttnn::DataType>& dtype,
     const std::optional<ttnn::MemoryConfig>& memory_config,
-    const std::optional<CoreRangeSet>& sub_core_grids) {
-    return CMAKE_UNIQUE_NAMESPACE::to_layout_impl(tensor_arg, layout, dtype, memory_config, sub_core_grids);
+    const std::optional<CoreRangeSet>& sub_core_grids,
+    const float pad_value) {
+    return CMAKE_UNIQUE_NAMESPACE::to_layout_impl(tensor_arg, layout, dtype, memory_config, sub_core_grids, pad_value);
 }
 
 }  // namespace ttnn::operations::core

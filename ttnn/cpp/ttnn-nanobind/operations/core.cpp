@@ -374,14 +374,16 @@ void py_module(nb::module_& mod) {
                const ttnn::Layout layout,
                const std::optional<ttnn::DataType>& dtype,
                const std::optional<ttnn::MemoryConfig>& memory_config,
-               const std::optional<CoreRangeSet>& sub_core_grids) -> ttnn::Tensor {
-                return self(tensor, layout, dtype, memory_config, sub_core_grids);
+               const std::optional<CoreRangeSet>& sub_core_grids,
+               const float pad_value = 0.0f) -> ttnn::Tensor {
+                return self(tensor, layout, dtype, memory_config, sub_core_grids, pad_value);
             },
             nb::arg("tensor"),
             nb::arg("layout"),
             nb::arg("dtype") = nb::none(),
             nb::arg("memory_config") = nb::none(),
-            nb::arg("sub_core_grids") = nb::none()});
+            nb::arg("sub_core_grids") = nb::none(),
+            nb::arg("pad_value") = 0.0f});
 
     mod.def(
         "num_cores_to_corerangeset",
