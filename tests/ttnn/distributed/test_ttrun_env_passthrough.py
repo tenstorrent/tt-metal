@@ -15,7 +15,6 @@ from ttnn.distributed.ttrun import (
     get_rank_environment,
     main,
 )
-import ttnn.distributed.ttrun as ttrun
 
 
 def _build_config(tmp_path: Path, binding: RankBinding, global_env: dict | None = None) -> TTRunConfig:
