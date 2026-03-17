@@ -287,7 +287,7 @@ def run_test_forward_pass_mla2d(
 
         tt_output_torch = ttnn.to_torch(
             tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
+            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
         ).reshape(
             -1, seq_len, hf_config_short.hidden_size
         )  # Concatenate all batches together

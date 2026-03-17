@@ -538,16 +538,25 @@ def assert_hidden_dim_pcc(
 ) -> float:
     tt_output_torch = tt_output_torch.cpu().float()
 
+    tt_leading_shape = tt_output_torch.shape[:-2]
+    reference_leading_shape = reference_output.shape[:-2]
     assert (
         all(
             d1 == d2
-            for d1, d2 in itertools.zip_longest(tt_output_torch.shape[:-2], reference_output.shape[:-2], fillvalue=1)
+            for d1, d2 in itertools.zip_longest(
+                reversed(tt_leading_shape), reversed(reference_leading_shape), fillvalue=1
+            )
         )
         and tt_output_torch.shape[-1] == reference_output.shape[-1]
     ), (
         "Model and reference output shape must match on all dimensions except for the second to last one "
         f"(module leading singleton dimensions); got {tt_output_torch.shape=} and {reference_output.shape=} "
     )
+
+    while tt_output_torch.ndim < reference_output.ndim:
+        tt_output_torch = tt_output_torch.unsqueeze(0)
+    while reference_output.ndim < tt_output_torch.ndim:
+        reference_output = reference_output.unsqueeze(0)
 
     seq_len_or_batch_size = min(tt_output_torch.shape[-2], reference_output.shape[-2])
     tt_output_torch = tt_output_torch[..., :seq_len_or_batch_size, :]
