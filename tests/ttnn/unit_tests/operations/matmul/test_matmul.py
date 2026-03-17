@@ -1841,6 +1841,7 @@ def test_matmul_does_dot_product(device, w):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=w,
     )
 
     assert torch.allclose(torch_output_tensor, output, atol=1e-2)
@@ -1883,6 +1884,7 @@ def test_matmul_with_matched_width_height_4D(device, n_size, c, h, w):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=w,
     )
 
     # assert_matmul_accuracy(torch_output_tensor, output, "test_matmul_with_matched_width_height_4D")
@@ -1923,6 +1925,7 @@ def test_matmul_same_shape_and_valid(device, n_size, c, h, w):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=w,
     )
 
     # assert_with_pcc(torch_output_tensor, output, 0.9997)
@@ -3494,6 +3497,7 @@ def test_matmul_block_sharded_input_with_padding(device):
         test_name=test_name,
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=16,
     )
 
     # assert_matmul_accuracy(torch_output, output, "test_matmul_block_sharded_input_with_padding")
@@ -3635,6 +3639,7 @@ def test_matmul_on_subdevice_1d_mcast(device, m_size, k_size, n_size):
             test_name=test_name,
             csv_filename="test_matmul_numeric_results.csv",
             test_params=None,
+            k=k_size,
         )
 
         # assert_matmul_accuracy(torch_output, output, "test_matmul_on_subdevice_1d_mcast")
@@ -3690,6 +3695,7 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
         test_name=f"{test_name}_golden_vs_conv",
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=K,
     )
     collect_and_dump_numeric_metrics(
         golden,
@@ -3697,6 +3703,7 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
         test_name=f"{test_name}_golden_vs_col",
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=K,
     )
     collect_and_dump_numeric_metrics(
         result_conv,
@@ -3704,6 +3711,7 @@ def test_matmul_column_wise_bfp_tilize_via_transpose_b(device, weight_dtype, pcc
         test_name=f"{test_name}_conv_vs_col",
         csv_filename="test_matmul_numeric_results.csv",
         test_params=None,
+        k=K,
     )
 
     # assert_matmul_accuracy(golden, result_conv, "test_matmul_column_wise_bfp_tilize_via_transpose_b")

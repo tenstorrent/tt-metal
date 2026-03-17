@@ -309,6 +309,7 @@ def test_batched_sparse_matmul_with_nnz(device, mkn, num_experts, tile_h, tile_w
             test_name=test_name,
             csv_filename="test_sparse_matmul_numeric_results.csv",
             test_params=None,
+            k=k,
         )
         assert_with_pcc(pt_out, output_tensor[b_i, s_i, :, :], expected_pcc)
 
@@ -511,6 +512,7 @@ def test_sparse_matmul_inputA_with_nnz(device, mkn, num_experts, num_batches, ti
             test_name=test_name,
             csv_filename="test_sparse_matmul_numeric_results.csv",
             test_params=None,
+            k=k,
         )
         assert_with_pcc(pt_out, output_tensor[b_i, e_i, :, :], expected_pcc)
 
@@ -611,5 +613,6 @@ def test_sparse_matmul_inputA_without_nnz(device, mkn, num_experts, num_batches,
             test_name=test_name,
             csv_filename="test_sparse_matmul_numeric_results.csv",
             test_params=None,
+            k=k,
         )
         assert_with_pcc(pt_out, output_tensor[b_i, e_i, :, :], expected_pcc)
