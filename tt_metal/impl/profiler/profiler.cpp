@@ -217,8 +217,8 @@ void populateZoneSrcLocations(
     std::unordered_set<std::string>& zone_src_locations) {
     std::ifstream log_file_read(new_log_name);
     std::string line;
+    static const std::string delimiter = "'#pragma message: ";
     while (std::getline(log_file_read, line)) {
-        std::string delimiter = "'#pragma message: ";
         auto pos = line.find(delimiter);
         if (pos == std::string::npos) {
             continue;
