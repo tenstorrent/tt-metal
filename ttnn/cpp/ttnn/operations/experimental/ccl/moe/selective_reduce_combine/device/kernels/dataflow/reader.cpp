@@ -188,4 +188,6 @@ void kernel_main() {
     cb_push_back(token_activations_cb_id, 1);
 
     noc_semaphore_set(sync_semaphore_ptr, 0);
+
+    DPRINT << "COMBINE READER DONE \n";
 }
