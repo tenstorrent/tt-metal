@@ -479,12 +479,13 @@ def run_test_forward_pass_dpmodel(
         test_name="test_model",
         real_weights=True,
     )
+    config_batch_size_per_row = batch_size_per_row if mode == "decode" else USERS_PER_ROW
     model_config = get_model_config(
         RowBatchedModel,
         mode,
         hf_config_short,
         mesh_device,
-        batch_size_per_row=batch_size_per_row,
+        batch_size_per_row=config_batch_size_per_row,
     )
     model_state = RowBatchedModel.create_state(hf_config_short, paged_config, mesh_device, ccl, paged_input_caches)
     model_shared_state = RowBatchedModel.create_shared_state(hf_config_short, mesh_device)
