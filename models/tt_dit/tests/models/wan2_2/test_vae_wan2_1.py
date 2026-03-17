@@ -1906,8 +1906,9 @@ def test_wan_encoder(mesh_device, B, C, T, H, W, mean, std, h_axis, w_axis, num_
     "mesh_device, h_axis, w_axis, num_links",
     [
         ((4, 8), 0, 1, 2),
+        ((4, 32), 0, 1, 2),
     ],
-    ids=["4x8_h0_w1_2links"],
+    ids=["bh_4x8_h0_w1_2links", "bh_4x32_h0_w1_2links"],
     indirect=["mesh_device"],
 )
 @pytest.mark.parametrize("device_params", [{"fabric_config": ttnn.FabricConfig.FABRIC_1D}], indirect=True)
@@ -1985,13 +1986,13 @@ def test_wan_decoder_perf_720p_81f(mesh_device, h_axis, w_axis, num_links):
         return tt_input, logical_h
 
     # ── Warmup: both modes at T=6 to JIT-compile all kernels ──────────────────
-    logger.info("Warmup cached T=6 (JIT)...")
-    tt_input, logical_h = make_input(T=6)
-    tt_model(tt_input, logical_h, use_cache=True)
+    # logger.info("Warmup cached T=6 (JIT)...")
+    # tt_input, logical_h = make_input(T=6)
+    # tt_model(tt_input, logical_h, use_cache=True)
 
-    logger.info("Warmup no-cache T=6 (JIT)...")
-    tt_input, logical_h = make_input(T=6)
-    tt_model(tt_input, logical_h, use_cache=False)
+    # logger.info("Warmup no-cache T=6 (JIT)...")
+    # tt_input, logical_h = make_input(T=6)
+    # tt_model(tt_input, logical_h, use_cache=False)
 
     # Also warm up T=21 for both modes
     logger.info("Warmup cached T=21 (JIT)...")
@@ -2003,41 +2004,49 @@ def test_wan_decoder_perf_720p_81f(mesh_device, h_axis, w_axis, num_links):
     tt_model(tt_input, logical_h, use_cache=False)
 
     # ── Timed runs ─────────────────────────────────────────────────────────────
-    ttnn.synchronize_device(mesh_device)
-    logger.info("Timing cached T=6 (24 output frames)...")
-    start = time.perf_counter()
-    tt_input, logical_h = make_input(T=6)
-    tt_model(tt_input, logical_h, use_cache=True)
-    ttnn.synchronize_device(mesh_device)
-    elapsed_cached_6 = time.perf_counter() - start
+    # ttnn.synchronize_device(mesh_device)
+    # ttnn.distributed_context_barrier()
+    # logger.info("Timing cached T=6 (24 output frames)...")
+    # start = time.perf_counter()
+    # tt_input, logical_h = make_input(T=6)
+    # tt_model(tt_input, logical_h, use_cache=True)
+    # ttnn.synchronize_device(mesh_device)
+    # ttnn.distributed_context_barrier()
+    # elapsed_cached_6 = time.perf_counter() - start
+
+    # ttnn.synchronize_device(mesh_device)
+    # ttnn.distributed_context_barrier()
+    # logger.info("Timing no-cache T=6 (24 output frames)...")
+    # start = time.perf_counter()
+    # tt_input, logical_h = make_input(T=6)
+    # tt_model(tt_input, logical_h, use_cache=False)
+    # ttnn.synchronize_device(mesh_device)
+    # ttnn.distributed_context_barrier()
+    # elapsed_no_cache_6 = time.perf_counter() - start
 
     ttnn.synchronize_device(mesh_device)
-    logger.info("Timing no-cache T=6 (24 output frames)...")
-    start = time.perf_counter()
-    tt_input, logical_h = make_input(T=6)
-    tt_model(tt_input, logical_h, use_cache=False)
-    ttnn.synchronize_device(mesh_device)
-    elapsed_no_cache_6 = time.perf_counter() - start
-
-    ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
     logger.info("Timing cached T=21 (81 output frames)...")
     start = time.perf_counter()
     tt_input, logical_h = make_input(T=21)
     tt_model(tt_input, logical_h, use_cache=True)
     ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
     elapsed_cached_21 = time.perf_counter() - start
 
     ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
     logger.info("Timing no-cache T=21 (81 output frames)...")
     start = time.perf_counter()
     tt_input, logical_h = make_input(T=21)
     tt_model(tt_input, logical_h, use_cache=False)
     ttnn.synchronize_device(mesh_device)
+    ttnn.distributed_context_barrier()
     elapsed_no_cache_21 = time.perf_counter() - start
 
     logger.info("=" * 60)
-    logger.info(f"WanDecoder 720p T=6  (24 frames)   cached: {elapsed_cached_6:.3f}s")
-    logger.info(f"WanDecoder 720p T=6  (24 frames) no-cache: {elapsed_no_cache_6:.3f}s")
+    # logger.info(f"WanDecoder 720p T=6  (24 frames)   cached: {elapsed_cached_6:.3f}s")
+    # logger.info(f"WanDecoder 720p T=6  (24 frames) no-cache: {elapsed_no_cache_6:.3f}s")
     logger.info(f"WanDecoder 720p T=21 (81 frames)   cached: {elapsed_cached_21:.3f}s")
     logger.info(f"WanDecoder 720p T=21 (81 frames) no-cache: {elapsed_no_cache_21:.3f}s")
     logger.info("=" * 60)
