@@ -196,7 +196,7 @@ class BroadcastRMSNorm:
                     ("intermediate_cb", input_cb),
                     ("gamma_cb", gamma_cb),
                 ]
-                ncrisc_named_compile_time_args.extend(bcast_config.get_writer_named_ct_args(coord))
+                ncrisc_named_compile_time_args.extend(bcast_config.get_ncrisc_named_ct_args(coord))
 
                 brisc_named_compile_time_args = [("skip_ccl", 1 if skip_ccl else 0)]
                 if bcast_config.has_bypass_socket_reader:
@@ -206,9 +206,9 @@ class BroadcastRMSNorm:
                     )
                     brisc_common_runtime_args = bcast_config.get_socket_reader_rt_args(coord)
                 else:
-                    brisc_named_compile_time_args.extend(bcast_config.get_reader_named_ct_args(coord))
+                    brisc_named_compile_time_args.extend(bcast_config.get_brisc_named_ct_args(coord))
                     # Socket runtime args for BRISC (zeros when not using socket)
-                    brisc_common_runtime_args = bcast_config.get_reader_common_rt_args(coord)
+                    brisc_common_runtime_args = bcast_config.get_brisc_common_rt_args(coord)
 
                 # Named compile-time args for TRISC (rmsnorm compute)
                 trisc_named_compile_time_args = [
@@ -222,7 +222,7 @@ class BroadcastRMSNorm:
                 ]
 
                 # Common runtime args for writer (broadcast args shared across cores)
-                writer_common_rt_args = bcast_config.get_writer_common_rt_args(coord)
+                writer_common_rt_args = bcast_config.get_ncrisc_common_rt_args(coord)
 
                 # Create tile descriptor for proper tile dimensions
                 tile_descriptor = ttnn.TileDescriptor(interpreted_tile)
@@ -285,7 +285,7 @@ class BroadcastRMSNorm:
                     semaphores=[],
                 )
                 writer_rt_args_ref = program.kernels[0].runtime_args[bcast_worker_core.x][bcast_worker_core.y]
-                writer_rt_args_ref.extend(bcast_config.get_writer_per_core_rt_args(coord, program, bcast_worker_core))
+                writer_rt_args_ref.extend(bcast_config.get_ncrisc_per_core_rt_args(coord, program, bcast_worker_core))
 
                 mesh_program_descriptor[ttnn.MeshCoordinateRange(coord, coord)] = program
 

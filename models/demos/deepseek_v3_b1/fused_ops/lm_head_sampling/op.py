@@ -627,7 +627,7 @@ class LMHeadSampling:
                     ("mesh_row", row),
                     ("mesh_col", col),
                 ]
-                ncrisc_named_compile_time_args.extend(bcast_config.get_writer_named_ct_args(coord))
+                ncrisc_named_compile_time_args.extend(bcast_config.get_ncrisc_named_ct_args(coord))
 
                 # ================================================================
                 # BRISC compile-time args
@@ -660,7 +660,7 @@ class LMHeadSampling:
                     ("mesh_row", row),
                     ("mesh_col", col),
                 ]
-                brisc_named_compile_time_args.extend(bcast_config.get_reader_named_ct_args(coord))
+                brisc_named_compile_time_args.extend(bcast_config.get_brisc_named_ct_args(coord))
 
                 # ================================================================
                 # TRISC compile-time args
@@ -692,7 +692,7 @@ class LMHeadSampling:
                 argmax_scratch_addr = (
                     int(scratch_tensors_per_device[device_idx].buffer_address()) if not skip_ccl else 0
                 )
-                ncrisc_bcast_common_args = bcast_config.get_writer_common_rt_args(coord) + [
+                ncrisc_bcast_common_args = bcast_config.get_ncrisc_common_rt_args(coord) + [
                     int(indices_tensor_device.buffer_address()),
                     int(output_index_tensor_device.buffer_address()),
                     int(final_core_phys.x),
@@ -701,7 +701,7 @@ class LMHeadSampling:
                     global_sem_addr,
                     global_stage2_sem_addr,
                 ]
-                brisc_bcast_common_args = bcast_config.get_reader_common_rt_args(coord) + [
+                brisc_bcast_common_args = bcast_config.get_brisc_common_rt_args(coord) + [
                     int(final_core_phys.x),
                     int(final_core_phys.y),
                     argmax_scratch_addr,
@@ -1035,7 +1035,7 @@ class LMHeadSampling:
                         raise RuntimeError("Missing is_input_core kernel group for CCL writer fabric append")
                     writer_kernel_idx = ccl_writer_group.ncrisc_kernel_index
                     writer_rt_args_ref = program.kernels[writer_kernel_idx].runtime_args[worker_core.x][worker_core.y]
-                    writer_rt_args_ref.extend(bcast_config.get_writer_per_core_rt_args(coord, program, worker_core))
+                    writer_rt_args_ref.extend(bcast_config.get_ncrisc_per_core_rt_args(coord, program, worker_core))
 
                 if not skip_ccl and is_argmax_mesh_sender_core:
                     sender_group = kernel_result.get_group_by_arg("is_argmax_mesh_sender_core", 1)

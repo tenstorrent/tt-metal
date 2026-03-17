@@ -3465,12 +3465,12 @@ class AttentionBlock:
                 bcast_brisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                 ]
-                bcast_brisc_named_compile_time_args.extend(bcast_config.get_reader_named_ct_args(mesh_coord))
+                bcast_brisc_named_compile_time_args.extend(bcast_config.get_brisc_named_ct_args(mesh_coord))
 
                 bcast_ncrisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
                 ]
-                bcast_ncrisc_named_compile_time_args.extend(bcast_config.get_writer_named_ct_args(mesh_coord))
+                bcast_ncrisc_named_compile_time_args.extend(bcast_config.get_ncrisc_named_ct_args(mesh_coord))
 
                 bcast_trisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
@@ -3480,7 +3480,7 @@ class AttentionBlock:
                 # CCL Broadcast common runtime args (computed before UnifiedKernelDescriptor)
                 # These are common to all cores since only one core participates in CCL
                 # ================================================================
-                ncrisc_bcast_common_args = list(bcast_config.get_writer_common_rt_args(mesh_coord))
+                ncrisc_bcast_common_args = list(bcast_config.get_ncrisc_common_rt_args(mesh_coord))
 
                 # RoPE DRAM address args (per-device)
                 qrope_cos_tensor_address = qrope_cos_tensor_device.buffer_address()
@@ -3985,7 +3985,7 @@ class AttentionBlock:
                 writer_rt_args_ref = program.kernels[writer_kernel_idx].runtime_args[broadcast_worker_core.x][
                     broadcast_worker_core.y
                 ]
-                bcast_writer_args = bcast_cfg.get_writer_per_core_rt_args(mesh_coord, program, broadcast_worker_core)
+                bcast_writer_args = bcast_cfg.get_ncrisc_per_core_rt_args(mesh_coord, program, broadcast_worker_core)
                 # Broadcast parser consumes its prefix first; preserve existing per-core payload after it.
                 program.kernels[writer_kernel_idx].runtime_args[broadcast_worker_core.x][
                     broadcast_worker_core.y

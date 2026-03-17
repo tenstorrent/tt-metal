@@ -1327,10 +1327,10 @@ class PreSDPA:
                 # CCL Broadcast compile-time args (per-device)
                 # ================================================================
                 bcast_brisc_named_compile_time_args = [("skip_ccl", 1 if skip_ccl else 0)]
-                bcast_brisc_named_compile_time_args.extend(bcast_config.get_reader_named_ct_args(coord))
+                bcast_brisc_named_compile_time_args.extend(bcast_config.get_brisc_named_ct_args(coord))
 
                 bcast_ncrisc_named_compile_time_args = [("skip_ccl", 1 if skip_ccl else 0)]
-                bcast_ncrisc_named_compile_time_args.extend(bcast_config.get_writer_named_ct_args(coord))
+                bcast_ncrisc_named_compile_time_args.extend(bcast_config.get_ncrisc_named_ct_args(coord))
 
                 bcast_trisc_named_compile_time_args = [
                     ("skip_ccl", 1 if skip_ccl else 0),
@@ -2078,7 +2078,7 @@ class PreSDPA:
                 # CCL Broadcast common runtime args (computed before UnifiedKernelDescriptor)
                 # These are common to all cores since only one core participates in CCL
                 # ================================================================
-                ncrisc_bcast_common_args = bcast_config.get_writer_common_rt_args(coord)
+                ncrisc_bcast_common_args = bcast_config.get_ncrisc_common_rt_args(coord)
 
                 # RoPE DRAM address args (per-device)
                 qrope_cos_tensor_address = qrope_cos_tensor_device.buffer_address()
@@ -2478,7 +2478,7 @@ class PreSDPA:
                     # fabric setup), then merge only for the bcast worker core in explicit
                     # order: bcast prefix first, that core's tail args after.
                     #
-                    bcast_writer_args = bcast_config.get_writer_per_core_rt_args(coord, program, worker_core)
+                    bcast_writer_args = bcast_config.get_ncrisc_per_core_rt_args(coord, program, worker_core)
                     bcast_group = [(worker_core, bcast_writer_args)]
                     merged_ncrisc_group = merge_per_core_runtime_args(
                         bcast_group,
