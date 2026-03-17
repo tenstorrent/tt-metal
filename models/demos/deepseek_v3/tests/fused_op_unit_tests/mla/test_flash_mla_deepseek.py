@@ -107,7 +107,7 @@ def scaled_dot_product_attention_reference(Q, K, V, start_indices, padded_layer_
             },
             [1, 4, 128, 512],  # Output: [1, bsz_local, num_heads, kv_lora_rank]
             [32, 576],  # HEIGHT_SHARDED shard shape for input Q
-            64,  # (32/8) * 16 = 4 * 16 = 64 cores
+            64,  # min(users_per_device * num_heads, device_cores) = min(4 * 128, 64) = 64
         ),
     ],
     ids=["flash_mla_decode"],
