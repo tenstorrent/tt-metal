@@ -24,7 +24,6 @@
 #include "command_queue_common.hpp"
 #include "system_memory_cq_interface.hpp"
 #include <tt-logger/tt-logger.hpp>
-#include <umd/device/tt_io.hpp>
 #include <umd/device/types/cluster_descriptor_types.hpp>
 #include <umd/device/types/xy_pair.hpp>
 #include <tracy/Tracy.hpp>
@@ -113,8 +112,8 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
     prefetcher_cores(num_hw_cqs),
     prefetch_q_dev_ptrs(num_hw_cqs),
     prefetch_q_dev_fences(num_hw_cqs) {
-    this->prefetch_q_writers.reserve(num_hw_cqs);
-    this->completion_q_writers.reserve(num_hw_cqs);
+    this->prefetch_q_windows.reserve(num_hw_cqs);
+    this->completion_q_windows.reserve(num_hw_cqs);
 
     uint32_t alignment = MetalContext::instance(context_id).hal().get_alignment(HalMemType::HOST);
     if (is_mock_device()) {
@@ -165,7 +164,8 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
         auto prefetcher_virtual = ctx.get_cluster().get_virtual_coordinate_from_logical_coordinates(
             prefetcher_core.chip, CoreCoord(prefetcher_core.x, prefetcher_core.y), core_type);
         this->prefetcher_cores[cq_id] = tt_cxy_pair(prefetcher_core.chip, prefetcher_virtual.x, prefetcher_virtual.y);
-        this->prefetch_q_writers.emplace_back(ctx.get_cluster().get_static_tlb_writer(this->prefetcher_cores[cq_id]));
+        this->prefetch_q_windows.emplace_back(
+            ctx.get_cluster().get_static_tlb_window(this->prefetcher_cores[cq_id]));
 
         tt_cxy_pair completion_queue_writer_core =
             ctx.get_dispatch_core_manager().completion_queue_writer_core(device_id, channel, cq_id);
@@ -183,8 +183,11 @@ SystemMemoryManager::SystemMemoryManager(ContextId context_id, ChipId device_id,
         auto [completion_tlb_offset, completion_tlb_size] = completion_interface_tlb_data;
 
         this->completion_byte_addrs[cq_id] = completion_q_rd_ptr % completion_tlb_size;
-        this->completion_q_writers.emplace_back(ctx.get_cluster().get_static_tlb_writer(tt_cxy_pair(
-            completion_queue_writer_core.chip, completion_queue_writer_virtual.x, completion_queue_writer_virtual.y)));
+        this->completion_q_windows.emplace_back(
+            ctx.get_cluster().get_static_tlb_window(tt_cxy_pair(
+                completion_queue_writer_core.chip,
+                completion_queue_writer_virtual.x,
+                completion_queue_writer_virtual.y)));
 
         this->cq_interfaces.push_back(SystemMemoryCQInterface(channel, cq_id, this->cq_size, cq_start, alignment));
         // Prefetch queue acts as the sync mechanism to ensure that issue queue has space to write, so issue queue
@@ -507,7 +510,7 @@ void SystemMemoryManager::send_completion_queue_read_ptr(const uint8_t cq_id) co
     const SystemMemoryCQInterface& cq_interface = this->cq_interfaces[cq_id];
 
     uint32_t read_ptr_and_toggle = cq_interface.completion_fifo_rd_ptr | (cq_interface.completion_fifo_rd_toggle << 31);
-    this->completion_q_writers[cq_id].write(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
+    this->completion_q_windows[cq_id]->write32(this->completion_byte_addrs[cq_id], read_ptr_and_toggle);
 
     // Also store this data in hugepages in case we hang and can't get it from the device.
     auto& ctx = tt::tt_metal::MetalContext::instance(context_id);
@@ -700,7 +703,7 @@ void SystemMemoryManager::fetch_queue_write(uint32_t command_size_B, const uint8
     if (stall_prefetcher) {
         command_size_16B |= (1 << ((sizeof(DispatchSettings::prefetch_q_entry_type) * 8) - 1));
     }
-    this->prefetch_q_writers[cq_id].write(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
+    this->prefetch_q_windows[cq_id]->write16(this->prefetch_q_dev_ptrs[cq_id], command_size_16B);
     this->prefetch_q_dev_ptrs[cq_id] += sizeof(DispatchSettings::prefetch_q_entry_type);
 }
 
