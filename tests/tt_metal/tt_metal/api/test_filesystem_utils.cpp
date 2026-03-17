@@ -667,6 +667,10 @@ TEST_F(FilesystemUtilsTest, SyncFilesystem_HandlesNonExistentPath) {
 // ============================================================================
 
 TEST_F(FilesystemUtilsTest, RemoveEmptyParentDirectories_RemovesEmptyDirs) {
+    // Create a guard file in temp_dir_ to prevent it from becoming empty
+    // (which would cause the function to try removing temp_dir_ itself)
+    create_test_file("guard.txt", "prevents temp_dir_ removal");
+
     // Create a nested structure: temp_dir_/a/b/c/d/
     std::filesystem::path dir_a = create_test_directory("cleanup_a");
     std::filesystem::path dir_b = dir_a / "b";
@@ -847,6 +851,10 @@ TEST_F(FilesystemUtilsNfsSafetyTest, SafeHardLinkOrCopy) {
 }
 
 TEST_F(FilesystemUtilsNfsSafetyTest, RemoveEmptyParentDirectories) {
+    // Create a guard file in temp_dir_ to prevent it from becoming empty
+    // (which would cause the function to try removing temp_dir_ itself)
+    create_test_file("nfs_guard.txt", "prevents temp_dir_ removal");
+
     auto deep = temp_dir_ / "nfs_a" / "nfs_b" / "nfs_c";
     std::filesystem::create_directories(deep);
 
