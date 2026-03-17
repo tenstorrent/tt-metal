@@ -212,8 +212,7 @@ def create_tensor_on_mesh(
 
         entries = re.findall(r"Placement(?:Shard\(-?\d+\)|Replicate)", placement_str)
 
-        if not mesh_compatible or not entries or "PlacementShard" not in placement_str:
-            # Device mesh too small or no shard placement - replicate
+        if not mesh_compatible or not entries:
             mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
         elif len(entries) >= 2:
             dims = []
@@ -239,13 +238,14 @@ def create_tensor_on_mesh(
             shard_match = re.search(r"PlacementShard\((-?\d+)\)", entries[0])
             if shard_match:
                 dim = int(shard_match.group(1))
-                dims_tuple = (None, dim)
-
                 repeat_factors = [1] * torch_tensor.ndim
-                repeat_factors[dim] = mesh_shape_tuple[1] if len(mesh_shape_tuple) > 1 else mesh_shape_tuple[0]
+                total_devices = 1
+                for extent in mesh_shape_tuple:
+                    total_devices *= extent
+                repeat_factors[dim] = total_devices
                 torch_tensor = torch_tensor.repeat(*repeat_factors)
 
-                mesh_mapper = ttnn.ShardTensor2dMesh(mesh_device, dims=dims_tuple, mesh_shape=mesh_shape_tuple)
+                mesh_mapper = ttnn.ShardTensorToMesh(mesh_device, dim=dim)
             else:
                 mesh_mapper = ttnn.ReplicateTensorToMesh(mesh_device)
         else:

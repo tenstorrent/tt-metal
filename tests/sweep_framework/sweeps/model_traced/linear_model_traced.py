@@ -106,6 +106,7 @@ def run(
     program_config=None,  # Program configuration
     compute_kernel_config=None,  # Compute kernel configuration
     activation=None,  # Activation function
+    output_tile=None,  # Output tile configuration
     *,
     device,
     **kwargs,  # Accept placements, traced_source, traced_machine_info, etc.
@@ -143,6 +144,19 @@ def run(
         except (ValueError, TypeError, KeyError):
             program_config = None
 
+    # Parse output_tile if provided as dict (e.g., {"type": "Tile", "value": "Tile with shape: [32, 32]"})
+    if isinstance(output_tile, dict):
+        try:
+            import re as _re_tile
+
+            tile_match = _re_tile.search(r"\[(\d+),\s*(\d+)\]", str(output_tile.get("value", "")))
+            if tile_match:
+                output_tile = ttnn.Tile(int(tile_match.group(1)), int(tile_match.group(2)))
+            else:
+                output_tile = None
+        except Exception:
+            output_tile = None
+
     # Extract kwargs
     input_a_tensor_placement = kwargs.get("input_a_tensor_placement", None)
     input_b_tensor_placement = kwargs.get(
@@ -176,16 +190,6 @@ def run(
     # V2 format provides separate shapes
     shape_a = tuple(input_a_shape) if isinstance(input_a_shape, (list, tuple)) else input_a_shape
     shape_b = tuple(input_b_shape) if isinstance(input_b_shape, (list, tuple)) else input_b_shape
-
-    # Detect 4D batched weights (batch > 1 in weight tensor).
-    # ttnn.linear hits TT_FATAL with batched weights (requires batch_b == 1).
-    # Use ttnn.matmul instead, which handles batched matmul natively.
-    is_batched_weight = False
-    if len(shape_b) >= 4:
-        batch_b = 1
-        for d in shape_b[:-2]:
-            batch_b *= d
-        is_batched_weight = batch_b > 1
 
     # Check if storage_type is HOST
     is_host = storage_type and "HOST" in str(storage_type)
@@ -246,8 +250,7 @@ def run(
         torch_output_tensor = torch.nn.functional.linear(torch_a, torch_weight_for_linear, torch_bias)
 
     # Apply activation to golden reference to match ttnn.linear behavior
-    # Skip for batched weights (ttnn.matmul path doesn't apply activation)
-    if activation is not None and not is_batched_weight:
+    if activation is not None:
         act = str(activation).lower()
         if "silu" in act or "swish" in act:
             torch_output_tensor = torch.nn.functional.silu(torch_output_tensor)
@@ -313,47 +316,40 @@ def run(
     # Run TTNN op
     start_time = start_measuring_time()
 
-    if is_batched_weight:
-        # 4D batched weights: use ttnn.matmul which handles batched matmul natively.
-        # ttnn.linear requires batch_b == 1 and hits TT_FATAL otherwise.
-        # Use DRAM interleaved (sharded configs cleared above) with no program_config.
-        matmul_kwargs = {}
-        if compute_kernel_config is not None:
-            matmul_kwargs["compute_kernel_config"] = compute_kernel_config
-        if dtype is not None:
-            matmul_kwargs["dtype"] = dtype
-        output_tensor = ttnn.matmul(ttnn_a, ttnn_b, **matmul_kwargs)
-    else:
-        # Standard linear path
-        linear_kwargs = {
-            "bias": ttnn_bias,
-            "transpose_a": transpose_a,
-            "transpose_b": transpose_b,
-        }
+    # Build linear kwargs incrementally — only include non-default values
+    # so the traced arguments match the model trace exactly.
+    linear_kwargs = {}
 
-        # Add optional parameters from traced config
-        if memory_config is not None:
-            linear_kwargs["memory_config"] = memory_config
-        elif output_memory_config is not None:
-            linear_kwargs["memory_config"] = output_memory_config
+    if ttnn_bias is not None:
+        linear_kwargs["bias"] = ttnn_bias
+    if transpose_a:
+        linear_kwargs["transpose_a"] = transpose_a
+    if transpose_b:
+        linear_kwargs["transpose_b"] = transpose_b
 
-        if dtype is not None:
-            linear_kwargs["dtype"] = dtype
+    if memory_config is not None:
+        linear_kwargs["memory_config"] = memory_config
+    elif output_memory_config is not None:
+        linear_kwargs["memory_config"] = output_memory_config
 
-        if program_config is not None:
-            linear_kwargs["program_config"] = program_config
+    if dtype is not None:
+        linear_kwargs["dtype"] = dtype
+    if program_config is not None:
+        linear_kwargs["program_config"] = program_config
+    if compute_kernel_config is not None:
+        linear_kwargs["compute_kernel_config"] = compute_kernel_config
+    if core_grid is not None:
+        linear_kwargs["core_grid"] = core_grid
+    if activation is not None:
+        linear_kwargs["activation"] = activation
+    if output_tile is not None:
+        linear_kwargs["output_tile"] = output_tile
 
-        if compute_kernel_config is not None:
-            linear_kwargs["compute_kernel_config"] = compute_kernel_config
+    linear_kwargs.update(parsed_op_kwargs)
 
-        if core_grid is not None:
-            linear_kwargs["core_grid"] = core_grid
-
-        if activation is not None:
-            linear_kwargs["activation"] = activation
-
-        linear_kwargs.update(parsed_op_kwargs)
-        output_tensor = ttnn.linear(ttnn_a, ttnn_b, **linear_kwargs)
+    # Pass weight as input_tensor_b named kwarg (not positional) to match
+    # the model trace, which records it as "input_tensor_b" not "arg1".
+    output_tensor = ttnn.linear(ttnn_a, input_tensor_b=ttnn_b, **linear_kwargs)
 
     output_tensor = mesh_tensor_to_torch(output_tensor, device if is_mesh_device else None)
     e2e_perf = stop_measuring_time(start_time)

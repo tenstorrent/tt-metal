@@ -331,6 +331,7 @@ def _build_program_config_by_type(type_name: str, cfg: dict):
                 per_core_M=int(cfg["per_core_M"]),
                 per_core_N=int(cfg["per_core_N"]),
                 transpose_mcast=bool(cfg.get("transpose_mcast", False)),
+                fuse_batch=bool(cfg.get("fuse_batch", True)),
                 fused_activation=fused_activation,
             )
             if cfg.get("out_block_h") is not None:
@@ -1035,6 +1036,7 @@ class MasterConfigLoader:
         dtype_mapping = {
             # Legacy tracer format (namespace-style)
             "DataType::BFLOAT16": ttnn.bfloat16,
+            "DataType::BFLOAT4_B": ttnn.bfloat4_b,
             "DataType::FLOAT32": ttnn.float32,
             "DataType::INT32": ttnn.int32,
             "DataType::UINT32": ttnn.uint32,
@@ -1042,6 +1044,7 @@ class MasterConfigLoader:
             "DataType::UINT16": ttnn.uint16,
             # V2 tracer format (dot-style)
             "DataType.BFLOAT16": ttnn.bfloat16,
+            "DataType.BFLOAT4_B": ttnn.bfloat4_b,
             "DataType.FLOAT32": ttnn.float32,
             "DataType.INT32": ttnn.int32,
             "DataType.UINT32": ttnn.uint32,
