@@ -61,6 +61,11 @@ def create_parser() -> argparse.ArgumentParser:
         help="Path to output JSON file. If --prompts-file is provided and --output-path is not specified, output will be saved to <prompts-file-stem>_output.json in the same directory as the prompts file.",
     )
     p.add_argument(
+        "--checkpoint-jsonl",
+        type=str,
+        help="Optional JSONL path for appending per-user results during generation.",
+    )
+    p.add_argument(
         "--model-path",
         type=str,
         required=True,
@@ -156,6 +161,19 @@ def create_parser() -> argparse.ArgumentParser:
         default=False,
         help="Force regeneration of cached TTNN weight files and config.",
     )
+    p.add_argument(
+        "--stop-at-eos",
+        dest="stop_at_eos",
+        action="store_true",
+        help="Stop recording output tokens for a user after EOS (default).",
+    )
+    p.add_argument(
+        "--no-stop-at-eos",
+        dest="stop_at_eos",
+        action="store_false",
+        help="Always record max-new-tokens even after EOS.",
+    )
+    p.set_defaults(stop_at_eos=True)
     return p
 
 
@@ -275,6 +293,8 @@ def run_demo(
     profile_decode: bool = False,
     sample_on_device: bool = True,
     force_recalculate: bool = False,
+    stop_at_eos: bool = True,
+    checkpoint_jsonl: str | Path | None = None,
 ) -> dict:
     """Programmatic entrypoint for the DeepSeek-V3 demo.
 
@@ -401,34 +421,80 @@ def run_demo(
                     raise SystemExit("A prompt is required unless --random-weights is used.")
                 prompt_list = prompts
 
-        # Multi-prompt generation
-        generations, statistics = gen.generate(
-            prompt_list,
-            max_new_tokens=max_new_tokens,
-            teacher_forcing=token_acc,
-            early_print_first_user=early_print_first_user,
-            repeat_batches=repeat_batches,
-            pre_tokenized=pre_tokenized_prompts,
-        )
-
-        # Process all generations
-        results = []
-        for i, generation_tokens in enumerate(generations):
-            result = {"tokens": generation_tokens, "text": None}
-            if gen.tokenizer is not None:
-                result["text"] = gen.tokenizer.decode(generation_tokens, skip_special_tokens=True)
-            if token_acc is not None and i == 0:  # Only compute accuracy for first generation
-                acc = token_acc.compute_accuracy()
-                result.update(
-                    {
-                        "accuracy_top1": acc.get("top1"),
-                        "accuracy_top5": acc.get("top5"),
-                        "predicted_tokens": token_acc._pred_tokens,
-                    }
+        checkpoint_fh = None
+        checkpoint_written: set[int] = set()
+        checkpoint_path = Path(checkpoint_jsonl) if checkpoint_jsonl is not None else None
+        if checkpoint_path is not None:
+            checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+            checkpoint_fh = open(checkpoint_path, "w", encoding="utf-8")
+            if not stop_at_eos:
+                logger.info(
+                    "checkpoint-jsonl is enabled without stop-at-eos; records will be written after generation."
                 )
-            results.append(result)
 
-        return {"generations": results, "statistics": statistics}
+        def checkpoint_user(user_idx: int, token_ids: list[int]) -> None:
+            if checkpoint_fh is None or user_idx in checkpoint_written:
+                return
+            text = None
+            if gen.tokenizer is not None:
+                text = gen.tokenizer.decode(token_ids, skip_special_tokens=True)
+            record = {
+                "index": user_idx + 1,
+                "prompt": prompt_list[user_idx] if user_idx < len(prompt_list) else "",
+                "text": text,
+            }
+            checkpoint_fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+            checkpoint_fh.flush()
+            os.fsync(checkpoint_fh.fileno())
+            checkpoint_written.add(user_idx)
+
+        try:
+            # Multi-prompt generation
+            generations, statistics = gen.generate(
+                prompt_list,
+                max_new_tokens=max_new_tokens,
+                teacher_forcing=token_acc,
+                early_print_first_user=early_print_first_user,
+                repeat_batches=repeat_batches,
+                pre_tokenized=pre_tokenized_prompts,
+                stop_at_eos=stop_at_eos,
+                on_user_finished=checkpoint_user if checkpoint_fh is not None else None,
+            )
+
+            # Process all generations
+            results = []
+            for i, generation_tokens in enumerate(generations):
+                result = {"tokens": generation_tokens, "text": None}
+                if gen.tokenizer is not None:
+                    result["text"] = gen.tokenizer.decode(generation_tokens, skip_special_tokens=True)
+                if token_acc is not None and i == 0:  # Only compute accuracy for first generation
+                    acc = token_acc.compute_accuracy()
+                    result.update(
+                        {
+                            "accuracy_top1": acc.get("top1"),
+                            "accuracy_top5": acc.get("top5"),
+                            "predicted_tokens": token_acc._pred_tokens,
+                        }
+                    )
+                results.append(result)
+
+            if checkpoint_fh is not None:
+                for i, result in enumerate(results):
+                    if i in checkpoint_written:
+                        continue
+                    record = {
+                        "index": i + 1,
+                        "prompt": prompt_list[i] if i < len(prompt_list) else "",
+                        "text": result["text"],
+                    }
+                    checkpoint_fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+                checkpoint_fh.flush()
+                os.fsync(checkpoint_fh.fileno())
+
+            return {"generations": results, "statistics": statistics}
+        finally:
+            if checkpoint_fh is not None:
+                checkpoint_fh.close()
     finally:
         # Clean up generator resources
         try:
@@ -484,6 +550,8 @@ def main() -> None:
         profile_decode=args.profile_decode,
         sample_on_device=args.sample_on_device,
         force_recalculate=bool(args.force_recalculate),
+        stop_at_eos=bool(args.stop_at_eos),
+        checkpoint_jsonl=args.checkpoint_jsonl,
     )
 
     # If prompts were loaded from a JSON file, save output to JSON file instead of printing

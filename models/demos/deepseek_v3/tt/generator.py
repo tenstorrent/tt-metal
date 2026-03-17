@@ -616,6 +616,12 @@ class DeepseekGenerator(WarmupForwardMixin):
     def _sample_greedy_on_host(self, logits: torch.Tensor) -> torch.Tensor:
         return torch.argmax(logits, dim=-1)  # [B]
 
+    def _get_stop_token_ids(self) -> set[int]:
+        eos_token_id = self.hf_config.eos_token_id
+        if isinstance(eos_token_id, int):
+            return {int(eos_token_id)}
+        return {int(token_id) for token_id in eos_token_id}
+
     def _pad_batch(self, tokens_list: List[List[int]], batch_size: int) -> Tuple[torch.Tensor, torch.Tensor]:
         """Pad/pack a list of token id sequences to batch of size batch_size.
 
@@ -660,6 +666,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         early_print_first_user: bool = True,
         repeat_batches: int = 1,
         pre_tokenized: List[List[int]] | None = None,
+        stop_at_eos: bool = True,
+        on_user_finished=None,
     ) -> Tuple[List[List[int]], dict]:
         """Generate tokens for the given prompts using greedy decode by default.
 
@@ -668,6 +676,12 @@ class DeepseekGenerator(WarmupForwardMixin):
 
         repeat_batches: Number of times to repeat the prefill+decode pass. Only the
                         last pass's tokens are returned; timings aggregate.
+
+        stop_at_eos: Defaults to True. When enabled and teacher_forcing is not
+                     active, stop recording output tokens for a user after EOS.
+                     When teacher_forcing is active, EOS-based early stopping is
+                     disabled and all teacher-forced tokens are recorded.
+        on_user_finished: Optional callback with signature (user_index, output_tokens).
 
         Returns: (list of generated token id lists for the provided prompts (order preserved), statistics dictionary)
         """
@@ -706,7 +720,8 @@ class DeepseekGenerator(WarmupForwardMixin):
         logger.info(f"Lengths of {lengths.shape} (encoded) prompts: {lengths}")
 
         # Run one or more prefill+decode batches
-        for _ in range(repeat_batches):
+        stop_token_ids = self._get_stop_token_ids() if stop_at_eos and teacher_forcing is None else set()
+        for batch_idx in range(repeat_batches):
             # Reset teacher-forcing state per batch.
             if teacher_forcing is not None:
                 teacher_forcing.reset()
@@ -787,6 +802,9 @@ class DeepseekGenerator(WarmupForwardMixin):
             )
 
             generations: List[List[int]] = [[] for _ in range(num_of_prompts)]
+            finished = [False] * num_of_prompts if stop_token_ids else None
+            notified = [False] * num_of_prompts if stop_token_ids else None
+            callback = on_user_finished if batch_idx == repeat_batches - 1 else None
             if max_new_tokens <= 0:
                 logger.info("max_new_tokens <= 0, skipping decode loop.")
             else:
@@ -811,7 +829,18 @@ class DeepseekGenerator(WarmupForwardMixin):
 
                 # Record token 0
                 for i in range(num_of_prompts):
+                    if finished is not None and finished[i]:
+                        continue
                     token_value = int(next_tokens[i].item())
+                    if finished is not None and token_value in stop_token_ids:
+                        finished[i] = True
+                        if callback is not None and notified is not None and not notified[i]:
+                            try:
+                                callback(i, list(generations[i]))
+                            except Exception as exc:
+                                logger.warning(f"on_user_finished callback failed for user {i}: {exc}")
+                            notified[i] = True
+                        continue
                     generations[i].append(token_value)
                     if early_print_first_user and i == 0:
                         if self.tokenizer is not None:
@@ -860,7 +889,18 @@ class DeepseekGenerator(WarmupForwardMixin):
                     positions += 1
 
                     for i in range(num_of_prompts):
+                        if finished is not None and finished[i]:
+                            continue
                         token_value = int(next_tokens[i].item())
+                        if finished is not None and token_value in stop_token_ids:
+                            finished[i] = True
+                            if callback is not None and notified is not None and not notified[i]:
+                                try:
+                                    callback(i, list(generations[i]))
+                                except Exception as exc:
+                                    logger.warning(f"on_user_finished callback failed for user {i}: {exc}")
+                                notified[i] = True
+                            continue
                         generations[i].append(token_value)
                         if early_print_first_user and i == 0:
                             if self.tokenizer is not None:
