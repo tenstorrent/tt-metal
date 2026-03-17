@@ -58,7 +58,8 @@ def run_binary_ng_op(device, op, shape_a, shape_b, dtype=ttnn.bfloat16, memory_c
 
     tt_a = ttnn.from_torch(torch_a, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
     tt_b = ttnn.from_torch(torch_b, layout=ttnn.TILE_LAYOUT, device=device, memory_config=memory_config)
-    tt_result = op(tt_a, tt_b, memory_config=memory_config)
+    with device.cache_entries_counter.measure():
+        tt_result = op(tt_a, tt_b, memory_config=memory_config)
     tt_result = ttnn.to_torch(tt_result)
 
     return torch_result, tt_result
@@ -98,7 +99,7 @@ def test_ng_cache_reuse_same_config(device, isolate_program_cache):
     torch_ref2, tt_out2 = run_binary_ng_op(device, ttnn.add, shape, shape, dtype=ttnn.float32)
     assert_with_pcc(torch_ref2, tt_out2, 0.9999)
 
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
     assert not torch.equal(tt_out1, tt_out2)
 
 
