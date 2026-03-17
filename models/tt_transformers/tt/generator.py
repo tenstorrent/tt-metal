@@ -124,11 +124,6 @@ class Generator(WarmupForwardMixin):
         # Sweep all sampling parameters for prefill warmup just once since it is sequence length agnostic
         sampling_parameters_sweeped = False
 
-        # Warmup a small subset of SUPPORTED_PREFILL_BATCH_SIZES. Larger sizes
-        # (8, 16, 32) are omitted because they are too expensive to pre-compile
-        # and rarely hit in practice.
-        warmup_batch_sizes = [1, 2, 4]
-
         for model_id in range(self.data_parallel):
             for supported_length in sequence_lengths_to_warmup:
                 if model_id != 0 and (
@@ -136,7 +131,9 @@ class Generator(WarmupForwardMixin):
                 ):
                     continue
 
-                for batch_size in warmup_batch_sizes:
+                # Token-limit guard below skips combinations that would
+                # exceed MAX_BATCHED_PREFILL_SEQ_LEN.
+                for batch_size in SUPPORTED_PREFILL_BATCH_SIZES:
                     if batch_size > 1 and batch_size * supported_length >= MAX_BATCHED_PREFILL_SEQ_LEN:
                         logger.info(
                             f"Skipping batched prefill warmup for batch_size={batch_size}, "
