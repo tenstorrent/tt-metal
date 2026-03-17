@@ -80,7 +80,7 @@ Tensor pre_sort_transform_tensor(
             {padded_logical_shape[0], padded_logical_shape[1], padded_logical_shape[2], padded_last_dim}),
         tt::tt_metal::Array4D({0, 0, 0, 0}),
         descending ? -std::numeric_limits<float>::infinity() : std::numeric_limits<float>::infinity(),
-        /*multicore=*/true);
+        /*use_multicore=*/true);
 
     return padded_output_tensor;
 }
