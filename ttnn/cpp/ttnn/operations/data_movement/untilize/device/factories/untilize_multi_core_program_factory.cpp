@@ -119,22 +119,13 @@ UntilizeMultiCoreProgramFactory::cached_program_t UntilizeMultiCoreProgramFactor
 
     // Input CB
     uint32_t input_cb_num_tiles;
-    if (use_block_reader) {
-        // Block reader mode: double-buffer blocks instead of holding the entire shard.
-        if (num_input_blocks_per_full_core == 1) {
-            input_cb_num_tiles = num_tiles_per_input_block;
-        } else {
-            input_cb_num_tiles = num_tiles_per_input_block * 2;
-        }
-    } else if (input_is_sharded) {
+    if (input_is_sharded && !use_block_reader) {
         // Even sharding with pack_untilize: CB is backed by the sharded buffer (zero-copy)
         input_cb_num_tiles = num_tiles_per_input_block * num_input_blocks_per_full_core;
     } else {
-        if (num_input_blocks_per_full_core == 1) {
-            input_cb_num_tiles = num_tiles_per_input_block;
-        } else {
-            input_cb_num_tiles = num_tiles_per_input_block * 2;
-        }
+        // Block reader (sharded) or interleaved: double-buffer
+        input_cb_num_tiles =
+            (num_input_blocks_per_full_core == 1) ? num_tiles_per_input_block : num_tiles_per_input_block * 2;
     }
     Buffer* cb_backing_buffer = (input_is_sharded && !use_block_reader) ? src0_buffer : nullptr;
     auto [src0_cb_index, cb_src0] = create_cb(

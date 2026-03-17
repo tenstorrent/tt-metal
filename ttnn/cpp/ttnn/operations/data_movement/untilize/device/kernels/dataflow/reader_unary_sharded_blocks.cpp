@@ -7,7 +7,7 @@
 #include "experimental/circular_buffer.h"
 
 // Block-by-block reader for sharded inputs. The kernel does a simple local L1 to CB copy (not page-by-page via
-// TensorAccessor), so it is fully using device API 1.1 features. Only cb operations are used.
+// TensorAccessor), so it is not fully using device API 1.1 features. Only cb operations are used.
 // Reads tiles from the local L1 shard one block (tile-row) at a time into a double-buffered CB, so the
 // CB only needs 2 blocks instead of the entire shard.
 //
