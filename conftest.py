@@ -20,9 +20,9 @@ import psutil
 import subprocess
 from datetime import datetime
 import requests
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from html.parser import HTMLParser
 import shutil
+import tempfile
 
 from loguru import logger
 
@@ -152,24 +152,6 @@ class CIv2ModelDownloadUtils_:
         return files_to_download
 
     @staticmethod
-    def _download_file(session, url, local_path, timeout):
-        """Download a single file."""
-        try:
-            response = session.get(url, stream=True, timeout=timeout)
-            response.raise_for_status()
-
-            local_path.parent.mkdir(parents=True, exist_ok=True)
-
-            with open(local_path, "wb") as f:
-                for chunk in response.iter_content(chunk_size=8192):
-                    if chunk:
-                        f.write(chunk)
-
-            return url, True, None
-        except Exception as e:
-            return url, False, str(e)
-
-    @staticmethod
     def download_from_ci_v2_cache(
         model_path,
         timeout_in_s,
@@ -181,6 +163,12 @@ class CIv2ModelDownloadUtils_:
         assert isinstance(
             timeout_in_s, int
         ), f"{timeout_in_s} is not an integer, which it should be because it's a timeout duration"
+
+        # Check if aria2c is available
+        if not shutil.which("aria2c"):
+            raise RuntimeError(
+                "aria2c command not found. Please install aria2c: apt-get install aria2 (Ubuntu/Debian) or brew install aria2 (macOS)"
+            )
 
         # RK: Will this be portable? LOL
         download_dir = Path("/tmp/ttnn_model_cache/") / download_dir_suffix
@@ -194,7 +182,6 @@ class CIv2ModelDownloadUtils_:
         endpoint = f"{endpoint_prefix}/{model_path}"
 
         # Extract the cut_dirs equivalent (5 levels from endpoint_prefix)
-        # endpoint_prefix has scheme and path components, we need to figure out base path
         # For cutting 5 dirs: /mldata/model_checkpoints/pytorch/huggingface/
         base_path_components = 5
 
@@ -212,18 +199,14 @@ class CIv2ModelDownloadUtils_:
                 logger.warning(f"No files found at {endpoint}")
                 return download_dir / Path(model_path)
 
-            logger.info(f"Found {len(files_to_download)} files, downloading in parallel...")
+            logger.info(f"Found {len(files_to_download)} files, downloading with aria2c...")
 
-            # Download files in parallel
-            max_workers = min(32, len(files_to_download))  # Use up to 32 threads
-            failed_downloads = []
-
-            with ThreadPoolExecutor(max_workers=max_workers) as executor:
-                futures = {}
+            # Create a temporary file with URLs and output paths for aria2c
+            with tempfile.NamedTemporaryFile(mode="w", delete=False, suffix=".txt") as url_file:
+                url_file_path = Path(url_file.name)
 
                 for file_url in files_to_download:
                     # Calculate relative path by removing endpoint_prefix and cutting directories
-                    # Parse URL to get path component
                     from urllib.parse import urlparse
 
                     parsed = urlparse(file_url)
@@ -237,34 +220,62 @@ class CIv2ModelDownloadUtils_:
                         relative_path = path_parts[-1]
 
                     local_path = download_dir / relative_path
+                    local_path.parent.mkdir(parents=True, exist_ok=True)
 
-                    future = executor.submit(
-                        CIv2ModelDownloadUtils_._download_file, session, file_url, local_path, timeout_in_s
-                    )
-                    futures[future] = file_url
+                    # aria2c input file format: URL\n  out=filename\n
+                    url_file.write(f"{file_url}\n")
+                    url_file.write(f"  dir={local_path.parent}\n")
+                    url_file.write(f"  out={local_path.name}\n")
 
-                # Wait for all downloads to complete with progress tracking
-                completed = 0
-                for future in as_completed(futures):
-                    url, success, error = future.result()
-                    completed += 1
+            try:
+                # Run aria2c with optimal settings for parallel downloads
+                aria2c_cmd = [
+                    "aria2c",
+                    "--input-file",
+                    str(url_file_path),
+                    "--max-concurrent-downloads=32",  # Download up to 32 files in parallel
+                    "--max-connection-per-server=4",  # Up to 4 connections per server
+                    "--split=4",  # Split each file into 4 segments
+                    "--min-split-size=1M",  # Minimum size for splitting
+                    "--continue=true",  # Resume downloads if interrupted
+                    "--max-tries=5",  # Retry up to 5 times
+                    "--retry-wait=3",  # Wait 3 seconds between retries
+                    "--timeout=60",  # Connection timeout
+                    "--connect-timeout=30",  # Connection establishment timeout
+                    "--allow-overwrite=true",  # Overwrite existing files
+                    "--auto-file-renaming=false",  # Don't auto-rename files
+                    "--console-log-level=notice",  # Reduce verbosity
+                    "--summary-interval=10",  # Show summary every 10 seconds
+                    "--file-allocation=none",  # Faster for networked filesystems
+                ]
 
-                    if success:
-                        if completed % 10 == 0 or completed == len(files_to_download):
-                            logger.info(f"Downloaded {completed}/{len(files_to_download)} files")
-                    else:
-                        logger.error(f"Failed to download {url}: {error}")
-                        failed_downloads.append((url, error))
+                logger.info(f"Starting aria2c download with up to 32 parallel connections...")
 
-            if failed_downloads:
-                error_msg = f"Failed to download {len(failed_downloads)} files:\n"
-                for url, error in failed_downloads[:5]:  # Show first 5 errors
-                    error_msg += f"  {url}: {error}\n"
-                if len(failed_downloads) > 5:
-                    error_msg += f"  ... and {len(failed_downloads) - 5} more"
-                raise RuntimeError(error_msg)
+                result = subprocess.run(
+                    aria2c_cmd,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    timeout=timeout_in_s,
+                )
 
-            logger.info(f"Successfully downloaded all {len(files_to_download)} files")
+                logger.info(f"Successfully downloaded all {len(files_to_download)} files")
+
+                # Log aria2c output for debugging if needed
+                if result.stdout:
+                    logger.debug(f"aria2c output: {result.stdout}")
+
+            except subprocess.TimeoutExpired as err:
+                logger.error(f"Timeout of {timeout_in_s} seconds occurred while downloading from {endpoint}")
+                raise err
+            except subprocess.CalledProcessError as err:
+                logger.error(f"aria2c failed with exit code {err.returncode}")
+                if err.stderr:
+                    logger.error(f"aria2c error output: {err.stderr}")
+                raise RuntimeError(f"Download failed: {err.stderr}")
+            finally:
+                # Clean up temporary URL file
+                url_file_path.unlink(missing_ok=True)
 
         except Exception as err:
             logger.error(f"Error occurred while trying to download from {endpoint}: {err}")

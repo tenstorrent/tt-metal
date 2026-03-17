@@ -182,6 +182,9 @@ RUN umask 000 && \
     python3 -c "import ttexalens; print('ttexalens successfully imported')" || echo "ttexalens import failed"; \
     fi
 
+# Install aria2c for fast parallel model downloads in tests
+RUN apt-get update && apt-get install -y --no-install-recommends aria2 && apt-get clean && rm -rf /var/lib/apt/lists/*
+
 #############################################################
 
 FROM ci-test AS dev
