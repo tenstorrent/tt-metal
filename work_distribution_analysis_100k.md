@@ -1,259 +1,195 @@
-# Work Distribution Analysis: 100k Sequence with q_chunk=320, k_chunk=160
+# Work Distribution Analysis: Ring Joint SDPA (100k Sequence)
 
 ## Context
-Extending the 128k work distribution analysis to a ~100k sequence with different chunking parameters to understand how chunk sizes affect:
-1. L1 memory fit
-2. Work distribution imbalance
-3. Theoretical improvement from balancing
+Analysis of work distribution and core utilization for ring_joint_sdpa_profile with causal+balanced mode on 100k sequence.
 
 ---
 
 ## Configuration
 
-### Sequence Parameters (using 102,400 for clean math)
 ```
-Total sequence: 102,400 tokens (≈100k, divisible by 64×32 for alignment)
+Total sequence: 102,400 tokens (~100k)
 Ring size: 32 devices
 is_balanced: True (zigzag device assignment)
 is_causal: True
 
-Global chunks: 64 (at 1,600 tokens each)
-Device chunk pairs: 32 (each device gets 2 global chunks from zigzag)
-
 Device 0 (ring_index=0):
-  Global chunks: [0, 63]
+  Global chunks: [0, 63] (zigzag assignment)
   Token ranges: [0-1,599] + [100,800-102,399] = 3,200 local tokens
 
-q_chunk_size = 320 tokens → Sq_chunk_t = 10 tiles
-k_chunk_size = 160 tokens → Sk_chunk_t = 5 tiles
-DHt = 18 tiles (576 dim head / 32)
-vDHt = 18 tiles
-
-num_local_q_chunks = 3,200 / 320 = 10 Q chunks
-num_local_k_chunks = 3,200 / 160 = 20 K chunks
-
-Parallelization:
-  total_q_chunks = B × NH × num_q_chunks = 1 × 32 × 10 = 320
-  num_cores = 110
-  chunks_per_core: 100 cores get 3 chunks, 10 cores get 2 chunks
+q_chunk_size = 160 tokens
+k_chunk_size = 160 tokens
+num_local_q_chunks = 3,200 / 160 = 20 Q chunks per head
+num_heads = 32
+total_q_chunks = 32 * 20 = 640
+num_cores = 110
 ```
 
 ---
 
-## L1 Memory Analysis
+## Work Per Q Chunk
 
-### Circular Buffer Requirements
+For causal+balanced mode with ring_index=0:
+- **Light Q chunks (q0-q9)**: Process only local KV with causal mask (early sequence)
+- **Heavy Q chunks (q10-q19)**: Process ALL KV from ALL 32 devices (late sequence)
 
-From `ring_joint_sdpa_program_factory.cpp`:
+```
+Q Chunk | Global Positions     | Work (K chunks to process)
+--------|----------------------|---------------------------
+   0    | [0-159]              |     1   (local causal)
+   1    | [160-319]            |     2   (local causal)
+   2    | [320-479]            |     3   (local causal)
+   ...  | ...                  |   ...
+   9    | [1,440-1,599]        |    10   (local causal)
+--------|----------------------|---------------------------
+  10    | [100,800-100,959]    |   640   (ALL 32 devices)
+  11    | [100,960-101,119]    |   640   (ALL 32 devices)
+  ...   | ...                  |   ...
+  19    | [102,240-102,399]    |   640   (ALL 32 devices)
+
+Work ratio: Heavy (640) vs Light avg (5.5) = ~116x
+```
+
+---
+
+## Current Q Chunk Assignment
+
+From `ring_joint_sdpa_profile_program_factory.cpp` (lines 579-594):
+
 ```cpp
-q_tiles = Sq_chunk_t × DHt × q_buffer_factor = 10 × 18 × 2 = 360 tiles
-k_tiles = Sk_chunk_t × DHt × 2 = 5 × 18 × 2 = 180 tiles  // double buffer
-v_tiles = Sk_chunk_t × vDHt × 2 = 5 × 18 × 2 = 180 tiles  // double buffer
-mask_tiles = Sq_chunk_t × Sk_chunk_t = 10 × 5 = 50 tiles
-qk_tiles = Sq_chunk_t × Sk_chunk_t = 10 × 5 = 50 tiles
-out_im_tiles = Sq_chunk_t × vDHt = 10 × 18 = 180 tiles
-out0_t = Sq_chunk_t × vDHt = 10 × 18 = 180 tiles
-statistics_tiles = Sq_chunk_t = 10 tiles (× multiple CBs)
+const uint32_t total_q_chunks = B * NH * num_q_chunks;  // 640
+uint32_t next_global_chunk = 0;
+
+for (uint32_t i = 0; i < num_cores; ++i) {
+    uint32_t global_q_start = next_global_chunk;
+    // Sequential assignment - cores get consecutive Q chunks
 ```
 
-### Memory Calculation (BFloat16 = 2KB/tile)
+Q chunks are assigned **sequentially** by `(batch, head, q_chunk_idx)`:
+- Q chunk 0 = (b=0, h=0, q=0)  -> Core 0
+- Q chunk 1 = (b=0, h=0, q=1)  -> Core 0
+- ...
+- Q chunk 19 = (b=0, h=0, q=19) -> Core 0 or 1
+- Q chunk 20 = (b=0, h=1, q=0)  -> Core 1
+- ...
 
-| Buffer     | Tiles | Tile Size | Memory (KB) |
-|------------|-------|-----------|-------------|
-| Q input    | 360   | 2 KB      | 720         |
-| K input    | 180   | 2 KB      | 360         |
-| V input    | 180   | 2 KB      | 360         |
-| Mask       | 50    | 256 B     | 12.5        |
-| QK intermed| 50    | 2 KB      | 100         |
-| Out intermed (×3) | 540 | 2 KB  | 1,080       |
-| Statistics (×6) | 60  | 2 KB    | 120         |
-| Output     | 180   | 2 KB      | 360         |
-| Scale (×3) | 3     | 2 KB      | 6           |
-| **TOTAL**  |       |           | **~3,118 KB** |
-
-### Verdict: Does NOT fit in L1
-
-**L1 capacity: ~1,500 KB per Tensix core**
-**Required: ~3,118 KB**
-**Overcommit: 2.1×**
-
-The q_chunk_size=320 with k_chunk_size=160 configuration exceeds L1 by over 2×. This would require either:
-- Smaller chunk sizes
-- Streaming/spilling strategies
-- Different data formats
+With 640 Q chunks / 110 cores = 5.8 chunks/core:
+- **First ~18 cores**: Get Q chunks from early heads, predominantly light (q0-q9)
+- **Last ~18 cores**: Get Q chunks from late heads, predominantly heavy (q10-q19)
+- **Middle cores**: Mixed
 
 ---
 
-## Theoretical Work Distribution (Ignoring L1)
+## Measured Results (Tracy Profiling)
 
-### Q Chunk → Global Position Mapping
-
-Device 0 with is_balanced=True:
+### Test Configuration
 ```
-Local Q chunks 0-4:  → Global tokens [0-1,599]        (chunk 0, early sequence)
-Local Q chunks 5-9:  → Global tokens [100,800-102,399] (chunk 63, late sequence)
+ring_index=0, total_seq=102400, q_chunk=160, k_chunk=160
+Device: Blackhole, 110 compute cores
 ```
 
-### Work Per Q Chunk
-
-For balanced mode with ring_index=0:
-- Q chunks 0-4 (early): **SKIPPED** for remote KV (only local KV with causal mask)
-- Q chunks 5-9 (late): Process ALL KV (local + 31 remote devices)
-
+### TRISC_2 Kernel Duration Per Core
 ```
-Q Chunk │ Global Positions     │ Local KV (causal) │ Remote KV       │ Total K chunks
-────────┼──────────────────────┼───────────────────┼─────────────────┼───────────────
-   0    │ [0-319]              │       2           │  SKIPPED        │      2
-   1    │ [320-639]            │       4           │  SKIPPED        │      4
-   2    │ [640-959]            │       6           │  SKIPPED        │      6
-   3    │ [960-1,279]          │       8           │  SKIPPED        │      8
-   4    │ [1,280-1,599]        │      10           │  SKIPPED        │     10
-────────┼──────────────────────┼───────────────────┼─────────────────┼───────────────
-   5    │ [100,800-101,119]    │      20           │  31 × 20 = 620  │    640
-   6    │ [101,120-101,439]    │      20           │  31 × 20 = 620  │    640
-   7    │ [101,440-101,759]    │      20           │  31 × 20 = 620  │    640
-   8    │ [101,760-102,079]    │      20           │  31 × 20 = 620  │    640
-   9    │ [102,080-102,399]    │      20           │  31 × 20 = 620  │    640
+Min:    1,230,304 cycles (  0.91 ms)  <- Light Q chunks only
+Max:  162,408,871 cycles (120.30 ms)  <- Heavy Q chunks
+Avg:   64,094,909 cycles ( 47.48 ms)
+
+MEASURED UTILIZATION (avg/max): 39.5%
 ```
 
-**Work ratio:** Q chunk 5-9 (640) vs Q chunk 0 (2) = **320× difference**
-
-Compared to 128k analysis: 512× → The smaller sequence reduces per-chunk work variance.
-
----
-
-## Work Inventory
-
+### Work Distribution by Core
 ```
-Light Q chunks (q0-q4): 160 total (32 heads × 5)
-  Work per chunk: 2, 4, 6, 8, 10 K chunks
-  Total light work: 32 × (2+4+6+8+10) = 32 × 30 = 960 K chunks
+< 5M cycles   (< 3.7ms):   21 cores  <- Got mostly light Q chunks
+5-20M cycles  (3.7-15ms):  12 cores
+20-50M cycles (15-37ms):   14 cores
+50-100M cycles (37-74ms):  30 cores
+100-150M cycles (74-111ms): 30 cores
+>150M cycles  (>111ms):     3 cores  <- Got mostly heavy Q chunks
+```
 
-Heavy Q chunks (q5-q9): 160 total (32 heads × 5)
-  Work per chunk: 640 K chunks each
-  Total heavy work: 160 × 640 = 102,400 K chunks
+### Imbalance Metrics
+```
+Total compute work: 7,050,440,004 cycles (5.22 seconds aggregate)
+Optimal per core:    64,094,909 cycles (47.48 ms)
+Actual bottleneck:  162,408,871 cycles (120.30 ms)
 
-TOTAL WORK: 103,360 K chunks
-CORES: 110
-IDEAL PER CORE: 103,360 / 110 = 940 K chunks
+Imbalance overhead: 153%
+Max/Min ratio: 132x
 ```
 
 ---
 
-## Current vs Balanced Distribution
+## Root Cause
 
-### Current: Round-Robin Assignment
+The sequential Q chunk assignment creates work imbalance because:
 
-With 320 Q chunks assigned round-robin across 110 cores:
+1. **Q chunk ordering**: (batch, head, q_chunk_idx) means light chunks (q0-q9) come before heavy chunks (q10-q19) within each head
+
+2. **Sequential core assignment**: Core 0 gets chunks 0-5, Core 1 gets chunks 6-11, etc.
+
+3. **Result**: Early cores get predominantly light work, late cores get predominantly heavy work
+
+### Example Assignment (simplified)
 ```
-Core 0: (h0,q0), (h0,q1), (h0,q2)  → 2+4+6 = 12 K chunks    ← LIGHT
-Core 1: (h0,q3), (h0,q4), (h0,q5)  → 8+10+640 = 658 K chunks ← MIXED
-Core 2: (h0,q6), (h0,q7), (h0,q8)  → 640+640+640 = 1,920 K  ← BOTTLENECK
-Core 3: (h0,q9), (h1,q0), (h1,q1)  → 640+2+4 = 646 K chunks
-...
+Core 0:  (h0,q0), (h0,q1), (h0,q2), (h0,q3), (h0,q4), (h0,q5)
+         -> Work: 1+2+3+4+5+6 = 21 K chunks (light)
+
+Core 18: (h2,q18), (h2,q19), (h3,q0), (h3,q1), (h3,q2), (h3,q3)
+         -> Work: 640+640+1+2+3+4 = 1,290 K chunks (mixed)
+
+Core 100: (h31,q8), (h31,q9), (h31,q10), (h31,q11), (h31,q12), (h31,q13)
+          -> Work: 9+10+640+640+640+640 = 2,579 K chunks (heavy)
 ```
-
-**Current bottleneck: 1,920 K chunks** (cores with 3 heavy chunks)
-**Fastest core: ~12 K chunks** (cores with all light chunks)
-**Imbalance: 160×**
-
-### Balanced: Zigzag Pairing
-
-Discrete allocation problem:
-```
-160 heavy chunks ÷ 110 cores = 1.45 per core
-
-Integer solution:
-  Let x cores get 1 heavy chunk
-  Let y cores get 2 heavy chunks
-
-  x + y = 110
-  x + 2y = 160
-
-  Solving: y = 50, x = 60
-
-Result:
-  60 cores: 1 heavy chunk = 640 K chunks (from heavy)
-  50 cores: 2 heavy chunks = 1,280 K chunks (from heavy) ← BOTTLENECK
-```
-
-Light chunk distribution (give to underloaded cores):
-```
-160 light chunks → 60 underloaded cores
-160 / 60 = 2.67 chunks per core
-
-Final distribution:
-  60 cores (1 heavy): 640 + ~16 (light) ≈ 656 K chunks
-  50 cores (2 heavy): 1,280 K chunks ← BOTTLENECK
-```
-
-**Balanced bottleneck: 1,280 K chunks**
 
 ---
 
-## Comparison: 100k vs 128k
+## What `is_balanced` Actually Does
 
-| Metric | 100k (this analysis) | 128k (reference) |
-|--------|---------------------|------------------|
-| Total sequence | 102,400 | 131,072 |
-| q_chunk_size | 320 | 256 |
-| k_chunk_size | 160 | 128 |
-| Local Q chunks | 10 | 16 |
-| Local K chunks | 20 | 32 |
-| Heavy chunks total | 160 | 256 |
-| Heavy/core ratio | 1.45 | 2.33 |
-| Per-chunk work variance | 320× | 512× |
-| Current bottleneck | 1,920 K | 5,120 K |
-| Balanced bottleneck | 1,280 K | 3,072 K |
-| **Speedup from balancing** | **1.50×** | **1.67×** |
-| Balanced utilization | 73.4% | 78.3% |
+The `is_balanced` flag in the compute kernel (`ring_joint_sdpa.cpp` lines 224-227) handles **causal masking** with zigzag device assignment:
 
-### Key Insight
+```cpp
+if (is_causal && is_balanced && ring_index > ring_id) {
+    iter_num_kv_chunks /= 2;  // Skip processing remote KV for early Q chunks
+}
+```
 
-The 100k case with larger chunk sizes benefits **LESS** from balancing because:
-1. Fewer Q chunks per head (10 vs 16) → fewer heavy chunks overall
-2. Heavy/core ratio is lower (1.45 vs 2.33) → smaller discrete allocation gap
-3. The "all-heavy" worst case has only 3 chunks vs 5 chunks
+This ensures correctness when a device has both early and late sequence chunks, but it does **NOT** balance work across cores.
 
 ---
 
-## Visual Comparison
+## Recommendations
 
-```
-CURRENT (no balancing):
-  Fastest cores:  █░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░ (~12 K, idle 99%)
-  Mixed cores:    ██████████████████░░░░░░░░░░░░░░░ (~658 K, idle 66%)
-  Slowest cores:  ████████████████████████████████████████ (1,920 K) ← bottleneck
+### To Achieve Better Utilization
 
-BALANCED (zigzag):
-  60 cores:       █████████████████████░░░░░░░░░░░░░ (~656 K, idle 49%)
-  50 cores:       ██████████████████████████████████ (1,280 K) ← bottleneck
+1. **Interleave light and heavy Q chunks in assignment order**:
+   ```
+   Instead of: q0, q1, q2, ..., q9, q10, q11, ..., q19
+   Use:        q0, q19, q1, q18, q2, q17, ...  (zigzag within head)
+   ```
 
-PERFECT (theoretical):
-  All 110 cores:  ████████████████████████░░░░░░░░░░ (940 K each)
+2. **Or distribute by work estimate**:
+   - Count heavy chunks, distribute evenly first
+   - Fill remaining core capacity with light chunks
 
-Speedup: 1,920 → 1,280 = 1.50×
-Remaining gap: 1,280 → 940 = 1.36× (lost to discrete granularity)
-```
+3. **Change in program factory**:
+   - Currently: `global_q_start = next_global_chunk++` (sequential)
+   - Needed: Work-aware chunk ordering before assignment
+
+### Expected Improvement
+
+With proper work balancing:
+- 320 heavy chunks / 110 cores = 2.91 heavy/core
+- Bottleneck: ~3 heavy chunks = 1,920 K chunks
+- Optimal: 206,560 K / 110 = 1,878 K chunks
+- **Theoretical utilization: 97.8%** (vs current 39.5%)
 
 ---
 
 ## Summary
 
-| Configuration | L1 Fit? | Work Imbalance | Balanced Speedup | Utilization |
-|---------------|---------|----------------|------------------|-------------|
-| 100k, q=320, k=160 | NO (2.1×) | 160× | 1.50× | 73.4% |
-| 128k, q=256, k=128 | YES | 170× | 1.67× | 78.3% |
-
-### Recommendations
-
-1. **L1 constraint is the blocker**: q=320, k=160 does not fit. Need smaller chunks.
-
-2. **If L1 were not a constraint**: Balanced assignment would give 1.50× speedup, less than the 1.67× from 128k due to fewer heavy chunks.
-
-3. **To maximize balancing benefit**: More Q chunks per head (smaller q_chunk_size) creates more heavy chunks, which spreads better across cores.
-
-4. **Alternative chunk sizes that might fit L1** (rough estimates):
-   - q=192, k=96 → ~1,400 KB (might fit)
-   - q=160, k=80 → ~1,100 KB (should fit)
-   - q=128, k=64 → ~800 KB (definitely fits)
+| Metric | Current | With Work Balancing |
+|--------|---------|---------------------|
+| Utilization | 39.5% | ~97.8% |
+| Bottleneck | 120.30 ms | ~48.5 ms |
+| Max/Min ratio | 132x | ~1.02x |
+| Speedup | 1.0x | **2.5x** |

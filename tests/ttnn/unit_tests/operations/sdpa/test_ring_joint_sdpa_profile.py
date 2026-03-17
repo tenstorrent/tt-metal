@@ -846,6 +846,7 @@ def test_ring_joint_sdpa_profile_ring_sizes(device, ring_size: int, ring_index_r
     [
         (64, 64),  # Default
         (128, 128),  # Larger chunks
+        (160, 160),  # Optimal for 100k: 97.8% utilization (see work_balancing_analysis_tt_train_vs_ring_joint.md)
         (64, 128),  # Asymmetric: smaller Q, larger K
         (128, 256),  # Large K chunks
     ],
@@ -1039,8 +1040,8 @@ def test_ring_joint_sdpa_profile_seq_lengths(device, seq_len_per_device: int):
 
 
 @pytest.mark.skipif(os.environ.get("RUN_PROFILE") != "1", reason="Set RUN_PROFILE=1 to run")
-@pytest.mark.parametrize("k_chunk_size", [64, 128, 256, 512])
-@pytest.mark.parametrize("q_chunk_size", [64, 128, 256, 512])
+@pytest.mark.parametrize("k_chunk_size", [64, 128, 160, 256, 512])
+@pytest.mark.parametrize("q_chunk_size", [64, 128, 160, 256, 512])
 @pytest.mark.parametrize(
     "total_seq",
     [
