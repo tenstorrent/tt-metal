@@ -344,12 +344,12 @@ def train():
     tokenizer = AutoTokenizer.from_pretrained("gpt2")
 
     yaml_config = load_config(
-        CONFIG, f"{get_tt_metal_home()}/tt-train/configs/training_configs"
+        CONFIG, f"{get_tt_metal_runtime_root()}/tt-train/configs/training_configs"
     )
     model_config = load_config(yaml_config["training_config"]["model_config"])
 
     override_config_path = (
-        f"{os.environ['TT_METAL_HOME']}/tt-train/configs/training_overrides.yaml"
+        f"{get_tt_metal_runtime_root()}/tt-train/configs/training_overrides.yaml"
     )
 
     if os.path.isfile(override_config_path):

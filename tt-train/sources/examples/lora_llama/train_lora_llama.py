@@ -319,7 +319,7 @@ def main():
 
     # ── Model ─────────────────────────────────────────────────────────────────
     if args.model_config is not None:
-        tt_train_root = f"{get_tt_metal_home()}/tt-train"
+        tt_train_root = f"{get_tt_metal_runtime_root()}/tt-train"
         print(f"Loading model config from: {args.model_config}")
         yaml_config = load_config(args.model_config, tt_train_root)
         llama_cfg = llama_config_from_yaml(yaml_config, vocab_size)

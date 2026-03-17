@@ -24,7 +24,7 @@ def set_seed(seed: int = 42):
     ttml.autograd.AutoContext.get_instance().set_seed(seed)
 
 
-def get_tt_metal_home() -> str:
+def get_tt_metal_runtime_root() -> str:
     """Return TT-Metal runtime root from the environment.
 
     Returns:
