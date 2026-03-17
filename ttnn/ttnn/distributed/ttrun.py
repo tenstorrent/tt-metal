@@ -23,6 +23,8 @@ from pydantic import BaseModel, Field, ValidationError, field_validator
 
 TT_RUN_PREFIX = "[tt-run]"
 DEFAULT_LD_LIBRARY_PATH = "{home}/build/lib"
+DEFAULT_JIT_SCRATCH = Path("/tmp/tt-jit-build")
+DEFAULT_CACHE_FALLBACK = Path("/tmp")
 INTERRUPTED_EXIT_CODE = 130  # 128 + SIGINT
 PRETTY_PRINT_THRESHOLD = 10  # Minimum args to trigger multi-line formatting
 
@@ -179,7 +181,8 @@ def resolve_path(
     check_fn = Path.is_file if must_be_file else Path.exists
 
     # Track TT_METAL_HOME for fallback warning
-    tt_metal_home = os.environ.get("TT_METAL_HOME")
+    tt_metal_home_str = os.environ.get("TT_METAL_HOME")
+    tt_metal_home_path = Path(tt_metal_home_str).expanduser() if tt_metal_home_str else None
     tt_metal_home_checked = False
 
     for base_path in search_paths:
@@ -188,16 +191,16 @@ def resolve_path(
         candidate = (base_path / expanded_path).resolve()
         if check_fn(candidate):
             # Warn if TT_METAL_HOME was set but we found the file elsewhere (fallback occurred)
-            if tt_metal_home and tt_metal_home_checked and str(base_path) != tt_metal_home:
+            if tt_metal_home_path and tt_metal_home_checked and base_path != tt_metal_home_path:
                 logger.debug(
-                    f"{TT_RUN_PREFIX} {description} not found in TT_METAL_HOME ({tt_metal_home}), "
+                    f"{TT_RUN_PREFIX} {description} not found in TT_METAL_HOME ({tt_metal_home_path}), "
                     f"using fallback location: {candidate}"
                 )
             else:
                 logger.debug(f"{TT_RUN_PREFIX} Resolved {description}: {path} -> {candidate}")
             return candidate
         # Track if we checked TT_METAL_HOME
-        if tt_metal_home and str(base_path) == str(Path(tt_metal_home).expanduser()):
+        if tt_metal_home_path and base_path == tt_metal_home_path:
             tt_metal_home_checked = True
 
     # Path not found
@@ -225,8 +228,7 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
     logger.debug(f"{TT_RUN_PREFIX} Loading configuration from: {resolved_yaml_path}")
     logger.debug(f"{TT_RUN_PREFIX} Original CWD: {ORIGINAL_CWD}")
 
-    with open(resolved_yaml_path, "r") as f:
-        data = yaml.safe_load(f)
+    data = yaml.safe_load(resolved_yaml_path.read_text())
 
     try:
         config = TTRunConfig(**data)
@@ -238,8 +240,7 @@ def parse_binding_config(yaml_path: Path, mock_cluster_rank_binding: Optional[Pa
         resolved_mock_path = resolve_path(
             mock_cluster_rank_binding, description="Mock cluster rank binding configuration", must_be_file=True
         )
-        with open(resolved_mock_path, "r") as f:
-            mock_data = yaml.safe_load(f)
+        mock_data = yaml.safe_load(resolved_mock_path.read_text())
 
         # Validate and resolve mock cluster rank binding configuration paths
         resolved_mock_bindings: Dict[int, Path] = {}
@@ -440,6 +441,26 @@ def classify_mpi_env_exports(
     return direct_exports, name_only_exports, missing_launcher_keys
 
 
+SENSITIVE_SYSTEM_PATHS = tuple(
+    Path(p)
+    for p in [
+        "/etc",
+        "/bin",
+        "/sbin",
+        "/usr/bin",
+        "/usr/sbin",
+        "/lib",
+        "/lib64",
+        "/usr/lib",
+        "/usr/lib64",
+        "/boot",
+        "/sys",
+        "/proc",
+        "/dev",
+    ]
+)
+
+
 def validate_path_safety(path_str: str, var_name: str) -> None:
     """Validate that a filesystem path is safe for use.
 
@@ -460,8 +481,8 @@ def validate_path_safety(path_str: str, var_name: str) -> None:
 
     path = Path(path_str)
 
-    # Check for parent directory traversal
-    if ".." in path_str:
+    # Check for parent directory traversal using pathlib parts
+    if ".." in path.parts:
         raise ValueError(
             f"{var_name} contains parent directory traversal (..): {path_str}. "
             "This is not allowed for security reasons."
@@ -471,25 +492,10 @@ def validate_path_safety(path_str: str, var_name: str) -> None:
     if not path.is_absolute():
         raise ValueError(f"{var_name} must be an absolute path, got: {path_str}")
 
-    # Check for sensitive system directories
-    sensitive_prefixes = [
-        "/etc",
-        "/bin",
-        "/sbin",
-        "/usr/bin",
-        "/usr/sbin",
-        "/lib",
-        "/lib64",
-        "/usr/lib",
-        "/usr/lib64",
-        "/boot",
-        "/sys",
-        "/proc",
-        "/dev",
-    ]
+    # Check for sensitive system directories using pathlib
     path_normalized = path.resolve()
-    for prefix in sensitive_prefixes:
-        if str(path_normalized).startswith(prefix):
+    for sensitive_path in SENSITIVE_SYSTEM_PATHS:
+        if path_normalized.is_relative_to(sensitive_path):
             raise ValueError(
                 f"{var_name} points to a sensitive system directory: {path_str}. "
                 f"Please choose a different path under /tmp, /home, or a dedicated application directory."
@@ -608,14 +614,17 @@ def get_rank_environment(binding: RankBinding, config: TTRunConfig) -> Dict[str,
     # NFS-canonical paths, so cache-hit checks work across ranks/hosts.
     # See RANK_SCOPED_PATH_ENV_VARS and build.hpp for the full rationale.
     if "TT_METAL_CACHE" not in env:
-        home = os.environ.get("HOME", "")
-        env["TT_METAL_CACHE"] = f"{home}/.cache" if home else "/tmp"
+        home = os.environ.get("HOME")
+        if home:
+            env["TT_METAL_CACHE"] = str(Path(home) / ".cache")
+        else:
+            env["TT_METAL_CACHE"] = str(DEFAULT_CACHE_FALLBACK)
 
     # Provide a default TT_METAL_JIT_SCRATCH so SFPI compilation writes to
     # local disk instead of NFS.  Rank scoping (below) appends a unique
     # per-rank suffix, eliminating cross-rank contention entirely.
     if "TT_METAL_JIT_SCRATCH" not in env and "TT_METAL_JIT_SCRATCH" not in explicit_rank_scoped_keys:
-        env["TT_METAL_JIT_SCRATCH"] = "/tmp/tt-jit-build"
+        env["TT_METAL_JIT_SCRATCH"] = str(DEFAULT_JIT_SCRATCH)
 
     # Disable XIP ELF dumps in multi-host mode by default.  XIP dumps write
     # .xip.elf files next to cached ELFs on NFS, which causes ESTALE contention
