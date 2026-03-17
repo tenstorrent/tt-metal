@@ -62,7 +62,8 @@ SoftmaxProgramFactoryGeneralHSmall::cached_program_t SoftmaxProgramFactoryGenera
         {
             {tt::CBIndex::c_0, Ht},                         // input
             {tt::CBIndex::c_1, 1},                          // mask
-            {tt::CBIndex::c_2, 1},                          // scaler
+            {tt::CBIndex::c_2, 1},                          // max scaler (row-0 fill for reduce LLK)
+            {tt::CBIndex::c_3, 1},                          // sum scaler (col-0 fill for matmul reduce)
             {tt::CBIndex::c_16, Ht},                        // output
             {tt::CBIndex::c_24, Ht, intermed_data_format},  // exp(x)
             {tt::CBIndex::c_25, 1, intermed_data_format},   // reduce

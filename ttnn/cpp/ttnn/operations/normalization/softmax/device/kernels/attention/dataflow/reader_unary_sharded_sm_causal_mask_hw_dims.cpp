@@ -21,7 +21,8 @@ FORCE_INLINE void generate_inv_sqrt_hw_bcast_tile() {
 }
 
 void kernel_main() {
-    constexpr uint32_t cb_reduce_scaler = tt::CBIndex::c_1;
+    constexpr uint32_t cb_max_scaler = tt::CBIndex::c_1;
+    constexpr uint32_t cb_sum_scaler = tt::CBIndex::c_13;
 
     constexpr uint32_t block_wt = get_compile_time_arg_val(0);
     constexpr auto mask_args = TensorAccessorArgs<1>();
@@ -55,7 +56,11 @@ void kernel_main() {
 
             if (h == 0 && w == 0) {
                 dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
-                    cb_reduce_scaler,
+                    cb_max_scaler,
+                    ckernel::PoolType::MAX,
+                    ckernel::ReduceDim::REDUCE_ROW>();
+                dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+                    cb_sum_scaler,
                     ckernel::PoolType::SUM,
                     ckernel::ReduceDim::REDUCE_ROW>();
             }

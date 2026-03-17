@@ -243,6 +243,10 @@ SoftmaxProgramFactoryAttentionOptimized::cached_program_t SoftmaxProgramFactoryA
         CircularBufferConfig(in2_t * reduce_scaler_tile_size, {{tt::CBIndex::c_2, reduce_scaler_cb_data_format}})
             .set_page_size(tt::CBIndex::c_2, reduce_scaler_tile_size);
     auto cb_in2_id = CreateCircularBuffer(program, all_device_cores, c_in2_config);
+    auto c_sum_scaler_config =
+        CircularBufferConfig(in2_t * reduce_scaler_tile_size, {{tt::CBIndex::c_13, reduce_scaler_cb_data_format}})
+            .set_page_size(tt::CBIndex::c_13, reduce_scaler_tile_size);
+    CreateCircularBuffer(program, all_device_cores, c_sum_scaler_config);
     auto c_intermed0_config = CircularBufferConfig(im0_t * im_tile_size, {{tt::CBIndex::c_6, im_cb_data_format}})
                                   .set_page_size(tt::CBIndex::c_6, im_tile_size);
     auto cb_intermed0_id = CreateCircularBuffer(program, all_device_cores, c_intermed0_config);

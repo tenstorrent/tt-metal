@@ -214,10 +214,14 @@ SoftmaxShardedProgramFactoryAttentionOptimized::cached_program_t SoftmaxShardedP
                             .set_page_size(tt::CBIndex::c_0, in0_tile_size)
                             .set_globally_allocated_address(*src0_buffer);
     auto cb_in0_id = CreateCircularBuffer(program, all_device_cores, c_in0_config);
-    // in1 scalar
+    // in1 max scaler (row-0 fill for reduce LLK)
     auto c_in1_config = CircularBufferConfig(in1_CB_size, {{tt::CBIndex::c_1, reduce_scaler_cb_data_format}})
                             .set_page_size(tt::CBIndex::c_1, reduce_scaler_tile_size);
     CreateCircularBuffer(program, all_device_cores, c_in1_config);
+    // sum scaler (col-0 fill for matmul reduce)
+    auto c_sum_scaler_config = CircularBufferConfig(in1_CB_size, {{tt::CBIndex::c_13, reduce_scaler_cb_data_format}})
+                                   .set_page_size(tt::CBIndex::c_13, reduce_scaler_tile_size);
+    CreateCircularBuffer(program, all_device_cores, c_sum_scaler_config);
     // in2 in3 attn scale mask
     std::optional<CBHandle> cb_intermed2_id;
     std::optional<CBHandle> cb_in2_id;

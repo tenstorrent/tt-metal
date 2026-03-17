@@ -60,9 +60,16 @@ void kernel_main() {
     experimental::CircularBuffer cb_id_in0_obj(cb_id_in0);
 
     {
-        constexpr uint32_t cb_in_2 = tt::CBIndex::c_2;
-        dataflow_kernel_lib::
-            calculate_and_prepare_reduce_scaler<cb_in_2, ckernel::PoolType::SUM, ckernel::ReduceDim::REDUCE_ROW>();
+        constexpr uint32_t cb_max_scaler = tt::CBIndex::c_2;
+        constexpr uint32_t cb_sum_scaler = tt::CBIndex::c_13;
+        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+            cb_max_scaler,
+            ckernel::PoolType::MAX,
+            ckernel::ReduceDim::REDUCE_ROW>();
+        dataflow_kernel_lib::calculate_and_prepare_reduce_scaler<
+            cb_sum_scaler,
+            ckernel::PoolType::SUM,
+            ckernel::ReduceDim::REDUCE_ROW>();
     }
 
     // read a ublock of tiles from src to CB, and then push the ublock to unpacker
