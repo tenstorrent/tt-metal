@@ -132,7 +132,13 @@ __attribute__((noinline, noclone)) void blocked_matmul_and_pack(
  * Per-row-group max reduction with optional eltwise_max against prev values.
  * Reads from in0_cb at row group offset, writes to out_cb sequentially.
  */
-template <PoolType pool_type, ReduceDim reduce_dim, uint32_t scale_cb, uint32_t cols, uint32_t ROW_STRIDE = cols>
+template <
+    PoolType pool_type,
+    ReduceDim reduce_dim,
+    uint32_t scale_cb,
+    uint32_t cols,
+    uint32_t ROW_STRIDE = cols,
+    bool PROFILUM = false>
 void reduce_c_row_group(
     uint32_t in0_cb,
     uint32_t out_cb,
@@ -155,6 +161,7 @@ void reduce_c_row_group(
     tile_regs_acquire();
 
     if (do_eltwise_max) {
+        MaybeDeviceZoneScopedN(PROFILUM, "copy_tile_custom");
         cb_wait_front(prev_cb, cumulative_prev_tiles);
         // sdpa_reduce_copy_tile_to_dst_init_short(prev_cb);
         for (uint32_t i = 0; i < GROUP_SIZE; i++) {
@@ -169,34 +176,43 @@ void reduce_c_row_group(
     // When respect_trigger=true, the unpack MOP is split into two halves with a
     // HW semaphore wait in between, so we don't need cb_wait_front here.
     if (!respect_trigger) {
+        MaybeDeviceZoneScopedN(PROFILUM, "w8 b4 red");
         cb_wait_front(in0_cb, cumulative_input_tiles);
     }
 
 #ifdef ARCH_BLACKHOLE
-    if (!do_eltwise_max) {
-        reduce_block_max_row_init_runtime(reduce_cols, respect_trigger);
-    } else if (row_group_index == 0) {
+    if (row_group_index > 0) {
+        MaybeDeviceZoneScopedN(PROFILUM, "reduce_block_max_row_reinit_minimal_runtime");
+        reduce_block_max_row_reinit_minimal_runtime(reduce_cols, respect_trigger);
+    } else if (do_eltwise_max) {
+        MaybeDeviceZoneScopedN(PROFILUM, "reduce_block_max_row_reinit_short_runtime");
         reduce_block_max_row_reinit_short_runtime(reduce_cols, respect_trigger);
     } else {
-        reduce_block_max_row_reinit_minimal_runtime(reduce_cols, respect_trigger);
+        MaybeDeviceZoneScopedN(PROFILUM, "reduce_block_max_row_init_runtime");
+        reduce_block_max_row_init_runtime(reduce_cols, respect_trigger);
     }
 #else
     reduce_block_max_row_init_runtime(reduce_cols, respect_trigger);
 #endif
-    for (uint32_t i = 0; i < GROUP_SIZE; i++) {
-        const uint32_t input_tile_start = (row_start + i) * ROW_STRIDE;
-        reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger);
+    {
+        MaybeDeviceZoneScopedN(PROFILUM, "reduce_block_max_row_runtime");
+        for (uint32_t i = 0; i < GROUP_SIZE; i++) {
+            const uint32_t input_tile_start = (row_start + i) * ROW_STRIDE;
+            reduce_block_max_row_runtime(in0_cb, scale_cb, input_tile_start, i, respect_trigger);
+        }
+        reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger);
+        tile_regs_commit();
     }
-    reduce_block_max_row_uninit_runtime(in0_cb, respect_trigger);
+    {
+        MaybeDeviceZoneScopedN(PROFILUM, "pack_tile");
+        tile_regs_wait();
 
-    tile_regs_commit();
-    tile_regs_wait();
+        for (uint32_t i = 0; i < GROUP_SIZE; i++) {
+            pack_tile<false>(i, out_cb);
+        }
 
-    for (uint32_t i = 0; i < GROUP_SIZE; i++) {
-        pack_tile<false>(i, out_cb);
+        tile_regs_release();
     }
-
-    tile_regs_release();
 }
 
 /**
@@ -700,7 +716,7 @@ static void sdpa_inner_loop_step(
     PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, actual_sbw)));
 #endif
     for (uint32_t q_subblock = 0; q_subblock < q_num_subblocks; q_subblock++) {
-        MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)");
+        MaybeDeviceZoneScopedN(false, "Softmax(Q@KT)");
         cb_wait_front(cb_q_in, q_wait_tiles);
         // Deferred KT wait: reader pushes Q before KT, so waiting for Q first
         // allows reserves + MOP config + Q wait to overlap with KT DMA.
@@ -854,7 +870,7 @@ static void sdpa_inner_loop_step(
         PACK((llk_pack_mop_config<false, false, false>(cb_qkt_im, 1)));
 #endif
         {
-            MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)@V");
+            MaybeDeviceZoneScopedN(false, "Softmax(Q@KT)@V");
             // subblock_h=1: split-drain (sub_exp interleaved with V matmul).
             // subblock_h>1: non-split drain (all sub_exp first, then full V matmul).
             // Note: constexpr on subblock_h eliminates the dead branch at compile time.
@@ -1001,7 +1017,7 @@ static void sdpa_inner_loop_step(
         // q_subblock 1..N-1: SALAD(prev) overlapped with matmul(cur)
         exp_packthread_tile_init<EXP_APPROX_MODE, false>();
         for (uint32_t q_subblock = 1; q_subblock < qktv_q_num_subblocks; ++q_subblock) {
-            MaybeDeviceZoneScopedN(PROFILING_ENABLED, "Softmax(Q@KT)@V");
+            MaybeDeviceZoneScopedN(false, "Softmax(Q@KT)@V");
             uint32_t salad_row = q_subblock - 1;
             uint32_t w_salad = salad_row - pushed_rows;
             uint32_t w_q = q_subblock - pushed_rows;
@@ -1426,7 +1442,7 @@ void sdpa_ring_v2(
             }
 
             sdpa_inner_loop_step<
-                false,  // PROFILING_ENABLED
+                true,  // PROFILING_ENABLED
                 Sq_chunk_t,
                 Sk_chunk_t,
                 Skt,
