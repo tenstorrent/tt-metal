@@ -19,9 +19,10 @@ Close only issues that are no longer actionable based on the latest completed ru
 
 ## Required Workflow
 
+0. **Start with a clean slate.** Before doing anything else, delete any stale files in `build_ci/ci_ticketing/close_tickets` (e.g. old `closed_tickets.json` and contents of `glean_review_logs`) so you never rely on pre-existing outputs; all inputs for this run must be produced or re-fetched during this run.
 1. Use only direct `gh` / `gh api` commands.
 2. If you need temporary scripts, place them in `.build_ci/data/ci_ticketing_temp`.
-3. Before starting review, clear stale logs in `build_ci/ci_ticketing/close_tickets/glean_review_logs`.
+3. Before starting review, ensure `build_ci/ci_ticketing/close_tickets/glean_review_logs` is clear (already done in step 0 if you cleared it there).
 4. For each issue:
    - Extract the failing test name and root-cause error from the issue body.
    - Inspect the latest completed workflow run on `main` for that same job.

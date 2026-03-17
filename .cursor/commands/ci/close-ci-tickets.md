@@ -4,13 +4,16 @@
 Review open CI maintenance issues and close only those no longer relevant based on the latest completed run on `main`.
 
 ## Steps
+0. **Start with a clean slate**
+   - Delete any stale files in `build_ci/ci_ticketing/close_tickets` (e.g. old `closed_tickets.json` and contents of `glean_review_logs`) so you never rely on pre-existing outputs. All inputs for this run must be produced or re-fetched during this run.
+
 1. **Load candidate issues**
    - Query open issues with label `glean CI maintenance`
    - Evaluate all candidates before applying any close limit
 
 2. **Apply close-ticket rule**
    - Follow `.cursor/rules/ci-close-tickets.mdc`
-   - Clear stale logs under `build_ci/ci_ticketing/close_tickets/glean_review_logs`
+   - (Stale logs under `build_ci/ci_ticketing/close_tickets/glean_review_logs` should already have been cleared in step 0.)
    - For each issue, compare ticket failure vs latest completed job run on `main`
 
 3. **Decide closures**

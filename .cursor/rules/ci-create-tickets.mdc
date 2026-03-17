@@ -18,10 +18,11 @@ Create issues only for **deterministic** CI failures that are still repeating an
 
 ## Required Flow
 
+0. **Start with a clean slate.** Before doing anything else, delete stale files in `build_ci/ci_ticketing/create_tickets` so you never rely on pre-existing outputs. **Exception:** if the user specified they already ran `tools/ci/extract_failing_jobs.py`, delete everything in that folder **except** `failing_jobs.json` (that file is the input for this run). Otherwise delete everything there, including any old `failing_jobs.json`. In all cases remove old `created_issues.jsonl`, `created_tickets_report.json`, and contents of `downloaded_logs`.
 1. Use only direct `gh` / `gh api` commands for GitHub operations.
-2. Build candidate jobs from `build_ci/ci_ticketing/create_tickets/failing_jobs.json`.
+2. Build candidate jobs from `build_ci/ci_ticketing/create_tickets/failing_jobs.json`. This file must either be produced in this run (e.g. by running `extract_failing_jobs.py`) or, if the user specified they already ran that script, it may be the existing `failing_jobs.json` (the only file that may be reused in that case).
 3. Deduplicate candidates against open `glean CI maintenance` issues.
-4. Before validation, delete stale logs in `build_ci/ci_ticketing/create_tickets/downloaded_logs`.
+4. Before validation, ensure `build_ci/ci_ticketing/create_tickets/downloaded_logs` is empty (already done in step 0 if you cleared it there).
 5. **For each candidate you might create an issue for:** download the job logs for **all three** failing runs (e.g. save to `downloaded_logs` or equivalent), then:
    - Read the downloaded logs and confirm the **same** error or failure signature appears in all three runs. If it does not, skip creating an issue for that candidate.
    - Extract the **actual** error text from the logs (e.g. `##[error]` lines, `[  FAILED  ]` lines, or the relevant exception message) for use in the issue body.
