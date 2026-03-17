@@ -32,15 +32,15 @@ void bind_strided_reduce_scatter_async(nb::module_& mod, const ccl_operation_t& 
             [](const ccl_operation_t& self,
                const ttnn::Tensor& input_tensor,
                const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
-               const int32_t dim,
+               int32_t dim,
                const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
                uint32_t mm_block_ht,
                uint32_t mm_block_wt,
                const std::optional<GlobalSemaphore>& barrier_semaphore,
-               const uint32_t num_links,
+               uint32_t num_links,
                const std::optional<ttnn::MemoryConfig>& memory_config,
                const std::optional<ttnn::MemoryConfig>& intermediate_memory_config,
-               const ttnn::ccl::Topology topology,
+               ttnn::ccl::Topology topology,
                std::optional<tt::tt_metal::SubDeviceId> subdevice_id,
                std::optional<uint32_t> cluster_axis,
                std::optional<uint32_t> chunks_per_sync,
@@ -120,8 +120,8 @@ void bind_strided_reduce_scatter_async(nb::module_& mod) {
             num_workers_per_link (Optional[int]): Number of workers per link.
             num_buffers_per_channel (Optional[int]): Number of buffers per channel.
             mm_cores_y (Optional[int]): Number of cores in Y direction for matmul output layout.
-            mm_block_ht (int): Matmul block height in tiles.
-            mm_block_wt (int): Matmul block width in tiles.
+            mm_block_ht (int): Matmul unit block height in tiles.
+            mm_block_wt (int): Matmul unit block width in tiles.
             mm_N_full_block_wt (Optional[int]): Matmul N block width in tiles.
             chunk_width_in_mm_blocks (Optional[int]): Chunk width in matmul blocks.
 

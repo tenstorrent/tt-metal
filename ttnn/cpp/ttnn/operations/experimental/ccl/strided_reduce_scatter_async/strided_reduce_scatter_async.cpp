@@ -14,21 +14,21 @@ ttnn::Tensor ExecuteStridedReduceScatterAsync::invoke(
     const std::optional<std::vector<ttnn::Tensor>>& persistent_output_buffers,
     const int32_t dim,
     const std::vector<GlobalSemaphore>& multi_device_global_semaphore,
-    uint32_t mm_block_ht,
-    uint32_t mm_block_wt,
+    const uint32_t mm_block_ht,
+    const uint32_t mm_block_wt,
     const std::optional<GlobalSemaphore>& barrier_semaphore,
     const uint32_t num_links,
     const std::optional<ttnn::MemoryConfig>& memory_config,
     const std::optional<ttnn::MemoryConfig>& intermediate_memory_config,
     const ttnn::ccl::Topology topology,
-    std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
-    std::optional<uint32_t> cluster_axis,
-    std::optional<uint32_t> chunks_per_sync,
-    std::optional<uint32_t> num_workers_per_link,
-    std::optional<uint32_t> num_buffers_per_channel,
-    std::optional<uint32_t> mm_cores_y,
-    std::optional<uint32_t> mm_N_full_block_wt,
-    std::optional<uint32_t> chunk_width_in_mm_blocks) {
+    const std::optional<tt::tt_metal::SubDeviceId> sub_device_id,
+    const std::optional<uint32_t> cluster_axis,
+    const std::optional<uint32_t> chunks_per_sync,
+    const std::optional<uint32_t> num_workers_per_link,
+    const std::optional<uint32_t> num_buffers_per_channel,
+    const std::optional<uint32_t> mm_cores_y,
+    const std::optional<uint32_t> mm_N_full_block_wt,
+    const std::optional<uint32_t> chunk_width_in_mm_blocks) {
     int32_t rank = input_tensor.logical_shape().rank();
     int32_t scatter_dim = (dim < 0) ? rank + dim : dim;
 
