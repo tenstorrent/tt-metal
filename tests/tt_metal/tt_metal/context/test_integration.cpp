@@ -116,10 +116,17 @@ void PerformDeviceWork(
 
     auto child_mesh_shape = child_env.get_system_mesh().shape();
     auto child_mesh_device = child_env.create_mesh_device(distributed::MeshDeviceConfig(child_mesh_shape));
-    if (child_mesh_device->num_devices() != expected_num_chips) {
+    // The system mesh shape may be smaller than expected_num_chips when chips are not fabric-connected
+    // (e.g. standalone PCIe cards without direct chip-to-chip links). Verify at least one device opened.
+    if (child_mesh_device->num_devices() == 0) {
         _exit(kExitBadMeshSize);
     }
-    log_info(tt::LogTest, "{}: opened MeshDevice with {} device(s)", child_name, child_mesh_device->num_devices());
+    log_info(
+        tt::LogTest,
+        "{}: opened MeshDevice with {} device(s) (expected up to {})",
+        child_name,
+        child_mesh_device->num_devices(),
+        expected_num_chips);
 
     try {
         PerformDeviceWork(child_mesh_device, data_pattern, child_name, child_name + " kernel");
