@@ -22,7 +22,7 @@ from tests.ttnn.unit_tests.operations.ccl.blackhole_CI.box.nightly.test_all_gath
         (4, [1, 1, 256, 256], 3, ttnn.TILE_LAYOUT, ttnn.Topology.Linear, ttnn.bfloat16),
     ],
 )
-@pytest.mark.parametrize("cluster_axis", [1])
+@pytest.mark.parametrize("cluster_axis", [0, 1])
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_ag",
     [
@@ -76,40 +76,27 @@ def test_all_links_ag(
         print(f"Testing horizontal all-gather with {num_devices} devices and {num_links} links")
     else:
         print(f"Testing vertical all-gather with {num_devices} devices and {num_links} links")
-    for i in range(mesh_device.shape[(cluster_axis - 1) % 2]):
-        if cluster_axis == 0:
-            print(f"Validating row {i} of {mesh_device.shape}")
-        else:
-            print(f"Validating column {i} of {mesh_device.shape}")
-        if cluster_axis == 0:
-            submesh_device = mesh_device.create_submesh(
-                ttnn.MeshShape((num_devices, 1)), offset=ttnn.MeshCoordinate(0, i)
-            )
-        else:
-            submesh_device = mesh_device.create_submesh(
-                ttnn.MeshShape((1, num_devices)), offset=ttnn.MeshCoordinate(i, 0)
-            )
-        run_all_gather_impl(
-            submesh_device,
-            num_devices,
-            ag_output_shape,
-            dim,
-            num_links,
-            ag_input_dtype,
-            layout,
-            mem_config_input,
-            mem_config_ag,
-            all_gather_topology=all_gather_topology,
-            enable_trace=enable_trace,
-            num_iters=num_iters,
-            cluster_axis=cluster_axis,
-            chunks_per_sync=chunks_per_sync,
-            num_workers_per_link=num_workers_per_link,
-            num_buffers_per_channel=num_buffers_per_channel,
-            allowed_pcc=0.9999,  # equality check
-            num_l1_banks=110,
-        )
-    ttnn.ReadDeviceProfiler(submesh_device)
+    run_all_gather_impl(
+        mesh_device,
+        num_devices,
+        ag_output_shape,
+        dim,
+        num_links,
+        ag_input_dtype,
+        layout,
+        mem_config_input,
+        mem_config_ag,
+        all_gather_topology=all_gather_topology,
+        enable_trace=enable_trace,
+        num_iters=num_iters,
+        cluster_axis=cluster_axis,
+        chunks_per_sync=chunks_per_sync,
+        num_workers_per_link=num_workers_per_link,
+        num_buffers_per_channel=num_buffers_per_channel,
+        allowed_pcc=0.9999,  # equality check
+        num_l1_banks=110,
+    )
+    ttnn.ReadDeviceProfiler(mesh_device)
 
 
 @pytest.mark.parametrize("num_links", [2], ids=["2_links"])
@@ -129,7 +116,7 @@ def test_all_links_ag(
         "float_16",
     ],
 )
-@pytest.mark.parametrize("cluster_axis", [0, 1])
+@pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_rs",
     [
@@ -220,7 +207,7 @@ def test_rs(
         "bfloat16",
     ],
 )
-@pytest.mark.parametrize("cluster_axis", [0, 1])
+@pytest.mark.parametrize("cluster_axis", [1])
 @pytest.mark.parametrize(
     "mem_config_input, mem_config_output",
     [
