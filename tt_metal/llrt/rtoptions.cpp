@@ -765,15 +765,25 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         //   1  (1 << 0) - FPU counters
         //   2  (1 << 1) - PACK counters
         //   4  (1 << 2) - UNPACK counters
-        //   8  (1 << 3) - L1 counters
-        //   16 (1 << 4) - INSTRN (instruction) counters
-        //   31 (0x1F)   - All counter groups (fpu|pack|unpack|l1|instrn)
+        //   8  (1 << 3) - L1 bank 0 counters (ring0 NOC, L1 arbitration)
+        //   16 (1 << 4) - L1 bank 1 counters (ring1 NOC, TDMA extended)
+        //   32 (1 << 5) - INSTRN (instruction) counters
+        //   63 (0x3F)   - All counter groups (fpu|pack|unpack|l1_0|l1_1|instrn)
         //
         // Multiple groups can be combined by OR-ing the values (e.g., 3 = FPU + PACK)
-        // Note: Currently, only FPU counters are supported
+        // Note: L1 bank 0 and L1 bank 1 cannot be enabled simultaneously (they share
+        //       the same hardware registers and are selected via MUX_CTRL bit 4).
         case EnvVarID::TT_METAL_PROFILE_PERF_COUNTERS:
             sscanf(value, "%u", &this->profiler_perf_counter_mode);
             if (this->profiler_perf_counter_mode != 0) {
+                constexpr uint32_t L1_0_BIT = (1 << 3);
+                constexpr uint32_t L1_1_BIT = (1 << 4);
+                if ((this->profiler_perf_counter_mode & L1_0_BIT) && (this->profiler_perf_counter_mode & L1_1_BIT)) {
+                    TT_THROW(
+                        "L1 bank 0 and L1 bank 1 perf counter groups cannot be enabled simultaneously. "
+                        "They share the same hardware registers (selected via MUX_CTRL bit 4). "
+                        "Please choose one: l1_0 (bit 3) or l1_1 (bit 4).");
+                }
                 this->profiler_enabled = true;
             }
             break;

@@ -549,7 +549,8 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
         76: "THREAD_INSTRUCTIONS_0",
         77: "THREAD_INSTRUCTIONS_1",
         78: "THREAD_INSTRUCTIONS_2",
-        # L1 Group (16, mux-dependent)
+        # L1 Group (16 counters, split into bank 0 and bank 1 via MUX_CTRL bit 4)
+        # L1 Bank 0 (MUX bit 4 = 0)
         79: "NOC_RING0_INCOMING_1",
         80: "NOC_RING0_INCOMING_0",
         81: "NOC_RING0_OUTGOING_1",
@@ -558,6 +559,7 @@ def extract_perf_counters(events: List[Any]) -> Optional[pd.DataFrame]:
         84: "L1_ARB_TDMA_BUNDLE_0",
         85: "L1_ARB_UNPACKER",
         86: "L1_NO_ARB_UNPACKER",
+        # L1 Bank 1 (MUX bit 4 = 1)
         87: "NOC_RING1_INCOMING_1",
         88: "NOC_RING1_INCOMING_0",
         89: "NOC_RING1_OUTGOING_1",

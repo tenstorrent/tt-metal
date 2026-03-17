@@ -242,21 +242,33 @@ def main():
             "fpu": 0,  # PROFILE_PERF_COUNTERS_FPU    (1 << 0)
             "pack": 1,  # PROFILE_PERF_COUNTERS_PACK   (1 << 1)
             "unpack": 2,  # PROFILE_PERF_COUNTERS_UNPACK (1 << 2)
-            "l1": 3,  # PROFILE_PERF_COUNTERS_L1     (1 << 3)
-            "instrn": 4,  # PROFILE_PERF_COUNTERS_INSTRN (1 << 4)
+            "l1_0": 3,  # PROFILE_PERF_COUNTERS_L1_0   (1 << 3)
+            "l1_1": 4,  # PROFILE_PERF_COUNTERS_L1_1   (1 << 4)
+            "instrn": 5,  # PROFILE_PERF_COUNTERS_INSTRN (1 << 5)
         }
 
         bitfield = 0
         for group in options.perf_counter_groups:
             group_lower = group.lower()
             if group_lower == "all":
-                # Enable all counter groups
-                bitfield = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 3) | (1 << 4)  # 0x1F = 31
+                # Enable all counter groups (excluding L1 banks since they conflict;
+                # user must explicitly pick l1_0 or l1_1)
+                bitfield = (1 << 0) | (1 << 1) | (1 << 2) | (1 << 5)  # fpu|pack|unpack|instrn
                 break
             elif group_lower in counter_group_bits:
                 bitfield |= 1 << counter_group_bits[group_lower]
             else:
-                logger.warning(f"Unknown counter group '{group}'. Valid groups: fpu, pack, unpack, l1, instrn, all")
+                logger.warning(
+                    f"Unknown counter group '{group}'. " f"Valid groups: fpu, pack, unpack, l1_0, l1_1, instrn, all"
+                )
+
+        # Validate L1 bank mutual exclusion
+        if (bitfield & (1 << 3)) and (bitfield & (1 << 4)):
+            raise ValueError(
+                "L1 bank 0 (l1_0) and L1 bank 1 (l1_1) cannot be enabled simultaneously. "
+                "They share the same hardware registers (selected via MUX_CTRL bit 4). "
+                "Please choose one: l1_0 or l1_1."
+            )
 
         if bitfield > 0:
             os.environ["TT_METAL_PROFILE_PERF_COUNTERS"] = str(bitfield)

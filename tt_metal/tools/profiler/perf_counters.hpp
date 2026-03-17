@@ -36,9 +36,13 @@
 #define RISCV_DEBUG_REG_PERF_CNT_OUT_L_INSTRN_THREAD (RISCV_DEBUG_REGS_START_ADDR | 0x100)
 #endif
 
+#ifndef RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL
+#define RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL (RISCV_DEBUG_REGS_START_ADDR | 0x218)
+#endif
+
 constexpr uint16_t PERF_COUNTER_PROFILER_ID = 9090;
 
-enum PerfCounterGroup : uint8_t { FPU, PACK, UNPACK, L1, INSTRN };
+enum PerfCounterGroup : uint8_t { FPU, PACK, UNPACK, L1_0, L1_1, INSTRN };
 enum PerfCounterType : uint8_t {
     UNDEF = 0,
     // FPU Group (3 counters)
@@ -169,7 +173,8 @@ const PerfCounterGroup counter_groups[] = {
     PerfCounterGroup::FPU,
     PerfCounterGroup::PACK,
     PerfCounterGroup::UNPACK,
-    PerfCounterGroup::L1,
+    PerfCounterGroup::L1_0,
+    PerfCounterGroup::L1_1,
     PerfCounterGroup::INSTRN};
 constexpr size_t MAX_NUM_COUNTERS_PER_GROUP = 61;
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> fpu_counters = {
@@ -194,8 +199,8 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_
      {PerfCounterType::AVAILABLE_MATH, 272}}};
 constexpr size_t NUM_PACK_COUNTERS = 3;
 
-// L1 counters (16 counters) - Note: Some are mux-dependent
-constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> l1_counters = {
+// L1 bank 0 counters (MUX_CTRL bit 4 = 0): ring0 NOC, L1 arbitration, unpacker
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> l1_0_counters = {
     {{PerfCounterType::NOC_RING0_INCOMING_1, 0},
      {PerfCounterType::NOC_RING0_INCOMING_0, 1},
      {PerfCounterType::NOC_RING0_OUTGOING_1, 2},
@@ -203,16 +208,20 @@ constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_
      {PerfCounterType::L1_ARB_TDMA_BUNDLE_1, 4},
      {PerfCounterType::L1_ARB_TDMA_BUNDLE_0, 5},
      {PerfCounterType::L1_ARB_UNPACKER, 6},
-     {PerfCounterType::L1_NO_ARB_UNPACKER, 7},
-     {PerfCounterType::NOC_RING1_INCOMING_1, 8},
-     {PerfCounterType::NOC_RING1_INCOMING_0, 9},
-     {PerfCounterType::NOC_RING1_OUTGOING_1, 10},
-     {PerfCounterType::NOC_RING1_OUTGOING_0, 11},
-     {PerfCounterType::TDMA_BUNDLE_1_ARB, 12},
-     {PerfCounterType::TDMA_BUNDLE_0_ARB, 13},
-     {PerfCounterType::TDMA_EXT_UNPACK_9_10, 14},
-     {PerfCounterType::TDMA_PACKER_2_WR, 15}}};
-constexpr size_t NUM_L1_COUNTERS = 16;
+     {PerfCounterType::L1_NO_ARB_UNPACKER, 7}}};
+constexpr size_t NUM_L1_0_COUNTERS = 8;
+
+// L1 bank 1 counters (MUX_CTRL bit 4 = 1): ring1 NOC, TDMA extended unpacker, packer
+constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> l1_1_counters = {
+    {{PerfCounterType::NOC_RING1_INCOMING_1, 0},
+     {PerfCounterType::NOC_RING1_INCOMING_0, 1},
+     {PerfCounterType::NOC_RING1_OUTGOING_1, 2},
+     {PerfCounterType::NOC_RING1_OUTGOING_0, 3},
+     {PerfCounterType::TDMA_BUNDLE_1_ARB, 4},
+     {PerfCounterType::TDMA_BUNDLE_0_ARB, 5},
+     {PerfCounterType::TDMA_EXT_UNPACK_9_10, 6},
+     {PerfCounterType::TDMA_PACKER_2_WR, 7}}};
+constexpr size_t NUM_L1_1_COUNTERS = 8;
 
 // INSTRN counters (61 counters)
 constexpr std::array<std::pair<PerfCounterType, uint16_t>, MAX_NUM_COUNTERS_PER_GROUP> instrn_counters = {
@@ -283,8 +292,9 @@ constexpr size_t NUM_INSTRN_COUNTERS = 61;
 #define PROFILE_PERF_COUNTERS_FPU (1 << 0)
 #define PROFILE_PERF_COUNTERS_PACK (1 << 1)
 #define PROFILE_PERF_COUNTERS_UNPACK (1 << 2)
-#define PROFILE_PERF_COUNTERS_L1 (1 << 3)
-#define PROFILE_PERF_COUNTERS_INSTRN (1 << 4)
+#define PROFILE_PERF_COUNTERS_L1_0 (1 << 3)
+#define PROFILE_PERF_COUNTERS_L1_1 (1 << 4)
+#define PROFILE_PERF_COUNTERS_INSTRN (1 << 5)
 
 /*
 Performance Counter registers (to understand programming sequence in start_perf_counter/stop_perf_counter)
@@ -327,7 +337,8 @@ uint32_t get_cntl_register_for_counter_group(PerfCounterGroup counter_group) {
         case PerfCounterGroup::FPU: reg_addr = RISCV_DEBUG_REG_PERF_CNT_FPU0; break;
         case PerfCounterGroup::PACK: reg_addr = RISCV_DEBUG_REG_PERF_CNT_TDMA_PACK0; break;
         case PerfCounterGroup::UNPACK: reg_addr = RISCV_DEBUG_REG_PERF_CNT_TDMA_UNPACK0; break;
-        case PerfCounterGroup::L1: reg_addr = RISCV_DEBUG_REG_PERF_CNT_L1_0; break;
+        case PerfCounterGroup::L1_0:
+        case PerfCounterGroup::L1_1: reg_addr = RISCV_DEBUG_REG_PERF_CNT_L1_0; break;
         case PerfCounterGroup::INSTRN: reg_addr = RISCV_DEBUG_REG_PERF_CNT_INSTRN_THREAD0; break;
         default: {
             ASSERT(false);
@@ -343,7 +354,8 @@ uint32_t get_read_register_for_counter_group(PerfCounterGroup counter_group) {
         case PerfCounterGroup::FPU: reg_addr = RISCV_DEBUG_REG_PERF_CNT_OUT_L_FPU; break;
         case PerfCounterGroup::PACK: reg_addr = RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_PACK; break;
         case PerfCounterGroup::UNPACK: reg_addr = RISCV_DEBUG_REG_PERF_CNT_OUT_L_TDMA_UNPACK; break;
-        case PerfCounterGroup::L1: reg_addr = RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1; break;
+        case PerfCounterGroup::L1_0:
+        case PerfCounterGroup::L1_1: reg_addr = RISCV_DEBUG_REG_PERF_CNT_OUT_L_DBG_L1; break;
         case PerfCounterGroup::INSTRN: reg_addr = RISCV_DEBUG_REG_PERF_CNT_OUT_L_INSTRN_THREAD; break;
         default: {
             ASSERT(false);
@@ -359,7 +371,8 @@ uint32_t get_flag_for_counter_group(PerfCounterGroup counter_group) {
         case PerfCounterGroup::FPU: flag = PROFILE_PERF_COUNTERS_FPU; break;
         case PerfCounterGroup::PACK: flag = PROFILE_PERF_COUNTERS_PACK; break;
         case PerfCounterGroup::UNPACK: flag = PROFILE_PERF_COUNTERS_UNPACK; break;
-        case PerfCounterGroup::L1: flag = PROFILE_PERF_COUNTERS_L1; break;
+        case PerfCounterGroup::L1_0: flag = PROFILE_PERF_COUNTERS_L1_0; break;
+        case PerfCounterGroup::L1_1: flag = PROFILE_PERF_COUNTERS_L1_1; break;
         case PerfCounterGroup::INSTRN: flag = PROFILE_PERF_COUNTERS_INSTRN; break;
         default: {
             ASSERT(false);
@@ -375,7 +388,8 @@ uint32_t get_num_counters_for_counter_group(PerfCounterGroup counter_group) {
         case PerfCounterGroup::FPU: num_counters = NUM_FPU_COUNTERS; break;
         case PerfCounterGroup::UNPACK: num_counters = NUM_UNPACK_COUNTERS; break;
         case PerfCounterGroup::PACK: num_counters = NUM_PACK_COUNTERS; break;
-        case PerfCounterGroup::L1: num_counters = NUM_L1_COUNTERS; break;
+        case PerfCounterGroup::L1_0: num_counters = NUM_L1_0_COUNTERS; break;
+        case PerfCounterGroup::L1_1: num_counters = NUM_L1_1_COUNTERS; break;
         case PerfCounterGroup::INSTRN: num_counters = NUM_INSTRN_COUNTERS; break;
         default: {
             ASSERT(false);
@@ -391,7 +405,8 @@ get_counters_for_counter_group(PerfCounterGroup counter_group) {
         case PerfCounterGroup::FPU: return fpu_counters;
         case PerfCounterGroup::UNPACK: return unpack_counters;
         case PerfCounterGroup::PACK: return pack_counters;
-        case PerfCounterGroup::L1: return l1_counters;
+        case PerfCounterGroup::L1_0: return l1_0_counters;
+        case PerfCounterGroup::L1_1: return l1_1_counters;
         case PerfCounterGroup::INSTRN: return instrn_counters;
         default: {
             ASSERT(false);
@@ -400,10 +415,27 @@ get_counters_for_counter_group(PerfCounterGroup counter_group) {
     }
 }
 
+void set_l1_mux_ctrl(PerfCounterGroup counter_group) {
+    volatile tt_reg_ptr uint32_t* mux_reg =
+        reinterpret_cast<volatile tt_reg_ptr uint32_t*>(RISCV_DEBUG_REG_PERF_CNT_MUX_CTRL);
+    uint32_t mux_val = *mux_reg;
+    constexpr uint32_t L1_MUX_SEL_BIT = (1 << 4);
+    if (counter_group == PerfCounterGroup::L1_0) {
+        mux_val &= ~L1_MUX_SEL_BIT;  // bit 4 = 0 for bank 0
+    } else {
+        mux_val |= L1_MUX_SEL_BIT;  // bit 4 = 1 for bank 1
+    }
+    *mux_reg = mux_val;
+}
+
 void start_perf_counter() {
     // start counters for selected groups
     for (auto counter_group : counter_groups) {
         if (PROFILE_PERF_COUNTERS & get_flag_for_counter_group(counter_group)) {
+            // Set L1 MUX before starting L1 counters
+            if (counter_group == PerfCounterGroup::L1_0 || counter_group == PerfCounterGroup::L1_1) {
+                set_l1_mux_ctrl(counter_group);
+            }
             volatile tt_reg_ptr uint32_t* cntl_reg =
                 reinterpret_cast<volatile tt_reg_ptr uint32_t*>(get_cntl_register_for_counter_group(counter_group));
             uint32_t counter_select = 0;  // individual counters selected later when reading
