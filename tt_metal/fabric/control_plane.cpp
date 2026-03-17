@@ -87,6 +87,25 @@ std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> get_galaxy_fixed
     const MeshGraph& mesh_graph, bool hard_pin_node_0 = false) {
     std::vector<std::pair<FabricNodeId, std::vector<AsicPosition>>> fixed_asic_position_pinnings;
 
+    // Check if mesh has any LINE dimensions - if so, skip corner pinning
+    // Corner pinning assumes logical mesh corners correspond to physical tray corners,
+    // which is only true for RING,RING torus topologies. For LINE dimensions, the
+    // logical corners have different degree than physical tray corners.
+    if (mesh_graph.get_mesh_graph_descriptor_path().has_value()) {
+        const auto& mgd = mesh_graph.get_mesh_graph_descriptor();
+        for (const auto& mesh_global_id : mgd.all_meshes()) {
+            const auto& instance = mgd.get_instance(mesh_global_id);
+            const auto* mesh_desc = std::get<const proto::MeshDescriptor*>(instance.desc);
+            const auto& dim_types = mesh_desc->device_topology().dim_types();
+            bool has_line_dim =
+                std::any_of(dim_types.begin(), dim_types.end(), [](auto t) { return t == proto::TorusTopology::LINE; });
+            if (has_line_dim) {
+                // Skip corner pinning for LINE topologies - corners don't align with tray positions
+                return fixed_asic_position_pinnings;
+            }
+        }
+    }
+
     // Get all 4 possible corners ASIC positions
     std::vector<AsicPosition> corner_asic_positions;
     corner_asic_positions.emplace_back(AsicPosition{1, 1});  // Top left corner
