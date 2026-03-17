@@ -75,7 +75,7 @@ HARDWARE_RUNNER_MAP = {
         "tt_smi_cmd": "tt-smi -r",
     },
     "p150b": {
-        "arch": "wormhole_b0",
+        "arch": "blackhole",
         "runs_on": "tt-ubuntu-2204-p150b-stable",
         "runner_label": "P150b",
         "tt_smi_cmd": "tt-smi -r",
