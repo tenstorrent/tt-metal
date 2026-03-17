@@ -35,8 +35,12 @@ from models.tt_transformers.tt.common import (
     num_blocks_in_seq,
 )
 
-# Maximum total sequence length for batched prefill (batch_size * per_user_seq_len)
+# Maximum total tokens (batch_size * seq_len) allowed for a batched prefill pass.
+# Exceeding this triggers a fallback to sequential per-user prefill.
 MAX_BATCHED_PREFILL_SEQ_LEN = 128 * 1024
+
+# Power-of-2 batch sizes supported by trace caching for batched prefill.
+SUPPORTED_PREFILL_BATCH_SIZES = (1, 2, 4, 8, 16, 32)
 
 
 def max_prefill_chunk_size_cutoff(sequence_length, max_prefill_chunk_size):
@@ -121,8 +125,9 @@ class Generator(WarmupForwardMixin):
         # Sweep all sampling parameters for prefill warmup just once since it is sequence length agnostic
         sampling_parameters_sweeped = False
 
-        # Warmup batch sizes: always warmup batch_size=1; also warmup small
-        # batched prefill sizes that may be used at runtime.
+        # Warmup a small subset of SUPPORTED_PREFILL_BATCH_SIZES. Larger sizes
+        # (8, 16, 32) are omitted because they are too expensive to pre-compile
+        # and rarely hit in practice.
         warmup_batch_sizes = [1, 2, 4]
 
         for model_id in range(self.data_parallel):
@@ -468,10 +473,10 @@ class Generator(WarmupForwardMixin):
             prompt_lens = prompt_lens.tolist()
 
         prefill_seq_lens = [get_padded_prefill_len(seq_len) for seq_len in prompt_lens]
-        # Use batched prefill when all prompts have the same padded length.
-        # padded_batch is sized to the actual number of users (rounded up to a
-        # supported batch size) instead of max_batch_size to avoid OOM from
-        # oversized all_gather buffers (see PR #35722 regression).
+        # Batched prefill: all prompts share the same padded length so they can
+        # be processed in a single forward pass. padded_batch is rounded up to
+        # the nearest SUPPORTED_PREFILL_BATCH_SIZES entry (not max_batch_size)
+        # to keep all_gather buffers within DRAM limits.
         use_batched_prefill = (
             batch_size > 1
             and len(set(prefill_seq_lens)) == 1
@@ -480,8 +485,10 @@ class Generator(WarmupForwardMixin):
         )
 
         if use_batched_prefill:
-            _supported = [b for b in (1, 2, 4, 8, 16, 32) if b >= batch_size]
-            padded_batch = _supported[0] if _supported else self.model_args[0].max_batch_size
+            padded_batch = next(
+                (b for b in SUPPORTED_PREFILL_BATCH_SIZES if b >= batch_size),
+                self.model_args[0].max_batch_size,
+            )
             if padded_batch * prefill_seq_lens[0] >= MAX_BATCHED_PREFILL_SEQ_LEN:
                 logger.info(
                     f"Batched prefill disabled: {padded_batch} x {prefill_seq_lens[0]} = "
