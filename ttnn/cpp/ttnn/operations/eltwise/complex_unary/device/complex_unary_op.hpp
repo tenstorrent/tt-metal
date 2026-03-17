@@ -9,6 +9,7 @@
 #include "ttnn/tensor/tensor.hpp"
 #include "ttnn/tensor/memory_config/memory_config.hpp"
 #include "ttnn/operations/eltwise/complex/complex.hpp"
+#include "ttnn/types.hpp"
 
 namespace ttnn::operations::complex_unary {
 
