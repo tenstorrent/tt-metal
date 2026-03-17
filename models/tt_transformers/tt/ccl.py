@@ -39,7 +39,7 @@ def get_num_links(mesh_device, cluster_axis=None):
         "P150x4": (2, 2),
         "P150x8": (2, 2),
         "P300": (2, 2),
-        "BHGLX": (4, 4),
+        "BHGLX": (2, 2),
         "TG": (4, 4),
         "N150x4": (1, 1),
     }
