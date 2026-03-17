@@ -303,7 +303,3 @@ def test_forward_pass(
     ttnn.deallocate(tt_topk_indices)
     ttnn.deallocate(tt_logits)
     ttnn.deallocate(dispatch_offsets)
-
-
-if __name__ == "__main__":
-    pytest.main([__file__])
