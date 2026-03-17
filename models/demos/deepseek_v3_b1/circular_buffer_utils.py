@@ -145,11 +145,13 @@ def cb_descriptor_from_overlapped_tensors(
     assert len(overlapped_list) > 0
 
     first = overlapped_list[0]
-    if core_ranges is None:
+    core_range_override = core_ranges is not None
+    if not core_range_override:
         core_ranges = first.core_range_set
-        for ot in overlapped_list[1:]:
-            assert ot.dtype == first.dtype
-            assert ot.tile_shape == first.tile_shape
+    for ot in overlapped_list[1:]:
+        assert ot.dtype == first.dtype
+        assert ot.tile_shape == first.tile_shape
+        if not core_range_override:
             core_ranges = core_ranges.merge(ot.core_range_set)
 
     cb_desc = ttnn.cb_descriptor_from_sharded_tensor(
