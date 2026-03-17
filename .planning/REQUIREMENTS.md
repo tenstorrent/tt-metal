@@ -18,9 +18,9 @@
 
 ### Channel Mapping
 
-- [ ] **CMAP-01**: `FabricRouterChannelMapping` gains `initialize_vc2_mappings()` for non-Z routers (sender + receiver)
-- [ ] **CMAP-02**: Z-router VC2 mapping: sender-only at last flat index, forwards to VC0's receiver channel (which on Z routers is VC1's receiver)
-- [ ] **CMAP-03**: VC2 sender channel indexed as last in flat lookup arrays
+- [x] **CMAP-01**: `FabricRouterChannelMapping` gains `initialize_vc2_mappings()` for non-Z routers (sender + receiver)
+- [x] **CMAP-02**: Z-router VC2 mapping: sender-only at last flat index, forwards to VC0's receiver channel (which on Z routers is VC1's receiver)
+- [x] **CMAP-03**: VC2 sender channel indexed as last in flat lookup arrays
 
 ### Configuration & Enablement
 
@@ -33,7 +33,7 @@
 - [ ] **BLDR-01**: `FabricBuilderContext` computes VC2 channel counts and allocations
 - [ ] **BLDR-02**: `EriscDatamoverBuilder` wires VC2 sender→receiver connections on non-Z routers
 - [ ] **BLDR-03**: `EriscDatamoverBuilder` wires Z-router VC2 worker sender→VC0 receiver forwarding
-- [ ] **BLDR-04**: `StaticSizedChannelAllocator` allocates L1 buffer space for VC2 channels
+- [x] **BLDR-04**: `StaticSizedChannelAllocator` allocates L1 buffer space for VC2 channels
 - [ ] **BLDR-05**: CT arg emission accounts for VC2 channels in index derivation formulas (`MAX_NUM_SENDER_CHANNELS_VC0`, `VC1_SENDER_CHANNEL_START`, etc.)
 
 ### Flow Control
@@ -83,10 +83,10 @@
 | CONF-01 | Phase 2 | Complete |
 | CONF-02 | Phase 2 | Complete |
 | CONF-03 | Phase 2 | Complete |
-| CMAP-01 | Phase 3 | Pending |
-| CMAP-02 | Phase 3 | Pending |
-| CMAP-03 | Phase 3 | Pending |
-| BLDR-04 | Phase 3 | Pending |
+| CMAP-01 | Phase 3 | Complete |
+| CMAP-02 | Phase 3 | Complete |
+| CMAP-03 | Phase 3 | Complete |
+| BLDR-04 | Phase 3 | Complete |
 | BLDR-01 | Phase 4 | Pending |
 | BLDR-02 | Phase 4 | Pending |
 | BLDR-03 | Phase 4 | Pending |

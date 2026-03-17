@@ -2,15 +2,15 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: in-progress
-stopped_at: Completed 02-02-PLAN.md
-last_updated: "2026-03-17T03:43:10Z"
-last_activity: 2026-03-17 -- Plan 02-02 executed
+status: in_progress
+stopped_at: Plan 03-01 complete
+last_updated: "2026-03-17T15:35:51.000Z"
+last_activity: 2026-03-17 -- Plan 03-01 executed
 progress:
   total_phases: 5
   completed_phases: 2
-  total_plans: 2
-  completed_plans: 4
+  total_plans: 6
+  completed_plans: 5
   percent: 30
 ---
 
@@ -21,16 +21,16 @@ progress:
 See: .planning/PROJECT.md (updated 2026-03-17)
 
 **Core value:** Third VC correctly wired into fabric infrastructure, invisible to existing VC0/VC1, only active under correct conditions
-**Current focus:** Phase 2: Constants and Config Foundation
+**Current focus:** Phase 3: Channel Mapping and Allocation
 
 ## Current Position
 
-Phase: 2 of 5 (Constants and Config Foundation)
-Plan: 2 of 2 in current phase
-Status: Plan 02-02 complete (Phase 2 complete)
-Last activity: 2026-03-17 -- Plan 02-02 executed
+Phase: 3 of 5 (Channel Mapping and Allocation)
+Plan: 1 of 2 in current phase
+Status: Plan 03-01 complete
+Last activity: 2026-03-17 -- Plan 03-01 executed
 
-Progress: [###.......] 30%
+Progress: [########..] 83%
 
 ## Performance Metrics
 
@@ -53,6 +53,7 @@ Progress: [###.......] 30%
 | Phase 01 P01 | 4min | 2 tasks | 3 files |
 | Phase 02 P01 | 10min | 2 tasks | 5 files |
 | Phase 02 P02 | 5min | 2 tasks | 3 files |
+| Phase 03 P01 | 15min | 2 tasks | 3 files |
 
 ## Accumulated Context
 
@@ -69,6 +70,8 @@ Recent decisions affecting current work:
 - [02-01] Fixed latent bug in test_channel_trimming_capture.cpp: CaptureResults template used num_max_receiver_channels instead of MAX_NUM_VCS
 - [02-02] Split buffer slot tables by VC config group (vc0_only, vc0_vc1, vc0_vc1_vc2) with num_active_vcs selection
 - [02-02] VC2 predicate: requires_vc1 AND Blackhole AND not UDM AND not MUX
+- [03-01] VC2 mesh receiver at internal channel index 2 (after VC0=0, VC1=1)
+- [03-01] VC2 sender at last flat index after VC0+VC1; no changes needed in compute_max_channel_counts
 
 ### Pending Todos
 
@@ -80,6 +83,6 @@ None yet.
 
 ## Session Continuity
 
-Last session: 2026-03-17T03:43:10Z
-Stopped at: Completed 02-02-PLAN.md
-Resume file: .planning/phases/02-constants-config-foundation/02-02-SUMMARY.md
+Last session: 2026-03-17T15:35:51.000Z
+Stopped at: Completed 03-01-PLAN.md
+Resume file: .planning/phases/03-channel-mapping-allocation/03-01-SUMMARY.md
