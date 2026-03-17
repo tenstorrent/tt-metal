@@ -9,6 +9,7 @@ on:
         default: ""
         description: "Docker image to use for build and test"
   workflow_dispatch:
+  merge_group:
 
 jobs:
   build-docker-image:
