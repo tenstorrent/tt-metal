@@ -393,7 +393,6 @@ void RiscFirmwareInitializer::assert_cores(tt::ChipId device_id) {
         assert_active_ethernet_cores_to_reset(device_id);
     }
     assert_inactive_ethernet_cores(device_id);
-    assert_dram_cores(device_id);
 }
 
 CoreCoord RiscFirmwareInitializer::virtual_noc0_coordinate(tt::ChipId device_id, uint8_t noc_index, CoreCoord coord) {
@@ -1157,7 +1156,6 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         not_done_cores.insert(virtual_core);
     }
 
-    std::unordered_set<CoreCoord> dram_not_done_cores;
     bool has_dram_fw =
         hal_.get_programmable_core_type_index(HalProgrammableCoreType::DRAM) < hal_.get_programmable_core_type_count();
     if (has_dram_fw) {
@@ -1184,7 +1182,6 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
                 virtual_dram_core,
                 dram_launch_msg.view(),
                 dram_go_msg.view());
-            dram_not_done_cores.insert(virtual_dram_core);
         }
     }
 
@@ -1206,10 +1203,6 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         }
         cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, worker_core), reset_val);
     }
-    for (const auto& dram_core : dram_not_done_cores) {
-        cluster_.deassert_risc_reset_at_core(tt_cxy_pair(device_id, dram_core), tt::umd::RiscType::BRISC);
-    }
-
     log_debug(LogDevice, "Waiting for firmware init complete");
     const int timeout_ms = 10000;
     try {
@@ -1218,16 +1211,6 @@ void RiscFirmwareInitializer::initialize_and_launch_firmware(tt::ChipId device_i
         TT_THROW("Device {} init: failed to initialize FW! Try resetting the board.", device_id);
     }
     log_debug(LogDevice, "Firmware init complete");
-
-    if (!dram_not_done_cores.empty()) {
-        log_debug(LogDevice, "Waiting for DRAM firmware init complete");
-        try {
-            llrt::internal_::wait_until_cores_done(device_id, dev_msgs::RUN_MSG_INIT, dram_not_done_cores, timeout_ms);
-        } catch (std::runtime_error&) {
-            TT_THROW("Device {} init: failed to initialize DRAM FW!", device_id);
-        }
-        log_debug(LogDevice, "DRAM firmware init complete");
-    }
 }
 
 }  // namespace tt::tt_metal
