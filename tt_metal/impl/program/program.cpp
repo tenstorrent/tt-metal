@@ -1526,7 +1526,74 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
 
     std::vector<std::shared_future<void>> events;
 
-    auto schedule_kernel_compile = [&](const std::shared_ptr<Kernel>& kernel) {
+    struct PreparedKernelCompile {
+        KernelHandle kernel_handle;
+        std::shared_ptr<Kernel> kernel;
+        JitBuildOptions build_options;
+        size_t kernel_hash;
+
+        PreparedKernelCompile(
+            KernelHandle kernel_handle,
+            std::shared_ptr<Kernel> kernel,
+            JitBuildOptions&& build_options,
+            size_t kernel_hash) :
+            kernel_handle(kernel_handle),
+            kernel(std::move(kernel)),
+            build_options(std::move(build_options)),
+            kernel_hash(kernel_hash) {}
+    };
+
+    auto prepare_kernel_compile = [&](KernelHandle kernel_handle, const std::shared_ptr<Kernel>& kernel) {
+        JitBuildOptions build_options(build_env.build_env);
+        kernel->set_build_options(build_options);
+        if (this->compiled_.empty()) {
+            this->set_remote_circular_buffer_init(kernel);
+        }
+        this->set_cb_data_fmt(kernel->logical_coreranges(), build_options);
+        this->set_cb_tile_dims(kernel->logical_coreranges(), build_options);
+        this->set_dfb_data_fmt(kernel->logical_coreranges(), build_options);
+        this->set_dfb_tile_dims(kernel->logical_coreranges(), build_options);
+
+        size_t kernel_hash = KernelCompileHash(kernel, build_options, build_env.build_key());
+        return PreparedKernelCompile(kernel_handle, kernel, std::move(build_options), kernel_hash);
+    };
+
+    auto schedule_prepared_kernel_compile = [&](const PreparedKernelCompile& prepared_kernel) {
+        const auto kernel = prepared_kernel.kernel;
+        const size_t kernel_hash = prepared_kernel.kernel_hash;
+        JitBuildOptions build_options = prepared_kernel.build_options;
+
+        validate_kernel_placement(force_slow_dispatch, kernel);
+        launch_build_step(
+            [kernel, kernel_hash, build_options = std::move(build_options), device, this, &build_env]() mutable {
+                const std::string kernel_path_suffix = kernel->name() + "/" + std::to_string(kernel_hash) + "/";
+                kernel->set_full_name(kernel_path_suffix);
+                build_options.set_name(kernel_path_suffix);
+
+                if (tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() !=
+                    tt::TargetDevice::Mock) {
+                    kernel->register_kernel_elf_paths_with_watcher(*device);
+                }
+
+                bool is_mock = tt::tt_metal::MetalContext::instance().get_cluster().get_target_device_type() ==
+                               tt::TargetDevice::Mock;
+
+                jit_build_once(kernel_hash, [&] {
+                    if (!is_mock) {
+                        GenerateBinaries(device, build_options, kernel);
+                    } else {
+                        // Create empty stub binaries for mock devices
+                        std::vector<const ll_api::memory*> empty_binaries(kernel->expected_num_binaries(), nullptr);
+                        kernel->set_binaries(build_env.build_key(), std::move(empty_binaries));
+                    }
+                });
+
+                Inspector::program_kernel_compile_finished(this, device, kernel, build_options);
+            },
+            events);
+    };
+
+    auto schedule_kernel_compile_legacy = [&](const std::shared_ptr<Kernel>& kernel) {
         validate_kernel_placement(force_slow_dispatch, kernel);
         launch_build_step(
             [kernel, device, this, &build_env] {
@@ -1589,7 +1656,7 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             shard_count = static_cast<size_t>(parsed_shard_count);
             log_info(
                 tt::LogMetal,
-                "Compile sharding enabled for program {}: TT_METAL_COMPILE_SHARD_IDX={} "
+                "Compile sharding enabled for program {} (mode=hash): TT_METAL_COMPILE_SHARD_IDX={} "
                 "TT_METAL_COMPILE_SHARD_COUNT={}",
                 this->get_id(),
                 *shard_idx,
@@ -1598,7 +1665,13 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
     }
 
     if (shard_idx.has_value() && shard_count.has_value()) {
-        std::vector<std::shared_ptr<Kernel>> ordered_kernels;
+        size_t kernel_count = 0;
+        for (const auto& kernels : kernels_) {
+            kernel_count += kernels.size();
+        }
+
+        std::vector<PreparedKernelCompile> ordered_kernels;
+        ordered_kernels.reserve(kernel_count);
         for (auto& kernels : kernels_) {
             std::vector<KernelHandle> kernel_ids;
             kernel_ids.reserve(kernels.size());
@@ -1607,25 +1680,27 @@ void detail::ProgramImpl::compile(IDevice* device, bool force_slow_dispatch) {
             }
             std::sort(kernel_ids.begin(), kernel_ids.end());
             for (KernelHandle id : kernel_ids) {
-                ordered_kernels.push_back(kernels.at(id));
+                ordered_kernels.push_back(prepare_kernel_compile(id, kernels.at(id)));
             }
         }
 
-        std::vector<std::vector<std::shared_ptr<Kernel>>> kernels_by_shard(*shard_count);
+        // Bucket by compile hash while preserving deterministic insertion order within each shard.
+        std::vector<std::vector<size_t>> kernels_by_shard(*shard_count);
         for (size_t i = 0; i < ordered_kernels.size(); ++i) {
-            kernels_by_shard[i % *shard_count].push_back(ordered_kernels[i]);
+            const size_t shard = ordered_kernels[i].kernel_hash % *shard_count;
+            kernels_by_shard[shard].push_back(i);
         }
 
         for (size_t shard_offset = 0; shard_offset < *shard_count; ++shard_offset) {
             const size_t shard = (*shard_idx + shard_offset) % *shard_count;
-            for (const auto& kernel : kernels_by_shard[shard]) {
-                schedule_kernel_compile(kernel);
+            for (size_t kernel_index : kernels_by_shard[shard]) {
+                schedule_prepared_kernel_compile(ordered_kernels[kernel_index]);
             }
         }
     } else {
         for (auto& kernels : kernels_) {
             for (auto& [id, kernel] : kernels) {
-                schedule_kernel_compile(kernel);
+                schedule_kernel_compile_legacy(kernel);
             }
         }
     }
