@@ -8,6 +8,9 @@
 
 #include <nanobind/nanobind.h>
 #include <nanobind/stl/optional.h>
+#include <nanobind/stl/array.h>
+#include <nanobind/stl/variant.h>
+
 #include "ttnn-nanobind/small_vector_caster.hpp"  // NOLINT - for nanobind SmallVector binding support.
 
 #include "tilize_with_val_padding.hpp"
