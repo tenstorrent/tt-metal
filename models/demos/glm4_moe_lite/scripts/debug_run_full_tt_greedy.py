@@ -113,6 +113,7 @@ def main() -> int:
     ap.add_argument("--kv-cache-dtype", default="bf16", help="bf16 (correctness) or bf8 (memory/perf).")
     ap.add_argument("--block-size", type=int, default=64)
     ap.add_argument("--min-cache-tokens", type=int, default=128, help="Allocate at least this many tokens in KV cache.")
+    ap.add_argument("--batch-size", type=int, default=1, help="Batch size for decode (replicates the prompt B times).")
     ap.add_argument(
         "--phase",
         choices=["prefill", "decode", "both"],
@@ -131,6 +132,13 @@ def main() -> int:
         default="logits",
         help="Trace mode: 'logits' returns logits to host (same as eager), 'sampling' does on-device greedy top-1.",
     )
+    ap.add_argument(
+        "--simulate-context-len",
+        type=int,
+        default=0,
+        help="Repeat prompt tokens to reach this context length (0=disabled). "
+        "Useful for testing prefill/decode at long sequence lengths without a real long prompt.",
+    )
     args = ap.parse_args()
 
     model_id = str(args.model_id)
@@ -141,12 +149,26 @@ def main() -> int:
             f"Snapshot missing {len(missing)} shards; run ensure_glm47_weights.sh first (example: {missing[0]})"
         )
 
+    batch_size = int(args.batch_size)
+    if batch_size < 1:
+        raise ValueError("--batch-size must be >= 1")
+
     tok = AutoTokenizer.from_pretrained(snap, local_files_only=True, use_fast=True)
     enc = tok(str(args.prompt), return_tensors="pt", add_special_tokens=True)
-    prompt_ids = enc["input_ids"].to(dtype=torch.int32)
-    if prompt_ids.ndim != 2 or int(prompt_ids.shape[0]) != 1:
-        raise ValueError(f"expected prompt input_ids [1,S], got {tuple(prompt_ids.shape)}")
-    prompt_len = int(prompt_ids.shape[1])
+    prompt_ids_single = enc["input_ids"].to(dtype=torch.int32)  # [1, S]
+    if prompt_ids_single.ndim != 2 or int(prompt_ids_single.shape[0]) != 1:
+        raise ValueError(f"expected prompt input_ids [1,S], got {tuple(prompt_ids_single.shape)}")
+    prompt_len = int(prompt_ids_single.shape[1])
+
+    sim_ctx = int(args.simulate_context_len)
+    if sim_ctx > 0 and sim_ctx > prompt_len:
+        repeats = (sim_ctx + prompt_len - 1) // prompt_len
+        prompt_ids_single = prompt_ids_single.repeat(1, repeats)[:, :sim_ctx]  # [1, sim_ctx]
+        prompt_len = sim_ctx
+        print(f"[DEBUG] Expanded prompt to {prompt_len} tokens via repetition", flush=True)
+
+    prompt_ids = prompt_ids_single.repeat(batch_size, 1)  # [B, S]
+    prompt_lens = [prompt_len] * batch_size
 
     mesh_rows = int(args.mesh_rows)
     mesh_cols = int(args.mesh_cols)
@@ -198,14 +220,14 @@ def main() -> int:
         kv_cache = [
             _alloc_paged_kvpe_cache_from_cpu(
                 device=mesh_device,
-                max_num_blocks=int(1 * blocks_per_seq),
+                max_num_blocks=int(batch_size * blocks_per_seq),
                 block_size=block_size,
                 kvpe_dim=kvpe_dim,
                 tt_dtype=kv_cache_dtype,
             )
             for _ in range(int(runner.num_layers_to_run))
         ]
-        page_table = _alloc_contiguous_page_table(batch=1, blocks_per_seq=blocks_per_seq)
+        page_table = _alloc_contiguous_page_table(batch=batch_size, blocks_per_seq=blocks_per_seq)
 
         # Pre-load all layer weights before the decode loop.  Lazy loading
         # inside decode() can deadlock because ttnn.as_tensor (host->device DMA)
@@ -226,14 +248,14 @@ def main() -> int:
             t0 = time.perf_counter()
             logits = runner.prefill(
                 tokens=prompt_ids,
-                prompt_lens=[prompt_len],
+                prompt_lens=prompt_lens,
                 page_table=page_table,
                 kv_cache=kv_cache,
                 seq_pad_multiple=block_size,
             )
             prefill_s = time.perf_counter() - t0
             print(f"\n=== Prefill (real flash_mla_prefill) ===", flush=True)
-            print(f"prompt_len={prompt_len} prefill_s={prefill_s:.3f}", flush=True)
+            print(f"batch_size={batch_size} prompt_len={prompt_len} prefill_s={prefill_s:.3f}", flush=True)
             if phase == "prefill":
                 for t in kv_cache:
                     ttnn.deallocate(t)
@@ -247,8 +269,8 @@ def main() -> int:
             use_sampling = use_trace and args.trace_mode == "sampling"
             for t in range(prompt_len):
                 print(f"[DEBUG] Warm-up decode token {t}/{prompt_len}...", flush=True)
-                tok_in = prompt_ids[:, t : t + 1].contiguous()
-                pos = torch.tensor([t], dtype=torch.int32)
+                tok_in = prompt_ids[:, t : t + 1].contiguous()  # [B, 1]
+                pos = torch.tensor([t] * batch_size, dtype=torch.int32)  # [B]
                 if use_sampling:
                     result = runner.decode(
                         tokens=tok_in,
@@ -282,18 +304,23 @@ def main() -> int:
         if use_trace:
             mode_label = f"trace-{args.trace_mode}"
 
-        generated: list[int] = []
+        # For batch>1, track per-sequence generated tokens; use sequence 0 for display.
+        generated: list[list[int]] = [[] for _ in range(batch_size)]
         if use_sampling and phase == "decode":
             token_in = _sampling_result_to_token(last_sampling_result, mesh_device)
+            tokens_in = [token_in] * batch_size
         else:
-            token_in = int(torch.argmax(logits.reshape(-1)).item())
-        generated.append(token_in)
+            # logits: [B, 1, vocab] or [B, vocab]
+            logits_flat = logits.reshape(batch_size, -1)
+            tokens_in = [int(torch.argmax(logits_flat[b]).item()) for b in range(batch_size)]
+        for b in range(batch_size):
+            generated[b].append(tokens_in[b])
 
         step_times: list[float] = []
         t_decode0 = time.perf_counter()
         for step in range(max_new_tokens - 1):
-            pos = torch.tensor([prompt_len + step], dtype=torch.int32)
-            tok_in = torch.tensor([[token_in]], dtype=torch.int32)
+            pos = torch.tensor([prompt_len + step] * batch_size, dtype=torch.int32)  # [B]
+            tok_in = torch.tensor([[t] for t in tokens_in], dtype=torch.int32)  # [B, 1]
             t_step = time.perf_counter()
 
             if use_sampling:
@@ -306,6 +333,7 @@ def main() -> int:
                     sampling_params=True,
                 )
                 token_in = _sampling_result_to_token(result, mesh_device)
+                tokens_in = [token_in] * batch_size
             else:
                 logits = runner.decode(
                     tokens=tok_in,
@@ -314,24 +342,26 @@ def main() -> int:
                     kv_cache=kv_cache,
                     enable_trace=use_trace,
                 )
-                token_in = int(torch.argmax(logits.reshape(-1)).item())
+                logits_flat = logits.reshape(batch_size, -1)
+                tokens_in = [int(torch.argmax(logits_flat[b]).item()) for b in range(batch_size)]
 
             step_ms = (time.perf_counter() - t_step) * 1000
             step_times.append(step_ms)
-            generated.append(token_in)
+            for b in range(batch_size):
+                generated[b].append(tokens_in[b])
         decode_s = time.perf_counter() - t_decode0
 
-        full_ids = torch.cat([prompt_ids, torch.tensor([generated], dtype=torch.int32)], dim=1)
+        full_ids = torch.cat([prompt_ids[0:1], torch.tensor([generated[0]], dtype=torch.int32)], dim=1)
         text = tok.decode(full_ids[0].tolist(), skip_special_tokens=True)
         print("", flush=True)
         print(f"=== TT greedy decode ({mode_label}) ===", flush=True)
         print(
             f"mesh_shape=({mesh_rows},{mesh_cols}) device_ids={device_ids if device_ids is not None else 'auto'} "
-            f"kv_cache_dtype={args.kv_cache_dtype} dispatch=ETH phase={phase}",
+            f"kv_cache_dtype={args.kv_cache_dtype} dispatch=ETH phase={phase} batch_size={batch_size}",
             flush=True,
         )
-        print(f"prompt_len={prompt_len} new_tokens={len(generated)} blocks_per_seq={blocks_per_seq}", flush=True)
-        num_gen = max(1, len(generated) - 1)
+        print(f"prompt_len={prompt_len} new_tokens={len(generated[0])} blocks_per_seq={blocks_per_seq}", flush=True)
+        num_gen = max(1, len(generated[0]) - 1)
         if decode_s > 0:
             print(
                 f"prefill_s={prefill_s:.3f} decode_tok_s={decode_s / num_gen:.4f} tok_s={num_gen / decode_s:.2f}",
