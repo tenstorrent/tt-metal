@@ -526,6 +526,53 @@ void launch_d2h_workload(
     Finish(mesh_device->mesh_command_queue());
     std::cout << "D2H workload finished" << std::endl;
 }
+
+void launch_loopback_workload(
+    const std::shared_ptr<tt::tt_metal::distributed::MeshDevice>& mesh_device,
+    std::size_t socket_fifo_size,
+    std::size_t page_size,
+    std::size_t data_size,
+    H2DMode h2d_mode,
+    uint32_t num_iterations = 10,
+    const MeshCoreCoord& socket_core = {MeshCoordinate(0, 0), CoreCoord(0, 0)}) {
+    TT_FATAL(data_size % page_size == 0, "Data size must be a multiple of page size");
+
+    std::string h2d_socket_id = fmt::format("test_h2d_xproc_{}", 0);
+    std::string d2h_socket_id = fmt::format("test_d2h_xproc_{}", 0);
+
+    auto h2d_socket = H2DSocket(mesh_device, socket_core, BufferType::L1, socket_fifo_size, h2d_mode);
+    h2d_socket.export_descriptor(h2d_socket_id);
+
+    auto d2h_socket = D2HSocket(mesh_device, socket_core, socket_fifo_size);
+    d2h_socket.export_descriptor(d2h_socket_id);
+
+    auto program = CreateProgram();
+    CreateKernel(
+        program,
+        "tests/tt_metal/tt_metal/test_kernels/misc/socket/pcie_socket_loopback.cpp",
+        socket_core.core_coord,
+        DataMovementConfig{
+            .processor = DataMovementProcessor::RISCV_0,
+            .noc = NOC::RISCV_0_default,
+            .compile_args = {
+                static_cast<uint32_t>(h2d_socket.get_config_buffer_address()),
+                static_cast<uint32_t>(d2h_socket.get_config_buffer_address()),
+                static_cast<uint32_t>(page_size),
+                static_cast<uint32_t>(data_size),
+                static_cast<uint32_t>(num_iterations),
+                h2d_mode == H2DMode::DEVICE_PULL,
+            }});
+
+    auto mesh_workload = MeshWorkload();
+    MeshCoordinateRange devices = MeshCoordinateRange(socket_core.device_coord);
+    mesh_workload.add_program(devices, std::move(program));
+    std::cout << "Enqueueing Loopback workload" << std::endl;
+    EnqueueMeshWorkload(mesh_device->mesh_command_queue(), mesh_workload, false);
+    std::cout << "Loopback workload enqueued, waiting for Finish" << std::endl;
+    Finish(mesh_device->mesh_command_queue());
+    std::cout << "Loopback workload finished" << std::endl;
+}
+
 TEST_F(HDSocketFixture, LaunchH2DWorkload) {
     if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
@@ -545,6 +592,20 @@ TEST_F(HDSocketFixture, LaunchD2HWorkload) {
         GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
     }
     launch_d2h_workload(mesh_device_, 1024, 64, 1310720, MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(0, 0)));
+}
+
+TEST_F(HDSocketFixture, LaunchLoopbackWorkload) {
+    if (!experimental::GetMemoryPinningParameters(*mesh_device_).can_map_to_noc) {
+        GTEST_SKIP() << "Mapping host memory to NOC is not supported on this system";
+    }
+    launch_loopback_workload(
+        mesh_device_,
+        1024,
+        64,
+        32768,
+        H2DMode::DEVICE_PULL,
+        1000,
+        MeshCoreCoord(MeshCoordinate(0, 0), CoreCoord(0, 0)));
 }
 
 }  // namespace tt::tt_metal::distributed
