@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: © 2025 Tenstorrent AI ULC.
+# SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC.
 # SPDX-License-Identifier: Apache-2.0
 
 
@@ -6,9 +6,10 @@ import torch
 from tracy import signpost
 
 import ttnn
+from models.common.lightweightmodule import LightweightModule
 
 
-class MoEGatePrefill:
+class MoEGatePrefill(LightweightModule):
     """MoE gate module from DeepSeek-R1."""
 
     def __init__(self, config, mesh_device):
@@ -118,6 +119,3 @@ class MoEGatePrefill:
         signpost(header="moe_gate_calculate_dispatch_offsets")
 
         return (ttnn_scores, ttnn_top_k_experts_indices, logits, dispatch_offsets)
-
-    def __call__(self, x):
-        return self.forward(x)
