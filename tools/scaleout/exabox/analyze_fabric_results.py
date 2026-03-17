@@ -398,7 +398,12 @@ def main():
     args = parser.parse_args()
     apply_common_args(args)
 
-    log_file = validate_file_exists(args.path)
+    try:
+        log_file = validate_file_exists(args.path)
+    except SystemExit as exc:
+        if isinstance(exc.code, int) and exc.code == 1:
+            sys.exit(EXIT_CODE_INPUT_ERROR)
+        raise
     analysis = analyze_log_file(str(log_file))
     analysis.hosts = args.hosts or ""
 

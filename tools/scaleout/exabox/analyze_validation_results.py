@@ -852,7 +852,6 @@ def _recommend_dram_failure(cats: dict, total: int, analyses: list[LogAnalysis])
     return [f"- {Colors.RED}DRAM training failures:{Colors.NC} Hardware issue. Report to Syseng."]
 
 
-
 @register_recommendation("arc_timeout")
 def _recommend_arc_timeout(cats: dict, total: int, analyses: list[LogAnalysis]) -> list[str]:
     if not cats.get("arc_timeout"):
@@ -1522,7 +1521,12 @@ def main():
     args = parser.parse_args()
     apply_common_args(args)
 
-    log_dir = validate_dir_exists(args.directory)
+    try:
+        log_dir = validate_dir_exists(args.directory)
+    except SystemExit as exc:
+        if isinstance(exc.code, int) and exc.code == 1:
+            sys.exit(EXIT_CODE_INPUT_ERROR)
+        raise
 
     log_files = sorted(log_dir.glob("*.log"))
     if not log_files:

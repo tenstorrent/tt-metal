@@ -19,6 +19,8 @@ DOMAIN_DISPATCH = "dispatch"
 DOMAIN_FABRIC = "fabric"
 DOMAIN_VALIDATION = "validation"
 
+EXIT_CODE_INPUT_ERROR = 66
+
 
 class Colors:
     GREEN = "\033[0;32m"
@@ -146,7 +148,7 @@ def validate_file_exists(path: str) -> Path:
     p = Path(path)
     if not p.is_file():
         print(f"Error: Log file not found: {path}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CODE_INPUT_ERROR)
     return p
 
 
@@ -155,7 +157,7 @@ def validate_dir_exists(path: str) -> Path:
     p = Path(path)
     if not p.is_dir():
         print(f"Error: Directory not found: {path}", file=sys.stderr)
-        sys.exit(1)
+        sys.exit(EXIT_CODE_INPUT_ERROR)
     return p
 
 
