@@ -115,85 +115,52 @@ struct KernelSpec {
     };
     RuntimeArgSchema runtime_arguments_schema;
 
-    // Make KernelSpec an abstract type
-    // ComputeKernelSpec and DataMovementKernelSpec are the concrete types
-    virtual ~KernelSpec() = default;
+
+    //////////////////////////////////////////////////////////////////////////////
+    // Kernel-controlled hardware resource configuration 
+    //////////////////////////////////////////////////////////////////////////////
+    using ConfigSpec = std::
+        variant<DataMovementConfiguration, ComputeConfiguration>;
+    ConfigSpec config_spec;
 };
 
-struct ComputeKernelSpec : public KernelSpec {
-    // Everything in the base KernelSpec, plus:
+struct ComputeConfiguration {
+    // Tensix hardware resource configuration (configured by compute kernels)
+    // The configuration for Gen1 and Gen2 is currently identical.
 
-    //////////////////////////////////////////////////////////////////////////////
-    // Hardware resource configuration
-    // Compute kernels control Tensix hardware resources
-    //////////////////////////////////////////////////////////////////////////////
+    MathFidelity math_fidelity = MathFidelity::HiFi4;
+    bool fp32_dest_acc_en = false;
+    bool dst_full_sync_en = false;
+    bool bfp8_pack_precise = false;
+    bool math_approx_mode = false;
 
-    // We will need architecture-specific variants for the hardware resource configs.
-    // (It's possible that Quasar compute config will be identical to Gen1...)
-    // (If so, we'll merge them.)
-
-    // You can provide a Gen1 config, a Gen2 config, or both.
-    // If your host code is intended to be architecture-agnostic, provide both.
-
-    struct Gen1TensixComputeConfig {
-        MathFidelity math_fidelity = MathFidelity::HiFi4;
-        bool fp32_dest_acc_en = false;
-        bool dst_full_sync_en = false;
-        bool bfp8_pack_precise = false;
-        bool math_approx_mode = false;
-
-        // "Unpack to dest" mode must be specified on a per-DFB basis
-        // unpack_to_dest_mode maps DFB identifier to UnpackToDestMode
-        using UnpackToDestModeEntry = std::pair<DFBSpecName, ::UnpackToDestMode>;
-        std::vector<UnpackToDestModeEntry> unpack_to_dest_mode = {}; // empty vector means default mode
-    };
-    std::optional<Gen1TensixComputeConfig> gen1_tensix_compute_config = std::nullopt;
-
-
-    // Currently looking identical to Gen1... but we'll see!
-    struct Gen2TensixComputeConfig {
-        MathFidelity math_fidelity = MathFidelity::HiFi4;
-        bool fp32_dest_acc_en = false;
-        bool dst_full_sync_en = false;
-        bool bfp8_pack_precise = false;
-        bool math_approx_mode = false;
-
-        // "Unpack to dest" mode must be specified on a per-DFB basis
-        // unpack_to_dest_mode maps DFB identifier to UnpackToDestMode
-        using UnpackToDestModeEntry = std::pair<DFBSpecName, ::UnpackToDestMode>;
-        std::vector<UnpackToDestModeEntry> unpack_to_dest_mode = {}; // empty vector means default mode
-    };
-    std::optional<Gen2TensixComputeConfig> gen2_tensix_compute_config = std::nullopt;
+    // "Unpack to dest" mode must be specified on a per-DFB basis
+    // unpack_to_dest_mode maps DFB identifier to UnpackToDestMode
+    using UnpackToDestModeEntry = std::pair<DFBSpecName, ::UnpackToDestMode>;
+    std::vector<UnpackToDestModeEntry> unpack_to_dest_mode = {}; // empty vector means default mode
 };
 
-struct DataMovementKernelSpec : public KernelSpec {
-    // Everything in the base KernelSpec, plus:
+struct DataMovementConfiguration {
 
-    //////////////////////////////////////////////////////////////////////////////
-    // Hardware resource configuration
-    // Compute kernels control Tensix hardware resources
-    //////////////////////////////////////////////////////////////////////////////
-
-    // We will need architecture-specific variants for the hardware resource configs.
-
+    // The DM configuration is different for Gen1 and Gen2.
     // You can provide either a Gen1 config, a Gen2 config, or both.
     // If your host code is intended to run on Gen1 or Gen2, you should provide both.
 
-    // TODO: Get rid of the manual specification of processor and NOC.
-    // (or at least make them optional)
     struct Gen1DataMovementConfig {
         tt::tt_metal::DataMovementProcessor processor = tt::tt_metal::DataMovementProcessor::RISCV_0;
         tt::tt_metal::NOC noc = tt::tt_metal::NOC::RISCV_0_default;
         tt::tt_metal::NOC_MODE noc_mode = tt::tt_metal::NOC_MODE::DM_DEDICATED_NOC;
     };
+    std::optional<Gen1DataMovementConfig> gen1_data_movement_config = std::nullopt;
 
     struct Gen2DataMovementConfig {
-        bool is_dm = true; // placeholder so I don't have an empty struct
-        // TODO
-        //   The user doesn't specify the DM processor (the runtime chooses).
-        //   There's only one NOC.
-        //   Is there anything in here? It's possible we don't need this.
+        // Currently, no configuration is needed for Gen2!
+        // Might want to revisit the API if so....
     };
+    std::optional<Gen2DataMovementConfig> gen2_data_movement_config = std::nullopt;
+
+    void validate() const {TT_FATAL(gen1_data_movement_config.has_value() || gen2_data_movement_config.has_value(), 
+        "DataMovementConfiguration must specify at least one of Gen1 and Gen2 configurations");}
 };
 
 }  // namespace tt::tt_metal::experimental::metal2_host_api

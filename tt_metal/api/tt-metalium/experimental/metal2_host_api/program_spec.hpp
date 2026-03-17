@@ -24,10 +24,9 @@ struct WorkerSpec {
     WorkerSpecName unique_id;
 
     // Kernels, DFBs, and semaphores for this worker
-    std::vector<DataMovementKernelSpec> data_movement_kernels;
-    std::vector<ComputeKernelSpec> compute_kernels;
-    std::vector<DataflowBufferSpec> dataflow_buffers;
-    std::vector<SemaphoreSpec> semaphores;
+    std::vector<KernelSpecName> kernels;
+    std::vector<DFBSpecName> dataflow_buffers;
+    std::vector<SemaphoreSpecName> semaphores;
 
     // The set of nodes configured by this WorkerSpec
     std::variant<NodeCoord, NodeRange, NodeRangeSet> target_nodes;
@@ -37,7 +36,18 @@ struct WorkerSpec {
 // ProgramSpec describes the immutable properties of a Program
 //   (analogous to a function's signature and body)
 struct ProgramSpec {
-    std::vector<WorkerSpec> workers;
+    // Kernels
+    std::vector<DataMovementKernelSpec> data_movement_kernels;
+    std::vector<ComputeKernelSpec> compute_kernels;
+    // Dataflow Buffers
+    std::vector<DataflowBufferSpec> dataflow_buffers;
+    // Semaphores
+    std::vector<SemaphoreSpec> semaphores;
+
+    // Worker specifications (optional on Gen1, required on Gen2+)
+    // This info is redundant, but improves clarity and messaging.
+    // (Done to simplify porting from ProgramDescriptor.)
+    std::optional<std::vector<WorkerSpec>> workers = std::nullopt;
 };
 
 // ProgramRunParams describes the mutable properties of a Program,
