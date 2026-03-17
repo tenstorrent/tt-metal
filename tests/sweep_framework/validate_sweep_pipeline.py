@@ -62,25 +62,52 @@ def _module_basename(module_name: str) -> str:
     return module_name.rsplit(".", 1)[-1]
 
 
-def step_clean_vectors(module_name: str, dry_run: bool) -> None:
-    """Remove existing vector files in vectors_export/ that match this sweep's module name."""
+def step_clean_previous_outputs(
+    module_name: str,
+    sweep_trace_output: Path,
+    sweep_trace_split_dir: Path,
+    dry_run: bool,
+) -> None:
+    """Remove all artifacts from a previous pipeline run so we start fresh."""
+    import shutil
+
     print(f"\n{SEPARATOR}")
-    print("Step 0: Clean stale sweep vectors")
+    print("Step 0: Clean previous pipeline outputs")
     print(SEPARATOR)
 
+    removed = 0
+
+    # 1. Sweep trace JSON
+    if sweep_trace_output.is_file():
+        print(f"  Removing sweep trace: {sweep_trace_output}")
+        if not dry_run:
+            sweep_trace_output.unlink()
+        removed += 1
+    else:
+        print(f"  Sweep trace already absent: {sweep_trace_output}")
+
+    # 2. Sweep trace split directory
+    if sweep_trace_split_dir.is_dir():
+        print(f"  Removing sweep trace split dir: {sweep_trace_split_dir}")
+        if not dry_run:
+            shutil.rmtree(sweep_trace_split_dir)
+        removed += 1
+    else:
+        print(f"  Sweep trace split dir already absent: {sweep_trace_split_dir}")
+
+    # 3. Vector export files matching this module
     pattern = str(VECTORS_EXPORT_DIR / f"{module_name}__*")
     matches = sorted(glob.glob(pattern))
-
-    if not matches:
+    if matches:
+        for path in matches:
+            print(f"  Removing vector file: {path}")
+            if not dry_run:
+                os.remove(path)
+        removed += len(matches)
+    else:
         print(f"  No existing vector files matching: {module_name}__*")
-        return
 
-    for path in matches:
-        print(f"  Removing: {path}")
-        if not dry_run:
-            os.remove(path)
-
-    print(f"  Removed {len(matches)} file(s)")
+    print(f"  Cleaned {removed} artifact(s)")
 
 
 def step_generate_vectors(
@@ -342,8 +369,13 @@ def main() -> int:
     if args.dry_run:
         print(f"  Mode:               DRY RUN")
 
-    # Step 0: Remove stale vector files for this sweep
-    step_clean_vectors(module_name=args.module_name, dry_run=args.dry_run)
+    # Step 0: Remove all artifacts from a previous run
+    step_clean_previous_outputs(
+        module_name=args.module_name,
+        sweep_trace_output=sweep_trace_output,
+        sweep_trace_split_dir=sweep_trace_split_dir,
+        dry_run=args.dry_run,
+    )
 
     # Step 1: Generate vectors
     step_generate_vectors(
