@@ -262,7 +262,7 @@ def step_print_validation_pairs(
         for op_dir_name, model_file, sweep_file in matched:
             op_display = op_dir_name.replace("_", ".")
             chat_input = (
-                f"Use @validate-sweep-trac.mdc to validate {op_display}. " f"Model: {model_file} Sweep: {sweep_file}"
+                f"Use @validate-sweep-trace.mdc to validate {op_display}. " f"Model: {model_file} Sweep: {sweep_file}"
             )
             print(f"    {op_display}:")
             print(f"      Chat input: {chat_input}")
