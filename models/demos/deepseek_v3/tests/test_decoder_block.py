@@ -197,9 +197,11 @@ def run_test_forward_pass_decoder2d(
     assert_hidden_dim_pcc(tt_output_torch, reference_output, pcc_required=0.9899)
 
 
+ROW_BATCHED_PREFILL_SEQ_LEN = max(1, DEFAULT_PREFILL_SEQ_LEN // USERS_PER_ROW)
+
 TEST_CASES, TEST_IDS = build_test_cases_and_ids(
     USERS_PER_ROW,
-    DEFAULT_PREFILL_SEQ_LEN,  # default prefill sequence length to test
+    ROW_BATCHED_PREFILL_SEQ_LEN,  # keep total prefill token budget aligned with historical single-row coverage
     include_decode_random_pos_ids=True,  # include decode random position_ids case
 )
 
