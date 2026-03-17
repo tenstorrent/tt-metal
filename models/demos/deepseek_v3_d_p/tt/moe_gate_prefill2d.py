@@ -79,6 +79,7 @@ class MoEGatePrefill:
             logits,
             cluster_axis=self.ccl_config["TP_AXIS"],
             mesh_device=self.mesh_device,
+            num_links=self.ccl_config["NUM_LINKS"],
             math_op=ttnn.ReduceType.Sum,
             memory_config=ttnn.L1_MEMORY_CONFIG,
             topology=ttnn.Topology.Linear,
