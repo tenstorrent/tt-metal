@@ -66,7 +66,7 @@ on:
         required: false
         type: string
         default: default
-        description: "Select a single Blackhole DRAM init write bucket for CI diagnostics"
+        description: "Select a comma-separated list of Blackhole DRAM init buckets for CI diagnostics"
       # Pre-built artifacts (optional - if provided, skips build-artifact job)
       dev-docker-image:
         required: false
@@ -157,7 +157,7 @@ on:
         required: false
         type: string
         default: default
-        description: "Select a single Blackhole DRAM init write bucket for CI diagnostics"
+        description: "Select a comma-separated list of Blackhole DRAM init buckets for CI diagnostics"
   schedule:
     - cron: "0 */4 * * *"
     - cron: "0 7 * * *"  # Every day at 7:00 UTC

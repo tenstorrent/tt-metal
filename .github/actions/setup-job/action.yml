@@ -26,7 +26,7 @@ inputs:
     default: false
     type: boolean
   bh-dram-init-case:
-    description: 'Select a single Blackhole DRAM init write bucket to enable; use default for normal behavior'
+    description: 'Select a comma-separated list of Blackhole DRAM init buckets to enable; use default for normal behavior'
     default: default
     type: string
   enable-kernel-ccache:

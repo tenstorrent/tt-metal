@@ -68,7 +68,7 @@ enum class EnvVarID {
     // ========================================
     TT_METAL_CLEAR_L1,    // Clear L1 memory on device init
     TT_METAL_CLEAR_DRAM,  // Clear DRAM on device init
-    TT_METAL_BH_DRAM_INIT_CASE,  // Select a single Blackhole DRAM init write bucket
+    TT_METAL_BH_DRAM_INIT_CASE,  // Select a Blackhole DRAM init write allowlist
 
     // ========================================
     // DEBUG & TESTING
@@ -258,9 +258,8 @@ IntType parse_int_token(const std::string& token, const std::string& context) {
 
 bool equals_all(const std::string& token) { return to_lower_copy(trim_copy(token)) == "all"; }
 
-BlackholeDramInitCase parse_blackhole_dram_init_case(const char* value) {
-    TT_FATAL(value != nullptr, "TT_METAL_BH_DRAM_INIT_CASE must be set before parsing");
-    const std::string normalized = to_lower_copy(trim_copy(value));
+BlackholeDramInitCase parse_blackhole_dram_init_case_token(const std::string& token) {
+    const std::string normalized = to_lower_copy(trim_copy(token));
     if (normalized == "none") {
         return BlackholeDramInitCase::None;
     }
@@ -305,11 +304,48 @@ BlackholeDramInitCase parse_blackhole_dram_init_case(const char* value) {
     }
 
     TT_THROW(
-        "Invalid TT_METAL_BH_DRAM_INIT_CASE value '{}'. Expected one of: none, dram_core_info, "
+        "Invalid TT_METAL_BH_DRAM_INIT_CASE token '{}'. Expected one of: none, all, dram_core_info, "
         "dram_bank_to_noc_tables, dram_fw_binary, dram_launch_msg, dram_go_msg, dram_fw_launch_rdptr, "
         "dram_fw_go_msg_index, dram_reset_pc, dram_cq_launch_rdptr, dram_watcher_init, "
         "dram_watcher_mailbox_read, dram_core_reset_assert, dram_fw_reset_assert",
-        value);
+        token);
+}
+
+std::optional<std::set<BlackholeDramInitCase>> parse_blackhole_dram_init_cases(const char* value) {
+    TT_FATAL(value != nullptr, "TT_METAL_BH_DRAM_INIT_CASE must be set before parsing");
+
+    std::set<BlackholeDramInitCase> parsed_cases;
+    std::stringstream stream(value);
+    std::string token;
+    bool saw_token = false;
+
+    while (std::getline(stream, token, ',')) {
+        saw_token = true;
+        const std::string normalized = to_lower_copy(trim_copy(token));
+        TT_FATAL(!normalized.empty(), "TT_METAL_BH_DRAM_INIT_CASE contains an empty token in '{}'", value);
+
+        if (normalized == "all") {
+            TT_FATAL(
+                parsed_cases.empty(),
+                "TT_METAL_BH_DRAM_INIT_CASE='all' cannot be combined with other tokens in '{}'",
+                value);
+            return std::nullopt;
+        }
+
+        const auto parsed_case = parse_blackhole_dram_init_case_token(normalized);
+        if (parsed_case == BlackholeDramInitCase::None) {
+            TT_FATAL(
+                parsed_cases.empty() && normalized == to_lower_copy(trim_copy(value)),
+                "TT_METAL_BH_DRAM_INIT_CASE='none' must be used by itself; got '{}'",
+                value);
+            return std::set<BlackholeDramInitCase>{};
+        }
+
+        parsed_cases.insert(parsed_case);
+    }
+
+    TT_FATAL(saw_token, "TT_METAL_BH_DRAM_INIT_CASE must not be empty");
+    return parsed_cases;
 }
 
 }  // namespace
@@ -534,11 +570,11 @@ void RunTimeOptions::HandleEnvVar(EnvVarID id, const char* value) {
         case EnvVarID::TT_METAL_CLEAR_DRAM: this->clear_dram = is_env_enabled(value); break;
 
         // TT_METAL_BH_DRAM_INIT_CASE
-        // Select a single branch-local DRAM-core write bucket to execute on Blackhole.
+        // Select a comma-separated allowlist of branch-local DRAM-core access buckets to execute on Blackhole.
         // Default: unset (legacy behavior - execute all writes)
-        // Usage: export TT_METAL_BH_DRAM_INIT_CASE=dram_core_info
+        // Usage: export TT_METAL_BH_DRAM_INIT_CASE=dram_core_info,dram_watcher_init
         case EnvVarID::TT_METAL_BH_DRAM_INIT_CASE:
-            this->blackhole_dram_init_case = parse_blackhole_dram_init_case(value);
+            this->blackhole_dram_init_cases = parse_blackhole_dram_init_cases(value);
             break;
         // ========================================
         // DEBUG & TESTING

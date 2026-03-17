@@ -226,7 +226,7 @@ class RunTimeOptions {
     bool clear_dram = false;
 
     bool skip_loading_fw = false;
-    std::optional<BlackholeDramInitCase> blackhole_dram_init_case = std::nullopt;
+    std::optional<std::set<BlackholeDramInitCase>> blackhole_dram_init_cases = std::nullopt;
 
     bool jit_analytics_enabled = false;
     bool riscv_debug_info_enabled = false;
@@ -597,9 +597,11 @@ public:
     bool get_tracy_mid_run_push() const { return tracy_mid_run_push; }
 
     bool get_skip_loading_fw() const { return skip_loading_fw; }
-    std::optional<BlackholeDramInitCase> get_blackhole_dram_init_case() const { return blackhole_dram_init_case; }
+    std::optional<std::set<BlackholeDramInitCase>> get_blackhole_dram_init_cases() const {
+        return blackhole_dram_init_cases;
+    }
     bool should_run_blackhole_dram_init_case(BlackholeDramInitCase init_case) const {
-        return !blackhole_dram_init_case.has_value() || blackhole_dram_init_case == init_case;
+        return !blackhole_dram_init_cases.has_value() || blackhole_dram_init_cases->contains(init_case);
     }
 
     bool get_jit_analytics_enabled() const { return jit_analytics_enabled; }

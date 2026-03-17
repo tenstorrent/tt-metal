@@ -29,7 +29,7 @@ on:
         default: false
         type: boolean
       bh-dram-init-case:
-        description: 'Select a single Blackhole DRAM init write bucket; use default for legacy behavior'
+        description: 'Select a comma-separated list of Blackhole DRAM init buckets; use default for legacy behavior'
         required: false
         type: string
         default: default
@@ -127,10 +127,10 @@ jobs:
         timeout-minutes: 10
         with:
           runner-label: ${{ inputs.runner-label }}
-      - name: Summarize Blackhole DRAM init case
+      - name: Summarize Blackhole DRAM init selection
         run: |
-          echo "Blackhole DRAM init case: ${{ inputs.bh-dram-init-case }}"
-          echo "## Blackhole DRAM init case" >> $GITHUB_STEP_SUMMARY
+          echo "Blackhole DRAM init selection: ${{ inputs.bh-dram-init-case }}"
+          echo "## Blackhole DRAM init selection" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "- \`${{ inputs.bh-dram-init-case }}\`" >> $GITHUB_STEP_SUMMARY
       - name: ${{ matrix.test-group.name }} tests
