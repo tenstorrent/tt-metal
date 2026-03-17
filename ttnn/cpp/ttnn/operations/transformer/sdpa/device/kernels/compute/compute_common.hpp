@@ -8,6 +8,23 @@
 #define REDUCE_DIM (ReduceDim::REDUCE_ROW)
 
 #include "api/debug/assert.h"
+
+/**
+ * Convert linear flat index to zigzag flat index for per-head load balancing.
+ * See dataflow_common.hpp for full documentation.
+ */
+ALWI uint32_t linear_to_zigzag(uint32_t linear_flat, uint32_t num_q_chunks) {
+    const uint32_t head_idx = linear_flat / num_q_chunks;
+    const uint32_t pos_in_head = linear_flat % num_q_chunks;
+
+    uint32_t q_chunk;
+    if (pos_in_head % 2 == 0) {
+        q_chunk = pos_in_head / 2;
+    } else {
+        q_chunk = num_q_chunks - 1 - (pos_in_head / 2);
+    }
+    return head_idx * num_q_chunks + q_chunk;
+}
 #include "api/compute/compute_kernel_api.h"
 #include "api/compute/binary_max_min.h"
 #include "api/compute/eltwise_binary.h"
@@ -1678,9 +1695,16 @@ void sdpa_inner_loop(
                 q_high_idx = Skt;
             }
         } else if (sdpa_type == RING) {
-            const uint32_t nb = q_iter / (NH * q_num_chunks);
-            const uint32_t nq = (q_iter % (NH * q_num_chunks)) / q_num_chunks;
-            const uint32_t q_chunk = q_iter % q_num_chunks;
+#if defined BALANCED_Q_PARALLEL
+            // Apply per-head zigzag for load balancing
+            uint32_t global_q_chunk = linear_to_zigzag(q_iter, q_num_chunks);
+#else
+            uint32_t global_q_chunk = q_iter;
+#endif
+
+            const uint32_t nb = global_q_chunk / (NH * q_num_chunks);
+            const uint32_t nq = (global_q_chunk % (NH * q_num_chunks)) / q_num_chunks;
+            const uint32_t q_chunk = global_q_chunk % q_num_chunks;
 
             if (is_causal) {
                 q_low_idx = q_chunk * Sq_chunk_t;

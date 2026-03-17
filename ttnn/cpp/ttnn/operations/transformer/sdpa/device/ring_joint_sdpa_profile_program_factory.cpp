@@ -397,6 +397,13 @@ RingJointSDPAProfileProgramFactory::cached_program_t RingJointSDPAProfileProgram
     defines["REDUCE_GRANULARITY"] = std::to_string(reduce_granularity);
     defines["EXP_APPROX_MODE"] = std::to_string(exp_approx_mode);
 
+    // Enable per-head zigzag for load balancing in balanced causal mode
+    // Requires even num_q_chunks for symmetric light/heavy work distribution
+    bool balanced_q_parallel = args.is_balanced && args.is_causal && (num_q_chunks % 2 == 0);
+    if (balanced_q_parallel) {
+        defines["BALANCED_Q_PARALLEL"] = "1";
+    }
+
     // Profile kernels: simplified reader/writer without sync
     auto reader_kernels_id = CreateKernel(
         program,
