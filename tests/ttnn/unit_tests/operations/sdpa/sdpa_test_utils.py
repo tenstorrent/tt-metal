@@ -464,29 +464,31 @@ def run_test_sdpa_decode_single_iter(
     if causal:
         if cur_pos_tensor:
             start_indices_tt = ttnn.Tensor(torch.tensor(start_indices), ttnn.int32).to(device)
-            tt_back = ttnn.transformer.scaled_dot_product_attention_decode(
-                tt_Q,
-                tt_K,
-                tt_V,
-                cur_pos_tensor=start_indices_tt,
-                scale=scale,
-                sliding_window_size=sliding_window_size,
-                program_config=program_config,
-                compute_kernel_config=compute_kernel_config,
-                memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
-            )
+            with device.cache_entries_counter.measure():
+                tt_back = ttnn.transformer.scaled_dot_product_attention_decode(
+                    tt_Q,
+                    tt_K,
+                    tt_V,
+                    cur_pos_tensor=start_indices_tt,
+                    scale=scale,
+                    sliding_window_size=sliding_window_size,
+                    program_config=program_config,
+                    compute_kernel_config=compute_kernel_config,
+                    memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
+                )
         else:
-            tt_back = ttnn.transformer.scaled_dot_product_attention_decode(
-                tt_Q,
-                tt_K,
-                tt_V,
-                cur_pos=start_indices,
-                scale=scale,
-                sliding_window_size=sliding_window_size,
-                program_config=program_config,
-                compute_kernel_config=compute_kernel_config,
-                memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
-            )
+            with device.cache_entries_counter.measure():
+                tt_back = ttnn.transformer.scaled_dot_product_attention_decode(
+                    tt_Q,
+                    tt_K,
+                    tt_V,
+                    cur_pos=start_indices,
+                    scale=scale,
+                    sliding_window_size=sliding_window_size,
+                    program_config=program_config,
+                    compute_kernel_config=compute_kernel_config,
+                    memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
+                )
     else:
         tt_mask = ttnn.as_tensor(
             attn_mask.transpose(1, 2).contiguous(),
@@ -495,17 +497,18 @@ def run_test_sdpa_decode_single_iter(
             layout=ttnn.TILE_LAYOUT,
             memory_config=dram_memcfg,
         )
-        tt_back = ttnn.transformer.scaled_dot_product_attention_decode(
-            tt_Q,
-            tt_K,
-            tt_V,
-            is_causal=False,
-            attn_mask=tt_mask,
-            scale=scale,
-            program_config=program_config,
-            compute_kernel_config=compute_kernel_config,
-            memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
-        )
+        with device.cache_entries_counter.measure():
+            tt_back = ttnn.transformer.scaled_dot_product_attention_decode(
+                tt_Q,
+                tt_K,
+                tt_V,
+                is_causal=False,
+                attn_mask=tt_mask,
+                scale=scale,
+                program_config=program_config,
+                compute_kernel_config=compute_kernel_config,
+                memory_config=height_sharded_memcfg if sharded_out else dram_memcfg,
+            )
 
     tt_back_shape = list(tt_back.shape)
     assert tt_back_shape[2] == nh, (

@@ -114,7 +114,7 @@ def test_sdpa_decode_non_causal(device, b, nh, nkv, s, d, dtype, grid_size, q_dt
         run_test_sdpa_decode_single_iter(
             device, b, nh, nkv, s, d, dtype, grid_size, q_dtype, sharded_in=False, sharded_out=False, causal=False
         )
-    assert device.num_program_cache_entries() == 1
+    assert device.cache_entries_counter.total == 1
 
 
 @skip_with_llk_assert("Hits LLK assert check for L1 memory access.")
