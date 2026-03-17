@@ -77,7 +77,9 @@ void kernel_main() {
     constexpr uint32_t mean_dst = 1;
     constexpr uint32_t var_dst = 2;
 
-    // The number of valid rows in the last tile in width dimension
+    // The number of valid columns in the last tile in width dimension.
+    // Because the Welford's llk is given transposed data, skip some rows when
+    // we want to skip some columns from getting processed by layer_norm.
     constexpr uint32_t last_tile_rows = (W % tile_width) == 0 ? tile_width : W % tile_width;
 
     cb_eps_obj.wait_front(1);  // comes from the reader

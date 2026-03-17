@@ -2,6 +2,8 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
+#pragma once
+
 #include "ttnn-nanobind/nanobind_fwd.hpp"
 
 namespace ttnn::operations::reduction::detail {

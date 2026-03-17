@@ -11,6 +11,8 @@
 namespace tt {
 
 // Host MMIO reads/writes don't have alignment restrictions, so no need to check alignment here.
+// TODO: For Quasar, this range would need to be expanded if we need to write into uncached L1
+// (>= MEM_L1_UNCACHED_BASE) from host, probably by baking the existence of uncached memory into HAL.
 #define DEBUG_VALID_L1_ADDR(a, l) (((a) >= HAL_MEM_L1_BASE) && ((a) + (l) <= HAL_MEM_L1_BASE + HAL_MEM_L1_SIZE))
 
 #define DEBUG_VALID_REG_ADDR(a) tt::tt_metal::MetalContext::instance().hal().valid_reg_addr(a)
