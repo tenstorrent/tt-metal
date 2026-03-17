@@ -12,10 +12,7 @@ from loguru import logger
 import ttnn
 from conftest import is_galaxy
 from models.demos.stable_diffusion_xl_base.conftest import get_device_name
-from models.demos.stable_diffusion_xl_base.tests.test_common import (
-    SDXL_BASE_REFINER_TRACE_REGION_SIZE,
-    SDXL_L1_SMALL_SIZE,
-)
+from models.demos.stable_diffusion_xl_base.tests.test_common import SDXL_BASE_REFINER_TRACE_REGION_SIZE
 from models.demos.stable_diffusion_xl_base.tt.tt_sdxl_pipeline import TtSDXLPipeline, TtSDXLPipelineConfig
 from tests.ttnn.utils_for_testing import assert_allclose, assert_with_pcc
 
@@ -96,7 +93,6 @@ def _build_reference_weights(peft_sd):
     "device_params",
     [
         {
-            "l1_small_size": SDXL_L1_SMALL_SIZE,
             "trace_region_size": SDXL_BASE_REFINER_TRACE_REGION_SIZE,
         },
     ],

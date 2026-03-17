@@ -8,12 +8,12 @@ import os
 import pytest
 from loguru import logger
 
+from models.common.utility_functions import is_blackhole
 from models.demos.stable_diffusion_xl_base.conftest import get_device_name
 from models.demos.stable_diffusion_xl_base.demo.demo_base_and_refiner import test_demo_base_and_refiner
 from models.demos.stable_diffusion_xl_base.tests.test_common import (
     SDXL_BASE_REFINER_TRACE_REGION_SIZE,
     SDXL_FABRIC_CONFIG,
-    SDXL_L1_SMALL_SIZE,
 )
 from models.demos.stable_diffusion_xl_base.utils.accuracy_utils import (
     accuracy_assert,
@@ -40,7 +40,6 @@ test_demo_base_and_refiner.__test__ = False
     [
         (
             {
-                "l1_small_size": SDXL_L1_SMALL_SIZE,
                 "trace_region_size": SDXL_BASE_REFINER_TRACE_REGION_SIZE,
                 "fabric_config": SDXL_FABRIC_CONFIG,
             },
@@ -48,7 +47,6 @@ test_demo_base_and_refiner.__test__ = False
         ),
         (
             {
-                "l1_small_size": SDXL_L1_SMALL_SIZE,
                 "trace_region_size": SDXL_BASE_REFINER_TRACE_REGION_SIZE,
             },
             False,
@@ -137,6 +135,8 @@ def test_accuracy_sdxl(
     refiner_aesthetic_score,
     refiner_negative_aesthetic_score,
 ):
+    if image_resolution == (512, 512) and is_blackhole():
+        pytest.skip("512x512 not supported on Blackhole")
     if image_resolution == (512, 512) and (vae_on_device or use_refiner):
         pytest.skip("Accuracy test on 512x512 image resolution is only supported for UNet on device.")
 
