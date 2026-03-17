@@ -23,6 +23,7 @@ import requests
 from html.parser import HTMLParser
 import shutil
 import tempfile
+from urllib.parse import urlparse
 
 from loguru import logger
 
@@ -202,8 +203,6 @@ class CIv2ModelDownloadUtils_:
             logger.info(f"Found {len(files_to_download)} files, downloading with aria2c...")
 
             # Download files using aria2c - simple approach with URLs as arguments
-            from urllib.parse import urlparse
-
             for file_url in files_to_download:
                 # Calculate relative path by removing endpoint_prefix and cutting directories
                 parsed = urlparse(file_url)
