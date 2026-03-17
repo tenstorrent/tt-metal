@@ -25,7 +25,7 @@ Multi-upstream mode:
 
 import ttnn
 
-SINGLE_UPSTREAM_KERNEL = "models/demos/deepseek_v3_b1/micro_ops/d2d_exchange/kernels/d2d_exchange_single_upstream.cpp"
+SINGLE_UPSTREAM_KERNEL = "models/demos/deepseek_v3_b1/micro_ops/d2d_exchange/kernels/d2d_exchange.cpp"
 MULTI_UPSTREAM_KERNEL = "models/demos/deepseek_v3_b1/micro_ops/d2d_exchange/kernels/d2d_exchange_multiple_upstreams.cpp"
 
 
