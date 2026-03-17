@@ -65,8 +65,8 @@ spec_return_value_t SwigluElemwiseBwDeviceOperation::compute_output_specs(
 
 tensor_return_value_t SwigluElemwiseBwDeviceOperation::create_output_tensors(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
-    auto specs = compute_output_specs(args, tensor_args);
-    auto* device = tensor_args.linear1.device();
+    const auto specs = compute_output_specs(args, tensor_args);
+    auto* const device = tensor_args.linear1.device();
 
     return {
         tensor_args.preallocated_dL_dlinear1.has_value() ? tensor_args.preallocated_dL_dlinear1.value()
@@ -95,7 +95,7 @@ ttml_swiglu_elemwise_bw(
     const std::optional<ttnn::Tensor>& preallocated_dL_dgate) {
     using Op = ttml::metal::ops::swiglu_elemwise_bw::device::SwigluElemwiseBwDeviceOperation;
 
-    auto tensor_args = Op::tensor_args_t{
+    const auto tensor_args = Op::tensor_args_t{
         .linear1 = linear1,
         .gate = gate,
         .dL_dprod = dL_dprod,

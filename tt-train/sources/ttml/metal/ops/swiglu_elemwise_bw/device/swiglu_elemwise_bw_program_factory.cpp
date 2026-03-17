@@ -62,7 +62,7 @@ void assign_per_core_runtime_args(
     const tt::tt_metal::CoreRangeSet& core_group_1,
     const tt::tt_metal::CoreRangeSet& core_group_2) {
     for (uint32_t i = 0, num_rows_written = 0; i < num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
+        const tt::tt_metal::CoreCoord core = {i / num_cores_y, i % num_cores_y};
 
         uint32_t num_rows_per_core = 0;
         if (core_group_1.contains(core)) {
@@ -116,7 +116,7 @@ SwigluElemwiseBwProgramFactory::cached_program_t SwigluElemwiseBwProgramFactory:
     const uint32_t num_cores_y = grid_size.y;
     constexpr uint32_t block_size = 4U;
 
-    auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_g1, num_rows_g2] =
+    const auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_g1, num_rows_g2] =
         tt::tt_metal::split_work_to_cores(grid_size, total_rows);
 
     const uint32_t twice_block = 2U * block_size;
@@ -129,11 +129,11 @@ SwigluElemwiseBwProgramFactory::cached_program_t SwigluElemwiseBwProgramFactory:
     create_circular_buffer(program, all_cores, kScratchCbIndex, data_format, tile_size_bytes, twice_block);
     create_circular_buffer(program, all_cores, kSiluGradCbIndex, data_format, tile_size_bytes, twice_block);
 
-    auto* linear1_buf = linear1.buffer();
-    auto* gate_buf = gate.buffer();
-    auto* dL_dprod_buf = dL_dprod.buffer();
-    auto* dL_dlinear1_buf = output.dL_dlinear1.buffer();
-    auto* dL_dgate_buf = output.dL_dgate.buffer();
+    auto* const linear1_buf = linear1.buffer();
+    auto* const gate_buf = gate.buffer();
+    auto* const dL_dprod_buf = dL_dprod.buffer();
+    auto* const dL_dlinear1_buf = output.dL_dlinear1.buffer();
+    auto* const dL_dgate_buf = output.dL_dgate.buffer();
 
     SwigluElemwiseBwKernels kernels;
 
@@ -197,7 +197,7 @@ void SwigluElemwiseBwProgramFactory::override_runtime_arguments(
     auto& writer_rt = GetRuntimeArgs(program, sv.writer_kernel_id);
 
     for (uint32_t i = 0; i < sv.num_cores; i++) {
-        tt::tt_metal::CoreCoord core = {i / sv.num_cores_y, i % sv.num_cores_y};
+        const tt::tt_metal::CoreCoord core = {i / sv.num_cores_y, i % sv.num_cores_y};
 
         {
             auto& args = reader_rt[core.x][core.y];

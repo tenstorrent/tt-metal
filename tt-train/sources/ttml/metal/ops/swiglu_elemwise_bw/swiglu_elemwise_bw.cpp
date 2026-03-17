@@ -14,7 +14,7 @@ SwigluElemwiseBwResult swiglu_elemwise_bw(
     const ttnn::Tensor& dL_dprod,
     const std::optional<ttnn::Tensor>& preallocated_dL_dlinear1,
     const std::optional<ttnn::Tensor>& preallocated_dL_dgate) {
-    auto result =
+    const auto result =
         ttnn::prim::ttml_swiglu_elemwise_bw(linear1, gate, dL_dprod, preallocated_dL_dlinear1, preallocated_dL_dgate);
     return SwigluElemwiseBwResult{.dL_dlinear1 = result.dL_dlinear1, .dL_dgate = result.dL_dgate};
 }
