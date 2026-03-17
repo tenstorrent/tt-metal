@@ -77,7 +77,7 @@ def test_benchmark_from_torch(benchmark, device, use_device, ttnn_dtype, torch_d
 @pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
 @pytest.mark.parametrize("size", [1024])
 @pytest.mark.parametrize("enable_bf4_opt", [True, False])
-def test_benchmark_from_torch_fast_approx(
+def test_benchmark_from_torch_enable_bf4_opt(
     benchmark, device, use_device, ttnn_dtype, torch_dtype, ttnn_layout, size, enable_bf4_opt
 ):
     # performacne for borrowed data must be the same
