@@ -1,119 +1,78 @@
 // SPDX-FileCopyrightText: © 2026 Tenstorrent AI ULC
 // SPDX-License-Identifier: Apache-2.0
 
-// Unified CCL All-Reduce Kernel
-//
-// This kernel handles both sender and receiver cores via compile-time dispatch.
-// The core role is determined by the `is_sender` compile-time arg:
-// - is_sender=1: Sender core (reads local data, sends to neighbor)
-// - is_sender=0: Receiver core (receives remote data, performs reduction)
-//
-// Sender Core:
-//   - NCRISC: Reads local tensor data into CB
-//   - BRISC: Sends data to remote device via fabric
-//   - TRISC: No-op
-//
-// Receiver Core:
-//   - NCRISC: Waits for remote data, pushes to compute
-//   - BRISC: No-op
-//   - TRISC: Reduction compute (adds local + remote data)
-
 #include "../../../unified_kernels/kernel_op_api.hpp"
 #include "../../../unified_kernels/kernel_utils.hpp"
-#include "../../../unified_kernels/all_reduce_sender.hpp"
-#include "../../../unified_kernels/all_reduce_receiver.hpp"
+#include "../../../unified_kernels/all_reduce.hpp"
 
 void kernel_main() {
-    constexpr bool is_sender = get_named_compile_time_arg_val("is_sender") == 1;
+    constexpr bool is_allreduce_core = get_named_compile_time_arg_val("is_allreduce_core") == 1;
 
 #if defined(COMPILE_FOR_NCRISC)
-    // ========================================================================
-    // NCRISC: Both sender and receiver have reader logic
-    // ========================================================================
-    if constexpr (is_sender) {
-        using Sender = deepseek_b1_ops::AllReduceSender;
+    if constexpr (is_allreduce_core) {
+        using WriterCTArgs = deepseek_b1_ops::AllReduce::WriterCTArgs<
+            get_named_compile_time_arg_val("allreduce_local_data_cb_id"),
+            get_named_compile_time_arg_val("allreduce_sync_cb_id"),
+            get_named_compile_time_arg_val("allreduce_input_num_tiles"),
+            get_named_compile_time_arg_val("allreduce_page_size_bytes"),
+            get_named_compile_time_arg_val("allreduce_tiles_per_chunk"),
+            get_named_compile_time_arg_val("allreduce_last_chunk_tiles"),
+            get_named_compile_time_arg_val("allreduce_num_chunks"),
+            get_named_compile_time_arg_val("allreduce_num_links")>;
 
-        using ReaderCTArgs = Sender::ReaderCTArgs<
-            get_named_compile_time_arg_val("cb0_id"),
-            get_named_compile_time_arg_val("num_tiles"),
-            get_named_compile_time_arg_val("tensor_page_size"),
-            get_named_compile_time_arg_val("core_noc_x"),
-            get_named_compile_time_arg_val("core_noc_y")>;
+        deepseek_b1_ops::AllReduce::RTArgs args{};
+        args.intermediate_buffer_address = get_common_arg_val<uint32_t>(0);
+        args.my_noc_x = get_common_arg_val<uint32_t>(1);
+        args.my_noc_y = get_common_arg_val<uint32_t>(2);
+        args.sem_bank_addr_0 = get_common_arg_val<uint32_t>(3);
+        args.sem_bank_addr_1 = get_common_arg_val<uint32_t>(4);
 
-        Sender::RTArgs args{};
-        args.tensor_address = get_common_arg_val<uint32_t>(0);
-
-        Sender::Op<ReaderCTArgs> op;
-        op(args);
-    } else {
-        using Receiver = deepseek_b1_ops::AllReduceReceiver;
-
-        using ReaderCTArgs = Receiver::ReaderCTArgs<
-            get_named_compile_time_arg_val("cb_in1"),
-            get_named_compile_time_arg_val("cb_in2"),
-            get_named_compile_time_arg_val("remote_sender_noc_x"),
-            get_named_compile_time_arg_val("remote_sender_noc_y"),
-            get_named_compile_time_arg_val("num_standard_tiles"),
-            get_named_compile_time_arg_val("cb_residual"),
-            get_named_compile_time_arg_val("has_residual")>;
-
-        Receiver::RTArgs args{};
-        args.sender_semaphore_addr = get_common_arg_val<uint32_t>(0);
-
-        Receiver::Op<ReaderCTArgs> op;
-        op(args);
+        deepseek_b1_ops::AllReduce::Writer<WriterCTArgs> writer;
+        writer(args);
     }
 
 #elif defined(COMPILE_FOR_BRISC)
-    // ========================================================================
-    // BRISC: Only sender has writer logic; receiver is no-op
-    // ========================================================================
-    if constexpr (is_sender) {
-        using Sender = deepseek_b1_ops::AllReduceSender;
+    if constexpr (is_allreduce_core) {
+        using ReaderCTArgs = deepseek_b1_ops::AllReduce::ReaderCTArgs<
+            get_named_compile_time_arg_val("allreduce_local_data_cb_id"),
+            get_named_compile_time_arg_val("allreduce_remote_data_cb_id"),
+            get_named_compile_time_arg_val("allreduce_residual_cb_id"),
+            get_named_compile_time_arg_val("allreduce_has_residual"),
+            get_named_compile_time_arg_val("allreduce_skip_local_push"),
+            get_named_compile_time_arg_val("allreduce_total_num_tiles"),
+            get_named_compile_time_arg_val("allreduce_tiles_per_chunk"),
+            get_named_compile_time_arg_val("allreduce_last_chunk_tiles"),
+            get_named_compile_time_arg_val("allreduce_num_chunks"),
+            get_named_compile_time_arg_val("allreduce_num_links")>;
 
-        using WriterCTArgs = Sender::WriterCTArgs<
-            get_named_compile_time_arg_val("packet_cb_id"),
-            get_named_compile_time_arg_val("input_num_tiles"),
-            get_named_compile_time_arg_val("page_size_bytes"),
-            get_named_compile_time_arg_val("payload_size_bytes"),
-            get_named_compile_time_arg_val("data_noc_x"),
-            get_named_compile_time_arg_val("data_noc_y"),
-            get_named_compile_time_arg_val("remote_receiver_noc_x"),
-            get_named_compile_time_arg_val("remote_receiver_noc_y"),
-            get_named_compile_time_arg_val("dst_num_hops"),
-            get_named_compile_time_arg_val("num_connections")>;
+        deepseek_b1_ops::AllReduce::RTArgs args{};
+        args.sem_bank_addr_0 = get_common_arg_val<uint32_t>(0);
+        args.sem_bank_addr_1 = get_common_arg_val<uint32_t>(1);
 
-        Sender::RTArgs args{};
-        args.receiver_base_address = get_common_arg_val<uint32_t>(0);
-        args.receive_semaphore_addr = get_common_arg_val<uint32_t>(1);
-
-        Sender::Op<WriterCTArgs> op;
-        op(args);
+        deepseek_b1_ops::AllReduce::Reader<ReaderCTArgs> reader;
+        reader(args);
     }
-    // else: receiver BRISC is no-op
 
 #elif defined(COMPILE_FOR_TRISC)
-    // ========================================================================
-    // TRISC: Only receiver has compute logic; sender is no-op
-    // ========================================================================
-    if constexpr (!is_sender) {
-        using Receiver = deepseek_b1_ops::AllReduceReceiver;
-
-        using ComputeCTArgs = Receiver::ComputeCTArgs<
-            get_named_compile_time_arg_val("cb_in0"),
-            get_named_compile_time_arg_val("cb_in1"),
-            get_named_compile_time_arg_val("cb_out0"),
-            get_named_compile_time_arg_val("cb_residual"),
-            get_named_compile_time_arg_val("has_residual"),
-            get_named_compile_time_arg_val("num_tiles")>;
+    if constexpr (is_allreduce_core) {
+        using ComputeCTArgs = deepseek_b1_ops::AllReduce::ComputeCTArgs<
+            get_named_compile_time_arg_val("allreduce_cb_remote"),
+            get_named_compile_time_arg_val("allreduce_cb_local"),
+            get_named_compile_time_arg_val("allreduce_cb_out"),
+            get_named_compile_time_arg_val("allreduce_sync_cb_id"),
+            get_named_compile_time_arg_val("allreduce_cb_residual"),
+            get_named_compile_time_arg_val("allreduce_cb_temp"),
+            get_named_compile_time_arg_val("allreduce_has_residual"),
+            get_named_compile_time_arg_val("allreduce_num_tiles"),
+            get_named_compile_time_arg_val("allreduce_num_chunks"),
+            get_named_compile_time_arg_val("allreduce_tiles_per_chunk"),
+            get_named_compile_time_arg_val("allreduce_last_chunk_tiles")>;
 
         deepseek_compute_kernel_init();
 
-        Receiver::RTArgs args{};
-
-        Receiver::Op<ComputeCTArgs> op;
-        op(args);
+        deepseek_b1_ops::AllReduce::RTArgs args{};
+        deepseek_b1_ops::AllReduce::Compute<ComputeCTArgs> compute;
+        compute(args);
     }
-    // else: sender TRISC is no-op
 #endif
 }
