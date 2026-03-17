@@ -7,6 +7,7 @@
 #include <cstdint>
 #include "internal/ethernet/dataflow_api.h"
 #include "hostdevcommon/fabric_common.h"
+#include "tt_metal/fabric/hw/inc/tt_fabric_utils.h"
 
 namespace erisc {
 namespace datamover {
@@ -70,17 +71,20 @@ FORCE_INLINE volatile tt_l1_ptr handshake_info_t* init_handshake_info(
     return handshake_info;
 }
 
+template <bool RISC_CPU_DATA_CACHE_ENABLED>
 FORCE_INLINE void sender_side_handshake(
     uint32_t handshake_register_address,
     uint16_t my_mesh_id,
     uint8_t my_device_id,
+    volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
     size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
     volatile tt_l1_ptr handshake_info_t* handshake_info =
         init_handshake_info(handshake_register_address, my_mesh_id, my_device_id);
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t count = 0;
-    while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE) {
+    while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE &&
+           !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
             run_routing();
@@ -92,17 +96,20 @@ FORCE_INLINE void sender_side_handshake(
     }
 }
 
+template <bool RISC_CPU_DATA_CACHE_ENABLED>
 FORCE_INLINE void receiver_side_handshake(
     uint32_t handshake_register_address,
     uint16_t my_mesh_id,
     uint8_t my_device_id,
+    volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr,
     size_t HS_CONTEXT_SWITCH_TIMEOUT = A_LONG_TIMEOUT_BEFORE_CONTEXT_SWITCH) {
     volatile tt_l1_ptr handshake_info_t* handshake_info =
         init_handshake_info(handshake_register_address, my_mesh_id, my_device_id);
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t count = 0;
-    while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE) {
+    while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE &&
+           !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
             run_routing();
@@ -111,7 +118,9 @@ FORCE_INLINE void receiver_side_handshake(
         }
         invalidate_l1_cache();
     }
-    internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
+    if (!tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)) {
+        internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
+    }
 }
 
 namespace deprecated {
