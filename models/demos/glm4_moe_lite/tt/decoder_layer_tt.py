@@ -237,19 +237,14 @@ def _shard_kvpe_update_tensor(
     # Correctness: `ttnn.pad` and some view-like ops can alias the input buffer without
     # increasing refcounts. Make the padded/permuted update tensor own its buffer to
     # avoid intermittent use-after-free corruption in decode.
-    if skip_defensive_clones:
-        # Skip clones: views flow directly through pad -> permute -> shard.
-        # kvpe_new must stay alive until paged_update_cache consumes the sharded result.
-        kvpe_padded = ttnn.pad(kvpe_new, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)  # [1,32,B,kvpe_dim]
-        kvpe_perm = ttnn.permute(kvpe_padded, (0, 2, 1, 3))  # [1,B,32,kvpe_dim]
-    else:
-        kvpe_padded_view = ttnn.pad(kvpe_new, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)  # [1,32,B,kvpe_dim]
-        kvpe_padded = ttnn.clone(kvpe_padded_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # NOTE: kvpe_padded_view may alias kvpe_new; do not deallocate it separately.
-        kvpe_perm_view = ttnn.permute(kvpe_padded, (0, 2, 1, 3))  # [1,B,32,kvpe_dim]
-        kvpe_perm = ttnn.clone(kvpe_perm_view, memory_config=ttnn.DRAM_MEMORY_CONFIG)
-        # NOTE: kvpe_perm_view may alias kvpe_padded; do not deallocate it separately.
-        ttnn.deallocate(kvpe_padded, force=False)
+    # Pad in ROW_MAJOR to avoid FillPad on TILE input; TilizeWithValPadding zeros padding.
+    kvpe_rm = ttnn.to_layout(kvpe_new, ttnn.ROW_MAJOR_LAYOUT)
+    kvpe_padded_rm = ttnn.pad(kvpe_rm, [(0, 0), (0, ttnn.TILE_SIZE - 1), (0, 0), (0, 0)], 0)  # [1,32,B,kvpe_dim]
+    ttnn.deallocate(kvpe_rm, force=False)
+    kvpe_perm_rm = ttnn.permute(kvpe_padded_rm, (0, 2, 1, 3))  # [1,B,32,kvpe_dim]
+    ttnn.deallocate(kvpe_padded_rm, force=False)
+    kvpe_perm = ttnn.to_layout(kvpe_perm_rm, ttnn.TILE_LAYOUT)
+    ttnn.deallocate(kvpe_perm_rm, force=False)
 
     # Shard across the (B*32) height dimension so each user gets one 32xkvpe_dim shard.
     grid_size = device.compute_with_storage_grid_size()
