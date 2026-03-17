@@ -4,6 +4,7 @@
 
 #include "all_gather_async_default_program_factory.hpp"
 
+#include "ttnn/device_context.hpp"
 #include "ttnn/operations/ccl/sharding_addrgen_helper.hpp"
 #include "ttnn/operations/experimental/ccl/composite_common.hpp"
 #include <tt-metalium/tensor_accessor_args.hpp>
@@ -162,7 +163,8 @@ uint32_t default_workers(
     uint32_t num_directions_per_link,
     uint32_t num_mux_cores_per_direction_per_link,
     const std::optional<CoreRangeSet>& sub_core_grid) {
-    auto sd_id = sub_device_id.value_or(mesh_device.get_sub_device_ids().at(0));
+    auto sd_id = ttnn::DeviceContext(const_cast<tt::tt_metal::distributed::MeshDevice*>(&mesh_device))
+                     .get_effective_sub_device_id(sub_device_id);
     auto subdevice_core_range_set = mesh_device.worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     if (sub_core_grid.has_value()) {
         subdevice_core_range_set = subdevice_core_range_set.intersection(sub_core_grid.value());

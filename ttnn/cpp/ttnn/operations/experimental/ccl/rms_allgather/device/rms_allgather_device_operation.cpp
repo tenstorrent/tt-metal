@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/core/compute_kernel/compute_kernel_config.hpp"
 #include "ttnn/device.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/tensor/tensor_utils.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
@@ -219,9 +220,8 @@ ttsl::hash::hash_t RMSAllGatherDeviceOperation::compute_program_hash(
     const operation_attributes_t& args, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "RMSAllGatherDeviceOperation::compute_program_hash is called");
 
-    auto subdevice_id = args.sub_device_id;
     auto* mesh_device = tensor_args.input.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto sd_id = ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(args.sub_device_id);
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     return tt::tt_metal::operation::hash_operation<RMSAllGatherDeviceOperation>(
         args.eps,

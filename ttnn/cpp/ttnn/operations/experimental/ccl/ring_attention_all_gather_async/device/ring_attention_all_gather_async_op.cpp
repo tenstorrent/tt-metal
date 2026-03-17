@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "ring_attention_all_gather_async_op.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/operations/functions.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/global_semaphore.hpp"
@@ -163,7 +164,7 @@ tt::tt_metal::operation::Hash RingAttentionAllGatherAsync::compute_program_hash(
 
     auto subdevice_id = this->sub_device_id;
     auto* mesh_device = input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
+    auto sd_id = ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(subdevice_id);
     auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
 
     return tt::tt_metal::operation::hash_operation<RingAttentionAllGatherAsync>(

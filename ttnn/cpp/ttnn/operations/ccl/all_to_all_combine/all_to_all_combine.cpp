@@ -11,6 +11,7 @@
 #include "ttnn/operations/ccl/common/host/moe_utils.hpp"
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/full/full.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 
 namespace ttnn {
@@ -28,9 +29,10 @@ ttnn::Tensor all_to_all_combine(
     const std::optional<uint32_t>& output_shard_dim,
     const std::optional<tt::tt_metal::SubDeviceId>& subdevice_id,
     const std::optional<ttnn::Tensor>& optional_output_tensor) {
-    auto* mesh_device = input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    ttnn::DeviceContext device_ctx(input_tensor);
+    auto subdevice_core_range_set =
+        device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice_id);
+    auto* mesh_device = device_ctx.raw_mesh_device();
     uint32_t shard_dim = output_shard_dim.value_or(1);
     uint32_t num_links_ = num_links.value_or(common::get_num_links(*mesh_device, axis));
     tt::tt_fabric::Topology topology_ = ::ttnn::ccl::get_usable_topology(input_tensor, topology, axis);

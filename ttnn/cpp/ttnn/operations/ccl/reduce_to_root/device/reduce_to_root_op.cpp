@@ -5,6 +5,7 @@
 #include <tt_stl/assert.hpp>
 #include "ttnn/device_operation.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -146,9 +147,9 @@ ReduceToRootOp::ReduceToRoot::cached_mesh_workload_t ReduceToRootOp::ReduceToRoo
     tt::tt_metal::distributed::MeshWorkload workload;
     std::unordered_map<ttnn::MeshCoordinateRange, shared_variables_t> shared_variables;
 
-    auto* mesh_device = tensor_args.input_tensor_l.device();
-    auto sd_id = mesh_device->get_sub_device_ids().at(0);
-    auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    ttnn::DeviceContext device_ctx(tensor_args.input_tensor_l);
+    auto available_cores = device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, std::nullopt);
+    auto* mesh_device = device_ctx.raw_mesh_device();
     std::vector<tt::tt_metal::GlobalSemaphore> semaphores;
     semaphores.reserve(2);
     // 2 semaphores: one for each round

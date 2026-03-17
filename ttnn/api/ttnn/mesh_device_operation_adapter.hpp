@@ -4,14 +4,13 @@
 
 #pragma once
 
+#include <tt-metalium/device.hpp>
 #include <tt-metalium/program_cache.hpp>
 
-#include <memory>
-#include <optional>
-#include <functional>
 #include <concepts>
 #include <variant>
 #include "ttnn/distributed/types.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
 #include "ttnn/operation_concepts.hpp"
 #include "ttnn/operation.hpp"
@@ -152,15 +151,40 @@ struct MeshDeviceOperationAdapter {
         }
     };
 
+    /**
+     * Determine the effective sub-device id for this operation.
+     *
+     * If the operation attributes provide an explicit sub-device id (via a
+     * `sub_device_id` data member), we use that so that the program cache key
+     * is independent of the thread-local current sub-device. Otherwise we
+     * fall back to the context-driven current sub-device.
+     */
+    static tt::tt_metal::SubDeviceId get_effective_sub_device_id(
+        tt::tt_metal::distributed::MeshDevice* mesh_device, const operation_attributes_t& attrs) {
+        if constexpr (requires { attrs.sub_device_id; }) {
+            return attrs.sub_device_id.value_or(ttnn::DeviceContext(mesh_device).get_current_sub_device_id());
+        } else {
+            return ttnn::DeviceContext(mesh_device).get_current_sub_device_id();
+        }
+    }
+
     static ttsl::hash::hash_t compute_mesh_workload_hash(
         tt::tt_metal::distributed::MeshDevice* mesh_device,
         const operation_attributes_t& attrs,
         const tensor_args_t& tensor_args) {
-        // Hash the program hash and the tensor coordinates the workload is targeting.
+        // Hash the program hash, the tensor coordinates, and the effective sub-device's worker core region.
+        // Use effective sub-device (explicit from attrs if present, else context-driven): when the op
+        // has an explicit sub_device_id, hashing by current sub-device would tie the key to thread-local
+        // context and unnecessarily split the cache and reduce reuse; hashing by effective sub-device
+        // keeps the key independent of context for those ops.
         auto hash = compute_program_hash(attrs, tensor_args);
         for (const auto& coord : mesh_device_operation_utils::extract_tensor_coordinates(tensor_args, mesh_device)) {
             hash = ttsl::hash::hash_objects(hash, coord);
         }
+        const auto sub_device_id = get_effective_sub_device_id(mesh_device, attrs);
+        const CoreRangeSet worker_cores =
+            mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sub_device_id);
+        ttsl::hash::hash_combine(hash, worker_cores);
         return hash;
     }
 

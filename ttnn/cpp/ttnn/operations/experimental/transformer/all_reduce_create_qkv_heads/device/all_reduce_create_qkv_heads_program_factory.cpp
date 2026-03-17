@@ -6,6 +6,7 @@
 
 #include "ttnn/operations/ccl/shared_with_host/hetergeneous_data_structs.hpp"
 #include "ttnn/operations/ccl/ccl_host_datastructures.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/math.hpp"
 #include "ttnn/operations/ccl/common/types/ccl_types_args_emitters.hpp"
@@ -54,7 +55,7 @@ std::tuple<CoreRangeSet, std::vector<CoreCoord>> choose_worker_cores_fuse(
     const size_t num_workers_preferred = num_workers_per_link * num_links;
     auto available_cores = device->worker_cores(
         tt::tt_metal::HalProgrammableCoreType::TENSIX,
-        sub_device_id.has_value() ? *sub_device_id : device->get_sub_device_ids().at(0));
+        ttnn::DeviceContext(device).get_effective_sub_device_id(sub_device_id));
     if (reserved_core_range.has_value()) {
         available_cores = available_cores.subtract(*reserved_core_range);
     }

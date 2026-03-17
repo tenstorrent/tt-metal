@@ -7,6 +7,7 @@
 
 #include "all_gather_device_operation.hpp"
 #include "ttnn/device_operation.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_ops.hpp"
 
@@ -141,10 +142,9 @@ ttsl::hash::hash_t AllGatherDeviceOperation::compute_program_hash(
     const operation_attributes_t& operation_attributes, const tensor_args_t& tensor_args) {
     log_trace(tt::LogOp, "AllGatherDeviceOperation::compute_program_hash is called");
 
-    auto subdevice_id = operation_attributes.subdevice_id;
-    auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = subdevice_id.value_or(mesh_device->get_sub_device_ids().at(0));
-    auto subdevice_core_range_set = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
+    ttnn::DeviceContext device_ctx(tensor_args.input_tensor);
+    auto subdevice_core_range_set =
+        device_ctx.get_worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, operation_attributes.subdevice_id);
     if (operation_attributes.sub_core_grid.has_value()) {
         subdevice_core_range_set = subdevice_core_range_set.intersection(operation_attributes.sub_core_grid.value());
     }

@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "all_to_all_async_generic_program_factory.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/global_semaphore.hpp"
 #include <tt-metalium/work_split.hpp>
@@ -44,7 +45,7 @@ AllToAllAsyncGenericProgram::cached_mesh_workload_t AllToAllAsyncGenericProgram:
 
     auto* mesh_device = tensor_args.input_tensor.device();
     auto sub_device_id = operation_attributes.sub_device_id;
-    auto subdevice = sub_device_id.has_value() ? *sub_device_id : mesh_device->get_sub_device_ids().at(0);
+    auto subdevice = ttnn::DeviceContext(mesh_device).get_effective_sub_device_id(sub_device_id);
     const auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, subdevice);
     auto subdevices = {subdevice};
 

@@ -6,6 +6,7 @@
 #include "ttnn/tensor/tensor_ops.hpp"
 #include "ttnn/device_operation.hpp"
 #include "ttnn/mesh_device_operation_utils.hpp"
+#include "ttnn/device_context.hpp"
 #include "ttnn/operations/ccl/ccl_common.hpp"
 #include "ttnn/operations/data_movement/common/common.hpp"
 #include <tt-metalium/experimental/fabric/fabric.hpp>
@@ -195,7 +196,7 @@ PointToPointOp::SendReceive::cached_mesh_workload_t PointToPointOp::SendReceive:
     std::array<MeshCoordinate, 2> use_coords = {operation_attributes.send_coord, operation_attributes.receive_coord};
 
     auto* mesh_device = tensor_args.input_tensor.device();
-    auto sd_id = mesh_device->get_sub_device_ids().at(0);
+    auto sd_id = ttnn::DeviceContext(mesh_device).get_current_sub_device_id();
     auto available_cores = mesh_device->worker_cores(tt::tt_metal::HalProgrammableCoreType::TENSIX, sd_id);
     auto semaphore = ttnn::global_semaphore::create_global_semaphore(mesh_device, available_cores, 0);
     log_debug(tt::LogOp, "Semaphores allocated and waiting for all devices to be ready in p2p op");
