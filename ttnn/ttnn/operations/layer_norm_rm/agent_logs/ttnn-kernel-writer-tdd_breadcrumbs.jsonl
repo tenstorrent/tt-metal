@@ -25,3 +25,9 @@
 {"event":"cb_sync_check","stage":"variance_rsqrt","balanced":true,"cb_summary":"c0:Wt/Wt c1:Wt/wait+manual_pop c8:1/persist c9:1/WaitUpfrontNoPop c24:1/1 c25:Wt/wait+manual_pop c26:Wt/Wt c27:1/1 c28:1/1 c29:Wt/Wt c16:Wt/Wt","ts":"2026-03-17T14:19:42+00:00"}
 {"event":"test_run","status":"pass","stage":"variance_rsqrt","test_file":"test_stage_variance_rsqrt.py","shapes":["1x1x32x32","1x1x64x128","1x1x32x256","4x2x64x64","1x1x32x512"],"hard_attempts":0,"ts":"2026-03-17T14:20:09+00:00"}
 {"event":"stage_complete","stage":"variance_rsqrt","attempts":1,"upstream_fixes":[],"design_deviations":[],"ts":"2026-03-17T14:21:25+00:00"}
+{"event":"stage_start","stage":"affine","description":"Add optional gamma multiply (ROW broadcast) and beta add (ROW broadcast) for affine transform.","ts":"2026-03-17T14:21:57+00:00"}
+{"event":"kernel_implemented","stage":"affine","kernel":"compute","approach":"Added Phase 0 (tilize gamma c_2->c_30, beta c_3->c_31 once), Phase 8 (mul ROW c_29*c_30->c_26), Phase 9 (add ROW c_26+c_31->c_29), compile-time CB routing for untilize source, pop persistent gamma/beta at end","ts":"2026-03-17T14:23:02+00:00"}
+{"event":"cb_sync_check","stage":"affine","balanced":true,"cb_summary":"c2:Wt/Wt c3:Wt/Wt c30:Wt/persist+pop_end c31:Wt/persist+pop_end c29:Wt(norm)->pop(mul_gamma)->Wt(add_beta) c26:Wt(mul_gamma)->pop(add_beta) c16:Wt/Wt","ts":"2026-03-17T14:23:17+00:00"}
+{"event":"test_run","status":"pass","stage":"affine","test_file":"test_stage_affine.py","shapes":["1x1x32x32","1x1x64x128","1x1x32x256","4x2x64x64","1x1x32x512"],"hard_attempts":0,"ts":"2026-03-17T14:23:47+00:00"}
+{"event":"stage_complete","stage":"affine","attempts":1,"upstream_fixes":[],"design_deviations":[],"ts":"2026-03-17T14:24:13+00:00"}
+{"event":"complete","final_status":"ALL_PASSED","stages_completed":["data_pipeline","reduce_mean","subtract_mean","variance_rsqrt","affine"],"total_test_runs":5,"total_upstream_fixes":1,"ts":"2026-03-17T14:24:22+00:00"}
