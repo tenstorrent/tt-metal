@@ -23,6 +23,7 @@
 #include "ops/losses.hpp"
 #include "ops/matmul_op.hpp"
 #include "ops/multi_head_utils.hpp"
+#include "ops/randn_op.hpp"
 #include "ops/reshape_op.hpp"
 #include "ops/rmsnorm_op.hpp"
 #include "ops/rope_op.hpp"
@@ -362,6 +363,19 @@ void py_module(nb::module_& m) {
             nb::arg("gamma"),
             nb::arg("epsilon"));
     }
+
+    m.def(
+        "randn",
+        &ttml::ops::randn,
+        nb::arg("shape"),
+        nb::arg("device"),
+        nb::kw_only(),
+        nb::arg("dtype") = nb::cast(DataType::BFLOAT16),
+        nb::arg("layout") = nb::cast(Layout::TILE),
+        nb::arg("memory_config") = nb::cast(ttnn::DRAM_MEMORY_CONFIG),
+        nb::arg("mean") = 0.0f,
+        nb::arg("std") = 1.0f,
+        nb::arg("seed") = nb::none());
 
     {
         auto py_sample = static_cast<nb::module_>(m.attr("sample"));

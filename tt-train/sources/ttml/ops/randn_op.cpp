@@ -2,20 +2,20 @@
 //
 // SPDX-License-Identifier: Apache-2.0
 
-#include "normal.hpp"
+#include "randn_op.hpp"
 
 #include <cmath>
 #include <random>
 
-#include "ttnn/operations/rand/rand.hpp"
-#include "ttnn/operations/eltwise/unary/unary.hpp"
-#include "ttnn/operations/eltwise/binary/binary.hpp"
 #include "ttnn/operations/copy/typecast/typecast.hpp"
 #include "ttnn/operations/core/core.hpp"
+#include "ttnn/operations/eltwise/binary/binary.hpp"
+#include "ttnn/operations/eltwise/unary/unary.hpp"
+#include "ttnn/operations/rand/rand.hpp"
 
-namespace ttnn {
+namespace ttml::ops {
 
-Tensor normal(
+tt::tt_metal::Tensor randn(
     const ttnn::Shape& shape,
     MeshDevice& device,
     const DataType dtype,
@@ -24,7 +24,7 @@ Tensor normal(
     float mean,
     float stddev,
     std::optional<uint32_t> seed) {
-    TT_FATAL(stddev >= 0.0f, "[ttnn::normal] stddev must be non-negative, got {}.", stddev);
+    TT_FATAL(stddev >= 0.0f, "[ttml::ops::randn] stddev must be non-negative, got {}.", stddev);
 
     // Box-Muller transform: z = sqrt(-2 * log(u1)) * cos(2 * pi * u2)
     // u1 in (eps, 1] to avoid log(0); u2 in [0, 1)
@@ -32,7 +32,7 @@ Tensor normal(
     auto u1 = ttnn::rand(shape, device, DataType::FLOAT32, Layout::TILE, memory_config, 1e-6f, 1.0f, effective_seed);
     auto u2 = ttnn::rand(shape, device, DataType::FLOAT32, Layout::TILE, memory_config, 0.0f, 1.0f, effective_seed + 1);
 
-    auto log_u1 = ttnn::log(u1, false, memory_config);
+    auto log_u1 = ttnn::log(u1, memory_config);
     auto neg2log = ttnn::multiply(log_u1, -2.0f, std::nullopt, memory_config);
     auto r = ttnn::sqrt(neg2log, false, memory_config);
 
@@ -57,4 +57,4 @@ Tensor normal(
     return z;
 }
 
-}  // namespace ttnn
+}  // namespace ttml::ops

@@ -72,7 +72,6 @@
 #include "ttnn/operations/transformer/transformer_nanobind.hpp"
 #include "ttnn/operations/uniform/uniform_nanobind.hpp"
 #include "ttnn/operations/rand/rand_nanobind.hpp"
-#include "ttnn/operations/normal/normal_nanobind.hpp"
 #include "ttnn/operations/experimental/test/hang_device/hang_device_operation_nanobind.hpp"
 
 namespace nb = nanobind;
@@ -205,9 +204,6 @@ void py_module(nb::module_& mod) {
 
     auto m_rand = mod.def_submodule("rand", "ttnn rand operation");
     rand::bind_rand_operation(m_rand);
-
-    auto m_normal = mod.def_submodule("normal", "ttnn normal operation");
-    normal::bind_normal_operation(m_normal);
 
     auto m_point_to_point = mod.def_submodule("point_to_point", "point_to_point operations");
     point_to_point::bind_point_to_point(m_point_to_point);

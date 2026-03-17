@@ -43,7 +43,7 @@ def initialize_weights_gpt2(parameters: Dict[str, ttml.autograd.Tensor]) -> None
 
         if "weight" in name:
             # Re-initialize weights with normal(0, 0.02)
-            weight_ttnn = ttnn.normal(
+            weight_ttnn = ttml.ops.randn(
                 shape, device=device, dtype=ttnn.bfloat16, mean=0.0, std=0.02
             )
             new_tensor = ttml.autograd.create_tensor(weight_ttnn)

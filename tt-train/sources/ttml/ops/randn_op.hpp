@@ -4,20 +4,19 @@
 
 #pragma once
 
+#include <core/ttnn_all_includes.hpp>
 #include <optional>
 
-#include "ttnn/decorators.hpp"
+namespace ttml::ops {
 
-namespace ttnn {
-
-Tensor normal(
+tt::tt_metal::Tensor randn(
     const ttnn::Shape& shape,
     MeshDevice& device,
     DataType dtype = DataType::BFLOAT16,
     Layout layout = Layout::TILE,
-    const MemoryConfig& memory_config = types::DRAM_MEMORY_CONFIG,
+    const MemoryConfig& memory_config = ttnn::types::DRAM_MEMORY_CONFIG,
     float mean = 0.0f,
     float stddev = 1.0f,
     std::optional<uint32_t> seed = std::nullopt);
 
-}  // namespace ttnn
+}  // namespace ttml::ops

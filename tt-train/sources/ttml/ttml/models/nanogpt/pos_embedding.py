@@ -128,7 +128,7 @@ class TrainablePositionalEmbedding(AbstractModuleBase):
                 layout=ttnn.TILE_LAYOUT,
             )
         else:
-            weight_ttnn = ttnn.normal(
+            weight_ttnn = ttml.ops.randn(
                 weight_shape, device=device, dtype=ttnn.bfloat16, mean=0.0, std=0.02
             )
         self.weight = Parameter(ttml.autograd.create_tensor(weight_ttnn))
