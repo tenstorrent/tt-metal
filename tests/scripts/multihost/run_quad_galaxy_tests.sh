@@ -141,83 +141,118 @@ _resolve_deepseekv3_cache() {
     fi
 }
 
-# Kill stale processes from the current invocation plus safe orphaned leftovers
-# on all Galaxy hosts. This avoids clobbering unrelated jobs that happen to be
-# using Tenstorrent devices on the shared test systems.
+# Diagnose stale processes on all Galaxy hosts (dry-run mode).
+# This function enumerates and logs processes that would be cleaned up
+# but does NOT actually kill them. Use this for diagnostics and warnings.
 #
 # TT_MULTIHOST_CLEANUP_TAG (environment variable)
 #   A unique per-invocation tag used to identify processes belonging to this
 #   test run during cleanup. Set automatically by setup_dual_galaxy_env() and
 #   setup_quad_galaxy_env() as "${GITHUB_RUN_ID:-manual}-$(id -un)-$$".
 #   The tag is propagated to child MPI processes via `-x TT_MULTIHOST_CLEANUP_TAG`.
-#   During cleanup, _cleanup_multihost reads /proc/$pid/environ on each host
-#   and only kills processes whose TT_MULTIHOST_CLEANUP_TAG matches the
-#   current tag. This prevents cleanup from killing unrelated jobs.
 #
 # Usage: _cleanup_multihost <comma-separated-hosts> [true|false]
 #   $1 - hosts (required, comma-separated, e.g. "g05glx01,g05glx02")
-#   $2 - run tt-smi reset after cleanup (optional, default: false)
+#   $2 - unused (kept for API compatibility, default: false)
+# Returns: 0 if no residual processes found, 1 if residual processes detected
 _cleanup_multihost() {
     local hosts="${1:-}"
-    local do_reset="${2:-false}"
+    local _unused="${2:-false}"
+    local found_residual=0
 
     if [[ -z "$hosts" ]]; then
         echo "  _cleanup_multihost: no hosts set, skipping." >&2
         return 0
     fi
 
-    echo "=== Cleaning up stale processes on all hosts ===" >&2
+    echo "=== Diagnosing stale processes on all hosts (DRY-RUN) ===" >&2
     for host in ${hosts//,/ }; do
-        echo "  Cleaning $host..." >&2
-        ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$host" env TT_MULTIHOST_CLEANUP_TAG="${TT_MULTIHOST_CLEANUP_TAG:-}" bash -s <<-'CLEANUP_EOF' 2>/dev/null || true
-            kill_process_group() {
-                local pid="$1"
-                local pgid
-                pgid=$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ') || true
-                if [ -n "$pgid" ] && [ "$pgid" != "0" ] && [ "$pgid" != "1" ]; then
-                    kill -9 -- -"$pgid" 2>/dev/null || true
-                else
-                    kill -9 "$pid" 2>/dev/null || true
-                fi
-            }
-
+        echo "  Scanning $host..." >&2
+        local host_output
+        host_output=$(ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$host" env TT_MULTIHOST_CLEANUP_TAG="${TT_MULTIHOST_CLEANUP_TAG:-}" bash -s <<-'DIAG_EOF' 2>/dev/null) || true
             current_tag="${TT_MULTIHOST_CLEANUP_TAG:-}"
+            found_any=0
 
-            # Kill orphaned MPI daemons (prted/orted) whose parent mpirun is
-            # already dead (reparented to init, PID 1).  This is safe because
-            # a legitimately running MPI job keeps its prted children parented
-            # to the live mpirun process.
-            pkill -9 --parent 1 -f 'prted|orted' 2>/dev/null || true
+            # Check for orphaned MPI daemons (prted/orted) reparented to init
+            orphan_mpi_pids=$(pgrep --parent 1 -f 'prted|orted' 2>/dev/null || true)
+            if [[ -n "$orphan_mpi_pids" ]]; then
+                echo "    [WOULD KILL] Orphaned MPI daemons (parent=1):"
+                for pid in $orphan_mpi_pids; do
+                    cmd=$(ps -o args= -p "$pid" 2>/dev/null | head -c 100 || echo "<unknown>")
+                    echo "      PID $pid: $cmd"
+                done
+                found_any=1
+            fi
 
-            # Kill orphaned test processes reparented to init.  These are
-            # children of dead prted/mpirun that still hold device files.
-            pkill -9 --parent 1 -f 'pytest|python.*tt_metal|python.*ttnn|fabric_unit_tests|run_cluster_validation|test_system_health' 2>/dev/null || true
+            # Check for orphaned test processes reparented to init
+            orphan_test_pids=$(pgrep --parent 1 -f 'pytest|python.*tt_metal|python.*ttnn|fabric_unit_tests|run_cluster_validation|test_system_health' 2>/dev/null || true)
+            if [[ -n "$orphan_test_pids" ]]; then
+                echo "    [WOULD KILL] Orphaned test processes (parent=1):"
+                for pid in $orphan_test_pids; do
+                    cmd=$(ps -o args= -p "$pid" 2>/dev/null | head -c 100 || echo "<unknown>")
+                    echo "      PID $pid: $cmd"
+                done
+                found_any=1
+            fi
 
-            # For non-orphan leftovers, only kill processes tagged by this same
-            # workflow invocation. That lets retries clean up their own stale
-            # ranks without touching unrelated jobs on the host.
+            # Check for tagged processes from this invocation
             if [[ -n "$current_tag" ]]; then
+                tagged_found=0
                 for pid in $(pgrep -u "$(id -u)" -f 'prted|orted|pytest|python.*tt_metal|python.*ttnn|fabric_unit_tests|run_cluster_validation|test_system_health' 2>/dev/null); do
                     [ -r "/proc/$pid/environ" ] || continue
                     if tr '\0' '\n' < "/proc/$pid/environ" 2>/dev/null | grep -Fxq "TT_MULTIHOST_CLEANUP_TAG=$current_tag"; then
-                        kill_process_group "$pid"
+                        if [[ $tagged_found -eq 0 ]]; then
+                            echo "    [WOULD KILL] Tagged processes (TT_MULTIHOST_CLEANUP_TAG=$current_tag):"
+                            tagged_found=1
+                        fi
+                        cmd=$(ps -o args= -p "$pid" 2>/dev/null | head -c 100 || echo "<unknown>")
+                        echo "      PID $pid: $cmd"
+                        found_any=1
                     fi
                 done
             fi
-CLEANUP_EOF
-        if [[ "$do_reset" == "true" ]]; then
-            ssh -o ConnectTimeout=5 -o StrictHostKeyChecking=no "$host" \
-                "tt-smi -r 2>/dev/null || true" 2>/dev/null || true
+
+            # Check for any other potentially stale test processes (not orphaned, not tagged)
+            other_pids=$(pgrep -u "$(id -u)" -f 'prted|orted|pytest|python.*tt_metal|python.*ttnn|fabric_unit_tests|run_cluster_validation|test_system_health' 2>/dev/null || true)
+            if [[ -n "$other_pids" ]]; then
+                echo "    [INFO] Other matching processes (not orphaned, may be from other runs):"
+                for pid in $other_pids; do
+                    ppid=$(ps -o ppid= -p "$pid" 2>/dev/null | tr -d ' ' || echo "?")
+                    cmd=$(ps -o args= -p "$pid" 2>/dev/null | head -c 100 || echo "<unknown>")
+                    echo "      PID $pid (ppid=$ppid): $cmd"
+                done
+            fi
+
+            if [[ $found_any -eq 0 ]]; then
+                echo "    No residual processes found."
+            fi
+            exit $found_any
+DIAG_EOF
+        local host_status=$?
+        if [[ -n "$host_output" ]]; then
+            echo "$host_output" >&2
+        fi
+        if [[ $host_status -ne 0 ]]; then
+            found_residual=1
         fi
     done
-    echo "=== Cleanup complete ===" >&2
+    echo "=== Diagnostic scan complete (NO PROCESSES WERE KILLED) ===" >&2
+    return $found_residual
 }
 
 setup_dual_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/dual_galaxy_rank_bindings.yaml"
     export HOSTS="g05glx01,g05glx02"
     export TT_MULTIHOST_CLEANUP_TAG="${TT_MULTIHOST_CLEANUP_TAG:-${GITHUB_RUN_ID:-manual}-$(id -un)-$$}"
-    _cleanup_multihost "$HOSTS"
+    if ! _cleanup_multihost "$HOSTS"; then
+        echo "" >&2
+        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+        echo "WARNING: Residual processes detected from prior runs!" >&2
+        echo "These may cause device contention or test failures." >&2
+        echo "Consider manually cleaning up stale processes before proceeding." >&2
+        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+        echo "" >&2
+    fi
     export RANKFILE=/etc/mpirun/rankfile_g05glx01_g05glx02
     export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
     export TCP_INTERFACE="cnx1"
@@ -258,7 +293,15 @@ setup_quad_galaxy_env() {
     export RANK_BINDING_YAML="tests/tt_metal/distributed/config/quad_galaxy_rank_bindings.yaml"
     export HOSTS="g05glx04,g05glx03,g05glx02,g05glx01"
     export TT_MULTIHOST_CLEANUP_TAG="${TT_MULTIHOST_CLEANUP_TAG:-${GITHUB_RUN_ID:-manual}-$(id -un)-$$}"
-    _cleanup_multihost "$HOSTS"
+    if ! _cleanup_multihost "$HOSTS"; then
+        echo "" >&2
+        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+        echo "WARNING: Residual processes detected from prior runs!" >&2
+        echo "These may cause device contention or test failures." >&2
+        echo "Consider manually cleaning up stale processes before proceeding." >&2
+        echo "!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!" >&2
+        echo "" >&2
+    fi
     export RANKFILE=/etc/mpirun/rankfile
     export MPI_ARGS="--host $HOSTS --map-by rankfile:file=$RANKFILE --bind-to none --output-filename logs/mpi_job"
     export TCP_INTERFACE="cnx1"
@@ -327,8 +370,8 @@ _retry_deepseekv3_tt() {
             return 0
         fi
         if (( attempt < max_attempts )); then
-            echo "Attempt $attempt failed. Cleaning up stale state before retry..." >&2
-            _cleanup_multihost "${HOSTS:-}" false
+            echo "Attempt $attempt failed. Scanning for stale processes before retry..." >&2
+            _cleanup_multihost "${HOSTS:-}" false || true
             sleep "$backoff"
         fi
         (( attempt++ ))
@@ -541,9 +584,9 @@ main() {
     cd $TT_METAL_HOME
     export PYTHONPATH=$TT_METAL_HOME
 
-    # Ensure stale chip locks and zombie processes are cleaned up on exit,
-    # regardless of how the script terminates (success, failure, or signal).
-    trap '_cleanup_multihost "${HOSTS:-}" false' EXIT
+    # On exit, run a diagnostic scan to report any residual processes.
+    # This is informational only - no processes are killed.
+    trap '_cleanup_multihost "${HOSTS:-}" false || true' EXIT
 
     # Support running specific test function via argument
     local test_function="${1:-all}"
