@@ -64,11 +64,39 @@ def _sharded_rms_norm(x: ttnn.Tensor, norm_module: Any, hidden_size: int, num_co
     For hidden_size=5120, single-core RMSNorm overflows L1 by ~13.6 KB (1.51 MB vs 1.43 MB limit).
     Spreading across 8 cores reduces per-core memory to ~100 KB — well within L1.
 
+    For prefill (large sequence lengths), auto-scales num_cores up so each core's
+    shard fits within L1. The rms_norm kernel needs ~6 bytes per element in CBs
+    (input + output + intermediates).
+
     Uses ttnn.to_memory_config for sharding (works on TG mesh; interleaved_to_sharded hangs).
     """
     input_shape = [int(d) for d in x.shape]  # save for shape restoration
     h_logical = int(x.shape[-2])  # logical height (may NOT be tile-padded)
     h = ((h_logical + 31) // 32) * 32  # round up to tile boundary (32)
+
+    # Auto-scale num_cores for large sequences to fit within L1.
+    # L1 budget ~1.43 MB. rms_norm CBs ≈ 6 bytes per element (3x BF16 for in/out/scratch).
+    # Per-core shard: h * (hidden/num_cores) * 6 bytes must fit in L1.
+    L1_BUDGET = 1_400_000  # conservative (actual 1,499,136)
+    BYTES_PER_ELEM = 6  # empirical: ~3x BF16 for rms_norm CBs
+    tiles_w_total = hidden_size // 32
+    while num_cores < 64:
+        shard_w_candidate = hidden_size // num_cores
+        per_core_bytes = h * shard_w_candidate * BYTES_PER_ELEM
+        if per_core_bytes <= L1_BUDGET and tiles_w_total % num_cores == 0:
+            break
+        # Try doubling cores
+        next_cores = num_cores * 2
+        if tiles_w_total % next_cores != 0:
+            # Find next valid divisor
+            for c in range(num_cores + 1, 65):
+                if tiles_w_total % c == 0:
+                    next_cores = c
+                    break
+            else:
+                break
+        num_cores = next_cores
+
     tile_h = h // 32  # number of tile rows
     tiles_w = hidden_size // 32  # total tiles in width
     tiles_per_core = tiles_w // num_cores  # tiles per core
@@ -332,8 +360,16 @@ class Glm4MoeDecoderLayer:
 
         _dlsync("before rms_norm")
 
-        # ---- Pre-attention norm (sharded to avoid L1 overflow with hidden=5120) ----
-        h = _sharded_rms_norm(x, w.input_layernorm, hparams.hidden_size)
+        # ---- Pre-attention norm ----
+        # Prefill: use DRAM-interleaved RMSNorm (no L1 constraint at any seq_len).
+        # Sharded RMSNorm overflows L1 at seq>256 with hidden=5120.
+        # DRAM norm is ~0.2ms per call — negligible vs matmuls.
+        h = ttnn.rms_norm(
+            x,
+            epsilon=w.input_layernorm.eps,
+            weight=w.input_layernorm.weight,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         _dlsync("after rms_norm, before attention")
 
@@ -348,9 +384,14 @@ class Glm4MoeDecoderLayer:
 
         _dlsync("after attention + residual")
 
-        # ---- Pre-MLP norm (sharded to avoid L1 overflow with hidden=5120) ----
+        # ---- Pre-MLP norm (DRAM-interleaved for prefill, same as pre-attn) ----
         residual = x
-        h = _sharded_rms_norm(x, w.post_attention_layernorm, hparams.hidden_size)
+        h = ttnn.rms_norm(
+            x,
+            epsilon=w.post_attention_layernorm.eps,
+            weight=w.post_attention_layernorm.weight,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+        )
 
         _dlsync("after post_attn_norm, before MLP")
 

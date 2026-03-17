@@ -38,7 +38,7 @@ class Glm4MoeForCausalLM(nn.Module):
     KV cache: separate K and V, dtype BF8, paged.
     """
 
-    model_capabilities = {"supports_prefix_caching": False}
+    model_capabilities = {"supports_prefix_caching": True}
 
     def __init__(
         self,
@@ -298,7 +298,12 @@ class Glm4MoeForCausalLM(nn.Module):
     # -------------------------------------------------------------------
 
     def prefill_forward(self, *args, **kwargs):
-        """Prefill: process prompt tokens, fill KV cache, return logits for last token."""
+        """Prefill: process prompt tokens, fill KV cache, return logits for last token.
+
+        Supports prefix caching: when start_pos > 0 for a request, the first
+        start_pos tokens are already in KV cache (shared blocks from a prior
+        request). We skip those tokens and only prefill from start_pos onward.
+        """
         tokens: torch.Tensor = kwargs["tokens"]
         prompt_lens = kwargs["prompt_lens"]
         page_table: torch.Tensor = kwargs["page_table"]
@@ -311,10 +316,24 @@ class Glm4MoeForCausalLM(nn.Module):
         if all(int(x) == 0 for x in prompt_lens):
             return torch.zeros((batch, 1, vocab), dtype=torch.float32)
 
+        # Prefix caching: trim cached prefix tokens from input.
+        # start_pos[i] = number of tokens already in KV cache for request i.
+        # We only need to prefill tokens[i, start_pos[i]:prompt_lens[i]].
         if start_pos is not None:
             start_pos_t = torch.as_tensor(start_pos, dtype=torch.int32) if not isinstance(start_pos, torch.Tensor) else start_pos.to(torch.int32)
             if (start_pos_t != 0).any():
-                raise ValueError(f"Prefix caching not supported; got non-zero start_pos: {start_pos_t.tolist()}")
+                import copy
+                prompt_lens = list(prompt_lens)
+                tokens = tokens.clone()
+                for i in range(batch):
+                    sp = int(start_pos_t[i])
+                    if sp > 0 and sp < int(prompt_lens[i]):
+                        pl = int(prompt_lens[i])
+                        new_len = pl - sp
+                        # Shift uncached tokens to the front
+                        tokens[i, :new_len] = tokens[i, sp:pl]
+                        tokens[i, new_len:] = 0
+                        prompt_lens[i] = new_len
 
         self._ensure_tt_runner()
 
