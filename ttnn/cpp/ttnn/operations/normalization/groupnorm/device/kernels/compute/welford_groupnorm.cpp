@@ -143,16 +143,16 @@ void kernel_main() {
 #ifdef UNTILIZE_OUT
     constexpr uint32_t cb_out = tt::CBIndex::c_30;
 #else
-    constexpr uint32_t cb_out = (do_gamma or do_beta)
-                                    ? (((do_gamma and not do_beta) or (not do_gamma and do_beta)) ? cb_in : cb_out0)
-                                    : cb_out0;
+    constexpr uint32_t cb_out = (do_gamma or do_beta) ? cb_out0 : cb_reread_write_out;
 #endif
 
 #ifdef UNTILIZE_OUT
     constexpr int cb_outgamma = cb_in;
-    constexpr int cb_inbeta = do_gamma ? cb_outgamma : cb_out;
+    constexpr int cb_inbeta = do_gamma ? cb_outgamma : cb_reread_write_out;
     constexpr int cb_outbeta = do_gamma ? cb_out : cb_in;
-    constexpr int cb_untilize_in = (do_gamma and not do_beta) ? cb_outgamma : do_beta ? cb_outbeta : cb_out;
+    constexpr int cb_untilize_in = (do_gamma and not do_beta) ? cb_outgamma
+                                   : do_beta                  ? cb_outbeta
+                                                              : cb_reread_write_out;
     constexpr int cb_untilize_out =
 #ifdef READER_REPACK
         cb_repack_out;
@@ -520,11 +520,11 @@ void kernel_main() {
                     copy_tile(cb_x, 0, dst0);
                     tile_regs_commit();
                     cb_pop_front(cb_x, 1);
-                    cb_reserve_back(cb_out0, 1);
+                    cb_reserve_back(cb_out, 1);
                     tile_regs_wait();
-                    pack_tile(dst0, cb_out0);
+                    pack_tile(dst0, cb_out);
                     tile_regs_release();
-                    cb_push_back(cb_out0, 1);
+                    cb_push_back(cb_out, 1);
                 }
             }
 
