@@ -17,6 +17,7 @@
 #include "ttnn/types.hpp"
 
 #include "ttnn/operations/reduction/generic/generic_reductions.hpp"
+#include "ttnn/operations/reduction/reduction_common/reduction_common.hpp"
 
 namespace ttnn::operations::experimental::ccl {
 
@@ -63,7 +64,7 @@ void bind_all_reduce_async(nb::module_& mod) {
                 const std::vector<GlobalSemaphore>&,
                 const std::vector<GlobalSemaphore>&,
                 const std::vector<GlobalSemaphore>&,
-                ttnn::operations::reduction::ReduceType,
+                reduction_common::ReduceType,
                 const std::optional<ttnn::MemoryConfig>&,
                 ttnn::ccl::Topology,
                 std::optional<size_t>,
@@ -87,7 +88,7 @@ void bind_all_reduce_async(nb::module_& mod) {
                 const std::optional<std::vector<GlobalSemaphore>>&,
                 const std::optional<std::vector<GlobalSemaphore>>&,
                 const std::optional<std::vector<GlobalSemaphore>>&,
-                ttnn::operations::reduction::ReduceType,
+                reduction_common::ReduceType,
                 const std::optional<ttnn::MemoryConfig>&,
                 std::optional<ttnn::ccl::Topology>,
                 std::optional<size_t>,
