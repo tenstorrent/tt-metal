@@ -26,7 +26,7 @@ def get_image_features(vision_tower, projector, input_tensor, image_sizes):
     return image_features
 
 
-@run_for_wormhole_b0_or_blackhole
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
     "mesh_device",
     [

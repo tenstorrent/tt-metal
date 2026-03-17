@@ -15,7 +15,7 @@ from models.experimental.mistral_24b.tt.vision_pixtral_transformer import TtPixt
 from models.common.utility_functions import comp_allclose, comp_pcc, run_for_wormhole_b0_or_blackhole
 
 
-@run_for_wormhole_b0_or_blackhole
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
     "batch, num_chunks",
     ((1, 1),),

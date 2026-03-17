@@ -27,7 +27,7 @@ def reference_conv2d_patch(model_args):
     return layer
 
 
-@run_for_wormhole_b0_or_blackhole
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
     "mesh_device",
     [

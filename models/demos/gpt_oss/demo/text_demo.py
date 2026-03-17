@@ -189,7 +189,7 @@ def prepare_gpt_oss_generator_args(
     ],
     ids=["mesh_1x8", "mesh_4x8"],
 )
-@run_for_wormhole_b0_or_blackhole
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
     "input_prompts, data_parallel, batch_size, repeat_batches, max_seq_len, max_generated_tokens, page_params, sampling_params, enable_decode_trace, enable_prefill_trace, warmup_prefill, users_row_sharded, long_context_mode, stop_at_eos, run_in_ci",
     [

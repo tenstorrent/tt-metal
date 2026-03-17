@@ -18,7 +18,7 @@ from ttnn import ConcatMeshToTensor
 
 
 @torch.no_grad()
-@run_for_wormhole_b0_or_blackhole
+@run_for_wormhole_b0_or_blackhole()
 @pytest.mark.parametrize(
     "mesh_device",
     [
