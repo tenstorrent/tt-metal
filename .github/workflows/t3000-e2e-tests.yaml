@@ -27,6 +27,10 @@ on:
         type: boolean
         default: false
         description: "Enable Link Time Optimization (LTO)"
+      enable-watcher:
+        default: false
+        type: boolean
+        description: "Enable watcher"
       model:
         description: 'Filter tests by model name'
         required: false
@@ -59,3 +63,4 @@ jobs:
       wheel-artifact-name: ${{ needs.build-artifact.outputs.wheel-artifact-name }}
       enabled-skus: "wh_llmbox"
       model: ${{ inputs.model || 'all' }}
+      enable-watcher: ${{ inputs.enable-watcher || false }}
