@@ -176,8 +176,6 @@ jobs:
             --ignore=models/demos/deepseek_v3/tests/unit \
             --ignore=models/demos/deepseek_v3/tests/fused_op_unit_tests \
             --ignore=models/demos/deepseek_v3/tests/test_rms_norm.py \
-            --ignore=models/demos/deepseek_v3/tests/test_moe_gate.py \
-            --ignore=models/demos/deepseek_v3/tests/test_moe_experts.py \
             --ignore=models/demos/deepseek_v3/tests/test_mlp.py \
             --ignore=models/demos/deepseek_v3/tests/test_get_weight_config.py \
             --ignore=models/demos/deepseek_v3/tests/test_lazy_state_dict.py \
