@@ -20,10 +20,11 @@ import torch
 from loguru import logger
 
 import ttnn
-from models.common.utility_functions import comp_pcc
+from models.common.utility_functions import comp_pcc, skip_with_llk_assert
 from models.demos.deepseek_v3_b1.micro_ops.sdpa_tail.op import SdpaTailSingleCore
 
 
+@skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39451")
 @pytest.mark.parametrize(
     "width, block_size, num_blocks, dense",
     [
