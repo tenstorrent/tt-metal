@@ -77,7 +77,7 @@ struct ReduceScatterMinimalAsyncInputs {
 
 }  // namespace ttnn::experimental::prim
 
-#include "ttnn/operations/experimental/ccl/reduce_scatter_validate_utils.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_validate_utils.hpp"
 
 namespace ttnn::experimental::prim {
 

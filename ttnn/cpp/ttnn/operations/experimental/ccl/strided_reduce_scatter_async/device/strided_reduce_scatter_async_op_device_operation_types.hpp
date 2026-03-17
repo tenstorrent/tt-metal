@@ -89,4 +89,4 @@ using tensor_return_value_t = std::vector<Tensor>;
 
 }  // namespace ttnn::operations::experimental::ccl::strided_reduce_scatter_async::detail
 
-#include "ttnn/operations/experimental/ccl/reduce_scatter_validate_utils.hpp"
+#include "ttnn/operations/experimental/ccl/reduce_scatter_common/reduce_scatter_validate_utils.hpp"
