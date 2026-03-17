@@ -58,10 +58,10 @@ from models.tt_transformers.tt.model_config import DecodersPrecision
     "optimizations",
     [
         lambda model_args: DecodersPrecision.performance(model_args.n_layers, model_args.model_name),
-    #    lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
+        #    lambda model_args: DecodersPrecision.accuracy(model_args.n_layers, model_args.model_name),
     ],
     ids=[
-        "performance", 
+        "performance",
         # "accuracy"
     ],
 )
