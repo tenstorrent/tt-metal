@@ -7,9 +7,9 @@
 #include <nanobind/nanobind.h>
 
 #include "ttnn-nanobind/decorators.hpp"
-#include "ttnn/operations/experimental/offset_cumsum/offset_cumsum.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum.hpp"
 
-namespace ttnn::operations::experimental::offset_cumsum::detail {
+namespace ttnn::operations::experimental::deepseek_prefill::offset_cumsum::detail {
 void bind_experimental_offset_cumsum_operation(nb::module_& mod) {
     const auto* doc =
         R"doc(
@@ -49,4 +49,4 @@ void bind_experimental_offset_cumsum_operation(nb::module_& mod) {
             nb::arg("memory_config")});
 }
 
-}  // namespace ttnn::operations::experimental::offset_cumsum::detail
+}  // namespace ttnn::operations::experimental::deepseek_prefill::offset_cumsum::detail

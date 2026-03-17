@@ -63,7 +63,7 @@ OffsetCumsumProgramFactory::cached_program_t OffsetCumsumProgramFactory::create(
     std::map<std::string, std::string> kernel_defines;
     tt::tt_metal::KernelHandle kernel_id = tt::tt_metal::CreateKernel(
         program,
-        "ttnn/cpp/ttnn/operations/experimental/offset_cumsum/device/kernels/"
+        "ttnn/cpp/ttnn/operations/experimental/deepseek_prefill/offset_cumsum/device/kernels/"
         "reader_offset_cumsum_interleaved.cpp",
         core_set,
         tt::tt_metal::ReaderDataMovementConfig(compile_time_args, kernel_defines));

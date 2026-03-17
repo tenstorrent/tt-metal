@@ -3,7 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include "device/offset_cumsum_device_operation.hpp"
-#include "ttnn/operations/experimental/offset_cumsum/offset_cumsum.hpp"
+#include "ttnn/operations/experimental/deepseek_prefill/offset_cumsum/offset_cumsum.hpp"
 
 #include "ttnn/operations/core/core.hpp"
 #include "ttnn/operations/data_movement/reshape_view/reshape.hpp"
