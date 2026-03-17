@@ -247,3 +247,8 @@ def test_dram_matmul_compressed_4cores_bfp4(device):
 def test_dram_matmul_compressed_4cores_mixed(device):
     """[1, 7168] x [7168, 2048], mixed bfp4+bfp2, 2 cores per bank."""
     _run_dram_matmul_custom_compressed(device, 1, 7168, 2048, formats=["bfp4", "bfp2"], cores_per_bank=4)
+
+
+def test_dram_matmul_compressed_4cores_mixed_bfp024(device):
+    """[1, 7168] x [7168, 2048], mixed bfp4+bfp2, 2 cores per bank."""
+    _run_dram_matmul_custom_compressed(device, 1, 7168, 2048, formats=["bfp4", "bfp2", "bfp0"], cores_per_bank=4)

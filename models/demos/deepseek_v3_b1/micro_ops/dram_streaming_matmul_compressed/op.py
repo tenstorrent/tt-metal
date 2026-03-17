@@ -25,7 +25,11 @@ from loguru import logger
 
 import ttnn
 from models.demos.deepseek_v3_b1.compressed_tensor.compressed_tensor import CompressedTensor
-from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import _ZERO_TILE_SENTINEL, pack_tile_pairs
+from models.demos.deepseek_v3_b1.micro_ops.matmul_custom_compressed.op import (
+    _CB_ADDR_SHIFT,
+    _ZEROS_ADDR_SHIFTED,
+    pack_tile_pairs,
+)
 from models.demos.deepseek_v3_b1.unified_kernel_descriptor import (
     PerCoreCompileTimeDescriptor,
     UnifiedCompileTimeCoreDescriptor,
@@ -42,18 +46,24 @@ def _compute_subblock_metadata(
     subblock_k: int,
     per_core_n: int,
     num_subblocks_k: int,
+    cb_in1_base_shifted: int,
+    max_subblock_bytes_shifted: int,
+    num_buffers: int,
 ) -> tuple[list[int], list[int]]:
     """Compute per-subblock NOC read metadata and per-tile format metadata.
 
     The assignment is in column-major order within the shard:
     for each N column, K tiles are contiguous.
 
+    Uses absolute addressing: each tile's address is precomputed using the
+    known CB base address and deterministic triple-buffer slot rotation.
+
     Returns:
         block_sizes: list of uint32, one per subblock (block_size_bytes).
             Total entries: num_subblocks_k * per_core_n
-        tile_infos: list of uint32, per-tile [relative_offset:24 | fmt:8].
-            Relative offsets are within each subblock (base=0).
-            Zero tiles use _ZERO_TILE_SENTINEL as address.
+        tile_infos: list of uint32, per-tile [abs_addr:24 | fmt:8].
+            Absolute THCON-shifted addresses, precomputed by host.
+            Zero tiles use _ZEROS_ADDR_SHIFTED.
             Total entries: subblock_k * num_subblocks_k * per_core_n
     """
     num_tiles_k = subblock_k * num_subblocks_k
@@ -62,7 +72,9 @@ def _compute_subblock_metadata(
     block_sizes = []
     tile_infos = []
 
+    iteration = 0  # global iteration index for slot rotation
     tile_idx = 0
+    debug_logged = False
     for _n in range(per_core_n):
         for sb_k in range(num_subblocks_k):
             # Compute block size for this subblock
@@ -75,12 +87,18 @@ def _compute_subblock_metadata(
 
             block_sizes.append(block_bytes)
 
-            # Pack per-tile info for this subblock using pack_tile_pairs.
-            # base_addr_shifted=0 gives relative offsets within the subblock.
-            # The kernel adds addr_in1 (CB read pointer) at runtime.
+            # Absolute base for this subblock's slot in the triple-buffer
+            slot = iteration % num_buffers
+            slot_base_shifted = cb_in1_base_shifted + slot * max_subblock_bytes_shifted
+
             subblock_slice = shard_assignment[subblock_start : subblock_start + subblock_k]
-            tiles = pack_tile_pairs(subblock_slice, base_addr_shifted=0, zero_tile_addr=_ZERO_TILE_SENTINEL)
+            tiles = pack_tile_pairs(
+                subblock_slice, base_addr_shifted=slot_base_shifted, zero_tile_addr=_ZEROS_ADDR_SHIFTED
+            )
+
             tile_infos.extend(tiles)
+
+            iteration += 1
 
     return block_sizes, tile_infos
 
@@ -185,25 +203,38 @@ class DRAMStreamingMatmulCompressed:
         # CB0: A tensor — tensor-backed
         cb0_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in0, input_a)
 
-        # CB1: Working buffer for streaming — NOT tensor-backed.
+        # CB1: Working buffer for streaming — tensor-backed so the L1 address
+        # is known at host time, enabling absolute addressing in metadata.
         # Size: 3 buffers * max possible subblock size (all bfp8 = subblock_k * 1088)
         max_tile_size = _TILE_SIZES[0]  # bfp8 = 1088
         num_in1_buffers = 3
         max_subblock_bytes = subblock_k * max_tile_size
         cb_in1_total_bytes = num_in1_buffers * max_subblock_bytes
 
-        tile_32x32 = ttnn.Tile([32, 32])
-        cb1_fmt = ttnn.CBFormatDescriptor(
-            buffer_index=cb_in1,
-            data_format=ttnn.bfloat8_b,
-            page_size=max_tile_size,
-            tile=ttnn.TileDescriptor(tile_32x32),
+        # Create backing tensor as bfp8 tile-layout so cb_descriptor_from_sharded_tensor
+        # derives the correct CB format (page_size, data_format, tile descriptor).
+        in1_tile = ttnn.Tile([32, 32])
+        in1_cb_tiles = subblock_k * num_in1_buffers
+        in1_backing_shard_shape = (32, in1_cb_tiles * 32)
+        in1_backing_total_width = in1_cb_tiles * 32 * num_total_cores
+        in1_backing_shard_spec = ttnn.ShardSpec(compute_cores, in1_backing_shard_shape, ttnn.ShardOrientation.ROW_MAJOR)
+        in1_backing_mem_config = ttnn.MemoryConfig(
+            ttnn.TensorMemoryLayout.WIDTH_SHARDED, ttnn.BufferType.L1, in1_backing_shard_spec
         )
-        cb1_desc = ttnn.CBDescriptor(
-            total_size=cb_in1_total_bytes,
-            core_ranges=compute_cores,
-            format_descriptors=[cb1_fmt],
+        in1_backing_torch = torch.zeros([1, 1, 32, in1_backing_total_width]).bfloat16().float()
+        in1_backing_tensor = ttnn.from_torch(
+            in1_backing_torch,
+            dtype=ttnn.bfloat8_b,
+            layout=ttnn.TILE_LAYOUT,
+            device=device,
+            memory_config=in1_backing_mem_config,
+            tile=in1_tile,
         )
+        cb_in1_base = in1_backing_tensor.buffer_address()
+        cb_in1_base_shifted = (cb_in1_base >> _CB_ADDR_SHIFT) - 1
+        max_subblock_bytes_shifted = max_subblock_bytes >> _CB_ADDR_SHIFT
+
+        cb1_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_in1, in1_backing_tensor)
 
         # CB2: Output tensor — tensor-backed
         cb2_desc = ttnn.cb_descriptor_from_sharded_tensor(cb_out, output_tensor)
@@ -274,7 +305,14 @@ class DRAMStreamingMatmulCompressed:
 
                 # Compute metadata for this core's columns
                 block_sizes, tile_infos = _compute_subblock_metadata(
-                    device, core_assignment, subblock_k, per_core_N, num_subblocks_k
+                    device,
+                    core_assignment,
+                    subblock_k,
+                    per_core_N,
+                    num_subblocks_k,
+                    cb_in1_base_shifted,
+                    max_subblock_bytes_shifted,
+                    num_in1_buffers,
                 )
                 per_core_block_sizes[core_flat_idx] = block_sizes
                 per_core_fmt_pairs[core_flat_idx] = tile_infos
@@ -327,7 +365,8 @@ class DRAMStreamingMatmulCompressed:
         for core_idx in range(num_total_cores):
             fmt_flat.extend(per_core_fmt_pairs[core_idx])
 
-        fmt_torch = torch.tensor(fmt_flat, dtype=torch.int32).reshape(num_total_cores, num_tile_entries)
+        fmt_np = np.array(fmt_flat, dtype=np.uint32).view(np.int32).reshape(num_total_cores, num_tile_entries)
+        fmt_torch = torch.from_numpy(fmt_np)
         fmt_shard_spec = ttnn.ShardSpec(compute_cores, [1, num_tile_entries * 4], ttnn.ShardOrientation.ROW_MAJOR)
         fmt_mem_config = ttnn.MemoryConfig(ttnn.TensorMemoryLayout.HEIGHT_SHARDED, ttnn.BufferType.L1, fmt_shard_spec)
         fmt_tensor = ttnn.from_torch(
@@ -458,7 +497,7 @@ class DRAMStreamingMatmulCompressed:
             semaphores=semaphores,
         )
 
-        io_tensors = [input_a, data_tensor, output_tensor, meta_tensor, fmt_tensor]
+        io_tensors = [input_a, data_tensor, output_tensor, in1_backing_tensor, meta_tensor, fmt_tensor]
         ttnn.generic_op(io_tensors, program_descriptor)
 
         return output_tensor

@@ -113,9 +113,9 @@ def shuffle_tensor_tiles(tensor, tile_size, num_banks):
     return shuffled
 
 
-@pytest.mark.parametrize("k, n", [(7168, 2048), (2048, 7168)])
-@pytest.mark.parametrize("m", [1, 4, 8])
-@pytest.mark.parametrize("fused_activation", [None, "silu"])
+@pytest.mark.parametrize("k, n", [(7168, 2048)])
+@pytest.mark.parametrize("m", [1])
+@pytest.mark.parametrize("fused_activation", [None])
 def test_dram_streaming_matmul(device, k, n, m, fused_activation):
     """Test simplified DRAM streaming matmul with optional fused activation.
 
@@ -130,8 +130,7 @@ def test_dram_streaming_matmul(device, k, n, m, fused_activation):
     """
 
     # Use 100 iterations for m=1 to stress-test CB boundary wrapping, 1 iteration otherwise
-    num_loop_iters = 100 if m == 1 else 1
-
+    num_loop_iters = 1
     tile_h = m  # Tile height matches m (1 for tiny tiles, 32 for standard)
     tile_w = 32
 

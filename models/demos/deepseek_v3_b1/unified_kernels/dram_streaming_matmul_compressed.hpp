@@ -273,21 +273,17 @@ struct DRAMStreamingMatmulCompressed {
                 for (uint32_t sb_k = 0; sb_k < CTArgs::num_subblocks_k; sb_k++) {
                     cb_wait_front(CTArgs::cb_in1, CTArgs::subblock_k);
 
-                    // Get in1 read address from CB (changes per subblock due to triple-buffering)
-                    uint32_t addr_in1 = 0;
-                    UNPACK(({
-                        uint32_t in1_id = get_operand_id(CTArgs::cb_in1);
-                        addr_in1 = get_local_cb_interface(in1_id).fifo_rd_ptr - 1;
-                    }));
-
+                    // Absolute addresses are precomputed in fmt metadata by host
+                    // (CB is tensor-backed so L1 address is known at compile time).
+                    // addr_in1 is unused when RELATIVE_ADDR=false.
                     const volatile uint32_t* fmt_ptr = fmt_base_ptr + fmt_tile_offset;
                     uint32_t fmt_addr = reinterpret_cast<uint32_t>(fmt_ptr);
                     if (sb_k < CTArgs::num_subblocks_k - 1) {
-                        compressed::custom_mm_compressed_block_runtime<CTArgs::subblock_k, 1, false, true>(
-                            fmt_addr, addr_in0_subblock, addr_in1, in0_face_r_dim, 0);
+                        compressed::custom_mm_compressed_block_runtime<CTArgs::subblock_k, 1, false>(
+                            fmt_addr, addr_in0_subblock, 0, in0_face_r_dim, 0);
                     } else {
-                        compressed::custom_mm_compressed_block_runtime<CTArgs::subblock_k, 1, true, true>(
-                            fmt_addr, addr_in0_subblock, addr_in1, in0_face_r_dim, 0);
+                        compressed::custom_mm_compressed_block_runtime<CTArgs::subblock_k, 1, true>(
+                            fmt_addr, addr_in0_subblock, 0, in0_face_r_dim, 0);
                     }
 
                     addr_in0_subblock += CTArgs::subblock_k * in0_tile_size;
