@@ -149,7 +149,6 @@ def test_masked_bincount(
 
     # Compare per-device (TP replicas in the same dispatch row should match)
     device_tensors = ttnn.get_device_tensors(tt_histograms)
-    n_rows = mesh_device.shape[0]
     n_cols = mesh_device.shape[1]
     all_passed = True
 
