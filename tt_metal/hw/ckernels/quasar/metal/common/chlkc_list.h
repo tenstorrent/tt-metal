@@ -33,21 +33,13 @@ using namespace ckernel;
 std::uint32_t run_kernel() {
 #ifdef UCK_CHLKC_MATH
     ckernel::zeroacc();
-    chlkc_math::math_main();
-#endif
-
-#ifdef UCK_CHLKC_PACK
-    chlkc_pack::pack_main();
 #endif
 
 #ifdef UCK_CHLKC_UNPACK
     ckernel::zerosrc();
-    chlkc_unpack::unpack_main();
 #endif
 
-#ifdef UCK_CHLKC_ISOLATE_SFPU
-    chlkc_isolate_sfpu::isolate_sfpu_main();
-#endif
+    kernel_main();
 
     return 0;
 }
