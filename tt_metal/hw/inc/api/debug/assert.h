@@ -19,9 +19,12 @@ inline void assert_and_hang(uint32_t line_num, debug_assert_type_t assert_type =
         if (assert_type == DebugAssertHwFault) {  // only vslid on Quasar
             uint64_t mcause;
             uint64_t mtval;
+            uint64_t mepc;
+            asm volatile("csrr %0, mepc" : "=r"(mepc));
             asm volatile("csrr %0, mcause" : "=r"(mcause));
             asm volatile("csrr %0, mtval" : "=r"(mtval));
-            v->hw_fault_info = mtval << 32 | (mcause & 0xffffffff);
+            v->line_num = mepc;  // mepc is the instruction address that caused the fault
+            v->hw_fault_info = mtval << 32 | (mcause & 0xffffffff);  // mtval is the faulting address or instruction
         }
     }
 

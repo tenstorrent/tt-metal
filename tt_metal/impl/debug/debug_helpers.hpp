@@ -127,7 +127,8 @@ inline std::string get_debug_assert_message(
         case dev_msgs::DebugAssertCrtaOutOfBounds: return "accessed common runtime arg index out of bounds.";
         case dev_msgs::DebugAssertHwFault:
             return fmt::format(
-                "hardware fault occurred. Cause: 0x{:x}, faulting address or instruction: 0x{:08x}",
+                "hardware fault occurred at PC 0x{:x}. Cause: 0x{:x}, faulting address or instruction: 0x{:08x}",
+                line_num,
                 hw_fault_info & 0xffffffff,
                 (hw_fault_info >> 32) & 0xffffffff);
         default: return "";
