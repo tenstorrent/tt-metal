@@ -1106,7 +1106,7 @@ def _shard_device_impl(
         mesh_mapper=mesh_mapper,
         device=mesh_device,
         dtype=dtype,
-        fast_approx=True,
+        enable_bf4_opt=True,
     )
 
     assert memory_config == ttnn_tensor.memory_config()

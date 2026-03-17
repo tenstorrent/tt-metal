@@ -45,7 +45,11 @@ bool can_construct_on_device(
                // tilize operation, which requires `physical_volume() % tt::constants::TILE_HW == 0`
                tensor_spec.logical_shape().rank() <= 4 &&
                // Logical shape must match physical shape for the tensor to be constructed on the device.
-               tt::tt_metal::logical_matches_physical(tensor_spec);
+               tt::tt_metal::logical_matches_physical(tensor_spec) &&
+               // If the memory config is sharded, the tensor must be constructed on the host. Even if we can borrow the
+               // buffer, the sharding spec may require padding, including cases where the shard dimension is larger
+               // than the shape dimension.
+               !tensor_spec.memory_config().is_sharded();
 
     if (optional_tile.has_value()) {
         // on-device tiling operation expects tiles to be divisible by 32x32.
@@ -68,7 +72,7 @@ Tensor create_tt_tensor_from_host_data(
     std::optional<ttnn::QueueId> cq_id,
     ttnn::distributed::MeshDevice* device,
     bool preserve_nan_values,
-    bool fast_approx) {
+    bool enable_bf4_opt) {
     using namespace tt::tt_metal;
     auto create_tensor_from_host_buffer = [&]<typename T>() -> Tensor {
         TensorLayout dst_tensor_layout(dst_dtype, PageConfig(layout, optional_tile), memory_config);
@@ -77,19 +81,16 @@ Tensor create_tt_tensor_from_host_data(
         if (dst_dtype != DataType::BFLOAT4_B) {
             // typecast to bfloat4_b is expected to lose precision, see
             // https://github.com/tenstorrent/tt-metal/issues/35048
-            // user can choose to use fast_approx=True to get the best performance, but the precision will be lost.
-            fast_approx = true;
+            // user can choose to use enable_bf4_opt=True to get the best performance, but the precision will be lost.
+            enable_bf4_opt = true;
         }
 
-        // If the memory config is sharded, the tensor must be constructed on the host. Even if we can borrow the
-        // buffer, the sharding spec may require padding, including cases where the shard dimension is larger than the
-        // shape dimension.
         // TODO: Remove preserve_nan_values check after
         // https://github.com/tenstorrent/tt-metal/issues/31406
         const bool construct_on_device =
-            can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype) && !memory_config.is_sharded() &&
+            can_exec_ops_on_device(dst_dtype) && can_exec_ops_on_device(src_dtype) &&
             can_construct_on_device(device, optional_tile, TensorSpec(tensor_shape, src_tensor_layout)) &&
-            fast_approx && !preserve_nan_values;
+            enable_bf4_opt && !preserve_nan_values;
 
         if (mesh_mapper != nullptr) {
             return ttnn::distributed::create_distributed_tensor(
@@ -105,7 +106,6 @@ Tensor create_tt_tensor_from_host_data(
 
         // Borrow the Python buffer directly when possible, otherwise copy via from_span.
         const bool can_borrow = src_dtype == convert_to_data_type<T>() && construct_on_device;
-
         if (can_borrow) {
             return Tensor::from_borrowed_data(host_buffer.view_as<T>(), tensor_shape, host_buffer.pin(), optional_tile);
         }
@@ -185,7 +185,7 @@ Tensor convert_python_tensor_to_tt_tensor(
     std::optional<float> pad_value,
     bool preserve_nan_values,
     bool col_tilize,
-    bool fast_approx) {
+    bool enable_bf4_opt) {
     ZoneScoped;
     if (dst_dtype == DataType::BFLOAT8_B || dst_dtype == DataType::BFLOAT4_B) {
         TT_FATAL(layout == Layout::TILE, "Layout must be Layout::TILE for bfloat8_b or bfloat4_b!");
@@ -261,7 +261,7 @@ Tensor convert_python_tensor_to_tt_tensor(
         cq_id,
         device.value_or(nullptr),
         preserve_nan_values,
-        fast_approx);
+        enable_bf4_opt);
 
     auto set_layout = [&](Layout target) {
         if (output.layout() != target) {

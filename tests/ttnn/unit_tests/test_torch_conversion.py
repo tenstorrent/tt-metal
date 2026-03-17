@@ -572,7 +572,7 @@ def test_from_torch_sharded_tile_layout_non_tile_aligned_height(
     assert ttnn_tensor.memory_config().memory_layout == shard_strategy
 
 
-@pytest.mark.parametrize("fast_approx", [True, False])
+@pytest.mark.parametrize("enable_bf4_opt", [True, False])
 @pytest.mark.parametrize("use_mesh_mapper", [True, False])
 @pytest.mark.parametrize(
     "torch_dtype,ttnn_dtype",
@@ -582,12 +582,12 @@ def test_from_torch_sharded_tile_layout_non_tile_aligned_height(
     ],
 )
 def test_from_torch_fast_approx_preserves_sharded_memory_config(
-    device, fast_approx, use_mesh_mapper, torch_dtype, ttnn_dtype
+    device, enable_bf4_opt, use_mesh_mapper, torch_dtype, ttnn_dtype
 ):
     """
-    Validate that fast_approx=True preserves DRAM-sharded memory config.
+    Validate that enable_bf4_opt=True preserves DRAM-sharded memory config.
 
-    When fast_approx is used with a mesh_mapper, the tensor is initially created
+    When enable_bf4_opt is used with a mesh_mapper, the tensor is initially created
     on the device with a default (interleaved) memory config and then converted
     in-place. This test ensures the final tensor has the requested sharded config.
     """
@@ -626,7 +626,7 @@ def test_from_torch_fast_approx_preserves_sharded_memory_config(
         device=device,
         memory_config=memory_config,
         mesh_mapper=mesh_mapper,
-        fast_approx=fast_approx,
+        enable_bf4_opt=enable_bf4_opt,
     )
 
     assert (
@@ -638,7 +638,7 @@ def test_from_torch_fast_approx_preserves_sharded_memory_config(
 
 @pytest.mark.parametrize("mesh_device", [(2, 4)], ids=["t3k"], indirect=True)
 @pytest.mark.parametrize(
-    "mapper_type,ttnn_dtype,memory_config_type,fast_approx",
+    "mapper_type,ttnn_dtype,memory_config_type,enable_bf4_opt",
     [
         ("replicate", ttnn.bfloat16, "DRAM", True),
         ("replicate", ttnn.bfloat16, "DRAM", False),
@@ -657,7 +657,7 @@ def test_from_torch_fast_approx_preserves_sharded_memory_config(
     ],
 )
 def test_from_torch_mesh_mapper_preserves_memory_config(
-    mesh_device, mapper_type, ttnn_dtype, memory_config_type, fast_approx
+    mesh_device, mapper_type, ttnn_dtype, memory_config_type, enable_bf4_opt
 ):
     """
     Verify that from_torch with mesh_mapper on a mesh device preserves the
@@ -666,7 +666,7 @@ def test_from_torch_mesh_mapper_preserves_memory_config(
     Reproduces a regression where the memory_config on the output tensor
     does not match what was passed in, observed in deepseek_v3 weight
     loading with ShardTensor2dMesh + DRAM-sharded memory config +
-    fast_approx=True.
+    enable_bf4_opt=True.
     """
     torch.manual_seed(42)
     mesh_shape = tuple(mesh_device.shape)
@@ -725,7 +725,7 @@ def test_from_torch_mesh_mapper_preserves_memory_config(
         device=mesh_device,
         memory_config=memory_config,
         mesh_mapper=mesh_mapper,
-        fast_approx=fast_approx,
+        enable_bf4_opt=enable_bf4_opt,
     )
 
     assert (

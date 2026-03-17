@@ -60,7 +60,7 @@ def test_benchmark_from_torch(benchmark, device, use_device, ttnn_dtype, torch_d
             device=device if use_device else None,
             dtype=ttnn_dtype,
             layout=ttnn_layout,
-            fast_approx=True,
+            enable_bf4_opt=True,
         )
 
         if not use_device:
@@ -69,3 +69,64 @@ def test_benchmark_from_torch(benchmark, device, use_device, ttnn_dtype, torch_d
         ttnn.synchronize_device(device)
 
     benchmark.pedantic(from_torch, iterations=10, rounds=2, warmup_rounds=1)
+
+
+@pytest.mark.parametrize("use_device", [True])
+@pytest.mark.parametrize("ttnn_layout", [ttnn.ROW_MAJOR_LAYOUT])
+@pytest.mark.parametrize("torch_dtype", [torch.float32])
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat16])
+@pytest.mark.parametrize("size", [1024])
+@pytest.mark.parametrize("enable_bf4_opt", [True, False])
+def test_benchmark_from_torch_fast_approx(
+    benchmark, device, use_device, ttnn_dtype, torch_dtype, ttnn_layout, size, enable_bf4_opt
+):
+    # performacne for borrowed data must be the same
+    # for enable_bf4_opt=True and enable_bf4_opt=False
+    torch_input_tensor = torch.rand((size, size), dtype=torch_dtype, device=device)
+
+    def from_torch():
+        ttnn_tensor = ttnn.from_torch(
+            torch_input_tensor,
+            device=device if use_device else None,
+            dtype=ttnn_dtype,
+            layout=ttnn_layout,
+            enable_bf4_opt=enable_bf4_opt,
+        )
+
+        if not use_device:
+            ttnn.to_device(ttnn_tensor, device=device)
+
+        ttnn.synchronize_device(device)
+
+    benchmark.pedantic(from_torch, iterations=10, rounds=2, warmup_rounds=1)
+
+
+@pytest.mark.parametrize(
+    "shape",
+    [
+        ([1, 256, 7168, 2048]),
+    ],
+)
+@pytest.mark.parametrize("ttnn_dtype", [ttnn.bfloat4_b])
+@pytest.mark.parametrize("mesh_device", [(1, 8)], indirect=True)
+@pytest.mark.parametrize("enable_bf4_opt", [True, False])
+def test_from_torch_deep_seek_interleaved_moe_weights_galaxy(benchmark, mesh_device, shape, ttnn_dtype, enable_bf4_opt):
+    if mesh_device.get_num_devices() != 8:
+        pytest.skip("Test is only valid on T3K (8 devices)")
+
+    torch.manual_seed(0)
+    torch_input_tensor = torch.rand(shape, dtype=torch.float32)
+
+    def from_torch():
+        ttnn_tensor = ttnn.from_torch(
+            torch_input_tensor,
+            dtype=ttnn_dtype,
+            device=mesh_device,
+            layout=ttnn.TILE_LAYOUT,
+            memory_config=ttnn.DRAM_MEMORY_CONFIG,
+            mesh_mapper=ttnn.ShardTensorToMesh(mesh_device, dim=1),
+            enable_bf4_opt=enable_bf4_opt,
+        )
+        ttnn.synchronize_device(mesh_device)
+
+    benchmark.pedantic(from_torch, iterations=1, rounds=1, warmup_rounds=1)
