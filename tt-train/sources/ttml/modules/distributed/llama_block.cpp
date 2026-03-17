@@ -32,7 +32,6 @@ DistributedLlamaMLP::DistributedLlamaMLP(
     }
 
     m_dropout_prob = dropout_prob;
-    m_use_fused = !use_tp;
 
     if (use_tp) {
         m_w1 = std::make_shared<ColumnParallelLinear>(
@@ -59,7 +58,8 @@ DistributedLlamaMLP::DistributedLlamaMLP(
 }
 
 autograd::TensorPtr DistributedLlamaMLP::operator()(const autograd::TensorPtr& input) {
-    if (m_use_fused) {
+    // Fused path is available only for non-TP where local LinearLayer weights exist.
+    if (m_w1_linear && m_w2_linear && m_w3_linear) {
         return ops::swiglu(
             input, m_w1_linear->get_weight(), m_w2_linear->get_weight(), m_w3_linear->get_weight(), m_dropout_prob);
     }

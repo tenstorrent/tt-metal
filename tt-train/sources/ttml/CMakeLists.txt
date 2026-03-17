@@ -135,7 +135,7 @@ set(METAL_OPS_FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/silu_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/silu_bw/device/silu_bw_program_factory.cpp
-    # SwiGLU Gradient (fused eltwise backward)
+    # SwiGLU Elemwise Backward (fused eltwise backward)
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/swiglu_elemwise_bw.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_device_operation.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/metal/ops/swiglu_elemwise_bw/device/swiglu_elemwise_bw_program_factory.cpp

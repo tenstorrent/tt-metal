@@ -27,6 +27,8 @@ constexpr uint32_t cb_sigmoid = tt::CBIndex::c_5;
 constexpr uint32_t cb_scratch = tt::CBIndex::c_6;
 constexpr uint32_t cb_silu_grad = tt::CBIndex::c_7;
 
+// Computes sigmoid(U) tile-wise and stores it for reuse in both output gradients.
+// U := linear1
 inline void compute_sigmoid() {
     tile_regs_acquire();
     for (uint32_t i = 0; i < block_size; ++i) {
@@ -39,6 +41,8 @@ inline void compute_sigmoid() {
     pack_and_push_block(cb_sigmoid, block_size);
 }
 
+// Computes dL/dgate from:
+// dL/dgate = dL/dprod * silu(U), where silu(U) = U * sigmoid(U).
 inline void compute_dL_dgate() {
     cb_wait_front(cb_sigmoid, block_size);
 
@@ -61,6 +65,9 @@ inline void compute_dL_dgate() {
     pack_and_push_block(cb_dL_dgate, block_size);
 }
 
+// Computes silu'(U) in two stages:
+//   silu'(U) = sigmoid(U) * (1 + U * (1 - sigmoid(U))).
+// The intermediate terms are materialized in CB scratch buffers to minimize rereads.
 inline void compute_silu_grad() {
     const uint32_t one = 0x3F800000;
 
@@ -97,6 +104,8 @@ inline void compute_silu_grad() {
     pack_and_push_block(cb_silu_grad, block_size);
 }
 
+// Computes dL/dlinear1 from:
+// dL/dlinear1 = dL/dprod * gate * silu'(U).
 inline void compute_dL_dlinear1() {
     cb_wait_front(cb_silu_grad, block_size);
 
@@ -121,6 +130,16 @@ inline void compute_dL_dlinear1() {
 }
 
 void kernel_main() {
+    // Input tiles are consumed in blocks:
+    //   linear1(U), gate, dL/dprod
+    // and produce:
+    //   dL/dlinear1, dL/dgate
+    //
+    // Processing order per block:
+    // 1) sigmoid(U)
+    // 2) dL/dgate
+    // 3) silu'(U)
+    // 4) dL/dlinear1
     init_sfpu(cb_linear1, cb_dL_dlinear1);
     binary_op_init_common(cb_linear1, cb_gate, cb_dL_dlinear1);
 

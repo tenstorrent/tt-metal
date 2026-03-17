@@ -17,7 +17,7 @@
 #include "models/distributed/llama.hpp"
 #include "models/llama.hpp"
 #include "ops/losses.hpp"
-#include "optimizers/adamw_composite.hpp"
+#include "optimizers/adamw.hpp"
 #include "tokenizers/char_tokenizer.hpp"
 #include "tt-metalium/host_api.hpp"
 #include "ttnn/distributed/distributed_tensor.hpp"
@@ -245,11 +245,11 @@ void train_test(bool use_tensor_parallel = false, bool use_ddp = false) {
         model = ttml::models::llama::create(config.transformer_config);
     }
 
-    auto adamw_params = ttml::optimizers::AdamWCompositeConfig();
+    auto adamw_params = ttml::optimizers::AdamWConfig();
     adamw_params.lr = config.learning_rate;
     adamw_params.weight_decay = config.weight_decay;
 
-    auto optimizer = std::make_shared<ttml::optimizers::MorehAdamW>(model->parameters(), adamw_params);
+    auto optimizer = std::make_shared<ttml::optimizers::AdamW>(model->parameters(), adamw_params);
 
     auto get_loss_value = [](const TensorPtr &loss) {
         auto loss_xtensors = ttml::core::to_xtensor(loss->get_value(), ttml::core::IdentityComposer{});

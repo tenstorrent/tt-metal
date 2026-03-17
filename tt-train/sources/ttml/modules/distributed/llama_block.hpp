@@ -28,7 +28,6 @@ private:
     std::shared_ptr<ttml::modules::LinearLayer> m_w2_linear;
     std::shared_ptr<ttml::modules::LinearLayer> m_w3_linear;
     float m_dropout_prob = 0.0F;
-    bool m_use_fused = false;
 };
 
 class DistributedLlamaBlock : public ModuleBase {

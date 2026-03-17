@@ -8,17 +8,15 @@
 #include <chrono>
 #include <cmath>
 #include <cstdint>
-#include <cstdlib>
-#include <functional>
 #include <numeric>
 #include <random>
-#include <sstream>
 #include <string>
 #include <tt-metalium/distributed.hpp>
 #include <vector>
 
 #include "autograd/auto_context.hpp"
 #include "autograd/tensor.hpp"
+#include "core/random.hpp"
 #include "core/tt_tensor_utils.hpp"
 #include "ops/swiglu_op.hpp"
 #include "utils/memory_utils.hpp"
@@ -60,18 +58,16 @@ double avg(const std::vector<double>& values) {
     return std::accumulate(values.begin(), values.end(), 0.0) / static_cast<double>(values.size());
 }
 
-std::vector<float> make_random_vector(size_t size, float stddev, uint32_t seed) {
-    std::vector<float> data(size);
-    std::mt19937 gen(seed);
-    std::normal_distribution<float> dist(0.0F, stddev);
-    for (auto& v : data) {
-        v = dist(gen);
-    }
-    return data;
+ttnn::Tensor make_random_tensor(
+    const ttnn::Shape& shape, ttnn::distributed::MeshDevice* device, float stddev, uint32_t seed) {
+    std::vector<float> data(shape.volume());
+    ttml::core::parallel_generate<float>(
+        std::span<float>(data), [stddev]() { return std::normal_distribution<float>(0.0F, stddev); }, seed);
+    return ttml::core::from_vector(data, shape, device);
 }
 
 RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t batch_size, bool use_fused) {
-    auto* device = &ttml::autograd::ctx().get_device();
+    auto* const device = &ttml::autograd::ctx().get_device();
     device->clear_program_cache();
 
     const uint32_t d = shape.embedding_dim;
@@ -82,29 +78,29 @@ RunResult run_single(const ModelShape& shape, const SweepConfig& cfg, uint32_t b
     const ttnn::Shape w2_shape({d, h});
     const ttnn::Shape w3_shape({h, d});
 
-    const float act_std = 1.0F;
+    constexpr float kActivationStd = 1.0F;
     const float w13_std = 1.0F / std::sqrt(static_cast<float>(d));
     const float w2_std = 1.0F / std::sqrt(static_cast<float>(h));
 
-    auto x_data = make_random_vector(x_shape.volume(), act_std, 101U + batch_size + d);
-    auto w1_data = make_random_vector(w1_shape.volume(), w13_std, 202U + batch_size + h);
-    auto w2_data = make_random_vector(w2_shape.volume(), w2_std, 303U + batch_size + h);
-    auto w3_data = make_random_vector(w3_shape.volume(), w13_std, 404U + batch_size + d);
+    constexpr uint32_t kSeedX = 101U;
+    constexpr uint32_t kSeedW1 = 202U;
+    constexpr uint32_t kSeedW2 = 303U;
+    constexpr uint32_t kSeedW3 = 404U;
 
-    auto x_value = ttml::core::from_vector(x_data, x_shape, device);
-    auto w1_value = ttml::core::from_vector(w1_data, w1_shape, device);
-    auto w2_value = ttml::core::from_vector(w2_data, w2_shape, device);
-    auto w3_value = ttml::core::from_vector(w3_data, w3_shape, device);
+    auto x_value = make_random_tensor(x_shape, device, kActivationStd, kSeedX + batch_size + d);
+    auto w1_value = make_random_tensor(w1_shape, device, w13_std, kSeedW1 + batch_size + h);
+    auto w2_value = make_random_tensor(w2_shape, device, w2_std, kSeedW2 + batch_size + h);
+    auto w3_value = make_random_tensor(w3_shape, device, w13_std, kSeedW3 + batch_size + d);
 
-    auto op = use_fused ? &ttml::ops::swiglu : &ttml::ops::swiglu_composite;
+    const auto op = use_fused ? &ttml::ops::swiglu : &ttml::ops::swiglu_composite;
     RunResult result;
     const uint32_t max_steps = cfg.num_warmup + cfg.num_measure;
     for (uint32_t step = 0; step < max_steps; ++step) {
-        bool is_measured = step >= cfg.num_warmup;
-        bool capture_memory = is_measured && result.dram_peak == 0;
+        const bool is_measured = step >= cfg.num_warmup;
+        const bool capture_memory = is_measured && result.dram_peak == 0;
 
         auto run_step = [&](double& fwd_ms, double& bwd_ms, bool with_capture) {
-            auto* dev = &ttml::autograd::ctx().get_device();
+            auto* const dev = &ttml::autograd::ctx().get_device();
             auto x = ttml::autograd::create_tensor(x_value, /*requires_grad=*/true);
             auto w1 = ttml::autograd::create_tensor(w1_value, /*requires_grad=*/true);
             auto w2 = ttml::autograd::create_tensor(w2_value, /*requires_grad=*/true);
@@ -199,10 +195,10 @@ void print_model_table(const ModelShape& model, const std::vector<RowSummary>& r
 
 int main() {
     try {
-        SweepConfig sweep_cfg{};
+        const SweepConfig sweep_cfg{};
         const auto& models = all_models();
 
-        auto mesh = tt::tt_metal::distributed::MeshShape(1, 1);
+        const auto mesh = tt::tt_metal::distributed::MeshShape(1, 1);
         ttml::autograd::ctx().open_device(mesh);
 
         fmt::print("SwiGLU isolated op benchmark (composite baseline vs fused)\n");
@@ -216,9 +212,9 @@ int main() {
         for (const auto& model : models) {
             std::vector<RowSummary> rows;
             rows.reserve(sweep_cfg.batch_sizes.size());
-            for (auto batch_size : sweep_cfg.batch_sizes) {
-                auto baseline = run_single(model, sweep_cfg, batch_size, /*use_fused=*/false);
-                auto fused = run_single(model, sweep_cfg, batch_size, /*use_fused=*/true);
+            for (const auto batch_size : sweep_cfg.batch_sizes) {
+                const auto baseline = run_single(model, sweep_cfg, batch_size, /*use_fused=*/false);
+                const auto fused = run_single(model, sweep_cfg, batch_size, /*use_fused=*/true);
 
                 const double b_total = avg(baseline.step_times);
                 const double f_total = avg(fused.step_times);

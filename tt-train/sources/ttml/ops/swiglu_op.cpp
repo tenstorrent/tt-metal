@@ -26,7 +26,7 @@ namespace ttml::ops {
 namespace {
 // Zero-copy flatten of all dims except the last into a single leading dim: [B,N,S,D] -> [B*N*S, D]
 ttnn::Tensor flatten_leading(const ttnn::Tensor& t) {
-    auto vol = t.logical_volume() / static_cast<uint64_t>(t.logical_shape()[-1]);
+    const auto vol = t.logical_volume() / static_cast<uint64_t>(t.logical_shape()[-1]);
     return t.reshape(ttnn::Shape({static_cast<uint32_t>(vol), t.logical_shape()[-1]}));
 }
 
@@ -38,9 +38,11 @@ autograd::TensorPtr swiglu_composite(
     const autograd::TensorPtr& w2,
     const autograd::TensorPtr& w3,
     float dropout_prob) {
-    auto swished = ops::silu(ops::linear_op(tensor, w1, nullptr));
-    auto gate = ops::linear_op(tensor, w3, nullptr);
-    auto x = ops::linear_op(ops::mul(swished, gate), w2, nullptr);
+    // Baseline-only reference used by the isolated benchmark A/B table.
+    // Keep model/runtime paths on fused swiglu().
+    const auto swished = ops::silu(ops::linear_op(tensor, w1, nullptr));
+    const auto gate = ops::linear_op(tensor, w3, nullptr);
+    const auto x = ops::linear_op(ops::mul(swished, gate), w2, nullptr);
     return ops::dropout(x, dropout_prob);
 }
 

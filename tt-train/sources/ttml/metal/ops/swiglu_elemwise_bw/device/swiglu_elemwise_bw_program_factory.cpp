@@ -99,22 +99,22 @@ SwigluElemwiseBwProgramFactory::cached_program_t SwigluElemwiseBwProgramFactory:
     const auto& gate = tensor_args.gate;
     const auto& dL_dprod = tensor_args.dL_dprod;
 
-    auto* device = linear1.device();
+    auto* const device = linear1.device();
     tt::tt_metal::Program program{};
 
-    tt::DataFormat data_format = datatype_to_dataformat_converter(linear1.dtype());
-    uint32_t tile_size_bytes = tt::tile_size(data_format);
+    const tt::DataFormat data_format = datatype_to_dataformat_converter(linear1.dtype());
+    const uint32_t tile_size_bytes = tt::tile_size(data_format);
 
-    auto padded_shape = linear1.padded_shape();
+    const auto padded_shape = linear1.padded_shape();
     TT_FATAL(padded_shape.rank() == 4U, "Input tensors must be 4D");
-    uint32_t Wt = padded_shape[-1] / tt::constants::TILE_WIDTH;
-    uint32_t Ht = padded_shape[-2] / tt::constants::TILE_HEIGHT;
-    uint32_t NC = padded_shape[0] * padded_shape[1];
-    uint32_t total_rows = NC * Ht;
+    const uint32_t Wt = padded_shape[-1] / tt::constants::TILE_WIDTH;
+    const uint32_t Ht = padded_shape[-2] / tt::constants::TILE_HEIGHT;
+    const uint32_t NC = padded_shape[0] * padded_shape[1];
+    const uint32_t total_rows = NC * Ht;
 
-    auto grid_size = device->compute_with_storage_grid_size();
-    uint32_t num_cores_y = grid_size.y;
-    uint32_t block_size = 4U;
+    const auto grid_size = device->compute_with_storage_grid_size();
+    const uint32_t num_cores_y = grid_size.y;
+    constexpr uint32_t block_size = 4U;
 
     auto [num_cores, all_cores, core_group_1, core_group_2, num_rows_g1, num_rows_g2] =
         tt::tt_metal::split_work_to_cores(grid_size, total_rows);

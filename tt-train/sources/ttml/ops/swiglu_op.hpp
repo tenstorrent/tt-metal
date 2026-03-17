@@ -19,7 +19,8 @@ autograd::TensorPtr swiglu(
     float dropout_prob = 0.0F);
 
 // Baseline composite SwiGLU path (matmul + silu + mul + matmul + dropout).
-// Intended for benchmark/reference comparison with fused swiglu.
+// Keep this only as a benchmark/reference baseline for A/B measurements.
+// Production model paths should call fused `swiglu(...)`.
 autograd::TensorPtr swiglu_composite(
     const autograd::TensorPtr& tensor,
     const autograd::TensorPtr& w1,
