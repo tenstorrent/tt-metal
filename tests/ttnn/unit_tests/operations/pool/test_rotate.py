@@ -315,6 +315,7 @@ def test_height_sharded_memory(device, interpolation_mode):
 # Data Type Tests
 # ============================================================================
 
+
 @skip_with_llk_assert("Hit LLK_ASSERT for unpacker configuration verification. Issue: #39448")
 @pytest.mark.parametrize("dtype", [ttnn.bfloat16, ttnn.float32])
 def test_data_types(device, dtype):
