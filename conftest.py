@@ -19,6 +19,10 @@ import time
 import psutil
 import subprocess
 from datetime import datetime
+import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from html.parser import HTMLParser
+import shutil
 
 from loguru import logger
 
@@ -106,6 +110,65 @@ def is_ci_v2_env():
 
 # We don't want other people using this stuff... wonder if we should just stuff it in the fixture that's calling it instead
 class CIv2ModelDownloadUtils_:
+    class _DirectoryListingParser(HTMLParser):
+        """Parse Apache/nginx-style directory listings to extract file URLs."""
+
+        def __init__(self):
+            super().__init__()
+            self.links = []
+
+        def handle_starttag(self, tag, attrs):
+            if tag == "a":
+                for attr, value in attrs:
+                    if attr == "href" and value and not value.startswith("?") and value != "../":
+                        self.links.append(value)
+
+    @staticmethod
+    def _discover_files(base_url, session, timeout):
+        """Recursively discover all files from a directory listing."""
+        files_to_download = []
+        dirs_to_process = [base_url]
+
+        while dirs_to_process:
+            current_url = dirs_to_process.pop(0)
+            try:
+                response = session.get(current_url, timeout=timeout)
+                response.raise_for_status()
+
+                parser = CIv2ModelDownloadUtils_._DirectoryListingParser()
+                parser.feed(response.text)
+
+                for link in parser.links:
+                    if link.endswith("/"):
+                        # It's a directory
+                        dirs_to_process.append(current_url.rstrip("/") + "/" + link)
+                    elif not link.startswith("index.html"):
+                        # It's a file
+                        files_to_download.append(current_url.rstrip("/") + "/" + link)
+            except Exception as e:
+                logger.warning(f"Failed to list directory {current_url}: {e}")
+                continue
+
+        return files_to_download
+
+    @staticmethod
+    def _download_file(session, url, local_path, timeout):
+        """Download a single file."""
+        try:
+            response = session.get(url, stream=True, timeout=timeout)
+            response.raise_for_status()
+
+            local_path.parent.mkdir(parents=True, exist_ok=True)
+
+            with open(local_path, "wb") as f:
+                for chunk in response.iter_content(chunk_size=8192):
+                    if chunk:
+                        f.write(chunk)
+
+            return url, True, None
+        except Exception as e:
+            return url, False, str(e)
+
     @staticmethod
     def download_from_ci_v2_cache(
         model_path,
@@ -124,45 +187,87 @@ class CIv2ModelDownloadUtils_:
 
         download_dir.mkdir(parents=True, exist_ok=True)
 
-        download_dir_str = str(download_dir)
-
-        # Add trailing slash to model_path if it doesn't have one, as wget
-        # seems to not download recursively via subprocess if it doesn't have
-        # it
+        # Add trailing slash to model_path if it doesn't have one
         if model_path and not model_path.endswith("/"):
             model_path = model_path + "/"
 
         endpoint = f"{endpoint_prefix}/{model_path}"
 
+        # Extract the cut_dirs equivalent (5 levels from endpoint_prefix)
+        # endpoint_prefix has scheme and path components, we need to figure out base path
+        # For cutting 5 dirs: /mldata/model_checkpoints/pytorch/huggingface/
+        base_path_components = 5
+
         try:
-            # TODO: How do we add a timeout here without relying on native timeout command?
-            subprocess.run(
-                [
-                    "wget",
-                    "-r",
-                    "-nH",
-                    "-x",
-                    "--cut-dirs=5",
-                    "-np",
-                    "--progress=dot:giga",
-                    "-R",
-                    "index.html*",
-                    "-P",
-                    download_dir_str,
-                    endpoint,
-                ],
-                check=True,
-                text=True,
-                timeout=timeout_in_s,
-            )
-        except subprocess.TimeoutExpired as err:
-            logger.error(f"Timeout of {timeout_in_s} seconds occurred while downloading from {endpoint}.")
-            raise err
+            logger.info(f"Discovering files from {endpoint}")
+
+            # Create a session for connection reuse
+            session = requests.Session()
+            session.headers.update({"User-Agent": "ttnn-model-downloader/1.0"})
+
+            # Discover all files recursively
+            files_to_download = CIv2ModelDownloadUtils_._discover_files(endpoint, session, timeout_in_s / 10)
+
+            if not files_to_download:
+                logger.warning(f"No files found at {endpoint}")
+                return download_dir / Path(model_path)
+
+            logger.info(f"Found {len(files_to_download)} files, downloading in parallel...")
+
+            # Download files in parallel
+            max_workers = min(32, len(files_to_download))  # Use up to 32 threads
+            failed_downloads = []
+
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = {}
+
+                for file_url in files_to_download:
+                    # Calculate relative path by removing endpoint_prefix and cutting directories
+                    # Parse URL to get path component
+                    from urllib.parse import urlparse
+
+                    parsed = urlparse(file_url)
+                    path_parts = parsed.path.strip("/").split("/")
+
+                    # Cut the first 'base_path_components' directories
+                    if len(path_parts) > base_path_components:
+                        relative_path_parts = path_parts[base_path_components:]
+                        relative_path = "/".join(relative_path_parts)
+                    else:
+                        relative_path = path_parts[-1]
+
+                    local_path = download_dir / relative_path
+
+                    future = executor.submit(
+                        CIv2ModelDownloadUtils_._download_file, session, file_url, local_path, timeout_in_s
+                    )
+                    futures[future] = file_url
+
+                # Wait for all downloads to complete with progress tracking
+                completed = 0
+                for future in as_completed(futures):
+                    url, success, error = future.result()
+                    completed += 1
+
+                    if success:
+                        if completed % 10 == 0 or completed == len(files_to_download):
+                            logger.info(f"Downloaded {completed}/{len(files_to_download)} files")
+                    else:
+                        logger.error(f"Failed to download {url}: {error}")
+                        failed_downloads.append((url, error))
+
+            if failed_downloads:
+                error_msg = f"Failed to download {len(failed_downloads)} files:\n"
+                for url, error in failed_downloads[:5]:  # Show first 5 errors
+                    error_msg += f"  {url}: {error}\n"
+                if len(failed_downloads) > 5:
+                    error_msg += f"  ... and {len(failed_downloads) - 5} more"
+                raise RuntimeError(error_msg)
+
+            logger.info(f"Successfully downloaded all {len(files_to_download)} files")
+
         except Exception as err:
-            logger.error(
-                f"Unknown error occurred while trying to download from {endpoint}. Check above logs from wget call."
-            )
-            logger.error(err)
+            logger.error(f"Error occurred while trying to download from {endpoint}: {err}")
             raise err
 
         return download_dir / Path(model_path)
