@@ -227,7 +227,7 @@ def run_test_forward_pass_mla2d(
         (state_dict,),
         cache_path,
         mesh_device,
-        force_recalculate_weight_config,
+        force_recalculate_weight_config or module_path is None,
         test_name="test_mla",
         real_weights=module_path is not None,
         layer_id=module_path,
@@ -285,12 +285,19 @@ def run_test_forward_pass_mla2d(
         # Convert to interleaved to match model behavior and avoid implicit conversion in to_torch
         tt_output = ttnn.to_memory_config(tt_output, memory_config=ttnn.L1_MEMORY_CONFIG)
 
-        tt_output_torch = ttnn.to_torch(
-            tt_output,
-            mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
-        ).reshape(
-            -1, seq_len, hf_config_short.hidden_size
-        )  # Concatenate all batches together
+        if mode == "prefill":
+            # Isolated MLA prefill returns the selected user's output while still updating the full row cache.
+            tt_output_torch = ttnn.to_torch(
+                tt_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(-2, -1), mesh_shape=mesh_device.shape),
+            ).reshape(1, seq_len, hf_config_short.hidden_size)
+        else:
+            tt_output_torch = ttnn.to_torch(
+                tt_output,
+                mesh_composer=ttnn.ConcatMesh2dToTensor(mesh_device, dims=(0, -1), mesh_shape=mesh_device.shape),
+            ).reshape(
+                -1, seq_len, hf_config_short.hidden_size
+            )  # Concatenate all batches together
 
         # Check PCC
         tt_cache = torch_cache_from_paged(
@@ -299,10 +306,15 @@ def run_test_forward_pass_mla2d(
             mesh_device.get_num_devices(),
         )
         if mode == "prefill":
+            selected_user = user_id % batch_size_per_row
             row_start = (user_id // batch_size_per_row) * batch_size_per_row
             row_end = row_start + batch_size_per_row
             assert (
-                check_output_matches(tt_output_torch, reference_output, pcc_required=PCC_REQUIRED)
+                check_output_matches(
+                    tt_output_torch,
+                    reference_output[selected_user : selected_user + 1],
+                    pcc_required=PCC_REQUIRED,
+                )
                 and check_cache_matches(
                     tt_cache[row_start:row_end, :, :seq_len],
                     output_cache,
