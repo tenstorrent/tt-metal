@@ -16,6 +16,7 @@ from transformers.configuration_utils import PretrainedConfig
 import ttnn
 from models.demos.deepseek_v3.utils.config_dataclass import SavedWeight
 from models.demos.deepseek_v3.utils.config_helpers import TENSOR_CACHE_EXTENSION
+from models.demos.deepseek_v3.utils.test_utils import get_test_weight_config
 from models.demos.deepseek_v3.utils.weight_config import (
     WeightConfigEncoder,
     get_weight_config,
@@ -34,6 +35,67 @@ def _make_hf_config(num_hidden_layers: int = 2) -> PretrainedConfig:
     hf_config = PretrainedConfig()
     hf_config.num_hidden_layers = num_hidden_layers
     return hf_config
+
+
+def test_get_test_weight_config_uses_shared_cache_for_real_weights(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, Path] = {}
+
+    class FakeModule:
+        pass
+
+    def fake_get_weight_config(ModuleClass, hf_config, state_dicts, weight_cache_path, mesh_device, force_recalculate):
+        captured["path"] = weight_cache_path
+        return {"ok": True}
+
+    monkeypatch.setattr("models.demos.deepseek_v3.utils.test_utils.get_weight_config", fake_get_weight_config)
+
+    result = get_test_weight_config(
+        FakeModule,
+        _make_hf_config(),
+        ({"dummy": torch.empty(1)},),
+        tmp_path,
+        _FakeMeshDevice(shape=(1, 1)),
+        False,
+        test_name="test_mla",
+        real_weights=True,
+        layer_id="model.layers.0.self_attn",
+    )
+
+    assert result == {"ok": True}
+    assert captured["path"] == tmp_path / "tests_cache" / "test_mla/FakeModule/real/model.layers.0.self_attn"
+
+
+def test_get_test_weight_config_uses_local_scratch_cache_for_random_weights(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    captured: dict[str, Path] = {}
+
+    class FakeModule:
+        pass
+
+    def fake_get_weight_config(ModuleClass, hf_config, state_dicts, weight_cache_path, mesh_device, force_recalculate):
+        captured["path"] = weight_cache_path
+        return {"ok": True}
+
+    monkeypatch.setattr("models.demos.deepseek_v3.utils.test_utils.get_weight_config", fake_get_weight_config)
+    monkeypatch.setenv("DEEPSEEK_V3_RANDOM_TEST_CACHE", str(tmp_path / "random-cache-root"))
+
+    result = get_test_weight_config(
+        FakeModule,
+        _make_hf_config(),
+        ({"dummy": torch.empty(1)},),
+        tmp_path,
+        _FakeMeshDevice(shape=(1, 1)),
+        False,
+        test_name="test_mla",
+        real_weights=False,
+        layer_id=None,
+    )
+
+    assert result == {"ok": True}
+    assert captured["path"] == tmp_path / "random-cache-root" / "tests_cache" / "test_mla/FakeModule/random"
 
 
 def test_get_weight_config_cache_hit_skips_convert(tmp_path: Path) -> None:
