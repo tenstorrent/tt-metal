@@ -188,6 +188,8 @@ class Generator(WarmupForwardMixin):
 
             logger.info(f"Warming up vision encoder with image size {vision_chunk_size}x{vision_chunk_size}")
 
+            warmup_image_sizes = [(vision_chunk_size, vision_chunk_size)]
+
             self.prefill_forward_text(
                 **prefill_forward_args,
                 kv_cache=kv_cache,
@@ -195,6 +197,7 @@ class Generator(WarmupForwardMixin):
                 model_id_warmup=model_id,
                 sampling_params=None,
                 pixel_values=warmup_pixel_values,
+                image_sizes=warmup_image_sizes,
             )
             logger.info("Vision encoder warmup completed")
 
