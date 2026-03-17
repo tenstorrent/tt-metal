@@ -112,6 +112,10 @@ OPS_CSV_HEADER = [
     "DRAM BW UTIL (%)",
     "ETH BW UTIL (%)",
     "NPE CONG IMPACT (%)",
+]
+
+# Perf counter headers are only included in CSV output when perf counter data is available.
+PERF_COUNTER_CSV_HEADERS = [
     "SFPU Util Min (%)",
     "SFPU Util Median (%)",
     "SFPU Util Max (%)",
@@ -157,6 +161,8 @@ OPS_CSV_HEADER = [
     "Unpacker-to-Math Data Flow Max (%)",
     "Unpacker-to-Math Data Flow Avg (%)",
 ]
+
+_PERF_COUNTER_CSV_HEADERS_SET = set(PERF_COUNTER_CSV_HEADERS)
 
 
 DEVICE_PERF_INT_FIELDS = {
@@ -1923,7 +1929,7 @@ def get_device_data_generate_report(
         if export_csv:
             with open(allOpsCSVPath, "w") as allOpsCSV:
                 allHeaders = []
-                for header in OPS_CSV_HEADER:
+                for header in OPS_CSV_HEADER + PERF_COUNTER_CSV_HEADERS:
                     if header in csv_row_headers:
                         allHeaders.append(header)
                 writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
@@ -2108,7 +2114,7 @@ def generate_reports(
                     # Check if headerField (uppercase) matches any header in OPS_CSV_HEADER (case-insensitive)
                     # If it matches, use the original case from OPS_CSV_HEADER to preserve previous commit's format
                     matching_header = None
-                    for ops_header in OPS_CSV_HEADER:
+                    for ops_header in OPS_CSV_HEADER + PERF_COUNTER_CSV_HEADERS:
                         if headerField == csv_header_format(ops_header):
                             matching_header = ops_header
                             break
@@ -2264,7 +2270,7 @@ def generate_reports(
                     for header, value in device_perf_row.items():
                         if header in skip_headers:
                             continue
-                        if header not in OPS_CSV_HEADER:
+                        if header not in OPS_CSV_HEADER and header not in _PERF_COUNTER_CSV_HEADERS_SET:
                             continue
                         if value in (None, ""):
                             continue
@@ -2356,12 +2362,19 @@ def generate_reports(
 
             csv_rows.append(csv_row)
 
+        # Determine which perf counter headers have data in any row
+        all_row_keys = set()
+        for row in csv_rows:
+            all_row_keys.update(row.keys())
+        active_perf_headers = [h for h in PERF_COUNTER_CSV_HEADERS if h in all_row_keys]
+
         ioHeaderIndex = OPS_CSV_HEADER.index("INPUTS")
         allHeaders = (
             OPS_CSV_HEADER[:ioHeaderIndex]
             + tensorCSVData["INPUT"]["headers"]
             + tensorCSVData["OUTPUT"]["headers"]
             + OPS_CSV_HEADER[ioHeaderIndex + 2 :]
+            + active_perf_headers
             + sorted(list(childCallKeys))
         )
         writer = csv.DictWriter(allOpsCSV, fieldnames=allHeaders)
