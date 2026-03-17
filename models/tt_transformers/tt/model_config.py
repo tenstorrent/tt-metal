@@ -890,7 +890,7 @@ class ModelArgs:
             )
             self.model_config["IMAGE_ATTN_OUT_PROGCFG"] = lambda seq_len, max_seq: self.matmul_config(
                 m=min(seq_len, max_seq),
-                k=(nearest_32(self.vision_head_dim) * self.vision_attn_n_heads * 3) // self.num_devices,
+                k=(nearest_32(self.vision_head_dim) * self.vision_attn_n_heads) // self.num_devices,
                 n=self.vision_dim,
                 grid_size=(8, 8),
                 in0_block_w=1,
