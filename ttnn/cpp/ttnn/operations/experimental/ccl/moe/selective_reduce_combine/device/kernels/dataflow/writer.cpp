@@ -271,7 +271,7 @@ void kernel_main() {
         noc_semaphore_wait(termination_sync_semaphore_ptr, num_data_parallel_cores - 1);
         noc_semaphore_set(termination_sync_semaphore_ptr, 0);
 
-        const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr);
+        const uint64_t global_noc_semaphore_addr = get_noc_addr(global_semaphore_addr, /*noc=*/1);
 
         fabric_multicast_bidirectional_atomic_inc_ring_1d<
             linearized_mesh_coord,
@@ -282,8 +282,8 @@ void kernel_main() {
 
         auto semaphore_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(global_semaphore_addr);
 
-        noc_async_write_barrier();
-        noc_async_atomic_barrier();
+        noc_async_write_barrier(/*noc=*/1);
+        noc_async_atomic_barrier(/*noc=*/1);
 
         close_direction_connections<
             Num_Directions,
@@ -310,4 +310,6 @@ void kernel_main() {
         noc_async_write_barrier(/*noc=*/1);
         noc_async_atomic_barrier(/*noc=*/1);
     }
+
+    DPRINT << "COMBINE WRITER DONE \n";
 }
