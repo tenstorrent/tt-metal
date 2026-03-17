@@ -41,7 +41,7 @@ def draw(outpath="exabox_logical.png"):
         nid = f"g{gid}"
         G.add_node(nid, label=str(gid))
         pos[nid] = (cx, cy)
-
+exa
     # All-to-all edges (10 connections)
     for i in range(n_galaxies):
         for j in range(i + 1, n_galaxies):
