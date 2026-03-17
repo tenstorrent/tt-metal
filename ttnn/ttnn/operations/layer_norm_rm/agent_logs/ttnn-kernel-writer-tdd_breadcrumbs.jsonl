@@ -9,3 +9,8 @@
 {"event":"cb_sync_check","stage":"data_pipeline","balanced":true,"cb_summary":"c0:Wt/Wt c1:Wt/Wt c16:Wt/Wt c8:1/unused c9:1/unused","ts":"2026-03-17T14:09:17+00:00"}
 {"event":"test_run","status":"pass","stage":"data_pipeline","test_file":"test_stage_data_pipeline.py","shapes":["1x1x32x32","1x1x64x128","1x1x32x256","4x2x64x64","1x1x32x512"],"hard_attempts":0,"ts":"2026-03-17T14:11:28+00:00"}
 {"event":"stage_complete","stage":"data_pipeline","attempts":1,"upstream_fixes":["Fixed TensorAccessorArgs placeholder from [0] to [0,0] for absent gamma/beta"],"design_deviations":["Skipped copy to c_31 intermediate - untilize directly from c_1 for identity passthrough"],"ts":"2026-03-17T14:11:49+00:00"}
+{"event":"stage_start","stage":"reduce_mean","description":"Add REDUCE_ROW for mean computation, output is mean broadcast to full input shape","ts":"2026-03-17T14:12:30+00:00"}
+{"event":"kernel_implemented","stage":"reduce_mean","kernel":"compute","approach":"tilize c_0->c_1, reduce_row c_1->c_24 (mean), unary_bcast COL to broadcast mean Wt times into c_29, untilize c_29->c_16","ts":"2026-03-17T14:14:23+00:00"}
+{"event":"cb_sync_check","stage":"reduce_mean","balanced":true,"cb_summary":"c0:Wt/Wt c1:Wt/Wt(reduce) c8:1/persist c24:1/1 c29:Wt/Wt c16:Wt/Wt","ts":"2026-03-17T14:14:34+00:00"}
+{"event":"test_run","status":"pass","stage":"reduce_mean","test_file":"test_stage_reduce_mean.py","shapes":["1x1x32x32","1x1x64x128","1x1x32x256","4x2x64x64","1x1x32x512"],"hard_attempts":0,"ts":"2026-03-17T14:15:04+00:00"}
+{"event":"stage_complete","stage":"reduce_mean","attempts":1,"upstream_fixes":[],"design_deviations":["Used unary_bcast COL instead of binary_op for mean broadcast - simpler and avoids needing a zeros CB"],"ts":"2026-03-17T14:15:29+00:00"}
