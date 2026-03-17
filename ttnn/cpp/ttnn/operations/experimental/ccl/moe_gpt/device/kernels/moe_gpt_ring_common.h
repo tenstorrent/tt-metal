@@ -29,24 +29,22 @@ constexpr uint32_t NUM_CORES = 12;
 
 // W0/W1 weight height in tiles: K / 32 = 2880 / 32 = 90
 constexpr uint32_t NUM_W0_W1_TILES_H = 90;
-constexpr uint32_t NUM_W0_W1_TILES_PLUS_BIAS_H = 91;
 
 // W2 weight height in tiles: N / 32 = 2880 / 32 = 90
 constexpr uint32_t NUM_W2_TILES_H = 90;
-constexpr uint32_t NUM_W2_TILES_PLUS_BIAS_H = 91;
 
 // Transaction sizing for DRAM reads
 // Each transaction = 10 tiles of Bfp4_b = 10 * 576 = 5760 bytes (fits in 8KB NOC packet)
 // 10 is the largest factor of 90 that fits: 10 * 576 = 5760 < 8192
 constexpr uint32_t W0_W1_TXNS_PER_BLOCK = 2;
-constexpr uint32_t W0_W1_TILES_PER_TXN = 14;
+constexpr uint32_t W0_W1_TILES_PER_TXN = 10;
 
 constexpr uint32_t W2_TXNS_PER_BLOCK = 2;
-constexpr uint32_t W2_TILES_PER_TXN = 14;
+constexpr uint32_t W2_TILES_PER_TXN = 10;
 
-constexpr uint32_t W2_B2_BLOCKS_PER_EXPERT =
-    (((NUM_W2_TILES_PLUS_BIAS_H * 8) - 1) / (W2_TILES_PER_TXN * W2_TXNS_PER_BLOCK)) + 1;
-constexpr uint32_t W0_B0_W1_B1_BLOCKS_PER_EXPERT = W2_B2_BLOCKS_PER_EXPERT * 2;
+// W2 blocks per expert = w2_blocks_per_four_mm2_tile * NUM_A2A_ITERS
+// = (4 * (90/10) / 2) * 2 = 18 * 2 = 36
+constexpr uint32_t W2_BLOCKS_PER_EXPERT = 36;
 
 //-----------------------------------------------------------------------------
 // Precomputed lookup tables
