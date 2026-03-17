@@ -823,6 +823,8 @@ def test_topology_matrix_tracy(mesh_device):
         {"topology": ttnn.Topology.Ring, "label": "ring"},
     ]
 
+    results = {}
+
     for topo in topologies:
         for cfg in configs:
             variant = f"{topo['label']}-{cfg['label']}"
@@ -870,6 +872,21 @@ def test_topology_matrix_tracy(mesh_device):
             module(tt_x, tt_weights, tt_indices)
             ttnn.synchronize_device(mesh_device)
 
-            logger.info(f"  {variant} done")
+            durations = _extract_dispatch_only_profiler_durations(mesh_device)
+            if durations:
+                avg_us = sum(durations) / len(durations) / 1e3
+                results[variant] = avg_us
+                logger.info(f"  {variant} done (profiler: {avg_us:.2f} us)")
+            else:
+                logger.warning(f"  {variant} done (no profiler data)")
 
-    logger.info("All topology matrix configurations completed.")
+    if results:
+        variants = list(results.keys())
+        col_w = max(len(v) for v in variants) + 2
+        header = f"{'Variant':<{col_w}}  {'Dispatch (us)':>16}"
+        sep = "=" * len(header)
+        rows = [f"{v:<{col_w}}  {results[v]:>16.2f}" for v in variants]
+        table = "\n".join([sep, header, "-" * len(header)] + rows + [sep])
+        logger.info(f"\nTopology matrix tracy results:\n{table}")
+    else:
+        logger.warning("No profiler data collected for any variant.")
