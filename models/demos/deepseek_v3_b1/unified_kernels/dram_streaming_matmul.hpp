@@ -61,7 +61,8 @@ struct DRAMStreamingMatmul {
         uint32_t enable_indexing_ = 0,
         uint32_t cb_index_ = 0,
         uint32_t index_offset_ = 0,
-        uint32_t use_hardcoded_expert_index_ = 0>
+        uint32_t use_hardcoded_expert_index_ = 0,
+        uint32_t selected_experts_k_ = 1>
     struct ReaderCTArgs {
         static constexpr uint32_t cb_in1 = cb_in1_;
         static constexpr uint32_t cb_out = cb_out_;
@@ -81,6 +82,7 @@ struct DRAMStreamingMatmul {
         static constexpr uint32_t index_offset =
             index_offset_;  // offset into index tensor (or expert index when hardcoded)
         static constexpr bool use_hardcoded_expert_index = use_hardcoded_expert_index_ == 1;  // For testing/mesh mode
+        static constexpr uint32_t selected_experts_k = selected_experts_k_;
     };
 
     // Writer CTArgs (BRISC) - empty, BRISC is no-op for DRAM streaming
@@ -143,37 +145,43 @@ struct DRAMStreamingMatmul {
 #if defined(COMPILE_FOR_NCRISC)
             // ================================================================
             // NCRISC: Stream in1 from DRAM with pipelining (uses NOC_0)
+            // Supports multi-expert mode: when selected_experts_k > 1, reads
+            // weight shards for each selected expert sequentially.  Pipeline
+            // state flows continuously across expert boundaries — only the
+            // DRAM read address resets per expert.
             // ================================================================
-            constexpr uint32_t num_iterations = CTArgs::num_subblocks_k * CTArgs::per_core_n;
+            constexpr uint32_t per_expert_iterations = CTArgs::num_subblocks_k * CTArgs::per_core_n;
+            constexpr uint32_t num_experts = CTArgs::selected_experts_k;
 
             // bank_id and vc are per-core compile-time args
             constexpr uint32_t dram_bank_id = CTArgs::bank_id;
             constexpr uint32_t vc = CTArgs::vc;
 
-            // Expert indexing: compute DRAM offset based on expert index
-            uint32_t expert_offset_bytes = 0;
+            // Expert indexing: compute DRAM offsets for all selected experts
+            constexpr uint32_t k_tiles = CTArgs::num_subblocks_k * CTArgs::subblock_k;
+            constexpr uint32_t bytes_per_tile = CTArgs::in1_block_size_bytes / CTArgs::subblock_k;
+            constexpr uint32_t expert_size_bytes = k_tiles * CTArgs::per_core_n * bytes_per_tile;
+
+            uint32_t expert_offsets[num_experts];
+
             if constexpr (CTArgs::enable_indexing) {
-                // Wait for index tensor to be ready
                 cb_wait_front(CTArgs::cb_index, 1);
 
-                // Read expert index from index tensor at specified offset (uint16)
-                uint32_t expert_idx;
-                if constexpr (CTArgs::use_hardcoded_expert_index) {
-                    expert_idx = CTArgs::index_offset;  // Use index_offset directly as expert index
-                } else {
-                    volatile tt_l1_ptr uint16_t* index_ptr =
-                        reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::cb_index));
-                    expert_idx = static_cast<uint32_t>(index_ptr[CTArgs::index_offset]);
+                for (uint32_t e = 0; e < num_experts; e++) {
+                    uint32_t expert_idx;
+                    if constexpr (CTArgs::use_hardcoded_expert_index) {
+                        expert_idx = CTArgs::index_offset + e;
+                    } else {
+                        volatile tt_l1_ptr uint16_t* index_ptr =
+                            reinterpret_cast<volatile tt_l1_ptr uint16_t*>(get_read_ptr(CTArgs::cb_index));
+                        expert_idx = static_cast<uint32_t>(index_ptr[CTArgs::index_offset + e]);
+                    }
+                    expert_offsets[e] = expert_idx * expert_size_bytes;
                 }
-
-                // Compute offset: expert_idx * expert_size_per_bank
-                // Each expert per bank = k_tiles * per_core_n tiles (column-major shuffled per expert)
-                // k_tiles = num_subblocks_k * subblock_k
-                // bytes_per_tile = in1_block_size_bytes / subblock_k
-                constexpr uint32_t k_tiles = CTArgs::num_subblocks_k * CTArgs::subblock_k;
-                constexpr uint32_t bytes_per_tile = CTArgs::in1_block_size_bytes / CTArgs::subblock_k;
-                constexpr uint32_t expert_size_bytes = k_tiles * CTArgs::per_core_n * bytes_per_tile;
-                expert_offset_bytes = expert_idx * expert_size_bytes;
+            } else {
+                for (uint32_t e = 0; e < num_experts; e++) {
+                    expert_offsets[e] = 0;
+                }
             }
 
             // Previous multicasts could have put trids into a non-zero state, so reset the barrier counter
@@ -182,7 +190,6 @@ struct DRAMStreamingMatmul {
             // Setup DRAM read for in1
             uint64_t in1_base_addr = get_noc_addr_from_bank_id<true>(dram_bank_id, CTArgs::in1_tensor_addr);
             uint32_t l1_write_addr_in1;
-            uint32_t l1_read_addr_in1 = expert_offset_bytes;
 
             // Set up NOC state for page reads
             noc_async_read_one_packet_set_state<true>(in1_base_addr, CTArgs::in1_page_size, vc);
@@ -206,34 +213,39 @@ struct DRAMStreamingMatmul {
             }
             uint32_t cb_in1_end = cb_in1_base + num_buffers * CTArgs::in1_block_size_bytes;
 
-            // Read in1: for each N column, read num_subblocks_k K subblocks
-            for (uint32_t n = 0; n < num_iterations; ++n) {
-                noc_async_read_set_trid(curr_block_trid);
+            // Outer loop over experts, inner loop streams one expert's weight tiles.
+            // Pipeline state (trid, free blocks, L1 write addr) flows continuously;
+            // only the DRAM read address resets at each expert boundary.
 
-                for (uint32_t p = 0; p < CTArgs::in1_num_pages; p++) {
-                    noc_async_read_one_packet_with_state_with_trid(
-                        in1_base_addr, l1_read_addr_in1, l1_write_addr_in1, curr_block_trid);
-                    l1_read_addr_in1 += CTArgs::in1_page_size;
-                    l1_write_addr_in1 += CTArgs::in1_page_size;
-                }
+            for (uint32_t expert = 0; expert < num_experts; expert++) {
+                uint32_t l1_read_addr_in1 = expert_offsets[expert];
+                for (uint32_t n = 0; n < per_expert_iterations; ++n) {
+                    noc_async_read_set_trid(curr_block_trid);
 
-                if (num_free_blocks_in_buffer == num_buffers - extra_blocks_in_flight) {
-                    noc_async_read_barrier_with_trid(block_trid_to_wait);
-                    cb_push_back(CTArgs::cb_in1, CTArgs::subblock_k);
-                    block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
-                    cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
-                } else {
-                    num_free_blocks_in_buffer -= 1;
-                }
+                    for (uint32_t p = 0; p < CTArgs::in1_num_pages; p++) {
+                        noc_async_read_one_packet_with_state_with_trid(
+                            in1_base_addr, l1_read_addr_in1, l1_write_addr_in1, curr_block_trid);
+                        l1_read_addr_in1 += CTArgs::in1_page_size;
+                        l1_write_addr_in1 += CTArgs::in1_page_size;
+                    }
 
-                curr_block_trid = (curr_block_trid == num_buffers) ? 1 : (curr_block_trid + 1);
-                // Address naturally advanced by inner page loop; wrap at CB boundary
-                if (l1_write_addr_in1 >= cb_in1_end) {
-                    l1_write_addr_in1 = cb_in1_base;
+                    if (num_free_blocks_in_buffer == num_buffers - extra_blocks_in_flight) {
+                        noc_async_read_barrier_with_trid(block_trid_to_wait);
+                        cb_push_back(CTArgs::cb_in1, CTArgs::subblock_k);
+                        block_trid_to_wait = block_trid_to_wait == num_buffers ? 1 : (block_trid_to_wait + 1);
+                        cb_reserve_back(CTArgs::cb_in1, CTArgs::subblock_k * (extra_blocks_in_flight + 1));
+                    } else {
+                        num_free_blocks_in_buffer -= 1;
+                    }
+
+                    curr_block_trid = (curr_block_trid == num_buffers) ? 1 : (curr_block_trid + 1);
+                    if (l1_write_addr_in1 >= cb_in1_end) {
+                        l1_write_addr_in1 = cb_in1_base;
+                    }
                 }
             }
 
-            // Push remaining blocks
+            // Push remaining blocks (after all experts)
             for (uint32_t i = 0; i < extra_blocks_in_flight; ++i) {
                 noc_async_read_barrier_with_trid(block_trid_to_wait);
                 cb_push_back(CTArgs::cb_in1, CTArgs::subblock_k);

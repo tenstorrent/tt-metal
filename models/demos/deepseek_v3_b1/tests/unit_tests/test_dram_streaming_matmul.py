@@ -954,7 +954,6 @@ def test_dram_streaming_matmul_with_all_experts(device, k, n, m, num_experts, se
 
     for expert_idx in range(num_experts):
         # Create this expert's weights
-        torch.manual_seed(42 + expert_idx)
         expert_weights = torch.randn(1, 1, k, n_padded).bfloat16()
 
         if expert_idx in selected_indices_set:
@@ -1063,7 +1062,7 @@ def test_dram_streaming_matmul_with_all_experts(device, k, n, m, num_experts, se
             math_approx_mode=True,
             subblock_k=subblock_k,
             fused_activation=fused_activation,
-            num_experts=selected_experts_k,
+            selected_experts_k=selected_experts_k,
         )
     except Exception as e:
         logger.error(f"Multi-expert DRAM streaming matmul{activation_str} failed: {e}")
