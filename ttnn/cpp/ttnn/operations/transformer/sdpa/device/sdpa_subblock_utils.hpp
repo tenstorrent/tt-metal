@@ -13,11 +13,12 @@ namespace ttnn::prim::detail {
 // Determine the largest subblock size for matmul that:
 // 1. Has subblock_h * subblock_w <= dst_size
 // 2. subblock_h divides block_height and subblock_w divides block_width
+// 3. subblock_h <= max_subblock_h (use dst_size to leave unconstrained)
 //
 // Candidates are ordered by total volume (h*w) descending to maximize
 // dest register utilization.
 static inline std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
-    uint32_t block_height, uint32_t block_width, uint32_t dst_size) {
+    uint32_t block_height, uint32_t block_width, uint32_t dst_size, uint32_t max_subblock_h = UINT32_MAX) {
     constexpr std::array<std::pair<uint32_t, uint32_t>, 20> subblocks = {{
         {2, 4}, {4, 2}, {1, 8}, {8, 1}, {1, 7}, {7, 1}, {2, 3}, {3, 2}, {1, 6}, {6, 1},
         {1, 5}, {5, 1}, {2, 2}, {1, 4}, {4, 1}, {1, 3}, {3, 1}, {1, 2}, {2, 1}, {1, 1},
@@ -25,6 +26,9 @@ static inline std::pair<uint32_t, uint32_t> determine_largest_subblock_size(
 
     for (auto [subblock_height, subblock_width] : subblocks) {
         if (subblock_height * subblock_width > dst_size) {
+            continue;
+        }
+        if (subblock_height > max_subblock_h) {
             continue;
         }
         if ((block_height % subblock_height != 0) || (block_width % subblock_width != 0)) {
