@@ -30,8 +30,11 @@ __attribute__((optimize("Os"))) FORCE_INLINE void fabric_sender_side_handshake(
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t count = 0;
-    while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE &&
-           !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)) {
+    while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE
+#ifndef ARCH_WORMHOLE
+           && !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)
+#endif
+    ) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
             run_routing();
@@ -55,8 +58,11 @@ __attribute__((optimize("Os"))) FORCE_INLINE void fabric_receiver_side_handshake
     uint32_t local_val_addr = ((uint32_t)(&handshake_info->local_value)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t scratch_addr = ((uint32_t)(&handshake_info->scratch)) / tt::tt_fabric::PACKET_WORD_SIZE_BYTES;
     uint32_t count = 0;
-    while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE &&
-           !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)) {
+    while (handshake_info->local_value != MAGIC_HANDSHAKE_VALUE
+#ifndef ARCH_WORMHOLE
+           && !tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)
+#endif
+    ) {
         if (count == HS_CONTEXT_SWITCH_TIMEOUT) {
             count = 0;
             run_routing();
@@ -65,9 +71,13 @@ __attribute__((optimize("Os"))) FORCE_INLINE void fabric_receiver_side_handshake
         }
         invalidate_l1_cache();
     }
+#ifndef ARCH_WORMHOLE
     if (!tt::tt_fabric::got_immediate_termination_signal<RISC_CPU_DATA_CACHE_ENABLED>(termination_signal_ptr)) {
         internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
     }
+#else
+    internal_::eth_send_packet(0, scratch_addr, local_val_addr, 1);
+#endif
 }
 
 }  // namespace handshake

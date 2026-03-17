@@ -2682,10 +2682,15 @@ void
         if (!sender_ch_live_check_skip[sender_channel_idx]) {
             return;
         }
-        while (!connect_is_requested(*interface.connection_live_semaphore) &&
-               !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+        while (!connect_is_requested(*interface.connection_live_semaphore)
+#ifndef ARCH_WORMHOLE
+               && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)
+#endif
+        ) {
             router_invalidate_l1_cache<ENABLE_RISC_CPU_DATA_CACHE>();
+#ifndef ARCH_WORMHOLE
             run_routing();
+#endif
         }
         establish_edm_connection(interface, local_sender_channel_free_slots_stream_ids[sender_channel_idx]);
     };
