@@ -27,7 +27,11 @@ Usage:
 from __future__ import annotations
 
 import logging
+import os
+import subprocess
+import tempfile
 import threading
+from collections import Counter
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
@@ -181,6 +185,129 @@ class DispatchTrace:
             self._entries.append(entry)
             logger.debug("%s", entry)
 
+    def _folded_frame(self, name: str) -> str:
+        """Sanitize a frame name for folded format (no semicolons)."""
+        return str(name).replace(";", "_")
+
+    def to_folded(
+        self,
+        entries: Optional[List[TraceEntry]] = None,
+        time_order: bool = True,
+        include_ccls: bool = True,
+    ) -> str:
+        """Return trace in folded stack format (semicolon-separated frames, space, count).
+        Compatible with Brendan Gregg's flamegraph.pl and speedscope.
+
+        When time_order=True (default): one line per event in execution order, count=1.
+        X axis = time (execution order). Includes op name and, if include_ccls=True,
+        pre_collectives (broadcast), redistributions, and post_collectives (all_reduce) as frames.
+
+        When time_order=False: one line per distinct module+op stack, count = number of ops
+        (classic aggregate view). CCLs are not included in this mode.
+        """
+        if entries is None:
+            entries = self._entries
+        if not entries:
+            return ""
+
+        if time_order:
+            # Emit one line per "event" in execution order so X = time
+            lines = []
+            for e in entries:
+                path = list(e.module_stack) if e.module_stack else ["root"]
+                path_s = ";".join(self._folded_frame(s) for s in path)
+
+                if include_ccls and e.pre_collectives:
+                    for c in e.pre_collectives:
+                        ctype = c.get("type", "pre_ccl")
+                        axis = c.get("mesh_axis", "")
+                        frame = f"{ctype}(axis={axis})" if axis else ctype
+                        lines.append(f"{path_s};{self._folded_frame(frame)} 1")
+
+                lines.append(f"{path_s};{self._folded_frame(e.op_name)} 1")
+
+                if include_ccls and e.redistributions:
+                    for r in e.redistributions:
+                        arg = r.get("arg_idx", "")
+                        lines.append(
+                            f"{path_s};{self._folded_frame(e.op_name)};redistribute(arg{arg}) 1"
+                        )
+
+                if include_ccls and e.post_collectives:
+                    for c in e.post_collectives:
+                        ctype = c.get("type", "post_ccl")
+                        axis = c.get("mesh_axis", "")
+                        frame = f"{ctype}(axis={axis})" if axis else ctype
+                        lines.append(
+                            f"{path_s};{self._folded_frame(e.op_name)};{self._folded_frame(frame)} 1"
+                        )
+
+            return "\n".join(lines) + "\n"
+        else:
+            stacks = []
+            for e in entries:
+                path = list(e.module_stack) if e.module_stack else ["root"]
+                path.append(e.op_name)
+                stack = ";".join(self._folded_frame(s) for s in path)
+                stacks.append(stack)
+            lines = [
+                f"{stack} {count}" for stack, count in sorted(Counter(stacks).items())
+            ]
+            return "\n".join(lines) + "\n" if lines else ""
+
+    def export_folded(
+        self,
+        path: str,
+        entries: Optional[List[TraceEntry]] = None,
+        time_order: bool = True,
+        include_ccls: bool = True,
+    ) -> None:
+        """Write folded format to a file. Use with: flamegraph.pl path.folded > path.svg
+        By default uses time_order=True, include_ccls=True (X=time, all events including CCLs).
+        """
+        folded = self.to_folded(
+            entries, time_order=time_order, include_ccls=include_ccls
+        )
+        with open(path, "w") as f:
+            f.write(folded)
+
+    def build_flamegraph_svg(
+        self,
+        entries: Optional[List[TraceEntry]] = None,
+        out_path: Optional[str] = None,
+        flamegraph_pl: Optional[str] = None,
+    ) -> Optional[str]:
+        """Generate a classic flame graph SVG from the trace.
+        Requires flamegraph.pl (Brendan Gregg's FlameGraph) on PATH or pass path.
+        Clone: https://github.com/brendangregg/FlameGraph
+        Returns path to generated SVG, or None if flamegraph.pl not found/failed.
+        """
+        if entries is None:
+            entries = self._entries
+        if not entries:
+            return None
+        script = flamegraph_pl or os.environ.get("FLAMEGRAPH_PL", "flamegraph.pl")
+        try:
+            folded = self.to_folded(entries)
+            out_file = out_path or os.path.join(
+                tempfile.gettempdir(), "dispatch_flame.svg"
+            )
+            result = subprocess.run(
+                [script, "-t", "modules+ops"],
+                input=folded,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            if result.returncode == 0 and result.stdout:
+                with open(out_file, "w") as f:
+                    f.write(result.stdout)
+                return out_file
+            return None
+        except (FileNotFoundError, subprocess.TimeoutExpired, OSError) as e:
+            logger.debug("flamegraph.pl not used: %s", e)
+            return None
+
     def format_entries_tree(
         self,
         entries: Optional[List[TraceEntry]] = None,
@@ -273,20 +400,6 @@ class DispatchTrace:
                 body="<p>(no trace entries)</p>",
             )
 
-        by_path: Dict[tuple, List[TraceEntry]] = {}
-        all_paths: set = set()
-        for e in entries:
-            key = tuple(e.module_stack)
-            by_path.setdefault(key, []).append(e)
-            # Collect every prefix so we can show intermediate nodes (even with no direct ops)
-            for i in range(len(key) + 1):
-                all_paths.add(key[:i])
-        sorted_paths = sorted(all_paths, key=lambda p: (len(p), p))
-
-        def children_of(path: tuple) -> List[tuple]:
-            n = len(path)
-            return [p for p in sorted_paths if len(p) == n + 1 and p[:n] == path]
-
         def escape(s: str) -> str:
             return (
                 s.replace("&", "&amp;")
@@ -338,109 +451,7 @@ class DispatchTrace:
                 parts.append("post_ccl")
             return " [" + ", ".join(parts) + "]"
 
-        def op_li(ent: TraceEntry) -> str:
-            ccl_block = ccls_html(ent)
-            return (
-                f'<li class="op"><span class="op-name">{escape(ent.op_name)}</span>'
-                f'<span class="op-summary">{entry_summary(ent)}</span>{ccl_block}</li>'
-            )
-
-        def recurse(path: tuple) -> str:
-            segment = path[-1] if path else "root"
-            path_entries = by_path.get(path, [])
-            kids = children_of(path)
-            seg_esc = escape(segment)
-            if not kids and not path_entries:
-                return f'<li class="node"><span class="name">{seg_esc}</span></li>'
-            inner: List[str] = []
-            for ent in path_entries:
-                inner.append(op_li(ent))
-            for child_path in kids:
-                inner.append(recurse(child_path))
-            return (
-                f'<li class="node"><details open><summary class="name">{seg_esc}</summary>'
-                f"<ul>{chr(10).join(inner)}</ul></details></li>"
-            )
-
-        # Flame-graph style tree: weight = op count in subtree; one rect per module path
-        def weight(path: tuple) -> int:
-            return len(by_path.get(path, [])) + sum(
-                weight(c) for c in children_of(path)
-            )
-
-        total_weight = max(1, weight(()))
-        max_depth = max(len(p) for p in all_paths) if all_paths else 0
-        bar_height = 12
-        flame_height = (max_depth + 1) * bar_height
-
-        # Collect (path, depth, weight) in tree order, then group by depth for layout
-        nodes_in_order: List[tuple] = []
-
-        def collect(path: tuple, depth: int) -> None:
-            w = weight(path)
-            nodes_in_order.append((path, depth, w))
-            for c in children_of(path):
-                collect(c, depth + 1)
-
-        collect((), 0)
-
-        # Group by depth so we can assign x from sibling order (cumulative width at same level)
-        by_depth: Dict[int, List[tuple]] = {}
-        for path, depth, w in nodes_in_order:
-            by_depth.setdefault(depth, []).append((path, w))
-
-        # Build SVG: root at bottom, depth upward; at each depth x = cumulative % of weights
-        # Use <g> so <title> tooltip applies to the bar; add visible <text> label
-        flame_rects: List[str] = []
-        for depth in range(max_depth + 1):
-            level_nodes = by_depth.get(depth, [])
-            x_cur = 0.0
-            for path, w in level_nodes:
-                width_pct = 100.0 * w / total_weight
-                if width_pct < 0.25:
-                    continue
-                segment = path[-1] if path else "root"
-                seg_esc = escape(segment)
-                full_label_esc = escape(f"{segment} ({w})")
-                # Compact truncation: short labels for narrow bars (flame-graph style)
-                max_chars = max(3, int(width_pct / 3.5))
-                label = (
-                    (segment[: max_chars - 1] + "..")
-                    if len(segment) > max_chars
-                    else segment
-                )
-                if width_pct >= 8:
-                    label = f"{label} ({w})"
-                label_esc = escape(label)
-                y = (max_depth - depth) * bar_height
-                hue = 200 + depth * 12
-                text_x = x_cur + 0.2
-                text_y = y + (bar_height - 1) / 2 + 2.2
-                flame_rects.append(
-                    f'<g class="flame-bar" data-path="{seg_esc}">'
-                    f"<title>{full_label_esc} ops</title>"
-                    f'<rect class="flame-rect" x="{x_cur:.2f}%" y="{y}" '
-                    f'width="{width_pct:.2f}%" height="{bar_height - 1}" '
-                    f'style="fill:hsl({hue},45%,28%);stroke:#555;stroke-width:0.3"/>'
-                    f'<text class="flame-text" x="{text_x:.2f}%" y="{text_y}" '
-                    f'font-size="9" fill="#e0e0e0">{label_esc}</text>'
-                    f"</g>"
-                )
-                x_cur += width_pct
-
-        flame_svg = (
-            f'<svg class="flame-svg" viewBox="0 0 100 {flame_height}" '
-            f'preserveAspectRatio="none" width="100%">'
-            + "".join(flame_rects)
-            + "</svg>"
-        )
-        flame_section = (
-            '<section><h2 class="section-title">Flame graph (modules + ops)</h2>'
-            '<p class="flame-meta">Width = op count in subtree. Hover for name and count.</p>'
-            f'<div class="flame-container">{flame_svg}</div></section>\n  '
-        )
-
-        # Execution order section: same entries in record order with CCLs visible
+        # Execution order: entries in record order with CCLs visible
         exec_lines: List[str] = []
         for i, ent in enumerate(entries):
             path_str = escape(" / ".join(ent.module_stack)) if ent.module_stack else "—"
@@ -455,8 +466,7 @@ class DispatchTrace:
         execution_body = "\n".join(exec_lines)
 
         body = (
-            flame_section
-            + '<section><h2 class="section-title">By execution order</h2><div class="exec-list">'
+            '<section><h2 class="section-title">By execution order</h2><div class="exec-list">'
             + execution_body
             + "</div></section>"
         )
@@ -493,12 +503,6 @@ _HTML_TEMPLATE = """<!DOCTYPE html>
     .ccl.pre {{ color: #4ec9b0; }}
     .ccl.redist {{ color: #ce9178; }}
     .ccl.post {{ color: #569cd6; }}
-    .flame-meta {{ color: #858585; margin-bottom: 0.5rem; font-size: 0.9em; }}
-    .flame-container {{ margin-top: 0.5rem; border: 1px solid #444; border-radius: 4px; overflow: hidden; min-height: 72px; max-height: 420px; }}
-    .flame-svg {{ display: block; vertical-align: bottom; }}
-    .flame-bar {{ cursor: pointer; }}
-    .flame-bar:hover .flame-rect {{ filter: brightness(1.2); }}
-    .flame-text {{ fill: #e0e0e0; font-size: 9px; }}
   </style>
 </head>
 <body>

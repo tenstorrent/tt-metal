@@ -300,6 +300,33 @@ for entry in dispatch_trace.entries:
     print(f"  Post-collectives: {entry.post_collectives}")
 ```
 
+### Trace entries
+
+Each `TraceEntry` contains:
+- `op_name`: The dispatched operation name
+- `input_layouts`: Layouts of input tensors before dispatch
+- `rule_name`: Name of the sharding rule applied (or `"fast_path"` if no distributed tensors)
+- `redistributions`: Layout conversions applied to inputs
+- `post_collectives`: Collectives applied after the op (e.g., all_reduce for row-parallel)
+- `output_layout`: Layout of the output tensor
+
+Use `entry.to_dict()` to get a JSON-serializable representation.
+
+### Trainer integration
+
+The `train_llama_tp.py` script supports dispatch tracing via CLI flags:
+
+```bash
+# Enable tracing for all steps (prints first 20 entries at end)
+python train_llama_tp.py -c config.yaml --debug_dispatch
+
+# Trace only the first step (reduces memory for long runs)
+python train_llama_tp.py -c config.yaml --debug_dispatch --debug_dispatch_first_step_only
+
+# Dump all entries to a JSON lines file
+python train_llama_tp.py -c config.yaml --debug_dispatch --debug_dispatch_dump trace.jsonl
+```
+
 ## File Structure
 
 ```

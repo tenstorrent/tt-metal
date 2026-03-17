@@ -413,6 +413,17 @@ class DispatchTraceCallback(TrainerCallback):
                 with open(self.dump_path, "w") as f:
                     f.write(html)
                 print(f"  Wrote HTML trace to {self.dump_path} (open in a browser)")
+                base = self.dump_path[:-5]
+                folded_path = base + ".folded"
+                dispatch_trace.export_folded(folded_path, entries=entries)
+                print(
+                    f"  Wrote folded stacks to {folded_path} (use flamegraph.pl for classic SVG)"
+                )
+                svg_path = base + "_flame.svg"
+                if dispatch_trace.build_flamegraph_svg(
+                    entries=entries, out_path=svg_path
+                ):
+                    print(f"  Wrote flame graph to {svg_path} (open in browser)")
             else:
                 import json
 
