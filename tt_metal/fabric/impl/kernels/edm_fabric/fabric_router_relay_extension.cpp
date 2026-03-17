@@ -142,8 +142,11 @@ template <uint8_t NUM_BUFFERS>
 __attribute__((optimize("Os"))) void wait_for_static_connection_to_ready(
     tt::tt_fabric::FabricRelayStaticSizedChannelWorkerInterface<NUM_BUFFERS>& worker_interface,
     volatile tt::tt_fabric::TerminationSignal* termination_signal_ptr) {
-    while (!connect_is_requested(*worker_interface.connection_live_semaphore) &&
-           !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+    while (!connect_is_requested(*worker_interface.connection_live_semaphore)
+#ifndef ARCH_WORMHOLE
+           && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)
+#endif
+    ) {
         invalidate_l1_cache();
         run_routing();
     }
@@ -165,8 +168,11 @@ __attribute__((optimize("Os"))) FORCE_INLINE void wait_for_mux_endpoint_ready(
         noc_async_read_one_packet(noc_addr, mux_status_readback_address, 4);
         noc_async_read_barrier();
         invalidate_l1_cache();
-    } while (ptr[0] != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC &&
-             !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr));
+    } while (ptr[0] != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC
+#ifndef ARCH_WORMHOLE
+             && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)
+#endif
+    );
 }
 
 template <uint8_t NUM_BUFFERS>
@@ -542,8 +548,11 @@ void kernel_main() {
 
     // before connecting to mux, wait for mux status to turn into READY_FOR_TRAFFIC
     volatile auto mux_status_ptr = reinterpret_cast<volatile tt_l1_ptr uint32_t*>(mux_status_address);
-    while (*mux_status_ptr != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC &&
-           !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)) {
+    while (*mux_status_ptr != tt::tt_fabric::FabricMuxStatus::READY_FOR_TRAFFIC
+#ifndef ARCH_WORMHOLE
+           && !got_immediate_termination_signal<ENABLE_RISC_CPU_DATA_CACHE>(termination_signal_ptr)
+#endif
+    ) {
         invalidate_l1_cache();
     }
 
