@@ -4,7 +4,12 @@ add_library(TTNN::Ops::Eltwise::Complex::Unary ALIAS ttnn_op_eltwise_complex_una
 tt_reuse_precompile_headers(ttnn_op_eltwise_complex_unary TTNN::PCH)
 TT_ENABLE_UNITY_BUILD(ttnn_op_eltwise_complex_unary)
 
-target_sources(ttnn_op_eltwise_complex_unary PRIVATE device/complex_unary_op.cpp)
+target_sources(
+    ttnn_op_eltwise_complex_unary
+    PRIVATE
+        complex_unary.cpp
+        device/complex_unary_op.cpp
+)
 
 target_include_directories(ttnn_op_eltwise_complex_unary PRIVATE ${FixmeOpIncDirs})
 target_link_libraries(

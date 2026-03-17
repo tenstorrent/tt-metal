@@ -4,30 +4,18 @@
 
 #include "complex_unary_backward_nanobind.hpp"
 
-#include <string>
-#include <string_view>
-
-#include <fmt/format.h>
 #include <nanobind/nanobind.h>
 
-#include "ttnn-nanobind/decorators.hpp"
+#include "ttnn-nanobind/bind_function.hpp"
 #include "ttnn/operations/eltwise/complex_unary_backward/complex_unary_backward.hpp"
-#include "ttnn/operations/eltwise/complex/complex.hpp"
-#include "ttnn/types.hpp"
 
 namespace ttnn::operations::complex_unary_backward {
 
-namespace {
-
-template <typename complex_unary_backward_operation_t>
-void bind_complex_unary_backward(
-    nb::module_& mod,
-    const complex_unary_backward_operation_t& operation,
-    const std::string& description,
-    const std::string_view supported_dtype = "") {
-    auto doc = fmt::format(
+void py_module(nb::module_& mod) {
+    ttnn::bind_function<"polar_bw">(
+        mod,
         R"doc(
-        {2}
+        Performs backward operations for complex polar function on :attr:`input_tensor` with given :attr:`grad_tensor`.
 
 
         Args:
@@ -43,40 +31,54 @@ void bind_complex_unary_backward(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            {3}
+            Supported dtypes and layouts:
+
+            .. list-table::
+               :header-rows: 1
+
+               * - Dtypes
+                 - Layouts
+               * - BFLOAT16, FLOAT32
+                 - TILE, ROW_MAJOR
+
         )doc",
+        &ttnn::polar_bw,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config"));
 
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        description,
-        supported_dtype);
-
-    bind_registered_operation(
+    ttnn::bind_function<"conj_bw">(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const complex_unary_backward_operation_t& self,
-               const ComplexTensor& grad_tensor,
-               const ComplexTensor& input_tensor,
-               const ttnn::MemoryConfig& memory_config) -> std::vector<ComplexTensor> {
-                return self(grad_tensor, input_tensor, memory_config);
-            },
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config")});
-}
-
-template <typename complex_unary_backward_operation_t>
-void bind_complex_unary_backward_tensor(
-    nb::module_& mod,
-    const complex_unary_backward_operation_t& operation,
-    const std::string& description,
-    const std::string_view supported_dtype = "") {
-    auto doc = fmt::format(
         R"doc(
-        {2}
+        Performs backward operations for complex conj function on :attr:`input_tensor` with given :attr:`grad_tensor`.
+
+
+        Args:
+            grad_tensor (ComplexTensor): the input tensor.
+            input_tensor (ComplexTensor): the input tensor.
+
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig): Memory configuration for the operation.
+
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+
+        Note:
+
+        )doc",
+        &ttnn::conj_bw,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config"));
+
+    ttnn::bind_function<"imag_bw">(
+        mod,
+        R"doc(
+        Performs backward operations for complex imaginary function on :attr:`input_tensor` with given :attr:`grad_tensor`.
 
 
         Args:
@@ -92,39 +94,61 @@ void bind_complex_unary_backward_tensor(
             List of ttnn.Tensor: the output tensor.
 
         Note:
-            {3}
+
         )doc",
+        &ttnn::imag_bw,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config"));
 
-        operation.base_name(),
-        operation.python_fully_qualified_name(),
-        description,
-        supported_dtype);
-
-    bind_registered_operation(
+    ttnn::bind_function<"real_bw">(
         mod,
-        operation,
-        doc,
-        ttnn::nanobind_overload_t{
-            [](const complex_unary_backward_operation_t& self,
-               const ttnn::Tensor& grad_tensor,
-               const ComplexTensor& input_tensor,
-               const ttnn::MemoryConfig& memory_config) -> std::vector<ComplexTensor> {
-                return self(grad_tensor, input_tensor, memory_config);
-            },
-            nb::arg("grad_tensor"),
-            nb::arg("input_tensor"),
-            nb::kw_only(),
-            nb::arg("memory_config")});
-}
+        R"doc(
+        Performs backward operations for complex real function on :attr:`input_tensor` with given :attr:`grad_tensor`.
 
-}  // namespace
 
-void py_module(nb::module_& mod) {
-    bind_complex_unary_backward(
+        Args:
+            grad_tensor (ttnn.Tensor): the input tensor.
+            input_tensor (ComplexTensor): the input tensor.
+
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig): Memory configuration for the operation.
+
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+
+        Note:
+
+        )doc",
+        &ttnn::real_bw,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config"));
+
+    ttnn::bind_function<"angle_bw">(
         mod,
-        ttnn::polar_bw,
-        R"doc(Performs backward operations for complex polar function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
-        R"doc(Supported dtypes and layouts:
+        R"doc(
+        Performs backward operations for complex angle function on :attr:`input_tensor` with given :attr:`grad_tensor`.
+
+
+        Args:
+            grad_tensor (ttnn.Tensor): the input tensor.
+            input_tensor (ComplexTensor): the input tensor.
+
+
+        Keyword args:
+            memory_config (ttnn.MemoryConfig): Memory configuration for the operation.
+
+
+        Returns:
+            List of ttnn.Tensor: the output tensor.
+
+        Note:
+            Supported dtypes and layouts:
 
             .. list-table::
                :header-rows: 1
@@ -134,38 +158,12 @@ void py_module(nb::module_& mod) {
                * - BFLOAT16, FLOAT32
                  - TILE, ROW_MAJOR
 
-        )doc");
-
-    bind_complex_unary_backward(
-        mod,
-        ttnn::conj_bw,
-        R"doc(Performs backward operations for complex conj function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
-
-    bind_complex_unary_backward_tensor(
-        mod,
-        ttnn::imag_bw,
-        R"doc(Performs backward operations for complex imaginary function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
-
-    bind_complex_unary_backward_tensor(
-        mod,
-        ttnn::real_bw,
-        R"doc(Performs backward operations for complex real function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc");
-
-    bind_complex_unary_backward_tensor(
-        mod,
-        ttnn::angle_bw,
-        R"doc(Performs backward operations for complex angle function on :attr:`input_tensor` with given :attr:`grad_tensor`.)doc",
-        R"doc(Supported dtypes and layouts:
-
-            .. list-table::
-               :header-rows: 1
-
-               * - Dtypes
-                 - Layouts
-               * - BFLOAT16, FLOAT32
-                 - TILE, ROW_MAJOR
-
-        )doc");
+        )doc",
+        &ttnn::angle_bw,
+        nb::arg("grad_tensor"),
+        nb::arg("input_tensor"),
+        nb::kw_only(),
+        nb::arg("memory_config"));
 }
 
 }  // namespace ttnn::operations::complex_unary_backward
