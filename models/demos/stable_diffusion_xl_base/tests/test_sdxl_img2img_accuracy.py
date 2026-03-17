@@ -185,16 +185,6 @@ def test_accuracy_sdxl_img2img(
     deviation_clip_score = statistics.stdev(scores)
     logger.info(f"Average directional similarity: {average_clip_score}")
 
-    # Additional accuracy calculation on first 100 samples for CI testing
-    if num_prompts >= 100:
-        logger.info("Calculating directional similarity on first 100 samples for CI testing...")
-        scores_100 = scores[:100]
-        average_clip_score_100 = sum(scores_100) / len(scores_100)
-        deviation_clip_score_100 = statistics.stdev(scores_100) if len(scores_100) > 1 else 0
-        logger.info(
-            f"Directional similarity (100 samples): average={average_clip_score_100:.4f}, deviation={deviation_clip_score_100:.4f}"
-        )
-
     model_name = f"sdxl-img2img-{image_resolution[0]}" + ("-tp" if use_cfg_parallel else "")
     metadata = {
         "model_name": model_name,
