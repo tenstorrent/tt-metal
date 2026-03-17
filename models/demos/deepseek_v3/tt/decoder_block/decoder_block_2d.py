@@ -74,7 +74,14 @@ class DecoderBlock2D(DecoderBlock2DBase):
 
     @classmethod
     def forward_mlp_prefill(cls, x: ttnn.Tensor, cfg: RunPrefillConfig) -> ttnn.Tensor:
-        return NonExpert.forward_prefill(x, cfg)
+        if x.shape[1] == 1:
+            return NonExpert.forward_prefill(x, cfg)
+
+        batch_size = x.shape[1]
+        seq_len = x.shape[2]
+        x = ttnn.reshape(x, (x.shape[0], 1, batch_size * seq_len, x.shape[3]))
+        output = NonExpert.forward_prefill(x, cfg)
+        return ttnn.reshape(output, (output.shape[0], batch_size, seq_len, output.shape[3]))
 
     @classmethod
     def forward_mlp_decode(cls, x: ttnn.Tensor, cfg: RunDecodeConfig) -> ttnn.Tensor:

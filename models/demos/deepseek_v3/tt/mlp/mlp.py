@@ -500,8 +500,8 @@ class MLP(AbstractModule):
 
             # De-chunk the output if needed (for SharedExpert usage)
             num_layers = x.shape[0]
-            _, num_chunks, _, output_dim = output.shape
-            if num_chunks > 1:
+            _, _, _, output_dim = output.shape
+            if original_seq_len > cfg["max_rows"]:
                 output = ttnn.reshape(output, [num_layers, 1, -1, output_dim])
                 if pad_rows > 0:
                     output = ttnn.slice(output, [0, 0, 0, 0], [num_layers, 1, original_seq_len, output_dim])
@@ -595,8 +595,8 @@ class MLP(AbstractModule):
         output = cls._fwd_reduce_scatter_post_ff2(output, cfg, ccl)
 
         # De-chunk the output if the input was chunked
-        _, num_chunks, _, output_dim = output.shape
-        if num_chunks > 1:
+        _, _, _, output_dim = output.shape
+        if original_seq_len > cfg["max_rows"]:
             output = ttnn.reshape(output, [num_layers, 1, -1, output_dim])
             if pad_rows > 0:
                 output = ttnn.slice(output, [0, 0, 0, 0], [num_layers, 1, original_seq_len, output_dim])
