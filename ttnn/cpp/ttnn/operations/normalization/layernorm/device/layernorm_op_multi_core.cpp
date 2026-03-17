@@ -115,10 +115,7 @@ LayerNormMultiCoreProgramFactory::cached_program_t LayerNormMultiCoreProgramFact
 }
 
 tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descriptor(
-    const LayerNormParams& operation_attributes,
-    const LayerNormInputs& tensor_args,
-    Tensor& tensor_return_value,
-    const std::optional<CoreRangeSet>& core_range_set) {
+    const LayerNormParams& operation_attributes, const LayerNormInputs& tensor_args, Tensor& tensor_return_value) {
     using namespace CMAKE_UNIQUE_NAMESPACE;
 
     // Extract from operation_attributes and tensor_args
@@ -135,6 +132,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
     bool legacy_reduction = false;
     bool legacy_rsqrt = false;
     bool use_welford = false;
+    std::optional<CoreRangeSet> core_range_set;
     std::visit(
         [&](const auto& program_config) {
             using ProgramConfigType = std::decay_t<decltype(program_config)>;
@@ -142,6 +140,7 @@ tt::tt_metal::ProgramDescriptor LayerNormMultiCoreProgramFactory::create_descrip
                 legacy_reduction = program_config.legacy_reduction;
                 legacy_rsqrt = program_config.legacy_rsqrt;
                 use_welford = program_config.use_welford;
+                core_range_set = program_config.core_range_set;
             }
         },
         operation_attributes.program_config);

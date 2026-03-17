@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <optional>
 #include <variant>
 
 #include <tt-metalium/buffer.hpp>
@@ -20,6 +21,7 @@ struct LayerNormDefaultProgramConfig {
     bool legacy_reduction = false;
     bool legacy_rsqrt = false;
     bool use_welford = false;
+    std::optional<CoreRangeSet> core_range_set = std::nullopt;
 };
 struct LayerNormShardedMultiCoreProgramConfig {
     CoreCoord compute_with_storage_grid_size;

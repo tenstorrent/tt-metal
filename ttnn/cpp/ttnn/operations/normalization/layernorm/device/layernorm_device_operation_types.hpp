@@ -23,6 +23,21 @@ struct LayerNormParams {
     DeviceComputeKernelConfig compute_kernel_config;
     std::optional<DataType> dtype;
     std::optional<operations::unary::UnaryWithParam> fused_activation;
+
+    // Construct LayerNormParams with defaults resolved from input tensor context.
+    // Optional parameters that are nullopt will be filled from the input tensor's
+    // memory config, shard spec, tile dims, and device arch.
+    // Compute kernel config defaults depend on norm_type (layernorm vs rmsnorm).
+    static LayerNormParams with_defaults(
+        const Tensor& input_tensor,
+        LayerNormType norm_type,
+        float eps,
+        const std::optional<MemoryConfig>& output_mem_config = std::nullopt,
+        const std::optional<LayerNormProgramConfig>& program_config = std::nullopt,
+        const std::optional<DeviceComputeKernelConfig>& compute_kernel_config = std::nullopt,
+        DistributedLayerNormStage distributed_norm_stage = DistributedLayerNormStage::NOT_DISTRIBUTED,
+        const std::optional<DataType>& dtype = std::nullopt,
+        const std::optional<operations::unary::UnaryWithParam>& fused_activation = std::nullopt);
 };
 
 struct LayerNormInputs {

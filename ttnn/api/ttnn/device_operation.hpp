@@ -13,6 +13,7 @@
 #include <unordered_map>
 
 #include <tt-metalium/program_cache.hpp>
+#include <tt-metalium/program_descriptors.hpp>
 #include <tracy/Tracy.hpp>
 #include "tools/profiler/op_profiler.hpp"
 #include <tt_stl/concepts.hpp>
@@ -519,5 +520,53 @@ typename device_operation_t::tensor_return_value_t invoke(
 }  // namespace detail
 
 using ttnn::device_operation::detail::launch;
+
+// Return type for create_op_descriptor
+template <DeviceOperationConcept device_operation_t>
+struct OpDescriptorResult {
+    tt::tt_metal::ProgramDescriptor descriptor;
+    typename device_operation_t::tensor_return_value_t output_tensors;
+};
+
+/**
+ * Create a ProgramDescriptor for an operation without enqueuing it.
+ *
+ * Runs the same pipeline as launch<>() (output allocation, validation, factory selection)
+ * but calls create_descriptor() on the selected factory instead of enqueuing a program.
+ *
+ * Requires that the selected factory variant has a static create_descriptor() method.
+ * Factories without create_descriptor() will cause a runtime error if selected.
+ */
+template <DeviceOperationConcept device_operation_t>
+OpDescriptorResult<device_operation_t> create_op_descriptor(
+    const typename device_operation_t::operation_attributes_t& operation_attributes,
+    const typename device_operation_t::tensor_args_t& tensor_args) {
+    // 1. Allocate outputs — same as launch<>()
+    auto output_tensors = device_operation_t::create_output_tensors(operation_attributes, tensor_args);
+
+    // 2. Validate — same as launch<>()
+    device_operation_t::validate_on_program_cache_miss(operation_attributes, tensor_args);
+
+    // 3. Select factory — same as launch<>()
+    auto program_factory = device_operation_t::select_program_factory(operation_attributes, tensor_args);
+
+    // 4. Call create_descriptor() on the selected factory
+    auto descriptor = std::visit(
+        [&]<typename T>(const T&) -> tt::tt_metal::ProgramDescriptor {
+            if constexpr (requires {
+                              {
+                                  T::create_descriptor(operation_attributes, tensor_args, output_tensors)
+                              } -> std::same_as<tt::tt_metal::ProgramDescriptor>;
+                          }) {
+                return T::create_descriptor(operation_attributes, tensor_args, output_tensors);
+            } else {
+                TT_THROW("create_op_descriptor: selected factory does not implement create_descriptor()");
+            }
+        },
+        program_factory);
+
+    // 5. No enqueue. Return descriptor + allocated outputs.
+    return {std::move(descriptor), std::move(output_tensors)};
+}
 
 }  // namespace ttnn::device_operation
