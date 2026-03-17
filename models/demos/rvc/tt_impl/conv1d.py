@@ -163,47 +163,57 @@ def output_length_from_input_length(input_length, conv1d_config: Conv1dConfigura
     ) // conv1d_config.stride + 1
 
 
-dims_to_config_values = {
-    # (output_length, in_channels, out_channels, kernel_size): (num_slices, act_block_h_override, act_block_w_div)
-    (1780, 768, 768, 128): (56, 0, 1),
-    (113986, 1, 512, 10): (2, 32, 1),
-    ((113986 // 128) * 128, 1, 512, 10): (2, 128, 1),
-    (56992, 512, 512, 3): (3, 32 * 3, 1),
-    (28495, 512, 512, 3): (4, 32 * 0, 1),
-    (14247, 512, 512, 3): (1, 32 * 24, 1),
-    (35600, 1, 256, 96): (1, 32, 1),
-    (35600, 256, 256, 3): (1, 32 * 24, 1),
-    (35600, 256, 256, 7): (1, 32 * 24, 1),
-    (35600, 256, 256, 11): (1, 32 * 16, 1),
-    (213600, 1, 128, 16): (2, 32, 1),
-    (213600, 128, 128, 3): (2, 32, 1),
-    (213600, 128, 128, 7): (2, 32, 1),
-    (213600, 128, 128, 11): (4, 32, 1),
-    (427200, 1, 64, 8): (1, 32, 1),
-    (427200, 64, 64, 3): (2, 32, 1),
-    (427200, 64, 64, 7): (2, 32, 1),
-    (427200, 64, 64, 11): (2, 32, 1),
-    (854400, 1, 32, 4): (1, 32 * 4, 1),
-    (854400, 32, 32, 3): (2, 32 * 24, 1),
-    (854400, 32, 32, 7): (2, 32 * 16, 1),
-    (854400, 32, 32, 11): (32, 32 * 0, 1),
-    (1708800, 16, 16, 3): (32, 32 * 0, 1),
-    (1708800, 16, 16, 7): (32, 32, 1),
-    (1708800, 16, 16, 11): (32, 32 * 0, 1),
-    (1708800, 16, 1, 7): (16, 32 * 0, 1),
+params_to_act_block_h_override = {
+    (1, 512, 10): (100_000, 32),
+    (512, 512, 3): (20_000, 32),
+    (768, 768, 128): (50, 32),
+    (1, 256, 96): (100_000, 32),
+    (256, 256, 3): (20_000, 32 * 24),
+    (256, 256, 7): (20_000, 32 * 24),
+    (256, 256, 11): (20_000, 32 * 16),
+    (1, 128, 16): (100_000, 32),
+    (128, 128, 3): (90_000, 32),
+    (128, 128, 7): (90_000, 32),
+    (128, 128, 11): (90_000, 32 * 16),
+    (1, 64, 8): (200_000, 32),
+    (64, 64, 3): (200_000, 32),
+    (64, 64, 7): (200_000, 32),
+    (64, 64, 11): (200_000, 32),
+    (1, 32, 4): (400_000, 32 * 4),
+    (32, 32, 3): (400_000, 32 * 24),
+    (32, 32, 7): (400_000, 32 * 16),
+    (32, 32, 11): (400_000, 32 * 8),
+    (16, 16, 3): (50_000, 32 * 0),
+    (16, 16, 7): (50_000, 32),
+    (16, 16, 11): (50_000, 32 * 0),
+    (16, 1, 7): (50_000, 32 * 0),
 }
+
+
+def get_conv2d_config_values(output_length, in_channels, out_channels, kernel_size) -> tuple[int, int]:
+    if (in_channels, out_channels, kernel_size) in params_to_act_block_h_override:
+        len_per_slice, act_block_h_override = params_to_act_block_h_override[(in_channels, out_channels, kernel_size)]
+        slice_num = (output_length + len_per_slice - 1) // len_per_slice
+    else:
+        act_block_h_override = 0
+        slice_num = 1
+
+    return (slice_num, act_block_h_override)
 
 
 def get_conv_configs(
     input_length, conv1d_config: Conv1dConfiguration, device: ttnn.Device
 ) -> tuple[ttnn.Conv2dConfig, ttnn.Conv2dSliceConfig, ttnn.DeviceComputeKernelConfig]:
     output_length = output_length_from_input_length(input_length, conv1d_config)
-    num_slices, act_block_h_override, act_block_w_div = dims_to_config_values.get(
-        (output_length, conv1d_config.in_channels, conv1d_config.out_channels, conv1d_config.kernel_size),
-        (1, 0, 1),
-    )
-    slice_config = ttnn.Conv2dSliceConfig(num_slices=num_slices, slice_type=ttnn.Op2DDRAMSliceWidth)
 
+    slice_num, act_block_h_override = get_conv2d_config_values(
+        output_length, conv1d_config.in_channels, conv1d_config.out_channels, conv1d_config.kernel_size
+    )
+    slice_config = ttnn.Conv2dSliceConfig(
+        num_slices=slice_num, slice_type=ttnn.Op2DDRAMSliceWidth
+    )  # if slice_num > 1 else None
+
+    act_block_w_div = 1
     return (
         ttnn.Conv2dConfig(
             weights_dtype=conv1d_config.weights_dtype,
