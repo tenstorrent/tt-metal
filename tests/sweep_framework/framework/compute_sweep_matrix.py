@@ -31,7 +31,7 @@ from collections import defaultdict
 from pathlib import Path
 
 # Import mesh utilities from shared constants module
-from constants import get_mesh_shape_string, strip_mesh_suffix
+from constants import get_mesh_shape_string, strip_mesh_suffix, parse_hardware_suffix, get_runner_config_for_hardware
 
 
 def chunk_modules(items, size):
@@ -46,22 +46,12 @@ def get_mesh_shape(module_name):
 
 
 def get_lead_models_mesh_runner_config():
-    """
-    Configuration: Map mesh shapes to runner configurations.
+    """Static runner config for lead models runs (unchanged from original).
 
-    Each entry specifies which runner handles which mesh shapes.
-    Multiple mesh shapes can be handled by the same runner.
-
-    To add new mesh configurations or runners, add entries to this list.
-
-    Note: 'runs_on' can be either:
-      - A string: Single runner label (e.g., "tt-ubuntu-2204-n150-stable")
-      - A list: Multiple runner labels for GitHub Actions matrix
-                (e.g., ["topology-6u", "arch-wormhole_b0", "in-service", "pipeline-functional"])
+    Uses two groups: single-chip (N150) and multi-chip (Galaxy).
     """
     return [
         {
-            # Single-chip operations (1x1 mesh) - runs on N150
             "mesh_shapes": ["1x1"],
             "test_group_name": "lead-models-single-chip",
             "arch": "wormhole_b0",
@@ -83,20 +73,78 @@ def get_lead_models_mesh_runner_config():
     ]
 
 
-def compute_lead_models_matrix(modules, batch_size):
+def build_mesh_runner_config_from_modules(modules):
+    """Dynamically build runner config from vector filenames.
+
+    Reads hardware from the ``__hw_<name>`` filename suffix (written by
+    the vector generator from traced_machine_info).  Groups all mesh
+    shapes for the same hardware into ONE runner config, producing one
+    CI job per hardware type (e.g., one N300 job, one Galaxy job).
+
+    Args:
+        modules: List of module filenames (stems) including mesh/hw suffixes.
+
+    Returns:
+        List of runner config dicts — one per unique hardware that has vectors.
     """
-    Compute matrix for lead models run with mesh-aware runner assignment.
+    # Group mesh shapes by hardware
+    hw_to_meshes = defaultdict(set)
+    for module in modules:
+        mesh_str = get_mesh_shape_string(module)
+        hw_name = parse_hardware_suffix(module)
+        if mesh_str:
+            hw_to_meshes[hw_name or ""].add(mesh_str)
+
+    configs = []
+    for hw_name in sorted(hw_to_meshes.keys()):
+        mesh_shapes = sorted(hw_to_meshes[hw_name])
+        if hw_name:
+            runner = get_runner_config_for_hardware(hw_name)
+            if runner is None:
+                print(
+                    f"Warning: Unknown hardware '{hw_name}', skipping {mesh_shapes}",
+                    file=sys.stderr,
+                )
+                continue
+            configs.append(
+                {
+                    "mesh_shapes": mesh_shapes,
+                    "test_group_name": f"model-traced-{hw_name}",
+                    "suite_name": "model_traced",
+                    **runner,
+                }
+            )
+        else:
+            # Legacy suffix without __hw_ — fall back to default N150 runner
+            configs.append(
+                {
+                    "mesh_shapes": mesh_shapes,
+                    "test_group_name": "model-traced-default",
+                    "suite_name": "model_traced",
+                    "arch": "wormhole_b0",
+                    "runs_on": "tt-ubuntu-2204-n150-stable",
+                    "runner_label": "N150",
+                    "tt_smi_cmd": "tt-smi -r",
+                }
+            )
+    return configs
+
+
+def compute_lead_models_matrix(modules, batch_size, dynamic_hw=False):
+    """
+    Compute matrix for mesh-aware runner assignment.
 
     Args:
         modules: List of module names (from vector JSON filenames)
         batch_size: Number of modules per batch
+        dynamic_hw: If True, derive hardware from __hw_ filename suffix
+                    (for model_traced runs). If False, use static config
+                    (for lead models runs).
 
     Returns:
         Tuple of (include_entries, batches, ccl_batches)
     """
-    config = get_lead_models_mesh_runner_config()
-
-    # Group modules by mesh shape
+    # Group modules by mesh shape first to discover what shapes exist
     mesh_shape_modules = defaultdict(list)
     unmatched_modules = []
 
@@ -107,17 +155,12 @@ def compute_lead_models_matrix(modules, batch_size):
         else:
             unmatched_modules.append(module)
 
-    # Build set of all configured mesh shapes for validation
-    configured_shapes = set()
-    for runner_config in config:
-        configured_shapes.update(runner_config["mesh_shapes"])
-
-    # Warn about mesh shapes without runner config
-    for mesh_shape in mesh_shape_modules.keys():
-        if mesh_shape not in configured_shapes:
-            print(
-                f"Warning: Mesh shape '{mesh_shape}' has no runner config, " f"modules will be skipped", file=sys.stderr
-            )
+    if dynamic_hw:
+        # Model traced: read hardware from __hw_ suffix in filenames
+        config = build_mesh_runner_config_from_modules(modules)
+    else:
+        # Lead models: use static config (N150 + Galaxy)
+        config = get_lead_models_mesh_runner_config()
 
     # Create matrix entries based on runner config
     include_entries = []
@@ -129,8 +172,7 @@ def compute_lead_models_matrix(modules, batch_size):
         for mesh_shape in runner_config["mesh_shapes"]:
             runner_modules.extend(mesh_shape_modules.get(mesh_shape, []))
 
-        # Route modules without a mesh suffix to the first (default) runner config,
-        # which is conventionally the single-chip N150 runner.
+        # Route modules without a mesh suffix to the first (default) runner config.
         is_default_runner = runner_config == config[0]
         if is_default_runner:
             runner_modules.extend(unmatched_modules)
@@ -138,38 +180,76 @@ def compute_lead_models_matrix(modules, batch_size):
         if not runner_modules:
             continue
 
-        # Strip mesh suffixes to get base module names that sweeps_runner can find
-        # The VectorExportSource will automatically load mesh-variant JSONs
-        base_modules = sorted(set(strip_mesh_suffix(m) for m in runner_modules))
-
-        # For Galaxy runners (multi-chip), split into 3 parallel jobs
-        # For single-chip runners, use the standard batch size
-        is_galaxy = runner_config["test_group_name"] == "lead-models-galaxy"
-        if is_galaxy:
-            galaxy_jobs = 3
-            galaxy_batch_size = max(1, -(-len(base_modules) // galaxy_jobs))
-            runner_batches = chunk_modules(base_modules, galaxy_batch_size)
+        if dynamic_hw:
+            # --- Model traced: one sub-job per mesh shape ---
+            # Each sub-job sets MESH_DEVICE_SHAPE so only matching vectors run.
+            # UI shows: Run sweeps (model-traced-tt-galaxy-wh, 4x8: add,linear)
+            for mesh_shape in runner_config["mesh_shapes"]:
+                shape_modules = mesh_shape_modules.get(mesh_shape, [])
+                if not shape_modules:
+                    continue
+                base_modules = sorted(set(strip_mesh_suffix(m) for m in shape_modules))
+                shape_batches = chunk_modules(base_modules, batch_size)
+                batches.extend(shape_batches)
+                for batch in shape_batches:
+                    include_entries.append(
+                        {
+                            "test_group_name": runner_config["test_group_name"],
+                            "arch": runner_config["arch"],
+                            "runs_on": runner_config["runs_on"],
+                            "runner_label": runner_config["runner_label"],
+                            "tt_smi_cmd": runner_config["tt_smi_cmd"],
+                            "module_selector": batch,
+                            "batch_display": f"{mesh_shape}:{batch}",
+                            "suite_name": runner_config["suite_name"],
+                            "mesh_shapes_filter": mesh_shape,
+                        }
+                    )
+            # Also handle unmatched modules on the default runner
+            if is_default_runner and unmatched_modules:
+                base_modules = sorted(set(strip_mesh_suffix(m) for m in unmatched_modules))
+                um_batches = chunk_modules(base_modules, batch_size)
+                batches.extend(um_batches)
+                for batch in um_batches:
+                    include_entries.append(
+                        {
+                            "test_group_name": runner_config["test_group_name"],
+                            "arch": runner_config["arch"],
+                            "runs_on": runner_config["runs_on"],
+                            "runner_label": runner_config["runner_label"],
+                            "tt_smi_cmd": runner_config["tt_smi_cmd"],
+                            "module_selector": batch,
+                            "batch_display": batch,
+                            "suite_name": runner_config["suite_name"],
+                            "mesh_shapes_filter": "",
+                        }
+                    )
         else:
-            # Standard batching for single-chip
-            runner_batches = chunk_modules(base_modules, batch_size)
-
-        batches.extend(runner_batches)
-
-        # Create matrix entries
-        mesh_label = "+".join(runner_config["mesh_shapes"])
-        for batch in runner_batches:
-            include_entries.append(
-                {
-                    "test_group_name": runner_config["test_group_name"],
-                    "arch": runner_config["arch"],
-                    "runs_on": runner_config["runs_on"],
-                    "runner_label": runner_config["runner_label"],
-                    "tt_smi_cmd": runner_config["tt_smi_cmd"],
-                    "module_selector": batch,
-                    "batch_display": f"{mesh_label}:{batch}",
-                    "suite_name": runner_config["suite_name"],
-                }
-            )
+            # --- Lead models: original behavior (all mesh shapes grouped per runner) ---
+            base_modules = sorted(set(strip_mesh_suffix(m) for m in runner_modules))
+            is_galaxy = "galaxy" in runner_config["test_group_name"]
+            if is_galaxy:
+                galaxy_jobs = 3
+                galaxy_batch_size = max(1, -(-len(base_modules) // galaxy_jobs))
+                runner_batches = chunk_modules(base_modules, galaxy_batch_size)
+            else:
+                runner_batches = chunk_modules(base_modules, batch_size)
+            batches.extend(runner_batches)
+            mesh_label = "+".join(runner_config["mesh_shapes"])
+            for batch in runner_batches:
+                include_entries.append(
+                    {
+                        "test_group_name": runner_config["test_group_name"],
+                        "arch": runner_config["arch"],
+                        "runs_on": runner_config["runs_on"],
+                        "runner_label": runner_config["runner_label"],
+                        "tt_smi_cmd": runner_config["tt_smi_cmd"],
+                        "module_selector": batch,
+                        "batch_display": f"{mesh_label}:{batch}",
+                        "suite_name": runner_config["suite_name"],
+                        "mesh_shapes_filter": "",
+                    }
+                )
 
     # Log summary
     total_base_modules = len(set(strip_mesh_suffix(m) for m in modules))
@@ -234,6 +314,7 @@ def compute_standard_matrix(modules, batch_size, suite_name):
                 "module_selector": batch,
                 "batch_display": batch,
                 "suite_name": suite_name,
+                "mesh_shapes_filter": "",
             }
         )
 
@@ -253,6 +334,7 @@ def compute_standard_matrix(modules, batch_size, suite_name):
                     "module_selector": batch,
                     "batch_display": f"ccl:{batch}",
                     "suite_name": "generality_suite_fabric_1d",
+                    "mesh_shapes_filter": "",
                 }
             )
 
@@ -317,12 +399,14 @@ def main():
 
     # Compute matrix based on run type
     if is_lead_models:
-        include_entries, batches, ccl_batches = compute_lead_models_matrix(modules, batch_size)
+        include_entries, batches, ccl_batches = compute_lead_models_matrix(modules, batch_size, dynamic_hw=False)
+    elif is_model_traced:
+        # Model traced runs use mesh-aware routing so vectors execute
+        # on the exact hardware they were traced on.
+        include_entries, batches, ccl_batches = compute_lead_models_matrix(modules, batch_size, dynamic_hw=True)
     else:
         # Determine suite name for standard runs
-        if is_model_traced:
-            suite_name = "model_traced"
-        elif is_comprehensive:
+        if is_comprehensive:
             suite_name = None
         else:
             suite_name = "nightly"
@@ -348,12 +432,24 @@ def main():
         )
         sys.exit(1)
 
+    # Split include entries by test_group_name for per-hardware job definitions.
+    # Each hardware group becomes a separate matrix output so the workflow
+    # can create distinct parent jobs with sub-jobs underneath.
+    hw_groups = defaultdict(list)
+    for entry in include_entries:
+        hw_groups[entry["test_group_name"]].append(entry)
+
     # Output matrix JSON
     result = {
         "module": modules,
         "batches": batches,
         "ccl_batches": ccl_batches,
         "include": include_entries,
+        # Per-hardware sub-matrices — each is a list of matrix entries
+        # that share the same runner. The workflow creates a separate
+        # job definition per hardware group, each with its own matrix.
+        "hw_groups": {name: entries for name, entries in sorted(hw_groups.items())},
+        "hw_group_names": sorted(hw_groups.keys()),
     }
 
     print(json.dumps(result))
