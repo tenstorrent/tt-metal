@@ -152,7 +152,7 @@ jobs:
           build-artifact-name: ${{ inputs.build-artifact-name }}
           wheel-artifact-name: ${{ inputs.wheel-artifact-name }}
       - name: Enable Performance mode
-        if: ${{ contains(join(matrix.test-group.runs_on, ' '), 'pipeline-perf') || contains(join(matrix.test-group.runs_on, ' '), 'bare-metal') }}
+        if: ${{ (contains(join(matrix.test-group.runs_on, ' '), 'pipeline-perf') || contains(join(matrix.test-group.runs_on, ' '), 'bare-metal')) && matrix.test-group.sku != 'bh_p100' && matrix.test-group.sku != 'bh_p150' && matrix.test-group.sku != 'bh_p150_perf' }}
         uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: performance
@@ -221,7 +221,7 @@ jobs:
       - uses: tenstorrent/tt-metal/.github/actions/cleanup@main
         if: always()
       - name: Disable Performance mode
-        if: ${{ (contains(join(matrix.test-group.runs_on, ' '), 'pipeline-perf') || contains(join(matrix.test-group.runs_on, ' '), 'bare-metal')) && always() }}
+        if: ${{ (contains(join(matrix.test-group.runs_on, ' '), 'pipeline-perf') || contains(join(matrix.test-group.runs_on, ' '), 'bare-metal')) && matrix.test-group.sku != 'bh_p100' && matrix.test-group.sku != 'bh_p150' && matrix.test-group.sku != 'bh_p150_perf' && always() }}
         uses: tenstorrent/tt-metal/.github/actions/set-cpu-governor@main
         with:
           governor: ondemand
