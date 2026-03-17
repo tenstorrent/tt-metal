@@ -42,7 +42,10 @@ void DispatchContext::initialize_fast_dispatch(distributed::MeshDevice* mesh_dev
     TT_FATAL(
         !fast_dispatch_enabled_,
         "Fast Dispatch can only be manually enabled when running the workload with Slow Dispatch mode.");
-    TT_FATAL(num_fd_inits_ == 0, "Fast Dispatch can only be manually initialized and torn down once.");
+    TT_FATAL(
+        num_fd_inits_ == 0,
+        "Fast Dispatch is already manually initialized. Terminate the current manual Fast Dispatch session before "
+        "initializing another one.");
     TT_FATAL(
         cluster.is_ubb_galaxy() || cluster.arch() == tt::ARCH::BLACKHOLE,
         "Manually setting up and tearing down Fast Dispatch is only supported on Galaxy and Blackhole clusters.");
@@ -90,7 +93,7 @@ void DispatchContext::terminate_fast_dispatch(distributed::MeshDevice* mesh_devi
     }
 
     TT_FATAL(fast_dispatch_enabled_, "Can only manually terminate fast dispatch after initializing it.");
-    TT_FATAL(num_fd_inits_ == 1, "Fast Dispatch can only be manually terminated and torn down once.");
+    TT_FATAL(num_fd_inits_ == 1, "Fast Dispatch termination requires exactly one active manual Fast Dispatch session.");
 
     const auto& device_manager = MetalContext::instance().device_manager();
     const auto& active_devices = device_manager->get_all_active_devices();
