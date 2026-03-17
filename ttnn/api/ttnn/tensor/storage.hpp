@@ -10,6 +10,9 @@
 #include <tuple>
 
 #include "tt-metalium/distributed_host_buffer.hpp"
+#include "tt-metalium/experimental/tensor/host_tensor.hpp"
+#include <ttnn/tensor/tensor_spec.hpp>
+#include <ttnn/distributed/tensor_topology.hpp>
 #include "ttnn/tensor/types.hpp"
 #include "ttnn/tensor/tensor_spec.hpp"
 
@@ -23,8 +26,20 @@ public:
     // Creates HostStorage distributed over 1x1 mesh.
     explicit HostStorage(HostBuffer buffer);
 
+    // Creates HostStorage from a HostTensor.
+    explicit HostStorage(HostTensor tensor);
+
+    // Copy a HostStorage with a new TensorSpec and TensorTopology, this is meant for transition
+    HostStorage(const HostStorage& other, TensorSpec spec, TensorTopology topology);
+
+    // Move a HostStorage with a new TensorSpec and TensorTopology
+    HostStorage(HostStorage&& other, TensorSpec spec, TensorTopology topology);
+
     // Returns the distributed host buffer.
     const DistributedHostBuffer& buffer() const;
+
+    // Returns the host tensor.
+    const HostTensor& host_tensor() const;
 
     // Applies a transformation function to each device buffer in parallel, returning a new HostStorage.
     HostStorage transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const;
@@ -33,7 +48,7 @@ public:
     auto attribute_values() const { return std::forward_as_tuple(); }
 
 private:
-    DistributedHostBuffer distributed_buffer_;
+    HostTensor tensor;
 };
 
 struct DeviceStorage {

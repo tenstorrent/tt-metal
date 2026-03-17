@@ -5,23 +5,46 @@
 #include <algorithm>
 #include <vector>
 
+#include <ttnn/tensor/layout/layout.hpp>
 #include "tt-metalium/mesh_coord.hpp"
 
 #include "ttnn/tensor/storage.hpp"
 
 namespace tt::tt_metal {
 
-HostStorage::HostStorage(HostBuffer buffer) :
-    distributed_buffer_(DistributedHostBuffer::create(distributed::MeshShape(1, 1))) {
-    distributed_buffer_.emplace_shard(distributed::MeshCoordinate(0, 0), [&buffer]() { return std::move(buffer); });
+DistributedHostBuffer create_unit_distributed_host_buffer(HostBuffer buffer) {
+    auto distributed_buffer = DistributedHostBuffer::create(distributed::MeshShape(1, 1));
+    distributed_buffer.emplace_shard(distributed::MeshCoordinate(0, 0), [&buffer]() { return std::move(buffer); });
+    return distributed_buffer;
 }
-HostStorage::HostStorage(DistributedHostBuffer buffer) : distributed_buffer_(std::move(buffer)) {}
 
-const DistributedHostBuffer& HostStorage::buffer() const { return distributed_buffer_; }
+HostStorage::HostStorage(HostBuffer buffer) : HostStorage(create_unit_distributed_host_buffer(std::move(buffer))) {}
+
+HostTensor create_dummy_host_tensor(DistributedHostBuffer buffer) {
+    TensorSpec spec{Shape{}, TensorLayout{DataType::BFLOAT16, PageConfig{Layout::ROW_MAJOR}, MemoryConfig{}}};
+    TensorTopology topology;
+    return HostTensor(std::move(buffer), std::move(spec), std::move(topology));
+}
+
+HostStorage::HostStorage(DistributedHostBuffer buffer) : tensor(create_dummy_host_tensor(std::move(buffer))) {}
+
+HostStorage::HostStorage(HostTensor tensor) : tensor(std::move(tensor)) {}
+
+HostStorage::HostStorage(const HostStorage& other, TensorSpec spec, TensorTopology topology) :
+    tensor(HostTensor(other.buffer(), std::move(spec), std::move(topology))) {}
+
+HostStorage::HostStorage(HostStorage&& other, TensorSpec spec, TensorTopology topology) :
+    tensor(HostTensor(std::move(other.tensor), std::move(spec), std::move(topology))) {}
+
+const DistributedHostBuffer& HostStorage::buffer() const { return tensor.buffer(); }
+
+const HostTensor& HostStorage::host_tensor() const { return tensor; }
 
 HostStorage HostStorage::transform(const std::function<HostBuffer(const HostBuffer&)>& callable) const {
-    return HostStorage(
-        distributed_buffer_.transform(callable, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL));
+    auto transformed_buffer =
+        tensor.buffer().transform(callable, DistributedHostBuffer::ProcessShardExecutionPolicy::PARALLEL);
+    auto transformed_tensor = HostTensor(std::move(transformed_buffer), tensor.tensor_spec(), tensor.tensor_topology());
+    return HostStorage(std::move(transformed_tensor));
 }
 
 DeviceStorage::DeviceStorage(
