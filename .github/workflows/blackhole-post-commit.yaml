@@ -284,7 +284,7 @@ jobs:
 
   run-profiler-regression:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && inputs.run-profiler-regression != false }}
+    if: ${{ always() && !cancelled() && (inputs.run-profiler-regression == true || github.event_name == 'schedule') }}
     uses: ./.github/workflows/run-profiler-regression.yaml
     secrets: inherit
     strategy:
@@ -302,7 +302,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   umd-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && inputs.run-umd-unit-tests != false }}
+    if: ${{ always() && !cancelled() && (inputs.run-umd-unit-tests == true || github.event_name == 'schedule') }}
     secrets: inherit
     uses: ./.github/workflows/umd-unit-tests.yaml
     strategy:
@@ -318,7 +318,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   models-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && inputs.run-models-unit-tests != false }}
+    if: ${{ always() && !cancelled() && (inputs.run-models-unit-tests == true || github.event_name == 'schedule') }}
     secrets: inherit
     uses: ./.github/workflows/models-post-commit.yaml
     strategy:
@@ -335,7 +335,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ttnn-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && inputs.run-ttnn-unit-tests != false }}
+    if: ${{ always() && !cancelled() && (inputs.run-ttnn-unit-tests == true || github.event_name == 'schedule') }}
     secrets: inherit
     uses: ./.github/workflows/ttnn-post-commit.yaml
     strategy:
@@ -351,7 +351,7 @@ jobs:
       enable-llk-asserts: ${{ inputs.enable-llk-asserts || false }}
   ops-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && inputs.run-ops-unit-tests != false }}
+    if: ${{ always() && !cancelled() && (inputs.run-ops-unit-tests == true || github.event_name == 'schedule') }}
     secrets: inherit
     strategy:
       fail-fast: false
@@ -370,7 +370,7 @@ jobs:
   # TT-CNN Unit Tests
   tt-cnn-unit-tests:
     needs: [resolve-artifacts, generate-matrix]
-    if: ${{ always() && !cancelled() && inputs.run-tt-cnn-unit-tests != false }}
+    if: ${{ always() && !cancelled() && (inputs.run-tt-cnn-unit-tests == true || github.event_name == 'schedule') }}
     secrets: inherit
     uses: ./.github/workflows/tt-cnn-post-commit.yaml
     strategy:
@@ -387,7 +387,7 @@ jobs:
 
   # Multi-card post-commit tests
   blackhole-multi-card-fast-unit-tests:
-    if: ${{ always() && !cancelled() && (inputs.run-blackhole-multi-card-fast-unit-tests == true || (inputs.run-blackhole-multi-card-fast-unit-tests != false && (!contains(fromJson(needs.generate-matrix.outputs.matrix), 'P100') || github.event_name == 'schedule'))) }}
+    if: ${{ always() && !cancelled() && (!contains(fromJson(needs.generate-matrix.outputs.matrix), 'P100') || github.event_name == 'schedule' || inputs.run-blackhole-multi-card-fast-unit-tests == true) }}
     needs: [resolve-artifacts, generate-matrix]
     secrets: inherit
     uses: ./.github/workflows/blackhole-multi-card-unit-tests-impl.yaml
