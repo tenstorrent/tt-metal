@@ -27,6 +27,11 @@ from models.demos.deepseek_v3.utils.run_config import (
     RunPrefillConfig,
     WeightConfig,
 )
+from tests.nightly.tg.ccl.moe.test_moe_compute_6U import (
+    determine_compute_matmul_cores,
+    get_w0_w1_memory_config,
+    get_w2_memory_config,
+)
 
 
 class Experts(AbstractModule):
@@ -109,6 +114,20 @@ class Experts(AbstractModule):
         )
         (state_dict,) = state_dicts
         assert state_dict is not None
+
+        num_layers = 1
+        experts_per_device = cls._get_num_experts_per_device(hf_config, mesh_device)
+        hidden_size = hidden_size = hf_config.hidden_size
+        matmul_N = 2048
+
+        ring2cores, compute_matmul_dram_core_range_set = determine_compute_matmul_cores(mesh_device)
+
+        w0_w1_memory_config = get_w0_w1_memory_config(
+            num_layers, experts_per_device, hidden_size, compute_matmul_dram_core_range_set
+        )
+        w2_memory_config = get_w2_memory_config(
+            num_layers, experts_per_device, matmul_N, compute_matmul_dram_core_range_set
+        )
 
         def _load_expert_weight(hf_name: str) -> torch.Tensor:
             weight_name = f"{hf_name}.weight"
