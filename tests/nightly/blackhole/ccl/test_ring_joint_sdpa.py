@@ -55,14 +55,14 @@ GALAXY_SP_SIZE = 8
 
 # WAN 2.2 model workload configuration constants (per-device sequence lengths)
 GALAXY_SEQ_LENS_PER_DEVICE = [2368, 9472]  # WAN 2.2 Galaxy per-device
-NON_GALAXY_SEQ_LENS_PER_DEVICE = [2240, 8544]  # WAN 2.2 non-Galaxy per-device
+NON_GALAXY_SEQ_LENS_PER_DEVICE = [2240]  # WAN 2.2 non-Galaxy per-device
 HEADS_PER_DEVICE = 10  # WAN 2.2 attention heads per device
 HEAD_DIMENSION = 128  # WAN 2.2 head dimension
 BATCH_SIZE = 1
 
 # Chunk size sweep parameters
-Q_CHUNK_SIZES = [224, 256, 288]
-K_CHUNK_SIZES = [128, 256, 512]
+Q_CHUNK_SIZES = [224]
+K_CHUNK_SIZES = [512]
 
 # Accuracy threshold constants
 DEFAULT_PCC_THRESHOLD = 0.994

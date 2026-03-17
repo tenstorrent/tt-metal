@@ -1512,8 +1512,12 @@ void sdpa_ring_v2(
             }
         }
 
-        // Pop Q — not popped inside step since ring_mode gates the early Q pop
-        cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
+        // Pop Q — not popped inside step since ring_mode gates the early Q pop.
+        // When q_per_core == 1, Q is identical across ring iterations so we keep it
+        // fronted in the CB and only pop on the last iteration to avoid redundant DRAM re-reads.
+        if (q_per_core > 1 || is_last_ring_iter) {
+            cb_pop_front(cb_q_in, Sq_chunk_t * DHt);
+        }
 
         // Persist or save accumulators for next ring iteration
         if (q_per_core == 1) {

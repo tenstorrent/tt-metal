@@ -1646,7 +1646,8 @@ void sdpa_inner_loop(
     const uint32_t cb_lse_out,
     const uint32_t cb_prev_out,
     const uint32_t cb_out,
-    const LightweightMaskContext& lw_mask = {}) {
+    const LightweightMaskContext& lw_mask = {},
+    const bool is_last_ring_iter = true) {
     uint32_t KV_chunks_processed_in_iter = 0;
 
     for (uint32_t q_iter = iter_q_start; q_iter < iter_q_end; ++q_iter) {
@@ -1987,7 +1988,11 @@ void sdpa_inner_loop(
             cb_pop_front(alias_prev_max, Sq_chunk_t);
         }
 
-        cb_pop_front(cb_q_in, q_chunk_tiles);
+        // When q_per_core == 1, Q is identical across ring iterations so we keep it
+        // fronted in the CB and only pop on the last iteration to avoid redundant DRAM re-reads.
+        if ((iter_q_end - iter_q_start) > 1 || is_last_ring_iter) {
+            cb_pop_front(cb_q_in, q_chunk_tiles);
+        }
     }
 
     if constexpr (sdpa_type == RING) {
@@ -2315,7 +2320,8 @@ void sdpa_ring(
     const uint32_t cb_lse_out,
     const uint32_t cb_prev_out,
     const uint32_t cb_out,
-    const LightweightMaskContext& lw_mask) {
+    const LightweightMaskContext& lw_mask,
+    const bool is_last_ring_iter) {
     sdpa_inner_loop<
         RING,
         cb_qk_im,
@@ -2387,7 +2393,8 @@ void sdpa_ring(
         cb_lse_out,
         cb_prev_out,
         cb_out,
-        lw_mask);
+        lw_mask,
+        is_last_ring_iter);
 }
 
 /**
