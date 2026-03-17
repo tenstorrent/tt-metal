@@ -194,6 +194,7 @@ void MetalContext::initialize(
     // contexts (e.g. mock BLACKHOLE), this returns the wrong axis. Resolve it eagerly here,
     // but only when the caller hasn't explicitly set an axis.
     // TODO: https://github.com/tenstorrent/tt-metal/issues/39974
+    dispatch_core_config_ = dispatch_core_config;
     DispatchCoreAxis axis =
         resolve_dispatch_core_axis(dispatch_core_config, get_cluster().arch(), get_fabric_tensix_config());
     dispatch_core_config_.set_dispatch_core_axis(axis);
