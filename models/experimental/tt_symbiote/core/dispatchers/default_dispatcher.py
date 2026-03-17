@@ -1259,6 +1259,86 @@ def handle_gather(func, args, kwargs):
     return res
 
 
+def handle_isin(func, args, kwargs):
+    """Handle isin operation using ttnn.experimental.isin.
+
+    torch.isin(elements, test_elements, *, assume_unique=False, invert=False)
+    When both inputs are on CPU, uses the current TTNN device from set_device() to move them.
+    """
+    from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+    from models.experimental.tt_symbiote.utils.device_management import get_current_ttnn_device
+
+    elements = args[0]
+    test_elements = args[1]
+    invert = kwargs.get("invert", False)
+
+    # When both inputs are on CPU, run torch.isin to avoid TTNN isin segfault on small CPU-origin tensors
+    from models.experimental.tt_symbiote.core.run_config import no_dispatch
+
+    def has_ttnn_on_device(t):
+        if not isinstance(t, TorchTTNNTensor):
+            return False
+        if t.ttnn_tensor is None:
+            return False
+        try:
+            return t.ttnn_tensor.device() is not None
+        except Exception:
+            return False
+
+    both_cpu = not has_ttnn_on_device(elements) and not has_ttnn_on_device(test_elements)
+    if both_cpu:
+
+        def to_torch(t):
+            if isinstance(t, TorchTTNNTensor):
+                return t.elem if t.elem is not None else t.to_torch
+            return t
+
+        with no_dispatch():
+            a, b = to_torch(elements), to_torch(test_elements)
+            out = torch.isin(a, b, invert=invert)
+        return TorchTTNNTensor(out, dtype=torch.bool)
+
+    # Resolve device: from inputs first, then from current TTNN device (set by set_device) when both are on CPU
+    device = None
+    for t in (elements, test_elements):
+        if isinstance(t, TorchTTNNTensor) and t.ttnn_tensor is not None:
+            try:
+                d = t.ttnn_tensor.device()
+                if d is not None:
+                    device = d
+                    break
+            except Exception:
+                pass
+    if device is None:
+        for t in (elements, test_elements):
+            if isinstance(t, TorchTTNNTensor):
+                try:
+                    device = t.to_ttnn.device()
+                    if device is not None:
+                        break
+                except Exception:
+                    pass
+    if device is None:
+        device = get_current_ttnn_device()
+    if device is None:
+        raise RuntimeError(
+            "Cannot dispatch torch.isin to TTNN: could not resolve device. "
+            "Ensure set_device(model, device) was called, or at least one input has a TTNN tensor on device."
+        )
+
+    print("Device : ", device)
+
+    tensor1, tensor2, deallocate_a, deallocate_b, device = _prepare_binary_inputs(elements, test_elements, device)
+    if deallocate_a:
+        tensor1.ttnn_tensor = ttnn.to_device(tensor1.to_ttnn, device)
+    if deallocate_b:
+        tensor2.ttnn_tensor = ttnn.to_device(tensor2.to_ttnn, device)
+    result = ttnn.experimental.isin(tensor1.to_ttnn, tensor2.to_ttnn, invert=invert)
+    res = TorchTTNNTensor(result, dtype=torch.bool)
+    _cleanup_tensors((tensor1, deallocate_a), (tensor2, deallocate_b))
+    return res
+
+
 # Mapping of ATen operations to TTNN handlers
 func_to_ttnn_compatible = {
     "aten::view": handle_view,
@@ -1315,12 +1395,17 @@ func_to_ttnn_compatible = {
     # "aten::scatter_.value": handle_scatter_value_inplace,
     "aten::bitwise_not": handle_bitwise_not,
     "aten::gather": handle_gather,
+    "aten::isin": handle_isin,
+    "aten::isin.Tensor_Tensor": handle_isin,
 }
 
 
 def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
     """Check if operation can be dispatched to TTNN."""
     from models.experimental.tt_symbiote.core.tensor import TorchTTNNTensor
+
+    # Normalize aten::isin.* overloads for lookup
+    dispatch_func_name = "aten::isin" if (func_name and func_name.startswith("aten::isin")) else func_name
 
     any_ttnn_tensor = False
     for elem in args:
@@ -1358,6 +1443,12 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
                         f"TTNN: Found unsupported dtype {sub_elem.dtype} for TTNN tensor in list/tuple, cannot dispatch {func_name} to TTNN"
                     )
                     return False
+    # isin: allow dispatch when at least one arg is TorchTTNNTensor (even ttnn_tensor None); handle_isin will convert
+    if not any_ttnn_tensor and dispatch_func_name == "aten::isin":
+        for elem in args:
+            if isinstance(elem, TorchTTNNTensor):
+                any_ttnn_tensor = True
+                break
     passed = True
     if "aten::slice.Tensor" == func_name:
         if (
@@ -1410,7 +1501,7 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
             passed = False
     if not any_ttnn_tensor and func_name in ["aten::mm", "aten::addmm", "aten::bmm"]:
         print("Found invalid TTNN dispatch for matmul operation. Please check input dtypes and layouts.")
-    if func_name in func_to_ttnn_compatible and any_ttnn_tensor:
+    if dispatch_func_name in func_to_ttnn_compatible and any_ttnn_tensor:
         return passed
     if func_name != "aten::_scaled_dot_product_flash_attention_for_cpu" and passed and any_ttnn_tensor:
         print(
@@ -1422,4 +1513,5 @@ def can_dispatch_to_ttnn(func_name: str, args=None, kwargs=None) -> bool:
 
 def dispatch_to_ttnn(func_name, args, kwargs):
     """Dispatch operation to TTNN handler."""
-    return func_to_ttnn_compatible[func_name](func_name, args, kwargs)
+    dispatch_func_name = "aten::isin" if (func_name and func_name.startswith("aten::isin")) else func_name
+    return func_to_ttnn_compatible[dispatch_func_name](func_name, args, kwargs)
