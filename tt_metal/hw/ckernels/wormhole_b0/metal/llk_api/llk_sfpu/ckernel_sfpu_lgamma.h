@@ -113,7 +113,7 @@ inline void calculate_lgamma_stirling_fp32(
 
         // reflection adjustment for inputs < 0.5 are done in calculate_lgamma_adjusted.
 
-        sfpi::dst_reg[0] = res;
+        sfpi::dst_reg[dst_index_out * dst_tile_size_sfpi] = res;
         sfpi::dst_reg++;
     }
 }
