@@ -288,7 +288,7 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     uint32_t l1_scratch_cb_page_size_bytes = page_size;
 
     uint32_t num_sticks_to_write_per_packet = 1;
-    uint32_t cb_num_pages = 3 * num_sticks_to_write_per_packet;  // triple buffering
+    uint32_t cb_num_pages = 2 * num_sticks_to_write_per_packet;  // double buffering
     tt::DataFormat df = datatype_to_dataformat_converter(tensor_args.input_tensor.dtype());
 
     // CBs for transferring data between reader and writer
@@ -298,16 +298,19 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             .set_page_size(sender_cb_index, l1_scratch_cb_page_size_bytes);
     CreateCircularBuffer(program, worker_core_ranges, cb_sender_config);
 
-    // L1 receive buffer for 2D padding: fabric-delivered H halo data arrives here
-    // instead of going directly to DRAM, so the reader can copy it with proper barriers.
-    // Buffer must hold ALL outer_dims' sticks (no per-outer_dim reuse) because the
+    // L1 receive buffer for 2D padding: fabric-delivered H halo corner sticks arrive here.
+    // Corners-only optimization: only W-boundary sticks (pad2_left + pad2_right per row) go
+    // to L1; non-corner sticks go directly to neighbor DRAM via fabric.
+    // Buffer must hold ALL outer_dims' corner sticks (no per-outer_dim reuse) because the
     // fabric pipeline can deliver data for outer_dim N+1 before the reader finishes
     // copying outer_dim N.
     uint32_t recv_cb_index = tt::CB::c_in1;
+    uint32_t corner_sticks_per_row =
+        is_2d ? std::min(operation_attributes.pad2_left + operation_attributes.pad2_right, num_sticks_per_halo_dim) : 0;
     if (is_2d) {
         uint32_t max_padding = std::max(operation_attributes.padding_left, operation_attributes.padding_right);
         uint32_t max_outer_dims_per_core = dims_per_core_group_1;
-        uint32_t recv_total_sticks = max_outer_dims_per_core * max_padding * writer_num_sticks_to_read;
+        uint32_t recv_total_sticks = max_outer_dims_per_core * max_padding * corner_sticks_per_row;
         uint32_t recv_buf_size = recv_total_sticks * page_size;
         if (recv_buf_size > 0) {
             CircularBufferConfig recv_cb_config =
@@ -327,7 +330,6 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
     std::optional<MeshCoordinate> w_forward_coord;
     std::optional<MeshCoordinate> w_backward_coord;
     uint32_t w_outer_dim_size = 0;
-    uint32_t max_w_padding = 0;
     uint32_t w_rows_per_link = 0;
     uint32_t w_extra_rows = 0;
 
@@ -381,24 +383,16 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
 
         // Phase 2 processes all rows of the H-padded output tensor
         w_outer_dim_size = outer_dim_size * output_halo_dim_size;
-        max_w_padding = std::max(operation_attributes.pad2_left, operation_attributes.pad2_right);
 
         // CB and recv buffer on W fabric cores
         CreateCircularBuffer(program, w_fabric_core_range, cb_sender_config);
 
-        // L1 recv buffer on W fabric cores: fabric-delivered W padding data arrives here
-        // instead of going directly to DRAM. With multi-link, each link processes a subset
-        // of rows, so buffer is sized for the max per-link portion (not full w_outer_dim_size).
+        // W recv: no L1 recv buffer needed. The W writer sends padding sticks directly to
+        // the neighbor's output DRAM (same pattern as 1D H). The W reader just waits for
+        // the completion semaphore. DRAM write ordering is guaranteed by synchronize_device()
+        // before the next op dispatch.
         w_rows_per_link = w_outer_dim_size / pad2_num_links;
         w_extra_rows = w_outer_dim_size % pad2_num_links;
-        uint32_t max_w_link_rows = w_rows_per_link + (w_extra_rows > 0 ? 1 : 0);
-        uint32_t w_recv_total_sticks = max_w_link_rows * max_w_padding;
-        uint32_t w_recv_buf_size = w_recv_total_sticks * page_size;
-        if (w_recv_buf_size > 0) {
-            CircularBufferConfig w_recv_cb_config =
-                CircularBufferConfig(w_recv_buf_size, {{recv_cb_index, df}}).set_page_size(recv_cb_index, page_size);
-            CreateCircularBuffer(program, w_fabric_core_range, w_recv_cb_config);
-        }
     }
 
     // Compute H fabric unicast route configuration (for compile-time args)
@@ -491,7 +485,8 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
                 (operation_attributes.dim > 0) ? link_dims_to_read : outer_dim_size,  // outer_dim_size
                 direction ? operation_attributes.padding_right : operation_attributes.padding_left,  // padding
                 (operation_attributes.dim == 0) ? link_dims_to_read : num_sticks_per_halo_dim,  // num_sticks_to_read
-                num_sticks_per_halo_dim};  // num_sticks_per_halo_dim
+                num_sticks_per_halo_dim,  // num_sticks_per_halo_dim
+                corner_sticks_per_row};   // num_l1_recv_sticks_per_row (corners-only for 2D)
             // Per-core direction args (moved from compile-time for kernel consolidation)
             reader_rt_args.push_back(direction ? is_last_device : is_first_device);  // is_first_chip
             reader_rt_args.push_back(direction ? is_first_device : is_last_device);  // is_last_chip
@@ -727,7 +722,6 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             is_padding_zeros,  // is_padding_zeros
             page_size};        // stick_size
         TensorAccessorArgs(*output_buffer).append_to(w_reader_kernel_config.compile_args);
-        w_reader_kernel_config.compile_args.push_back(recv_cb_index);  // recv_cb_id
         w_reader_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
@@ -748,11 +742,11 @@ NeighborPadAsyncMeshWorkloadFactory::cached_program_t NeighborPadAsyncMeshWorklo
             is_padding_zeros,  // is_padding_zeros
             page_size};        // stick_size
         TensorAccessorArgs(*output_buffer).append_to(w_writer_kernel_config.compile_args);
-        w_writer_kernel_config.compile_args.push_back(1);              // use_l1_intermediate
-        w_writer_kernel_config.compile_args.push_back(recv_cb_index);  // recv_cb_id
-        w_writer_kernel_config.compile_args.push_back(1);              // handle_incoming_writes (W writer: yes)
-        w_writer_kernel_config.compile_args.push_back(1);              // is_w_fabric_writer (W writer: true)
-        w_writer_kernel_config.compile_args.push_back(w_ring_size);    // ring_size
+        w_writer_kernel_config.compile_args.push_back(0);  // use_l1_intermediate (direct-to-DRAM for W)
+        w_writer_kernel_config.compile_args.push_back(0);  // recv_cb_id (unused)
+        w_writer_kernel_config.compile_args.push_back(0);  // handle_incoming_writes (data goes direct to DRAM)
+        w_writer_kernel_config.compile_args.push_back(1);  // is_w_fabric_writer (W writer: true)
+        w_writer_kernel_config.compile_args.push_back(w_ring_size);  // ring_size
         w_writer_kernel_id = CreateKernel(
             program,
             "ttnn/cpp/ttnn/operations/experimental/ccl/neighbor_pad_async/device/kernels/"
