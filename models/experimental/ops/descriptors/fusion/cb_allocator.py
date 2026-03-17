@@ -87,6 +87,19 @@ class CBSlot:
     source_fmt: Any = None  # Reference to the original CBFormatDescriptor
 
 
+def num_cbs_for_device(device) -> int:
+    """Return the number of circular buffer slots for the given device.
+
+    Wormhole has 32 CB slots; Blackhole has 64.
+    """
+    if device is not None and hasattr(device, "arch") and callable(device.arch):
+        if device.arch() == ttnn.Arch.WORMHOLE_B0:
+            return 32
+        return 64
+    # Default to 32 (Wormhole) when device is unknown
+    return 32
+
+
 class CBPoolAllocator:
     """Pool-allocates CB hardware slots based on compatibility keys.
 
@@ -94,15 +107,14 @@ class CBPoolAllocator:
     unpack_to_dest_mode) configuration are assigned to the same slot.
     Different configs get separate slots.
 
-    The allocator itself imposes no slot limit.  The 32-slot hardware limit
-    is enforced externally when projecting to a per-group pool via
-    ``project_to_group()``, or by the caller when using the pool directly
-    for single-group builds.
+    The allocator itself imposes no slot limit.  The hardware limit
+    (32 for Wormhole, 64 for Blackhole) is enforced externally when
+    projecting to a per-group pool via ``project_to_group()``, or by
+    the caller when using the pool directly for single-group builds.
     """
 
-    MAX_SLOTS = 32
-
-    def __init__(self):
+    def __init__(self, max_slots: int = 32):
+        self.max_slots = max_slots
         self._slots: Dict[int, CBSlot] = {}  # slot_index -> CBSlot
         # Maps CBPoolKey -> list of slot indices with that config.
         # Within a phase, each CB gets its own slot even if configs match;
@@ -497,7 +509,7 @@ class CBPoolAllocator:
         NUM_CIRCULAR_BUFFERS) with the correct mode at each slot's index,
         Default elsewhere.
         """
-        result = [UnpackToDestMode.Default] * self.MAX_SLOTS
+        result = [UnpackToDestMode.Default] * self.max_slots
         for slot_idx, slot in self._slots.items():
             if slot.config.unpack_to_dest_mode is not None:
                 result[slot_idx] = slot.config.unpack_to_dest_mode
@@ -540,7 +552,7 @@ class CBPoolAllocator:
         Raises:
             ValueError: If the projected pool has > 32 slots.
         """
-        projected = CBPoolAllocator()
+        projected = CBPoolAllocator(max_slots=self.max_slots)
 
         # Collect phase_remaps for this group (re-indexed to local 0..K)
         for global_idx in group_global_indices:
@@ -584,8 +596,8 @@ class CBPoolAllocator:
             if group & included_slots:
                 projected._unique_alias_groups.add(group)
 
-        # Validate 32-slot hardware limit
-        if len(projected._slots) > self.MAX_SLOTS:
+        # Validate hardware slot limit
+        if len(projected._slots) > self.max_slots:
             breakdown = [
                 f"  slot {si}: fmt={sl.config.data_format}, "
                 f"page_size={sl.config.page_size}, "
@@ -594,7 +606,7 @@ class CBPoolAllocator:
             ]
             raise ValueError(
                 f"CB pool overflow: group projection needs {len(projected._slots)} "
-                f"slots but device limit is {self.MAX_SLOTS}.\n"
+                f"slots but device limit is {self.max_slots}.\n"
                 f"Allocated slots:\n" + "\n".join(breakdown)
             )
 
@@ -682,19 +694,12 @@ def _is_cb_named_arg(name: str, value: Any) -> bool:
     """Check if a named compile-time arg refers to a CB index.
 
     Returns True if the name starts with CB_ARG_PREFIX and the value
-    is an integer in [0, 31] (valid CB slot range).
+    is a non-negative integer.  The actual slot bound is validated by
+    the pool allocator, not here.
     """
     if not name.startswith(CB_ARG_PREFIX):
         return False
-    if not isinstance(value, int) or value < 0 or value >= CBPoolAllocator.MAX_SLOTS:
-        logger.warning(
-            "Named arg '%s' starts with '%s' but has value %s outside CB range [0,31]. "
-            "If this is not a CB arg, rename it to not start with '%s'.",
-            name,
-            CB_ARG_PREFIX,
-            value,
-            CB_ARG_PREFIX,
-        )
+    if not isinstance(value, int) or value < 0:
         return False
     return True
 

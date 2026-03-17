@@ -225,10 +225,10 @@ class TestCBArgNaming:
             ("cb_in", 0, True),
             ("cb_out", 16, True),
             ("cb_gamma", 31, True),
+            ("cb_large", 63, True),
             ("blk", 4, False),
             ("num_tiles", 16, False),
-            ("cb_debug_flag", 100, False),
-            ("cb_large", 32, False),
+            ("cb_negative", -1, False),
             ("cb_str", "not_an_int", False),
         ],
     )

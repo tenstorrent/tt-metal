@@ -30,6 +30,7 @@ from models.experimental.ops.descriptors.fusion.cb_allocator import (
     PhaseInfo,
     extract_cb_info,
     extract_cb_names_from_kernel,
+    num_cbs_for_device,
 )
 from models.experimental.ops.descriptors.fusion.codegen import (
     collect_defines,
@@ -56,6 +57,7 @@ __all__ = [
     # Functions
     "extract_cb_info",
     "extract_cb_names_from_kernel",
+    "num_cbs_for_device",
     "clear_build_cache",
     # C++ parsing
     "extract_kernel_body",

@@ -123,6 +123,7 @@ def _extract_device_from_tree(node: OpNode):
 
 def _build_global_cb_pool(
     unique_ops: List[OpDescriptor],
+    device: Any = None,
 ) -> "CBPoolAllocator":
     """Build a single global CB pool from all unique ops in the tree.
 
@@ -138,12 +139,13 @@ def _build_global_cb_pool(
     """
     from models.experimental.ops.descriptors.fusion.cb_allocator import (
         CBPoolAllocator,
+        num_cbs_for_device,
         _get_phantom_cb_indices,
         _extract_remote_cb_indices,
     )
     from models.experimental.ops.descriptors.fusion.codegen import _create_phase_info
 
-    pool = CBPoolAllocator()
+    pool = CBPoolAllocator(max_slots=num_cbs_for_device(device))
 
     # Create PhaseInfo for each unique op
     phase_infos = [_create_phase_info(op, i) for i, op in enumerate(unique_ops)]
@@ -395,7 +397,7 @@ class OpGraphBuilder:
         # old shared-op detection + forced-remap + equalize approach.
         per_group_pools: List[Optional["CBPoolAllocator"]] = [None] * len(groups)
         if multi_group:
-            global_pool = _build_global_cb_pool(unique_ops)
+            global_pool = _build_global_cb_pool(unique_ops, device=device)
             per_group_pools = _project_pools_for_groups(groups, global_pool)
 
         # Save CB descriptor state for ALL unique ops (not just per-group).

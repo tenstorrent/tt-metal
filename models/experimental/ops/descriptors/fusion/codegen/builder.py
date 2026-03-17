@@ -23,6 +23,7 @@ from models.experimental.ops.descriptors.fusion.cb_allocator import (
     PhaseInfo,
     CBPoolAllocator,
     extract_cb_info,
+    num_cbs_for_device,
     _get_phantom_cb_indices,
     _compute_rebind_info,
     _extract_remote_cb_indices,
@@ -209,7 +210,7 @@ def _build_fused_descriptor(
         # Self-allocate (linear-chain path or single-group trees).
         # Pre-reserve remote CB indices from GlobalCBs — prevents collisions
         # without adding to remaps, so they are excluded from inter-phase CB reset.
-        pool = CBPoolAllocator()
+        pool = CBPoolAllocator(max_slots=num_cbs_for_device(device))
         for phase in phases:
             for remote_idx in _extract_remote_cb_indices(phase.op_descriptor.descriptor):
                 pool.reserve_index(remote_idx)
