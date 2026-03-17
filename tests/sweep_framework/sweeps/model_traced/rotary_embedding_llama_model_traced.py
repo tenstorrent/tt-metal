@@ -64,6 +64,8 @@ from tests.sweep_framework.sweep_utils.op_kwargs_utils import build_op_kwargs
 from tests.sweep_framework.sweep_utils.mesh_tensor_utils import (
     get_mesh_shape,
     create_mesh_device,
+    create_tensor_on_mesh,
+    mesh_tensor_to_torch,
 )
 
 # Override the default timeout in seconds for hang detection.
