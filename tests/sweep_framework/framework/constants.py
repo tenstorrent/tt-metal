@@ -82,8 +82,8 @@ HARDWARE_RUNNER_MAP = {
     },
     "t3k": {
         "arch": "wormhole_b0",
-        "runs_on": ["topology-t3k", "arch-wormhole_b0", "in-service", "pipeline-functional"],
-        "runner_label": "topology-t3k",
+        "runs_on": ["config-t3000", "arch-wormhole_b0", "in-service", "pipeline-functional"],
+        "runner_label": "config-t3000",
         "tt_smi_cmd": "tt-smi -r",
     },
     "tt-galaxy-wh": {
@@ -128,7 +128,9 @@ def get_hardware_id_from_machine_info(machine_info) -> Optional[str]:
         return device_series
 
     # n300 series: disambiguate by device count
-    # n300 cards are used in N150 (1 dev), N300 (2 dev), T3K (8 dev)
+    # n300 cards are used in N300 (1-2 dev) and T3K (8 dev)
+    # Single-device configs (1x1 mesh) still run on N300 runners since
+    # the traced hardware was an n300 card.
     mesh = machine_info.get("mesh_device_shape")
     if isinstance(mesh, str):
         try:
@@ -144,9 +146,7 @@ def get_hardware_id_from_machine_info(machine_info) -> Optional[str]:
         if isinstance(num_devices, list):
             num_devices = num_devices[0] if num_devices else 1
 
-    if num_devices <= 1:
-        return "n150"
-    elif num_devices <= 2:
+    if num_devices <= 2:
         return "n300"
     elif num_devices <= 8:
         return "t3k"
