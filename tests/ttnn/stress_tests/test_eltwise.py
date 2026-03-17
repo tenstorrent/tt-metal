@@ -6,7 +6,7 @@ import pytest
 import torch
 
 import ttnn
-from ttnn.device import get_device_core_grid, is_blackhole, is_wormhole_b0
+from ttnn.device import is_blackhole, is_wormhole_b0
 
 NUM_REPEATS = 5
 NUM_DEVICES = ttnn.distributed.get_num_pcie_devices()
