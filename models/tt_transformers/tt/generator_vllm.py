@@ -515,6 +515,10 @@ class Mistral3ForConditionalGeneration(Generator, SupportsMultiModal):
         )
 
     def decode_forward(self, *args, **kwargs):
+        # HF-style RoPE (use_hf_rope=True) reads current_pos from device inside
+        # _hf_rope_decode via ttnn.to_torch, which is incompatible with trace capture.
+        # Disable decode trace until HF RoPE supports on-device position indexing.
+        kwargs["enable_trace"] = False
         return super().decode_forward(*args, **kwargs)
 
     def allocate_kv_cache(self, *args, **kwargs):
