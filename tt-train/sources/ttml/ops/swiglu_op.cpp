@@ -79,8 +79,8 @@ autograd::TensorPtr swiglu(
 
     using EltwiseUnary = ttnn::operations::unary::EltwiseUnaryWithParam;
     const EltwiseUnary silu_act{ttnn::operations::unary::UnaryOpType::SILU};
-    const tt::stl::Span<const EltwiseUnary> no_acts;
-    const tt::stl::Span<const EltwiseUnary> silu_lhs(&silu_act, 1);
+    const ttsl::Span<const EltwiseUnary> no_acts;
+    const ttsl::Span<const EltwiseUnary> silu_lhs(&silu_act, 1);
 
     auto saved_linear1 = ttnn_fixed::matmul(tensor->get_value(), w1->get_value(), false, true);
     auto saved_gate = ttnn_fixed::matmul(tensor->get_value(), w3->get_value(), false, true);
