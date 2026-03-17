@@ -700,6 +700,7 @@ def create_reference_mlp_models(state_dict, layer_idx):
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.timeout(1200)
 def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
     """Test fused MoE: run both routed expert and shared expert, validate combined output."""
 
@@ -877,6 +878,7 @@ def test_moe_fused(device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mod
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.timeout(1200)
 def test_moe_fused_with_reduce(
     bh_2d_mesh_device, use_hardcoded_expert_index, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
 ):
@@ -954,7 +956,6 @@ def test_moe_fused_with_reduce(
         ),
     )
 
-    device_grid_size = submesh.compute_with_storage_grid_size()
     sdpa_out_interm_shard_height = SDPA.OUT_INTERM_SHARD_HEIGHT
     sdpa_out_interm_shard_width = SDPA.OUT_INTERM_SHARD_WIDTH
     full_device_grid = ttnn.CoreRangeSet(
@@ -990,21 +991,27 @@ def test_moe_fused_with_reduce(
     final_output_total_width = r.final_output_total_width
     final_output_mem_config = r.final_output_mem_config
 
-    # 3 intermediate tensors for 3 reduction rounds (same shape as final_output)
-    intermediate_tensors = []
-    for _ in range(TestConfig.REDUCE_NUM_ROUNDS):
-        intermediate_data = torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16)
-        intermediate_tensor = ttnn.from_torch(
-            intermediate_data,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=final_output_mem_config,
-            tile=tile_1x32,
-            mesh_mapper=reduce_mesh_mapper,
-        )
-        intermediate_tensors.append(intermediate_tensor)
-    logger.info("Created 3 intermediate tensors for reduce rounds")
+    # Single intermediate tensor with 3x shard width for all 3 reduction rounds
+    orig_shard_spec = final_output_mem_config.shard_spec
+    intermediate_shard_shape = [orig_shard_spec.shape[0], orig_shard_spec.shape[1] * 3]
+    intermediate_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            orig_shard_spec.grid,
+            intermediate_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    intermediate_tensors = ttnn.from_torch(
+        torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=intermediate_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=reduce_mesh_mapper,
+    )
 
     # Reduce output tensor (single-core sharded on each device)
     compute_grid = submesh.compute_with_storage_grid_size()
@@ -1190,6 +1197,7 @@ def test_moe_fused_with_reduce(
 
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
+@pytest.mark.timeout(1200)
 @pytest.mark.requires_grid_size((13, 10))
 def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict):
     """Test MoeOp with enable_routing=False: same as MLP (dense mode), no routing logic."""
@@ -1336,6 +1344,7 @@ def test_mlp(device, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict)
 @pytest.mark.parametrize("reconfig_moe_cbs", [True, False])
 @pytest.mark.parametrize("noc_mode", [ttnn.NOC_MODE.DM_DYNAMIC_NOC])
 @pytest.mark.requires_grid_size((13, 10))
+@pytest.mark.timeout(1200)
 def test_mlp_with_reduce(
     bh_2d_mesh_device, use_mlp_weights, reconfig_moe_cbs, noc_mode, get_reference_model_state_dict
 ):
@@ -1415,7 +1424,6 @@ def test_mlp_with_reduce(
         ),
     )
 
-    device_grid_size = submesh.compute_with_storage_grid_size()
     sdpa_out_interm_shard_height = SDPA.OUT_INTERM_SHARD_HEIGHT
     sdpa_out_interm_shard_width = SDPA.OUT_INTERM_SHARD_WIDTH
     full_device_grid = ttnn.CoreRangeSet(
@@ -1450,21 +1458,27 @@ def test_mlp_with_reduce(
     final_output_total_width = r.final_output_total_width
     final_output_mem_config = r.final_output_mem_config
 
-    # 3 intermediate tensors for 3 reduction rounds
-    intermediate_tensors = []
-    for _ in range(TestConfig.REDUCE_NUM_ROUNDS):
-        intermediate_data = torch.zeros([4, 2, final_output_total_width], dtype=torch.bfloat16)
-        intermediate_tensor = ttnn.from_torch(
-            intermediate_data,
-            dtype=ttnn.bfloat16,
-            layout=ttnn.TILE_LAYOUT,
-            device=submesh,
-            memory_config=final_output_mem_config,
-            tile=tile_1x32,
-            mesh_mapper=reduce_mesh_mapper,
-        )
-        intermediate_tensors.append(intermediate_tensor)
-    logger.info("Created 3 intermediate tensors for reduce rounds")
+    # Single intermediate tensor with 3x shard width for all 3 reduction rounds
+    orig_shard_spec = final_output_mem_config.shard_spec
+    intermediate_shard_shape = [orig_shard_spec.shape[0], orig_shard_spec.shape[1] * 3]
+    intermediate_mem_config = ttnn.MemoryConfig(
+        ttnn.TensorMemoryLayout.WIDTH_SHARDED,
+        ttnn.BufferType.L1,
+        ttnn.ShardSpec(
+            orig_shard_spec.grid,
+            intermediate_shard_shape,
+            ttnn.ShardOrientation.ROW_MAJOR,
+        ),
+    )
+    intermediate_tensors = ttnn.from_torch(
+        torch.zeros([4, 2, final_output_total_width * 3], dtype=torch.bfloat16),
+        dtype=ttnn.bfloat16,
+        layout=ttnn.TILE_LAYOUT,
+        device=submesh,
+        memory_config=intermediate_mem_config,
+        tile=tile_1x32,
+        mesh_mapper=reduce_mesh_mapper,
+    )
 
     # Reduce output tensor (single-core sharded on each device)
     compute_grid = submesh.compute_with_storage_grid_size()
