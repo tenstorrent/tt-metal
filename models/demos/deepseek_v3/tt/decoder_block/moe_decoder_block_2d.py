@@ -124,6 +124,11 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
             # Should always be TP-sharded at this point
             assert False, f"Expected TP-sharded input with dim {hidden_size // tp_size}, got dim {x_dim}"
 
+        batch_size = x_gathered.shape[1]
+        seq_len = x_gathered.shape[2]
+        if batch_size > 1:
+            x_gathered = ttnn.reshape(x_gathered, (x_gathered.shape[0], 1, batch_size * seq_len, x_gathered.shape[3]))
+
         # Run both MoE and SharedExpert with the same gathered input
         mlp_out = MoE.forward_prefill(x_gathered, cfg["moe"])
         # SharedExpert now always expects collective ops to be handled by caller
@@ -143,6 +148,8 @@ class MoEDecoderBlock2D(DecoderBlock2DBase):
                 **ccl_moe.populate_reduce_scatter_runtime_args(cfg["moe"]["final_output_reduce_scatter"]),
             )
             ttnn.deallocate(combined_out)
+            if batch_size > 1:
+                output = ttnn.reshape(output, (output.shape[0], batch_size, seq_len, output.shape[3]))
             # Cleanup gathered tensor
             if x_gathered is not x:
                 ttnn.deallocate(x_gathered)
