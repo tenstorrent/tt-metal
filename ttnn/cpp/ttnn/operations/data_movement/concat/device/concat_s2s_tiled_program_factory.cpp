@@ -165,9 +165,9 @@ ConcatS2STiledProgramFactory::cached_program_t ConcatS2STiledProgramFactory::cre
     const uint32_t input0_stride = stride_tile_size * num_tiles_for_each_input_shard[0].second / groups;
     const uint32_t input1_stride = stride_tile_size * num_tiles_for_each_input_shard[1].second / groups;
 
-    // NOC_MAX_BURST_SIZE is 8KB (8192 bytes) - use single-packet reads only if both strides fit
-    constexpr uint32_t NOC_MAX_BURST_SIZE = 8192;
-    const bool use_single_packet_read = (input0_stride <= NOC_MAX_BURST_SIZE && input1_stride <= NOC_MAX_BURST_SIZE);
+    // NOC_MAX_BURST_SIZE from noc_parameters.h: Wormhole = 8192, Blackhole = 16384
+    const uint32_t noc_max_burst_size = (input_tensors[0].device()->arch() == tt::ARCH::BLACKHOLE) ? 16384 : 8192;
+    const bool use_single_packet_read = (input0_stride <= noc_max_burst_size && input1_stride <= noc_max_burst_size);
 
     std::vector<uint32_t> compile_time_args_0 = {
         0,
