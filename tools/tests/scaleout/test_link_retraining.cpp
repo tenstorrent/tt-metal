@@ -17,17 +17,15 @@
 
 namespace tt::scaleout_tools {
 
-// WH: ETH_TRAIN_STATUS_ADDR (0x1104) in the node_info FW layout.
-//     Values: 0 = IN_PROGRESS, 1 = SUCCESS, 2 = FAIL.
-// BH: port_status field inside eth_status_t in boot_results_t, at BOOT_RESULTS_ADDR + 4 = 0x7CC04.
-//     Values: 0 = PORT_UNKNOWN (in-progress), 1 = PORT_UP (success), 2 = PORT_DOWN (fail).
-// Both architectures use the same 0/1/2 encoding, matching EthTrainingStatus::IN_PROGRESS/SUCCESS/FAIL.
+// Returns the L1 address of the ETH training status register for the given arch.
+// WH: ETH_TRAIN_STATUS_ADDR (0x1104)
+// BH: port_status in boot_results_t (BOOT_RESULTS_ADDR + 4).
+// Both use the same encoding: 0 = IN_PROGRESS, 1 = SUCCESS, 2 = FAIL.
 [[nodiscard]] uint32_t get_eth_train_status_addr(const tt::Cluster& cluster) {
     if (cluster.arch() == tt::ARCH::WORMHOLE_B0) {
-        return tt::umd::wormhole::ETH_TRAIN_STATUS_ADDR;  // 0x1104
+        return tt::umd::wormhole::ETH_TRAIN_STATUS_ADDR;
     }
     if (cluster.arch() == tt::ARCH::BLACKHOLE) {
-        // port_status is the second uint32_t in eth_status_t, located at BOOT_RESULTS_ADDR + 4.
         return tt::umd::blackhole::BOOT_RESULTS_ADDR +
                static_cast<uint32_t>(offsetof(tt::umd::blackhole::eth_status_t, port_status));
     }

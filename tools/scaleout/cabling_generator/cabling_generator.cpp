@@ -1298,10 +1298,9 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_sys
         host->set_motherboard(deployment_host.motherboard);
     }
 
-    // Only include board types and connections for hosts that are in deployment_hosts.
+    // Only include board types and connections for hosts present in the deployment.
     const size_t num_deployment_hosts = deployment_hosts.size();
 
-    // Add board types that are present in the deployment descriptor only
     for (const auto& [host_id, node] : host_id_to_node) {
         if (*host_id >= num_deployment_hosts) {
             continue;
@@ -1314,7 +1313,6 @@ static tt::scaleout_tools::fsd::proto::FactorySystemDescriptor build_factory_sys
         }
     }
 
-    // Add ASIC connections (only between hosts present in deployment)
     for (const auto& [start, end] : chip_connections) {
         if (*start.host_id >= num_deployment_hosts || *end.host_id >= num_deployment_hosts) {
             continue;
