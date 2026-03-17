@@ -21,6 +21,7 @@
 #endif
 
 #include <tt-logger/tt-logger.hpp>
+#include <tt_stl/fmt.hpp>
 #include "common/filesystem_utils.hpp"
 #include "impl/context/metal_context.hpp"
 
@@ -139,10 +140,7 @@ FileRenamer::~FileRenamer() {
     }
     if (!tt::filesystem::safe_rename(temp_path_, target_path_)) {
         log_error(
-            tt::LogBuildKernels,
-            "Failed to rename temporary file {} to target file {}",
-            temp_path_.string(),
-            target_path_.string());
+            tt::LogBuildKernels, "Failed to rename temporary file {} to target file {}", temp_path_, target_path_);
     }
 }
 

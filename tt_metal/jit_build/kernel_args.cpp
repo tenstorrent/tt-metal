@@ -3,6 +3,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 #include <tt_stl/assert.hpp>
+#include <tt_stl/fmt.hpp>
 #include "jit_build_utils.hpp"
 #include "common/filesystem_utils.hpp"
 #include <cstddef>

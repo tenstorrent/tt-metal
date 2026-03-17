@@ -7,6 +7,8 @@
 #include "common/stable_hash.hpp"
 #include "jit_build_utils.hpp"
 
+#include <tt_stl/fmt.hpp>
+
 #include <cerrno>
 #include <chrono>
 #include <cstddef>
@@ -157,7 +159,7 @@ void write_dependency_hashes(
     const std::filesystem::path& canonical_dir) {
     auto iter = dependencies.find(obj);
     if (iter == dependencies.end()) {
-        log_warning(tt::LogBuildKernels, "Cannot cache JIT build, no dependencies found for {}.", obj.string());
+        log_warning(tt::LogBuildKernels, "Cannot cache JIT build, no dependencies found for {}.", obj);
         hash_file.setstate(std::ios::badbit);
         return;
     }

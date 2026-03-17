@@ -7,6 +7,7 @@
 #include "build_cache_telemetry.hpp"
 #include "jit_build_cache.hpp"
 #include "jit_device_config.hpp"
+#include <tt_stl/fmt.hpp>
 
 #include <algorithm>
 #include <array>
