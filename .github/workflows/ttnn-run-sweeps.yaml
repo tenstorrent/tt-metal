@@ -979,16 +979,17 @@ jobs:
           MEASURE_DEVICE_PERF: ${{ github.event.inputs.measure_device_perf }}
           VECTORS_DIR: /tmp/vectors
         run: |
-          matrix_json=$(python3 tests/sweep_framework/framework/compute_sweep_matrix.py)
-          echo "matrix=$matrix_json" >> "$GITHUB_OUTPUT"
+          python3 tests/sweep_framework/framework/compute_sweep_matrix.py > /tmp/matrix.json
+          echo "matrix=$(cat /tmp/matrix.json)" >> "$GITHUB_OUTPUT"
       - id: split-hw
         shell: bash
         run: |
           # Split the matrix into per-hardware sub-matrices for model_traced runs.
           # Each hardware type gets its own output consumed by a separate job.
+          # Reads from file to avoid ARG_MAX limits on large matrices.
           python3 -c "
           import json, os
-          matrix = json.loads(os.environ['MATRIX_JSON'])
+          matrix = json.load(open('/tmp/matrix.json'))
           hw_map = {'n150': [], 'n300': [], 't3k': [], 'galaxy': [], 'p150b': []}
           for entry in matrix.get('include', []):
               name = entry.get('test_group_name', '')
@@ -1006,8 +1007,6 @@ jobs:
               for hw, entries in hw_map.items():
                   f.write(f'matrix_{hw}={json.dumps({\"include\": entries})}\n')
           "
-        env:
-          MATRIX_JSON: ${{ steps.set-matrix.outputs.matrix }}
   ttnn-run-single-sweep:
     name: Run single sweep
     needs:
