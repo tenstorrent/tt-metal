@@ -160,6 +160,7 @@ def _run_precision_test(
     axis: int = 0,
     matmul_config: dict = None,
     optional_matmul_second_tensor: torch.Tensor = None,
+    col_tilize: bool = False,
 ) -> dict:
     """Run a single precision test comparing bfloat16 vs bfloat8_b results"""
 
@@ -176,7 +177,9 @@ def _run_precision_test(
             torch_optional_second_tensor = torch.randn(second_shape).bfloat16()
 
     # Convert to ttnn tensors
-    ttnn_tensor_bf8_b = ttnn.from_torch(torch_tensor_bf16, device=device, layout=ttnn.Layout.TILE, dtype=ttnn.bfloat8_b)
+    ttnn_tensor_bf8_b = ttnn.from_torch(
+        torch_tensor_bf16, device=device, layout=ttnn.Layout.TILE, dtype=ttnn.bfloat8_b, col_tilize=col_tilize
+    )
 
     if operation == OperationType.MATMUL:
         ttnn_optional_second_tensor = ttnn.from_torch(
@@ -201,7 +204,15 @@ def _run_precision_test(
     result_torch_tensor_bf16 = _perform_torch_operation(
         torch_tensor_bf16, operation, axis, torch_optional_second_tensor
     )
-    result_ttnn_tensor_bf8_b = _perform_ttnn_operation(ttnn_tensor_bf8_b, operation, axis, ttnn_optional_second_tensor)
+    # With col_tilize, from_torch transposes last two dims; for matmul use transpose_a/b to get A @ B
+    if operation == OperationType.MATMUL and col_tilize:
+        result_ttnn_tensor_bf8_b = ttnn.matmul(
+            ttnn_tensor_bf8_b, ttnn_optional_second_tensor, transpose_a=True, transpose_b=False
+        )
+    else:
+        result_ttnn_tensor_bf8_b = _perform_ttnn_operation(
+            ttnn_tensor_bf8_b, operation, axis, ttnn_optional_second_tensor
+        )
 
     # Compute metrics
     result_ttnn_tensor_bf8_b_converted = ttnn.to_torch(result_ttnn_tensor_bf8_b, dtype=torch.float32)
@@ -216,6 +227,8 @@ def _run_precision_test(
         "std": input_tensor.std().item(),
         "range": input_tensor.max().item() - input_tensor.min().item(),
     }
+    metrics["reference_output"] = result_torch_tensor_bf16
+    metrics["ttnn_output"] = result_ttnn_tensor_bf8_b_converted
 
     return metrics
 
