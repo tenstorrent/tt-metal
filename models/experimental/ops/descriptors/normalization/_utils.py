@@ -102,9 +102,13 @@ def _create_layernorm_op_descriptor(
 
     # Select the appropriate factory and create descriptor
     factory = ttnn.LayerNormDeviceOperation.select_program_factory(operation_params, tensor_args)
-    program_descriptor = factory.create_descriptor(operation_params, tensor_args, output_tensor, core_range_set)
+    # Sharded LN: factory derives core range from shard_spec.grid (None = use default).
+    # Interleaved LN: factory needs explicit core range.
+    cr_arg = None if input_tensor.is_sharded() else core_range_set
+    program_descriptor = factory.create_descriptor(operation_params, tensor_args, output_tensor, cr_arg)
 
     # Build input and output tensors
     inputs, outputs = _build_layernorm_io_tensors(tensor_args, output_tensor)
 
-    return OpDescriptor(program_descriptor, inputs, outputs)
+    name = "rms_norm" if norm_type == ttnn.LayerNormType.RMSNORM else "layer_norm"
+    return OpDescriptor(program_descriptor, inputs, outputs, name)
