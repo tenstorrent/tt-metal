@@ -47,8 +47,6 @@ ALWI void deepseek_moe_gate_init(uint32_t icb0, uint32_t icb1) {
 
 template <bool enable_sigmoid = false, bool is_32bit = false>
 ALWI void deepseek_moe_gate(uint32_t icb0, uint32_t icb1, uint32_t eps, uint32_t scale) {
-    DPRINT << "deepseek_moe_gate!!!!!!!!!!!!!!!!!!!!!!!" << ENDL();
-
     // print the logits
     /*
     DPRINT << "cb_idx: " << icb0 << " tile_idx: " << 0 << ENDL();
